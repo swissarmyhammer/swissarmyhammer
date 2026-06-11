@@ -152,24 +152,27 @@ export const GRID_PLUGIN_COMMANDS: CommandMetadata[] = [
 ];
 
 /**
- * Key metadata for the `ui-commands` builtin plugin's four UI-surface
+ * Key metadata for the `ui-commands` builtin plugin's seven UI-surface
  * commands, mirrored 1:1 from
- * `builtin/plugins/ui-commands/index.ts::UI_SURFACE_COMMANDS` (Card D — the
- * field-edit and pressable-activation command DEFINITIONS live in the plugin;
- * field.tsx and pressable.tsx only register webview-bus handlers for the ids
- * while spatial focus is within their instance's subtree — the zone itself
- * or a descendant such as a tag pill — matching the keymap's marker-in-chain
- * gate; a pressable is a spatial leaf, so containment degenerates to direct
- * focus).
+ * `builtin/plugins/ui-commands/index.ts::UI_SURFACE_COMMANDS` (Cards D + E —
+ * the field-edit / pressable-activation / editor drill-in command
+ * DEFINITIONS live in the plugin; the owning React components only register
+ * webview-bus handlers for the ids while spatial focus is within their
+ * instance's subtree — the zone itself or a descendant such as a tag pill —
+ * matching the keymap's marker-in-chain gate; a pressable is a spatial
+ * leaf, so containment degenerates to direct focus).
  *
- * Each entry is scope-gated to its surface's marker moniker (`ui:field` /
- * `ui:pressable`) — the literal moniker the component mounts via a
- * `CommandScopeProvider` directly above its `<FocusScope>` — so
- * `extractKeymapBindings` never lifts its keys into the global table; the
- * keys bind only while the marker is in the focused chain, via the
- * depth-interleaved chain walk (`extractChainBindings`). Tests that drive
- * Enter / Space on a focused field zone or pressable leaf need these in the
- * synthesized registry or the bindings never resolve.
+ * Each entry is scope-gated to its surface's literal chain moniker —
+ * either a constant marker the component mounts via a `CommandScopeProvider`
+ * directly above its `<FocusScope>` (`ui:field` / `ui:pressable` /
+ * `ui:filter_editor` / `ui:ai-panel.elicitation.field`, for surfaces with
+ * dynamic spatial monikers) or the `<FocusScope>`'s own constant moniker
+ * (`ui:ai-panel.composer`) — so `extractKeymapBindings` never lifts its keys
+ * into the global table; the keys bind only while the moniker is in the
+ * focused chain, via the depth-interleaved chain walk
+ * (`extractChainBindings`). Tests that drive Enter / Space on a focused
+ * surface need these in the synthesized registry or the bindings never
+ * resolve.
  *
  * Exported for the drift guard
  * (`ui-surface-plugin-commands-mirror.spatial.node.test.ts`), which parses
@@ -200,23 +203,84 @@ export const UI_SURFACE_PLUGIN_COMMANDS: CommandMetadata[] = [
     scope: ["ui:pressable"],
     keys: { cua: "Space" },
   },
+  {
+    id: "filter_editor.drillIn",
+    name: "Edit Filter",
+    scope: ["ui:filter_editor"],
+    keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+  },
+  {
+    id: "ui.ai-panel.composer.drillIn",
+    name: "Edit Prompt",
+    scope: ["ui:ai-panel.composer"],
+    keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+  },
+  {
+    id: "ui.ai-panel.elicitation.field.drillIn",
+    name: "Edit Field",
+    scope: ["ui:ai-panel.elicitation.field"],
+    keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+  },
+];
+
+/**
+ * Key metadata for the `board-commands` builtin plugin's three commands,
+ * mirrored 1:1 from `builtin/plugins/board-commands/index.ts::BOARD_COMMANDS`
+ * (Card F — the board command DEFINITIONS live in the plugin; board-view.tsx
+ * only registers a webview-bus handler for `board.newTask`, while
+ * `board.firstColumn` / `board.lastColumn` execute server-side via the focus
+ * kernel's `navigate focus` op).
+ *
+ * Every entry is scope-gated to the board zone marker (`scope:
+ * ["ui:board"]`, the constant marker `board-view.tsx` mounts via a
+ * `CommandScopeProvider` inside its dynamic `board:<id>` `<FocusScope>`), so
+ * `extractKeymapBindings` never lifts its keys into the global table; the
+ * keys bind only while the focused scope chain contains the literal
+ * `ui:board` moniker, via `extractChainBindings`. Tests that drive board
+ * keystrokes (vim `0` / `$` / `o`, cua `Mod+Home` / `Mod+End` / `Mod+Enter`)
+ * need these in the synthesized registry or the board bindings never
+ * resolve.
+ *
+ * Exported for the drift guard
+ * (`board-plugin-commands-mirror.spatial.node.test.ts`), which parses the
+ * plugin source from disk and fails loudly when this mirror drifts.
+ */
+export const BOARD_PLUGIN_COMMANDS: CommandMetadata[] = [
+  {
+    id: "board.newTask",
+    name: "New Task",
+    scope: ["ui:board"],
+    keys: { vim: "o", cua: "Mod+Enter" },
+  },
+  {
+    id: "board.firstColumn",
+    name: "First Column",
+    scope: ["ui:board"],
+    keys: { vim: "0", cua: "Mod+Home" },
+  },
+  {
+    id: "board.lastColumn",
+    name: "Last Column",
+    scope: ["ui:board"],
+    keys: { vim: "$", cua: "Mod+End" },
+  },
 ];
 
 /**
  * Build the global command registry from `BINDING_TABLES` (one command per id,
  * each carrying its `keys` map keyed by keymap mode) plus the
  * `nav-commands` plugin's directional commands, the `grid-commands`
- * plugin's grid commands, and the `ui-commands` plugin's UI-surface
- * commands, which carry their keys on the plugin catalogue rather than the
- * static tables.
+ * plugin's grid commands, the `ui-commands` plugin's UI-surface
+ * commands, and the `board-commands` plugin's board commands, which carry
+ * their keys on the plugin catalogue rather than the static tables.
  *
  * The plugin entries stay separate from the `byId` merge: a command id can
  * own several keys per mode (e.g. cua binds both `Tab` and `ArrowRight` to
  * `nav.right`), and `extractKeymapBindings` keys its table by KEY, so two
  * metadata entries with the same id simply contribute two bindings. The
- * grid and UI-surface entries are scope-gated, so they contribute nothing to
- * the global table — they surface only through the scoped chain walk when
- * their zone moniker is in the focused chain.
+ * grid, UI-surface, and board entries are scope-gated, so they contribute
+ * nothing to the global table — they surface only through the scoped chain
+ * walk when their zone moniker is in the focused chain.
  */
 export function globalCommandsFromBindingTables(): CommandMetadata[] {
   const byId: Record<string, CommandMetadata> = {};
@@ -230,6 +294,7 @@ export function globalCommandsFromBindingTables(): CommandMetadata[] {
     ...NAV_PLUGIN_COMMANDS,
     ...GRID_PLUGIN_COMMANDS,
     ...UI_SURFACE_PLUGIN_COMMANDS,
+    ...BOARD_PLUGIN_COMMANDS,
     ...Object.values(byId),
   ];
 }

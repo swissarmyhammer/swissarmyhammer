@@ -34,7 +34,7 @@
 //! one of its commands, the sort of drop the per-plugin tests cannot
 //! catch because each only stages one bundle in isolation.
 //!
-//! The 92 commands across the 10 builtin command plugins (matches each
+//! The 98 commands across the 11 builtin command plugins (matches each
 //! plugin's `registerCommands(...)` call set):
 //!
 //! - `app-shell-commands` (15): help, about, quit, command, search,
@@ -49,11 +49,13 @@
 //!   load,save,list,next,prev,filter,filter.focus,clearFilter,group,
 //!   clearGroup,sort.set,sort.clear,sort.toggle}.
 //! - `task-commands` (3): task.{move,untag,doThisNext}.
-//! - `ui-commands` (14): ui.inspect, ui.inspector.{close,close_all,set_width},
+//! - `ui-commands` (17): ui.inspect, ui.inspector.{close,close_all,set_width},
 //!   app.palette.open, ui.palette.close, ui.entity.startRename, ui.mode.set,
 //!   ui.setFocus, window.new, plus the Card D UI-surface commands
-//!   field.{edit,editEnter} and pressable.{activate,activateSpace} — webview-
-//!   bus handled (the field / pressable React components register the live
+//!   field.{edit,editEnter} and pressable.{activate,activateSpace} and the
+//!   Card E editor drill-in commands filter_editor.drillIn,
+//!   ui.ai-panel.composer.drillIn, and ui.ai-panel.elicitation.field.drillIn —
+//!   all webview-bus handled (the owning React components register the live
 //!   handlers while focused; the host executes are inert no-ops). (The palette
 //!   opener is `app.palette.open` after the ui.*→app.* rename fold;
 //!   `ui.palette.open` is retired.)
@@ -69,8 +71,12 @@
 //!   lastCell,edit,editEnter,exitEdit,toggleVisual,deleteRow,newBelow,
 //!   newAbove} — all webview-bus handled (Card C); the grid React tree
 //!   registers the live handlers, the host executes are inert no-ops.
+//! - `board-commands` (3): board.{newTask,firstColumn,lastColumn} — Card F.
+//!   firstColumn/lastColumn route to the focus kernel's `navigate focus` op
+//!   (first/last) host-driven; newTask is webview-bus handled (the board
+//!   React tree registers the live handler, the host execute is inert).
 //!
-//! TOTAL: 92 commands.
+//! TOTAL: 98 commands.
 
 #![allow(dead_code)]
 
@@ -96,8 +102,8 @@ use crate::support::call_command;
 /// rest of the suite.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// The 10 builtin command plugins, in the order the app loads them.
-/// The grand union of their command registrations is the 92 ids asserted
+/// The 11 builtin command plugins, in the order the app loads them.
+/// The grand union of their command registrations is the 98 ids asserted
 /// below.
 const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
     "app-shell-commands",
@@ -110,6 +116,7 @@ const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
     "ai-commands",
     "nav-commands",
     "grid-commands",
+    "board-commands",
 ];
 
 /// Backend modules every builtin command plugin's
@@ -312,6 +319,12 @@ fn expected_command_ids() -> BTreeSet<String> {
         "field.editEnter",
         "pressable.activate",
         "pressable.activateSpace",
+        // ...and the Card E editor drill-in commands: webview-bus handled,
+        // host executes inert. ONE base elicitation id — the per-field
+        // variation lives in the focus-gated bus registration, not minted ids.
+        "filter_editor.drillIn",
+        "ui.ai-panel.composer.drillIn",
+        "ui.ai-panel.elicitation.field.drillIn",
         // ai-commands (5)
         "ai.cancel",
         "ai.focus",
@@ -343,6 +356,13 @@ fn expected_command_ids() -> BTreeSet<String> {
         "grid.deleteRow",
         "grid.newBelow",
         "grid.newAbove",
+        // board-commands (3) — Card F: firstColumn/lastColumn route to the
+        // focus kernel's `navigate focus` op (first/last); newTask is
+        // webview-bus handled (the board React tree registers the live
+        // handler; the host execute is inert).
+        "board.newTask",
+        "board.firstColumn",
+        "board.lastColumn",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -358,7 +378,7 @@ struct BootedBuiltins {
     _builtin_root: TempDir,
 }
 
-/// Boot a real `PluginHost` against a temp builtin-layer with all 10
+/// Boot a real `PluginHost` against a temp builtin-layer with all 11
 /// committed builtin command plugins staged, install the commands module,
 /// stub every other backend the plugins reach for, and load every plugin.
 async fn boot_all_builtin_plugins() -> BootedBuiltins {
@@ -402,10 +422,10 @@ async fn boot_all_builtin_plugins() -> BootedBuiltins {
     }
 }
 
-/// Boot all 10 committed builtin command plugins and assert the union of
+/// Boot all 11 committed builtin command plugins and assert the union of
 /// registered commands equals the locked baseline.
 #[tokio::test]
-async fn all_ten_builtin_command_plugins_register_their_full_command_set() {
+async fn all_eleven_builtin_command_plugins_register_their_full_command_set() {
     let booted = boot_all_builtin_plugins().await;
     let service = &booted.service;
 
@@ -439,8 +459,8 @@ async fn all_ten_builtin_command_plugins_register_their_full_command_set() {
 
     assert_eq!(
         got.len(),
-        92,
-        "the 10 builtin command plugins must collectively register exactly 92 commands"
+        98,
+        "the 11 builtin command plugins must collectively register exactly 98 commands"
     );
 }
 
@@ -450,7 +470,7 @@ async fn all_ten_builtin_command_plugins_register_their_full_command_set() {
 /// focused object) nor without one (placeholders fall back to a clean
 /// generic form).
 ///
-/// Sweeps every command registered by all 10 committed builtin plugins, so a
+/// Sweeps every command registered by all 11 committed builtin plugins, so a
 /// future plugin caption that introduces a placeholder the renderer cannot
 /// resolve fails here instead of leaking into the palette / menus
 /// (regression guard for kanban card 01KTRMXRNH66GZCWSNR1YGE28E).

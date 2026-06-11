@@ -14,48 +14,27 @@
  *
  * The structural smell is an object-literal `id:` property holding a string
  * that starts with `grid.` — the shape every `CommandDef` / command-object
- * construction uses. Bus registrations (`registerWebviewCommandHandler(
- * "grid.edit", …)`) pass the id as a bare call argument, never as an `id:`
- * property, so handler-registration sites do not trip the scan.
+ * construction uses (see `@/test/plugin-owned-guard`). Bus registrations
+ * (`registerWebviewCommandHandler("grid.edit", …)`) pass the id as a bare
+ * call argument, never as an `id:` property, so handler-registration sites do
+ * not trip the scan.
  *
  * As with `webview-command-bus.guard.node.test.ts`, the detector is
  * unit-proven against known-good and known-bad source below so the directory
  * scan is trustworthy.
  */
 import { describe, it, expect } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  definesPluginCommand,
+  findCommandDefinitionOffenders,
+} from "@/test/plugin-owned-guard";
 
-// ---------------------------------------------------------------------------
-// Pure detector — unit-proven below so the directory scan is trustworthy.
-// ---------------------------------------------------------------------------
+/** Regex source for the guarded id family: any id starting with `grid.`. */
+const GRID_ID_PATTERN = String.raw`grid\.`;
 
 /** Whether `source` defines a command object with a `grid.*` id. */
-export function definesGridCommand(source: string): boolean {
-  return /\bid:\s*["']grid\./.test(source);
-}
-
-// Vitest runs with cwd = the ui project root (where vite.config.ts lives).
-const SRC_ROOT = join(process.cwd(), "src");
-
-/** Recursively collect non-test `.ts`/`.tsx` source files under `dir`.
- *
- * Skips `node_modules` and the `test/` harness directory (its registry
- * mirrors legitimately carry the plugin metadata, including the grid ids). */
-function collectSourceFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "node_modules" || entry.name === "test") continue;
-      out.push(...collectSourceFiles(full));
-      continue;
-    }
-    if (!/\.tsx?$/.test(entry.name)) continue;
-    if (/\.test\.tsx?$/.test(entry.name)) continue;
-    out.push(full);
-  }
-  return out;
+function definesGridCommand(source: string): boolean {
+  return definesPluginCommand(source, GRID_ID_PATTERN);
 }
 
 describe("grid.* command definitions are plugin-owned", () => {
@@ -79,9 +58,7 @@ describe("grid.* command definitions are plugin-owned", () => {
   });
 
   it("no client source defines a grid.* CommandDef — the plugin owns the definitions", () => {
-    const offenders = collectSourceFiles(SRC_ROOT).filter((f) =>
-      definesGridCommand(readFileSync(f, "utf8")),
-    );
+    const offenders = findCommandDefinitionOffenders(GRID_ID_PATTERN);
 
     // A grid.* id defined in React re-splits command ownership. Define it in
     // `builtin/plugins/grid-commands/index.ts` and register the behavior via

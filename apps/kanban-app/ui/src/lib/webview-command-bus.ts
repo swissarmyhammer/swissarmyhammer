@@ -45,7 +45,7 @@
  * When a webview behavior needs a durable effect, it dispatches BACK through
  * `useDispatchCommand` to a plugin command that owns a backend op — the way
  * `grid.deleteRow` re-dispatches `${entity}.archive` and `board.newTask`
- * re-dispatches `entity.addTask`. The bus only sequences presentation around
+ * re-dispatches `entity.add:task`. The bus only sequences presentation around
  * backend ops; it must never become a home for them, or it degrades into a
  * client-side command-logic dumping ground (the failure mode this invariant
  * exists to prevent).

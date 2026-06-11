@@ -1,8 +1,11 @@
 // ui-commands — builtin plugin porting `ui.yaml` (10 commands) to the
 // TypeScript plugin SDK (the last builtin-commands port), plus the four
-// UI-surface commands Card D moved out of React (`UI_SURFACE_COMMANDS`
+// UI-surface commands Card D moved out of React and the three editor
+// drill-in commands Card E moved out of React (`UI_SURFACE_COMMANDS`
 // below): `field.edit` / `field.editEnter` / `pressable.activate` /
-// `pressable.activateSpace` — 14 commands total.
+// `pressable.activateSpace` / `filter_editor.drillIn` /
+// `ui.ai-panel.composer.drillIn` / `ui.ai-panel.elicitation.field.drillIn`
+// — 17 commands total.
 //
 // Like `app-shell-commands`, this bundle fans out across MULTIPLE backends by
 // concern — but here the three backends are `ui_state`, `focus`, and `window`:
@@ -62,15 +65,24 @@ interface UiSurfaceCommandSpec {
 }
 
 /**
- * The four UI-surface commands, as a data table (Card D of the
+ * The seven UI-surface commands, as a data table (Cards D and E of the
  * ui-command-cleanup project — mirrors the `grid-commands` bundle's
  * `GRID_COMMANDS` pattern).
  *
  * `id` / `name` / `keys` are copied 1:1 from the retired client-side
  * `CommandDef`s: `field.edit` / `field.editEnter` from
- * `apps/kanban-app/ui/src/components/fields/field.tsx` and
+ * `apps/kanban-app/ui/src/components/fields/field.tsx`,
  * `pressable.activate` / `pressable.activateSpace` from
- * `apps/kanban-app/ui/src/components/pressable.tsx` (`usePressCommands`).
+ * `apps/kanban-app/ui/src/components/pressable.tsx` (`usePressCommands`),
+ * and the Card E editor drill-ins: `filter_editor.drillIn` from
+ * `apps/kanban-app/ui/src/components/perspective-tab-bar.tsx`
+ * (`FilterFormulaBarFocusable`), `ui.ai-panel.composer.drillIn` from
+ * `apps/kanban-app/ui/src/components/ai-prompt-composer.tsx`, and
+ * `ui.ai-panel.elicitation.field.drillIn` from
+ * `apps/kanban-app/ui/src/components/ai-elements/elicitation.tsx`
+ * (`useFieldDrillIn` — formerly minted per field as `...drillIn:{key}`;
+ * now ONE base id, with the per-field variation carried by the focus-gated
+ * bus registration rather than N minted command ids).
  *
  * # Why every host `execute` is an inert no-op
  *
@@ -144,6 +156,45 @@ const UI_SURFACE_COMMANDS: readonly UiSurfaceCommandSpec[] = [
     scope: "ui:pressable",
     keys: { cua: "Space" },
   },
+  // ── Editor drill-in (Card E) ──────────────────────────────────────────────
+  // Enter on a focused editor scope drills DOM focus into the live editor
+  // instance. Every keymap binds Enter, shadowing the global
+  // `nav.drillIn: Enter` only while the surface's scope moniker is in the
+  // focused chain. The webview handler is pure presentation: it calls the
+  // owning component's editor-handle `.focus()` and nothing else.
+  //
+  // The filter formula bar's spatial moniker is dynamic
+  // (`filter_editor:{perspectiveId}`), so — like `ui:field` — the component
+  // mounts the constant `ui:filter_editor` marker above its `<FocusScope>`.
+  {
+    id: "filter_editor.drillIn",
+    name: "Edit Filter",
+    scope: "ui:filter_editor",
+    keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+  },
+  // The composer's `<FocusScope>` moniker IS the constant
+  // `ui:ai-panel.composer`, so the scope gate names the zone moniker
+  // directly — no marker needed.
+  {
+    id: "ui.ai-panel.composer.drillIn",
+    name: "Edit Prompt",
+    scope: "ui:ai-panel.composer",
+    keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+  },
+  // ONE base id for every elicitation text-like field (formerly minted per
+  // field as `ui.ai-panel.elicitation.field.drillIn:{key}`). The field
+  // monikers are dynamic (`ui:ai-panel.elicitation.field:{key}`), so each
+  // field mounts the constant `ui:ai-panel.elicitation.field` marker; the
+  // per-field variation is carried by the focus-gated bus registration —
+  // the focused instance's closure owns its own input ref — NOT by N
+  // minted command ids (and not by a dispatch arg: the keymap dispatches
+  // bare ids, so an arg could never be supplied on the Enter path).
+  {
+    id: "ui.ai-panel.elicitation.field.drillIn",
+    name: "Edit Field",
+    scope: "ui:ai-panel.elicitation.field",
+    keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+  },
 ];
 
 /**
@@ -211,7 +262,7 @@ interface WindowDispatch {
  * The ui-commands builtin plugin.
  *
  * Registers the ten UI commands ported from `ui.yaml`, routed across the
- * `ui_state`, `focus`, and `window` MCP servers, plus the four webview-bus
+ * `ui_state`, `focus`, and `window` MCP servers, plus the seven webview-bus
  * handled UI-surface commands (`UI_SURFACE_COMMANDS`). Identity is the
  * bundle directory name (`ui-commands`); `name` / `description` are
  * descriptive metadata only.
@@ -222,7 +273,7 @@ export default class UiCommandsPlugin extends Plugin {
 
   /** One-line description — descriptive metadata only. */
   readonly description =
-    "Builtin UI commands (inspector open/close, command palette open/close, perspective rename, keymap mode, spatial focus, and new window) routed to the ui_state, focus, and window servers, plus the webview-bus handled field-edit and pressable-activation commands.";
+    "Builtin UI commands (inspector open/close, command palette open/close, perspective rename, keymap mode, spatial focus, and new window) routed to the ui_state, focus, and window servers, plus the webview-bus handled field-edit, pressable-activation, and editor drill-in commands.";
 
   /**
    * Activate the services these commands route to, then register the commands.
@@ -435,9 +486,11 @@ export default class UiCommandsPlugin extends Plugin {
         },
       },
 
-      // ─── UI-surface commands (Card D) ───────────────────────────────────
+      // ─── UI-surface commands (Cards D + E) ──────────────────────────────
       // field.edit / field.editEnter / pressable.activate /
-      // pressable.activateSpace from the data table above. Presentation-only:
+      // pressable.activateSpace / filter_editor.drillIn /
+      // ui.ai-panel.composer.drillIn / ui.ai-panel.elicitation.field.drillIn
+      // from the data table above. Presentation-only:
       // the webview bus handler (registered by the focused field / pressable
       // component) intercepts each id in `useDispatchCommand` before the
       // backend, so the host `execute` is never reached in production. It
@@ -460,7 +513,7 @@ export default class UiCommandsPlugin extends Plugin {
     ]);
 
     this.log.info(
-      "ui-commands: registered 14 commands (ui.inspect / ui.inspector.* / app.palette.open / ui.palette.close / ui.entity.startRename / ui.mode.set / ui.setFocus / window.new across ui_state / focus / window; field.edit / field.editEnter / pressable.activate / pressable.activateSpace → webview bus)",
+      "ui-commands: registered 17 commands (ui.inspect / ui.inspector.* / app.palette.open / ui.palette.close / ui.entity.startRename / ui.mode.set / ui.setFocus / window.new across ui_state / focus / window; field.edit / field.editEnter / pressable.activate / pressable.activateSpace / filter_editor.drillIn / ui.ai-panel.composer.drillIn / ui.ai-panel.elicitation.field.drillIn → webview bus)",
     );
   }
 }

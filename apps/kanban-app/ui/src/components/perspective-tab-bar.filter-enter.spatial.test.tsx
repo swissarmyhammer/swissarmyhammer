@@ -178,6 +178,15 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // assert here.
 // ---------------------------------------------------------------------------
 
+// Hoisted spy on the mocked CM6 editor's imperative `focus()` — the
+// `filter_editor.drillIn` bus handler's whole effect is calling it, so the
+// drill-in test below observes the handler ran through the live editor
+// handle (`vi.hoisted` because the `vi.mock` factory is hoisted above
+// module-level `const`s).
+const { filterEditorFocusSpy } = vi.hoisted(() => ({
+  filterEditorFocusSpy: vi.fn(),
+}));
+
 vi.mock("@/components/filter-editor", async () => {
   const React = await import("react");
   type FilterEditorHandle = {
@@ -192,7 +201,7 @@ vi.mock("@/components/filter-editor", async () => {
     React.useImperativeHandle(
       ref,
       () => ({
-        focus() {},
+        focus: filterEditorFocusSpy,
         setValue() {},
         getValue() {
           return "";
@@ -463,5 +472,67 @@ describe("PerspectiveTabBar filter button — Enter claims focus on the filter e
       filterFocusBackend,
       "Enter must not dispatch the deleted perspective.filter.focus backend command",
     ).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Card E — the `filter_editor.drillIn` DEFINITION lives in the `ui-commands`
+  // builtin plugin (scope `["ui:filter_editor"]`, the constant marker
+  // `FilterFormulaBarFocusable` mounts above its dynamic
+  // `filter_editor:{id}` `<FocusScope>`); the component registers only the
+  // live BEHAVIOR on the webview command bus while spatial focus is within
+  // the formula-bar scope. Enter on the focused scope must resolve the id via
+  // the registry chain walk and run the bus handler, which drills DOM focus
+  // into the CM6 editor via the imperative `FilterEditorHandle.focus()`.
+  // -------------------------------------------------------------------------
+
+  it("Enter on the focused filter_editor:p1 scope runs the plugin-defined filter_editor.drillIn and focuses the CM6 editor", async () => {
+    await renderTabBar();
+    await flushSetup();
+
+    // The formula bar registers its per-perspective spatial scope.
+    const scope = registerScopeArgs().find(
+      (a) => a.segment === "filter_editor:p1",
+    );
+    expect(
+      scope,
+      "filter_editor:p1 must register as a FocusScope for the formula bar",
+    ).toBeDefined();
+
+    // Drive a focus-changed event onto the formula-bar scope so the
+    // entity-focus bridge populates the focused chain AND the focus-gated
+    // bus registration (`useFocusedWebviewCommandHandlers`) installs the
+    // live drill-in handler.
+    const cb = listenCallbacks["focus-changed"];
+    expect(cb).toBeTruthy();
+    await act(async () => {
+      cb({
+        payload: {
+          window_label: "main",
+          prev_fq: null,
+          next_fq: scope!.fq,
+          next_segment: "filter_editor:p1",
+        },
+      });
+      currentFocusKey.key = scope!.fq as string;
+      await Promise.resolve();
+    });
+    await flushSetup();
+
+    expect(
+      filterEditorFocusSpy,
+      "precondition: the CM6 editor must not be focused before Enter",
+    ).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      filterEditorFocusSpy,
+      "Enter on the focused formula bar must run the filter_editor.drillIn " +
+        "webview-bus handler, which focuses the live CM6 editor instance",
+    ).toHaveBeenCalled();
   });
 });

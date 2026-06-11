@@ -643,6 +643,54 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Field A → field B focus handoff in a SINGLE render: spatially focusing
+  // field A installs its drill-in closure in the bus slot; handing spatial
+  // focus to field B must swap the slot to B's closure (the bus's
+  // ownership-guarded cleanup), so Enter drills into B's input — never A's.
+  // The per-kind table above proves disjointness per fresh render only; this
+  // pins that A's stale closure cannot linger after the handoff.
+  // -------------------------------------------------------------------------
+
+  it("Enter after a field A → field B focus handoff drills into B's input, not A's", async () => {
+    const harness = mockConnect();
+    const { unmount } = await renderPrimedPanel(harness);
+
+    await act(async () => {
+      void harness.elicitation()(allKindsFormRequest());
+    });
+    await flushSetup();
+
+    const leafA = findRegisterRecord("ui:ai-panel.elicitation.field:summary");
+    const leafB = findRegisterRecord("ui:ai-panel.elicitation.field:amount");
+    expect(leafA, "field A (summary) leaf must register").toBeTruthy();
+    expect(leafB, "field B (amount) leaf must register").toBeTruthy();
+
+    const inputA = screen.getByLabelText(/summary/i);
+    const inputB = screen.getByLabelText(/amount/i);
+
+    // Focus field A's leaf so its drill-in handler occupies the bus slot…
+    await act(async () => {
+      await spatialHarness.commitFocus(leafA!.fq as FullyQualifiedMoniker);
+    });
+    await flushSetup();
+
+    // …then hand spatial focus to field B and press Enter (drillInto commits
+    // focus on B before the keystroke — the explicit A → B handoff).
+    await drillInto(leafB!.fq as FullyQualifiedMoniker);
+
+    expect(
+      document.activeElement,
+      "after the A → B handoff, Enter must drill into B's input",
+    ).toBe(inputB);
+    expect(
+      document.activeElement,
+      "A's input must not retain (or steal) DOM focus after the handoff",
+    ).not.toBe(inputA);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
   // Drill-in for the select: Enter on the focused select leaf runs the
   // Pressable's activation, whose `onPress` hands DOM focus to the Radix
   // trigger so its listbox keyboard interaction takes over.

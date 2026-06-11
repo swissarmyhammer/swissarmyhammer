@@ -53,6 +53,7 @@ import { Pressable } from "@/components/pressable";
 import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
+import { useFocusedWebviewCommandHandlers } from "@/lib/use-focused-webview-command-handlers";
 import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 import { commandIconFor } from "@/components/command-icon-registry";
 
@@ -895,6 +896,20 @@ function PerspectiveTabFocusable({
 }
 
 /**
+ * The constant marker moniker the filter formula bar mounts into the command
+ * scope chain, directly above its `<FocusScope>`.
+ *
+ * The formula bar's spatial moniker is dynamic (`filter_editor:{id}`, one per
+ * active perspective), so the plugin-defined `filter_editor.drillIn` command
+ * cannot be scope-gated on a literal zone moniker. The marker gives the
+ * formula bar one shared literal moniker; the `ui-commands` plugin declares
+ * `scope: ["ui:filter_editor"]` against it, so its Enter key binds exactly
+ * while the formula bar is in the focused chain — and nowhere else. Mirrors
+ * `FIELD_COMMAND_SCOPE` in `fields/field.tsx` (Card D).
+ */
+export const FILTER_EDITOR_COMMAND_SCOPE = "ui:filter_editor";
+
+/**
  * Wrap the always-visible filter formula bar in
  * `<FocusScope moniker={asSegment(`filter_editor:${perspectiveId}`)}>` when
  * the spatial-nav stack is mounted; otherwise fall through.
@@ -909,9 +924,16 @@ function PerspectiveTabFocusable({
  * # Drill-in / drill-out via the existing nav.drillIn / nav.drillOut
  *
  * When the spatial focus is on `filter_editor:${id}`, pressing Enter
- * fires the global `nav.drillIn` keybinding. We register a per-scope
- * `filter_editor.drillIn` CommandDef with `keys: { Enter }` that
- * shadows the global handler and focuses the inner CM6 editor.
+ * fires the `filter_editor.drillIn` command. Its DEFINITION (id / name /
+ * keys / scope) lives in the `ui-commands` builtin plugin (Card E), gated
+ * to the constant `ui:filter_editor` marker moniker
+ * ({@link FILTER_EDITOR_COMMAND_SCOPE}) this component mounts via a
+ * `CommandScopeProvider` directly above its `<FocusScope>` — the keymap
+ * layer's chain walk claims Enter for it (shadowing the global
+ * `nav.drillIn: Enter`) whenever the marker is in the focused chain. This
+ * component registers only the live BEHAVIOR — focus the inner CM6
+ * editor — on the webview command bus, while spatial focus is within the
+ * formula-bar scope (`useFocusedWebviewCommandHandlers`).
  *
  * When the inner CM6 editor has DOM focus and the user presses
  * Escape, CM6's own keymap (already wired in
@@ -945,30 +967,34 @@ function FilterFormulaBarFocusable({
   const layerKey = useOptionalEnclosingLayerFq();
   const actions = useOptionalSpatialFocusActions();
 
-  const drillCommands = useMemo<readonly CommandDef[]>(
-    () => [
-      {
-        id: "filter_editor.drillIn",
-        name: "Edit Filter",
-        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
-        execute: () => {
-          editorRef.current?.focus();
-        },
+  // Card E: the live drill-in BEHAVIOR — focus the inner CM6 editor — is
+  // registered on the webview command bus while spatial focus is within
+  // this formula-bar scope (the scope is a spatial leaf, so containment
+  // degenerates to direct focus), matching the keymap's marker-in-chain
+  // gate on `ui:filter_editor`. Pure presentation: the handler touches
+  // only the live editor handle, no durable effect.
+  const drillInHandlers = useMemo(
+    () => ({
+      "filter_editor.drillIn": () => {
+        editorRef.current?.focus();
       },
-    ],
+    }),
     [editorRef],
+  );
+  useFocusedWebviewCommandHandlers(
+    asSegment(`filter_editor:${perspectiveId}`),
+    drillInHandlers,
   );
 
   if (!layerKey || !actions) {
     return <>{children}</>;
   }
   return (
-    <FocusScope
-      moniker={asSegment(`filter_editor:${perspectiveId}`)}
-      commands={drillCommands}
-    >
-      <FilterEditorDrillOutWiring>{children}</FilterEditorDrillOutWiring>
-    </FocusScope>
+    <CommandScopeProvider moniker={FILTER_EDITOR_COMMAND_SCOPE}>
+      <FocusScope moniker={asSegment(`filter_editor:${perspectiveId}`)}>
+        <FilterEditorDrillOutWiring>{children}</FilterEditorDrillOutWiring>
+      </FocusScope>
+    </CommandScopeProvider>
   );
 }
 

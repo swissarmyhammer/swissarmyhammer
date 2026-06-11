@@ -51,11 +51,11 @@ use tokio::sync::{Mutex as TokioMutex, RwLock};
 /// [`PluginPlatform::wire_command_services`]: `store`, `entity`, `ui_state`,
 /// `focus`, and `commands`). Every top-level subdirectory of
 /// `builtin/plugins/` is one plugin bundle: `kanban-builtin-probe` (the
-/// read-only builtin-layer probe) plus the 9 command plugins
+/// read-only builtin-layer probe) plus the 11 command plugins
 /// (`task-commands`, `kanban-misc-commands`, `file-commands`,
 /// `perspective-commands`, `entity-commands`, `ui-commands`,
-/// `app-shell-commands`, `ai-commands`, `nav-commands`) that register the
-/// cut-over's command surface.
+/// `app-shell-commands`, `ai-commands`, `nav-commands`, `grid-commands`,
+/// `board-commands`) that register the cut-over's command surface.
 ///
 /// At startup the embedded tree is extracted ([`extract_builtin_plugins`])
 /// into the `plugins/` subdirectory of a cache directory — one per-bundle
@@ -240,7 +240,7 @@ impl PluginPlatform {
     /// require a live `AppHandle`, which only exists at setup; exposing them
     /// here lets the `file-commands` / `ui-commands` / `kanban-misc-commands` /
     /// `app-shell-commands` builtin plugins satisfy `ensureServices` so the
-    /// atomic `discover_and_load_all` loads ALL 9 builtin command plugins.
+    /// atomic `discover_and_load_all` loads ALL 11 builtin command plugins.
     pub(crate) async fn expose_apphandle_modules(
         &self,
         window_shell: Option<std::sync::Arc<dyn swissarmyhammer_window_service::WindowShell>>,
@@ -640,7 +640,7 @@ mod tests {
     const BUILTIN_COMMAND_ID: &str = BUILTIN_COMMAND_BASELINE[0];
 
     /// One representative command id per builtin command plugin — proof that
-    /// ALL 10 plugins discovered and registered (each id comes from a distinct
+    /// ALL 11 plugins discovered and registered (each id comes from a distinct
     /// bundle, and the four after `entity.add` activate the `views` / `window` /
     /// `app` backends that previously failed `ensureServices`):
     ///
@@ -654,6 +654,7 @@ mod tests {
     /// - `ai.toggle`        → ai-commands         (`commands` only; webview-reactive no-op)
     /// - `nav.up`           → nav-commands        (`commands`, **focus** — host-driven nav)
     /// - `grid.edit`        → grid-commands       (`commands` only; webview-bus handled)
+    /// - `board.firstColumn` → board-commands     (`commands`, **focus** — host-driven nav)
     const BUILTIN_COMMAND_BASELINE: &[&str] = &[
         "task.move",
         "entity.add",
@@ -665,9 +666,10 @@ mod tests {
         "ai.toggle",
         "nav.up",
         "grid.edit",
+        "board.firstColumn",
     ];
 
-    /// The 10 builtin command-plugin bundle ids under `builtin/plugins/`
+    /// The 11 builtin command-plugin bundle ids under `builtin/plugins/`
     /// (excluding the read-only `kanban-builtin-probe`).
     const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
         "task-commands",
@@ -680,10 +682,11 @@ mod tests {
         "ai-commands",
         "nav-commands",
         "grid-commands",
+        "board-commands",
     ];
 
     /// Assert a platform's host carries the full builtin command baseline — one
-    /// command from each of the 10 builtin command plugins.
+    /// command from each of the 11 builtin command plugins.
     async fn assert_builtin_baseline(platform: &super::PluginPlatform, ctx: &str) {
         let ids = list_command_ids(platform).await;
         for id in BUILTIN_COMMAND_BASELINE {
@@ -832,16 +835,16 @@ mod tests {
         assert_builtin_baseline(&*platform_b.lock().await, "board B").await;
     }
 
-    /// The global host and every per-board host load ALL 9 builtin command
+    /// The global host and every per-board host load ALL 11 builtin command
     /// plugins and register the full builtin command baseline.
     ///
     /// This is the acceptance for the wiring card: `discover_and_load_all` is
     /// atomic, so a single unwired backend (`views` / `window` / `app` /
-    /// `focus`) would roll back ALL 9 plugins and leave an empty command
+    /// `focus`) would roll back ALL 11 plugins and leave an empty command
     /// registry. A passing run proves every backend each plugin's
     /// `ensureServices` requires is exposed before discovery on both host kinds.
     #[tokio::test]
-    async fn all_nine_builtin_command_plugins_load_with_full_baseline() {
+    async fn all_builtin_command_plugins_load_with_full_baseline() {
         let (_user_root, _builtin_cache, _global_dir, state) = app_state_with_plugin_roots().await;
 
         // The global fallback host: every builtin command plugin discovered

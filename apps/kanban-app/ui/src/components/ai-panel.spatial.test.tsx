@@ -564,13 +564,17 @@ describe("AiPanel — spatial-nav focus scopes", () => {
   // spatial focus, pressing Enter must move DOM focus into the CM6 prompt.
   //
   // A bare `<FocusScope>` only *registers* the composer as a nav target —
-  // landing on it and pressing Enter does NOT focus the editor. The fix
-  // gives the composer scope a per-scope `ui.ai-panel.composer.drillIn`
-  // `CommandDef` (keyed to Enter) whose `execute` calls the shared
-  // `TextEditorHandle.focus()`. This test drives a real Enter keystroke
-  // through `<AppShell>`'s `<KeybindingHandler>` and asserts the CM6
-  // prompt — NOT the model picker — receives DOM focus, mirroring the
-  // filter formula bar's `filter_editor.drillIn` contract.
+  // landing on it and pressing Enter does NOT focus the editor. The
+  // `ui.ai-panel.composer.drillIn` command DEFINITION (keyed to Enter,
+  // scope-gated to the composer scope's own `ui:ai-panel.composer`
+  // moniker) lives in the `ui-commands` builtin plugin (Card E); the
+  // composer registers the live behavior — the shared
+  // `TextEditorHandle.focus()` — on the webview command bus while the
+  // scope is focused. This test drives a real Enter keystroke through
+  // `<AppShell>`'s `<KeybindingHandler>` and asserts the CM6 prompt — NOT
+  // the model picker — receives DOM focus, mirroring the filter formula
+  // bar's `filter_editor.drillIn` contract, and that the dispatch is
+  // bus-handled (it never reaches the Command service backend).
   // -------------------------------------------------------------------------
 
   it("Enter on the focused composer leaf drives DOM focus into the CM6 prompt", async () => {
@@ -615,9 +619,10 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     });
     await flushSetup();
 
-    // Press Enter. `<KeybindingHandler>` resolves it against the focused
-    // composer scope's `commands` — the `ui.ai-panel.composer.drillIn`
-    // `CommandDef` shadows the global `nav.drillIn` and calls
+    // Press Enter. `<KeybindingHandler>` resolves it via the registry chain
+    // walk — the plugin-defined `ui.ai-panel.composer.drillIn` (scope
+    // `["ui:ai-panel.composer"]`) shadows the global `nav.drillIn` — and
+    // the dispatch runs the composer's webview-bus handler, which calls
     // `editorRef.current?.focus()`.
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
@@ -629,6 +634,23 @@ describe("AiPanel — spatial-nav focus scopes", () => {
       document.activeElement,
       "Enter on the focused composer leaf must land DOM focus on the CM6 prompt",
     ).toBe(prompt);
+
+    // Bus-handled, not backend-dispatched: the drill-in is pure
+    // presentation, so the id must never reach the Command service's
+    // `execute command` verb (lowered onto the `dispatch_command` Tauri
+    // command). A regression that drops the bus registration would fall
+    // through to the plugin's inert host execute via this backend channel
+    // and leave the editor unfocused.
+    const backendExecutes = mockInvoke.mock.calls.filter(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as { cmd?: string } | undefined)?.cmd ===
+          "ui.ai-panel.composer.drillIn",
+    );
+    expect(
+      backendExecutes,
+      "ui.ai-panel.composer.drillIn must be handled on the webview bus, never dispatched to the backend",
+    ).toHaveLength(0);
 
     unmount();
   });

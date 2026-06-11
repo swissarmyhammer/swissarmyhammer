@@ -3,7 +3,10 @@
 //! This is the acceptance for the port of `ui.yaml` — 10 commands — into the
 //! one `builtin/plugins/ui-commands/` bundle, PLUS the four UI-surface
 //! commands Card D moved out of React (`field.edit` / `field.editEnter` /
-//! `pressable.activate` / `pressable.activateSpace`) — 14 commands total.
+//! `pressable.activate` / `pressable.activateSpace`) and the three editor
+//! drill-in commands Card E moved out of React (`filter_editor.drillIn` /
+//! `ui.ai-panel.composer.drillIn` / `ui.ai-panel.elicitation.field.drillIn`)
+//! — 17 commands total.
 //! It was the LAST builtin-commands port, and like `app-shell-commands` every
 //! ported command fans out across MULTIPLE backends by concern — but here the
 //! three backends are `ui_state`, `focus`, and `window`:
@@ -26,10 +29,17 @@
 //!     mirroring the `grid-commands` bundle. Each is scope-gated to its
 //!     surface's literal chain moniker (`ui:field` / `ui:pressable`) so its
 //!     keys never claim a global binding.
+//!   - `filter_editor.drillIn` / `ui.ai-panel.composer.drillIn` /
+//!     `ui.ai-panel.elicitation.field.drillIn` — NO backend: the editor
+//!     drill-in commands (Card E), webview-bus handled like the Card D set.
+//!     The owning editor component focuses its live CM6 / input instance;
+//!     each is scope-gated to its surface's literal chain moniker
+//!     (`ui:filter_editor` / `ui:ai-panel.composer` /
+//!     `ui:ai-panel.elicitation.field`).
 //!
 //! What a passing run proves:
 //!
-//! 1. **Discovery + registration** — after load, all 14 commands are
+//! 1. **Discovery + registration** — after load, all 17 commands are
 //!    registered.
 //! 2. **Metadata fidelity** — each command's `name` / `keys` / `menu` /
 //!    `scope` / `context_menu*` / `visible` / `undoable` / `params` match the
@@ -432,6 +442,11 @@ async fn ui_commands_plugin_registers_and_executes() {
         "field.editEnter",
         "pressable.activate",
         "pressable.activateSpace",
+        // Card E — editor drill-in commands moved out of React, webview-bus
+        // handled.
+        "filter_editor.drillIn",
+        "ui.ai-panel.composer.drillIn",
+        "ui.ai-panel.elicitation.field.drillIn",
     ] {
         assert!(
             commands.contains_key(id),
@@ -441,8 +456,8 @@ async fn ui_commands_plugin_registers_and_executes() {
     }
     assert_eq!(
         commands.len(),
-        14,
-        "exactly the 14 ui-commands registrations should be present, got {:?}",
+        17,
+        "exactly the 17 ui-commands registrations should be present, got {:?}",
         commands.keys().collect::<Vec<_>>()
     );
 
@@ -659,15 +674,18 @@ async fn ui_commands_plugin_registers_and_executes() {
         "window.new must drive the window shell's open_new_window action"
     );
 
-    // ── (3j) field.* / pressable.* dispatch host-side as inert no-ops ───────
-    // The webview command bus owns the live effect (Card D); the host execute
-    // exists only to satisfy the registration contract. A successful
+    // ── (3j) field.* / pressable.* / drill-in dispatch host-side as no-ops ──
+    // The webview command bus owns the live effect (Cards D + E); the host
+    // execute exists only to satisfy the registration contract. A successful
     // `{ ok: true }` proves the execute reaches no backend.
     for id in [
         "field.edit",
         "field.editEnter",
         "pressable.activate",
         "pressable.activateSpace",
+        "filter_editor.drillIn",
+        "ui.ai-panel.composer.drillIn",
+        "ui.ai-panel.elicitation.field.drillIn",
     ] {
         let result = execute_ok(&service, id, json!({})).await;
         assert_eq!(
@@ -686,7 +704,7 @@ async fn ui_commands_plugin_registers_and_executes() {
 type MetadataAssert = (&'static str, fn(&Value));
 
 /// The metadata-fidelity table: each command id paired with its per-command
-/// assertion, exercised across all 14 in the test body.
+/// assertion, exercised across all 17 in the test body.
 fn metadata_asserts() -> Vec<MetadataAssert> {
     vec![
         ("ui.inspect", assert_ui_inspect),
@@ -703,6 +721,12 @@ fn metadata_asserts() -> Vec<MetadataAssert> {
         ("field.editEnter", assert_field_edit_enter),
         ("pressable.activate", assert_pressable_activate),
         ("pressable.activateSpace", assert_pressable_activate_space),
+        ("filter_editor.drillIn", assert_filter_editor_drill_in),
+        ("ui.ai-panel.composer.drillIn", assert_composer_drill_in),
+        (
+            "ui.ai-panel.elicitation.field.drillIn",
+            assert_elicitation_field_drill_in,
+        ),
     ]
 }
 
@@ -944,6 +968,56 @@ fn assert_pressable_activate_space(cmd: &Value) {
         "Activate (Space)",
         json!({ "cua": "Space" }),
         "ui:pressable",
+    );
+}
+
+/// The shared keys block of the three Card E editor drill-in commands: every
+/// keymap binds Enter, copied 1:1 from the retired React `CommandDef`s.
+fn drill_in_keys() -> Value {
+    json!({ "cua": "Enter", "vim": "Enter", "emacs": "Enter" })
+}
+
+/// `filter_editor.drillIn` — retired perspective-tab-bar.tsx def: Enter on the
+/// focused filter formula bar drills DOM focus into the CM6 filter editor;
+/// gated to the `ui:filter_editor` marker scope the formula bar mounts above
+/// its dynamic `filter_editor:{id}` `<FocusScope>`.
+fn assert_filter_editor_drill_in(cmd: &Value) {
+    assert_ui_surface_command(
+        cmd,
+        "filter_editor.drillIn",
+        "Edit Filter",
+        drill_in_keys(),
+        "ui:filter_editor",
+    );
+}
+
+/// `ui.ai-panel.composer.drillIn` — retired ai-prompt-composer.tsx def: Enter
+/// on the focused composer scope drills DOM focus into the CM6 prompt; gated
+/// to the composer `<FocusScope>`'s own constant `ui:ai-panel.composer`
+/// moniker (no marker needed — the zone moniker is already literal).
+fn assert_composer_drill_in(cmd: &Value) {
+    assert_ui_surface_command(
+        cmd,
+        "ui.ai-panel.composer.drillIn",
+        "Edit Prompt",
+        drill_in_keys(),
+        "ui:ai-panel.composer",
+    );
+}
+
+/// `ui.ai-panel.elicitation.field.drillIn` — retired ai-elements/elicitation
+/// .tsx def (formerly minted per field as `...drillIn:{key}`): ONE base id,
+/// gated to the `ui:ai-panel.elicitation.field` marker scope each text-like
+/// field mounts above its dynamic `ui:ai-panel.elicitation.field:{key}`
+/// `<FocusScope>`. The per-field variation lives in the focus-gated webview
+/// bus registration (the focused instance's closure), not in N minted ids.
+fn assert_elicitation_field_drill_in(cmd: &Value) {
+    assert_ui_surface_command(
+        cmd,
+        "ui.ai-panel.elicitation.field.drillIn",
+        "Edit Field",
+        drill_in_keys(),
+        "ui:ai-panel.elicitation.field",
     );
 }
 

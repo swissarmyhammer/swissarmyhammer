@@ -11,8 +11,10 @@
  * that imports the transport directly: that file is doing command logic in
  * React instead of dispatching to Rust.
  *
- * This guard fails when any file that calls `registerWebviewCommandHandler`
- * also imports the MCP transport. It is intentionally in place BEFORE the
+ * This guard fails when any file that registers a handler — by calling
+ * `registerWebviewCommandHandler` directly or via the focus-gated
+ * `useFocusedWebviewCommandHandlers` hook — also imports the MCP transport.
+ * It is intentionally in place BEFORE the
  * cards that populate the bus (C–F) so the first violation introduced fails
  * immediately rather than being caught only in review.
  *
@@ -21,8 +23,9 @@
  * scan is only trustworthy because the detector it relies on is itself tested.
  */
 import { describe, it, expect } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, basename } from "node:path";
+import { collectSourceFiles, SRC_ROOT } from "@/test/plugin-owned-guard";
 
 // ---------------------------------------------------------------------------
 // Pure detectors — unit-proven below so the directory scan is trustworthy.
@@ -35,36 +38,23 @@ export function importsMcpTransport(source: string): boolean {
   return /(?:from\s+|require\(\s*)["'][^"']*mcp-transport["']/.test(source);
 }
 
-/** Whether `source` *calls* `registerWebviewCommandHandler` (a registration site).
+/** Whether `source` *calls* `registerWebviewCommandHandler` — directly or via
+ * the focus-gated `useFocusedWebviewCommandHandlers` hook (a registration site
+ * either way; the hook is just a lifecycle wrapper around the bus call).
  *
- * Excludes the bus module's own `export function registerWebviewCommandHandler`
- * declaration so the mechanism file is not mistaken for a consumer. */
+ * Excludes the mechanism modules' own `export function …` declarations so the
+ * bus and the hook files are not mistaken for consumers. */
 export function registersWebviewHandler(source: string): boolean {
-  return /(?<!function\s)registerWebviewCommandHandler\s*\(/.test(
-    source.replace(/export\s+function\s+registerWebviewCommandHandler/g, ""),
+  const stripped = source.replace(
+    /export\s+function\s+(?:registerWebviewCommandHandler|useFocusedWebviewCommandHandlers)/g,
+    "",
+  );
+  return /(?<!function\s)(?:registerWebviewCommandHandler|useFocusedWebviewCommandHandlers)\s*\(/.test(
+    stripped,
   );
 }
 
-// Vitest runs with cwd = the ui project root (where vite.config.ts lives).
-const SRC_ROOT = join(process.cwd(), "src");
 const BUS_FILE = join(SRC_ROOT, "lib", "webview-command-bus.ts");
-
-/** Recursively collect non-test `.ts`/`.tsx` source files under `dir`. */
-function collectSourceFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "node_modules" || entry.name === "test") continue;
-      out.push(...collectSourceFiles(full));
-      continue;
-    }
-    if (!/\.tsx?$/.test(entry.name)) continue;
-    if (/\.test\.tsx?$/.test(entry.name)) continue;
-    out.push(full);
-  }
-  return out;
-}
 
 describe("webview-command-bus presentation invariant", () => {
   it("detects an mcp-transport import (detector is sound)", () => {
@@ -99,6 +89,53 @@ describe("webview-command-bus presentation invariant", () => {
         "export function registerWebviewCommandHandler(id, handler) {}",
       ),
     ).toBe(false);
+  });
+
+  it("recognizes a hook-mediated registration site but not the hook declaration itself", () => {
+    expect(
+      registersWebviewHandler(
+        "useFocusedWebviewCommandHandlers(moniker, handlers);",
+      ),
+    ).toBe(true);
+    expect(
+      registersWebviewHandler(
+        "export function useFocusedWebviewCommandHandlers(moniker, handlers) {}",
+      ),
+    ).toBe(false);
+  });
+
+  it("flags a hook-mediated registration site that imports the transport (known-bad)", () => {
+    const knownBad = [
+      'import { callCommandTool } from "@/lib/mcp-transport";',
+      'import { useFocusedWebviewCommandHandlers } from "@/lib/use-focused-webview-command-handlers";',
+      "useFocusedWebviewCommandHandlers(moniker, { drillIn: handler });",
+    ].join("\n");
+    expect(registersWebviewHandler(knownBad)).toBe(true);
+    expect(importsMcpTransport(knownBad)).toBe(true);
+  });
+
+  it("the hook-registering components are visible to the scan and transport-free", () => {
+    // The five files that register handlers via the
+    // `useFocusedWebviewCommandHandlers` hook (Cards D and E). Each must be
+    // detected as a registration site — otherwise the directory scan below is
+    // blind to them — and each must honor the presentation-only invariant.
+    const hookSites = [
+      join(SRC_ROOT, "components", "fields", "field.tsx"),
+      join(SRC_ROOT, "components", "pressable.tsx"),
+      join(SRC_ROOT, "components", "perspective-tab-bar.tsx"),
+      join(SRC_ROOT, "components", "ai-prompt-composer.tsx"),
+      join(SRC_ROOT, "components", "ai-elements", "elicitation.tsx"),
+    ];
+    for (const file of hookSites) {
+      const src = readFileSync(file, "utf8");
+      expect(
+        registersWebviewHandler(src),
+        `${file} must be detected as a registration site`,
+      ).toBe(true);
+      expect(importsMcpTransport(src), `${file} must stay transport-free`).toBe(
+        false,
+      );
+    }
   });
 
   it("no handler-registration site imports the MCP transport directly", () => {

@@ -5,17 +5,21 @@
  * Card D moved the four UI-surface command DEFINITIONS out of React —
  * `field.edit` / `field.editEnter` from `field.tsx`'s client-side
  * `CommandDef`s and `pressable.activate` / `pressable.activateSpace` from
- * `pressable.tsx`'s `usePressCommands` — into the `ui-commands` builtin
- * plugin (`builtin/plugins/ui-commands/index.ts`); the field / pressable
- * React components only register webview-bus handlers for the ids while
- * focused. In production the commands' `keys` + per-surface `scope`
- * (`["ui:field"]` / `["ui:pressable"]`) reach the keymap layer through the
- * CommandService registry; in tests the host is mocked, so the keymap tests
- * publish the same metadata through `mock-command-list.ts`'s
- * `UI_SURFACE_PLUGIN_COMMANDS` mirror. Like the nav and grid mirrors, the
- * plugin module is not importable from vitest, so the mirror is a manual
- * copy — this guard reads the plugin SOURCE from disk and fails loudly on
- * any drift (an id added/removed/renamed, a key rebound, a name change).
+ * `pressable.tsx`'s `usePressCommands` — and Card E moved the three editor
+ * drill-in DEFINITIONS — `filter_editor.drillIn` from
+ * `perspective-tab-bar.tsx`, `ui.ai-panel.composer.drillIn` from
+ * `ai-prompt-composer.tsx`, and `ui.ai-panel.elicitation.field.drillIn`
+ * from `ai-elements/elicitation.tsx` — into the `ui-commands` builtin
+ * plugin (`builtin/plugins/ui-commands/index.ts`); the owning React
+ * components only register webview-bus handlers for the ids while focused.
+ * In production the commands' `keys` + per-surface `scope` reach the keymap
+ * layer through the CommandService registry; in tests the host is mocked,
+ * so the keymap tests publish the same metadata through
+ * `mock-command-list.ts`'s `UI_SURFACE_PLUGIN_COMMANDS` mirror. Like the nav
+ * and grid mirrors, the plugin module is not importable from vitest, so the
+ * mirror is a manual copy — this guard reads the plugin SOURCE from disk and
+ * fails loudly on any drift (an id added/removed/renamed, a key rebound, a
+ * name change).
  */
 
 import { describe, it, expect } from "vitest";
@@ -37,15 +41,21 @@ const PLUGIN_SOURCE_PATH = resolve(
 
 /**
  * The expected scope gate per command id — `ui:field` for the field-edit
- * pair, `ui:pressable` for the pressable-activation pair. These are the
- * literal marker monikers `field.tsx` / `pressable.tsx` mount via a
- * `CommandScopeProvider` directly above their `<FocusScope>`.
+ * pair, `ui:pressable` for the pressable-activation pair, and the Card E
+ * editor drill-in gates: the `ui:filter_editor` /
+ * `ui:ai-panel.elicitation.field` marker monikers (mounted via a
+ * `CommandScopeProvider` above the surface's dynamic `<FocusScope>`) and
+ * the composer `<FocusScope>`'s own constant `ui:ai-panel.composer`
+ * moniker.
  */
 const EXPECTED_SCOPES: Record<string, string[]> = {
   "field.edit": ["ui:field"],
   "field.editEnter": ["ui:field"],
   "pressable.activate": ["ui:pressable"],
   "pressable.activateSpace": ["ui:pressable"],
+  "filter_editor.drillIn": ["ui:filter_editor"],
+  "ui.ai-panel.composer.drillIn": ["ui:ai-panel.composer"],
+  "ui.ai-panel.elicitation.field.drillIn": ["ui:ai-panel.elicitation.field"],
 };
 
 describe("UI_SURFACE_PLUGIN_COMMANDS drift guard", () => {
@@ -55,9 +65,10 @@ describe("UI_SURFACE_PLUGIN_COMMANDS drift guard", () => {
   it("parses the UI_SURFACE_COMMANDS table out of the plugin source", () => {
     // Anchor sanity: a refactor that renames/moves the table must fail HERE,
     // not let the comparison pass vacuously against zero entries.
-    expect(pluginEntries.length).toBe(4);
+    expect(pluginEntries.length).toBe(7);
     expect(pluginEntries.map((e) => e.id)).toContain("field.edit");
     expect(pluginEntries.map((e) => e.id)).toContain("pressable.activate");
+    expect(pluginEntries.map((e) => e.id)).toContain("filter_editor.drillIn");
   });
 
   it("mirror matches the plugin UI_SURFACE_COMMANDS 1:1 (ids, names, keys)", () => {

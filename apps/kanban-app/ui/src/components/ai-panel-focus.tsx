@@ -47,7 +47,6 @@ import { Slot } from "radix-ui";
 import { FocusScope } from "@/components/focus-scope";
 import { Pressable, type PressableProps } from "@/components/pressable";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
-import type { CommandDef } from "@/lib/command-scope";
 import type { SegmentMoniker } from "@/types/spatial";
 
 /** Props for {@link AiPanelFocusScope}. */
@@ -65,16 +64,6 @@ export interface AiPanelFocusScopeProps {
    * `true` so they advertise focus the way a card or a field row does.
    */
   showFocus?: boolean;
-  /**
-   * Per-scope `CommandDef`s forwarded to the underlying `<FocusScope>`'s
-   * own `commands` prop. A scope that wraps a CM6 editor passes a
-   * drill-in `CommandDef` (`keys: { cua/vim/emacs: "Enter" }`) here so
-   * landing on the scope and pressing Enter actually drives the editing
-   * cursor into the editor — a bare `<FocusScope>` only *registers* the
-   * scope as a nav target. Mirrors `FilterFormulaBarFocusable`'s
-   * `filter_editor.drillIn` wiring in `perspective-tab-bar.tsx`.
-   */
-  commands?: readonly CommandDef[];
   /** Extra classes merged onto the scope wrapper `<div>`. */
   className?: string;
   children: ReactNode;
@@ -89,17 +78,15 @@ export interface AiPanelFocusScopeProps {
  * focus target. Actionable icon buttons use {@link AiPanelPressable}
  * instead so they also get keyboard activation.
  *
- * The optional `commands` prop is forwarded straight to the underlying
- * `<FocusScope>` so a CM6-hosting scope can register a drill-in
- * `CommandDef` — the established `FilterFormulaBarFocusable` pattern
- * (see `perspective-tab-bar.tsx`). Outside the spatial-nav stack there
- * is no kernel to resolve commands against, so the prop is inert in the
- * standalone-unit-test branch, exactly like `showFocus`/`className`.
+ * A CM6-hosting scope (the composer) and the elicitation field leaves no
+ * longer pass per-scope drill-in `CommandDef`s here: their drill-in command
+ * DEFINITIONS live in the `ui-commands` builtin plugin (Card E), and the
+ * owning components register the live behavior on the webview command bus
+ * (`useFocusedWebviewCommandHandlers`) instead.
  */
 export function AiPanelFocusScope({
   moniker,
   showFocus = true,
-  commands,
   className,
   children,
 }: AiPanelFocusScopeProps): ReactNode {
@@ -113,12 +100,7 @@ export function AiPanelFocusScope({
     return <>{children}</>;
   }
   return (
-    <FocusScope
-      moniker={moniker}
-      showFocus={showFocus}
-      commands={commands}
-      className={className}
-    >
+    <FocusScope moniker={moniker} showFocus={showFocus} className={className}>
       {children}
     </FocusScope>
   );

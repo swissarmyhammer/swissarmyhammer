@@ -1,26 +1,27 @@
 /**
- * Browser-mode test for `<BoardView>`'s column-extreme key bindings —
- * vim `0` / `$` and cua `Mod+Home` / `Mod+End`.
+ * Browser-mode test for `<BoardView>`'s `board.newTask` key bindings —
+ * vim `o` and cua `Mod+Enter`.
  *
- * **Card F behaviour** (this test pins): `board.firstColumn` /
- * `board.lastColumn` are DEFINED by the `board-commands` builtin plugin
- * (`builtin/plugins/board-commands/index.ts`), scope-gated to the
- * `ui:board` marker the board view mounts. Their execution is a real
- * BACKEND route — the plugin's host execute drives the focus kernel's
- * `navigate focus` op (first / last) — so a key press resolves the
- * binding through the registry chain walk and dispatches the command id
- * to the backend (`invoke("dispatch_command", { cmd: "board.*" })`)
- * exactly once, with NO client-side `spatial_navigate` kernel IPC (the
- * retired React `makeNavCommand` defs called
- * `spatialActions.navigate(focusedFq, direction)` in the webview).
+ * **Card F behaviour** (this test pins): `board.newTask` is DEFINED by the
+ * `board-commands` builtin plugin (`builtin/plugins/board-commands/index.ts`,
+ * scope-gated to the `ui:board` marker the board view mounts), and its live
+ * BEHAVIOR is a webview-bus handler the board registers on mount
+ * (`registerWebviewCommandHandler`, Card B). The handler is pure
+ * orchestration:
  *
- * The board's vim `0` / `$` and cua `Mod+Home` / `Mod+End` keys are NOT
- * among the `nav-commands` plugin's `nav.first` / `nav.last` keys
- * (`Home` / `End` are cua there, vim has only `Shift+G` for last) —
- * they fill a gap the plugin does not cover, gated to the board zone.
+ *   1. The DURABLE add re-dispatches the backend-op `entity.add:task`
+ *      command through `useDispatchCommand` — never an inline mutation
+ *      (the presentation-only bus invariant). The backend resolves the
+ *      target column from the dispatch scope chain
+ *      (`resolve_focused_column`).
+ *   2. On success it focuses the created card by dispatching `nav.focus`
+ *      with the composed card FQM.
  *
- * Sister test to `board-view.spatial.test.tsx` — same harness, same
- * mock pattern, same browser project.
+ * Because the bus handler intercepts the id in `useDispatchCommand`, the
+ * `board.newTask` id itself never reaches the backend.
+ *
+ * Sister test to `board-view.column-extremes.spatial.test.tsx` — same
+ * harness, same mock pattern, same browser project.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -117,11 +118,16 @@ import {
   type FullyQualifiedMoniker,
   type WindowLabel,
 } from "@/types/spatial";
+import { hasWebviewCommandHandler } from "@/lib/webview-command-bus";
 
 // ---------------------------------------------------------------------------
-// Test fixtures — three columns so "first" and "last" land on distinct
-// monikers and the seeded middle column is unambiguous.
+// Test fixtures — three columns; the new task lands in the lowest-order
+// column (`col-todo`) per the kernel's `resolve_focused_column` fallback the
+// React-side focus dispatch mirrors.
 // ---------------------------------------------------------------------------
+
+/** The id the mocked `entity.add:task` dispatch reports back. */
+const CREATED_TASK_ID = "t-new";
 
 function makeColumn(id: string, name: string, order: number): Entity {
   return {
@@ -176,22 +182,20 @@ const tasks: Entity[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Default invoke responses — override with `mockInvoke.mockImplementation`
-// inside individual tests when a different keymap mode is needed.
+// Default invoke responses.
 // ---------------------------------------------------------------------------
 
-function makeDefaultInvokeImpl(keymapMode: "cua" | "vim" | "emacs") {
+function makeDefaultInvokeImpl(keymapMode: "cua" | "vim") {
   return async function defaultInvokeImpl(
     cmd: string,
-    _args?: unknown,
+    args?: unknown,
   ): Promise<unknown> {
-    // The board commands are DEFINED by the `board-commands` builtin plugin
-    // (scope ["ui:board"]) — their keys reach the keymap layer only through
-    // the `useCommandList` seam, so answer `list command` with the shared
-    // mock registry.
+    // `board.newTask`'s keys reach the keymap layer only through the
+    // `useCommandList` seam — answer `list command` with the shared mock
+    // registry (the `board-commands` plugin mirror carries them).
     const listAnswer = answerListCommand(
       cmd,
-      _args,
+      args,
       globalCommandsFromBindingTables(),
     );
     if (listAnswer) return listAnswer;
@@ -213,14 +217,20 @@ function makeDefaultInvokeImpl(keymapMode: "cua" | "vim" | "emacs") {
         recent_boards: [],
       };
     if (cmd === "get_undo_state") return { can_undo: false, can_redo: false };
-    if (cmd === "dispatch_command") return undefined;
+    if (cmd === "dispatch_command") {
+      // The durable add reports the created task id back to the handler so
+      // it can compose the card FQM and dispatch the focus jump.
+      const a = args as { cmd?: string } | undefined;
+      if (a?.cmd === "entity.add:task") return { id: CREATED_TASK_ID };
+      return undefined;
+    }
     return undefined;
   };
 }
 
 // ---------------------------------------------------------------------------
-// Helpers — copied from `board-view.spatial.test.tsx` so this test stays
-// self-contained.
+// Helpers — copied from `board-view.column-extremes.spatial.test.tsx` so this
+// test stays self-contained.
 // ---------------------------------------------------------------------------
 
 async function flushSetup() {
@@ -287,36 +297,38 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/** Every CLIENT-SIDE kernel-navigate IPC — the retired React defs' wire
- * shape. Post-Card-F the webview must never fire one of these for a
- * column-extreme key: the focus op runs host-side in the plugin. */
-function clientSpatialNavigateCalls(): Array<unknown> {
-  return mockInvoke.mock.calls.filter(
-    (c) =>
-      c[0] === "spatial_navigate" ||
-      (c[0] === "command_tool_call" &&
-        (c[1] as Record<string, unknown>)?.tool === "focus" &&
-        (c[1] as Record<string, unknown>)?.op === "navigate focus"),
-  );
-}
-
-/** Every backend `dispatch_command` whose cmd is a `board.*` id, in order —
- * the post-Card-F contract: the webview routes the command id to the
- * backend, where the `board-commands` plugin drives the focus kernel. */
-function boardDispatchCmds(): string[] {
+/** Every backend `dispatch_command` cmd id, in call order. */
+function dispatchCmds(): string[] {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "dispatch_command")
-    .map((c) => (c[1] as { cmd?: string } | undefined)?.cmd ?? "")
-    .filter((cmd) => cmd.startsWith("board."));
+    .map((c) => (c[1] as { cmd?: string } | undefined)?.cmd ?? "");
+}
+
+/** Every kernel focus-claim IPC (`spatial_focus` / focus `set focus`),
+ * unwrapped to its args bag. */
+function spatialFocusCalls(): Array<Record<string, unknown>> {
+  return mockInvoke.mock.calls
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as Record<string, unknown>)?.tool === "focus" &&
+          (c[1] as Record<string, unknown>)?.op === "set focus"),
+    )
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      return (outer?.params ?? outer) as Record<string, unknown>;
+    });
 }
 
 // ---------------------------------------------------------------------------
-// Tests — one assertion block per key. Each block seeds focus on the
-// middle column, fires the keystroke, and asserts a single backend
-// dispatch of the expected `board.*` command id.
+// Tests — each block seeds focus on the middle column, fires the
+// keystroke, and asserts the bus handler's orchestration: ONE durable
+// `entity.add:task` dispatch, NO backend `board.newTask` dispatch, and a
+// focus claim on the created card's FQM.
 // ---------------------------------------------------------------------------
 
-describe("BoardView — column-extreme keys dispatch the plugin board.* commands to the backend", () => {
+describe("BoardView — board.newTask runs on the webview bus and re-dispatches entity.add:task", () => {
   beforeEach(() => {
     mockInvoke.mockClear();
     mockListen.mockClear();
@@ -328,54 +340,50 @@ describe("BoardView — column-extreme keys dispatch the plugin board.* commands
   });
 
   /**
-   * Drive a single keystroke and assert it resolves to exactly one backend
-   * dispatch of the expected `board.*` command id — with no client-side
-   * kernel-navigate IPC (the plugin's host execute owns the focus op).
+   * Drive a single keystroke and assert the `board.newTask` webview-bus
+   * handler ran its orchestration.
    *
-   * Seeds focus on the middle column so the binding resolves through the
-   * focused scope chain (the `ui:board` marker the board mounts gates the
-   * plugin commands' keys). The middle column zone is registered by
-   * `<ColumnView>` under the board zone — we look it up by segment from
-   * the recorded `spatial_register_scope` IPCs.
-   *
-   * @param keymapMode `"vim"` for `0` / `$`, `"cua"` for `Mod+Home` /
-   *                   `Mod+End`. Drives `get_ui_state`'s `keymap_mode`
-   *                   so the keybinding handler resolves the right
-   *                   table.
-   * @param key        DOM event key (vim `0` / `$` are literal digits and
-   *                   shift+4 respectively; cua `Mod+Home` is `Home` with
-   *                   `metaKey`).
+   * @param keymapMode `"vim"` for `o`, `"cua"` for `Mod+Enter`.
+   * @param key        DOM event key.
    * @param eventInit  Extra `KeyboardEvent` init bits (e.g. `metaKey`).
-   * @param commandId  Expected `board.*` command id dispatched to the
-   *                   backend — `"board.firstColumn"` or
-   *                   `"board.lastColumn"`.
    */
-  async function assertSingleBoardDispatch({
+  async function assertNewTaskOrchestration({
     keymapMode,
     key,
     eventInit = {},
-    commandId,
   }: {
     keymapMode: "vim" | "cua";
     key: string;
     eventInit?: KeyboardEventInit;
-    commandId: "board.firstColumn" | "board.lastColumn";
   }) {
     mockInvoke.mockImplementation(makeDefaultInvokeImpl(keymapMode));
 
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
+    // The mounted board registers the `board.newTask` BEHAVIOR on the
+    // webview command bus (Card B) — a registered handler is the signal the
+    // id is "handled in webview", so `useDispatchCommand` runs it and skips
+    // the backend. The definition itself lives in the `board-commands`
+    // plugin, not in a React `CommandDef`.
+    expect(
+      hasWebviewCommandHandler("board.newTask"),
+      "the board view must register the board.newTask webview-bus handler on mount",
+    ).toBe(true);
+
     // Seed focus on the middle column so the focused scope chain (column →
-    // board marker → …) is populated. `next_segment` is also seeded so the
-    // entity-focus bridge mirrors the focused moniker into the entity-focus
-    // store — without it the keybinding handler can't resolve scope-level
-    // bindings.
+    // board marker → …) is populated and the board-gated `board.newTask`
+    // binding resolves.
     const middleColumn = registerScopeArgs().find(
       (a) => a.segment === "column:col-doing",
     );
     expect(middleColumn, "middle column zone must register").toBeTruthy();
     const middleColumnFq = middleColumn!.fq as FullyQualifiedMoniker;
+    const boardZone = registerScopeArgs().find(
+      (a) => a.segment === "board:board-1",
+    );
+    expect(boardZone, "board zone must register").toBeTruthy();
+    const boardZoneFq = boardZone!.fq as string;
     await fireFocusChanged({
       next_fq: middleColumnFq,
       next_segment: asSegment("column:col-doing"),
@@ -385,64 +393,49 @@ describe("BoardView — column-extreme keys dispatch the plugin board.* commands
 
     await act(async () => {
       fireEvent.keyDown(document, { key, ...eventInit });
-      await Promise.resolve();
+      // Let the handler's async add → focus chain settle.
+      await new Promise((r) => setTimeout(r, 10));
     });
 
-    const dispatched = boardDispatchCmds();
+    // (1) The DURABLE add re-dispatches the backend-op `entity.add:task` —
+    // exactly once — and the bus-intercepted `board.newTask` id itself never
+    // reaches the backend.
+    const dispatched = dispatchCmds();
     expect(
-      dispatched,
-      `key "${key}" (${keymapMode}) should dispatch ${commandId} to the backend exactly once`,
-    ).toEqual([commandId]);
-    // The focus op runs HOST-SIDE in the board-commands plugin — the webview
-    // must not fire its own kernel-navigate IPC (the retired React def did).
+      dispatched.filter((cmd) => cmd === "entity.add:task"),
+      `key "${key}" (${keymapMode}) must re-dispatch entity.add:task exactly once`,
+    ).toHaveLength(1);
     expect(
-      clientSpatialNavigateCalls(),
-      "no client-side spatial_navigate IPC may fire",
-    ).toEqual([]);
+      dispatched.filter((cmd) => cmd === "board.newTask"),
+      "the bus handler intercepts board.newTask — it must not reach the backend",
+    ).toHaveLength(0);
+
+    // (2) The handler focuses the created card: the composed FQM is the
+    // board zone + the fallback (lowest-order) column + the new task.
+    const expectedCardFq = `${boardZoneFq}/column:col-todo/task:${CREATED_TASK_ID}`;
+    const focusClaims = spatialFocusCalls().filter(
+      (c) => c.fq === expectedCardFq,
+    );
+    expect(
+      focusClaims.length,
+      `the created card (${expectedCardFq}) must receive exactly one focus claim`,
+    ).toBe(1);
 
     unmount();
   }
 
-  it("vim '0' dispatches board.firstColumn to the backend", async () => {
-    await assertSingleBoardDispatch({
-      keymapMode: "vim",
-      key: "0",
-      commandId: "board.firstColumn",
-    });
-  });
-
-  it("vim '$' dispatches board.lastColumn to the backend", async () => {
-    // The keybinding pipeline normalises the canonical key for the
-    // `$` glyph; it is produced by Shift+4 on a US layout but the
-    // DOM `key` value is `"$"`. The plugin def declares `vim: "$"`,
-    // so the matching event is `key: "$", shiftKey: true`.
-    await assertSingleBoardDispatch({
-      keymapMode: "vim",
-      key: "$",
-      eventInit: { shiftKey: true },
-      commandId: "board.lastColumn",
-    });
-  });
-
-  it("cua 'Mod+Home' dispatches board.firstColumn to the backend", async () => {
-    // `Mod` is the keybinding registry's portable alias for `Meta` on
-    // macOS / `Control` elsewhere. The browser test env runs on
-    // Chromium where `Meta` is the canonical modifier — `metaKey: true`
-    // matches `Mod`.
-    await assertSingleBoardDispatch({
+  it("cua 'Mod+Enter' adds a task via entity.add:task and focuses the new card", async () => {
+    await assertNewTaskOrchestration({
       keymapMode: "cua",
-      key: "Home",
+      key: "Enter",
       eventInit: { metaKey: true },
-      commandId: "board.firstColumn",
     });
   });
 
-  it("cua 'Mod+End' dispatches board.lastColumn to the backend", async () => {
-    await assertSingleBoardDispatch({
-      keymapMode: "cua",
-      key: "End",
-      eventInit: { metaKey: true },
-      commandId: "board.lastColumn",
+  it("vim 'o' adds a task via entity.add:task and focuses the new card", async () => {
+    await assertNewTaskOrchestration({
+      keymapMode: "vim",
+      key: "o",
     });
   });
 });
