@@ -1,14 +1,27 @@
 mod entity_extractor;
 mod languages;
 
+/// All file extensions the code parser handles, in the canonical
+/// dotted-lowercase form (e.g. `".rs"`) — the single extension list other
+/// crates reuse instead of keeping their own.
+pub use languages::get_all_code_extensions;
+/// Whether a path has a code extension per [`get_all_code_extensions`] — the
+/// predicate that owns the dotted-lowercase matching convention.
+pub use languages::is_code_file;
+
 use std::cell::RefCell;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 use crate::model::entity::SemanticEntity;
 use crate::parser::plugin::SemanticParserPlugin;
 use entity_extractor::extract_entities;
-use languages::{get_all_code_extensions, get_language_config};
+use languages::{dotted_lowercase_extension, get_language_config};
 
+/// Semantic parser plugin that extracts entities (functions, classes, traits,
+/// modules, ...) from source code via tree-sitter, covering every language
+/// registered in `languages`. Implements [`SemanticParserPlugin`] for the
+/// extensions reported by [`get_all_code_extensions`].
 pub struct CodeParserPlugin;
 
 // Thread-local parser cache: one Parser per language per thread.
@@ -27,11 +40,7 @@ impl SemanticParserPlugin for CodeParserPlugin {
     }
 
     fn extract_entities(&self, content: &str, file_path: &str) -> Vec<SemanticEntity> {
-        let ext = std::path::Path::new(file_path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| format!(".{}", e.to_lowercase()))
-            .unwrap_or_default();
+        let ext = dotted_lowercase_extension(file_path).unwrap_or_default();
 
         let config = match get_language_config(&ext) {
             Some(c) => c,
@@ -45,11 +54,25 @@ impl SemanticParserPlugin for CodeParserPlugin {
 
         PARSER_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
-            let parser = cache.entry(config.id).or_insert_with(|| {
-                let mut p = tree_sitter::Parser::new();
-                let _ = p.set_language(&language);
-                p
-            });
+            let parser = match cache.entry(config.id) {
+                Entry::Occupied(occupied) => occupied.into_mut(),
+                Entry::Vacant(vacant) => {
+                    let mut p = tree_sitter::Parser::new();
+                    // Only cache a successfully configured parser: caching a
+                    // language-less parser after a `set_language` failure would
+                    // permanently pin it for this thread and every later file
+                    // of this language would silently parse to no entities.
+                    if let Err(e) = p.set_language(&language) {
+                        tracing::warn!(
+                            language = config.id,
+                            error = %e,
+                            "failed to set tree-sitter language; skipping entity extraction"
+                        );
+                        return Vec::new();
+                    }
+                    vacant.insert(p)
+                }
+            };
 
             let tree = match parser.parse(content.as_bytes(), None) {
                 Some(t) => t,

@@ -14,6 +14,8 @@ pub mod fleet;
 pub mod probes;
 pub mod scope;
 pub mod synthesize;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod types;
 pub mod verify;
 

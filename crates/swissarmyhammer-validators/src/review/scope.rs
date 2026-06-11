@@ -40,6 +40,7 @@ use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_sem::git_types::{FileChange as SemFileChange, FileStatus};
 use swissarmyhammer_sem::model::change::SemanticChange;
 use swissarmyhammer_sem::parser::differ::compute_semantic_diff;
+use swissarmyhammer_sem::parser::plugins::code::is_code_file;
 use swissarmyhammer_sem::parser::plugins::create_default_registry;
 
 use crate::error::AvpError;
@@ -415,8 +416,13 @@ fn resolve_working(repo_path: &Path) -> Result<ResolvedScope, AvpError> {
     let status = repo
         .get_status()
         .map_err(|e| AvpError::Context(format!("failed to read git status: {e}")))?;
+    // Tracked changes (deliberate edits) keep current behavior — per-validator
+    // globs decide what's reviewed. UNTRACKED entries are filtered to code files
+    // via the canonical `swissarmyhammer-sem` extension list: brand-new source
+    // gets reviewed because it WILL be added, while unignored junk (logs, jsonl,
+    // lockfiles) never has its content read into scope.
     let mut files = status.all_changed_files();
-    files.extend(status.untracked.clone());
+    files.extend(status.untracked.iter().filter(|p| is_code_file(p)).cloned());
     files.sort();
     files.dedup();
 
@@ -691,183 +697,13 @@ fn dedup_sections(sections: Vec<String>) -> Vec<String> {
 mod tests {
     use super::*;
 
-    use std::path::{Path, PathBuf};
-
     use model_embedding::mock::MockEmbedder;
-    use rusqlite::Connection;
-    use tempfile::TempDir;
 
-    use swissarmyhammer_code_context::db::{configure_connection, create_schema};
-    use swissarmyhammer_code_context::serialize_embedding;
-
-    use crate::validators::types::{RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch};
-    use crate::validators::{Rule, ValidatorLoader, ValidatorSource};
-
-    /// Embedding dimension shared by the seeded index and the mock embedder.
-    const DIM: usize = 4;
-
-    // ---- git repo fixture -------------------------------------------------
-
-    /// A throwaway git repo backed by a [`TempDir`], driven via libgit2 so the
-    /// scope stage's real `swissarmyhammer-git` reads see real refs/working-tree.
-    struct TestRepo {
-        dir: TempDir,
-        repo: git2::Repository,
-    }
-
-    impl TestRepo {
-        fn new() -> Self {
-            let dir = TempDir::new().unwrap();
-            let repo = git2::Repository::init(dir.path()).unwrap();
-            {
-                let mut cfg = repo.config().unwrap();
-                cfg.set_str("user.name", "Test").unwrap();
-                cfg.set_str("user.email", "test@example.com").unwrap();
-            }
-            Self { dir, repo }
-        }
-
-        fn path(&self) -> &Path {
-            self.dir.path()
-        }
-
-        /// Write a file to the working tree (no staging).
-        fn write(&self, rel: &str, content: &str) {
-            let full = self.dir.path().join(rel);
-            if let Some(parent) = full.parent() {
-                std::fs::create_dir_all(parent).unwrap();
-            }
-            std::fs::write(full, content).unwrap();
-        }
-
-        /// Stage everything and commit, returning the commit sha.
-        fn commit(&self, message: &str) -> String {
-            let mut index = self.repo.index().unwrap();
-            index
-                .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
-                .unwrap();
-            index.write().unwrap();
-            let tree_id = index.write_tree().unwrap();
-            let tree = self.repo.find_tree(tree_id).unwrap();
-            let sig = git2::Signature::now("Test", "test@example.com").unwrap();
-            let parent = self.repo.head().ok().and_then(|h| h.peel_to_commit().ok());
-            let parents: Vec<&git2::Commit> = parent.iter().collect();
-            let oid = self
-                .repo
-                .commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
-                .unwrap();
-            oid.to_string()
-        }
-    }
-
-    // ---- code_context index fixture --------------------------------------
-
-    /// Open a real, schema-applied, in-memory code_context index (same shape the
-    /// probe runner uses in production), seeded deterministically.
-    fn index_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        configure_connection(&conn).unwrap();
-        create_schema(&conn).unwrap();
-        conn
-    }
-
-    /// Register a file so chunk rows can carry their foreign key.
-    fn seed_file(conn: &Connection, file_path: &str) {
-        conn.execute(
-            "INSERT OR IGNORE INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed, embedded)
-             VALUES (?1, X'DEADBEEF', 1024, 1000, 1, 1, 1)",
-            rusqlite::params![file_path],
-        )
-        .unwrap();
-    }
-
-    /// Seed a `ts_chunks` row with an embedding so `find_duplicates` sees it.
-    fn seed_chunk(conn: &Connection, file_path: &str, symbol_path: &str, text: &str, emb: &[f32]) {
-        seed_file(conn, file_path);
-        let blob = serialize_embedding(emb);
-        conn.execute(
-            "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, symbol_path, text, embedding)
-             VALUES (?1, 0, ?2, 1, 10, ?3, ?4, ?5)",
-            rusqlite::params![file_path, text.len() as i64, symbol_path, text, blob],
-        )
-        .unwrap();
-    }
-
-    /// Seed an `lsp_symbols` row so the `callers` probe can resolve a symbol.
-    fn seed_symbol(conn: &Connection, id: &str, name: &str, file_path: &str) {
-        seed_file(conn, file_path);
-        conn.execute(
-            "INSERT INTO lsp_symbols (id, name, kind, file_path, start_line, start_char, end_line, end_char, detail)
-             VALUES (?1, ?2, 12, ?3, 1, 0, 5, 0, NULL)",
-            rusqlite::params![id, name, file_path],
-        )
-        .unwrap();
-    }
-
-    /// Seed an `lsp_call_edges` row (caller -> callee) for the `callers` probe.
-    fn seed_call_edge(
-        conn: &Connection,
-        caller_id: &str,
-        callee_id: &str,
-        caller_file: &str,
-        callee_file: &str,
-    ) {
-        conn.execute(
-            "INSERT INTO lsp_call_edges (caller_id, callee_id, caller_file, callee_file, source, from_ranges)
-             VALUES (?1, ?2, ?3, ?4, 'lsp', '[]')",
-            rusqlite::params![caller_id, callee_id, caller_file, callee_file],
-        )
-        .unwrap();
-    }
-
-    // ---- validator loader fixture ----------------------------------------
-
-    /// A loader carrying one RuleSet named `name` that matches `file_glob` and
-    /// declares `probes`. `add_builtin_ruleset` is the deterministic injection
-    /// seam (no on-disk validators, so tests don't depend on the machine).
-    fn loader_with(name: &str, file_glob: &str, probes: &[&str]) -> ValidatorLoader {
-        let mut loader = ValidatorLoader::new();
-        loader.add_builtin_ruleset(ruleset(name, file_glob, probes));
-        loader
-    }
-
-    fn ruleset(name: &str, file_glob: &str, probes: &[&str]) -> RuleSet {
-        RuleSet {
-            manifest: RuleSetManifest {
-                name: name.to_string(),
-                description: format!("{name} test ruleset"),
-                metadata: RuleSetMetadata {
-                    version: "1.0.0".to_string(),
-                },
-                match_criteria: Some(ValidatorMatch {
-                    tools: vec![],
-                    files: vec![file_glob.to_string()],
-                }),
-                trigger_matcher: None,
-                tags: vec![],
-                probes: probes.iter().map(|p| p.to_string()).collect(),
-                severity: Severity::Warn,
-                timeout: 30,
-                once: false,
-            },
-            rules: vec![Rule {
-                name: format!("{name}-rule"),
-                description: "rule".to_string(),
-                body: "body".to_string(),
-                severity: None,
-                timeout: None,
-            }],
-            source: ValidatorSource::Builtin,
-            base_path: PathBuf::from("/test"),
-        }
-    }
-
-    /// A function body long enough to clear the default `min_chunk_bytes` (100).
-    fn body(label: &str) -> String {
-        format!(
-            "pub fn {label}(input: &[f64]) -> f64 {{\n    let mut total = 0.0;\n    for value in input {{\n        total += value * value;\n    }}\n    total / input.len() as f64\n}}"
-        )
-    }
+    use crate::review::test_support::{
+        body, dup_emb, index_conn, loader_with, ruleset, seed_call_edge, seed_chunk, seed_symbol,
+        TestRepo, DIM,
+    };
+    use crate::validators::ValidatorLoader;
 
     // ---- ScopeSpec::resolve ----------------------------------------------
 
@@ -934,11 +770,11 @@ mod tests {
 
         // The index already holds an equivalent function in another file → dup hit.
         let conn = index_conn();
-        let dup_emb = vec![1.0, 0.0, 0.0, 0.0];
-        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &dup_emb);
-        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &dup_emb);
+        let emb = dup_emb();
+        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
+        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &emb);
 
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
@@ -995,6 +831,104 @@ mod tests {
         );
     }
 
+    // ---- scope_review: untracked files in the working scope ---------------
+
+    #[tokio::test]
+    async fn working_scope_includes_untracked_nested_source_files() {
+        let repo = TestRepo::new();
+        repo.write("README.md", "# base\n");
+        repo.commit("initial");
+
+        // A brand-new untracked directory of source files — the calcutron shape.
+        repo.write("src/new.rs", &format!("{}\n", body("brand_new")));
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
+
+        let validator = work
+            .validators
+            .iter()
+            .find(|v| v.validator_name == "rust")
+            .expect("the rust validator must match the untracked .rs file");
+        assert!(
+            validator.files.iter().any(|f| f.path == "src/new.rs"),
+            "the untracked nested source file must be in scope, got: {:?}",
+            validator
+                .files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn working_scope_excludes_untracked_non_code_files() {
+        let repo = TestRepo::new();
+        repo.write("README.md", "# base\n");
+        repo.commit("initial");
+
+        // Untracked junk: a log file in a new directory. Even a match-everything
+        // validator must never see it — the code-extension filter drops it
+        // before matching, so its content is never read.
+        repo.write("logs/run.log", "lots of noise\n");
+
+        let conn = index_conn();
+        let loader = loader_with("everything", "*", &[], Severity::Warn);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
+
+        assert!(
+            work.validators.is_empty(),
+            "untracked non-code files must not enter the working scope, got: {:?}",
+            work.validators
+                .iter()
+                .flat_map(|v| v.files.iter().map(|f| f.path.as_str()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn working_scope_keeps_tracked_non_code_modifications() {
+        let repo = TestRepo::new();
+        repo.write("notes.txt", "original\n");
+        repo.commit("initial");
+
+        // A deliberate edit to a tracked non-code file keeps current behavior:
+        // it stays in scope and per-validator globs decide whether it's reviewed.
+        repo.write("notes.txt", "original\nedited\n");
+
+        let conn = index_conn();
+        let loader = loader_with("everything", "*", &[], Severity::Warn);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
+
+        let validator = work
+            .validators
+            .iter()
+            .find(|v| v.validator_name == "everything")
+            .expect("tracked modifications must stay in scope regardless of extension");
+        assert!(
+            validator.files.iter().any(|f| f.path == "notes.txt"),
+            "the tracked modified file must be in scope, got: {:?}",
+            validator
+                .files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
     // ---- scope_review: observability tracing -----------------------------
 
     #[tokio::test]
@@ -1007,10 +941,10 @@ mod tests {
         repo.write("src/lib.rs", &format!("fn placeholder() {{}}\n\n{dup}\n"));
 
         let conn = index_conn();
-        let dup_emb = vec![1.0, 0.0, 0.0, 0.0];
-        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &dup_emb);
+        let emb = dup_emb();
+        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
 
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
         let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
@@ -1036,7 +970,7 @@ mod tests {
         repo.write("Cargo.lock", "# lockfile\nupdated = true\n");
 
         let conn = index_conn();
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
         let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
@@ -1059,19 +993,46 @@ mod tests {
         repo.write("src/lib.rs", &format!("fn placeholder() {{}}\n\n{dup}\n"));
 
         let conn = index_conn();
-        let dup_emb = vec![1.0, 0.0, 0.0, 0.0];
-        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &dup_emb);
-        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &dup_emb);
+        let emb = dup_emb();
+        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
+        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &emb);
+
+        // Baseline: ONE validator declaring `duplicates` drives the embedder a
+        // fixed number of times for this change set. The embedder call count is
+        // the probe runner's observable execution count — a re-run repeats the
+        // changed-set embedding work.
+        let baseline_embedder = MockEmbedder::new(DIM);
+        let single = loader_with("dedupe-a", "*.rs", &["duplicates"], Severity::Warn);
+        scope_review(
+            Scope::Working,
+            repo.path(),
+            &single,
+            &conn,
+            &baseline_embedder,
+        )
+        .await
+        .unwrap();
+        let baseline = baseline_embedder.call_count();
+        assert!(baseline > 0, "the duplicates probe must drive the embedder");
 
         // Two validators, both declaring `duplicates`, both matching *.rs.
         let mut loader = ValidatorLoader::new();
-        loader.add_builtin_ruleset(ruleset("dedupe-a", "*.rs", &["duplicates"]));
-        loader.add_builtin_ruleset(ruleset("dedupe-b", "*.rs", &["duplicates"]));
+        loader.add_builtin_ruleset(ruleset("dedupe-a", "*.rs", &["duplicates"], Severity::Warn));
+        loader.add_builtin_ruleset(ruleset("dedupe-b", "*.rs", &["duplicates"], Severity::Warn));
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
             .await
             .unwrap();
+
+        // Execution count: the shared (file, probe) run embeds exactly as often
+        // as the single-validator baseline — a per-validator re-run would
+        // multiply it.
+        assert_eq!(
+            embedder.call_count(),
+            baseline,
+            "two validators declaring the same probe must not re-run it"
+        );
 
         let results_for = |name: &str| -> Vec<ProbeResult> {
             work.validators
@@ -1082,11 +1043,11 @@ mod tests {
                 .unwrap_or_default()
         };
 
+        // Secondary check: the single shared run's result fans out to both
+        // validators byte-for-byte.
         let a = results_for("dedupe-a");
         let b = results_for("dedupe-b");
         assert!(!a.is_empty(), "validator A should have probe results");
-        // Shared result identity: the single (file, probe) run fans out to both
-        // validators byte-for-byte — proving the probe was not re-run per validator.
         assert_eq!(
             a, b,
             "both validators must receive the identical shared (file, probe) result"
@@ -1115,7 +1076,7 @@ mod tests {
         seed_chunk(&conn, "src/util.rs", "existing_util", &added, &query_vec);
 
         // One validator declaring BOTH symbol-targeted probes on the .rs file.
-        let loader = loader_with("reuse", "*.rs", &["callers", "similar"]);
+        let loader = loader_with("reuse", "*.rs", &["callers", "similar"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
@@ -1178,7 +1139,7 @@ mod tests {
         repo.commit("Add the added function for review");
 
         let conn = index_conn();
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(
@@ -1208,7 +1169,7 @@ mod tests {
         repo.commit("initial");
 
         let conn = index_conn();
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(
@@ -1255,7 +1216,7 @@ mod tests {
 
         let conn = index_conn();
         // The only validator matches *.rs, never a .lock file.
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)

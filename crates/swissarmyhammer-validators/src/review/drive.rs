@@ -362,7 +362,6 @@ async fn run_pipeline_in_connection(
 mod tests {
     use super::*;
 
-    use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -372,141 +371,12 @@ mod tests {
     };
     use agent_client_protocol::{ConnectTo, ConnectionTo, Role};
     use model_embedding::mock::MockEmbedder;
-    use rusqlite::Connection;
-    use tempfile::TempDir;
-
-    use swissarmyhammer_code_context::db::{configure_connection, create_schema};
-    use swissarmyhammer_code_context::serialize_embedding;
 
     use crate::review::scope::Scope;
-    use crate::validators::types::{RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch};
-    use crate::validators::{Rule, Severity, ValidatorLoader, ValidatorSource};
-
-    const DIM: usize = 4;
-
-    // ---- git repo fixture (libgit2, real refs) ---------------------------
-
-    struct TestRepo {
-        dir: TempDir,
-        repo: git2::Repository,
-    }
-
-    impl TestRepo {
-        fn new() -> Self {
-            let dir = TempDir::new().unwrap();
-            let repo = git2::Repository::init(dir.path()).unwrap();
-            {
-                let mut cfg = repo.config().unwrap();
-                cfg.set_str("user.name", "Test").unwrap();
-                cfg.set_str("user.email", "test@example.com").unwrap();
-            }
-            Self { dir, repo }
-        }
-
-        fn path(&self) -> &Path {
-            self.dir.path()
-        }
-
-        fn write(&self, rel: &str, content: &str) {
-            let full = self.dir.path().join(rel);
-            if let Some(parent) = full.parent() {
-                std::fs::create_dir_all(parent).unwrap();
-            }
-            std::fs::write(full, content).unwrap();
-        }
-
-        fn commit(&self, message: &str) -> String {
-            let mut index = self.repo.index().unwrap();
-            index
-                .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
-                .unwrap();
-            index.write().unwrap();
-            let tree_id = index.write_tree().unwrap();
-            let tree = self.repo.find_tree(tree_id).unwrap();
-            let sig = git2::Signature::now("Test", "test@example.com").unwrap();
-            let parent = self.repo.head().ok().and_then(|h| h.peel_to_commit().ok());
-            let parents: Vec<&git2::Commit> = parent.iter().collect();
-            let oid = self
-                .repo
-                .commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
-                .unwrap();
-            oid.to_string()
-        }
-    }
-
-    // ---- code_context index fixture --------------------------------------
-
-    fn index_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        configure_connection(&conn).unwrap();
-        create_schema(&conn).unwrap();
-        conn
-    }
-
-    fn seed_file(conn: &Connection, file_path: &str) {
-        conn.execute(
-            "INSERT OR IGNORE INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed, embedded)
-             VALUES (?1, X'DEADBEEF', 1024, 1000, 1, 1, 1)",
-            rusqlite::params![file_path],
-        )
-        .unwrap();
-    }
-
-    fn seed_chunk(conn: &Connection, file_path: &str, symbol_path: &str, text: &str, emb: &[f32]) {
-        seed_file(conn, file_path);
-        let blob = serialize_embedding(emb);
-        conn.execute(
-            "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, symbol_path, text, embedding)
-             VALUES (?1, 0, ?2, 1, 10, ?3, ?4, ?5)",
-            rusqlite::params![file_path, text.len() as i64, symbol_path, text, blob],
-        )
-        .unwrap();
-    }
-
-    fn body(label: &str) -> String {
-        format!(
-            "pub fn {label}(input: &[f64]) -> f64 {{\n    let mut total = 0.0;\n    for value in input {{\n        total += value * value;\n    }}\n    total / input.len() as f64\n}}"
-        )
-    }
-
-    // ---- validator loader fixture ----------------------------------------
-
-    fn loader_with(name: &str, file_glob: &str, probes: &[&str]) -> ValidatorLoader {
-        let mut loader = ValidatorLoader::new();
-        loader.add_builtin_ruleset(ruleset(name, file_glob, probes));
-        loader
-    }
-
-    fn ruleset(name: &str, file_glob: &str, probes: &[&str]) -> RuleSet {
-        RuleSet {
-            manifest: RuleSetManifest {
-                name: name.to_string(),
-                description: format!("{name} test ruleset"),
-                metadata: RuleSetMetadata {
-                    version: "1.0.0".to_string(),
-                },
-                match_criteria: Some(ValidatorMatch {
-                    tools: vec![],
-                    files: vec![file_glob.to_string()],
-                }),
-                trigger_matcher: None,
-                tags: vec![],
-                probes: probes.iter().map(|p| p.to_string()).collect(),
-                severity: Severity::Error,
-                timeout: 30,
-                once: false,
-            },
-            rules: vec![Rule {
-                name: format!("{name}-rule"),
-                description: "rule".to_string(),
-                body: "body".to_string(),
-                severity: None,
-                timeout: None,
-            }],
-            source: ValidatorSource::Builtin,
-            base_path: std::path::PathBuf::from("/test"),
-        }
-    }
+    use crate::review::test_support::{
+        body, dup_emb, index_conn, loader_with, seed_chunk, TestRepo, DIM,
+    };
+    use crate::validators::Severity;
 
     // ---- scripted ACP agent (substring → response) -----------------------
     //
@@ -832,11 +702,11 @@ mod tests {
         repo.write("src/lib.rs", &format!("fn placeholder() {{}}\n\n{dup}\n"));
 
         let conn = index_conn();
-        let dup_emb = vec![1.0_f32, 0.0, 0.0, 0.0];
-        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &dup_emb);
-        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &dup_emb);
+        let emb = dup_emb();
+        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
+        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &emb);
 
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Error);
         let embedder = MockEmbedder::new(DIM);
 
         // The fan-out prompt names the validator + file; the verify prompt names
@@ -931,11 +801,11 @@ mod tests {
         repo.write("src/lib.rs", &format!("fn placeholder() {{}}\n\n{dup}\n"));
 
         let conn = index_conn();
-        let dup_emb = vec![1.0_f32, 0.0, 0.0, 0.0];
-        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &dup_emb);
-        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &dup_emb);
+        let emb = dup_emb();
+        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
+        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &emb);
 
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Error);
         let embedder = MockEmbedder::new(DIM);
 
         let (notify_tx, notification_rx) = broadcast::channel(64);
@@ -1000,11 +870,11 @@ mod tests {
         repo.write("src/lib.rs", &format!("fn placeholder() {{}}\n\n{dup}\n"));
 
         let conn = index_conn();
-        let dup_emb = vec![1.0_f32, 0.0, 0.0, 0.0];
-        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &dup_emb);
-        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &dup_emb);
+        let emb = dup_emb();
+        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
+        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &emb);
 
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Error);
         let embedder = MockEmbedder::new(DIM);
 
         let read_path = repo.path().join("src/lib.rs");

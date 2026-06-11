@@ -19,6 +19,10 @@ pub struct GitOperations {
     work_dir: PathBuf,
 }
 
+/// An accessor selecting which [`StatusSummary`] list a status flag's paths
+/// accumulate into (see [`GitOperations::STATUS_BUCKETS`]).
+type StatusBucket = fn(&mut StatusSummary) -> &mut Vec<String>;
+
 impl GitOperations {
     /// Create a new GitOperations instance for the current directory
     pub fn new() -> GitResult<Self> {
@@ -272,11 +276,31 @@ impl GitOperations {
         Ok(())
     }
 
+    /// The status-flag → summary-bucket classification table for
+    /// [`Self::get_status`]: each `git2::Status` flag maps to the
+    /// [`StatusSummary`] list its paths accumulate into. A new status category
+    /// is a one-row addition here, interpreted by the single loop below.
+    const STATUS_BUCKETS: &'static [(git2::Status, StatusBucket)] = &[
+        (git2::Status::INDEX_MODIFIED, |s| &mut s.staged_modified),
+        (git2::Status::WT_MODIFIED, |s| &mut s.unstaged_modified),
+        (git2::Status::WT_NEW, |s| &mut s.untracked),
+        (git2::Status::INDEX_NEW, |s| &mut s.staged_new),
+        (git2::Status::INDEX_DELETED, |s| &mut s.staged_deleted),
+        (git2::Status::WT_DELETED, |s| &mut s.unstaged_deleted),
+        (git2::Status::INDEX_RENAMED, |s| &mut s.renamed),
+        (git2::Status::CONFLICTED, |s| &mut s.conflicted),
+    ];
+
     /// Get the repository status
     pub fn get_status(&self) -> GitResult<StatusSummary> {
         let repo = self.repo.inner();
         let mut opts = StatusOptions::new();
         opts.include_untracked(true);
+        // Expand untracked directories to their contained files: without this,
+        // libgit2 reports a brand-new `src/` as one directory entry, which is
+        // unreadable as a file and unmatched by any file glob downstream.
+        // `.gitignore` is still respected via `include_ignored(false)`.
+        opts.recurse_untracked_dirs(true);
         opts.include_ignored(false);
 
         let statuses = repo
@@ -289,29 +313,10 @@ impl GitOperations {
             let path = entry.path().unwrap_or("<unknown>").to_string();
             let status = entry.status();
 
-            if status.contains(git2::Status::INDEX_MODIFIED) {
-                summary.staged_modified.push(path.clone());
-            }
-            if status.contains(git2::Status::WT_MODIFIED) {
-                summary.unstaged_modified.push(path.clone());
-            }
-            if status.contains(git2::Status::WT_NEW) {
-                summary.untracked.push(path.clone());
-            }
-            if status.contains(git2::Status::INDEX_NEW) {
-                summary.staged_new.push(path.clone());
-            }
-            if status.contains(git2::Status::INDEX_DELETED) {
-                summary.staged_deleted.push(path.clone());
-            }
-            if status.contains(git2::Status::WT_DELETED) {
-                summary.unstaged_deleted.push(path.clone());
-            }
-            if status.contains(git2::Status::INDEX_RENAMED) {
-                summary.renamed.push(path.clone());
-            }
-            if status.contains(git2::Status::CONFLICTED) {
-                summary.conflicted.push(path);
+            for (flag, bucket) in Self::STATUS_BUCKETS {
+                if status.contains(*flag) {
+                    bucket(&mut summary).push(path.clone());
+                }
             }
         }
 
@@ -2044,6 +2049,38 @@ mod tests {
         assert!(status.untracked.contains(&"untracked.txt".to_string()));
         assert!(status.staged_new.contains(&"staged_new.txt".to_string()));
         assert!(status.unstaged_modified.contains(&"README.md".to_string()));
+    }
+
+    #[test]
+    fn test_get_status_recurses_untracked_directories_into_files() {
+        let (temp_dir, git_ops) = setup_test_repo();
+        let repo_path = temp_dir.path();
+
+        // An untracked directory must expand to its contained files, not be
+        // reported as a single `src/` entry.
+        std::fs::create_dir_all(repo_path.join("src")).unwrap();
+        std::fs::write(repo_path.join("src").join("new.rs"), "fn new() {}\n").unwrap();
+
+        // A gitignored file must stay excluded even when recursing.
+        std::fs::write(repo_path.join(".gitignore"), "ignored.log\n").unwrap();
+        std::fs::write(repo_path.join("ignored.log"), "noise").unwrap();
+
+        let status = git_ops.get_status().unwrap();
+        assert!(
+            status.untracked.contains(&"src/new.rs".to_string()),
+            "untracked dirs must recurse to file paths, got: {:?}",
+            status.untracked
+        );
+        assert!(
+            !status.untracked.contains(&"src/".to_string()),
+            "the bare directory entry must not appear, got: {:?}",
+            status.untracked
+        );
+        assert!(
+            !status.untracked.iter().any(|p| p.contains("ignored.log")),
+            "gitignored files must stay excluded, got: {:?}",
+            status.untracked
+        );
     }
 
     #[test]

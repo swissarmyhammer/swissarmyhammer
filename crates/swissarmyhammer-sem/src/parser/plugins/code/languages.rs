@@ -367,6 +367,9 @@ pub fn get_language_config(extension: &str) -> Option<&'static LanguageConfig> {
         .copied()
 }
 
+/// All file extensions the code parser plugin handles, in the canonical
+/// dotted-lowercase form (e.g. `".rs"`). The single source of truth other
+/// crates reuse instead of keeping their own extension lists.
 pub fn get_all_code_extensions() -> &'static [&'static str] {
     // All unique extensions across all language configs
     static EXTENSIONS: &[&str] = &[
@@ -375,4 +378,57 @@ pub fn get_all_code_extensions() -> &'static [&'static str] {
         ".f08", ".f", ".for", ".swift", ".ex", ".exs", ".sh",
     ];
     EXTENSIONS
+}
+
+/// The dotted, lowercased extension of `path` (e.g. `".RS"` → `".rs"`), `None`
+/// when the path carries no UTF-8 extension.
+///
+/// This is the normalization convention the extension lists in this module are
+/// keyed by — every lookup against [`get_all_code_extensions`] or
+/// [`get_language_config`] must go through it, so the convention has exactly
+/// one owner.
+pub fn dotted_lowercase_extension(path: &str) -> Option<String> {
+    let ext = std::path::Path::new(path).extension()?.to_str()?;
+    Some(format!(".{}", ext.to_lowercase()))
+}
+
+/// Whether `path` has a code extension per [`get_all_code_extensions`].
+///
+/// Lives next to the list it interprets so callers (e.g. review scoping in
+/// other crates) never re-encode the dotted-lowercase convention themselves.
+pub fn is_code_file(path: &str) -> bool {
+    dotted_lowercase_extension(path)
+        .is_some_and(|ext| get_all_code_extensions().contains(&ext.as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_code_file_accepts_known_code_extensions() {
+        assert!(is_code_file("src/new.rs"));
+        assert!(is_code_file("app/main.py"));
+        assert!(is_code_file("deep/nested/dir/events.js"));
+    }
+
+    #[test]
+    fn is_code_file_normalizes_case_to_the_dotted_lowercase_convention() {
+        assert!(is_code_file("SRC/MAIN.RS"));
+        assert!(is_code_file("Lib.Swift"));
+    }
+
+    #[test]
+    fn is_code_file_rejects_non_code_and_extensionless_paths() {
+        assert!(!is_code_file("logs/run.log"));
+        assert!(!is_code_file("data.jsonl"));
+        assert!(!is_code_file("Makefile"));
+        assert!(!is_code_file("notes.txt"));
+    }
+
+    #[test]
+    fn dotted_lowercase_extension_matches_the_list_entry_format() {
+        assert_eq!(dotted_lowercase_extension("a/b.RS").as_deref(), Some(".rs"));
+        assert_eq!(dotted_lowercase_extension("Makefile"), None);
+    }
 }

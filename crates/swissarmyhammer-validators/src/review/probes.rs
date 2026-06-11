@@ -557,92 +557,10 @@ mod tests {
     use super::*;
 
     use model_embedding::mock::MockEmbedder;
-    use rusqlite::Connection;
-    use swissarmyhammer_code_context::db::{configure_connection, create_schema};
-    use swissarmyhammer_code_context::serialize_embedding;
 
-    /// Embedding dimension used by the seeded index and the mock embedder.
-    const DIM: usize = 4;
-
-    /// Open a real, schema-applied, in-memory code_context index connection.
-    ///
-    /// This is the production schema (`create_schema`) on a real SQLite
-    /// connection — the ops run against exactly what they run against in
-    /// production, just seeded deterministically instead of via the 600MB
-    /// embedder.
-    fn index_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        configure_connection(&conn).unwrap();
-        create_schema(&conn).unwrap();
-        conn
-    }
-
-    /// Register a file in `indexed_files`. `ts_chunks` / `lsp_symbols` carry a
-    /// foreign key onto this table (and `configure_connection` enforces it), so
-    /// every seeded chunk/symbol needs its file registered first.
-    fn seed_file(conn: &Connection, file_path: &str) {
-        conn.execute(
-            "INSERT OR IGNORE INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed, embedded)
-             VALUES (?1, X'DEADBEEF', 1024, 1000, 1, 1, 1)",
-            rusqlite::params![file_path],
-        )
-        .unwrap();
-    }
-
-    /// Seed a `ts_chunks` row with an embedding so `find_duplicates` /
-    /// `search_code` (which filter on `embedding IS NOT NULL`) can see it.
-    fn seed_chunk(
-        conn: &Connection,
-        file_path: &str,
-        symbol_path: &str,
-        text: &str,
-        embedding: &[f32],
-    ) {
-        seed_file(conn, file_path);
-        let blob = serialize_embedding(embedding);
-        conn.execute(
-            "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, symbol_path, text, embedding)
-             VALUES (?1, 0, ?2, 1, 10, ?3, ?4, ?5)",
-            rusqlite::params![file_path, text.len() as i64, symbol_path, text, blob],
-        )
-        .unwrap();
-    }
-
-    /// Seed an `lsp_symbols` row.
-    fn seed_symbol(conn: &Connection, id: &str, name: &str, file_path: &str) {
-        seed_file(conn, file_path);
-        conn.execute(
-            "INSERT INTO lsp_symbols (id, name, kind, file_path, start_line, start_char, end_line, end_char, detail)
-             VALUES (?1, ?2, 12, ?3, 1, 0, 5, 0, NULL)",
-            rusqlite::params![id, name, file_path],
-        )
-        .unwrap();
-    }
-
-    /// Seed an `lsp_call_edges` row (caller -> callee).
-    fn seed_call_edge(
-        conn: &Connection,
-        caller_id: &str,
-        callee_id: &str,
-        caller_file: &str,
-        callee_file: &str,
-    ) {
-        conn.execute(
-            "INSERT INTO lsp_call_edges (caller_id, callee_id, caller_file, callee_file, source, from_ranges)
-             VALUES (?1, ?2, ?3, ?4, 'lsp', '[]')",
-            rusqlite::params![caller_id, callee_id, caller_file, callee_file],
-        )
-        .unwrap();
-    }
-
-    /// A long-enough body that clears the default `min_chunk_bytes` (100).
-    fn body(label: &str) -> String {
-        format!(
-            "pub fn {label}(input: &[f64]) -> f64 {{ \
-             let mut total = 0.0; for value in input {{ total += value * value; }} \
-             total / input.len() as f64 }}"
-        )
-    }
+    use crate::review::test_support::{
+        body, dup_emb, index_conn, seed_call_edge, seed_chunk, seed_symbol, DIM,
+    };
 
     fn added_fn(name: &str, file: &str) -> ChangeEntry {
         ChangeEntry {
@@ -762,20 +680,8 @@ mod tests {
         let shared = body("compute");
         // The changed file and an existing indexed file share the same body
         // (identical embedding) → a duplicate.
-        seed_chunk(
-            &conn,
-            "src/new.rs",
-            "compute",
-            &shared,
-            &[1.0, 0.0, 0.0, 0.0],
-        );
-        seed_chunk(
-            &conn,
-            "src/existing.rs",
-            "old_compute",
-            &shared,
-            &[1.0, 0.0, 0.0, 0.0],
-        );
+        seed_chunk(&conn, "src/new.rs", "compute", &shared, &dup_emb());
+        seed_chunk(&conn, "src/existing.rs", "old_compute", &shared, &dup_emb());
 
         let embedder = MockEmbedder::new(DIM);
         let change = FileChange::new(vec![ChangeEntry {
@@ -862,20 +768,14 @@ mod tests {
         let conn = index_conn();
         let reimplemented = body("my_mse");
         // The added function's own (already-indexed) chunk — must be excluded.
-        seed_chunk(
-            &conn,
-            "src/new.rs",
-            "my_mse",
-            &reimplemented,
-            &[1.0, 0.0, 0.0, 0.0],
-        );
+        seed_chunk(&conn, "src/new.rs", "my_mse", &reimplemented, &dup_emb());
         // An existing util with the same embedding — the reuse candidate.
         seed_chunk(
             &conn,
             "src/util.rs",
             "mean_squared_error",
             &reimplemented,
-            &[1.0, 0.0, 0.0, 0.0],
+            &dup_emb(),
         );
 
         // Mock embedder returns a constant vector for every query; seed the
