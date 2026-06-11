@@ -7,7 +7,7 @@
 //! and wires every subsystem into it.
 //!
 //! This is the *one* place the substrate is wired. Both production
-//! (`BoardHandle::open` in kanban-app) and the substrate guard test
+//! (`BoardHandle::open_with` in kanban-app) and the substrate guard test
 //! (`apps/kanban-app/tests/substrate_guard.rs`) call this function, so the guard
 //! exercises the real production code path — if the wiring here ever forks the
 //! `StoreContext`, the guard fails directly.

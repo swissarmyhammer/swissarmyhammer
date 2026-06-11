@@ -155,7 +155,7 @@ pub struct StackState {
 /// stack, writes to the other on a second stack, and an `undo` would
 /// silently revert only the half the caller happened to dispatch to.
 ///
-/// In the kanban app this invariant is set up in `BoardHandle::open`
+/// In the kanban app this invariant is set up in `BoardHandle::open_with`
 /// (`apps/kanban-app/src/state.rs`) and pinned by the substrate guard test
 /// at `apps/kanban-app/tests/substrate_guard.rs`, which `Arc::ptr_eq`-
 /// compares the context each subsystem holds against the one the board

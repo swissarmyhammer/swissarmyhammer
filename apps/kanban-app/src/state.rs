@@ -113,8 +113,9 @@ pub(crate) struct BoardHandle {
     /// AI backend reaches it via [`BoardHandle::mcp_url`].
     ///
     /// `Option` so the handle can be taken in `Drop` to drive an async
-    /// `shutdown()`. It is always `Some` for a board returned by
-    /// [`BoardHandle::open`].
+    /// `shutdown()`. It is always `Some` for a board opened by
+    /// [`BoardHandle::open_with`] with [`BoardOpenOptions::default`] (the
+    /// production path); [`BoardOpenOptions::lite`] skips the server.
     mcp_server: Option<McpServerHandle>,
     /// This board's own plugin host — a [`PluginPlatform`] with its own
     /// [`swissarmyhammer_plugin::PluginHost`], `ServerRegistry`, command
@@ -327,13 +328,16 @@ impl BoardOpenOptions {
 }
 
 impl BoardHandle {
-    /// Create a handle with a fully-initialized context (views, fields, etc.).
+    /// Create a handle with a fully-initialized context (views, fields, etc.),
+    /// with explicit control over its heavyweight side effects.
     ///
     /// Does NOT start the bridge task — call `start_watcher` after the
     /// Tauri `AppHandle` is available so the bridge can emit events.
     ///
-    /// Opens with all production side effects enabled; see
-    /// [`BoardHandle::open_with`] for the toggleable variant.
+    /// Production ([`AppState::open_board`] via `open_board_with`) passes
+    /// [`BoardOpenOptions::default`] (everything enabled). Tests pass
+    /// [`BoardOpenOptions::lite`] to skip the MCP server, FSEvents watcher,
+    /// and skill deploy while still building the context and entity cache.
     ///
     /// `plugin_roots` carries the shared plugin-layer roots (`user_root`,
     /// `builtin_cache`) so this board can build its OWN [`PluginPlatform`]
@@ -350,29 +354,6 @@ impl BoardHandle {
     /// four `AppHandle`-dependent builtin command plugins alongside the rest.
     /// `None` (e.g. a board opened before `setup_app` stored the shells, or a
     /// test that doesn't exercise those backends) leaves them unexposed.
-    pub async fn open(
-        kanban_path: PathBuf,
-        plugin_roots: Option<&PluginRoots>,
-        apphandle_shells: ApphandleShells,
-    ) -> Result<Self, String> {
-        Self::open_with(
-            kanban_path,
-            plugin_roots,
-            apphandle_shells,
-            BoardOpenOptions::default(),
-        )
-        .await
-    }
-
-    /// Open a board with explicit control over its heavyweight side effects.
-    ///
-    /// [`BoardHandle::open`] delegates here with [`BoardOpenOptions::default`]
-    /// (everything enabled), so production behavior is unchanged. Tests pass
-    /// [`BoardOpenOptions::lite`] to skip the MCP server, FSEvents watcher, and
-    /// skill deploy while still building the context and entity cache.
-    ///
-    /// `plugin_roots` / `apphandle_shells` are as documented on
-    /// [`BoardHandle::open`].
     pub(crate) async fn open_with(
         kanban_path: PathBuf,
         plugin_roots: Option<&PluginRoots>,
@@ -1550,7 +1531,7 @@ async fn build_board_platform(
     // `&PluginPlatform` across `.await` points, and `PluginPlatform` is `Send`
     // but not `Sync` (its `PluginHost` carries the JS isolate state). Holding
     // that `&` across an await makes the surrounding future `!Send`, which would
-    // taint `BoardHandle::open` / `open_board` — both of which the menu handlers
+    // taint `BoardHandle::open_with` / `open_board` — both of which the menu handlers
     // run inside `tauri::async_runtime::spawn`, where the future must be `Send`.
     // [`crate::confine::spawn_confined`] runs the `!Send` build span on the
     // confinement runtime's blocking pool and returns a `JoinHandle` we `.await`
@@ -1885,7 +1866,7 @@ fn deploy_workspace_tools(board_dir: &Path) {
 /// The server's working directory is the board folder — the parent of the
 /// `.kanban` directory — so its `kanban` tool operates on this board's
 /// `.kanban`. The board's workspace tools are ensured by
-/// [`ensure_workspace_tools`], which `BoardHandle::open` calls synchronously
+/// [`ensure_workspace_tools`], which `BoardHandle::open_with` calls synchronously
 /// and to completion *before* this function. The in-memory `skill` tool serves
 /// the builtin skills embedded in the binary, so it is always ready; the
 /// pre-flight deploy materializes those same kanban skills on disk for any
@@ -2312,7 +2293,8 @@ mod tests {
     #[tokio::test]
     async fn test_open_board_deploys_kanban_tool_skills_at_board_folder() {
         // Drives the real production entry point — `AppState::open_board`
-        // delegates to `BoardHandle::open`, which calls `ensure_workspace_tools`
+        // delegates to `BoardHandle::open_with` (with `BoardOpenOptions::default`),
+        // which calls `ensure_workspace_tools`
         // with the resolved `.kanban` path and installs the board's
         // `kanban_profile` via `mirdan::install::init_profile` rooted at
         // `kanban_path.parent()` (the board folder). The deploy is synchronous
@@ -2326,7 +2308,7 @@ mod tests {
         // fork.
         //
         // This test fails if either piece of the production wiring regresses:
-        //   - if `ensure_workspace_tools` is removed from `BoardHandle::open`,
+        //   - if `ensure_workspace_tools` is removed from `BoardHandle::open_with`,
         //     nothing creates `<board>/.skills/` and the assertions below fail;
         //   - if the `.parent()` board-folder math is wrong (e.g. rooting at
         //     `.kanban/` itself), `.skills/` lands inside `.kanban/` rather than
@@ -2343,7 +2325,7 @@ mod tests {
         let store_dir = board_dir.join(".skills");
         assert!(
             store_dir.is_dir(),
-            ".skills/ store must be created at the board folder by BoardHandle::open"
+            ".skills/ store must be created at the board folder by BoardHandle::open_with"
         );
 
         // Exactly the 6 `kanban`-profile skills must be deployed by the

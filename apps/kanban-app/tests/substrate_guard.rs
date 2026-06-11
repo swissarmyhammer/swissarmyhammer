@@ -3,7 +3,7 @@
 //!
 //! # What this test pins
 //!
-//! Production wiring lives at `apps/kanban-app/src/state.rs::BoardHandle::open`,
+//! Production wiring lives at `apps/kanban-app/src/state.rs::BoardHandle::open_with`,
 //! which delegates the entire substrate wiring to
 //! `swissarmyhammer_kanban::wire_store_substrate`. That function constructs
 //! exactly one `Arc<StoreContext>`, then wires it into the `EntityContext`,
@@ -47,14 +47,14 @@ async fn open_production_shape() -> (TempDir, Arc<KanbanContext>, Arc<StoreConte
         .expect("board init");
     drop(init_ctx);
 
-    // Reopen to populate the views context, mirroring `BoardHandle::open`.
+    // Reopen to populate the views context, mirroring `BoardHandle::open_with`.
     let kanban = Arc::new(
         KanbanContext::open(&kanban_dir)
             .await
             .expect("reopen kanban context"),
     );
 
-    // Run the EXACT production wiring — the same call `BoardHandle::open`
+    // Run the EXACT production wiring — the same call `BoardHandle::open_with`
     // makes. The returned Arc is the one-and-only StoreContext for this board.
     let store_context = wire_store_substrate(&kanban).await;
 

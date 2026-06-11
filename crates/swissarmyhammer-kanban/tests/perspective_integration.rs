@@ -190,7 +190,7 @@ async fn test_perspective_store_events_and_list() {
         .into_result()
         .unwrap();
 
-    // Wire up StoreHandle for perspectives (mirrors BoardHandle::open)
+    // Wire up StoreHandle for perspectives (mirrors BoardHandle::open_with)
     let perspectives_dir = kanban_dir.join("perspectives");
     std::fs::create_dir_all(&perspectives_dir).unwrap();
     let store = Arc::new(swissarmyhammer_perspectives::PerspectiveStore::new(
