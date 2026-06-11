@@ -58,7 +58,8 @@ export const NAV_PLUGIN_COMMANDS: CommandMetadata[] = [
   {
     id: "nav.first",
     name: "Navigate to First",
-    keys: { cua: "Home", emacs: "Alt+<" },
+    // vim `g g` is a chord (Card J) — mirrored 1:1 from the plugin.
+    keys: { vim: "g g", cua: "Home", emacs: "Alt+<" },
   },
   {
     id: "nav.last",

@@ -507,42 +507,67 @@ describe("createKeyHandler", () => {
     }
   });
 
-  /* ---------- vim multi-key sequences ---------- */
+  /* ---------- chord bindings (multi-key sequences) ---------- */
+  //
+  // Chords are first-class catalogue metadata (Card J): a binding value is a
+  // sequence of canonical keystrokes separated by single spaces (`"g g"`,
+  // `"g Shift+T"`). The vim chords ride on the owning plugins' command
+  // `keys` (nav-commands `nav.first` "g g"; perspective-commands "g t" /
+  // "g Shift+T"; entity-commands "d d") and reach the handler through the
+  // SAME tables as single keys — `extractKeymapBindings` for globals,
+  // `extractChainBindings` for scope — so the retired static
+  // `SEQUENCE_TABLES` has no successor. The handler resolves chords with a
+  // pending buffer + 500ms-per-step timeout.
 
-  it("handles vim gg sequence", () => {
-    const handler = createKeyHandler("vim", executeCommand);
+  /** Registry slice mirroring the owning plugins' chord keys. */
+  const CHORD_REGISTRY = [
+    {
+      id: "nav.first",
+      name: "Navigate to First",
+      keys: { vim: "g g", cua: "Home", emacs: "Alt+<" },
+    },
+    {
+      id: "perspective.next",
+      name: "Next Perspective",
+      keys: { cua: "Mod+]", vim: "g t" },
+    },
+    {
+      id: "perspective.prev",
+      name: "Previous Perspective",
+      keys: { cua: "Mod+[", vim: "g Shift+T" },
+    },
+    { id: "app.undo", name: "Undo", keys: { vim: "u", cua: "Mod+z" } },
+  ] as const;
 
-    // First 'g' should not fire immediately
+  /** The vim global table the registry slice produces (chords included). */
+  function vimGlobal(): Record<string, string> {
+    return extractKeymapBindings([...CHORD_REGISTRY], "vim");
+  }
+
+  it("resolves the g g chord to nav.first from the registry global table", () => {
+    const handler = createKeyHandler(
+      "vim",
+      executeCommand,
+      undefined,
+      vimGlobal(),
+    );
+
+    // First 'g' buffers — nothing fires.
     handler(fakeKeyEvent("g"));
     expect(executeCommand).not.toHaveBeenCalled();
 
-    // Second 'g' completes the sequence
+    // Second 'g' completes the chord.
     handler(fakeKeyEvent("g"));
     expect(executeCommand).toHaveBeenCalledWith("nav.first");
   });
 
-  it("handles vim dd sequence", () => {
-    const handler = createKeyHandler("vim", executeCommand);
-
-    handler(fakeKeyEvent("d"));
-    expect(executeCommand).not.toHaveBeenCalled();
-
-    handler(fakeKeyEvent("d"));
-    expect(executeCommand).toHaveBeenCalledWith("entity.archive");
-  });
-
-  it("handles vim zo sequence", () => {
-    const handler = createKeyHandler("vim", executeCommand);
-
-    handler(fakeKeyEvent("z"));
-    expect(executeCommand).not.toHaveBeenCalled();
-
-    handler(fakeKeyEvent("o"));
-    expect(executeCommand).toHaveBeenCalledWith("task.toggleCollapse");
-  });
-
-  it("handles vim gt sequence → perspective.next", () => {
-    const handler = createKeyHandler("vim", executeCommand);
+  it("resolves g t → perspective.next", () => {
+    const handler = createKeyHandler(
+      "vim",
+      executeCommand,
+      undefined,
+      vimGlobal(),
+    );
 
     handler(fakeKeyEvent("g"));
     expect(executeCommand).not.toHaveBeenCalled();
@@ -551,8 +576,13 @@ describe("createKeyHandler", () => {
     expect(executeCommand).toHaveBeenCalledWith("perspective.next");
   });
 
-  it("handles vim gT (Shift+T) sequence → perspective.prev", () => {
-    const handler = createKeyHandler("vim", executeCommand);
+  it("resolves g Shift+T → perspective.prev (modifier step)", () => {
+    const handler = createKeyHandler(
+      "vim",
+      executeCommand,
+      undefined,
+      vimGlobal(),
+    );
 
     handler(fakeKeyEvent("g"));
     expect(executeCommand).not.toHaveBeenCalled();
@@ -561,39 +591,184 @@ describe("createKeyHandler", () => {
     expect(executeCommand).toHaveBeenCalledWith("perspective.prev");
   });
 
-  it("clears pending buffer after 500ms timeout", () => {
-    const handler = createKeyHandler("vim", executeCommand);
+  it("resolves a scope-sourced d d chord to entity.archive", () => {
+    // `entity.archive` declares `keys.vim: "d d"`; the cross-cutting emit
+    // surfaces it into the focused entity scope, so the chord arrives via
+    // `getScopeBindings`, not the global table.
+    const scopeBindings = () => ({ "d d": "entity.archive" });
+    const handler = createKeyHandler("vim", executeCommand, scopeBindings);
+
+    handler(fakeKeyEvent("d"));
+    expect(executeCommand).not.toHaveBeenCalled();
+
+    handler(fakeKeyEvent("d"));
+    expect(executeCommand).toHaveBeenCalledWith("entity.archive");
+  });
+
+  it("resolves a chord the legacy static tables never knew (pure table sourcing)", () => {
+    // A novel chord that never existed in the retired SEQUENCE_TABLES —
+    // proves chord resolution is sourced from the binding table alone, not
+    // from any static sequence knowledge.
+    const handler = createKeyHandler("vim", executeCommand, undefined, {
+      "x x": "test.doubleX",
+    });
+
+    handler(fakeKeyEvent("x"));
+    expect(executeCommand).not.toHaveBeenCalled();
+
+    handler(fakeKeyEvent("x"));
+    expect(executeCommand).toHaveBeenCalledWith("test.doubleX");
+  });
+
+  it("resolves a three-step chord", () => {
+    // The schema is a sequence of arbitrary length, not a hardcoded pair.
+    const handler = createKeyHandler("vim", executeCommand, undefined, {
+      "g g g": "test.tripleG",
+    });
+
+    handler(fakeKeyEvent("g"));
+    handler(fakeKeyEvent("g"));
+    expect(executeCommand).not.toHaveBeenCalled();
+
+    handler(fakeKeyEvent("g"));
+    expect(executeCommand).toHaveBeenCalledWith("test.tripleG");
+  });
+
+  it("a scope chord shadows a global chord for the same sequence", () => {
+    const scopeBindings = () => ({ "g g": "scope.first" });
+    const handler = createKeyHandler(
+      "vim",
+      executeCommand,
+      scopeBindings,
+      vimGlobal(),
+    );
+
+    handler(fakeKeyEvent("g"));
+    handler(fakeKeyEvent("g"));
+    expect(executeCommand).toHaveBeenCalledWith("scope.first");
+  });
+
+  it("clears the pending chord prefix after the 500ms timeout", () => {
+    const handler = createKeyHandler(
+      "vim",
+      executeCommand,
+      undefined,
+      vimGlobal(),
+    );
 
     handler(fakeKeyEvent("g"));
     expect(executeCommand).not.toHaveBeenCalled();
 
-    // Advance past the timeout
+    // Advance past the timeout — the buffered prefix is swallowed.
     vi.advanceTimersByTime(501);
 
-    // Now pressing 'g' again should start a fresh sequence, not complete 'gg'
+    // Pressing 'g' again starts a fresh chord, not a completion.
     handler(fakeKeyEvent("g"));
     expect(executeCommand).not.toHaveBeenCalled();
 
-    // Complete the fresh sequence
+    // Complete the fresh chord.
     handler(fakeKeyEvent("g"));
     expect(executeCommand).toHaveBeenCalledWith("nav.first");
   });
 
-  it("clears pending buffer when a non-matching key follows", () => {
-    const handler = createKeyHandler("vim", executeCommand);
+  it("a timed-out prefix never fires its single-key shadow late", () => {
+    // Buffered prefix keys are swallowed on timeout — pressing `g` and
+    // waiting must not retroactively dispatch anything, even when `g` also
+    // has a single-key binding.
+    const handler = createKeyHandler("vim", executeCommand, undefined, {
+      ...vimGlobal(),
+      g: "single.g",
+    });
 
-    // Start a 'g' sequence
     handler(fakeKeyEvent("g"));
-
-    // Press something that doesn't complete any sequence starting with 'g'
-    handler(fakeKeyEvent("x"));
-
-    // The buffer should be cleared, and 'x' does not match anything alone
+    vi.advanceTimersByTime(501);
     expect(executeCommand).not.toHaveBeenCalled();
   });
 
-  it("still handles single-key vim bindings alongside multi-key", () => {
-    const handler = createKeyHandler("vim", executeCommand);
+  it("an abandoned prefix falls back to resolving the terminating key", () => {
+    // 'g' buffers, then 'u' — "g u" matches no chord, so the handler
+    // re-resolves 'u' on its own and fires the single-key binding.
+    const handler = createKeyHandler(
+      "vim",
+      executeCommand,
+      undefined,
+      vimGlobal(),
+    );
+
+    handler(fakeKeyEvent("g"));
+    handler(fakeKeyEvent("u"));
+    expect(executeCommand).toHaveBeenCalledWith("app.undo");
+  });
+
+  it("clears the pending buffer when a non-matching key follows", () => {
+    const handler = createKeyHandler(
+      "vim",
+      executeCommand,
+      undefined,
+      vimGlobal(),
+    );
+
+    // Start a 'g' chord, then press something that completes nothing and
+    // has no single-key binding of its own.
+    handler(fakeKeyEvent("g"));
+    handler(fakeKeyEvent("x"));
+    expect(executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("an abandoned prefix falls through into a NEW chord prefix (g, d, d)", () => {
+    // The miss-path fallback must re-run the FULL resolve on the
+    // terminating key — including the prefix check — not just the exact
+    // single-key lookup. With the shipped catalogue: 'g' buffers (prefix
+    // of "g g" / "g t" / "g Shift+T"), then 'd' misses as "g d"; the bare
+    // re-resolve of 'd' must START A NEW chord buffer because 'd' is
+    // itself the root of the scope-sourced "d d" chord. The second 'd'
+    // then completes the fresh chord and fires `entity.archive`.
+    const scopeBindings = () => ({ "d d": "entity.archive" });
+    const handler = createKeyHandler(
+      "vim",
+      executeCommand,
+      scopeBindings,
+      vimGlobal(),
+    );
+
+    // 'g' buffers as a chord prefix — nothing fires.
+    handler(fakeKeyEvent("g"));
+    expect(executeCommand).not.toHaveBeenCalled();
+
+    // 'd' misses as "g d" and the fallback buffers it as a fresh prefix.
+    handler(fakeKeyEvent("d"));
+    expect(executeCommand).not.toHaveBeenCalled();
+
+    // Second 'd' completes the fresh "d d" chord.
+    handler(fakeKeyEvent("d"));
+    expect(executeCommand).toHaveBeenCalledWith("entity.archive");
+  });
+
+  it("a chord prefix shadows a single-key binding on the same key", () => {
+    // Precedence (documented in `createKeyHandler`): a key that is a chord
+    // prefix in the merged table DEFERS to the chord — the single-key
+    // binding for that exact key is unreachable while a chord claims the
+    // prefix. This preserves the pre-chord SEQUENCE_TABLES-first behavior
+    // and keeps resolution deterministic regardless of registry order.
+    const handler = createKeyHandler("vim", executeCommand, undefined, {
+      ...vimGlobal(),
+      g: "single.g",
+    });
+
+    handler(fakeKeyEvent("g"));
+    expect(executeCommand).not.toHaveBeenCalled();
+
+    handler(fakeKeyEvent("g"));
+    expect(executeCommand).toHaveBeenCalledWith("nav.first");
+  });
+
+  it("still handles single-key vim bindings alongside chords", () => {
+    const handler = createKeyHandler(
+      "vim",
+      executeCommand,
+      undefined,
+      vimGlobal(),
+    );
     handler(fakeKeyEvent("u"));
     expect(executeCommand).toHaveBeenCalledWith("app.undo");
   });
@@ -888,7 +1063,7 @@ describe("extractChainBindings — component defs only", () => {
 //   - `entity.delete`  — cua `Mod+Backspace` (migrated from the retired
 //                        type-specific `task.delete` so the delete shortcut
 //                        now works on any entity — task, tag, column, etc.)
-//   - `entity.archive` — vim `dd`
+//   - `entity.archive` — vim chord `d d`
 //   - `entity.cut`     — cua `Mod+X`, vim `x`
 //   - `entity.copy`    — cua `Mod+C`, vim `y`
 //   - `entity.paste`   — cua `Mod+V`, vim `p`
@@ -935,31 +1110,31 @@ describe("cross-cutting command keybinding dispatch", () => {
     }
   }
 
-  it("vim: dd on a task-scoped focus dispatches entity.archive", () => {
-    // `entity.archive` declares `keys.vim: dd` in
-    // swissarmyhammer-commands/builtin/commands/entity.yaml. The
-    // cross-cutting emit pass surfaces the command with its keys into the
-    // task's scope; `extractChainBindings` pulls it out.
-    const scope = makeScope([{ id: "entity.archive", keys: { vim: "dd" } }]);
+  it("vim: d d on a task-scoped focus dispatches entity.archive", () => {
+    // `entity.archive` declares the chord `keys.vim: "d d"` in
+    // `builtin/plugins/entity-commands/index.ts`. The cross-cutting emit
+    // pass surfaces the command with its keys into the task's scope;
+    // `extractChainBindings` pulls the chord out like any other key.
+    const scope = makeScope([{ id: "entity.archive", keys: { vim: "d d" } }]);
     const handler = createKeyHandler("vim", executeCommand, () =>
       extractChainBindings([], "vim", scope),
     );
 
-    // First `d` is buffered by the sequence logic.
+    // First `d` is buffered by the chord logic.
     handler(fakeKeyEvent("d"));
     expect(executeCommand).not.toHaveBeenCalled();
 
-    // Second `d` completes the sequence and fires.
+    // Second `d` completes the chord and fires.
     handler(fakeKeyEvent("d"));
     expect(executeCommand).toHaveBeenCalledWith("entity.archive");
   });
 
-  it("vim: dd on a tag-scoped focus also dispatches entity.archive", () => {
+  it("vim: d d on a tag-scoped focus also dispatches entity.archive", () => {
     // Identical extraction path regardless of whether the host scope is a
     // task, tag, project, or any other entity that auto-emits
     // `entity.archive`. The binding is a function of the command's keys,
     // not the scope type.
-    const scope = makeScope([{ id: "entity.archive", keys: { vim: "dd" } }]);
+    const scope = makeScope([{ id: "entity.archive", keys: { vim: "d d" } }]);
     const handler = createKeyHandler("vim", executeCommand, () =>
       extractChainBindings([], "vim", scope),
     );

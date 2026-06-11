@@ -210,7 +210,10 @@ pub struct CommandMetadata {
     /// Scope expression list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<Vec<String>>,
-    /// Keybindings keyed by keymap mode.
+    /// Keybindings keyed by keymap mode. Each value is a chord: one or more
+    /// canonical keystrokes separated by single spaces (e.g. `"x"`,
+    /// `"Mod+K"`, `"g g"`, `"g Shift+T"`). See [`crate::RegisterCommand::keys`]
+    /// for the full grammar.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keys: Option<HashMap<String, String>>,
     /// Native menu-bar placement payload.
@@ -302,6 +305,32 @@ impl CommandMetadata {
     }
 }
 
+/// Decide whether a keybinding value is a well-formed chord.
+///
+/// The chord grammar (Card J): a binding is a sequence of one or more
+/// canonical keystrokes separated by **single spaces**. A single keystroke
+/// (`"x"`, `"Mod+K"`, `"Space"`) is a chord of length 1 — identical to the
+/// pre-chord single-string behavior; a multi-step value (`"g g"`,
+/// `"g Shift+T"`) is a vim-style sequence. Canonical keystrokes never
+/// contain a literal space (the spacebar is the symbolic `"Space"` token),
+/// so the separator is unambiguous.
+///
+/// Rejected shapes — all of which would produce an empty or ambiguous chord
+/// step in the webview keymap:
+/// - the empty string;
+/// - a leading, trailing, or doubled separator (empty step);
+/// - non-space whitespace anywhere in a step (tabs, newlines).
+///
+/// @param binding - the keybinding value as registered.
+/// @returns `true` when every space-separated step is non-empty and free of
+///   other whitespace.
+pub fn is_valid_chord(binding: &str) -> bool {
+    !binding.is_empty()
+        && binding
+            .split(' ')
+            .all(|step| !step.is_empty() && !step.chars().any(char::is_whitespace))
+}
+
 /// Error types returned by the `command` operation tool.
 ///
 /// Structured so downstream callers (palette, menu, dispatcher) can
@@ -368,5 +397,22 @@ pub enum CommandError {
         /// The id of the registration whose `available` callback id was
         /// empty.
         id: String,
+    },
+    /// A `keys` binding value was not a well-formed chord. A binding is one
+    /// or more canonical keystrokes separated by single spaces (e.g. `"x"`,
+    /// `"Mod+K"`, `"g g"`); an empty value, a leading/trailing/doubled
+    /// separator (which would produce an empty chord step), or non-space
+    /// whitespace inside a step is rejected at registration time so a
+    /// malformed binding can never reach the webview keymap.
+    #[error(
+        "registration rejected: `keys.{keymap}` binding {binding:?} is not a valid chord for command {id}"
+    )]
+    InvalidKeyBinding {
+        /// The id of the registration whose binding was malformed.
+        id: String,
+        /// The keymap mode (`vim` / `cua` / `emacs`) carrying the binding.
+        keymap: String,
+        /// The malformed binding value as registered.
+        binding: String,
     },
 }

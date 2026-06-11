@@ -170,7 +170,11 @@ const NAV_DIRECTIONS: readonly NavDirSpec[] = [
   {
     id: "nav.first",
     name: "Navigate to First",
-    keys: { cua: "Home", emacs: "Alt+<" },
+    // vim `g g` is a CHORD (Card J): canonical keystrokes separated by
+    // single spaces. Migrated from the retired webview SEQUENCE_TABLES so
+    // the binding lives in catalogue metadata like every other key; the
+    // webview keymap resolves it step-by-step with a pending buffer.
+    keys: { vim: "g g", cua: "Home", emacs: "Alt+<" },
     menu: { path: ["Navigation"], group: 1, order: 0 },
     direction: "first",
   },

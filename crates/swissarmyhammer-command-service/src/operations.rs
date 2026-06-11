@@ -54,6 +54,17 @@ pub struct RegisterCommand {
     /// Keybindings keyed by keymap mode (e.g. `vim`, `cua`, `emacs`).
     /// Kept as a free-form map so new keymap modes can be added without a
     /// schema change.
+    ///
+    /// Each value is a **chord**: a sequence of one or more canonical
+    /// keystrokes separated by single spaces. A single keystroke (`"x"`,
+    /// `"Mod+K"`, `"Space"`) is a chord of length 1 — the pre-chord
+    /// behavior; a multi-step value (`"g g"`, `"g Shift+T"`) is a vim-style
+    /// sequence the webview keymap resolves step-by-step with a pending
+    /// buffer + timeout. Canonical keystrokes never contain a literal space
+    /// (the spacebar is the symbolic `"Space"` token), so the separator is
+    /// unambiguous. Malformed values (an empty binding, a leading/trailing/
+    /// doubled separator, non-space whitespace) are rejected at registration
+    /// time with [`crate::CommandError::InvalidKeyBinding`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keys: Option<HashMap<String, String>>,
     /// Native menu-bar placement payload. Free-form `Value` so

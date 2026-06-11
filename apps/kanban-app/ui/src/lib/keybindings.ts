@@ -2,9 +2,22 @@
  * Keybinding layer for the Tauri kanban app.
  *
  * Maps keyboard events to command IDs based on the active keymap mode
- * (vim / cua / emacs). Supports modifier combos, vim-style multi-key
- * sequences with a 500ms timeout, and skips events originating from
- * CodeMirror 6 editors.
+ * (vim / cua / emacs). Supports modifier combos, multi-key chords with a
+ * 500ms-per-step timeout, and skips events originating from CodeMirror 6
+ * editors.
+ *
+ * # Chord schema (Card J)
+ *
+ * A binding-table key is a **chord**: one or more canonical keystrokes (as
+ * produced by `normalizeKeyEvent`) separated by single spaces. A single
+ * keystroke (`"x"`, `"Mod+K"`, `"Space"`) is a chord of length 1 — the
+ * classic single-key binding; a multi-step key (`"g g"`, `"g Shift+T"`) is
+ * a vim-style sequence. Canonical keystrokes never contain a literal space
+ * (the spacebar is the symbolic `"Space"` token), so the separator is
+ * unambiguous. Chords ride on plugin command `keys` metadata and reach the
+ * handler through the same `extractKeymapBindings` / `extractChainBindings`
+ * tables as single keys — the command service validates the grammar at
+ * registration time (`swissarmyhammer-command-service::is_valid_chord`).
  */
 
 /* ---------- types ---------- */
@@ -12,11 +25,8 @@
 /** The three supported editor keymap modes. */
 export type KeymapMode = "cua" | "vim" | "emacs";
 
-/** A flat mapping from canonical key strings to command IDs. */
+/** A flat mapping from canonical chord strings to command IDs. */
 export type BindingTable = Record<string, string>;
-
-/** Multi-key sequence entry: first key prefix maps to second-key -> command. */
-type SequenceTable = Record<string, Record<string, string>>;
 
 /* ---------- binding tables ---------- */
 
@@ -41,18 +51,18 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     Escape: "nav.drillOut",
     "Mod+w": "file.closeBoard",
     // `s` opens the Jump-To overlay (AceJump-style scope picker). Free
-    // in vim because the existing chord prefixes are `g`, `d`, `z`
-    // (see `SEQUENCE_TABLES.vim`) — `s` collides with neither a chord
-    // root nor any other single-key vim binding above.
+    // in vim because the existing chord prefixes are `g` and `d` (the
+    // plugin-declared chords `g g` / `g t` / `g Shift+T` / `d d`) — `s`
+    // collides with neither a chord root nor any other single-key vim
+    // binding above.
     s: "nav.jump",
     // Space → `entity.inspect`. Same contract described on the cua
     // entry below — the plugin-owned global command (Card G) resolves
     // the focused entity server-side from the dispatched scope chain.
-    // There is no current vim leader-key registered in
-    // `SEQUENCE_TABLES.vim` (which uses `g`, `d`, `z`), so claiming
-    // Space here is safe; if a future vim leader is wired up, this
-    // entry will need to move along with the plugin's
-    // `keys: { vim: "Space" }` binding.
+    // No vim chord in the plugin catalogue uses a `Space` prefix (the
+    // chord roots are `g` and `d`), so claiming Space here is safe; if
+    // a future vim leader is wired up, this entry will need to move
+    // along with the plugin's `keys: { vim: "Space" }` binding.
     Space: "entity.inspect",
     // AI panel — commands DEFINED by the `ai-commands` builtin plugin
     // (whose registry `keys` carry these same canonical strings — the
@@ -141,20 +151,6 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     "Mod+Shift+J": "ai.newChat",
     "Mod+.": "ai.cancel",
   },
-};
-
-/**
- * Multi-key sequence tables per mode. Only vim uses these currently.
- * Keyed by first key, then second key, value is command ID.
- */
-const SEQUENCE_TABLES: Record<KeymapMode, SequenceTable> = {
-  vim: {
-    g: { g: "nav.first", t: "perspective.next", "Shift+T": "perspective.prev" },
-    d: { d: "entity.archive" },
-    z: { o: "task.toggleCollapse" },
-  },
-  cua: {},
-  emacs: {},
 };
 
 /* ---------- normalizeKeyEvent ---------- */
@@ -311,37 +307,9 @@ export function normalizeKeyEvent(e: KeyboardEvent): string | null {
 
 /* ---------- createKeyHandler ---------- */
 
-/** Timeout for vim multi-key sequence buffer in milliseconds. */
+/** Per-step timeout for the pending chord buffer in milliseconds. */
 const SEQUENCE_TIMEOUT_MS = 500;
 
-/**
- * Create a keydown event handler that looks up bindings for the given
- * keymap mode and executes commands via the provided callback.
- *
- * The handler:
- * - Skips events originating inside `.cm-editor` (CM6 handles its own keys).
- * - Supports single-key and modifier-key bindings from BINDING_TABLES.
- * - Supports multi-key sequences (e.g. vim "gg", "dd", "zo") with a
- *   500ms timeout on the pending buffer.
- * - Calls `preventDefault()` and `stopPropagation()` on matched events.
- *
- * @param mode - The active keymap mode ("vim", "cua", or "emacs").
- * @param executeCommand - Callback to run a command by ID, typically from
- *        `useDispatchCommand()` in the command scope.
- * @returns A function suitable for `addEventListener("keydown", ...)`.
- */
-/**
- * Create a keydown event handler that resolves keybindings and executes commands.
- *
- * Bindings come from two sources, checked in order (scope wins over global):
- * 1. **Scope bindings** — dynamic, from the focused scope's commands' `keys` property.
- *    Provided via `getScopeBindings()` callback so the handler always sees the current scope.
- * 2. **Global bindings** — static, from `BINDING_TABLES` for the active keymap mode.
- *
- * @param mode - The active keymap mode ("vim", "cua", or "emacs").
- * @param executeCommand - Callback to run a command by ID.
- * @param getScopeBindings - Returns key→commandId bindings from the focused scope.
- */
 /**
  * Check if a key event targets an editable context that should not trigger
  * global keybindings (inputs, textareas, CM6 editors, contenteditable).
@@ -366,6 +334,20 @@ function isEditableTarget(
 }
 
 /**
+ * Decide whether `candidate` is a STRICT prefix of some chord in the table —
+ * i.e. whether a longer binding starts with `candidate` plus a step
+ * separator. Chord steps never contain a space, so prefix detection is a
+ * plain string-prefix test against `"<candidate> "`.
+ */
+function isChordPrefix(bindings: BindingTable, candidate: string): boolean {
+  const prefix = `${candidate} `;
+  for (const key in bindings) {
+    if (key.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+/**
  * Create the key event handler for the active keymap mode.
  *
  * Bindings come from two sources, checked in order (scope wins over global):
@@ -373,9 +355,44 @@ function isEditableTarget(
  *    Provided via `getScopeBindings()` callback so the handler always sees the current scope.
  * 2. **Global bindings** — static, from `BINDING_TABLES` for the active keymap mode.
  *
+ * # Chord resolution
+ *
+ * Table keys are chords (see the module docs): canonical keystrokes joined
+ * by single spaces. The handler keeps a pending buffer of the chord steps
+ * consumed so far; each keydown extends the candidate (`"g"` → `"g g"`) and
+ * resolves it against the merged table:
+ *
+ * - **Prefix** — the candidate strictly prefixes a longer chord: buffer it
+ *   and restart the 500ms step timer. The buffered key is NOT
+ *   `preventDefault()`ed (matching the pre-chord sequence behavior) and is
+ *   swallowed if the timer expires. Chord authors beware: because the
+ *   buffered keystroke keeps its browser default, a chord rooted at a
+ *   default-bearing key (Space scrolls, Tab moves focus) would leak that
+ *   default while buffered — and registration validation cannot catch it.
+ *   Root chords only at default-free keys (the shipped roots are `g` and
+ *   `d`).
+ * - **Exact match** — fire the command, `preventDefault()` +
+ *   `stopPropagation()`, clear the buffer.
+ * - **Miss** — abandon the buffered prefix and re-resolve the terminating
+ *   key on its own (so `g` then `u` still fires `u`'s single-key binding).
+ *
+ * # Prefix-conflict precedence
+ *
+ * The prefix check runs BEFORE the exact-match check, so a key that is both
+ * a single-key binding and a chord prefix (`"g"` alongside `"g g"`) defers
+ * to the chord — the single-key binding on the prefix key is unreachable
+ * while any chord claims that prefix. This preserves the retired
+ * SEQUENCE_TABLES-first behavior and keeps resolution deterministic
+ * regardless of the registry's iteration order (the conflict is settled by
+ * the table contents, never by which entry was extracted first).
+ *
  * @param mode - The active keymap mode ("vim", "cua", or "emacs").
  * @param executeCommand - Callback to run a command by ID.
  * @param getScopeBindings - Returns key→commandId bindings from the focused scope.
+ * @param globalBindings - The global binding table (defaults to the static
+ *        `BINDING_TABLES[mode]`; production passes the registry-sourced
+ *        table from `extractKeymapBindings`).
+ * @returns A function suitable for `addEventListener("keydown", ...)`.
  */
 export function createKeyHandler(
   mode: KeymapMode,
@@ -383,8 +400,7 @@ export function createKeyHandler(
   getScopeBindings?: () => BindingTable,
   globalBindings: BindingTable = BINDING_TABLES[mode],
 ): (e: KeyboardEvent) => void {
-  const sequences = SEQUENCE_TABLES[mode];
-
+  /** Chord steps consumed so far, joined by the step separator. */
   let pending: string | null = null;
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -406,30 +422,36 @@ export function createKeyHandler(
 
     const bindings = { ...globalBindings, ...(getScopeBindings?.() ?? {}) };
 
-    // Multi-key sequence handling
-    if (pending !== null) {
-      const secondMap = sequences[pending];
-      if (secondMap && normalized in secondMap) {
-        clearPending();
+    /**
+     * Resolve one candidate chord against the merged table. Returns true
+     * when the candidate was consumed (buffered as a prefix or fired as an
+     * exact match), false on a miss.
+     */
+    const resolve = (candidate: string): boolean => {
+      // Prefix beats exact match — see the precedence note above.
+      if (isChordPrefix(bindings, candidate)) {
+        pending = candidate;
+        pendingTimer = setTimeout(clearPending, SEQUENCE_TIMEOUT_MS);
+        return true;
+      }
+      if (candidate in bindings) {
         e.preventDefault();
         e.stopPropagation();
-        executeCommand(secondMap[normalized]);
-        return;
+        executeCommand(bindings[candidate]);
+        return true;
       }
-      clearPending();
-    }
-    if (normalized in sequences) {
-      pending = normalized;
-      pendingTimer = setTimeout(clearPending, SEQUENCE_TIMEOUT_MS);
+      return false;
+    };
+
+    const prior = pending;
+    clearPending();
+
+    // Extend a pending chord first; on a miss fall through to re-resolving
+    // the terminating key on its own (fresh prefix or single-key binding).
+    if (prior !== null && resolve(`${prior} ${normalized}`)) {
       return;
     }
-
-    // Single-key binding lookup
-    if (normalized in bindings) {
-      e.preventDefault();
-      e.stopPropagation();
-      executeCommand(bindings[normalized]);
-    }
+    resolve(normalized);
   };
 }
 

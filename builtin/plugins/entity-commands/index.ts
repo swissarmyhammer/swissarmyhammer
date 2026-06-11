@@ -98,7 +98,10 @@ function parseTarget(ctx: CommandContext): ParsedMoniker | undefined {
 /** Require a target moniker for an `available` precondition. */
 function requireTarget(ctx: CommandContext): Availability {
   if (parseTarget(ctx) === undefined) {
-    return { ok: false, reason: "Select an entity first" } satisfies Availability;
+    return {
+      ok: false,
+      reason: "Select an entity first",
+    } satisfies Availability;
   }
   return { ok: true } satisfies Availability;
 }
@@ -192,17 +195,23 @@ export default class EntityCommandsPlugin extends Plugin {
         context_menu_order: 0,
         keys: { cua: "Mod+Backspace" },
         params: [{ name: "moniker", from: "target" }],
-        available: (rawCtx: unknown) => requireTarget((rawCtx ?? {}) as CommandContext),
+        available: (rawCtx: unknown) =>
+          requireTarget((rawCtx ?? {}) as CommandContext),
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           const m = parseTarget(ctx)!;
-          return await entity.entity.entity.entity.delete({ type: m.type, id: m.id });
+          return await entity.entity.entity.entity.delete({
+            type: m.type,
+            id: m.id,
+          });
         },
       },
 
       // ─── entity.archive ─────────────────────────────────────────────────
       // YAML: undoable, context_menu (group 2, order 1), keys vim:dd; param
-      // moniker(target). Routes to entity `archive entity`.
+      // moniker(target). Routes to entity `archive entity`. The vim binding
+      // is the CHORD `d d` (Card J — canonical keystrokes separated by
+      // single spaces), migrated from the retired webview SEQUENCE_TABLES.
       {
         id: "entity.archive",
         name: "Archive {{entity.type}}",
@@ -210,13 +219,17 @@ export default class EntityCommandsPlugin extends Plugin {
         context_menu: true,
         context_menu_group: 2,
         context_menu_order: 1,
-        keys: { vim: "dd" },
+        keys: { vim: "d d" },
         params: [{ name: "moniker", from: "target" }],
-        available: (rawCtx: unknown) => requireTarget((rawCtx ?? {}) as CommandContext),
+        available: (rawCtx: unknown) =>
+          requireTarget((rawCtx ?? {}) as CommandContext),
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           const m = parseTarget(ctx)!;
-          return await entity.entity.entity.entity.archive({ type: m.type, id: m.id });
+          return await entity.entity.entity.entity.archive({
+            type: m.type,
+            id: m.id,
+          });
         },
       },
 
@@ -231,11 +244,15 @@ export default class EntityCommandsPlugin extends Plugin {
         context_menu_group: 2,
         context_menu_order: 2,
         params: [{ name: "moniker", from: "target" }],
-        available: (rawCtx: unknown) => requireTarget((rawCtx ?? {}) as CommandContext),
+        available: (rawCtx: unknown) =>
+          requireTarget((rawCtx ?? {}) as CommandContext),
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           const m = parseTarget(ctx)!;
-          return await entity.entity.entity.entity.unarchive({ type: m.type, id: m.id });
+          return await entity.entity.entity.entity.unarchive({
+            type: m.type,
+            id: m.id,
+          });
         },
       },
 
@@ -254,7 +271,8 @@ export default class EntityCommandsPlugin extends Plugin {
         keys: { cua: "Mod+X", vim: "x" },
         menu: { path: ["Edit"], group: 1, order: 0 },
         params: [{ name: "moniker", from: "target" }],
-        available: (rawCtx: unknown) => requireTarget((rawCtx ?? {}) as CommandContext),
+        available: (rawCtx: unknown) =>
+          requireTarget((rawCtx ?? {}) as CommandContext),
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           const m = parseTarget(ctx)!;
@@ -279,7 +297,8 @@ export default class EntityCommandsPlugin extends Plugin {
         keys: { cua: "Mod+C", vim: "y" },
         menu: { path: ["Edit"], group: 1, order: 1 },
         params: [{ name: "moniker", from: "target" }],
-        available: (rawCtx: unknown) => requireTarget((rawCtx ?? {}) as CommandContext),
+        available: (rawCtx: unknown) =>
+          requireTarget((rawCtx ?? {}) as CommandContext),
         execute: async (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           const m = parseTarget(ctx)!;
@@ -310,7 +329,10 @@ export default class EntityCommandsPlugin extends Plugin {
         available: (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;
           if (ctx.target === undefined) {
-            return { ok: false, reason: "Select a paste target first" } satisfies Availability;
+            return {
+              ok: false,
+              reason: "Select a paste target first",
+            } satisfies Availability;
           }
           return { ok: true } satisfies Availability;
         },

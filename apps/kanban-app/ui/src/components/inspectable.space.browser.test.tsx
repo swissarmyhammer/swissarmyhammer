@@ -839,7 +839,8 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
   //
   // The first iteration of the Space-binding fix scoped the new binding
   // to cua + emacs only, on a judgment call about a hypothetical vim
-  // leader key. `SEQUENCE_TABLES.vim` has no `Space` prefix, so leaving
+  // leader key. No vim chord uses a `Space` prefix (the plugin-declared
+  // chord roots are `g` and `d`), so leaving
   // Space unbound there meant the binding-table lookup missed in vim
   // mode and the keydown handler did not call `preventDefault()` —
   // production users in vim mode still saw page-scroll on Space.

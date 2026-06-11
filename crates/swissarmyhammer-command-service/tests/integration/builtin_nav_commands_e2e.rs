@@ -1162,7 +1162,9 @@ fn nav_metadata() -> Vec<NavMeta> {
         },
         NavMeta {
             id: "nav.first",
-            keys: json!({ "cua": "Home", "emacs": "Alt+<" }),
+            // vim `g g` is the chord migrated from the retired webview
+            // SEQUENCE_TABLES (Card J) — chords are catalogue metadata now.
+            keys: json!({ "vim": "g g", "cua": "Home", "emacs": "Alt+<" }),
             menu: json!({ "path": ["Navigation"], "group": 1, "order": 0 }),
         },
         NavMeta {

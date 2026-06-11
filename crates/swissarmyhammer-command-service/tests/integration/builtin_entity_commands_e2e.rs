@@ -633,7 +633,9 @@ fn assert_entity_archive_metadata(cmd: &Value) {
         json!(1),
         "entity.archive context_menu_order"
     );
-    assert_eq!(cmd["keys"], json!({ "vim": "dd" }), "entity.archive keys");
+    // vim `d d` is a chord (Card J): two canonical keystrokes separated by
+    // a space, resolved by the webview chord machine.
+    assert_eq!(cmd["keys"], json!({ "vim": "d d" }), "entity.archive keys");
     assert_eq!(
         cmd["params"],
         json!([{ "name": "moniker", "from": "target" }]),

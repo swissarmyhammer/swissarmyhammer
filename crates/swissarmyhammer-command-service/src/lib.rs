@@ -46,8 +46,8 @@ pub use txn::{
     TransactionSeam,
 };
 pub use types::{
-    CallbackMarker, CommandContext, CommandError, CommandMetadata, CommandSchema, ParamDef,
-    ParamOption, ParamShape, ParamSource,
+    is_valid_chord, CallbackMarker, CommandContext, CommandError, CommandMetadata, CommandSchema,
+    ParamDef, ParamOption, ParamShape, ParamSource,
 };
 
 /// Alias for [`RegisterCommand`] — the full registration payload.

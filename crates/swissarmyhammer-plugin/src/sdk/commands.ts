@@ -72,7 +72,19 @@ export interface CommandRegistration {
   category?: string;
   /** Scope expression list (e.g. `["entity:task"]`). Empty / absent means global. */
   scope?: readonly string[];
-  /** Keybindings keyed by keymap mode (e.g. `vim`, `cua`, `emacs`). */
+  /**
+   * Keybindings keyed by keymap mode (e.g. `vim`, `cua`, `emacs`).
+   *
+   * Each value is a **chord**: one or more canonical keystrokes separated by
+   * single spaces. A single keystroke (`"x"`, `"Mod+K"`, `"Space"`) is a
+   * chord of length 1 — the classic single-key binding; a multi-step value
+   * (`"g g"`, `"g Shift+T"`) is a vim-style sequence the webview keymap
+   * resolves step-by-step with a pending buffer + timeout. Canonical
+   * keystrokes never contain a literal space (the spacebar is the symbolic
+   * `"Space"` token). The command service rejects malformed values (empty
+   * binding, leading/trailing/doubled separator, non-space whitespace) at
+   * registration time with a structured `InvalidKeyBinding` error.
+   */
   keys?: Record<string, string>;
   /** Native menu-bar placement payload. */
   menu?: unknown;

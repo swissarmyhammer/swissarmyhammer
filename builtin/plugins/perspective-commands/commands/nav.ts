@@ -17,11 +17,13 @@ export function navCommands(views: ViewsDispatch): CommandSpec[] {
   return [
     // ─── perspective.next ───────────────────────────────────────────────────
     // YAML: keys cua Mod+] / vim gt; params view_kind(args), view_id(args).
-    // Routes to views `next perspective`.
+    // Routes to views `next perspective`. The vim binding is the CHORD
+    // `g t` (Card J — canonical keystrokes separated by single spaces),
+    // migrated from the retired webview SEQUENCE_TABLES.
     {
       id: "perspective.next",
       name: "Next Perspective",
-      keys: { cua: "Mod+]", vim: "gt" },
+      keys: { cua: "Mod+]", vim: "g t" },
       params: [
         { name: "view_kind", from: "args" },
         { name: "view_id", from: "args" },
@@ -37,11 +39,13 @@ export function navCommands(views: ViewsDispatch): CommandSpec[] {
 
     // ─── perspective.prev ───────────────────────────────────────────────────
     // YAML: keys cua Mod+[ / vim gT; params view_kind(args), view_id(args).
-    // Routes to views `prev perspective`.
+    // Routes to views `prev perspective`. The vim binding is the CHORD
+    // `g Shift+T` — the canonical chord form of the old `gT` (its second
+    // step carries the Shift modifier).
     {
       id: "perspective.prev",
       name: "Previous Perspective",
-      keys: { cua: "Mod+[", vim: "gT" },
+      keys: { cua: "Mod+[", vim: "g Shift+T" },
       params: [
         { name: "view_kind", from: "args" },
         { name: "view_id", from: "args" },

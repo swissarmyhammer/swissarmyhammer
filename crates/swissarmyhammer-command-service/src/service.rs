@@ -52,7 +52,9 @@ use crate::txn::{
     build_commands_executed, NoopActionSink, NoopTransactionSeam, SharedActionSink,
     SharedTransactionSeam,
 };
-use crate::types::{CallbackMarker, CommandContext, CommandError, CommandMetadata, CommandSchema};
+use crate::types::{
+    is_valid_chord, CallbackMarker, CommandContext, CommandError, CommandMetadata, CommandSchema,
+};
 
 /// Default debounce window for `notifications/commands/changed`.
 ///
@@ -319,6 +321,9 @@ impl CommandService {
     ///   (same SDK serializer bug class — an unroutable marker would
     ///   surface later as an opaque dispatch failure, so it is rejected
     ///   at registration time).
+    /// - [`CommandError::InvalidKeyBinding`] when a `keys` value is not a
+    ///   well-formed chord (one or more canonical keystrokes separated by
+    ///   single spaces).
     fn handle_register(&self, caller: CallerId, req: RegisterCommand) -> Result<Value, McpError> {
         Self::validate_registration(&req)?;
 
@@ -464,6 +469,22 @@ impl CommandService {
                 return Err(command_error_to_mcp(
                     CommandError::MissingAvailableCallback { id: req.id.clone() },
                 ));
+            }
+        }
+        // Every keybinding value must be a well-formed chord: one or more
+        // canonical keystrokes separated by single spaces (`"x"`, `"Mod+K"`,
+        // `"g g"`). Rejecting malformed values here makes the catalogue the
+        // single enforcement point — the webview keymap can trust every
+        // binding it reads back from `list command`.
+        if let Some(keys) = req.keys.as_ref() {
+            for (keymap, binding) in keys {
+                if !is_valid_chord(binding) {
+                    return Err(command_error_to_mcp(CommandError::InvalidKeyBinding {
+                        id: req.id.clone(),
+                        keymap: keymap.clone(),
+                        binding: binding.clone(),
+                    }));
+                }
             }
         }
         Ok(())
@@ -897,7 +918,7 @@ fn deserialize_op<T: DeserializeOwned>(arguments: Value, op: &str) -> Result<T, 
 /// `tools/call` response.
 ///
 /// The error code is `invalid_params` for client-recoverable shape failures
-/// (the four registration-validation variants) and `internal_error` for
+/// (the five registration-validation variants) and `internal_error` for
 /// the dispatch-time variants (`UnknownCommand`, `CommandUnavailable`,
 /// `CallbackFailed`, `LatencyBudgetExceeded`). The `data` field carries
 /// the JSON-shaped variant for callers who want to branch on the
@@ -909,9 +930,8 @@ fn command_error_to_mcp(err: CommandError) -> McpError {
         CommandError::EmptyId
         | CommandError::EmptyName { .. }
         | CommandError::MissingExecuteCallback { .. }
-        | CommandError::MissingAvailableCallback { .. } => {
-            McpError::invalid_params(message, Some(data))
-        }
+        | CommandError::MissingAvailableCallback { .. }
+        | CommandError::InvalidKeyBinding { .. } => McpError::invalid_params(message, Some(data)),
         CommandError::UnknownCommand { .. }
         | CommandError::CommandUnavailable { .. }
         | CommandError::CallbackFailed { .. }
@@ -950,6 +970,18 @@ fn command_error_data(err: &CommandError) -> Value {
         }
         CommandError::MissingAvailableCallback { id } => {
             serde_json::json!({ "kind": "MissingAvailableCallback", "id": id })
+        }
+        CommandError::InvalidKeyBinding {
+            id,
+            keymap,
+            binding,
+        } => {
+            serde_json::json!({
+                "kind": "InvalidKeyBinding",
+                "id": id,
+                "keymap": keymap,
+                "binding": binding,
+            })
         }
     }
 }

@@ -412,12 +412,12 @@ const TAURI_NAMED_KEYS: &[&str] = &[
     "VOLUMEMUTE",
 ];
 
-/// Decide whether a YAML-supplied binding string is a valid Tauri
+/// Decide whether a metadata-supplied binding string is a valid Tauri
 /// accelerator atom that can be displayed in a native menu.
 ///
 /// Three accepted shapes, in priority order:
-/// 1. **Modifier chord** — anything containing `+` (e.g. `Cmd+S`,
-///    `Shift+G`, `Alt+ArrowDown`). The chord components are validated
+/// 1. **Modifier combo** — anything containing `+` (e.g. `Cmd+S`,
+///    `Shift+G`, `Alt+ArrowDown`). The combo components are validated
 ///    by Tauri itself when the menu item is built; this filter only
 ///    decides whether to forward the string at all.
 /// 2. **Single character** — exactly one character. Covers
@@ -428,17 +428,27 @@ const TAURI_NAMED_KEYS: &[&str] = &[
 ///    [`TAURI_NAMED_KEYS`] (e.g. `Enter`, `Escape`, `ArrowUp`,
 ///    `Home`, `F5`, `KeyA`, `Digit5`).
 ///
-/// Anything else — vim chord strings like `dd`, `gg`, `:q`, `yy`, or
-/// empty / whitespace-only input — is rejected. This is the actual
-/// filter target: vim's multi-character bindings are handled in the
-/// frontend's `SEQUENCE_TABLES` and never become native accelerators.
+/// Anything else is rejected. Two filter targets:
+/// - **Multi-key chords** (Card J) — catalogue `keys` values whose
+///   canonical keystrokes are separated by spaces (`"g g"`,
+///   `"g Shift+T"`). A chord is a sequence the webview keymap resolves
+///   step-by-step; it has no single-accelerator representation, so any
+///   binding with internal whitespace is rejected up front (before the
+///   `+` check — `"g Shift+T"` contains a `+` but is still a chord).
+/// - **Legacy concatenated vim strings** (`dd`, `gg`, `:q`, `yy`) and
+///   empty / whitespace-only input.
 fn is_valid_accelerator_key(binding: &str) -> bool {
     let trimmed = binding.trim();
     if trimmed.is_empty() {
         return false;
     }
+    if trimmed.chars().any(char::is_whitespace) {
+        // Multi-key chord (`"g g"`, `"g Shift+T"`) — resolved by the
+        // webview chord machine, never expressible as one accelerator.
+        return false;
+    }
     if trimmed.contains('+') {
-        // Modifier chord — Tauri's accelerator parser validates the
+        // Modifier combo — Tauri's accelerator parser validates the
         // individual tokens when the menu item is constructed.
         return true;
     }
@@ -454,23 +464,26 @@ fn is_valid_accelerator_key(binding: &str) -> bool {
 /// Resolve the keyboard accelerator for a command in the current keymap mode.
 ///
 /// Looks up the binding for the active mode, falling back to CUA if the
-/// mode-specific binding is absent. Replaces `Mod` with `CmdOrCtrl` so
+/// mode-specific binding is absent **or not accelerator-expressible**
+/// (a multi-key chord like vim `"g g"`, or a legacy concatenated string
+/// like `"dd"` — see [`is_valid_accelerator_key`]). The fallback keeps
+/// the menu useful in vim mode: `nav.first` shows `Home` even though its
+/// vim binding is the chord `g g`. Replaces `Mod` with `CmdOrCtrl` so
 /// Tauri maps it correctly per platform.
-///
-/// Bindings that aren't valid Tauri accelerators (vim chord strings
-/// like `"dd"`, `"gg"`, `":q"`) are filtered out via
-/// [`is_valid_accelerator_key`] so they don't render as garbled
-/// menu accelerators.
 fn resolve_accelerator(cmd: &CommandDef, keymap_mode: &str) -> Option<String> {
     let keys = cmd.keys.as_ref()?;
-    let binding = match keymap_mode {
-        "vim" => keys.vim.as_deref().or(keys.cua.as_deref()),
-        "emacs" => keys.emacs.as_deref().or(keys.cua.as_deref()),
-        _ => keys.cua.as_deref(),
-    }?;
-    if !is_valid_accelerator_key(binding) {
-        return None;
-    }
+    let mode_binding = match keymap_mode {
+        "vim" => keys.vim.as_deref(),
+        "emacs" => keys.emacs.as_deref(),
+        _ => None,
+    };
+    let binding = mode_binding
+        .filter(|binding| is_valid_accelerator_key(binding))
+        .or_else(|| {
+            keys.cua
+                .as_deref()
+                .filter(|binding| is_valid_accelerator_key(binding))
+        })?;
     Some(binding.replace("Mod", "CmdOrCtrl"))
 }
 
@@ -1120,12 +1133,23 @@ mod tests {
         assert!(is_valid_accelerator_key("Alt+>"));
     }
 
-    /// Vim chord strings are the actual filter target. They appear
-    /// in `keys.vim` for sequence bindings (`gg`, `dd`, `yy`, `:q`)
-    /// and have no representation as a single Tauri accelerator —
-    /// the frontend's `SEQUENCE_TABLES` handles them instead.
+    /// Vim chord strings are the actual filter target. They have no
+    /// representation as a single Tauri accelerator — the webview's
+    /// chord machine (`createKeyHandler`) resolves them instead.
+    /// Both the catalogue chord form (space-separated canonical
+    /// keystrokes, Card J) and the legacy concatenated form are
+    /// rejected.
     #[test]
     fn is_valid_accelerator_key_rejects_vim_chord_strings() {
+        // Catalogue chords — space-separated canonical keystrokes. The
+        // `"g Shift+T"` case is load-bearing: it contains a `+`, so
+        // without the whitespace check it would wrongly pass the
+        // modifier-combo branch and reach Tauri's accelerator parser.
+        assert!(!is_valid_accelerator_key("g g"));
+        assert!(!is_valid_accelerator_key("g t"));
+        assert!(!is_valid_accelerator_key("g Shift+T"));
+        assert!(!is_valid_accelerator_key("d d"));
+        // Legacy concatenated vim strings.
         assert!(!is_valid_accelerator_key("dd"));
         assert!(!is_valid_accelerator_key("gg"));
         assert!(!is_valid_accelerator_key(":q"));
@@ -1166,18 +1190,28 @@ mod tests {
         );
     }
 
-    /// Vim mode: `nav.first` has only `vim: gg` and `cua: Home` (no
-    /// emacs binding). Under vim mode the chord string `gg` must be
-    /// filtered out — leaving the menu item with no accelerator
-    /// rather than rendering a garbled `gg` label. (`nav.first`'s
-    /// real YAML omits the vim binding for exactly this reason —
-    /// the chord is handled by `SEQUENCE_TABLES.vim` instead.)
+    /// Vim mode: a command whose vim binding is a chord (catalogue
+    /// `"g g"` or legacy `"gg"`) must never render the chord as an
+    /// accelerator. With a cua binding present the resolver falls
+    /// back to it (the menu stays useful in vim mode); with no cua
+    /// binding the item simply has no accelerator.
     #[test]
     fn resolve_accelerator_filters_vim_chord_strings() {
-        let cmd = cmd_with_keys("test.cmd", Some("gg"), Some("Home"), None);
-        assert_eq!(resolve_accelerator(&cmd, "vim"), None);
-        // Same command in cua mode picks up the cua binding instead.
+        // Catalogue chord + cua fallback → the cua binding wins.
+        let cmd = cmd_with_keys("test.cmd", Some("g g"), Some("Home"), None);
+        assert_eq!(resolve_accelerator(&cmd, "vim"), Some("Home".to_string()));
         assert_eq!(resolve_accelerator(&cmd, "cua"), Some("Home".to_string()));
+
+        // Legacy concatenated string behaves identically.
+        let legacy = cmd_with_keys("test.cmd", Some("gg"), Some("Home"), None);
+        assert_eq!(
+            resolve_accelerator(&legacy, "vim"),
+            Some("Home".to_string())
+        );
+
+        // Chord with no cua fallback → no accelerator at all.
+        let chord_only = cmd_with_keys("test.cmd", Some("d d"), None, None);
+        assert_eq!(resolve_accelerator(&chord_only, "vim"), None);
     }
 
     /// End-to-end check against the real YAML: every `nav.*` command
@@ -1254,10 +1288,12 @@ mod tests {
         }
     }
 
-    /// `nav.first` has `cua: Home` and `emacs: Alt+<` but no vim
-    /// binding — under vim mode the resolver falls back to cua,
-    /// so the accelerator must be `Home` (not None). This exercises
-    /// the fallback path through the named-key allowlist.
+    /// `nav.first` carries `cua: Home`, `emacs: Alt+<`, and the vim
+    /// CHORD `g g` (Card J). A chord is not accelerator-expressible,
+    /// so under vim mode the resolver must skip it and fall back to
+    /// the cua binding — the accelerator stays `Home` (not None).
+    /// This exercises the chord-skip fallback path through the
+    /// named-key allowlist.
     #[tokio::test]
     async fn resolve_accelerator_falls_back_to_cua_in_vim_mode() {
         let (registry, _user, _cache, _global) = runtime_registry().await;
@@ -1265,11 +1301,13 @@ mod tests {
         let cmd = registry
             .get("nav.first")
             .expect("registry must define nav.first");
-        // Sanity: nav.first really has no vim binding in the plugin metadata.
+        // Sanity: nav.first's vim binding is the chord the plugin declares,
+        // so this test really exercises the chord-skip cua fallback.
         let keys = cmd.keys.as_ref().expect("nav.first has keys");
-        assert!(
-            keys.vim.is_none(),
-            "nav.first plugin metadata must keep its vim binding empty so this test exercises the cua fallback",
+        assert_eq!(
+            keys.vim.as_deref(),
+            Some("g g"),
+            "nav.first plugin metadata must carry the vim chord `g g` so this test exercises the chord-skip fallback",
         );
 
         assert_eq!(

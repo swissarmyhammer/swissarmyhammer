@@ -764,7 +764,9 @@ fn metadata_specs() -> Vec<MetaSpec> {
             context_menu: false,
             view_kinds: None,
             tab_button: None,
-            keys: Some(json!({ "cua": "Mod+]", "vim": "gt" })),
+            // vim `g t` is a chord (Card J): two canonical keystrokes
+            // separated by a space, resolved by the webview chord machine.
+            keys: Some(json!({ "cua": "Mod+]", "vim": "g t" })),
             params: json!([
                 { "name": "view_kind", "from": "args" },
                 { "name": "view_id", "from": "args" },
@@ -779,7 +781,9 @@ fn metadata_specs() -> Vec<MetaSpec> {
             context_menu: false,
             view_kinds: None,
             tab_button: None,
-            keys: Some(json!({ "cua": "Mod+[", "vim": "gT" })),
+            // vim `g Shift+T` — a chord whose second step carries a
+            // modifier (the canonical form of the old `gT`).
+            keys: Some(json!({ "cua": "Mod+[", "vim": "g Shift+T" })),
             params: json!([
                 { "name": "view_kind", "from": "args" },
                 { "name": "view_id", "from": "args" },
