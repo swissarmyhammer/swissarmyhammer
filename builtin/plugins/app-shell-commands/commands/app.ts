@@ -135,11 +135,16 @@ export function appCommands(
     // cua:Mod+Z / vim:u, menu {path:[Edit], group:0, order:0}. Routes to the
     // store server's `undo stack` — the one unified stack that spans every
     // store in the substrate, NOT the app shell.
+    //
+    // The emacs `Ctrl+/` binding moved here from `app-shell.tsx`'s deleted
+    // `STATIC_GLOBAL_COMMANDS` (Card I): the registry is now the only key
+    // source for the webview hotkey path, so the key must live on this
+    // registration to keep emacs-mode undo working.
     {
       id: "app.undo",
       name: "Undo",
       undoable: false,
-      keys: { cua: "Mod+Z", vim: "u" },
+      keys: { cua: "Mod+Z", vim: "u", emacs: "Ctrl+/" },
       menu: { path: ["Edit"], group: 0, order: 0 },
       execute: async () => {
         return await store.store.store.stack.undo({});

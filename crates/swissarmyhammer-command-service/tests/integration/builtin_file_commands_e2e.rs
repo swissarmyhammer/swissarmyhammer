@@ -459,8 +459,13 @@ fn assert_switch_board_metadata(cmd: &Value) {
     assert_no_scope_or_params(cmd, "file.switchBoard");
 }
 
-/// `file.closeBoard` — file.yaml: undoable:false, keys cua/vim Mod+W, menu
+/// `file.closeBoard` — file.yaml: undoable:false, keys cua/vim Mod+w, menu
 /// File/0/2.
+///
+/// The key is the canonical lowercase form `normalizeKeyEvent` emits for an
+/// unshifted letter chord (Card I): since the static React scope defs were
+/// deleted, this registry metadata is the only webview key source, and the
+/// frontend matches the string literally.
 fn assert_close_board_metadata(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Close Board"), "file.closeBoard name");
     assert_eq!(
@@ -470,7 +475,7 @@ fn assert_close_board_metadata(cmd: &Value) {
     );
     assert_eq!(
         cmd["keys"],
-        json!({ "cua": "Mod+W", "vim": "Mod+W" }),
+        json!({ "cua": "Mod+w", "vim": "Mod+w" }),
         "file.closeBoard keys"
     );
     assert_eq!(

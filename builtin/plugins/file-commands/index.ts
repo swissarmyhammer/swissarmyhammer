@@ -75,11 +75,18 @@ export default class FileCommandsPlugin extends Plugin {
       // ─── file.closeBoard ────────────────────────────────────────────────
       // YAML (file.yaml): undoable:false, keys cua/vim Mod+W, menu File/0/2.
       // Routes to window `close board`, threading the target board `path`.
+      //
+      // The keys use the canonical lowercase form `normalizeKeyEvent` emits
+      // for an unshifted letter chord (`Mod+w`, not `Mod+W`) — since Card I
+      // deleted `app-shell.tsx`'s static scope defs, this registry metadata
+      // is the only webview key source, and `extractKeymapBindings` matches
+      // the string literally. The native menu accelerator parses letters
+      // case-insensitively, so the lowercase form serves both sides.
       {
         id: "file.closeBoard",
         name: "Close Board",
         undoable: false,
-        keys: { cua: "Mod+W", vim: "Mod+W" },
+        keys: { cua: "Mod+w", vim: "Mod+w" },
         menu: { path: ["File"], group: 0, order: 2 },
         execute: async (rawCtx) => {
           const ctx = (rawCtx ?? {}) as CommandContext;

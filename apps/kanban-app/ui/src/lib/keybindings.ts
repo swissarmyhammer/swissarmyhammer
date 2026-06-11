@@ -54,14 +54,14 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     // entry will need to move along with the plugin's
     // `keys: { vim: "Space" }` binding.
     Space: "entity.inspect",
-    // AI panel — window-layer commands registered in `app-shell.tsx`'s
-    // global scope. Their `keys` blocks also ride on the `CommandDef`s,
-    // so `extractChainBindings` resolves them when the global scope is in
-    // the focused chain; these `BINDING_TABLES` entries cover the
-    // no-focus case (body focus) where the scope walk yields nothing.
-    // `ai.cancel` is availability-gated — its `CommandDef.available`
-    // flips to `false` when the conversation is idle, so the dispatch is
-    // a no-op off-stream even though the key is bound.
+    // AI panel — commands DEFINED by the `ai-commands` builtin plugin
+    // (whose registry `keys` carry these same canonical strings — the
+    // `ai-plugin-commands-mirror.spatial.node.test.ts` guard pins the
+    // parity) and EXECUTED through the webview command bus handlers
+    // `app-shell.tsx` registers (Card I). `ai.cancel` is
+    // availability-gated at dispatch time — its bus handler reads
+    // `aiStreaming()` and no-ops off-stream even though the key is
+    // bound.
     "Mod+j": "ai.toggle",
     "Mod+i": "ai.focus",
     "Mod+Shift+J": "ai.newChat",

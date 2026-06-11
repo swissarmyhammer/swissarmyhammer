@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -34,7 +33,6 @@ import { triggerStartRename } from "@/components/perspective-tab-bar";
 import { registerWebviewCommandHandler } from "@/lib/webview-command-bus";
 import {
   aiStreaming,
-  subscribeAiStreaming,
   triggerAiCancel,
   triggerAiFocus,
   triggerAiModel,
@@ -199,85 +197,29 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
   return null;
 }
 
-/**
- * Static global commands with no `execute` handler — dispatched to the Rust
- * backend on invocation.
- *
- * Kept at module scope so the `AppShell` component body stays small and the
- * array identity is stable across renders.
- */
-const STATIC_GLOBAL_COMMANDS: CommandDef[] = [
-  {
-    id: "app.command",
-    name: "Command Palette",
-    keys: { vim: ":", cua: "Mod+Shift+P", emacs: "Mod+Shift+P" },
-  },
-  {
-    id: "app.palette",
-    name: "Command Palette",
-    keys: { vim: "Mod+Shift+P", cua: "Mod+Shift+P", emacs: "Mod+Shift+P" },
-  },
-  {
-    id: "app.undo",
-    name: "Undo",
-    keys: { vim: "u", cua: "Mod+Z", emacs: "Ctrl+/" },
-  },
-  {
-    id: "app.redo",
-    name: "Redo",
-    keys: { vim: "Mod+R", cua: "Mod+Shift+Z" },
-  },
-  // `app.dismiss` carries NO Escape binding (card
-  // `01KTPDTH772HSEV5F7R1DKYDNJ`). Escape is owned globally by
-  // `nav.drillOut`: drill out one focus level, and at a layer-root edge fall
-  // through to the contextual dismiss (`ui_state dismiss ui` on the host side,
-  // the jump overlay's own capture-phase Escape handler). A scope-level
-  // `app.dismiss: Escape` here used to shadow `nav.drillOut` (scope wins over
-  // global in `createKeyHandler`), so drill-out never fired — the bug this
-  // card fixes. The command id stays in the root scope so it remains
-  // discoverable and dispatchable programmatically (inspector backdrop click,
-  // quick-capture); it is simply unbound from Escape.
-  {
-    id: "app.dismiss",
-    name: "Dismiss",
-  },
-  {
-    id: "app.search",
-    name: "Find",
-    keys: { vim: "/", cua: "Mod+F", emacs: "Mod+F" },
-  },
-  { id: "app.help", name: "Help", keys: { vim: "F1", cua: "F1" } },
-  {
-    id: "app.quit",
-    name: "Quit",
-    keys: { cua: "Mod+Q", vim: "Mod+Q", emacs: "Mod+Q" },
-  },
-  { id: "settings.keymap.vim", name: "Keymap Vim" },
-  { id: "settings.keymap.cua", name: "Keymap CUA" },
-  { id: "settings.keymap.emacs", name: "Keymap Emacs" },
-  { id: "app.resetWindows", name: "Reset Windows" },
-  {
-    id: "file.newBoard",
-    name: "New Board",
-    keys: { cua: "Mod+N", vim: "Mod+N" },
-  },
-  {
-    id: "file.openBoard",
-    name: "Open Board",
-    keys: { cua: "Mod+O", vim: "Mod+O" },
-  },
-  {
-    id: "file.closeBoard",
-    name: "Close Board",
-    keys: { cua: "Mod+w", vim: "Mod+w" },
-  },
-  {
-    id: "window.new",
-    name: "New Window",
-    keys: { cua: "Mod+Shift+N", vim: "Mod+Shift+N", emacs: "Mod+Shift+N" },
-  },
-  { id: "app.about", name: "About" },
-];
+// There is NO static global command list here (Card I deleted
+// `STATIC_GLOBAL_COMMANDS`). Every global command — app.*, settings.keymap.*,
+// file.*, window.new, ai.* — is DEFINED by a builtin plugin
+// (`builtin/plugins/app-shell-commands`, `file-commands`, `ui-commands`,
+// `ai-commands`, …) and surfaces through the Command service catalogue: the
+// palette and menus read `useCommandList`, and the hotkey layer derives its
+// global table from the same registry via `extractKeymapBindings`. The
+// registry `keys` use the canonical `normalizeKeyEvent` form, so no React-side
+// duplicate definition is needed for a key to resolve.
+//
+// `app.dismiss` deliberately carries NO Escape binding anywhere (card
+// `01KTPDTH772HSEV5F7R1DKYDNJ`): Escape is owned globally by `nav.drillOut`,
+// whose backend fall-through performs the contextual dismiss. The id remains
+// dispatchable programmatically (inspector backdrop click, quick-capture)
+// against its plugin registration.
+//
+// (`app.resetWindows`, which the old static list still carried, was
+// deliberately dropped with no replacement planned: it had no plugin
+// definition and no backend implementation — dispatching it always errored,
+// a brokenness that predates this cleanup. The command-cutover deleted the
+// dispatch path the historical fix card 01KN2GX9ABPFFAFG536SMWN9MY targeted,
+// and that card is closed; nothing tracks the feature. If Reset Windows
+// should ever return, file a fresh card against the window plugin.)
 
 /**
  * Build the dynamic global commands — currently just the
@@ -312,97 +254,55 @@ function buildDynamicGlobalCommands(): CommandDef[] {
 }
 
 /**
- * Build the window-layer `ai.*` commands that drive the AI panel.
+ * Register the webview command-bus handlers for the five `ai.*` window-layer
+ * commands.
  *
- * These are registered in `AppShell`'s global command scope — the window
- * layer — so their keybindings fire app-wide, even when focus is on a board
- * card outside the AI panel (matching `ARCHITECTURE.md`'s scope model). Each
- * `execute` closure calls into the `ai/commands.ts` module registry, where the
- * AI panel components have registered the live handlers; a command fired
- * before the panel mounts is a silent no-op.
+ * The commands are DEFINED by the `ai-commands` builtin plugin
+ * (`builtin/plugins/ai-commands/index.ts` — id, name, keys, menu in the
+ * unified registry; the plugin's backend `execute` is an inert no-op). Their
+ * EFFECT lives in the AI panel React tree, so `AppShell` bridges the two on
+ * the webview command bus (Card I, replacing the deleted client-side
+ * `buildAiCommands` scope defs): `useDispatchCommand` runs a registered
+ * handler and skips the backend, and each handler calls into the
+ * `ai/commands.ts` module registry, where the AI panel components register
+ * the live behaviors on mount. A command fired before the panel mounts is a
+ * silent no-op, exactly as before.
  *
- * `ai.cancel` is the one availability-gated command: a generation can only be
- * stopped while it is in flight, so its `available` flag tracks the
- * `streaming` argument. When `streaming` is `false` the `CommandDef` is
- * `available: false`, which both hides it from the palette
- * (`collectAvailableCommands`) and makes its keybinding a no-op
- * (`resolveCommand` returns `null` on a blocked command).
- *
- * The `ai.*` `keys` blocks here mirror `swissarmyhammer-kanban`'s
- * `builtin/commands/ai.yaml` — the YAML side feeds the palette's keybinding
- * hints and the backend completeness guard; this React side feeds
- * `extractChainBindings`. The static `BINDING_TABLES` entries cover the
- * no-focus case where the scope walk yields nothing.
- *
- * @param streaming - Whether the AI conversation is currently streaming.
- * @returns The five `ai.*` command definitions.
+ * `ai.cancel` keeps its availability gate here: a generation can only be
+ * stopped while it is in flight, so the handler reads {@link aiStreaming} at
+ * dispatch time and no-ops when the conversation is idle — the same
+ * observable behavior the legacy `available: false` scope def produced
+ * (palette-side gating of the registry entry is tracked separately, kanban
+ * 01KT7DB01HTR9SNRRG145F009P).
  */
-function buildAiCommands(streaming: boolean): CommandDef[] {
-  return [
-    {
-      // `keys` use the canonical lowercase form `normalizeKeyEvent`
-      // emits for a non-shifted letter (e.g. `Mod+j`), matching the
-      // `BINDING_TABLES` entries and the rest of `STATIC_GLOBAL_COMMANDS`
-      // (`file.closeBoard` is `Mod+w`). The YAML mirror keeps `Mod+J`
-      // uppercase — that side feeds menu accelerators / palette hints.
-      id: "ai.toggle",
-      name: "Toggle AI Panel",
-      keys: { vim: "Mod+j", cua: "Mod+j", emacs: "Mod+j" },
-      execute: () => {
+function useAiCommandBusHandlers(): void {
+  useEffect(() => {
+    const cleanups = [
+      registerWebviewCommandHandler("ai.toggle", () => {
         triggerAiToggle();
-      },
-    },
-    {
-      id: "ai.focus",
-      name: "Focus AI Panel",
-      keys: { vim: "Mod+i", cua: "Mod+i", emacs: "Mod+i" },
-      execute: () => {
+      }),
+      registerWebviewCommandHandler("ai.focus", () => {
         triggerAiFocus();
-      },
-    },
-    {
-      id: "ai.newChat",
-      name: "New AI Chat",
-      keys: { vim: "Mod+Shift+J", cua: "Mod+Shift+J", emacs: "Mod+Shift+J" },
-      execute: () => {
+      }),
+      registerWebviewCommandHandler("ai.newChat", () => {
         triggerAiNewChat();
-      },
-    },
-    {
-      id: "ai.model",
-      name: "Set AI Model",
+      }),
       // The `model` id rides in `opts.args` — palette rows that select a
       // model dispatch `ai.model` with `{ args: { model } }`.
-      execute: (opts) => {
+      registerWebviewCommandHandler("ai.model", (opts) => {
         const model = opts?.args?.model;
         triggerAiModel(typeof model === "string" ? model : undefined);
-      },
-    },
-    {
-      id: "ai.cancel",
-      name: "Stop AI Generation",
-      keys: { vim: "Mod+.", cua: "Mod+.", emacs: "Mod+." },
-      // Available only mid-stream — `available: false` blocks both the
-      // palette entry and the keybinding when the conversation is idle.
-      available: streaming,
-      execute: () => {
-        triggerAiCancel();
-      },
-    },
-  ];
-}
-
-/**
- * Subscribe to the AI conversation's streaming flag.
- *
- * A `useSyncExternalStore` binding over the `ai/commands.ts` registry: when
- * the conversation enters or leaves the streaming state, `AppShell` re-renders
- * and rebuilds `ai.cancel` with the fresh `available` flag.
- *
- * @returns `true` while the AI conversation is streaming a turn.
- */
-function useAiStreaming(): boolean {
-  return useSyncExternalStore(subscribeAiStreaming, aiStreaming, aiStreaming);
+      }),
+      registerWebviewCommandHandler("ai.cancel", () => {
+        if (aiStreaming()) {
+          triggerAiCancel();
+        }
+      }),
+    ];
+    return () => {
+      for (const cleanup of cleanups) cleanup();
+    };
+  }, []);
 }
 
 // `nav.focus` is registered in `<EntityFocusProvider>` rather than here.
@@ -473,10 +373,12 @@ interface AppShellProps {
 
 export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   const { paletteOpen, paletteMode, keymapMode } = useAppShellUIState();
-  // Tracks the AI conversation's streaming flag so `ai.cancel`'s `available`
-  // is rebuilt whenever a turn starts or ends.
-  const aiIsStreaming = useAiStreaming();
   const dismiss = useDispatchCommand("app.dismiss");
+
+  // The plugin-defined `ai.*` commands execute through webview-bus handlers
+  // registered here at the window layer (their effect lives in the AI panel
+  // subtree; the `ai.cancel` handler gates on the live streaming flag).
+  useAiCommandBusHandlers();
 
   // Jump-To overlay open/close lives here so every entry point —
   // vim-mode `s`, cua/emacs `Mod+G`, the Navigation > Jump To menu
@@ -510,27 +412,22 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
 
   usePaletteModeSync(paletteOpen);
 
-  // Static commands come from module scope; both batches are stable, so the
-  // memo depends only on `aiIsStreaming` (which rebuilds the `ai.cancel`
-  // availability gate).
+  // The window-layer scope carries ONLY `ui.entity.startRename` (see
+  // `buildDynamicGlobalCommands`) — every other global command is
+  // plugin-defined and resolves from the Command service catalogue (Card I
+  // deleted the static client-side list and the `ai.*` scope defs; the ai
+  // executions now ride the webview command bus, registered above).
   //
   // The directional / first-last / drill `nav.*` commands and `nav.jump` are
-  // no longer registered here — the `nav-commands` builtin plugin owns them.
-  // The directional / drill commands execute host-side through the `focus`
-  // kernel (so `useDispatchCommand` routes a dispatched `nav.*` id to the
-  // backend), and `nav.jump`'s webview-bus handler (registered above) opens the
-  // jump overlay. `entity.inspect` is likewise plugin-owned (Card G,
-  // `builtin/plugins/ui-commands/index.ts`).
+  // likewise not registered here — the `nav-commands` builtin plugin owns
+  // them. The directional / drill commands execute host-side through the
+  // `focus` kernel (so `useDispatchCommand` routes a dispatched `nav.*` id to
+  // the backend), and `nav.jump`'s webview-bus handler (registered above)
+  // opens the jump overlay. `entity.inspect` is likewise plugin-owned
+  // (Card G, `builtin/plugins/ui-commands/index.ts`).
   const globalCommands: CommandDef[] = useMemo(
-    () => [
-      ...buildDynamicGlobalCommands(),
-      // The window-layer `ai.*` commands — registered here so their
-      // keybindings fire app-wide. Rebuilt when `aiIsStreaming` flips
-      // so `ai.cancel`'s `available` tracks the live conversation.
-      ...buildAiCommands(aiIsStreaming),
-      ...STATIC_GLOBAL_COMMANDS,
-    ],
-    [aiIsStreaming],
+    () => buildDynamicGlobalCommands(),
+    [],
   );
 
   /** Close the command palette (dispatch to backend) and return to normal mode. */

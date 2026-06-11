@@ -287,18 +287,28 @@ describe("AppShell", () => {
     expect(screen.getByText("Hello")).toBeTruthy();
   });
 
-  it("provides global commands via CommandScope", async () => {
+  it("builds no client-side global CommandDef list — globals resolve from the catalogue", async () => {
+    // Card I deleted `STATIC_GLOBAL_COMMANDS` (and `buildAiCommands`): every
+    // global command is DEFINED by a builtin plugin and surfaces through the
+    // Command service catalogue (`useCommandList` → `extractKeymapBindings`),
+    // never as a client-built `CommandDef`. The window-layer scope keeps only
+    // `ui.entity.startRename` (the perspective-rename module-bus fallback).
+    // The keydown tests below prove the catalogue side: global keys resolve
+    // from the (mocked) registry and dispatch to the backend.
     await renderShell();
-    // Check that well-known global commands are available
-    expect(screen.getByTestId("cmd-app.command")).toBeTruthy();
-    expect(screen.getByTestId("cmd-app.dismiss")).toBeTruthy();
-    expect(screen.getByTestId("cmd-app.search")).toBeTruthy();
-    expect(screen.getByTestId("cmd-app.help")).toBeTruthy();
-    // Commands added by Card 10
-    expect(screen.getByTestId("cmd-app.quit")).toBeTruthy();
-    expect(screen.getByTestId("cmd-settings.keymap.vim")).toBeTruthy();
-    expect(screen.getByTestId("cmd-file.newBoard")).toBeTruthy();
-    expect(screen.getByTestId("cmd-file.openBoard")).toBeTruthy();
+    const listed = screen
+      .getAllByTestId(/^cmd-/)
+      .map((el) => el.getAttribute("data-testid")!.slice("cmd-".length));
+    const clientBuiltGlobals = listed.filter(
+      (id) =>
+        id.startsWith("app.") ||
+        id.startsWith("file.") ||
+        id.startsWith("settings.") ||
+        id.startsWith("window.") ||
+        id.startsWith("ai."),
+    );
+    expect(clientBuiltGlobals).toEqual([]);
+    expect(listed).toContain("ui.entity.startRename");
   });
 
   it("does not render command palette by default", async () => {
@@ -520,10 +530,9 @@ describe("AppShell", () => {
 
     mockInvoke.mockClear();
 
-    // Find and execute the file.closeBoard command
-    const closeBoardItem = screen.getByTestId("cmd-file.closeBoard");
-    expect(closeBoardItem).toBeTruthy();
-
+    // `file.closeBoard` is catalogue-defined (the `file-commands` builtin
+    // plugin); its `Mod+w` binding resolves from the mocked registry, not
+    // from any scope-registered CommandDef.
     // Simulate Mod+W (Cmd on Mac, Ctrl elsewhere)
     await act(async () => {
       fireEvent.keyDown(document, {

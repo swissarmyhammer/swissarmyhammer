@@ -1143,9 +1143,9 @@ describe("cross-cutting command keybinding dispatch", () => {
 // The fixtures mirror the ACTUAL plugin sources after the fix:
 //   - `app.ts` `app.dismiss` carries no Escape key.
 //   - `ui-commands/index.ts` `ui.inspector.close` keeps only vim `q`.
-//   - `app-shell.tsx` `STATIC_GLOBAL_COMMANDS` no longer contains an
-//     `app.dismiss` Escape entry, so the root command scope surfaces no
-//     Escape binding to shadow the global `nav.drillOut`.
+//   - `app-shell.tsx` registers no static global defs at all (Card I deleted
+//     `STATIC_GLOBAL_COMMANDS` outright), so the root command scope surfaces
+//     no Escape binding to shadow the global `nav.drillOut`.
 // To stay an honest RED-first guard, the fixtures here are kept in lockstep
 // with those sources: a regression that re-adds an Escape key to any of the
 // three legacy bindings would make this `expect` fail.

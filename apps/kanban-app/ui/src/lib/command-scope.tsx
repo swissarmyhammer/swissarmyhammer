@@ -208,9 +208,32 @@ export interface CommandDef {
    * The action to run when the command is executed.
    *
    * Receives the same `DispatchOptions` the dispatcher was called with,
-   * so commands that take per-call arguments (e.g. `nav.focus`'s
-   * `{ args: { fq } }`) can read them from the closure invocation.
-   * The vast majority of commands are parameterless and ignore the arg.
+   * so commands that take per-call arguments can read them from the
+   * closure invocation. Most execute closures are parameterless and
+   * ignore the arg.
+   *
+   * KEPT BY DESIGN (Card I, 01KTED9JYGWM815K2X41N4QDBY): this field and
+   * the `resolveCommand` fast-path in `useDispatchCommand` were slated
+   * for removal once every command definition moved to plugins, but a
+   * class of legitimate SCOPE-LOCAL executes remains that the id-keyed
+   * webview command bus cannot express — positional shadows whose
+   * behavior depends on WHERE in the focused chain they sit, and
+   * per-instance closures over component state:
+   *
+   *   - the jump overlay's `app.dismiss` shadow (`jump-to-overlay.tsx`)
+   *     — must intercept dismiss only while the overlay's own scope is
+   *     innermost, not globally for the id;
+   *   - the perspective tab's scoped rename (`perspective-tab-bar.tsx`)
+   *     — one closure per tab instance, over that tab's state;
+   *   - dialog-cancel-style Escape shadows registered by focused
+   *     subtrees.
+   *
+   * The bus is a module-level singleton keyed by command id alone, so a
+   * bus handler would claim the id app-wide for the lifetime of the
+   * registration — the wrong semantics for all of the above. Catalogue
+   * (global) commands must NEVER use this field: they are plugin-defined,
+   * and a webview-only behavior belongs on the webview command bus
+   * (`webview-command-bus.ts`) instead.
    */
   execute?: (opts?: DispatchOptions) => void | Promise<void>;
   /**
@@ -505,7 +528,10 @@ export function useDispatchCommand(presetCmd?: string) {
         maybeOpts,
       );
 
-      // Try frontend execute handler first
+      // Scope-local execute fast-path — kept by design (Card I): serves the
+      // positional / per-instance closures documented on `CommandDef.execute`
+      // (dismiss shadows, scoped rename). Global commands never carry an
+      // execute, so they fall through to the bus / backend below.
       const resolved = resolveCommand(effectiveScope, cmdId);
       if (resolved?.execute) {
         return runFrontendExecute(cmdId, opts, resolved);

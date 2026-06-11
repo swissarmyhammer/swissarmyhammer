@@ -599,14 +599,18 @@ fn assert_app_dismiss(cmd: &Value) {
     assert_no_menu(cmd, "app.dismiss");
 }
 
-/// `app.undo` — app.yaml: undoable:false; keys cua:Mod+Z / vim:u, menu
-/// {path:[Edit], group:0, order:0}.
+/// `app.undo` — app.yaml: undoable:false; keys cua:Mod+Z / vim:u /
+/// emacs:Ctrl+/, menu {path:[Edit], group:0, order:0}.
+///
+/// The emacs `Ctrl+/` binding moved here from `app-shell.tsx`'s deleted
+/// `STATIC_GLOBAL_COMMANDS` (Card I) — the registry is now the only key
+/// source for the webview hotkey path.
 fn assert_app_undo(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Undo"), "app.undo name");
     assert_eq!(cmd["undoable"], json!(false), "app.undo undoable:false");
     assert_eq!(
         cmd["keys"],
-        json!({ "cua": "Mod+Z", "vim": "u" }),
+        json!({ "cua": "Mod+Z", "vim": "u", "emacs": "Ctrl+/" }),
         "app.undo keys"
     );
     assert_eq!(
