@@ -443,6 +443,7 @@ mod tests {
 
     use crate::review::probes::{ProbeKind, ProbeResult, ProbeRow};
     use crate::review::scope::WorkList;
+    use crate::review::test_support::new_notifier;
     use crate::validators::types::{
         Rule, RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch,
     };
@@ -678,11 +679,6 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("")
-    }
-
-    fn new_notifier() -> Arc<claude_agent::NotificationSender> {
-        let (notifier, _) = claude_agent::NotificationSender::new(64);
-        Arc::new(notifier)
     }
 
     /// Run `body` against a pool backed by the scripted agent.

@@ -37,6 +37,10 @@ swissarmyhammer-templating = { workspace = true }
 # ACP agent connection driven by the shared agent pool
 claude-agent = { workspace = true }
 agent-client-protocol = { workspace = true }
+# TolerantResponseRouter for the review drive's client connection (an abandoned
+# turn's late response must fail that turn only, not the dispatch loop); also
+# supplies the PlaybackAgent harness the pool tests replay fixtures through.
+agent-client-protocol-extras = { workspace = true }
 
 # Scope stage (engine stage 1): the changed-file set + entity-level semantic diff
 # are reused from the same library crates the `git` MCP tool is built on. The tool
@@ -66,8 +70,9 @@ tempfile = { workspace = true }
 serial_test = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing-test = { workspace = true }
-# Mock-agent harness for the agent-pool tests (PlaybackAgent + ConnectTo wiring)
-agent-client-protocol-extras = { workspace = true }
+# The shared ACP mock-agent harness (MockAgent trait + adapter + dispatch) the
+# pool tests drive their scripted agents through — reused, never copied.
+acp-conformance = { workspace = true, features = ["test-support"] }
 futures = { workspace = true }
 # Deterministic embedder for the probe-runner tests (no 600MB model load)
 model-embedding = { workspace = true, features = ["test-support"] }

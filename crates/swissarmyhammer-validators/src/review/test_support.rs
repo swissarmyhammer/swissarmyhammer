@@ -4,7 +4,10 @@
 //! throwaway libgit2 repository, a schema-applied in-memory code_context
 //! index, and a deterministically injected validator loader — so the fixtures
 //! live here exactly once and the test modules in `scope.rs`, `drive.rs`, and
-//! `probes.rs` import them instead of carrying their own copies.
+//! `probes.rs` import them instead of carrying their own copies. The
+//! agent-facing test modules (`fleet.rs`, `verify.rs`, and the pool tests in
+//! `validators/pool.rs`) share the [`new_notifier`] channel fixture the same
+//! way.
 
 use std::path::{Path, PathBuf};
 
@@ -19,6 +22,14 @@ use crate::validators::{Rule, Severity, ValidatorLoader, ValidatorSource};
 
 /// Embedding dimension shared by the seeded index and the mock embedder.
 pub(crate) const DIM: usize = 4;
+
+/// A fresh notification channel for pool-backed tests. The 64-slot buffer
+/// comfortably exceeds any test's notification volume so the broadcast
+/// subscription never lags mid-assertion.
+pub(crate) fn new_notifier() -> std::sync::Arc<claude_agent::NotificationSender> {
+    let (notifier, _) = claude_agent::NotificationSender::new(64);
+    std::sync::Arc::new(notifier)
+}
 
 /// The LSP `SymbolKind` code for a function — what every [`seed_symbol`] row is.
 const LSP_SYMBOL_KIND_FUNCTION: i64 = 12;
@@ -203,6 +214,32 @@ pub(crate) fn ruleset(name: &str, file_glob: &str, probes: &[&str], severity: Se
         source: ValidatorSource::Builtin,
         base_path: PathBuf::from("/test"),
     }
+}
+
+// ---- composed pipeline fixture ----------------------------------------
+
+/// The seeded-duplicate starting point the drive tests share: a repo whose
+/// `src/lib.rs` gains an uncommitted `compute` function that duplicates an
+/// indexed `old_compute` chunk, plus the schema-applied index seeded with both
+/// chunks and a [`MockEmbedder`] over the same [`DIM`].
+///
+/// Composing it here keeps the seeds (file paths, symbol names, embedding) in
+/// one place — a drift in any copy would silently desynchronize the tests.
+/// Each test adds only its scenario-specific extras (e.g. a second working
+/// file for a second validator).
+pub(crate) fn seeded_dup_repo() -> (TestRepo, Connection, model_embedding::mock::MockEmbedder) {
+    let repo = TestRepo::new();
+    repo.write("src/lib.rs", "fn placeholder() {}\n");
+    repo.commit("initial");
+    let dup = body("compute");
+    repo.write("src/lib.rs", &format!("fn placeholder() {{}}\n\n{dup}\n"));
+
+    let conn = index_conn();
+    let emb = dup_emb();
+    seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
+    seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &emb);
+
+    (repo, conn, model_embedding::mock::MockEmbedder::new(DIM))
 }
 
 /// A function body long enough to clear the default `min_chunk_bytes` (100).

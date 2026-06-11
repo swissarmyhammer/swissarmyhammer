@@ -34,7 +34,7 @@ pub mod validators;
 pub use builtin::load_builtins;
 pub use error::AvpError;
 pub use validators::{
-    AgentPool, MatchContext, PoolConfig, PromptResult, RuleSet, Severity, Validator,
+    AgentPool, MatchContext, PoolConfig, PoolError, PromptResult, RuleSet, Severity, Validator,
     ValidatorLoader, ValidatorResult,
 };
 
@@ -107,7 +107,8 @@ pub async fn execute_agents(
             Ok(result) => results.push(result),
             Err(_) => results.push(Err(claude_agent::AgentError::Internal(
                 "agent pool dropped the result before delivery".to_string(),
-            ))),
+            )
+            .into())),
         }
     }
     results

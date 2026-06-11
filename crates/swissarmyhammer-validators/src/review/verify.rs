@@ -472,6 +472,7 @@ merely plausible.
 mod tests {
     use super::*;
     use crate::review::probes::ProbeRow;
+    use crate::review::test_support::new_notifier;
     use crate::review::types::Severity;
 
     /// A `dead-code` finding about `symbol` in `file`.
@@ -759,12 +760,13 @@ mod tests {
     // A script entry can be set to error, proving a failing verify task resolves
     // to refuted without deadlocking the rest.
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
     use std::sync::{Arc, Mutex};
 
+    use acp_conformance::test_utils::numbered_session_response;
     use agent_client_protocol::schema::{
-        ContentBlock as AcpContentBlock, ContentChunk, InitializeResponse, NewSessionResponse,
-        PromptRequest, PromptResponse, SessionNotification, SessionUpdate, TextContent,
+        ContentBlock as AcpContentBlock, ContentChunk, InitializeResponse, PromptRequest,
+        PromptResponse, SessionNotification, SessionUpdate, TextContent,
     };
     use agent_client_protocol::{Channel, Client, ConnectTo, ConnectionTo, Role};
 
@@ -853,13 +855,9 @@ mod tests {
                 Req::InitializeRequest(_) => responder
                     .cast()
                     .respond_with_result(Ok(InitializeResponse::new(1.into()))),
-                Req::NewSessionRequest(_req) => {
-                    let n = mock.next_session.fetch_add(1, Ordering::SeqCst);
-                    let id = agent_client_protocol::schema::SessionId::new(format!("sess-{n}"));
-                    responder
-                        .cast()
-                        .respond_with_result(Ok(NewSessionResponse::new(id)))
-                }
+                Req::NewSessionRequest(_req) => responder.cast().respond_with_result(
+                    numbered_session_response(&mock.next_session, "sess").await,
+                ),
                 Req::PromptRequest(req) => {
                     let prompt = prompt_text(&req);
                     mock.seen.lock().unwrap().push(prompt.clone());
@@ -895,11 +893,6 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("")
-    }
-
-    fn new_notifier() -> Arc<claude_agent::NotificationSender> {
-        let (notifier, _) = claude_agent::NotificationSender::new(64);
-        Arc::new(notifier)
     }
 
     /// Run `body` against a pool backed by the scripted verifier agent.

@@ -1334,6 +1334,19 @@ impl RequestQueue {
         self.metrics.get_stats()
     }
 
+    /// Whether the queue can no longer accept work: every future submit would
+    /// fail with [`QueueError::ShuttingDown`].
+    ///
+    /// True after an explicit [`shutdown`](Self::shutdown) and — crucially —
+    /// when every worker task has died (panicked or been aborted, e.g. because
+    /// the runtime that spawned them was dropped): the workers own the only
+    /// receiver clones, so their death closes the channel. Callers holding a
+    /// long-lived shared queue use this to detect a dead queue and rebuild
+    /// instead of handing out a corpse forever.
+    pub fn is_closed(&self) -> bool {
+        self.sender.as_ref().is_none_or(|sender| sender.is_closed())
+    }
+
     async fn worker_loop(
         worker_id: usize,
         receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<QueuedRequest>>>,
@@ -4420,6 +4433,45 @@ mod tests {
                 .await;
             let stats = queue.shutdown_with_timeout(Duration::from_secs(5)).await;
             assert_eq!(stats.total_requests, 1);
+        }
+
+        // --- Queue health: `is_closed` detects a dead queue -----------------
+
+        #[tokio::test]
+        async fn is_closed_false_while_workers_alive() {
+            let model = ScriptedModel::from_texts(["x"]);
+            let (queue, _turns) = scripted_queue(TurnOutcome::Scripted(model));
+            assert!(
+                !queue.is_closed(),
+                "a fresh queue with a live worker must report open"
+            );
+        }
+
+        /// The production cascade this guards: the queue's lone worker task is
+        /// aborted (in the incident, by dropping the per-review runtime that
+        /// spawned it), the receiver closes, and every later submit fails
+        /// `ShuttingDown`. A long-lived holder must be able to DETECT that via
+        /// `is_closed` so it can rebuild instead of serving a corpse.
+        #[tokio::test]
+        async fn is_closed_true_after_worker_tasks_die() {
+            let model = ScriptedModel::from_texts(["x"]);
+            let (queue, _turns) = scripted_queue(TurnOutcome::Scripted(model));
+
+            for handle in &queue.worker_handles {
+                handle.abort();
+            }
+            // Abort completion (and thus the receiver drop) is asynchronous;
+            // poll with the suite's standard budget.
+            for _ in 0..POLL_ATTEMPTS {
+                if queue.is_closed() {
+                    break;
+                }
+                tokio::time::sleep(POLL_INTERVAL).await;
+            }
+            assert!(
+                queue.is_closed(),
+                "a queue whose workers are all dead must report closed"
+            );
         }
     }
 

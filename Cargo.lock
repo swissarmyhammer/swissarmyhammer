@@ -8838,6 +8838,7 @@ dependencies = [
 name = "swissarmyhammer-validators"
 version = "0.14.0"
 dependencies = [
+ "acp-conformance",
  "agent-client-protocol",
  "agent-client-protocol-extras",
  "claude-agent",

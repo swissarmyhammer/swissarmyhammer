@@ -44,6 +44,7 @@ use agent_client_protocol::schema::{
     SelectedPermissionOutcome, SessionNotification, WriteTextFileResponse,
 };
 use agent_client_protocol::{Client, ConnectionTo, DynConnectTo, Responder};
+use agent_client_protocol_extras::TolerantResponseRouter;
 use model_embedding::TextEmbedder;
 use rusqlite::Connection;
 use tokio::sync::broadcast;
@@ -82,8 +83,8 @@ use crate::validators::{AgentPool, PoolConfig, ValidatorLoader};
 /// # Errors
 ///
 /// Returns the [`AvpError`] from [`run_review`](crate::review::run_review) on a
-/// scope/index failure, or [`AvpError::Agent`] when the ACP connection itself
-/// fails to stand up.
+/// scope/index failure, or [`AvpError::AgentConnection`] when the ACP
+/// connection itself fails to stand up.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_review_over_agent(
     agent: DynConnectTo<Client>,
@@ -112,6 +113,11 @@ pub async fn run_review_over_agent(
     let connect_result = Client
         .builder()
         .name("swissarmyhammer-review")
+        // An abandoned turn (the pool's per-turn liveness dropped its
+        // `block_task` receiver) must fail that turn only: route the agent's
+        // late response into the void instead of letting "receiver dropped"
+        // kill the dispatch loop and the whole review with it.
+        .with_handler(TolerantResponseRouter)
         .on_receive_request(
             {
                 let repo_root = Arc::clone(&repo_root);
@@ -150,9 +156,7 @@ pub async fn run_review_over_agent(
 
     match connect_result {
         Ok(report) => report,
-        Err(e) => Err(AvpError::Agent(format!(
-            "review agent connection failed: {e:?}"
-        ))),
+        Err(e) => Err(AvpError::AgentConnection(e)),
     }
 }
 
@@ -362,21 +366,52 @@ async fn run_pipeline_in_connection(
 mod tests {
     use super::*;
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
+    use std::time::Duration;
 
+    use acp_conformance::test_utils::{numbered_session_response, MockAgent, MockAgentAdapter};
     use agent_client_protocol::schema::{
-        ContentBlock, ContentChunk, InitializeResponse, NewSessionResponse, PromptRequest,
-        PromptResponse, SessionNotification, SessionUpdate, TextContent,
+        CancelNotification, ContentBlock, ContentChunk, InitializeResponse, NewSessionRequest,
+        NewSessionResponse, PromptRequest, PromptResponse, SessionId, SessionNotification,
+        SessionUpdate, StopReason, TextContent,
     };
     use agent_client_protocol::{ConnectTo, ConnectionTo, Role};
-    use model_embedding::mock::MockEmbedder;
+    use futures::future::BoxFuture;
+    use tokio::sync::Notify;
 
     use crate::review::scope::Scope;
-    use crate::review::test_support::{
-        body, dup_emb, index_conn, loader_with, seed_chunk, TestRepo, DIM,
-    };
+    use crate::review::test_support::{loader_with, ruleset, seeded_dup_repo};
     use crate::validators::Severity;
+
+    /// How long a wedged pipeline may run before a test fails instead of
+    /// hanging CI — the one tuning knob shared by every end-to-end test here.
+    const PIPELINE_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Capacity of the scripted backend's broadcast channel — the channel the
+    /// driver's `notification_rx` subscribes to. It comfortably exceeds any
+    /// test's notification volume, so a slow subscriber never lags chunks away
+    /// (`broadcast` silently drops for lagging receivers — exactly the failure
+    /// class these tests exist to pin).
+    const BACKEND_BROADCAST_CAPACITY: usize = 64;
+
+    /// Capacity for the single-stream invariant test, whose channels must hold
+    /// EVERY chunk sent before any collector subscribes and drains.
+    const PRELOADED_STREAM_CAPACITY: usize = 256;
+
+    /// The caller-formatted timestamp rendered verbatim into the report header.
+    const TEST_NOW: &str = "2026-06-05 12:00";
+
+    /// The abandoned-turn test's pool idle window, in milliseconds: claude-agent's
+    /// fixed post-response notification-drain sleep — during which a completed
+    /// turn is silent — plus margin. Deriving it from the exported constant keeps
+    /// the two values moving together: a window at or under the drain would
+    /// abandon every SUCCESSFUL turn mid-drain.
+    const ABANDON_IDLE_WINDOW_MS: u64 = claude_agent::NOTIFICATION_COLLECTION_DELAY_MS + 300;
+
+    /// Keep-alive interval for the live turn — a small fraction of the idle
+    /// window so the streaming turn never looks stalled.
+    const KEEP_ALIVE_INTERVAL: Duration = Duration::from_millis(ABANDON_IDLE_WINDOW_MS / 16);
 
     // ---- scripted ACP agent (substring → response) -----------------------
     //
@@ -548,13 +583,9 @@ mod tests {
                 Req::InitializeRequest(_) => responder
                     .cast()
                     .respond_with_result(Ok(InitializeResponse::new(1.into()))),
-                Req::NewSessionRequest(_req) => {
-                    let n = mock.next_session.fetch_add(1, Ordering::SeqCst);
-                    let id = agent_client_protocol::schema::SessionId::new(format!("sess-{n}"));
-                    responder
-                        .cast()
-                        .respond_with_result(Ok(NewSessionResponse::new(id)))
-                }
+                Req::NewSessionRequest(_req) => responder.cast().respond_with_result(
+                    numbered_session_response(&mock.next_session, "sess").await,
+                ),
                 Req::PromptRequest(req) => {
                     use agent_client_protocol::schema::ReadTextFileRequest;
                     let read_request =
@@ -596,13 +627,9 @@ mod tests {
                 Req::InitializeRequest(_) => responder
                     .cast()
                     .respond_with_result(Ok(InitializeResponse::new(1.into()))),
-                Req::NewSessionRequest(_req) => {
-                    let n = mock.next_session.fetch_add(1, Ordering::SeqCst);
-                    let id = agent_client_protocol::schema::SessionId::new(format!("sess-{n}"));
-                    responder
-                        .cast()
-                        .respond_with_result(Ok(NewSessionResponse::new(id)))
-                }
+                Req::NewSessionRequest(_req) => responder.cast().respond_with_result(
+                    numbered_session_response(&mock.next_session, "sess").await,
+                ),
                 Req::PromptRequest(req) => {
                     // Mid-turn, a real claude agent asks the client for tool
                     // consent via `session/request_permission` and blocks on the
@@ -695,19 +722,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn review_working_drives_the_pipeline_over_a_scripted_agent() {
-        let repo = TestRepo::new();
-        repo.write("src/lib.rs", "fn placeholder() {}\n");
-        repo.commit("initial");
-        let dup = body("compute");
-        repo.write("src/lib.rs", &format!("fn placeholder() {{}}\n\n{dup}\n"));
-
-        let conn = index_conn();
-        let emb = dup_emb();
-        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
-        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &emb);
-
+        let (repo, conn, embedder) = seeded_dup_repo();
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Error);
-        let embedder = MockEmbedder::new(DIM);
 
         // The fan-out prompt names the validator + file; the verify prompt names
         // the claim. Both substrings map to the right scripted response.
@@ -719,7 +735,7 @@ mod tests {
         // driver subscribes to `notify_tx` as `notification_rx`; the connection
         // re-emission must NOT be collected a second time. Under the old dual-path
         // driver every reply was concatenated twice.
-        let (notify_tx, notification_rx) = broadcast::channel(64);
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
         let agent = ScriptedAgent::new(
             vec![
                 (
@@ -744,7 +760,7 @@ mod tests {
             &embedder,
             PoolConfig::remote(2),
             FleetConfig::default(),
-            "2026-06-05 12:00",
+            TEST_NOW,
         )
         .await;
 
@@ -752,7 +768,7 @@ mod tests {
         assert!(
             report
                 .markdown
-                .contains("## Review Findings (2026-06-05 12:00)"),
+                .contains(&format!("## Review Findings ({TEST_NOW})")),
             "report header must render: {}",
             report.markdown
         );
@@ -794,21 +810,10 @@ mod tests {
     /// request anywhere in the pipeline would wedge it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn review_does_not_deadlock_when_agent_demands_permission_mid_prompt() {
-        let repo = TestRepo::new();
-        repo.write("src/lib.rs", "fn placeholder() {}\n");
-        repo.commit("initial");
-        let dup = body("compute");
-        repo.write("src/lib.rs", &format!("fn placeholder() {{}}\n\n{dup}\n"));
-
-        let conn = index_conn();
-        let emb = dup_emb();
-        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
-        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &emb);
-
+        let (repo, conn, embedder) = seeded_dup_repo();
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Error);
-        let embedder = MockEmbedder::new(DIM);
 
-        let (notify_tx, notification_rx) = broadcast::channel(64);
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
         // Every prompt this agent serves blocks on a `session/request_permission`
         // round-trip to the client first — both the fan-out prompt and the verify
         // prompt.
@@ -826,7 +831,7 @@ mod tests {
         let dyn_agent = DynConnectTo::new(ScriptedAdapter(agent));
 
         let report = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
+            PIPELINE_TIMEOUT,
             run_review_over_agent(
                 dyn_agent,
                 notification_rx,
@@ -837,7 +842,7 @@ mod tests {
                 &embedder,
                 PoolConfig::remote(2),
                 FleetConfig::default(),
-                "2026-06-05 12:00",
+                TEST_NOW,
             ),
         )
         .await
@@ -863,22 +868,11 @@ mod tests {
     /// file content (not just that the request is answered).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn review_serves_fs_read_text_file_from_disk_under_repo_path() {
-        let repo = TestRepo::new();
-        repo.write("src/lib.rs", "fn placeholder() {}\n");
-        repo.commit("initial");
-        let dup = body("compute");
-        repo.write("src/lib.rs", &format!("fn placeholder() {{}}\n\n{dup}\n"));
-
-        let conn = index_conn();
-        let emb = dup_emb();
-        seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
-        seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &emb);
-
+        let (repo, conn, embedder) = seeded_dup_repo();
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Error);
-        let embedder = MockEmbedder::new(DIM);
 
         let read_path = repo.path().join("src/lib.rs");
-        let (notify_tx, notification_rx) = broadcast::channel(64);
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
         let observed = Arc::new(std::sync::Mutex::new(Option::<String>::None));
         let agent = Arc::new(FsReadingAgent {
             next_session: AtomicUsize::new(0),
@@ -897,7 +891,7 @@ mod tests {
         let dyn_agent = DynConnectTo::new(FsReadingAdapter(agent));
 
         let report = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
+            PIPELINE_TIMEOUT,
             run_review_over_agent(
                 dyn_agent,
                 notification_rx,
@@ -908,7 +902,7 @@ mod tests {
                 &embedder,
                 PoolConfig::remote(2),
                 FleetConfig::default(),
-                "2026-06-05 12:00",
+                TEST_NOW,
             ),
         )
         .await
@@ -1006,7 +1000,8 @@ mod tests {
 
         // The backend broadcast: `notification_rx` is a `subscribe()` of it, just
         // as `wrap_claude_into_handle` resubscribes the agent's channel.
-        let (notify_tx, notification_rx) = broadcast::channel::<SessionNotification>(256);
+        let (notify_tx, notification_rx) =
+            broadcast::channel::<SessionNotification>(PRELOADED_STREAM_CAPACITY);
         let (single_notifier, single_forward) = build_pool_notifier(notification_rx);
         for notif in &stream {
             let _ = notify_tx.send(notif.clone());
@@ -1026,7 +1021,8 @@ mod tests {
         // re-emission) both copy into one notifier. Every chunk lands twice, so
         // the collected text is twice as long for any interleaving — which is
         // precisely what corrupted the JSON the verify/fleet parser reads.
-        let (dual_tx, dual_rx_a) = broadcast::channel::<SessionNotification>(256);
+        let (dual_tx, dual_rx_a) =
+            broadcast::channel::<SessionNotification>(PRELOADED_STREAM_CAPACITY);
         let dual_rx_b = dual_tx.subscribe();
         let (dual_notifier, _seed) = claude_agent::NotificationSender::new(NOTIFY_BUFFER);
         let dual_notifier = Arc::new(dual_notifier);
@@ -1050,5 +1046,198 @@ mod tests {
             "a dual feed doubles every chunk, doubling the collected length and \
              corrupting the JSON; the single-feed driver avoids this"
         );
+    }
+
+    // ---- abandoned-turn tolerance (the dropped-receiver cascade) ----------
+
+    /// Scripted agent for the abandoned-turn regression, driven through the
+    /// shared `acp_conformance` [`MockAgent`] harness.
+    ///
+    /// Reproduces the production cascade shape on top of the pool's real
+    /// liveness supervision:
+    ///
+    /// - The `staller` fan-out prompt goes silent until the pool abandons the
+    ///   turn (dropping its `block_task` response receiver) and sends
+    ///   `session/cancel`; the [`MockAgent::cancel`] hook releases it and the
+    ///   prompt answers LATE — a response whose awaiter is already gone.
+    /// - The `deduplicate` fan-out prompt holds its own (live, keep-alive
+    ///   streaming) turn open until that late answer has been produced, so the
+    ///   client connection MUST survive routing the late response before any
+    ///   subsequent turn can complete.
+    struct LateAnsweringAgent {
+        next_session: AtomicUsize,
+        /// Backend broadcast the driver's `notification_rx` subscribes to.
+        notify_tx: broadcast::Sender<SessionNotification>,
+        /// Notified by [`MockAgent::cancel`] when the pool abandons the
+        /// stalled turn.
+        cancelled: Notify,
+        /// Notified once the stalled prompt has produced its late answer.
+        late_answered: Notify,
+    }
+
+    impl LateAnsweringAgent {
+        /// The stalled turn: wedge silently (no streaming progress) until the
+        /// pool's idle liveness abandons this turn and cancels the session,
+        /// then answer late — the response receiver is already dropped when
+        /// this reply reaches the client.
+        async fn stall_until_cancelled(&self) -> PromptResponse {
+            self.cancelled.notified().await;
+            self.late_answered.notify_one();
+            PromptResponse::new(StopReason::EndTurn)
+        }
+
+        /// The live turn's gate: hold the turn open — streaming keep-alive
+        /// thought chunks so its own idle window never fires — until the late
+        /// answer is on the wire. The connection processes inbound messages in
+        /// order, so this turn can only complete after the client has routed
+        /// the late response and survived.
+        async fn keep_alive_until_late_answer(&self, session_id: &SessionId) {
+            loop {
+                tokio::select! {
+                    _ = self.late_answered.notified() => break,
+                    _ = tokio::time::sleep(KEEP_ALIVE_INTERVAL) => {
+                        let keep_alive = SessionUpdate::AgentThoughtChunk(
+                            ContentChunk::new(ContentBlock::Text(TextContent::new("…"))),
+                        );
+                        let _ = self
+                            .notify_tx
+                            .send(SessionNotification::new(session_id.clone(), keep_alive));
+                    }
+                }
+            }
+        }
+
+        /// Stream `reply` onto the backend broadcast as a single
+        /// `agent_message_chunk`, the way every scripted turn answers.
+        fn stream_reply(&self, session_id: &SessionId, reply: String) {
+            let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new(reply),
+            )));
+            let _ = self
+                .notify_tx
+                .send(SessionNotification::new(session_id.clone(), update));
+        }
+    }
+
+    impl MockAgent for LateAnsweringAgent {
+        fn new_session<'a>(
+            &'a self,
+            _request: NewSessionRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+            numbered_session_response(&self.next_session, "sess")
+        }
+
+        fn prompt<'a>(
+            &'a self,
+            request: PromptRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
+            Box::pin(async move {
+                let text = prompt_text(&request);
+
+                if text.contains("# Validator: staller") {
+                    return Ok(self.stall_until_cancelled().await);
+                }
+
+                let reply = if text.contains("# Validator: deduplicate") {
+                    self.keep_alive_until_late_answer(&request.session_id).await;
+                    findings_json("src/lib.rs", "blocker", "compute duplicates old_compute")
+                } else if text.contains("compute duplicates old_compute") {
+                    confirm_json()
+                } else {
+                    "[]".to_string()
+                };
+
+                self.stream_reply(&request.session_id, reply);
+                Ok(PromptResponse::new(StopReason::EndTurn))
+            })
+        }
+
+        fn cancel<'a>(
+            &'a self,
+            _notification: CancelNotification,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<()>> {
+            Box::pin(async move {
+                self.cancelled.notify_one();
+                Ok(())
+            })
+        }
+    }
+
+    /// The drive-seam regression for the dropped-receiver cascade (the
+    /// 2026-06-11 calcutron incident): one fan-out turn goes silent, the pool's
+    /// per-turn liveness abandons it — dropping its `block_task` receiver — and
+    /// the agent answers AFTER the abandonment. Without `TolerantResponseRouter`
+    /// in [`run_review_over_agent`]'s client builder, that late response kills
+    /// the connection's dispatch loop (`"failed to send response, receiver
+    /// dropped"`), `connect_with` returns `Err`, and the whole review fails
+    /// wholesale. With it, the abandoned turn degrades to a single failed task
+    /// and the remaining turns — the other validator's fan-out and its verify —
+    /// complete on the SAME connection, mirroring the
+    /// `agent-client-protocol-extras` `tolerant_routing` test at this seam.
+    #[tracing_test::traced_test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn review_survives_a_late_response_to_an_abandoned_turn() {
+        let (repo, conn, embedder) = seeded_dup_repo();
+        // A second, untracked working file (Working scope includes untracked)
+        // so a second validator gets its own concurrent fan-out turn.
+        repo.write(
+            "src/other.rs",
+            "fn other_placeholder() {}\n\nfn extra() {}\n",
+        );
+
+        // Two validators over disjoint files → two concurrent fan-out turns on
+        // the pool's two workers: `staller` wedges and is abandoned,
+        // `deduplicate` stays live and must complete after the late response.
+        let mut loader = loader_with(
+            "deduplicate",
+            "src/lib.rs",
+            &["duplicates"],
+            Severity::Error,
+        );
+        loader.add_builtin_ruleset(ruleset("staller", "src/other.rs", &[], Severity::Error));
+
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = Arc::new(LateAnsweringAgent {
+            next_session: AtomicUsize::new(0),
+            notify_tx,
+            cancelled: Notify::new(),
+            late_answered: Notify::new(),
+        });
+        let dyn_agent = DynConnectTo::new(MockAgentAdapter(agent));
+
+        let report = tokio::time::timeout(
+            PIPELINE_TIMEOUT,
+            run_review_over_agent(
+                dyn_agent,
+                notification_rx,
+                Scope::Working,
+                repo.path(),
+                &loader,
+                &conn,
+                &embedder,
+                // A sub-second idle window so the stalled turn is abandoned
+                // fast; the live turn's keep-alives sail well under it. See
+                // [`ABANDON_IDLE_WINDOW_MS`] for why it must exceed
+                // claude-agent's post-response notification-drain sleep.
+                PoolConfig::remote(2)
+                    .with_idle_timeout(Duration::from_millis(ABANDON_IDLE_WINDOW_MS)),
+                FleetConfig::default(),
+                TEST_NOW,
+            ),
+        )
+        .await
+        .expect("the review must not hang when a turn is abandoned and answered late");
+
+        let report = report.expect(
+            "a late response to an abandoned turn must fail that turn only, \
+             not the whole review connection",
+        );
+        assert!(
+            report.markdown.contains("### Blockers"),
+            "the live validator's confirmed blocker must still be rendered: {}",
+            report.markdown
+        );
+        assert_eq!(report.counts.blockers, 1);
+        assert_eq!(report.counts.confirmed, 1);
     }
 }

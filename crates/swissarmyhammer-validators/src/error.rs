@@ -30,6 +30,12 @@ pub enum AvpError {
     #[error("Agent error: {0}")]
     Agent(String),
 
+    /// The review's ACP client connection failed to stand up or died
+    /// mid-review. Preserves the underlying connection error as `source()`
+    /// so callers can walk or match the cause.
+    #[error("review agent connection failed")]
+    AgentConnection(#[source] agent_client_protocol::Error),
+
     /// File is a partial template, not a validator.
     ///
     /// This is not a true error - it indicates the file should be skipped
@@ -59,6 +65,18 @@ mod tests {
 
         let ctx_err = AvpError::Context("bad".to_string());
         assert!(!ctx_err.is_partial());
+    }
+
+    #[test]
+    fn agent_connection_preserves_the_source_chain() {
+        let err = AvpError::AgentConnection(agent_client_protocol::Error::internal_error());
+        assert_eq!(err.to_string(), "review agent connection failed");
+        let source = std::error::Error::source(&err)
+            .expect("the underlying connection error must be walkable via source()");
+        assert_eq!(
+            source.to_string(),
+            agent_client_protocol::Error::internal_error().to_string()
+        );
     }
 
     #[test]

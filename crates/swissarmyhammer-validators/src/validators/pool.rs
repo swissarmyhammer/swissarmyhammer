@@ -24,7 +24,8 @@
 use std::sync::Arc;
 
 use agent_client_protocol::schema::{
-    ContentBlock, NewSessionRequest, PromptRequest, SessionNotification, TextContent,
+    CancelNotification, ContentBlock, NewSessionRequest, PromptRequest, SessionId,
+    SessionNotification, TextContent,
 };
 use agent_client_protocol::{Agent, ConnectionTo};
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
@@ -40,15 +41,30 @@ const MAX_REMOTE_WORKERS: usize = 8;
 /// Default per-call cap on generation tokens for a single `submit` prompt.
 pub const DEFAULT_MAX_TOKENS: u64 = 16 * 1024;
 
-/// Defensive ceiling on a single prompt turn (`new_session` → `prompt`).
+/// Idle-progress window for a single prompt turn (`new_session` → `prompt`).
 ///
-/// A correctly wired client answers every nested agent→client request, so a turn
-/// completes in seconds-to-minutes. This generous backstop exists only so a
-/// future wedge (e.g. an unanswered agent request) degrades that one task to an
-/// error — the fleet reports zero findings for it and the review COMPLETES —
-/// instead of hanging the whole review forever. It is tuned far above any
-/// legitimately slow turn so it never false-fires in normal operation.
-const PROMPT_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+/// A turn is abandoned only when NO streaming progress — no `session/update`
+/// notification for the turn's session — has arrived for this long. Total wall
+/// clock is deliberately NOT capped at this value: a legitimate turn on a local
+/// 35B model (big review prompt, agentic loop, one shared GPU serializing
+/// decodes across fleet tasks) routinely needs more than 300s, but while it is
+/// decoding it streams chunks continuously, so it keeps resetting this window.
+/// Only a wedged turn (e.g. a nested agent request the client failed to answer)
+/// goes silent for the whole window, and that degrades to a single-task error —
+/// the fleet reports zero findings for it and the review COMPLETES — instead of
+/// hanging the whole review forever.
+pub const PROMPT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Defensive absolute ceiling on a single prompt turn.
+///
+/// Catches the one pathology the idle window cannot: a turn that keeps emitting
+/// notifications forever without ever completing (e.g. a runaway agentic loop).
+/// It must sit far above local-model reality — a single legitimate local-35B
+/// turn can take well over five minutes of wall clock when one shared GPU
+/// serializes decodes across fleet tasks — so it is set to 45 minutes: long
+/// enough to never false-fire on a slow-but-live turn, short enough that a
+/// runaway turn cannot pin a worker forever.
+pub const PROMPT_TURN_CEILING: std::time::Duration = std::time::Duration::from_secs(45 * 60);
 
 /// Backend-aware policy describing how many workers the pool runs and whether it
 /// adapts that count under load.
@@ -64,6 +80,12 @@ pub struct PoolConfig {
     pub aimd: bool,
     /// Per-call cap on generation tokens attached to every submitted prompt.
     pub max_tokens: u64,
+    /// Abandon a turn after this long with no streaming progress
+    /// (see [`PROMPT_IDLE_TIMEOUT`]).
+    pub idle_timeout: std::time::Duration,
+    /// Defensive absolute cap on a turn's total wall clock
+    /// (see [`PROMPT_TURN_CEILING`]).
+    pub turn_ceiling: std::time::Duration,
 }
 
 impl PoolConfig {
@@ -73,6 +95,8 @@ impl PoolConfig {
             workers: 1,
             aimd: false,
             max_tokens: DEFAULT_MAX_TOKENS,
+            idle_timeout: PROMPT_IDLE_TIMEOUT,
+            turn_ceiling: PROMPT_TURN_CEILING,
         }
     }
 
@@ -82,6 +106,8 @@ impl PoolConfig {
             workers: default_workers.clamp(MIN_WORKERS, MAX_REMOTE_WORKERS),
             aimd: true,
             max_tokens: DEFAULT_MAX_TOKENS,
+            idle_timeout: PROMPT_IDLE_TIMEOUT,
+            turn_ceiling: PROMPT_TURN_CEILING,
         }
     }
 
@@ -98,10 +124,52 @@ impl PoolConfig {
         self.max_tokens = max_tokens;
         self
     }
+
+    /// Override the idle-progress window after which a silent turn is
+    /// abandoned. Exists so tests can exercise abandonment with sub-second
+    /// durations; production constructors use [`PROMPT_IDLE_TIMEOUT`].
+    pub fn with_idle_timeout(mut self, idle_timeout: std::time::Duration) -> Self {
+        self.idle_timeout = idle_timeout;
+        self
+    }
+
+    /// Override the absolute wall-clock ceiling on a turn. Exists so tests can
+    /// exercise ceiling abandonment with sub-second durations; production
+    /// constructors use [`PROMPT_TURN_CEILING`].
+    pub fn with_turn_ceiling(mut self, turn_ceiling: std::time::Duration) -> Self {
+        self.turn_ceiling = turn_ceiling;
+        self
+    }
+}
+
+/// Failure of a single submitted prompt.
+///
+/// The two liveness-abandonment modes are typed variants so callers can tell
+/// "the supervisor abandoned the turn (agent alive, single-task degradation)"
+/// apart from a genuine agent failure without parsing message text.
+#[derive(Debug, thiserror::Error)]
+pub enum PoolError {
+    /// The turn made no streaming progress for [`PoolConfig::idle_timeout`]
+    /// and was abandoned (its session was cancelled).
+    #[error("prompt turn made no streaming progress for {idle_timeout:?} and was abandoned")]
+    TurnIdle {
+        /// The idle-progress window that elapsed without a session update.
+        idle_timeout: std::time::Duration,
+    },
+    /// The turn exceeded [`PoolConfig::turn_ceiling`] of total wall clock and
+    /// was abandoned (its session was cancelled).
+    #[error("prompt turn exceeded the absolute ceiling of {turn_ceiling:?} and was abandoned")]
+    TurnCeiling {
+        /// The absolute wall-clock cap the turn exceeded.
+        turn_ceiling: std::time::Duration,
+    },
+    /// The agent connection itself failed the turn.
+    #[error(transparent)]
+    Agent(#[from] claude_agent::AgentError),
 }
 
 /// Result of a single submitted prompt.
-pub type PromptResult = Result<claude_agent::CollectedResponse, claude_agent::AgentError>;
+pub type PromptResult = Result<claude_agent::CollectedResponse, PoolError>;
 
 /// A unit of work on the shared queue: a prompt plus the channel to deliver its
 /// result back to the submitter.
@@ -144,9 +212,8 @@ impl AgentPool {
             let rx = Arc::clone(&rx);
             let agent = agent.clone();
             let notifier = Arc::clone(&notifier);
-            let max_tokens = config.max_tokens;
             workers.push(tokio::spawn(async move {
-                worker_loop(rx, agent, notifier, max_tokens).await;
+                worker_loop(rx, agent, notifier, config).await;
             }));
         }
 
@@ -179,7 +246,8 @@ impl AgentPool {
                 .respond_to
                 .send(Err(claude_agent::AgentError::Internal(
                     "agent pool is shut down".to_string(),
-                )));
+                )
+                .into()));
         }
         rx
     }
@@ -214,7 +282,7 @@ async fn worker_loop(
     rx: Arc<Mutex<mpsc::UnboundedReceiver<Job>>>,
     agent: ConnectionTo<Agent>,
     notifier: Arc<claude_agent::NotificationSender>,
-    max_tokens: u64,
+    config: PoolConfig,
 ) {
     loop {
         let job = {
@@ -226,24 +294,134 @@ async fn worker_loop(
             break;
         };
 
-        let notifications = notifier.sender().subscribe();
-        // Backstop the turn with a generous timeout so a wedged prompt (e.g. a
-        // nested agent request the client failed to answer) degrades this one
-        // task to an error rather than hanging the whole review forever.
-        let result = match tokio::time::timeout(
-            PROMPT_TURN_TIMEOUT,
-            run_prompt(&agent, notifications, job.prompt, max_tokens),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_elapsed) => Err(claude_agent::AgentError::Internal(format!(
-                "prompt turn exceeded {}s and was abandoned",
-                PROMPT_TURN_TIMEOUT.as_secs()
-            ))),
-        };
+        let result = run_turn_with_liveness(&agent, &notifier, job.prompt, config).await;
         // The submitter may have dropped its receiver; that is fine.
         let _ = job.respond_to.send(result);
+    }
+}
+
+/// Supervise one prompt turn with progress-aware liveness.
+///
+/// The turn (`run_prompt`) races against two abandonment conditions instead of
+/// a single wall-clock cap:
+///
+/// - **idle**: no `session/update` notification for the turn's session within
+///   `config.idle_timeout`. Every received update for the session resets the
+///   window, so a slow-but-streaming turn (the local-35B case) is never
+///   abandoned regardless of total duration.
+/// - **ceiling**: `config.turn_ceiling` of total wall clock, the defensive cap
+///   on a turn that streams forever without completing.
+///
+/// On abandonment the in-flight session is actively cancelled (ACP
+/// `session/cancel`) so the agent stops decoding, rather than being detached to
+/// keep generating into a dropped receiver. The session id is learned from
+/// `run_prompt` through a shared slot once `new_session` completes; if the turn
+/// wedged before that there is no session to cancel.
+async fn run_turn_with_liveness(
+    agent: &ConnectionTo<Agent>,
+    notifier: &claude_agent::NotificationSender,
+    prompt: String,
+    config: PoolConfig,
+) -> PromptResult {
+    let session_slot: Arc<std::sync::Mutex<Option<SessionId>>> = Arc::default();
+    // Two independent subscriptions: one consumed by `run_prompt`'s content
+    // collector, one watched here for liveness.
+    let mut liveness = notifier.sender().subscribe();
+    let notifications = notifier.sender().subscribe();
+
+    let turn = run_prompt(
+        agent,
+        notifications,
+        prompt,
+        config.max_tokens,
+        Arc::clone(&session_slot),
+    );
+    tokio::pin!(turn);
+
+    let started = tokio::time::Instant::now();
+    let ceiling_deadline = started + config.turn_ceiling;
+    let mut last_progress = started;
+    let mut liveness_open = true;
+
+    loop {
+        let abandon_at = (last_progress + config.idle_timeout).min(ceiling_deadline);
+        tokio::select! {
+            result = &mut turn => return result,
+            received = liveness.recv(), if liveness_open => {
+                note_progress(received, &session_slot, &mut last_progress, &mut liveness_open);
+            }
+            _ = tokio::time::sleep_until(abandon_at) => {
+                return Err(abandon_turn(agent, &session_slot, ceiling_deadline, config));
+            }
+        }
+    }
+}
+
+/// Fold one liveness-subscription poll into the supervisor's progress state.
+///
+/// Encapsulates the progress policy:
+/// - a notification for **our** session is progress (updates `last_progress`);
+///   other sessions' traffic is not.
+/// - a `Lagged` receiver counts as progress: the dropped messages may have
+///   included ours, and abandonment is a backstop for a *wedged* turn — a
+///   wedged turn produces no traffic to lag behind.
+/// - a `Closed` channel means no further progress can ever be observed; close
+///   the liveness arm (`liveness_open = false`) and let the turn race the
+///   remaining deadlines.
+fn note_progress(
+    received: Result<SessionNotification, broadcast::error::RecvError>,
+    session_slot: &std::sync::Mutex<Option<SessionId>>,
+    last_progress: &mut tokio::time::Instant,
+    liveness_open: &mut bool,
+) {
+    match received {
+        Ok(notification) => {
+            let is_ours = session_slot
+                .lock()
+                .expect("session slot lock poisoned")
+                .as_ref()
+                .is_some_and(|sid| notification.session_id == *sid);
+            if is_ours {
+                *last_progress = tokio::time::Instant::now();
+            }
+        }
+        Err(broadcast::error::RecvError::Lagged(_)) => {
+            *last_progress = tokio::time::Instant::now();
+        }
+        Err(broadcast::error::RecvError::Closed) => {
+            *liveness_open = false;
+        }
+    }
+}
+
+/// Abandon the in-flight turn: actively cancel its session (ACP
+/// `session/cancel`) so the agent stops decoding, and pick the typed
+/// abandonment reason — [`PoolError::TurnCeiling`] when the absolute ceiling
+/// has passed, [`PoolError::TurnIdle`] otherwise. If the turn wedged before
+/// `new_session` completed there is no session to cancel.
+fn abandon_turn(
+    agent: &ConnectionTo<Agent>,
+    session_slot: &std::sync::Mutex<Option<SessionId>>,
+    ceiling_deadline: tokio::time::Instant,
+    config: PoolConfig,
+) -> PoolError {
+    let session = session_slot
+        .lock()
+        .expect("session slot lock poisoned")
+        .clone();
+    if let Some(session_id) = session {
+        if let Err(e) = agent.send_notification(CancelNotification::new(session_id)) {
+            tracing::warn!("failed to cancel abandoned session: {}", e);
+        }
+    }
+    if tokio::time::Instant::now() >= ceiling_deadline {
+        PoolError::TurnCeiling {
+            turn_ceiling: config.turn_ceiling,
+        }
+    } else {
+        PoolError::TurnIdle {
+            idle_timeout: config.idle_timeout,
+        }
     }
 }
 
@@ -260,11 +438,16 @@ async fn worker_loop(
 /// `review::drive::run_pipeline_in_connection`). Issuing it per prompt raced N
 /// concurrent handshakes over the single shared connection and wedged the real
 /// agent.
+///
+/// `session_slot` is filled with the new session's id as soon as `new_session`
+/// completes, giving the liveness supervisor a handle for progress attribution
+/// and cancel-on-abandonment.
 async fn run_prompt(
     agent: &ConnectionTo<Agent>,
     notifications: broadcast::Receiver<SessionNotification>,
     prompt: String,
     max_tokens: u64,
+    session_slot: Arc<std::sync::Mutex<Option<SessionId>>>,
 ) -> PromptResult {
     // new_session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
@@ -273,9 +456,13 @@ async fn run_prompt(
         .block_task()
         .await
         .map_err(|e| {
-            claude_agent::AgentError::Internal(format!("Failed to create session: {}", e))
+            claude_agent::AgentError::Internal(format!("failed to create session: {}", e))
         })?;
     let session_id = session_response.session_id;
+    // Publish the session id to the liveness supervisor
+    // (`run_turn_with_liveness`) so it can attribute streaming progress to this
+    // turn and cancel the session if the turn is abandoned.
+    *session_slot.lock().expect("session slot lock poisoned") = Some(session_id.clone());
     // Captured for the per-reply audit log below: `session_id` is moved into the
     // `PromptRequest` before the response is collected.
     let session_label = session_id.to_string();
@@ -298,7 +485,7 @@ async fn run_prompt(
         .block_task()
         .await
         .map_err(|e| {
-            claude_agent::AgentError::Internal(format!("Failed to execute prompt: {}", e))
+            claude_agent::AgentError::Internal(format!("failed to execute prompt: {}", e))
         })?;
 
     // 5. drain trailing notifications and assemble the collected response.
@@ -336,191 +523,24 @@ mod tests {
 
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use crate::review::test_support::new_notifier;
+
+    use acp_conformance::test_utils::{numbered_session_response, MockAgent, MockAgentAdapter};
     use agent_client_protocol::schema::{
-        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
-        ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest,
-        LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
-        SessionNotification, SetSessionModeRequest, SetSessionModeResponse,
+        ContentChunk, NewSessionResponse, PromptResponse, SessionUpdate,
     };
     use agent_client_protocol::{Channel, Client, ConnectTo};
     use agent_client_protocol_extras::PlaybackAgent;
     use futures::future::BoxFuture;
     use tempfile::TempDir;
 
-    // ------------------------------------------------------------------
-    // Mock-agent harness (same shape as the retired runner's harness:
-    // MockAgent trait + adapter + in-process client wiring).
-    // ------------------------------------------------------------------
-
-    /// Trait the test mock agents implement so a single [`MockAgentAdapter`] can
-    /// route incoming `ClientRequest` variants onto the right handler.
-    trait MockAgent: Send + Sync {
-        fn initialize<'a>(
-            &'a self,
-            _request: InitializeRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<InitializeResponse>> {
-            Box::pin(async move { Ok(InitializeResponse::new(1.into())) })
-        }
-
-        fn authenticate<'a>(
-            &'a self,
-            _request: AuthenticateRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<AuthenticateResponse>> {
-            Box::pin(async move { Ok(AuthenticateResponse::new()) })
-        }
-
-        fn new_session<'a>(
-            &'a self,
-            _request: NewSessionRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
-            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
-        }
-
-        fn load_session<'a>(
-            &'a self,
-            _request: LoadSessionRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<LoadSessionResponse>> {
-            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
-        }
-
-        fn set_session_mode<'a>(
-            &'a self,
-            _request: SetSessionModeRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<SetSessionModeResponse>> {
-            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
-        }
-
-        fn prompt<'a>(
-            &'a self,
-            _request: PromptRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
-            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
-        }
-
-        fn cancel<'a>(
-            &'a self,
-            _notification: CancelNotification,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<()>> {
-            Box::pin(async move { Ok(()) })
-        }
-
-        fn ext_method<'a>(
-            &'a self,
-            _request: ExtRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<ExtResponse>> {
-            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
-        }
-
-        fn ext_notification<'a>(
-            &'a self,
-            _notification: ExtNotification,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<()>> {
-            Box::pin(async move { Ok(()) })
-        }
-    }
-
-    /// `ConnectTo<Client>` adapter that drives a [`MockAgent`] as an ACP server.
-    struct MockAgentAdapter<M: MockAgent + 'static>(Arc<M>);
-
-    impl<M: MockAgent + 'static> ConnectTo<Client> for MockAgentAdapter<M> {
-        async fn connect_to(
-            self,
-            client: impl ConnectTo<<Client as agent_client_protocol::Role>::Counterpart>,
-        ) -> agent_client_protocol::Result<()> {
-            let mock = Arc::clone(&self.0);
-            let mock_for_notifications = Arc::clone(&self.0);
-
-            agent_client_protocol::Agent
-                .builder()
-                .name("mock-agent")
-                .on_receive_request(
-                    {
-                        let mock = Arc::clone(&mock);
-                        async move |req: agent_client_protocol::ClientRequest, responder, cx| {
-                            dispatch_mock_request(&mock, req, responder, &cx)
-                        }
-                    },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .on_receive_notification(
-                    async move |notif: agent_client_protocol::ClientNotification, _cx| {
-                        dispatch_mock_notification(&mock_for_notifications, notif).await;
-                        Ok(())
-                    },
-                    agent_client_protocol::on_receive_notification!(),
-                )
-                .connect_to(client)
-                .await
-        }
-    }
-
-    /// Demultiplex an incoming `ClientRequest` onto the mock's per-method
-    /// handlers. Each dispatch is offloaded to `cx.spawn` so the SDK event loop
-    /// keeps dispatching new requests while a slow handler is awaiting — without
-    /// the spawn, two concurrent prompts on one connection would serialise.
-    fn dispatch_mock_request<M: MockAgent + 'static>(
-        mock: &Arc<M>,
-        request: agent_client_protocol::ClientRequest,
-        responder: agent_client_protocol::Responder<serde_json::Value>,
-        cx: &ConnectionTo<Client>,
-    ) -> agent_client_protocol::Result<()> {
-        use agent_client_protocol::ClientRequest as Req;
-
-        let mock = Arc::clone(mock);
-        cx.spawn(async move {
-            match request {
-                Req::InitializeRequest(req) => responder
-                    .cast()
-                    .respond_with_result(mock.initialize(req).await),
-                Req::AuthenticateRequest(req) => responder
-                    .cast()
-                    .respond_with_result(mock.authenticate(req).await),
-                Req::NewSessionRequest(req) => responder
-                    .cast()
-                    .respond_with_result(mock.new_session(req).await),
-                Req::LoadSessionRequest(req) => responder
-                    .cast()
-                    .respond_with_result(mock.load_session(req).await),
-                Req::SetSessionModeRequest(req) => responder
-                    .cast()
-                    .respond_with_result(mock.set_session_mode(req).await),
-                Req::PromptRequest(req) => {
-                    responder.cast().respond_with_result(mock.prompt(req).await)
-                }
-                Req::ExtMethodRequest(req) => {
-                    let result = mock.ext_method(req).await.and_then(|ext_response| {
-                        serde_json::from_str::<serde_json::Value>(ext_response.0.get())
-                            .map_err(|_| agent_client_protocol::Error::internal_error())
-                    });
-                    responder.respond_with_result(result)
-                }
-                _ => responder
-                    .cast::<serde_json::Value>()
-                    .respond_with_error(agent_client_protocol::Error::method_not_found()),
-            }
-        })
-    }
-
-    /// Demultiplex an incoming `ClientNotification` onto the mock.
-    async fn dispatch_mock_notification<M: MockAgent + ?Sized>(
-        mock: &Arc<M>,
-        notification: agent_client_protocol::ClientNotification,
-    ) {
-        use agent_client_protocol::ClientNotification as Notif;
-
-        match notification {
-            Notif::CancelNotification(n) => {
-                let _ = mock.cancel(n).await;
-            }
-            Notif::ExtNotification(n) => {
-                let _ = mock.ext_notification(n).await;
-            }
-            _ => {}
-        }
-    }
-
     /// Wire a [`MockAgent`] up to a fresh `Client` and run `body` against the
     /// resulting `ConnectionTo<Agent>` handle.
+    ///
+    /// Pool-specific variant of `acp_conformance::test_utils::run_with_mock_agent`:
+    /// the client side additionally forwards incoming `session/update`
+    /// notifications into `notifier` (see [`run_client_against`]), which is the
+    /// seam the pool's streaming collector and liveness supervisor subscribe to.
     async fn run_with_mock_agent<M, F, Fut, R>(
         mock: Arc<M>,
         notifier: Arc<claude_agent::NotificationSender>,
@@ -600,9 +620,28 @@ mod tests {
             .expect("client connect_with failed")
     }
 
-    fn new_notifier() -> Arc<claude_agent::NotificationSender> {
-        let (notifier, _) = claude_agent::NotificationSender::new(64);
-        Arc::new(notifier)
+    /// Spawn a task that emits an `agent_message_chunk` notification for
+    /// `session_id` every `every_ms` ms — the shape of a slow turn that is
+    /// actively streaming tokens. Abort the returned handle to stop it.
+    fn spawn_progress_feeder(
+        notifier: Arc<claude_agent::NotificationSender>,
+        session_id: &str,
+        every_ms: u64,
+    ) -> tokio::task::JoinHandle<()> {
+        let session_id = session_id.to_string();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(every_ms)).await;
+                let _ = notifier
+                    .send_update(SessionNotification::new(
+                        agent_client_protocol::schema::SessionId::new(session_id.clone()),
+                        SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                            TextContent::new("chunk"),
+                        ))),
+                    ))
+                    .await;
+            }
+        })
     }
 
     // ------------------------------------------------------------------
@@ -627,12 +666,7 @@ mod tests {
             &'a self,
             _request: NewSessionRequest,
         ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
-            let n = self.next_session.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                Ok(NewSessionResponse::new(
-                    agent_client_protocol::schema::SessionId::new(format!("pass-sess-{}", n)),
-                ))
-            })
+            numbered_session_response(&self.next_session, "pass-sess")
         }
 
         fn prompt<'a>(
@@ -677,12 +711,7 @@ mod tests {
             &'a self,
             _request: NewSessionRequest,
         ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
-            let n = self.next_session.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                Ok(NewSessionResponse::new(
-                    agent_client_protocol::schema::SessionId::new(format!("peak-sess-{}", n)),
-                ))
-            })
+            numbered_session_response(&self.next_session, "peak-sess")
         }
 
         fn prompt<'a>(
@@ -723,12 +752,7 @@ mod tests {
             &'a self,
             _request: NewSessionRequest,
         ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
-            let n = self.next_session.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                Ok(NewSessionResponse::new(
-                    agent_client_protocol::schema::SessionId::new(format!("err-sess-{}", n)),
-                ))
-            })
+            numbered_session_response(&self.next_session, "err-sess")
         }
 
         fn prompt<'a>(
@@ -781,12 +805,7 @@ mod tests {
             &'a self,
             _request: NewSessionRequest,
         ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
-            let n = self.next_session.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                Ok(NewSessionResponse::new(
-                    agent_client_protocol::schema::SessionId::new(format!("meta-sess-{}", n)),
-                ))
-            })
+            numbered_session_response(&self.next_session, "meta-sess")
         }
 
         fn prompt<'a>(
@@ -804,6 +823,70 @@ mod tests {
                     agent_client_protocol::schema::StopReason::EndTurn,
                 ))
             })
+        }
+    }
+
+    /// Stalls (sleeps far longer than any test window) on the first
+    /// `stall_count` prompts and passes afterwards. Records every
+    /// `session/cancel` notification it receives, so tests can prove an
+    /// abandoned turn was actively cancelled rather than detached.
+    struct StallingAgent {
+        next_session: AtomicUsize,
+        remaining_stalls: AtomicUsize,
+        cancelled_sessions: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl StallingAgent {
+        fn new(stall_count: usize) -> Self {
+            Self {
+                next_session: AtomicUsize::new(0),
+                remaining_stalls: AtomicUsize::new(stall_count),
+                cancelled_sessions: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn cancelled(&self) -> Vec<String> {
+            self.cancelled_sessions.lock().unwrap().clone()
+        }
+    }
+
+    impl MockAgent for StallingAgent {
+        fn new_session<'a>(
+            &'a self,
+            _request: NewSessionRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+            numbered_session_response(&self.next_session, "stall-sess")
+        }
+
+        fn prompt<'a>(
+            &'a self,
+            _request: PromptRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
+            let should_stall = self
+                .remaining_stalls
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_ok();
+            Box::pin(async move {
+                if should_stall {
+                    // Far longer than any test's liveness windows; the client
+                    // abandons the turn long before this resolves.
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                }
+                Ok(PromptResponse::new(
+                    agent_client_protocol::schema::StopReason::EndTurn,
+                ))
+            })
+        }
+
+        fn cancel<'a>(
+            &'a self,
+            notification: CancelNotification,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<()>> {
+            self.cancelled_sessions
+                .lock()
+                .unwrap()
+                .push(notification.session_id.to_string());
+            Box::pin(async move { Ok(()) })
         }
     }
 
@@ -1017,6 +1100,140 @@ mod tests {
             }
             assert_eq!(errs, 1, "exactly one prompt should have errored");
             assert_eq!(oks, 3, "the remaining prompts must still complete");
+        })
+        .await;
+    }
+
+    /// A turn that streams a notification at least every idle-window interval
+    /// is never abandoned, regardless of total duration — the local-35B case:
+    /// slow, but demonstrably alive.
+    #[tokio::test]
+    async fn test_pool_streaming_turn_survives_beyond_idle_window() {
+        // The prompt takes 4x the idle window of total wall clock.
+        let agent = Arc::new(PeakProbeAgent::new(2000));
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+        let notifier_feeder = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let config = PoolConfig::local()
+                .with_idle_timeout(std::time::Duration::from_millis(500))
+                .with_turn_ceiling(std::time::Duration::from_secs(30));
+            let pool = AgentPool::new(conn, notifier_body, config);
+
+            let feeder = spawn_progress_feeder(notifier_feeder, "peak-sess-0", 100);
+            let result = pool.submit("slow but streaming").await.expect("result");
+            feeder.abort();
+
+            assert!(
+                result.is_ok(),
+                "a turn streaming progress every 100ms must never be abandoned even though \
+                 its 2s total exceeds the 500ms idle window: {:?}",
+                result.err(),
+            );
+        })
+        .await;
+    }
+
+    /// A turn with zero streaming progress for the idle window is abandoned and
+    /// degrades to a single-task error; the worker survives to run later jobs
+    /// (the fleet continues).
+    #[tokio::test]
+    async fn test_pool_stalled_turn_abandons_after_idle_window() {
+        let agent = Arc::new(StallingAgent::new(1));
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            // The idle window must exceed claude_agent's fixed 500ms trailing
+            // notification drain (`NOTIFICATION_COLLECTION_DELAY_MS`), or even
+            // an instantly-completing turn would look stalled.
+            let config = PoolConfig::local()
+                .with_idle_timeout(std::time::Duration::from_millis(800))
+                .with_turn_ceiling(std::time::Duration::from_secs(30));
+            let pool = AgentPool::new(conn, notifier_body, config);
+
+            let err = pool
+                .submit("stalled")
+                .await
+                .expect("worker must deliver a result, not hang")
+                .expect_err("a turn with zero progress for the idle window must be abandoned");
+            assert!(
+                matches!(err, PoolError::TurnIdle { .. }),
+                "abandonment must be the typed idle-window variant, got: {err:?}",
+            );
+
+            // The worker must survive the abandonment and run the next job.
+            pool.submit("after abandonment")
+                .await
+                .expect("result")
+                .expect("the fleet must continue after a single-task abandonment");
+        })
+        .await;
+    }
+
+    /// Abandoning a turn actively cancels the in-flight session (ACP
+    /// `session/cancel`) so the agent stops decoding, rather than detaching it.
+    #[tokio::test]
+    async fn test_pool_abandoned_turn_cancels_session() {
+        let agent = Arc::new(StallingAgent::new(1));
+        let agent_probe = Arc::clone(&agent);
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let config = PoolConfig::local()
+                .with_idle_timeout(std::time::Duration::from_millis(800))
+                .with_turn_ceiling(std::time::Duration::from_secs(30));
+            let pool = AgentPool::new(conn, notifier_body, config);
+
+            let result = pool.submit("stalled").await.expect("result");
+            assert!(result.is_err(), "the stalled turn must be abandoned");
+
+            // The cancel is a one-way notification; allow it a moment to land.
+            let mut cancelled = agent_probe.cancelled();
+            for _ in 0..200 {
+                if !cancelled.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                cancelled = agent_probe.cancelled();
+            }
+            assert_eq!(
+                cancelled,
+                vec!["stall-sess-0".to_string()],
+                "abandonment must send session/cancel for the in-flight session",
+            );
+        })
+        .await;
+    }
+
+    /// The defensive absolute ceiling still fires on a turn that streams
+    /// forever without completing (a runaway loop) — progress does not bypass
+    /// the ceiling.
+    #[tokio::test]
+    async fn test_pool_turn_ceiling_abandons_streaming_runaway() {
+        let agent = Arc::new(PeakProbeAgent::new(5000));
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+        let notifier_feeder = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let config = PoolConfig::local()
+                .with_idle_timeout(std::time::Duration::from_secs(10))
+                .with_turn_ceiling(std::time::Duration::from_millis(400));
+            let pool = AgentPool::new(conn, notifier_body, config);
+
+            let feeder = spawn_progress_feeder(notifier_feeder, "peak-sess-0", 50);
+            let result = pool.submit("runaway").await.expect("result");
+            feeder.abort();
+
+            let err =
+                result.expect_err("the ceiling must abandon a never-finishing streaming turn");
+            assert!(
+                matches!(err, PoolError::TurnCeiling { .. }),
+                "abandonment must be the typed ceiling variant, got: {err:?}",
+            );
         })
         .await;
     }

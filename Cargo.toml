@@ -265,6 +265,7 @@ swissarmyhammer-operations = { path = "crates/swissarmyhammer-operations" }
 swissarmyhammer-operations-macros = { path = "crates/swissarmyhammer-operations-macros" }
 
 # Workspace crate cross-references
+acp-conformance = { path = "crates/acp-conformance" }
 agent-client-protocol-extras = { path = "crates/agent-client-protocol-extras" }
 claude-agent = { path = "crates/claude-agent" }
 mirdan = { path = "crates/mirdan" }
