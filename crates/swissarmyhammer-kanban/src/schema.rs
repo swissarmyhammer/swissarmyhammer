@@ -59,7 +59,7 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(ListTasks::new())) as &dyn Operation,
         Box::leak(Box::new(ArchiveTask::new(""))) as &dyn Operation,
         Box::leak(Box::new(UnarchiveTask::new(""))) as &dyn Operation,
-        Box::leak(Box::new(ListArchived)) as &dyn Operation,
+        Box::leak(Box::new(ListArchived::new())) as &dyn Operation,
         // Tag
         Box::leak(Box::new(AddTag::new(""))) as &dyn Operation,
         Box::leak(Box::new(GetTag::new(""))) as &dyn Operation,
@@ -509,6 +509,49 @@ mod tests {
             !add_actor.contains(&"ensure"),
             "serde-defaulted bool field 'ensure' must not be required"
         );
+    }
+
+    /// The optional `detail` param must NOT widen the wire surface: the
+    /// `x-op-signatures` entries for `list tasks` and `list archived` carry
+    /// required params only, so they stay free of `detail`. The FULL/CLI
+    /// schema's `x-operation-schemas` entries, by contrast, must document it.
+    #[test]
+    fn test_detail_param_absent_from_wire_signatures_but_in_full_schema() {
+        let ops = kanban_operations();
+
+        let wire = generate_kanban_mcp_schema(ops);
+        let sigs = wire["x-op-signatures"].as_object().unwrap();
+        for op_name in ["list tasks", "list archived"] {
+            let required: Vec<&str> = sigs[op_name]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect();
+            assert!(
+                !required.contains(&"detail"),
+                "{op_name:?} wire signature must not require `detail`, got: {required:?}"
+            );
+        }
+
+        let full = generate_kanban_mcp_schema_full(ops);
+        let op_schemas = full["x-operation-schemas"].as_array().unwrap();
+        for op_name in ["list tasks", "list archived"] {
+            let entry = op_schemas
+                .iter()
+                .find(|s| s["properties"]["op"]["const"] == op_name)
+                .unwrap_or_else(|| panic!("full schema entry for {op_name:?}"));
+            let detail = &entry["properties"]["detail"];
+            assert!(
+                detail.is_object(),
+                "{op_name:?} full schema must document `detail`"
+            );
+            let desc = detail["description"].as_str().unwrap_or("");
+            assert!(
+                desc.contains("slim") && desc.contains("full"),
+                "{op_name:?} `detail` description must cover both values: {desc:?}"
+            );
+        }
     }
 
     #[test]

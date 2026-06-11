@@ -44,7 +44,6 @@ impl Execute<KanbanContext, KanbanError> for CutTask {
                 .read("task", self.id.as_str())
                 .await
                 .map_err(KanbanError::from_entity_error)?;
-            let title = entity.get_str("title").unwrap_or("").to_string();
 
             // Snapshot all fields as clipboard JSON
             let fields = serde_json::to_value(&entity.fields)?;
@@ -72,12 +71,12 @@ impl Execute<KanbanContext, KanbanError> for CutTask {
             // referenced by attachment-type fields.
             ectx.delete("task", self.id.as_str()).await?;
 
-            Ok(serde_json::json!({
-                "cut": true,
-                "id": self.id.to_string(),
-                "title": title,
-                "clipboard_json": clipboard_json,
-            }))
+            // Standard identity envelope plus the clipboard-specific payload
+            // (the clipboard payload IS the information the caller needs).
+            let mut ack = crate::task_helpers::task_mutation_ack(&entity);
+            ack["cut"] = serde_json::json!(true);
+            ack["clipboard_json"] = serde_json::json!(clipboard_json);
+            Ok(ack)
         }
         .await;
 
@@ -94,6 +93,7 @@ mod tests {
     use crate::board::InitBoard;
     use crate::clipboard;
     use crate::task::AddTask;
+    use crate::task_helpers::assert_task_mutation_ack_with;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -128,9 +128,9 @@ mod tests {
             .into_result()
             .unwrap();
 
+        // Standard identity envelope plus the clipboard-specific payload.
+        assert_task_mutation_ack_with(&result, task_id, &["cut", "clipboard_json"]);
         assert_eq!(result["cut"], true);
-        assert_eq!(result["id"], task_id);
-        assert_eq!(result["title"], "Cut me");
 
         // Verify clipboard JSON is valid
         let clipboard_json = result["clipboard_json"].as_str().unwrap();

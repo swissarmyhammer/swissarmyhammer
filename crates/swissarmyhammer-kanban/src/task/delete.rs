@@ -32,12 +32,11 @@ impl Execute<KanbanContext, KanbanError> for DeleteTask {
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
 
-            // Read the task first to verify it exists and get its data
+            // Read the task first to verify it exists
             let entity = ectx
                 .read("task", self.id.as_str())
                 .await
                 .map_err(KanbanError::from_entity_error)?;
-            let title = entity.get_str("title").unwrap_or("").to_string();
 
             // Remove this task from the depends_on list of all other tasks
             let all_tasks = ectx.list("task").await?;
@@ -60,11 +59,10 @@ impl Execute<KanbanContext, KanbanError> for DeleteTask {
             // referenced by attachment-type fields.
             ectx.delete("task", self.id.as_str()).await?;
 
-            Ok(serde_json::json!({
-                "deleted": true,
-                "id": self.id.to_string(),
-                "title": title
-            }))
+            // Standard identity envelope plus the op-specific flag.
+            let mut ack = crate::task_helpers::task_mutation_ack(&entity);
+            ack["deleted"] = serde_json::json!(true);
+            Ok(ack)
         }
         .await;
 
@@ -80,6 +78,7 @@ mod tests {
     use super::*;
     use crate::board::InitBoard;
     use crate::task::AddTask;
+    use crate::task_helpers::assert_task_mutation_ack_with;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -113,8 +112,9 @@ mod tests {
             .into_result()
             .unwrap();
 
+        // Standard identity envelope plus the op-specific flag — no echo.
+        assert_task_mutation_ack_with(&result, task_id, &["deleted"]);
         assert_eq!(result["deleted"], true);
-        assert_eq!(result["title"], "Task to delete");
 
         // Verify task is gone
         let ectx = ctx.entity_context().await.unwrap();

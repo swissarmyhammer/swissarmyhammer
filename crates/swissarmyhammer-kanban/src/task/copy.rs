@@ -49,11 +49,12 @@ impl Execute<KanbanContext, KanbanError> for CopyTask {
             let clipboard_json =
                 clipboard::serialize_to_clipboard("task", self.id.as_str(), "copy", fields);
 
-            Ok(serde_json::json!({
-                "copied": true,
-                "id": self.id.to_string(),
-                "clipboard_json": clipboard_json,
-            }))
+            // Standard identity envelope plus the clipboard-specific payload
+            // (the clipboard payload IS the information the caller needs).
+            let mut ack = crate::task_helpers::task_mutation_ack(&entity);
+            ack["copied"] = serde_json::json!(true);
+            ack["clipboard_json"] = serde_json::json!(clipboard_json);
+            Ok(ack)
         }
         .await
         {
@@ -69,6 +70,7 @@ mod tests {
     use crate::board::InitBoard;
     use crate::clipboard;
     use crate::task::AddTask;
+    use crate::task_helpers::assert_task_mutation_ack_with;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -103,8 +105,9 @@ mod tests {
             .into_result()
             .unwrap();
 
+        // Standard identity envelope plus the clipboard-specific payload.
+        assert_task_mutation_ack_with(&result, task_id, &["copied", "clipboard_json"]);
         assert_eq!(result["copied"], true);
-        assert_eq!(result["id"], task_id);
 
         // Verify the clipboard_json is valid and contains the task data
         let clipboard_json = result["clipboard_json"].as_str().unwrap();

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9780'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff9e80
 project: op-token-diet
 title: Add detail=slim|full to list tasks + list archived (slim default); get task stays full
 ---
@@ -25,21 +25,21 @@ Related (other project): the `search tasks` card in `semantic-search` maps hits 
 NOTE: this changes the default agent/CLI-facing `list tasks` and `list archived` shapes. The desktop UI does not consume these ops (it reads through the entity store), so the UI is unaffected — but any existing test or skill prose that assumes `list tasks`/`list archived` returns `description` must be updated as part of this card.
 
 ## Acceptance Criteria
-- [ ] `list tasks` with no `detail` returns slim tasks: allowlist fields present; NO `description`, `comments`, or `attachments` keys.
-- [ ] `list archived` with no `detail` returns the same slim projection per archived task; `detail: "full"` returns the full `task_entity_to_json` shape.
-- [ ] `list tasks` with `detail: "full"` returns today's enriched shape (description present).
-- [ ] `detail: "slim"` is accepted explicitly; an unknown value errors clearly — on both ops.
-- [ ] `get task` still returns the full enriched task (unchanged).
-- [ ] The `detail` param does NOT appear in the wire `x-op-signatures` required lists for `list tasks` or `list archived`; it IS documented in both ops' full-schema `x-operation-schemas` entries.
-- [ ] Existing tests/callers that assumed descriptions in list output are migrated (grep for `list tasks` and `list archived` assertions on `description`).
-- [ ] `cargo clippy -p swissarmyhammer-kanban -- -D warnings` clean.
+- [x] `list tasks` with no `detail` returns slim tasks: allowlist fields present; NO `description`, `comments`, or `attachments` keys.
+- [x] `list archived` with no `detail` returns the same slim projection per archived task; `detail: "full"` returns the full `task_entity_to_json` shape.
+- [x] `list tasks` with `detail: "full"` returns today's enriched shape (description present).
+- [x] `detail: "slim"` is accepted explicitly; an unknown value errors clearly — on both ops.
+- [x] `get task` still returns the full enriched task (unchanged).
+- [x] The `detail` param does NOT appear in the wire `x-op-signatures` required lists for `list tasks` or `list archived`; it IS documented in both ops' full-schema `x-operation-schemas` entries.
+- [x] Existing tests/callers that assumed descriptions in list output are migrated (grep for `list tasks` and `list archived` assertions on `description`) — audit found none: no Rust test or skill prose asserted `description` on list output; the `_plan` builder in swissarmyhammer-tools reads it via `if let Some` and degrades gracefully.
+- [x] `cargo clippy -p swissarmyhammer-kanban -- -D warnings` clean (ran with `--all-targets`).
 
 ## Tests
-- [ ] `slim_task_json` unit test: given an enriched task value with description/comments/attachments, the projection contains exactly the allowlist fields and none of the heavy ones.
-- [ ] `list.rs` op tests (TempDir board pattern: `InitBoard` + `AddTask`): default list response tasks lack `description`; `detail:"full"` includes it; unknown `detail` errors; `get task` on the same board returns `description`.
-- [ ] `archive.rs` op tests (same pattern + `ArchiveTask`): default `list archived` tasks lack `description`; `detail:"full"` includes it; unknown `detail` errors.
-- [ ] Schema test: `list tasks` and `list archived` signatures in wire `x-op-signatures` unchanged (no `detail`).
-- [ ] `cargo nextest run -p swissarmyhammer-kanban` — green.
+- [x] `slim_task_json` unit test: given an enriched task value with description/comments/attachments, the projection contains exactly the allowlist fields and none of the heavy ones (`test_slim_task_json_is_an_allowlist_projection`).
+- [x] `list.rs` op tests (TempDir board pattern: `InitBoard` + `AddTask`): default list response tasks lack `description`; `detail:"full"` includes it; unknown `detail` errors; `get task` on the same board returns `description`.
+- [x] `archive.rs` op tests (same pattern + `ArchiveTask`): default `list archived` tasks lack `description`; `detail:"full"` includes it; unknown `detail` errors.
+- [x] Schema test: `list tasks` and `list archived` signatures in wire `x-op-signatures` unchanged (no `detail`); full schema documents `detail` on both ops (`test_detail_param_absent_from_wire_signatures_but_in_full_schema`). Dispatch wiring covered by `dispatch_list_detail_param`.
+- [x] `cargo nextest run -p swissarmyhammer-kanban` — green (1448/1448).
 
 ## Workflow
-- Use `/tdd` — write the projection + default-slim list tests first, then implement.
+- Use `/tdd` — write the projection + default-slim list tests first, then implement. (Done: RED watched 7 failures for the missing-feature reasons, then GREEN, then refactored the duplicated projection match into `TaskDetail::project`.)

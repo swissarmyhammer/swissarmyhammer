@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTRYRC9DSWX5X5X11624PRSF
-position_column: todo
-position_ordinal: '9880'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff9f80
 project: op-token-diet
 title: Heavy task mutations return thin ack {ok,id,short_id}; add/paste return slim task
 ---
@@ -33,19 +33,23 @@ Test migration (the real blast radius — tests asserting the old full shape on 
 - `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs` tests: asserts on `data["title"]`/`data["position"]["column"]` after add/update/move/complete.
 
 ## Acceptance Criteria
-- [ ] `update task`, `move task`, `complete task` responses contain exactly `ok`, `id`, `short_id` — nothing else; no field echo of any kind.
-- [ ] `add task` / `paste` return the slim projection (allowlist fields incl. `id`, `short_id`, `position`; NO `description`/`attachments` keys).
-- [ ] Mutation effects are still fully verified: tests assert post-op state via `get task` (e.g. update title → get task shows new title; move → get task shows new column/ordinal; due date → normalized `YYYY-MM-DD`).
-- [ ] MCP kanban tool still attaches `_plan` with `affected_task_id` populated from mutation responses.
-- [ ] `get task` and `next task` responses unchanged (full rich JSON, description present).
-- [ ] `cargo clippy -p swissarmyhammer-kanban -p swissarmyhammer-tools -- -D warnings` clean.
+- [x] `update task`, `move task`, `complete task` responses contain exactly `ok`, `id`, `short_id` — nothing else; no field echo of any kind.
+- [x] `add task` / `paste` return the slim projection (allowlist fields incl. `id`, `short_id`, `position`; NO `description`/`attachments` keys).
+- [x] Mutation effects are still fully verified: tests assert post-op state via `get task` (e.g. update title → get task shows new title; move → get task shows new column/ordinal; due date → normalized `YYYY-MM-DD`).
+- [x] MCP kanban tool still attaches `_plan` with `affected_task_id` populated from mutation responses.
+- [x] `get task` and `next task` responses unchanged (full rich JSON, description present).
+- [x] `cargo clippy -p swissarmyhammer-kanban -p swissarmyhammer-tools -- -D warnings` clean.
 
 ## Tests
-- [ ] `task_helpers.rs` unit test for `task_mutation_ack`: envelope has exactly ok/id/short_id; short_id derived from the ULID.
-- [ ] Op tests (TempDir board pattern: `InitBoard` + `AddTask`) in `update.rs`, `mv.rs`, `complete.rs`: assert the exact three-key response set and the absence of `description`/`title`/`position`; then `get task` asserts the stored effect. `add.rs`/`paste.rs`: response is slim (no `description`/`attachments` keys, has `position`).
-- [ ] `dispatch.rs` integration tests migrated: add → update(title) asserts ack shape; effect asserts go through `get task`.
-- [ ] `crates/swissarmyhammer-tools` kanban tool test: `update task` response carries `_plan._meta.affected_task_id` equal to the mutated task id.
-- [ ] `cargo nextest run -p swissarmyhammer-kanban -p swissarmyhammer-tools` — green.
+- [x] `task_helpers.rs` unit test for `task_mutation_ack`: envelope has exactly ok/id/short_id; short_id derived from the ULID.
+- [x] Op tests (TempDir board pattern: `InitBoard` + `AddTask`) in `update.rs`, `mv.rs`, `complete.rs`: assert the exact three-key response set and the absence of `description`/`title`/`position`; then `get task` asserts the stored effect. `add.rs`/`paste.rs`: response is slim (no `description`/`attachments` keys, has `position`).
+- [x] `dispatch.rs` integration tests migrated: add → update(title) asserts ack shape; effect asserts go through `get task`.
+- [x] `crates/swissarmyhammer-tools` kanban tool test: `update task` response carries `_plan._meta.affected_task_id` equal to the mutated task id.
+- [x] `cargo nextest run -p swissarmyhammer-kanban -p swissarmyhammer-tools` — green (2725/2727; the 2 failures are the pre-existing stale-deployed-skill environment issue, filed as ^w43j9q0 — both pass with the stale untracked `.skills`/`.claude`/`.zed` copies moved aside, no source involvement).
 
 ## Workflow
 - Use `/tdd` — write the ack-shape tests first (red), then implement `task_mutation_ack` and rewire the five ops.
+
+## Implementation notes (done)
+- `task_mutation_ack` added to `task_helpers.rs` with a unit test plus two `#[cfg(test)]` shared assertion helpers (`assert_task_mutation_ack`, `assert_slim_task_response`) reused by the per-op test modules.
+- Additional blast radius migrated beyond the card's list: `commands/task_commands.rs` (MoveTaskCmd/DoThisNextCmd tests now read stored position) and `commands/drag_commands.rs` (`move_result` is now the thin ack; the parity test reads stored ordinals).
