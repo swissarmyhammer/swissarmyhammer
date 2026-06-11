@@ -1,10 +1,11 @@
 //! Macros for composing builtin command sources at the app layer.
 //!
-//! Each contributor crate (e.g. `swissarmyhammer-kanban`,
-//! `swissarmyhammer-focus`) ships its own
+//! Each contributor crate (e.g. `swissarmyhammer-focus`) may ship its own
 //! `builtin/commands/` directory and exposes a
 //! `pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)>`
 //! function that returns the embedded YAML sources for that crate.
+//! (`swissarmyhammer-kanban` itself no longer ships one — its
+//! `builtin_yaml_sources()` is empty since the command cut-over.)
 //!
 //! The **app** crate (kanban-app, kanban-cli, etc.) decides which
 //! contributors to compose and in what order via [`compose_registry!`]

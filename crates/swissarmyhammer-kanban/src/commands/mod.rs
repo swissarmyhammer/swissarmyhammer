@@ -1341,4 +1341,35 @@ mod tests {
             all_yaml_ids(),
         );
     }
+
+    /// Filesystem companion to [`test_no_builtin_yaml_command_sources_remain`].
+    ///
+    /// The embedding guard above only inspects the two
+    /// `builtin_yaml_sources()` functions, so a stranded YAML command file
+    /// that nothing embeds survives it undetected — exactly how
+    /// `builtin/commands/board.yaml` outlived the cut-over. This test closes
+    /// that gap by asserting no `*.yaml` file physically exists under this
+    /// crate's `builtin/commands/` directory (absent directory is fine).
+    ///
+    /// Scope: kanban crate only — `swissarmyhammer-focus/builtin/commands/`
+    /// is still a live `include_dir!` source owned by a separate migration.
+    #[test]
+    fn test_no_builtin_yaml_command_files_on_disk() {
+        let commands_dir =
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/builtin/commands"));
+        let Ok(entries) = std::fs::read_dir(commands_dir) else {
+            // Directory absent: the fully-retired state. Nothing to check.
+            return;
+        };
+        let yaml_files: Vec<_> = entries
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext == "yaml"))
+            .collect();
+        assert!(
+            yaml_files.is_empty(),
+            "no *.yaml file may exist under the kanban crate's builtin/commands/ \
+             after the cut-over — the command model lives in the builtin command \
+             plugins, dispatched through CommandService; found: {yaml_files:?}",
+        );
+    }
 }
