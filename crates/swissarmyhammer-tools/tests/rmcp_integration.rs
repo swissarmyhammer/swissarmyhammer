@@ -165,6 +165,26 @@ async fn tool_call_complete_log_emits_full_result_untruncated() {
         }
     });
 
+    // The `tool_call` span must carry the dispatched `op` so per-op aggregation
+    // over the logs (token accounting, latency by op) does not depend on
+    // joining the args line by adjacency — which breaks under concurrent
+    // calls. The span prefix renders on every line inside the call, including
+    // the completion line.
+    logs_assert(|lines: &[&str]| {
+        let complete_line = lines
+            .iter()
+            .find(|l| l.contains("tool_call complete"))
+            .ok_or_else(|| "expected a tool_call complete log line".to_string())?;
+        if complete_line.contains(r#"op="read file""#) {
+            Ok(())
+        } else {
+            Err(format!(
+                "tool_call span must carry the dispatched op (op=\"read file\"); \
+                 got: {complete_line}"
+            ))
+        }
+    });
+
     client.cancel().await.expect("Failed to cancel client");
     server.shutdown().await.expect("Failed to shutdown server");
 }
