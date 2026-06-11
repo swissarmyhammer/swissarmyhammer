@@ -354,7 +354,9 @@ function useScopedTabCommands(
   // `tab_button != null` predicate below narrows to tab-button affordances
   // and the entity-vs-global split keeps `perspective.save` (global) out of
   // the per-tab slot — `<BarRegistryTabButtons>` renders that at bar level.
-  const { commands: registry } = useCommandList({ scope: "entity:perspective" });
+  const { commands: registry } = useCommandList({
+    scope: "entity:perspective",
+  });
   // The active view's kind drives the `view_kinds` filter (the metadata-driven
   // replacement for the backend's old `filter_by_view_kind` pass) — a
   // grid-only command must not surface on a board view.
@@ -768,7 +770,7 @@ interface ScopedPerspectiveTabProps {
  *
  * Per-tab rename binding: every perspective tab — active or inactive —
  * registers a `ui.entity.startRename` `CommandDef` whose `keys` block
- * (Enter for cua / vim / emacs) is picked up by `extractScopeBindings`
+ * (Enter for cua / vim / emacs) is picked up by `extractChainBindings`
  * when this tab is the spatial focus. That binding shadows the global
  * `nav.drillIn: Enter` for the perspective scope only, matching the YAML
  * `scope: "entity:perspective"` filter on the same id in

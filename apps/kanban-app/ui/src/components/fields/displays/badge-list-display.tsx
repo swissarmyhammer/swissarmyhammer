@@ -63,7 +63,7 @@ function useMentionItems(
  * (`scope: ["entity:tag", "entity:task"]`), and scope-gated commands
  * contribute NO global keybinding (`extractKeymapBindings` skips them —
  * card `01KTQ6QZNB3VN4MAND7VPASM21`), so this scope-level `CommandDef` is
- * the sole carrier of those keys: `extractScopeBindings` picks them up
+ * the sole carrier of those keys: `extractChainBindings` picks them up
  * when a tag pill's `<FocusScope>` is the spatial focus. Same pattern as
  * `ScopedPerspectiveTab`'s per-tab `ui.entity.startRename` Enter binding.
  */

@@ -87,6 +87,14 @@ type FocusSubscriber = () => void;
 export class FocusStore {
   private current: string | null = null;
   private perMoniker = new Map<string, Set<FocusSubscriber>>();
+  /**
+   * Subtree subscriptions keyed by the subtree-root moniker. A subscriber
+   * here is woken whenever focus enters or leaves the keyed moniker's
+   * subtree (the focused FQM equals the key or extends it path-wise) —
+   * see `subscribeWithin`. Kept separate from `perMoniker` so direct-focus
+   * subscribers never pay for subtree notifications, and vice versa.
+   */
+  private withinMoniker = new Map<string, Set<FocusSubscriber>>();
   private anyListeners = new Set<FocusSubscriber>();
 
   /**
@@ -149,6 +157,47 @@ export class FocusStore {
   }
 
   /**
+   * Subscribe to a moniker's SUBTREE focus slot.
+   *
+   * Notified whenever focus moves into, out of, or within the given
+   * moniker's subtree — i.e. whenever the previous or next focused FQM
+   * equals `moniker` or extends it path-wise (`"<moniker>/…"`). Focus
+   * moves that touch neither side of the subtree do not wake this
+   * subscriber, preserving the per-moniker scaling property: a move from
+   * A to B wakes only the subtree subscribers along A's and B's ancestor
+   * paths (O(path depth)), never every mounted subscriber.
+   *
+   * @returns an unsubscribe function.
+   */
+  subscribeWithin(moniker: string, cb: FocusSubscriber): () => void {
+    let set = this.withinMoniker.get(moniker);
+    if (!set) {
+      set = new Set();
+      this.withinMoniker.set(moniker, set);
+    }
+    set.add(cb);
+    return () => {
+      set!.delete(cb);
+      if (set!.size === 0) this.withinMoniker.delete(moniker);
+    };
+  }
+
+  /**
+   * Collect every subtree-root key that contains `fq` into `into`: each
+   * `/`-bounded ancestor prefix plus `fq` itself (`"/a/b/c"` → `"/a"`,
+   * `"/a/b"`, `"/a/b/c"`). A moniker with no separator (segment-form
+   * test fallbacks) contributes only itself. The separator mirrors
+   * `FQ_SEPARATOR` in `types/spatial.ts`.
+   */
+  private collectSubtreeRoots(fq: string | null, into: Set<string>): void {
+    if (fq === null) return;
+    for (let i = fq.indexOf("/", 1); i !== -1; i = fq.indexOf("/", i + 1)) {
+      into.add(fq.slice(0, i));
+    }
+    into.add(fq);
+  }
+
+  /**
    * Subscribe to every focus change. Use only for consumers that truly
    * need to observe every move.
    *
@@ -197,6 +246,19 @@ export class FocusStore {
     }
     if (prev !== null) this.perMoniker.get(prev)?.forEach((cb) => cb());
     if (next !== null) this.perMoniker.get(next)?.forEach((cb) => cb());
+    // Subtree subscribers along the previous and next focus paths: a
+    // containment flip can only happen at a subtree root that is an
+    // ancestor (or equal) of one of the two endpoints, so notifying the
+    // union of both ancestor paths covers every possible flip while
+    // leaving unrelated subtree subscribers asleep.
+    if (this.withinMoniker.size > 0) {
+      const roots = new Set<string>();
+      this.collectSubtreeRoots(prev, roots);
+      this.collectSubtreeRoots(next, roots);
+      for (const root of roots) {
+        this.withinMoniker.get(root)?.forEach((cb) => cb());
+      }
+    }
     this.anyListeners.forEach((cb) => cb());
   }
 }
@@ -688,6 +750,46 @@ export function useOptionalIsDirectFocus(moniker: string): boolean {
 
   const current = useSyncExternalStore(subscribe, getSnapshot);
   return current === moniker;
+}
+
+/**
+ * Subtree focus subscription that tolerates a missing
+ * `EntityFocusProvider`.
+ *
+ * Returns `true` while the focused FQM is anywhere WITHIN `moniker`'s
+ * subtree — the focused value equals `moniker` or extends it path-wise
+ * (`"<moniker>/…"`). This is the focus-side counterpart of the keymap
+ * layer's chain walk (`extractChainBindings`), which binds a scope-gated
+ * command whenever its marker scope appears anywhere in the focused
+ * chain: a consumer gating behavior on "my zone or any of its
+ * descendants is focused" must use this, not `useOptionalIsDirectFocus`
+ * (which flips false the moment focus drills into a child).
+ *
+ * Re-renders only when containment flips (the snapshot is the boolean),
+ * and the underlying `subscribeWithin` wakes it only for focus moves
+ * touching the subtree's ancestor paths. Returns `false` permanently
+ * when no `EntityFocusProvider` ancestor is mounted, or when `moniker`
+ * is the empty string (the degenerate no-spatial-stack key).
+ */
+export function useOptionalIsFocusWithin(moniker: string): boolean {
+  const store = useContext(FocusStoreContext);
+
+  const subscribe = useCallback(
+    (cb: () => void) =>
+      store && moniker !== "" ? store.subscribeWithin(moniker, cb) : () => {},
+    [store, moniker],
+  );
+
+  const getSnapshot = useCallback(() => {
+    if (!store || moniker === "") return false;
+    const current = store.getSnapshot();
+    return (
+      current !== null &&
+      (current === moniker || current.startsWith(`${moniker}/`))
+    );
+  }, [store, moniker]);
+
+  return useSyncExternalStore(subscribe, getSnapshot);
 }
 
 /**

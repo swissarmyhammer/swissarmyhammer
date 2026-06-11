@@ -6,7 +6,7 @@
  * scope-level `field.edit` `CommandDef` (keys: vim Enter / cua Enter)
  * onto each field zone's `<CommandScope>` when the field is in display
  * mode AND has an `onEdit` callback. The field-zone scope is closer than
- * the global root scope, so `extractScopeBindings` claims Enter for
+ * the global root scope, so `extractChainBindings` claims Enter for
  * `field.edit` only when the focused entity is an editable field zone —
  * shadowing the global `nav.drillIn: Enter` precisely there. In edit
  * mode the binding is NOT registered: the editor element holds DOM
@@ -99,6 +99,11 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import "@/components/fields/registrations";
 import { Field } from "@/components/fields/field";
 import { AppShell } from "@/components/app-shell";
+import { commandToolCall } from "@/test/mock-command-list";
+import {
+  hasWebviewCommandHandler,
+  resetWebviewCommandBusForTest,
+} from "@/lib/webview-command-bus";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -143,24 +148,90 @@ const READ_ONLY_FIELD: FieldDef = {
   section: "header",
 };
 
+/**
+ * Production-shaped `tags` field (mirrors
+ * `crates/swissarmyhammer-kanban/builtin/definitions/tags.yaml`): a
+ * computed multi-value field whose display renders one `<FocusScope>`
+ * pill per tag inside the field zone — the shape the pill-focused
+ * Enter test below depends on.
+ */
+const TAGS_FIELD: FieldDef = {
+  id: "f3",
+  name: "tags",
+  type: {
+    kind: "computed",
+    derive: "parse-body-tags",
+    entity: "tag",
+    commit_display_names: true,
+  },
+  editor: "multi-select",
+  display: "badge-list",
+  icon: "tag",
+  section: "header",
+} as unknown as FieldDef;
+
 const TASK_SCHEMA = {
   entity: {
     name: "task",
-    fields: ["title", "id"],
+    fields: ["title", "id", "tags"],
   },
-  fields: [EDITABLE_TITLE_FIELD, READ_ONLY_FIELD],
+  fields: [EDITABLE_TITLE_FIELD, READ_ONLY_FIELD, TAGS_FIELD],
+};
+
+/** Tag schema so `MentionView` resolves tag pills (mention prefix + display field). */
+const TAG_SCHEMA = {
+  entity: {
+    name: "tag",
+    fields: ["tag_name", "color"],
+    mention_prefix: "#",
+    mention_display_field: "tag_name",
+  },
+  fields: [
+    {
+      id: "tf1",
+      name: "tag_name",
+      type: { kind: "text", single_line: true },
+      editor: "text",
+      display: "text",
+      icon: "tag",
+      section: "header",
+    },
+  ],
 };
 
 const SCHEMAS: Record<string, unknown> = {
   task: TASK_SCHEMA,
+  tag: TAG_SCHEMA,
 };
+
+/** Tag entities backing the `tags` slugs used by the pill tests. */
+const TAG_ENTITIES: Entity[] = [
+  {
+    id: "tag-1",
+    entity_type: "tag",
+    moniker: "tag:tag-1",
+    fields: { tag_name: "bugfix", color: "ff0000" },
+  },
+  {
+    id: "tag-2",
+    entity_type: "tag",
+    moniker: "tag:tag-2",
+    fields: { tag_name: "feature", color: "00ff00" },
+  },
+];
 
 /** Default invoke responses for the mount-time IPCs the providers fire. */
 async function defaultInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
-  if (cmd === "list_entity_types") return ["task"];
+  // The field-edit commands are DEFINED by the `ui-commands` builtin plugin
+  // (`field.edit` / `field.editEnter`, scope `["ui:field"]`) — in production
+  // their keys reach the keymap layer through the CommandService registry,
+  // so the harness publishes the same metadata through the `useCommandList`
+  // seam.
+  if (cmd === "command_tool_call") return commandToolCall(args);
+  if (cmd === "list_entity_types") return ["task", "tag"];
   if (cmd === "get_entity_schema") {
     const entityType = (args as { entityType?: string })?.entityType;
     return SCHEMAS[entityType ?? ""] ?? TASK_SCHEMA;
@@ -229,7 +300,7 @@ function inspectDispatches(): Array<Record<string, unknown>> {
  * kernel had emitted one. The bridge in `<EntityFocusProvider>`
  * mirrors `payload.next_segment` into the entity-focus store; the
  * focused entity scope becomes the head of the chain that
- * `extractScopeBindings` walks on the next keydown.
+ * `extractChainBindings` walks on the next keydown.
  */
 async function fireFocusChanged({
   prev_fq = null,
@@ -263,6 +334,8 @@ async function fireFocusChanged({
 function renderFieldHarness(props: {
   field: FieldDef;
   entity: Entity;
+  /** Extra tag entities for badge-list pill resolution. */
+  tags?: Entity[];
   initialEditing?: boolean;
   onEditSpy?: () => void;
   forceNoOnEdit?: boolean;
@@ -299,7 +372,12 @@ function renderFieldHarness(props: {
               <UndoProvider>
                 <TooltipProvider delayDuration={100}>
                   <SchemaProvider>
-                    <EntityStoreProvider entities={{ task: [props.entity] }}>
+                    <EntityStoreProvider
+                      entities={{
+                        task: [props.entity],
+                        tag: props.tags ?? [],
+                      }}
+                    >
                       <FieldUpdateProvider>
                         <ActiveBoardPathProvider value="/test/board">
                           <AppShell>
@@ -329,6 +407,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
     mockListen.mockClear();
     listeners.clear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
+    resetWebviewCommandBusForTest();
   });
 
   afterEach(() => {
@@ -393,6 +472,124 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
         "after Enter on a focused editable field, the editor must be mounted",
       ).not.toBeNull();
     });
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // #1b: The edit behavior routes through the webview command bus (Card D) —
+  // the `field.edit` / `field.editEnter` DEFINITIONS live in the `ui-commands`
+  // plugin; the Field registers the live handlers only while its zone is the
+  // spatial focus, so a dispatched id always reaches the focused field.
+  // -------------------------------------------------------------------------
+
+  it("registers field.edit/field.editEnter bus handlers only while the field zone is focused", async () => {
+    const { unmount } = renderFieldHarness({
+      field: EDITABLE_TITLE_FIELD,
+      entity: makeTask({ title: "Hello" }),
+    });
+    await flushSetup();
+
+    // Before focus: no handler — a dispatch would fall through to the
+    // plugin's inert host execute.
+    expect(hasWebviewCommandHandler("field.edit")).toBe(false);
+    expect(hasWebviewCommandHandler("field.editEnter")).toBe(false);
+
+    const titleZone = registerScopeArgs().find(
+      (a) => a.segment === "field:task:T1.title",
+    );
+    expect(titleZone).toBeTruthy();
+
+    await fireFocusChanged({
+      next_fq: titleZone!.fq as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.title"),
+    });
+    await flushSetup();
+
+    // Focused: both plugin ids resolve to this field's live closure.
+    expect(hasWebviewCommandHandler("field.edit")).toBe(true);
+    expect(hasWebviewCommandHandler("field.editEnter")).toBe(true);
+
+    // Focus away again: the slots are released.
+    await fireFocusChanged({
+      prev_fq: titleZone!.fq as FullyQualifiedMoniker,
+      next_fq: "/window/elsewhere" as FullyQualifiedMoniker,
+      next_segment: asSegment("ui:elsewhere"),
+    });
+    await flushSetup();
+    expect(hasWebviewCommandHandler("field.edit")).toBe(false);
+    expect(hasWebviewCommandHandler("field.editEnter")).toBe(false);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // #1c: Enter on a PILL inside a multi-value (tags) field opens the field's
+  // editor. This is the keyboard path `field.edit`'s own drill-in produces:
+  // Enter on the field zone focuses the first pill; a second Enter must fall
+  // through the pill (a spatial leaf — the kernel echoes) and open the
+  // editor. The keymap binds Enter to `field.edit` whenever the `ui:field`
+  // marker appears ANYWHERE in the focused chain, so the bus handler must be
+  // registered while focus is anywhere WITHIN the field zone's subtree — not
+  // only while the zone itself is the direct focus. Regression test for the
+  // Card D review blocker (pill-focused Enter was a dead binding: the keymap
+  // resolved `field.edit`, the bus slot was empty, and the dispatch died on
+  // the plugin's inert host execute while still preventDefault-ing).
+  // -------------------------------------------------------------------------
+
+  it("enter_on_pill_inside_tags_field_opens_the_field_editor", async () => {
+    const onEditSpy = vi.fn();
+    const { unmount } = renderFieldHarness({
+      field: TAGS_FIELD,
+      entity: makeTask({ tags: ["bugfix", "feature"] }),
+      tags: TAG_ENTITIES,
+      onEditSpy,
+    });
+    await flushSetup();
+
+    const tagsZone = registerScopeArgs().find(
+      (a) => a.segment === "field:task:T1.tags",
+    );
+    expect(
+      tagsZone,
+      "the tags field row must register a spatial zone with the field moniker",
+    ).toBeTruthy();
+    const pill = registerScopeArgs().find((a) => a.segment === "tag:tag-1");
+    expect(
+      pill,
+      "each tag pill must register its own FocusScope leaf",
+    ).toBeTruthy();
+    // Structural sanity: the pill is spatially INSIDE the field zone.
+    expect(String(pill!.fq).startsWith(`${tagsZone!.fq}/`)).toBe(true);
+
+    // Focus the PILL — the exact state `field.edit`'s drill-in puts the
+    // user in.
+    await fireFocusChanged({
+      next_fq: pill!.fq as FullyQualifiedMoniker,
+      next_segment: asSegment("tag:tag-1"),
+    });
+    await flushSetup();
+
+    // The field's bus handlers must be live while focus sits on a pill
+    // within its subtree (matching the keymap's marker-in-chain gate).
+    expect(
+      hasWebviewCommandHandler("field.edit"),
+      "field.edit must have a live bus handler while a pill inside the field is focused",
+    ).toBe(true);
+
+    // Press Enter. The keymap resolves it to `field.edit` (the `ui:field`
+    // marker is in the focused chain); the bus handler drills into the
+    // pill, the kernel echoes (leaf), and the closure falls through to
+    // `onEdit` — opening the editor.
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+    });
+    await flushSetup();
+
+    expect(
+      onEditSpy,
+      "Enter on a pill inside the tags field must open the field's editor",
+    ).toHaveBeenCalledTimes(1);
 
     unmount();
   });

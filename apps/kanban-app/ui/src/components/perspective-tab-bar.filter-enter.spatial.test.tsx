@@ -28,7 +28,7 @@
  *      leaf with `pressable.activate` Enter/Space CommandDefs.
  *   3. Driving `focus-changed` to that leaf populates the focused-scope
  *      chain.
- *   4. `KeybindingHandler` resolves Enter through `extractScopeBindings`,
+ *   4. `KeybindingHandler` resolves Enter through `extractChainBindings`,
  *      dispatches `pressable.activate` → `onPress` runs → the adapter
  *      dispatches `nav.focus` (frontend execute) → `actions.focus(fq)`
  *      → `spatial_focus` IPC.
@@ -44,6 +44,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+  UI_SURFACE_PLUGIN_COMMANDS,
+} from "@/test/mock-command-list";
 import { render, fireEvent, act } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
@@ -55,6 +60,18 @@ const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
+  // The pressable activation commands are DEFINED by the `ui-commands`
+  // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
+  // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
+  // layer only through the `useCommandList` seam, so answer `list command`
+  // with the shared mock registry. Non-list `command_tool_call` ops fall
+  // through to the branches below.
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "get_ui_state")
     return Promise.resolve({
       palette_open: false,
@@ -231,7 +248,10 @@ vi.mock("@/lib/context-menu", () => ({
 // `<RegistryTabButtons>` sources perspective-scoped tab-button commands from
 // the Command registry via `useCommandList`. Return `perspective.filter.focus`
 // (scoped `entity:perspective`) so its `<CommandButton>` mounts in the active
-// tab and registers its spatial-nav leaf.
+// tab and registers its spatial-nav leaf. The `UI_SURFACE_PLUGIN_COMMANDS`
+// mirror rides along so the keymap layer (which reads the same registry)
+// binds Enter → `pressable.activate` on the focused `<CommandButton>` leaf —
+// the entries carry no `tab_button`, so the bar renders no extra buttons.
 vi.mock("@/hooks/use-command-list", () => ({
   useCommandList: () => ({
     commands: [
@@ -243,6 +263,7 @@ vi.mock("@/hooks/use-command-list", () => ({
         params: [{ name: "perspective_id", from: "scope_chain" }],
         keys: {},
       },
+      ...UI_SURFACE_PLUGIN_COMMANDS,
     ],
     loading: false,
     refresh: vi.fn(),

@@ -611,6 +611,14 @@ Commands are defined and run in Rust but invoked from the frontend through four 
 
 All four surfaces use the same dispatch path: `useDispatchCommand` → scope chain resolution → Rust backend.
 
+##### Keybindings, Marker Scopes, and the Webview Command Bus
+
+Keyboard invocation resolves through `extractChainBindings` (`keybindings.ts`): a single innermost-first walk over the focused scope chain that merges two key sources at each depth — `CommandDef`s registered by components, and plugin-defined commands whose `scope` names a moniker literally present in the chain. The innermost claim of a key wins across both sources, so a deeper scope always shadows an outer one (e.g. a focused pressable's Space beats the enclosing inspectable's Space).
+
+Some plugin-defined commands have no backend op — their effect is pure presentation (enter a field's edit mode, press a button). The **webview command bus** (`webview-command-bus.ts`) carries those: the owning React component registers a live handler against the plugin command id, and `useDispatchCommand` consults the bus before calling the backend. Handlers are presentation-only — they never touch the MCP transport (enforced by `webview-command-bus.guard.node.test.ts`); durable effects re-dispatch through `useDispatchCommand`.
+
+Many-instance surfaces (`Field`, `Pressable`) bridge the two seams with a constant **marker scope moniker** (`ui:field`, `ui:pressable`) mounted via `CommandScopeProvider` directly above each instance's `FocusScope`. The plugin command's `scope` names the marker, so its keys bind whenever the marker is anywhere in the focused chain; the instance registers its bus handler while spatial focus is anywhere within its subtree (`use-focused-webview-command-handlers.ts`) — the same granularity, so a bound key always reaches exactly the focused instance's handler.
+
 ##### The Scope Chain and Monikers
 
 A **moniker** is a `"type:id"` string that names a specific entity or scope boundary — for example `"window:main"`, `"board:01ABC"`, `"column:todo"`, or `"task:01XYZ"`. Monikers are the universal way to reference entities across the command system, inspector stack, context menus, and scope chain.

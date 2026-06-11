@@ -113,7 +113,7 @@ import {
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import { asSegment } from "@/types/spatial";
-import { createKeyHandler, extractScopeBindings } from "@/lib/keybindings";
+import { createKeyHandler, extractChainBindings } from "@/lib/keybindings";
 
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -324,7 +324,7 @@ describe("BadgeListDisplay", () => {
 // `<FocusScope>` — the exact pattern `ScopedPerspectiveTab` uses for
 // `ui.entity.startRename`'s Enter. These tests pin that the pill scope's
 // `task.untag` mirrors the registry keys end-to-end through the real
-// component render → entity-focus scope registry → `extractScopeBindings`
+// component render → entity-focus scope registry → `extractChainBindings`
 // → `createKeyHandler` dispatch.
 
 /** Minimal KeyboardEvent-like object targeting a non-editable element. */
@@ -373,10 +373,10 @@ describe("tag pill keyboard untag", () => {
 
   it("the pill scope binds task.untag to the registry keys (vim x / cua Delete)", async () => {
     const scope = await renderPillScope();
-    expect(extractScopeBindings(scope, "vim")).toMatchObject({
+    expect(extractChainBindings([], "vim", scope)).toMatchObject({
       x: "task.untag",
     });
-    expect(extractScopeBindings(scope, "cua")).toMatchObject({
+    expect(extractChainBindings([], "cua", scope)).toMatchObject({
       Delete: "task.untag",
     });
   });
@@ -390,7 +390,7 @@ describe("tag pill keyboard untag", () => {
     const vimHandler = createKeyHandler(
       "vim",
       vimExec,
-      () => extractScopeBindings(scope, "vim"),
+      () => extractChainBindings([], "vim", scope),
       {},
     );
     vimHandler(fakeKeyEvent("x"));
@@ -401,7 +401,7 @@ describe("tag pill keyboard untag", () => {
     const cuaHandler = createKeyHandler(
       "cua",
       cuaExec,
-      () => extractScopeBindings(scope, "cua"),
+      () => extractChainBindings([], "cua", scope),
       {},
     );
     cuaHandler(fakeKeyEvent("Delete"));

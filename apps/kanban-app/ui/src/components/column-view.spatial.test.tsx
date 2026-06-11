@@ -527,7 +527,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     // Seed both the SpatialFocusProvider's `focusedKeyRef` (for the
     // nav-command closure) AND the entity-focus moniker store (so
     // `useFocusedScope()` resolves the column's CommandScope, which in
-    // turn lets `extractScopeBindings` reach the dynamic `nav.*`
+    // turn lets `extractChainBindings` reach the dynamic `nav.*`
     // commands' `keys[mode]` entries through the React-ancestor scope
     // chain). The moniker bridge in `EntityFocusProvider` mirrors
     // `payload.next_segment` into the moniker store; tests that omit
@@ -654,7 +654,7 @@ describe("ColumnView — browser spatial behaviour", () => {
 
     // Seed the focused-key ref AND the moniker store so the global
     // Escape handler sees the column as the current target. Same
-    // rationale as the arrow-key tests — `extractScopeBindings` walks
+    // rationale as the arrow-key tests — `extractChainBindings` walks
     // the focused scope's parent chain, so the moniker store has to
     // resolve the column's scope before the dynamic nav commands'
     // `keys[mode]` participate in the binding lookup.

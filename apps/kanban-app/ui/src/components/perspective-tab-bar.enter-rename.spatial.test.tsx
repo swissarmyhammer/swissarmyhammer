@@ -12,7 +12,7 @@
  * to the global `nav.drillIn: Enter` binding, which is a no-op for a leaf
  * scope. That card scoped a fresh `ui.entity.startRename` `CommandDef`
  * (with `keys: { cua: "Enter", vim: "Enter", emacs: "Enter" }`) onto the
- * active tab's `<CommandScopeProvider>` so `extractScopeBindings` claims
+ * active tab's `<CommandScopeProvider>` so `extractChainBindings` claims
  * Enter away from the global drill-in binding while the active perspective
  * tab is focused.
  *

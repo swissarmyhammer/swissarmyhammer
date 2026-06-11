@@ -8,7 +8,7 @@
  *
  * Scope-gated commands are excluded from the global table (card
  * `01KTQ6QZNB3VN4MAND7VPASM21`): a non-empty `scope` means the command's keys
- * apply only via the focused-scope walk (`extractScopeBindings` over the
+ * apply only via the focused-chain walk (`extractChainBindings` over the
  * scope-level `CommandDef` a component registers — for `task.untag`, the tag
  * pill's `useTagUntagCommands` in `badge-list-display.tsx`).
  *
@@ -26,8 +26,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   createKeyHandler,
+  extractChainBindings,
   extractKeymapBindings,
-  extractScopeBindings,
   type KeymapMode,
 } from "@/lib/keybindings";
 import type { CommandMetadata } from "@/hooks/use-command-list";
@@ -85,7 +85,7 @@ const TAG_PILL_SCOPE = {
  * bindings for `mode` and hand them to `createKeyHandler`. This is exactly the
  * wiring in `app-shell.tsx` — `extractKeymapBindings(commands, mode)` feeds
  * `createKeyHandler(mode, exec, scopeBindings, globalBindings)`, where
- * `scopeBindings` walks the focused scope via `extractScopeBindings`.
+ * `scopeBindings` walks the focused chain via `extractChainBindings`.
  */
 function handlerForMode(
   mode: KeymapMode,
@@ -96,7 +96,7 @@ function handlerForMode(
   return createKeyHandler(
     mode,
     exec,
-    () => extractScopeBindings(focusedScope, mode),
+    () => extractChainBindings(REGISTRY, mode, focusedScope),
     globalBindings,
   );
 }

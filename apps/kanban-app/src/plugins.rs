@@ -640,7 +640,7 @@ mod tests {
     const BUILTIN_COMMAND_ID: &str = BUILTIN_COMMAND_BASELINE[0];
 
     /// One representative command id per builtin command plugin — proof that
-    /// ALL 9 plugins discovered and registered (each id comes from a distinct
+    /// ALL 10 plugins discovered and registered (each id comes from a distinct
     /// bundle, and the four after `entity.add` activate the `views` / `window` /
     /// `app` backends that previously failed `ensureServices`):
     ///
@@ -653,6 +653,7 @@ mod tests {
     /// - `app.quit`         → app-shell-commands  (`commands`, **app**, ui_state, store)
     /// - `ai.toggle`        → ai-commands         (`commands` only; webview-reactive no-op)
     /// - `nav.up`           → nav-commands        (`commands`, **focus** — host-driven nav)
+    /// - `grid.edit`        → grid-commands       (`commands` only; webview-bus handled)
     const BUILTIN_COMMAND_BASELINE: &[&str] = &[
         "task.move",
         "entity.add",
@@ -663,9 +664,10 @@ mod tests {
         "app.quit",
         "ai.toggle",
         "nav.up",
+        "grid.edit",
     ];
 
-    /// The 9 builtin command-plugin bundle ids under `builtin/plugins/`
+    /// The 10 builtin command-plugin bundle ids under `builtin/plugins/`
     /// (excluding the read-only `kanban-builtin-probe`).
     const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
         "task-commands",
@@ -677,10 +679,11 @@ mod tests {
         "app-shell-commands",
         "ai-commands",
         "nav-commands",
+        "grid-commands",
     ];
 
     /// Assert a platform's host carries the full builtin command baseline — one
-    /// command from each of the 8 builtin command plugins.
+    /// command from each of the 10 builtin command plugins.
     async fn assert_builtin_baseline(platform: &super::PluginPlatform, ctx: &str) {
         let ids = list_command_ids(platform).await;
         for id in BUILTIN_COMMAND_BASELINE {

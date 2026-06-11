@@ -25,6 +25,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
 import { render, fireEvent, act } from "@testing-library/react";
 import type { Entity, EntitySchema } from "@/types/kanban";
 
@@ -76,6 +80,18 @@ const TASK_SCHEMA = {
 } as unknown as EntitySchema;
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
+  // The pressable activation commands are DEFINED by the `ui-commands`
+  // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
+  // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
+  // layer only through the `useCommandList` seam, so answer `list command`
+  // with the shared mock registry. Non-list `command_tool_call` ops fall
+  // through to the branches below.
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "list_entity_types") return Promise.resolve(["task"]);
   if (cmd === "get_entity_schema") return Promise.resolve(TASK_SCHEMA);
   if (cmd === "get_undo_state")
@@ -371,7 +387,11 @@ describe("EntityCard inspect button — Enter activates ui.inspect via Pressable
     // to the card zone's onClick handler. With e.stopPropagation
     // preserved on the inner button, it must not.
     const focusToCardCalls = mockInvoke.mock.calls.filter(
-      (c: unknown[]) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "set focus")) &&
+      (c: unknown[]) =>
+        (c[0] === "spatial_focus" ||
+          (c[0] === "command_tool_call" &&
+            (c[1] as Record<string, unknown>)?.tool === "focus" &&
+            (c[1] as Record<string, unknown>)?.op === "set focus")) &&
         (c[1] as { fq?: string })?.fq === cardZoneFq,
     );
     expect(

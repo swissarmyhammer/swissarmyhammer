@@ -91,6 +91,11 @@ vi.mock("@/components/perspective-container", () => ({
 import { GridView } from "./grid-view";
 import { AppShell } from "./app-shell";
 import { commandToolCall, navDispatchCmds } from "@/test/mock-command-list";
+import {
+  getWebviewCommandHandler,
+  hasWebviewCommandHandler,
+  resetWebviewCommandBusForTest,
+} from "@/lib/webview-command-bus";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -324,6 +329,7 @@ describe("GridView keyboard navigation (spatial)", () => {
     mockListen.mockClear();
     listeners.clear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
+    resetWebviewCommandBusForTest();
   });
 
   afterEach(() => {
@@ -619,5 +625,155 @@ describe("GridView keyboard navigation (spatial)", () => {
     ]);
     // Host-driven nav: the webview sends no client-side navigate IPC.
     expect(spatialNavigateCalls()).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Webview command bus — Card C. The eleven `grid.*` commands are DEFINED
+  // by the `grid-commands` builtin plugin (id / name / keys / scope:
+  // ["ui:grid"]); grid-view.tsx registers a live webview-bus handler per id
+  // on mount (`registerWebviewCommandHandler`). Dispatching an id —
+  // keybinding, palette, or programmatic — runs the bus handler, never a
+  // client-side `CommandDef` execute (none exists anymore) and never a
+  // backend `grid.*` dispatch.
+  // -------------------------------------------------------------------------
+
+  /** The eleven plugin-owned grid command ids (Card C). */
+  const GRID_COMMAND_IDS = [
+    "grid.moveToRowStart",
+    "grid.moveToRowEnd",
+    "grid.firstCell",
+    "grid.lastCell",
+    "grid.edit",
+    "grid.editEnter",
+    "grid.exitEdit",
+    "grid.toggleVisual",
+    "grid.deleteRow",
+    "grid.newBelow",
+    "grid.newAbove",
+  ];
+
+  /** Run a grid id's registered webview-bus handler inside act(). */
+  async function runBusHandler(id: string) {
+    const handler = getWebviewCommandHandler(id);
+    expect(
+      handler,
+      `webview-bus handler for ${id} must be registered`,
+    ).toBeTruthy();
+    await act(async () => {
+      await handler!({});
+      await Promise.resolve();
+    });
+  }
+
+  /** Collect every backend dispatch_command cmd, in call order. */
+  function dispatchedCmds(): string[] {
+    return mockInvoke.mock.calls
+      .filter((c) => c[0] === "dispatch_command")
+      .map((c) => (c[1] as { cmd?: string } | undefined)?.cmd ?? "");
+  }
+
+  describe("grid.* commands route through the webview command bus", () => {
+    it("registers a webview-bus handler for all 11 grid.* ids on mount", async () => {
+      await mountAndSeedFocus("grid_cell:0:title");
+      for (const id of GRID_COMMAND_IDS) {
+        expect(
+          hasWebviewCommandHandler(id),
+          `${id} must have a registered webview-bus handler`,
+        ).toBe(true);
+      }
+    });
+
+    it("Enter enters edit mode via the bus-handled grid.edit (no backend grid dispatch)", async () => {
+      const { result } = await mountAndSeedFocus("grid_cell:0:title");
+
+      mockInvoke.mockClear();
+      mockInvoke.mockImplementation(defaultInvokeImpl);
+
+      await act(async () => {
+        fireEvent.keyDown(document, { key: "Enter" });
+        await Promise.resolve();
+      });
+
+      // The live grid behavior ran: the status bar flips to EDIT.
+      expect(result.container.textContent).toContain("EDIT");
+      // The bus short-circuits the backend: no grid.* id reaches
+      // dispatch_command (and Enter did not fall through to nav.drillIn).
+      expect(dispatchedCmds()).toEqual([]);
+    });
+
+    it("grid.toggleVisual and grid.exitEdit drive the live grid mode via the bus", async () => {
+      const { result } = await mountAndSeedFocus("grid_cell:0:title");
+
+      await runBusHandler("grid.toggleVisual");
+      expect(result.container.textContent).toContain("VISUAL");
+
+      // grid.exitEdit exits visual mode too (the React def's contract).
+      await runBusHandler("grid.exitEdit");
+      expect(result.container.textContent).toContain("NORMAL");
+
+      // And the edit-mode pair: editEnter enters, exitEdit returns to normal.
+      await runBusHandler("grid.editEnter");
+      expect(result.container.textContent).toContain("EDIT");
+      await runBusHandler("grid.exitEdit");
+      expect(result.container.textContent).toContain("NORMAL");
+    });
+
+    it("grid.deleteRow re-dispatches entity.archive targeting the cursor row's moniker", async () => {
+      // Seed focus on row 1 — the cursor derives from the focused moniker,
+      // so deleteRow must archive the SECOND task (t2). The registered
+      // backend command is the cross-cutting `entity.archive` (resolving
+      // `from: target`); no per-type `{type}.archive` command exists, so
+      // dispatching one would silently fail in production.
+      await mountAndSeedFocus("grid_cell:1:title");
+
+      mockInvoke.mockClear();
+      mockInvoke.mockImplementation(defaultInvokeImpl);
+
+      await runBusHandler("grid.deleteRow");
+
+      const archiveCalls = mockInvoke.mock.calls.filter(
+        (c) =>
+          c[0] === "dispatch_command" &&
+          (c[1] as { cmd?: string } | undefined)?.cmd === "entity.archive",
+      );
+      expect(archiveCalls).toHaveLength(1);
+      expect(
+        (archiveCalls[0][1] as { target?: string }).target,
+        "entity.archive resolves its entity from the target moniker",
+      ).toBe("task:t2");
+    });
+
+    it("grid.newBelow and grid.newAbove re-dispatch entity.add:task through the backend", async () => {
+      await mountAndSeedFocus("grid_cell:0:title");
+
+      mockInvoke.mockClear();
+      mockInvoke.mockImplementation(defaultInvokeImpl);
+
+      await runBusHandler("grid.newBelow");
+      await runBusHandler("grid.newAbove");
+
+      expect(dispatchedCmds()).toEqual(["entity.add:task", "entity.add:task"]);
+    });
+
+    it("grid.moveToRowEnd jumps to the last cell of the cursor row via the bus", async () => {
+      const { result } = await mountAndSeedFocus("grid_cell:1:title");
+
+      const targetCell = registerScopeCalls().find(
+        (c) => c.segment === "grid_cell:1:status",
+      );
+      expect(targetCell).toBeTruthy();
+      const targetKey = targetCell!.fq as FullyQualifiedMoniker;
+
+      mockInvoke.mockClear();
+      mockInvoke.mockImplementation(defaultInvokeImpl);
+
+      await runBusHandler("grid.moveToRowEnd");
+
+      const focusCalls = spatialFocusCalls();
+      expect(focusCalls).toHaveLength(1);
+      expect(focusCalls[0].fq).toBe(targetKey);
+
+      result.unmount();
+    });
   });
 });

@@ -21,6 +21,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
 import { render, fireEvent, act } from "@testing-library/react";
 import type { Entity } from "@/types/kanban";
 
@@ -54,6 +58,18 @@ const COLUMN_SCHEMA = {
 };
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
+  // The pressable activation commands are DEFINED by the `ui-commands`
+  // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
+  // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
+  // layer only through the `useCommandList` seam, so answer `list command`
+  // with the shared mock registry. Non-list `command_tool_call` ops fall
+  // through to the branches below.
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "list_entity_types") return Promise.resolve(["column", "task"]);
   if (cmd === "get_entity_schema") return Promise.resolve(COLUMN_SCHEMA);
   if (cmd === "list_commands_for_scope") return Promise.resolve([]);

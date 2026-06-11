@@ -113,6 +113,10 @@ import {
   type DefaultInvokeImpl,
   type SpatialHarness,
 } from "@/test/spatial-shadow-registry";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
 import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -224,8 +228,20 @@ async function flushSetup() {
 /**
  * Fallback for the non-spatial Tauri commands the `AppShell` provider stack
  * hits on mount — `get_ui_state` and `get_undo_state`.
+ *
+ * Also answers `list command` with the shared mock registry: the form's
+ * `<Pressable>` leaves (Submit / Decline / Cancel / Done, checkboxes)
+ * activate through the plugin-defined `pressable.activate` /
+ * `pressable.activateSpace` commands (scope `["ui:pressable"]`), whose keys
+ * reach the keymap layer only through the `useCommandList` seam.
  */
-const appShellInvokeImpl: DefaultInvokeImpl = (cmd) => {
+const appShellInvokeImpl: DefaultInvokeImpl = (cmd, args) => {
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "get_ui_state") {
     return {
       palette_open: false,

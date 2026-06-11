@@ -471,7 +471,7 @@ describe("AppShell", () => {
      * A component that sets up a focused scope claiming Escape via a
      * `dialog.cancel`-style command — a focused subtree can still claim
      * Escape back for its own semantics (scope wins over global). The
-     * command declares `keys.cua: Escape` so `extractScopeBindings`
+     * command declares `keys.cua: Escape` so `extractChainBindings`
      * surfaces it; pressing Escape resolves to it instead of the global
      * `nav.drillOut`.
      */
@@ -824,10 +824,10 @@ describe("AppShell", () => {
   // and let the kernel emit `focus-changed`. The bridge in
   // `EntityFocusProvider` mirrors `payload.next_segment` into the
   // entity-focus store so `useFocusedScope()` — the data source the
-  // global keymap handler reads via `extractScopeBindings` — stays in
+  // global keymap handler reads via `extractChainBindings` — stays in
   // sync. Without the bridge, Space would look like a no-op because
   // the focused-scope ref would be `null` even though the spatial
-  // kernel had a focused scope, so `extractScopeBindings` would not
+  // kernel had a focused scope, so `extractChainBindings` would not
   // see the per-Inspectable `entity.inspect` binding.
   //
   // The test below drives the spatial-only flow (which is the

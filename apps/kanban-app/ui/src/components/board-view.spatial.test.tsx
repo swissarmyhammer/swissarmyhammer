@@ -281,7 +281,7 @@ async function flushSetup() {
  * spatial→entity bridge in `<EntityFocusProvider>` calls
  * `actions.setFocus(payload.next_segment)` on every focus-changed
  * event. The entity-focus store's `focusedScope` is what AppShell's
- * `<KeybindingHandler>` walks via `extractScopeBindings` to resolve
+ * `<KeybindingHandler>` walks via `extractChainBindings` to resolve
  * scope-level command keys (including `nav.up`/`nav.down`/`nav.left`/
  * `nav.right`'s `keys.cua` arrow bindings). When `next_segment` is
  * null, the entity-focus store is cleared, `focusedScope` becomes

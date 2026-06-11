@@ -49,6 +49,7 @@
 import {
   useCallback,
   useMemo,
+  useRef,
   type ComponentType,
   type ReactNode,
 } from "react";
@@ -59,11 +60,9 @@ import { isFieldEditable, resolveEditor } from "@/components/fields/editors";
 import type { EditorProps } from "@/components/fields/editors";
 import { FocusScope } from "@/components/focus-scope";
 import { Inspectable } from "@/components/inspectable";
-import {
-  EMPTY_COMMANDS,
-  useDispatchCommand,
-  type CommandDef,
-} from "@/lib/command-scope";
+import { CommandScopeProvider, useDispatchCommand } from "@/lib/command-scope";
+import { useFocusedWebviewCommandHandlers } from "@/lib/use-focused-webview-command-handlers";
+import type { WebviewCommandHandler } from "@/lib/webview-command-bus";
 import { fieldMoniker } from "@/lib/moniker";
 import { asSegment } from "@/types/spatial";
 import { fieldIcon } from "@/components/fields/field-icon";
@@ -71,6 +70,20 @@ import { FieldIconBadge } from "@/components/fields/field-icon-badge";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { HelpCircle, type LucideIcon } from "lucide-react";
 import type { FieldDef, Entity } from "@/types/kanban";
+
+/**
+ * The constant marker moniker every registering `<Field>` mounts into the
+ * command scope chain, directly above its `<FocusScope>` zone.
+ *
+ * Field zones carry dynamic per-field monikers
+ * (`field:{type}:{id}.{name}`), so the plugin-defined edit commands cannot
+ * be scope-gated on a literal zone moniker the way the grid's `ui:grid`
+ * zone is. The marker gives every field zone one shared literal moniker;
+ * the `ui-commands` plugin's `field.edit` / `field.editEnter` declare
+ * `scope: ["ui:field"]` against it, so their Enter / `i` keys bind exactly
+ * while a field zone is in the focused chain — and nowhere else.
+ */
+export const FIELD_COMMAND_SCOPE = "ui:field";
 
 // ---------------------------------------------------------------------------
 // Contracts — every editor and display implements one of these
@@ -461,17 +474,24 @@ function FieldDisplayContent(props: {
  * edit mode (Escape, blur) returns to the same moniker without losing
  * the zone's identity in the DOM.
  *
- * # Enter ownership
+ * # Enter ownership (Card D — plugin-defined, webview-bus handled)
  *
- * When the field is in display mode AND has an `onEdit` callback, the
- * field zone registers a scope-level `field.edit` command keyed to
- * Enter (vim + cua). The field zone's `<CommandScope>` sits closer
- * than the global root scope, so `extractScopeBindings` claims Enter
- * for `field.edit` whenever this field is the spatial focus —
- * shadowing the global `nav.drillIn: Enter` only for editable field
- * zones, leaving the drill-in default in place for every other
- * focusable. In edit mode the command is NOT registered (the editor
- * element owns Enter via its own keymap).
+ * The `field.edit` / `field.editEnter` command DEFINITIONS (id / name /
+ * keys / scope) live in the `ui-commands` builtin plugin, gated to the
+ * constant `ui:field` marker moniker ({@link FIELD_COMMAND_SCOPE}) this
+ * component mounts via a `CommandScopeProvider` directly above its
+ * `<FocusScope>`. The keymap layer's depth-interleaved chain walk
+ * claims Enter (cua) / `i` + Enter (vim) for them whenever the
+ * `ui:field` marker appears anywhere in the focused scope chain (the
+ * field zone itself or a pill inside it) — shadowing the global
+ * `nav.drillIn: Enter` only there, leaving the drill-in default in
+ * place for every other focusable. The live BEHAVIOR (drill into pills, else enter
+ * edit mode) registers on the webview command bus while spatial focus
+ * is anywhere within this zone's subtree (the zone itself or a pill
+ * inside it) — matching the keymap's marker-in-chain gate, so Enter on
+ * a focused pill still reaches this field's closure; in edit mode the
+ * handler short-circuits (the editor element owns Enter via its own
+ * keymap).
  *
  * # Read-only/computed metadata gate
  *
@@ -532,66 +552,81 @@ export function Field({
   const spatialActions = useOptionalSpatialFocusActions();
   const dispatchNavFocus = useDispatchCommand("nav.focus");
 
-  // Per-zone Enter binding: when the field is in display mode, register
-  // a scope-level `field.edit` command keyed to Enter. The field zone's
-  // `<CommandScope>` sits closer than the global root scope, so
-  // `extractScopeBindings` claims Enter for `field.edit` whenever this
-  // field is the spatial focus — shadowing the global `nav.drillIn:
-  // Enter` only for focused field zones.
+  // Per-zone Enter behavior (Card D): the `field.edit` / `field.editEnter`
+  // command DEFINITIONS (id / name / keys / scope) live in the `ui-commands`
+  // builtin plugin, gated to the `ui:field` marker this component mounts
+  // above its `<FocusScope>` (see FIELD_COMMAND_SCOPE) — so the keymap layer
+  // claims Enter / `i` for them whenever the marker appears anywhere in the
+  // focused scope chain (the field zone itself OR a pill inside it),
+  // shadowing the global `nav.drillIn: Enter` exactly there. This component
+  // registers only the live BEHAVIOR, on the webview command bus, and only
+  // WHILE SPATIAL FOCUS IS WITHIN THIS ZONE'S SUBTREE — the same granularity
+  // as the keymap gate, so a dispatched id always reaches the closure of the
+  // one field instance containing the focus (with many fields mounted, the
+  // subtrees are disjoint).
   //
-  // The execute closure unifies "drill into pills" and "open editor":
+  // The handler unifies "drill into pills" and "open editor":
   // it asks the kernel to drill into the field zone first; on a non-null
   // moniker (the field has spatial children — pills, badges, …) it
-  // dispatches `setFocus(moniker)` and returns. Only when the kernel
-  // returns null does it fall through to `onEdit?.()`. This means a
-  // field with pills navigates to the first pill, while a field without
-  // pills (and an `onEdit` callback) opens its editor — same scope-level
-  // command, two outcomes driven by the registry's structural answer.
-  // For non-editable fields with no spatial children, the kernel returns
-  // null and `onEdit` is undefined → Enter is a no-op.
+  // dispatches `nav.focus` and returns. Only when the kernel
+  // echoes the focused FQM does it fall through to `onEdit?.()`. This means
+  // a field with pills navigates to the first pill, while a field without
+  // pills (and an `onEdit` callback) opens its editor — same command id,
+  // two outcomes driven by the registry's structural answer. For
+  // non-editable fields with no spatial children, the kernel echoes and
+  // `onEdit` is undefined → Enter is a no-op.
   //
-  // The command is intentionally NOT registered in edit mode: the
-  // editor element holds DOM focus and owns Enter via its own keymap
-  // (commit on submit, newline in multiline, etc.). The global keymap
-  // handler's `isEditableTarget` gate also short-circuits before any
-  // scope binding resolution when the focused element is an
-  // `<input>` / `<textarea>` / contenteditable / `.cm-editor`, so the
-  // editor's local handling always wins; suppressing the registration
-  // is belt-and-suspenders for the case where a non-editable element
-  // holds focus while `editing` is true.
-  const editCommands = useMemo<readonly CommandDef[]>(() => {
-    if (isEditing) return EMPTY_COMMANDS;
-    // No `onEdit` AND no spatial provider to drill into → nothing the
-    // command could do, leave Enter to global `nav.drillIn`.
-    if (!onEdit && !spatialActions) return EMPTY_COMMANDS;
-    // Drill-in-or-edit closure. `vim:i`, `vim:Enter`, and `cua:Enter`
-    // all funnel through the same body — the only difference is the
-    // mapped key. We expose three command IDs (mirroring grid-view's
-    // `grid.edit` / `grid.editEnter` split) so the keybinding extractor
-    // produces the right per-keymap binding without needing a single
-    // command to advertise multiple keys per keymap (which the
-    // CommandDef shape does not support).
+  // The handler short-circuits in edit mode: the editor element holds DOM
+  // focus and owns Enter via its own keymap (commit on submit, newline in
+  // multiline, etc.). The global keymap handler's `isEditableTarget` gate
+  // also short-circuits before any binding resolution when the focused
+  // element is an `<input>` / `<textarea>` / contenteditable / `.cm-editor`,
+  // so the editor's local handling always wins; the in-handler check is
+  // belt-and-suspenders for the case where a non-editable element holds
+  // focus while `editing` is true.
+  //
+  // Latest props/actions ride in a ref so the handler registration never
+  // churns on render — mirrors grid-view's `ctxRef` pattern.
+  const editCtxRef = useRef({
+    isEditing,
+    onEdit,
+    spatialActions,
+    dispatchNavFocus,
+  });
+  editCtxRef.current = { isEditing, onEdit, spatialActions, dispatchNavFocus };
+  const editHandlers = useMemo<
+    Readonly<Record<string, WebviewCommandHandler>>
+  >(() => {
     const editClosure = async () => {
+      const {
+        isEditing: editing,
+        onEdit: enterEdit,
+        spatialActions: spatial,
+        dispatchNavFocus: navFocus,
+      } = editCtxRef.current;
+      if (editing) return;
       // Drill into spatial children first — pills (`<FocusScope>`
       // leaves) win over edit mode. Read the focused FQM off the
-      // spatial provider: the command only fires when this field
-      // zone is the focused entity, so `focusedFq()` returns this
-      // field's FQM.
+      // spatial provider: the command only fires while focus is
+      // within this field's subtree, so `focusedFq()` returns the
+      // field zone's FQM (drills into the first pill, if any) or a
+      // pill's FQM (a leaf — the kernel echoes and the closure falls
+      // through to the editor).
       //
       // Under the no-silent-dropout contract the kernel always
       // returns an FQM; we detect "no descent happened" by
       // comparing the result to the focused FQM. Equality
       // means the field has no spatial children — fall through to
       // the editor.
-      if (spatialActions) {
-        const focusedFq = spatialActions.focusedFq();
+      if (spatial) {
+        const focusedFq = spatial.focusedFq();
         if (focusedFq !== null) {
-          const result = await spatialActions.drillIn(focusedFq, focusedFq);
+          const result = await spatial.drillIn(focusedFq, focusedFq);
           if (result !== focusedFq) {
             // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow
             // through `nav.focus`. The drill-in result is the FQM
             // of the first spatial child (a pill, badge, etc.).
-            await dispatchNavFocus({ args: { fq: result } }).catch((err) =>
+            await navFocus({ args: { fq: result } }).catch((err) =>
               console.error("[field.edit] nav.focus dispatch failed", err),
             );
             return;
@@ -602,34 +637,23 @@ export function Field({
       // fall through to the editor. `onEdit` is optional: a
       // read-only field with no children produces a no-op, which
       // matches the "Enter on a leaf with nothing to do" contract.
-      onEdit?.();
+      enterEdit?.();
     };
-    return [
-      {
-        id: "field.edit",
-        // vim's normal-mode `i` enters insert mode; cua `Enter` shadows
-        // the global `nav.drillIn: Enter` only while the field zone is
-        // the focused scope chain, which is the desired behaviour:
-        // Enter on a field zone opens the editor (or drills into pills,
-        // via the closure above). For non-editable fields with no
-        // spatial children, `onEdit` is undefined and the keystroke is
-        // a no-op — matching the "Enter on a leaf with nothing to do"
-        // contract.
-        name: "Edit Field",
-        keys: { vim: "i", cua: "Enter" },
-        execute: editClosure,
-      },
-      {
-        id: "field.editEnter",
-        // vim parity for the cua `Enter` binding above. Vim's normal-
-        // mode `i` enters insert mode; this additional `Enter` mapping
-        // lets users press the same key regardless of keymap.
-        name: "Edit Field (Enter)",
-        keys: { vim: "Enter" },
-        execute: editClosure,
-      },
-    ];
-  }, [isEditing, onEdit, spatialActions, dispatchNavFocus]);
+    // Two ids share one body: the plugin splits `field.edit` (vim:i,
+    // cua:Enter) and `field.editEnter` (vim:Enter) only because each `keys`
+    // entry in the command metadata is one binding per keymap.
+    return { "field.edit": editClosure, "field.editEnter": editClosure };
+  }, []);
+
+  // A field row wraps a real entity field moniker
+  // (`field:<type>:<id>.<name>`); the same segment names the `<FocusScope>`
+  // below and keys the focus-gated bus registration here. When
+  // `register={false}` (the grid-cell case) the zone never registers, no
+  // focused FQM ever sits within this moniker's subtree, and the handlers
+  // never install — the enclosing grid cell owns edit-mode entry through
+  // `grid.edit` instead.
+  const fmk = asSegment(fieldMoniker(entityType, entityId, fieldDef.name));
+  useFocusedWebviewCommandHandlers(fmk, editHandlers);
 
   const inner = isEditing ? (
     <FieldEditor
@@ -672,34 +696,38 @@ export function Field({
     );
   }
 
-  // A field row wraps a real entity field moniker
-  // (`field:<type>:<id>.<name>`), so double-clicking a field row
-  // (e.g. in the inspector) opens the inspector for that field. The
-  // `<Inspectable>` wrapper owns the inspector dispatch; the spatial
-  // primitive `<FocusZone>` stays pure-spatial. Per the architectural
-  // guard (`focus-architecture.guards.node.test.ts`, Guards B + C),
-  // every entity zone — including `field:` — must be wrapped.
+  // Double-clicking a field row (e.g. in the inspector) opens the inspector
+  // for that field. The `<Inspectable>` wrapper owns the inspector dispatch;
+  // the spatial primitive `<FocusZone>` stays pure-spatial. Per the
+  // architectural guard (`focus-architecture.guards.node.test.ts`, Guards
+  // B + C), every entity zone — including `field:` — must be wrapped.
+  //
+  // The marker `CommandScopeProvider` sits directly above the
+  // `<FocusScope>` so the zone's command-scope chain contains the literal
+  // `ui:field` moniker — the gate the plugin-defined `field.edit` /
+  // `field.editEnter` commands' `scope` names (see FIELD_COMMAND_SCOPE).
   //
   // When `register={false}` (the grid-cell case), the inner
   // `<FocusScope>` is omitted so the field's moniker does not register
-  // as a scope. The enclosing `grid_cell:R:K` `<FocusScope>` is the
-  // sole leaf in that subtree, which is what the kernel's
-  // scope-is-leaf invariant requires (a registered `<FocusScope>`
+  // as a scope (and the marker is omitted with it — there is no field
+  // zone for the edit keys to gate on). The enclosing `grid_cell:R:K`
+  // `<FocusScope>` is the sole leaf in that subtree, which is what the
+  // kernel's scope-is-leaf invariant requires (a registered `<FocusScope>`
   // cannot contain another). The `<Inspectable>` wrapper is kept so
   // double-click → field inspect and the Space keybinding stay wired
   // — both are independent of the spatial registration.
-  const fmk = asSegment(fieldMoniker(entityType, entityId, fieldDef.name));
   return (
     <Inspectable moniker={fmk}>
       {register ? (
-        <FocusScope
-          moniker={fmk}
-          handleEvents={handleEvents}
-          showFocus={showFocus}
-          commands={editCommands}
-        >
-          {zoneChildren}
-        </FocusScope>
+        <CommandScopeProvider moniker={FIELD_COMMAND_SCOPE}>
+          <FocusScope
+            moniker={fmk}
+            handleEvents={handleEvents}
+            showFocus={showFocus}
+          >
+            {zoneChildren}
+          </FocusScope>
+        </CommandScopeProvider>
       ) : (
         zoneChildren
       )}

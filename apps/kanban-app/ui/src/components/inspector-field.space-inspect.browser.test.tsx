@@ -312,7 +312,7 @@ describe("Inspector field — Space → ui.inspect", () => {
     // Drive a focus-changed event from the kernel. This mirrors the
     // production flow when the user clicks (or arrow-keys to) the
     // field row — `useFocusClaim` flips, `useFocusedScope` updates,
-    // and `extractScopeBindings` will see the new chain on the next
+    // and `extractChainBindings` will see the new chain on the next
     // keydown.
     await fireFocusChanged({
       next_fq: titleZone!.fq as FullyQualifiedMoniker,

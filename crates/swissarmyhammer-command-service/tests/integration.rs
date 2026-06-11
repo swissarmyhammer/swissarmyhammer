@@ -42,6 +42,8 @@ mod builtin_app_shell_commands_e2e;
 mod builtin_entity_commands_e2e;
 #[path = "integration/builtin_file_commands_e2e.rs"]
 mod builtin_file_commands_e2e;
+#[path = "integration/builtin_grid_commands_e2e.rs"]
+mod builtin_grid_commands_e2e;
 #[path = "integration/builtin_kanban_misc_e2e.rs"]
 mod builtin_kanban_misc_e2e;
 #[path = "integration/builtin_nav_commands_e2e.rs"]

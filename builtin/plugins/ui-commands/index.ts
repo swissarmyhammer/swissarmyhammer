@@ -1,5 +1,8 @@
 // ui-commands — builtin plugin porting `ui.yaml` (10 commands) to the
-// TypeScript plugin SDK. This is the last builtin-commands port.
+// TypeScript plugin SDK (the last builtin-commands port), plus the four
+// UI-surface commands Card D moved out of React (`UI_SURFACE_COMMANDS`
+// below): `field.edit` / `field.editEnter` / `pressable.activate` /
+// `pressable.activateSpace` — 14 commands total.
 //
 // Like `app-shell-commands`, this bundle fans out across MULTIPLE backends by
 // concern — but here the three backends are `ui_state`, `focus`, and `window`:
@@ -48,6 +51,100 @@ import {
   ensureServices,
   registerCommands,
 } from "@swissarmyhammer/plugin";
+
+/** One UI-surface command's identity + metadata. `scope` is the surface's
+ * literal marker moniker (`ui:field` / `ui:pressable`). */
+interface UiSurfaceCommandSpec {
+  id: string;
+  name: string;
+  scope: string;
+  keys: Record<string, string>;
+}
+
+/**
+ * The four UI-surface commands, as a data table (Card D of the
+ * ui-command-cleanup project — mirrors the `grid-commands` bundle's
+ * `GRID_COMMANDS` pattern).
+ *
+ * `id` / `name` / `keys` are copied 1:1 from the retired client-side
+ * `CommandDef`s: `field.edit` / `field.editEnter` from
+ * `apps/kanban-app/ui/src/components/fields/field.tsx` and
+ * `pressable.activate` / `pressable.activateSpace` from
+ * `apps/kanban-app/ui/src/components/pressable.tsx` (`usePressCommands`).
+ *
+ * # Why every host `execute` is an inert no-op
+ *
+ * Each command's effect is pure presentation deep inside the React tree:
+ * entering a field's edit mode (or drilling into its pill children via
+ * `nav.focus`) and invoking a pressable's local `onPress` closure. The owning
+ * component registers a webview-bus handler per id WHILE SPATIAL FOCUS IS
+ * WITHIN ITS SUBTREE — the instance's zone itself or a descendant such as a
+ * tag pill, matching the keymap's marker-in-chain gate (a pressable is a
+ * spatial leaf, so containment degenerates to direct focus); see
+ * `apps/kanban-app/ui/src/lib/use-focused-webview-command-handlers.ts`.
+ * `useDispatchCommand` runs that handler and skips the
+ * backend, exactly like the `grid.*` commands. The host `execute` registered
+ * here exists only to satisfy the registration contract and to keep a direct
+ * host-side dispatch (e.g. the plugin e2e where no webview is mounted) a
+ * harmless success.
+ *
+ * # Scope gating
+ *
+ * Unlike the grid's singleton `ui:grid` zone, fields and pressables are
+ * many-instance surfaces with dynamic spatial monikers
+ * (`field:{type}:{id}.{name}`, arbitrary pressable leaf monikers). Each
+ * component therefore mounts a constant MARKER moniker into the command
+ * scope chain — a `CommandScopeProvider` with moniker `ui:field` /
+ * `ui:pressable` directly above its `<FocusScope>` — and the command's
+ * `scope` names that marker. While the focused chain contains the marker,
+ * the keys bind via the keymap layer's depth-interleaved chain walk;
+ * everywhere else the keys contribute nothing (Enter stays `nav.drillIn`,
+ * Space stays `entity.inspect`).
+ *
+ * None of the four had a menu placement in the React defs, so none carries
+ * a `menu` here — the OS menu bar is unchanged.
+ */
+const UI_SURFACE_COMMANDS: readonly UiSurfaceCommandSpec[] = [
+  // ── Field edit-mode entry ─────────────────────────────────────────────────
+  // The webview handler unifies "drill into pills" and "open editor": it
+  // drills into the focused field zone first and falls through to the
+  // component's `onEdit` when the kernel echoes the focused FQM (no spatial
+  // children). vim's normal-mode `i` enters insert mode; cua `Enter` shadows
+  // the global `nav.drillIn: Enter` only while the `ui:field` marker is in
+  // the focused chain (the field zone itself or a pill inside it).
+  {
+    id: "field.edit",
+    name: "Edit Field",
+    scope: "ui:field",
+    keys: { vim: "i", cua: "Enter" },
+  },
+  // vim parity for the cua `Enter` binding above — lets users press the same
+  // key regardless of keymap.
+  {
+    id: "field.editEnter",
+    name: "Edit Field (Enter)",
+    scope: "ui:field",
+    keys: { vim: "Enter" },
+  },
+  // ── Pressable activation ──────────────────────────────────────────────────
+  // Two separate commands because each `keys` entry is one binding per
+  // keymap, and the contract is Enter (vim + cua) AND Space (cua only —
+  // Web/CUA convention is both, vim leaves Space free). The webview handler
+  // invokes the focused pressable's local `onPress`, short-circuiting when
+  // the pressable is disabled.
+  {
+    id: "pressable.activate",
+    name: "Activate",
+    scope: "ui:pressable",
+    keys: { vim: "Enter", cua: "Enter" },
+  },
+  {
+    id: "pressable.activateSpace",
+    name: "Activate (Space)",
+    scope: "ui:pressable",
+    keys: { cua: "Space" },
+  },
+];
 
 /**
  * The dispatch surface for the `ui_state` operation tool — the inspector /
@@ -114,9 +211,10 @@ interface WindowDispatch {
  * The ui-commands builtin plugin.
  *
  * Registers the ten UI commands ported from `ui.yaml`, routed across the
- * `ui_state`, `focus`, and `window` MCP servers. Identity is the bundle
- * directory name (`ui-commands`); `name` / `description` are descriptive
- * metadata only.
+ * `ui_state`, `focus`, and `window` MCP servers, plus the four webview-bus
+ * handled UI-surface commands (`UI_SURFACE_COMMANDS`). Identity is the
+ * bundle directory name (`ui-commands`); `name` / `description` are
+ * descriptive metadata only.
  */
 export default class UiCommandsPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
@@ -124,7 +222,7 @@ export default class UiCommandsPlugin extends Plugin {
 
   /** One-line description — descriptive metadata only. */
   readonly description =
-    "Builtin UI commands (inspector open/close, command palette open/close, perspective rename, keymap mode, spatial focus, and new window) routed to the ui_state, focus, and window servers.";
+    "Builtin UI commands (inspector open/close, command palette open/close, perspective rename, keymap mode, spatial focus, and new window) routed to the ui_state, focus, and window servers, plus the webview-bus handled field-edit and pressable-activation commands.";
 
   /**
    * Activate the services these commands route to, then register the commands.
@@ -336,10 +434,33 @@ export default class UiCommandsPlugin extends Plugin {
           return await window.window.window.window.new(args);
         },
       },
+
+      // ─── UI-surface commands (Card D) ───────────────────────────────────
+      // field.edit / field.editEnter / pressable.activate /
+      // pressable.activateSpace from the data table above. Presentation-only:
+      // the webview bus handler (registered by the focused field / pressable
+      // component) intercepts each id in `useDispatchCommand` before the
+      // backend, so the host `execute` is never reached in production. It
+      // exists as an inert no-op only to satisfy the registration contract
+      // and to keep a direct host-side dispatch a harmless success (mirrors
+      // the grid-commands bundle).
+      ...UI_SURFACE_COMMANDS.map((spec) => ({
+        id: spec.id,
+        name: spec.name,
+        undoable: false,
+        // Gate to the surface's marker moniker: keys apply only while
+        // `ui:field` / `ui:pressable` is in the focused scope chain; never
+        // lifted into the global key table.
+        scope: [spec.scope],
+        keys: spec.keys,
+        execute: async () => {
+          return { ok: true };
+        },
+      })),
     ]);
 
     this.log.info(
-      "ui-commands: registered 10 commands (ui.inspect / ui.inspector.* / app.palette.open / ui.palette.close / ui.entity.startRename / ui.mode.set / ui.setFocus / window.new) across ui_state / focus / window",
+      "ui-commands: registered 14 commands (ui.inspect / ui.inspector.* / app.palette.open / ui.palette.close / ui.entity.startRename / ui.mode.set / ui.setFocus / window.new across ui_state / focus / window; field.edit / field.editEnter / pressable.activate / pressable.activateSpace → webview bus)",
     );
   }
 }

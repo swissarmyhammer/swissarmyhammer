@@ -112,6 +112,10 @@ import "@/components/fields/registrations";
 import { EntityInspector } from "./entity-inspector";
 import { AppShell } from "./app-shell";
 import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -205,6 +209,17 @@ async function defaultInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
+  // The field-edit commands are DEFINED by the `ui-commands` builtin plugin
+  // (`field.edit` / `field.editEnter`, scope ["ui:field"]) — their Enter /
+  // `i` keys reach the keymap layer only through the `useCommandList` seam,
+  // so answer `list command` with the shared mock registry. Non-list
+  // `command_tool_call` ops fall through to the branches below.
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "list_entity_types") return ["task", "tag"];
   if (cmd === "get_entity_schema") {
     const entityType = (args as { entityType?: string })?.entityType;
@@ -378,7 +393,7 @@ function spatialFocusCalls(): Array<{ fq?: string }> {
       const outer = c[1] as Record<string, unknown>;
       const args = (outer?.params ?? outer) as { fq?: string };
       return args;
-    })
+    });
 }
 
 /** Filter `dispatch_command` calls down to those for `ui.inspect`. */
@@ -397,7 +412,7 @@ function drillInCalls(): Array<{ fq: FullyQualifiedMoniker }> {
       const outer = c[1] as Record<string, unknown>;
       const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
       return args;
-    })
+    });
 }
 
 /**
@@ -633,7 +648,10 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
       .filter((c) => c[0] === "spatial_navigate")
       .map((c) => {
         const outer = c[1] as Record<string, unknown>;
-        const args = (outer?.params ?? outer) as { focusedFq: FullyQualifiedMoniker; direction: string };
+        const args = (outer?.params ?? outer) as {
+          focusedFq: FullyQualifiedMoniker;
+          direction: string;
+        };
         return args;
       });
     expect(navCalls.length).toBe(1);
@@ -713,7 +731,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
         const outer = c[1] as Record<string, unknown>;
         const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
         return args;
-      })
+      });
     expect(drillOutCalls.length).toBe(1);
     expect(drillOutCalls[0].fq).toBe(bugPill!.fq);
 

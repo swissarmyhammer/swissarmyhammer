@@ -57,7 +57,7 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     Space: "entity.inspect",
     // AI panel — window-layer commands registered in `app-shell.tsx`'s
     // global scope. Their `keys` blocks also ride on the `CommandDef`s,
-    // so `extractScopeBindings` resolves them when the global scope is in
+    // so `extractChainBindings` resolves them when the global scope is in
     // the focused chain; these `BINDING_TABLES` entries cover the
     // no-focus case (body focus) where the scope walk yields nothing.
     // `ai.cancel` is availability-gated — its `CommandDef.available`
@@ -94,7 +94,7 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     "Shift+Tab": "nav.left",
     // Space → `entity.inspect`. The per-`<Inspectable>` scope command
     // shadows this entry when an inspectable is in the focused chain
-    // (its `keys[mode]: "Space"` reaches `extractScopeBindings` first
+    // (its `keys[mode]: "Space"` reaches `extractChainBindings` first
     // and the inner-scope-wins walk picks it). When the focused chain
     // has no Inspectable — at app open, on focused chrome (perspective
     // tabs, filter editors), after the inspector closes off any
@@ -436,34 +436,103 @@ export function createKeyHandler(
 }
 
 /**
- * Extract key bindings from a command scope chain for a given keymap mode.
+ * A node in the focused command-scope chain, as the binding extractors see
+ * it: the component-registered `CommandDef`s at this scope, the scope's
+ * moniker (absent on anonymous `CommandScopeProvider`s), and the link to the
+ * enclosing scope. Structurally satisfied by `command-scope`'s
+ * `CommandScope`.
+ */
+export interface BindingScope {
+  commands: Map<string, { id: string; keys?: Record<string, string> }>;
+  moniker?: string;
+  parent: unknown;
+}
+
+/** Registry command shape the extractors read: id + per-keymap keys + the
+ * optional scope-expression list (empty/absent = global). */
+export interface RegistryKeyCommand {
+  id: string;
+  keys?: Record<string, string>;
+  scope?: readonly string[];
+}
+
+/**
+ * Build the `key → commandId` binding table for the focused scope chain by a
+ * single DEPTH-INTERLEAVED inner-first walk over BOTH binding sources:
  *
- * Walks the scope chain and collects `keys[mode]` from every command,
- * producing a flat key→commandId binding table. Inner (deeper) scopes
- * shadow outer scopes for the same key.
+ *   1. **Component-registered `CommandDef`s** — the `commands` map each chain
+ *      scope carries (inspector close, pill untag, Inspectable Space, root
+ *      `ai.*`, …).
+ *   2. **Scope-gated registry commands** — plugin-defined commands whose
+ *      `scope` expression LITERALLY equals this chain scope's moniker (the
+ *      `grid-commands` plugin's `ui:grid`, Card C; the `ui-commands` plugin's
+ *      `ui:field` / `ui:pressable` markers, Card D). Their behaviors live on
+ *      the webview command bus, registered by the matching component, so a
+ *      literal-moniker match implies the handler is live.
  *
- * @param scope - The scope to start from (typically the focused scope).
+ * At each chain scope the component defs are read FIRST (inner knowledge
+ * beats catalogue metadata at the same depth), then the registry commands
+ * matched at that scope; first key wins overall, so an inner scope's binding
+ * — from either source — shadows every outer claim of the same key. This is
+ * what keeps Space on a focused `<Pressable>` activating the pressable (its
+ * `ui:pressable` marker sits just above the leaf) rather than firing the
+ * enclosing `<Inspectable>`'s `entity.inspect` def, while an inner pill's
+ * own Enter def still beats the `ui:field`-matched `field.edit` further out.
+ *
+ * # Literal match only — no entity-typed expansion
+ *
+ * The registry match is STRICT EQUALITY between a scope expression and the
+ * chain scope's moniker. Entity-typed scope expressions (`entity:task`,
+ * `entity:tag`, …) intentionally never match here, even though a `task:...`
+ * moniker admits them in the context-menu's `scopeMatches`: those commands'
+ * keys are component-registered (e.g. `task.untag` on a tag pill's scope),
+ * and lighting them up from registry metadata alone would bind keys for
+ * behaviors the focused component never wired.
+ *
+ * @param registryCommands - The active command list (from `useCommandList`).
  * @param mode - The keymap mode to extract bindings for.
+ * @param scope - The focused scope (innermost), or null when nothing is
+ *   focused.
  * @returns A flat BindingTable mapping canonical key strings to command IDs.
  */
-export function extractScopeBindings(
-  scope: {
-    commands: Map<string, { id: string; keys?: Record<string, string> }>;
-    parent: unknown;
-  } | null,
+export function extractChainBindings(
+  registryCommands: readonly RegistryKeyCommand[],
   mode: KeymapMode,
+  scope: BindingScope | null,
 ): BindingTable {
+  // Group the scope-gated registry commands by scope expression once, so the
+  // chain walk does a map lookup per scope instead of rescanning the list.
+  const byScopeExpr = new Map<string, RegistryKeyCommand[]>();
+  for (const cmd of registryCommands) {
+    // Global commands own the global table (extractKeymapBindings) — only
+    // scope-gated commands contribute here.
+    if (cmd.scope === undefined || cmd.scope.length === 0) continue;
+    for (const expr of cmd.scope) {
+      const bucket = byScopeExpr.get(expr);
+      if (bucket) bucket.push(cmd);
+      else byScopeExpr.set(expr, [cmd]);
+    }
+  }
+
   const result: BindingTable = {};
+  const claim = (cmd: { id: string; keys?: Record<string, string> }) => {
+    const key = cmd.keys?.[mode];
+    if (key && !(key in result)) {
+      // Inner scopes win — only set if not already claimed.
+      result[key] = cmd.id;
+    }
+  };
+
   let current = scope;
   while (current !== null) {
-    for (const [, cmd] of current.commands) {
-      const key = cmd.keys?.[mode];
-      if (key && !(key in result)) {
-        // Inner scopes win — only set if not already claimed
-        result[key] = cmd.id;
-      }
+    // Component defs first: inner knowledge beats catalogue metadata at the
+    // same depth.
+    for (const [, cmd] of current.commands) claim(cmd);
+    // Then registry commands literally gated to this scope's moniker.
+    if (current.moniker !== undefined) {
+      for (const cmd of byScopeExpr.get(current.moniker) ?? []) claim(cmd);
     }
-    current = current.parent as typeof scope;
+    current = current.parent as BindingScope | null;
   }
   return result;
 }
@@ -483,7 +552,7 @@ export function extractScopeBindings(
  * Scope-gated commands (a non-empty `scope` list, e.g.
  * `ui.entity.startRename`'s `["entity:perspective"]`) contribute NO global
  * binding: their keys apply only when a matching scope is in the focused
- * chain, via {@link extractScopeBindings}. This is load-bearing for
+ * chain, via {@link extractChainBindings}. This is load-bearing for
  * determinism — `list command` returns commands in UNSPECIFIED order (the
  * service registry is a hash map and each per-board plugin runtime owns its
  * own instance), so letting a scoped command compete with a global one for

@@ -32,7 +32,7 @@
  *      moniker `perspective_bar.perspective.save:<view-id>` and an
  *      `onPress` that opens the popover.
  *   3. AppShell's `KeybindingHandler` resolves Enter on the focused
- *      leaf through `extractScopeBindings`, dispatches
+ *      leaf through `extractChainBindings`, dispatches
  *      `pressable.activate` → opens the popover.
  *
  * Asserts: the focused leaf registers under the new moniker AND Enter
@@ -44,6 +44,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+  UI_SURFACE_PLUGIN_COMMANDS,
+} from "@/test/mock-command-list";
 import { render, fireEvent, act } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
@@ -58,6 +63,18 @@ const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
+  // The pressable activation commands are DEFINED by the `ui-commands`
+  // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
+  // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
+  // layer only through the `useCommandList` seam, so answer `list command`
+  // with the shared mock registry. Non-list `command_tool_call` ops fall
+  // through to the branches below.
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "list_commands_for_scope") {
     // After the Add migration, `<BarRegistryTabButtons>` queries the
     // registry for global tab-button commands. Return the
@@ -203,7 +220,10 @@ vi.mock("@/lib/context-menu", () => ({
 // `<BarRegistryTabButtons>` sources global (unscoped) tab-button commands from
 // the Command registry via `useCommandList`. Return the `perspective.save`
 // payload (empty `scope` = global) so its `<CommandButton>` mounts at the bar
-// level and registers its spatial-nav leaf.
+// level and registers its spatial-nav leaf. The `UI_SURFACE_PLUGIN_COMMANDS`
+// mirror rides along so the keymap layer (which reads the same registry)
+// binds Enter → `pressable.activate` on the focused `<CommandButton>` leaf —
+// the entries carry no `tab_button`, so the bar renders no extra buttons.
 vi.mock("@/hooks/use-command-list", () => ({
   useCommandList: () => ({
     commands: [
@@ -218,6 +238,7 @@ vi.mock("@/hooks/use-command-list", () => ({
         ],
         keys: {},
       },
+      ...UI_SURFACE_PLUGIN_COMMANDS,
     ],
     loading: false,
     refresh: vi.fn(),
@@ -340,9 +361,7 @@ describe("PerspectiveTabBar add button — Enter activates the registry-rendered
     // where `<BarRegistryTabButtons>` uses surface `perspective_bar` and
     // the active view id as the suffix.
     const expectedSegment = "perspective_bar.perspective.save:board-1";
-    const leaf = registerScopeArgs().find(
-      (a) => a.segment === expectedSegment,
-    );
+    const leaf = registerScopeArgs().find((a) => a.segment === expectedSegment);
     expect(
       leaf,
       `${expectedSegment} must register as a FocusScope leaf via Pressable`,
@@ -385,9 +404,7 @@ describe("PerspectiveTabBar add button — Enter activates the registry-rendered
     // the unused `result` so the harness's render is still required for
     // its side-effects (mounting the bar + the popover root).
     void result;
-    const popover = document.querySelector(
-      '[data-testid="command-popover"]',
-    );
+    const popover = document.querySelector('[data-testid="command-popover"]');
     expect(
       popover,
       "Enter on the focused add leaf must open <CommandPopover>",

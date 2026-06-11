@@ -12,7 +12,7 @@
  *   3. The kernel emits `focus-changed` with the leaf's FQM →
  *      EntityFocusProvider mirrors that into the focused-scope store.
  *   4. AppShell's `KeybindingHandler` reads the focused scope's bindings
- *      via `extractScopeBindings(focusedScope)`, sees `pressable.activate`
+ *      via `extractChainBindings(focusedScope)`, sees `pressable.activate`
  *      bound to Enter, dispatches it through `useDispatchCommand`.
  *   5. The CommandDef's `execute` fires `onPress` → which dispatches
  *      `ui.inspect` against the board's moniker via the real dispatch
@@ -28,6 +28,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
 import { render, fireEvent, act } from "@testing-library/react";
 import type { BoardData, OpenBoard } from "@/types/kanban";
 
@@ -43,6 +47,18 @@ const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
+  // The pressable activation commands are DEFINED by the `ui-commands`
+  // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
+  // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
+  // layer only through the `useCommandList` seam, so answer `list command`
+  // with the shared mock registry. Non-list `command_tool_call` ops fall
+  // through to the branches below.
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "get_ui_state")
     return Promise.resolve({
       palette_open: false,

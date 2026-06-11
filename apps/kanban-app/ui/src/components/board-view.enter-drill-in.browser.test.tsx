@@ -335,7 +335,7 @@ async function flushSetup() {
  * spatial → entity bridge in `<EntityFocusProvider>` calls
  * `actions.setFocus(payload.next_segment)` on every focus-changed
  * event. The entity-focus store's `focusedScope` is what AppShell's
- * `<KeybindingHandler>` walks via `extractScopeBindings` to resolve
+ * `<KeybindingHandler>` walks via `extractChainBindings` to resolve
  * scope-level command keys.
  */
 async function fireFocusChanged({
@@ -517,7 +517,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
     expect(cardKey, "the first card must register a spatial zone").toBeTruthy();
 
     // Drive a focus-changed event so the entity-focus store reflects
-    // the card moniker. `extractScopeBindings` reads the focused
+    // the card moniker. `extractChainBindings` reads the focused
     // scope chain on the next keydown.
     await fireFocusChanged({
       next_fq: cardKey!,
@@ -604,7 +604,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
     // Fire Space at the document level — the `<Inspectable>` wrapper's
     // scope-level `entity.inspect` command is keyed `cua: "Space"`,
     // closer in the scope chain than the global root, and resolves
-    // through `extractScopeBindings`.
+    // through `extractChainBindings`.
     await act(async () => {
       fireEvent.keyDown(document, { key: " ", code: "Space" });
       await Promise.resolve();
@@ -640,7 +640,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
     ).toBeTruthy();
 
     // Seed focus to the column zone. The bridge mirrors next_segment
-    // into the entity-focus store so `extractScopeBindings` walks the
+    // into the entity-focus store so `extractChainBindings` walks the
     // column's scope chain on the next Enter keydown.
     await fireFocusChanged({
       next_fq: columnKey!,
@@ -691,7 +691,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
     );
     expect(focusCall).toBeTruthy();
     const focusOuter = focusCall![1] as Record<string, unknown>;
-    const focusArgs = ((focusOuter?.params ?? focusOuter) as { fq?: string });
+    const focusArgs = (focusOuter?.params ?? focusOuter) as { fq?: string };
     expect(
       focusArgs.fq,
       "drill-in's setFocus must invoke spatial_focus with the resolved child moniker",
@@ -765,7 +765,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
     );
     expect(focusCall).toBeTruthy();
     const focusOuter = focusCall![1] as Record<string, unknown>;
-    const focusArgs = ((focusOuter?.params ?? focusOuter) as { fq?: string });
+    const focusArgs = (focusOuter?.params ?? focusOuter) as { fq?: string };
     expect(
       focusArgs.fq,
       "drill-in must follow the kernel-returned remembered moniker",
@@ -854,7 +854,10 @@ describe("BoardView — Enter drills in, not inspect", () => {
     await flushSetup();
 
     const cardKey = keyForMoniker("task:t1");
-    expect(cardKey, "the first card must register a spatial scope").toBeTruthy();
+    expect(
+      cardKey,
+      "the first card must register a spatial scope",
+    ).toBeTruthy();
 
     await fireFocusChanged({
       next_fq: cardKey!,
@@ -913,7 +916,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
       "drill-in must invoke spatial_focus on the kernel-resolved target",
     ).toBeTruthy();
     const focusOuter = focusCall![1] as Record<string, unknown>;
-    const focusArgs = ((focusOuter?.params ?? focusOuter) as { fq?: string });
+    const focusArgs = (focusOuter?.params ?? focusOuter) as { fq?: string };
     expect(
       focusArgs.fq,
       "drill-in's setFocus must invoke spatial_focus with the resolved field FQM, not the card's own FQM",
@@ -949,7 +952,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
 
     // Seed focus to the field. We do NOT need to actually register the
     // field as a scope — the entity-focus bridge takes the segment from
-    // the focus-changed event payload, and `extractScopeBindings` walks
+    // the focus-changed event payload, and `extractChainBindings` walks
     // the scope chain that `<EntityFocusProvider>` produces.
     await fireFocusChanged({
       next_fq: fieldKey,
@@ -988,7 +991,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
       "drill-out must invoke spatial_focus on the kernel-resolved parent",
     ).toBeTruthy();
     const focusOuter = focusCall![1] as Record<string, unknown>;
-    const focusArgs = ((focusOuter?.params ?? focusOuter) as { fq?: string });
+    const focusArgs = (focusOuter?.params ?? focusOuter) as { fq?: string };
     expect(
       focusArgs.fq,
       "drill-out's setFocus must invoke spatial_focus with the parent card's FQM",

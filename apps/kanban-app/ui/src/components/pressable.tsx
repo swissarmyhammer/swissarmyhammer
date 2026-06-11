@@ -8,9 +8,31 @@
  *      navigate to it.
  *   2. Renders a `<button type="button">` (or, via `asChild`, an
  *      arbitrary host like a Radix `<TooltipTrigger asChild>` slot).
- *   3. Registers two scope-level CommandDefs so `Enter` (vim/cua) and
- *      `Space` (cua) on the focused leaf invoke the same `onPress`
- *      callback as the button's `onClick`.
+ *   3. Wires the plugin-defined activation commands
+ *      (`pressable.activate` — Enter vim/cua, `pressable.activateSpace`
+ *      — Space cua, both defined by the `ui-commands` builtin plugin)
+ *      to the same `onPress` callback as the button's `onClick`, by
+ *      registering webview command-bus handlers while the leaf is the
+ *      spatial focus.
+ *
+ * # Command split (Card D, ui-command-cleanup)
+ *
+ * The activation command DEFINITIONS (id / name / keys / scope) live in
+ * `builtin/plugins/ui-commands/index.ts::UI_SURFACE_COMMANDS` — this
+ * component defines no `CommandDef`. Their `scope: ["ui:pressable"]`
+ * names the constant marker moniker this component mounts via a
+ * `CommandScopeProvider` directly above its `<FocusScope>`
+ * ({@link PRESSABLE_COMMAND_SCOPE}), so the keymap layer binds
+ * Enter / Space only while a pressable leaf is in the focused chain.
+ * The live behavior — the local `onPress` closure — registers on the
+ * webview command bus per id while spatial focus is within the leaf's
+ * subtree (`useFocusedWebviewCommandHandlers`; for a pressable that
+ * means direct focus — it is a spatial LEAF, and a registered
+ * `<FocusScope>` cannot contain another, so nothing ever nests inside
+ * it), so a dispatch always reaches the focused instance. The handler
+ * is pure presentation: it calls the caller's `onPress`, which
+ * re-dispatches through `useDispatchCommand` when it needs a durable
+ * effect.
  *
  * # Why a primitive, not a hand-rolled per-site shape
  *
@@ -85,6 +107,7 @@ import {
   forwardRef,
   useCallback,
   useMemo,
+  useRef,
   type ButtonHTMLAttributes,
   type ForwardedRef,
   type MouseEvent as ReactMouseEvent,
@@ -92,8 +115,25 @@ import {
 } from "react";
 import { Slot } from "radix-ui";
 import { FocusScope } from "@/components/focus-scope";
-import { type CommandDef } from "@/lib/command-scope";
+import { CommandScopeProvider } from "@/lib/command-scope";
+import { useFocusedWebviewCommandHandlers } from "@/lib/use-focused-webview-command-handlers";
+import type { WebviewCommandHandler } from "@/lib/webview-command-bus";
 import type { SegmentMoniker } from "@/types/spatial";
+
+/**
+ * The constant marker moniker every `<Pressable>` mounts into the command
+ * scope chain, directly above its `<FocusScope>` leaf.
+ *
+ * Pressable leaves carry arbitrary per-site monikers
+ * (`"ui:navbar.inspect"`, `"card.inspect:T1"`, …), so the plugin-defined
+ * activation commands cannot be scope-gated on a literal leaf moniker the
+ * way the grid's `ui:grid` zone is. The marker gives every pressable one
+ * shared literal moniker; the `ui-commands` plugin's
+ * `pressable.activate` / `pressable.activateSpace` declare
+ * `scope: ["ui:pressable"]` against it, so their Enter / Space keys bind
+ * exactly while a pressable leaf is the spatial focus — and nowhere else.
+ */
+export const PRESSABLE_COMMAND_SCOPE = "ui:pressable";
 
 /** Public props for `<Pressable>`. */
 export interface PressableProps extends Omit<
@@ -139,39 +179,38 @@ export interface PressableProps extends Omit<
 }
 
 /**
- * Build the two scope-level CommandDefs that activate the pressable
- * when its leaf is focused.
+ * Wire the plugin-defined activation ids (`pressable.activate` /
+ * `pressable.activateSpace`) to this pressable's `onPress` while its leaf
+ * is the spatial focus.
  *
- * Two separate CommandDefs because each `keys` entry in a `CommandDef`
- * is one binding per keymap, and we want both Enter (vim + cua) AND
- * Space (cua only — Web/CUA convention is both, vim leaves Space free
- * for navigation). When `disabled` is true both `execute` closures
- * short-circuit so the keyboard activation matches the suppressed
- * `onClick`.
+ * Both ids share one guarded behavior: when `disabled` is true the closure
+ * short-circuits so keyboard activation matches the suppressed `onClick`.
+ * The latest `onPress` / `disabled` are read through a ref at invocation
+ * time, so the bus registration never churns on prop identity. Two separate
+ * command ids exist (rather than one with two keys) because each `keys`
+ * entry in the plugin's command metadata is one binding per keymap — Enter
+ * binds in vim + cua, Space in cua only.
  */
-function usePressCommands(
+function usePressActivationHandlers(
+  moniker: SegmentMoniker,
   onPress: () => void,
   disabled: boolean,
-): readonly CommandDef[] {
-  return useMemo<readonly CommandDef[]>(() => {
+): void {
+  const pressRef = useRef({ onPress, disabled });
+  pressRef.current = { onPress, disabled };
+  const handlers = useMemo<
+    Readonly<Record<string, WebviewCommandHandler>>
+  >(() => {
     const guarded = () => {
-      if (!disabled) onPress();
+      const { onPress: press, disabled: isDisabled } = pressRef.current;
+      if (!isDisabled) press();
     };
-    return [
-      {
-        id: "pressable.activate",
-        name: "Activate",
-        keys: { vim: "Enter", cua: "Enter" },
-        execute: guarded,
-      },
-      {
-        id: "pressable.activateSpace",
-        name: "Activate (Space)",
-        keys: { cua: "Space" },
-        execute: guarded,
-      },
-    ];
-  }, [onPress, disabled]);
+    return {
+      "pressable.activate": guarded,
+      "pressable.activateSpace": guarded,
+    };
+  }, []);
+  useFocusedWebviewCommandHandlers(moniker, handlers);
 }
 
 /**
@@ -191,7 +230,7 @@ export const Pressable = forwardRef<HTMLButtonElement, PressableProps>(
     }: PressableProps,
     ref: ForwardedRef<HTMLButtonElement>,
   ) {
-    const pressCommands = usePressCommands(onPress, disabled);
+    usePressActivationHandlers(moniker, onPress, disabled);
 
     // Pull a passthrough `onClick` out of `rest` so we can compose it
     // with our own activation handler. The contract document says
@@ -227,19 +266,25 @@ export const Pressable = forwardRef<HTMLButtonElement, PressableProps>(
     // non-asChild path.
     const buttonProps = asChild === true ? {} : { type: "button" as const };
 
+    // The marker `CommandScopeProvider` sits directly above the
+    // `<FocusScope>` so the leaf's command-scope chain contains the
+    // literal `ui:pressable` moniker — the gate the plugin-defined
+    // activation commands' `scope` names (see PRESSABLE_COMMAND_SCOPE).
     return (
-      <FocusScope moniker={moniker} commands={pressCommands}>
-        <Host
-          ref={ref}
-          aria-label={ariaLabel}
-          disabled={disabled || undefined}
-          {...buttonProps}
-          {...restWithoutClick}
-          onClick={handleClick}
-        >
-          {children}
-        </Host>
-      </FocusScope>
+      <CommandScopeProvider moniker={PRESSABLE_COMMAND_SCOPE}>
+        <FocusScope moniker={moniker}>
+          <Host
+            ref={ref}
+            aria-label={ariaLabel}
+            disabled={disabled || undefined}
+            {...buttonProps}
+            {...restWithoutClick}
+            onClick={handleClick}
+          >
+            {children}
+          </Host>
+        </FocusScope>
+      </CommandScopeProvider>
     );
   },
 );

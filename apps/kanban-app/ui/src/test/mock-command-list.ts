@@ -68,15 +68,155 @@ export const NAV_PLUGIN_COMMANDS: CommandMetadata[] = [
 ];
 
 /**
+ * Key metadata for the `grid-commands` builtin plugin's eleven commands,
+ * mirrored 1:1 from `builtin/plugins/grid-commands/index.ts::GRID_COMMANDS`
+ * (Card C — the grid command DEFINITIONS live in the plugin; grid-view.tsx
+ * only registers webview-bus handlers for the ids).
+ *
+ * Every entry is scope-gated to the grid zone (`scope: ["ui:grid"]`), so
+ * `extractKeymapBindings` never lifts its keys into the global table; the
+ * keys bind only while the focused scope chain contains the literal
+ * `ui:grid` moniker, via `extractChainBindings`. Tests that drive
+ * grid keystrokes (Home / End / Enter / Mod+Home / …) need these in the
+ * synthesized registry or the grid bindings never resolve.
+ *
+ * Exported for the drift guard
+ * (`grid-plugin-commands-mirror.spatial.node.test.ts`), which parses the
+ * plugin source from disk and fails loudly when this mirror drifts.
+ */
+export const GRID_PLUGIN_COMMANDS: CommandMetadata[] = [
+  {
+    id: "grid.moveToRowStart",
+    name: "Row Start",
+    scope: ["ui:grid"],
+    keys: { vim: "0", cua: "Home" },
+  },
+  {
+    id: "grid.moveToRowEnd",
+    name: "Row End",
+    scope: ["ui:grid"],
+    keys: { vim: "$", cua: "End" },
+  },
+  {
+    id: "grid.firstCell",
+    name: "First Cell",
+    scope: ["ui:grid"],
+    keys: { cua: "Mod+Home" },
+  },
+  {
+    id: "grid.lastCell",
+    name: "Last Cell",
+    scope: ["ui:grid"],
+    keys: { cua: "Mod+End" },
+  },
+  {
+    id: "grid.edit",
+    name: "Edit Cell",
+    scope: ["ui:grid"],
+    keys: { vim: "i", cua: "Enter" },
+  },
+  {
+    id: "grid.editEnter",
+    name: "Edit Cell (Enter)",
+    scope: ["ui:grid"],
+    keys: { vim: "Enter" },
+  },
+  {
+    id: "grid.exitEdit",
+    name: "Exit Edit",
+    scope: ["ui:grid"],
+  },
+  {
+    id: "grid.toggleVisual",
+    name: "Toggle Visual Mode",
+    scope: ["ui:grid"],
+    keys: { vim: "v" },
+  },
+  {
+    id: "grid.deleteRow",
+    name: "Delete Row",
+    scope: ["ui:grid"],
+  },
+  {
+    id: "grid.newBelow",
+    name: "New Row Below",
+    scope: ["ui:grid"],
+    keys: { vim: "o", cua: "Mod+Enter" },
+  },
+  {
+    id: "grid.newAbove",
+    name: "New Row Above",
+    scope: ["ui:grid"],
+    keys: { vim: "O", cua: "Mod+Shift+Enter" },
+  },
+];
+
+/**
+ * Key metadata for the `ui-commands` builtin plugin's four UI-surface
+ * commands, mirrored 1:1 from
+ * `builtin/plugins/ui-commands/index.ts::UI_SURFACE_COMMANDS` (Card D — the
+ * field-edit and pressable-activation command DEFINITIONS live in the plugin;
+ * field.tsx and pressable.tsx only register webview-bus handlers for the ids
+ * while spatial focus is within their instance's subtree — the zone itself
+ * or a descendant such as a tag pill — matching the keymap's marker-in-chain
+ * gate; a pressable is a spatial leaf, so containment degenerates to direct
+ * focus).
+ *
+ * Each entry is scope-gated to its surface's marker moniker (`ui:field` /
+ * `ui:pressable`) — the literal moniker the component mounts via a
+ * `CommandScopeProvider` directly above its `<FocusScope>` — so
+ * `extractKeymapBindings` never lifts its keys into the global table; the
+ * keys bind only while the marker is in the focused chain, via the
+ * depth-interleaved chain walk (`extractChainBindings`). Tests that drive
+ * Enter / Space on a focused field zone or pressable leaf need these in the
+ * synthesized registry or the bindings never resolve.
+ *
+ * Exported for the drift guard
+ * (`ui-surface-plugin-commands-mirror.spatial.node.test.ts`), which parses
+ * the plugin source from disk and fails loudly when this mirror drifts.
+ */
+export const UI_SURFACE_PLUGIN_COMMANDS: CommandMetadata[] = [
+  {
+    id: "field.edit",
+    name: "Edit Field",
+    scope: ["ui:field"],
+    keys: { vim: "i", cua: "Enter" },
+  },
+  {
+    id: "field.editEnter",
+    name: "Edit Field (Enter)",
+    scope: ["ui:field"],
+    keys: { vim: "Enter" },
+  },
+  {
+    id: "pressable.activate",
+    name: "Activate",
+    scope: ["ui:pressable"],
+    keys: { vim: "Enter", cua: "Enter" },
+  },
+  {
+    id: "pressable.activateSpace",
+    name: "Activate (Space)",
+    scope: ["ui:pressable"],
+    keys: { cua: "Space" },
+  },
+];
+
+/**
  * Build the global command registry from `BINDING_TABLES` (one command per id,
  * each carrying its `keys` map keyed by keymap mode) plus the
- * `nav-commands` plugin's directional commands, which carry their keys on the
- * plugin catalogue rather than the static tables.
+ * `nav-commands` plugin's directional commands, the `grid-commands`
+ * plugin's grid commands, and the `ui-commands` plugin's UI-surface
+ * commands, which carry their keys on the plugin catalogue rather than the
+ * static tables.
  *
  * The plugin entries stay separate from the `byId` merge: a command id can
  * own several keys per mode (e.g. cua binds both `Tab` and `ArrowRight` to
  * `nav.right`), and `extractKeymapBindings` keys its table by KEY, so two
- * metadata entries with the same id simply contribute two bindings.
+ * metadata entries with the same id simply contribute two bindings. The
+ * grid and UI-surface entries are scope-gated, so they contribute nothing to
+ * the global table — they surface only through the scoped chain walk when
+ * their zone moniker is in the focused chain.
  */
 export function globalCommandsFromBindingTables(): CommandMetadata[] {
   const byId: Record<string, CommandMetadata> = {};
@@ -86,7 +226,12 @@ export function globalCommandsFromBindingTables(): CommandMetadata[] {
       (byId[id].keys as Record<string, string>)[mode] = key;
     }
   }
-  return [...NAV_PLUGIN_COMMANDS, ...Object.values(byId)];
+  return [
+    ...NAV_PLUGIN_COMMANDS,
+    ...GRID_PLUGIN_COMMANDS,
+    ...UI_SURFACE_PLUGIN_COMMANDS,
+    ...Object.values(byId),
+  ];
 }
 
 /**

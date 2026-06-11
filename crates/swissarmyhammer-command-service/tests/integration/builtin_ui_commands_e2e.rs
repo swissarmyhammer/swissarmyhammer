@@ -1,10 +1,12 @@
 //! End-to-end test for the committed `ui-commands` builtin plugin.
 //!
 //! This is the acceptance for the port of `ui.yaml` — 10 commands — into the
-//! one `builtin/plugins/ui-commands/` bundle. It is the LAST builtin-commands
-//! port, and like `app-shell-commands` every command fans out across MULTIPLE
-//! backends by concern — but here the three backends are `ui_state`, `focus`,
-//! and `window`:
+//! one `builtin/plugins/ui-commands/` bundle, PLUS the four UI-surface
+//! commands Card D moved out of React (`field.edit` / `field.editEnter` /
+//! `pressable.activate` / `pressable.activateSpace`) — 14 commands total.
+//! It was the LAST builtin-commands port, and like `app-shell-commands` every
+//! ported command fans out across MULTIPLE backends by concern — but here the
+//! three backends are `ui_state`, `focus`, and `window`:
 //!
 //!   - inspector / palette / mode / rename / inspect — `ui.inspect`,
 //!     `ui.inspector.{close,close_all,set_width}`, `ui.palette.{open,close}`,
@@ -17,10 +19,17 @@
 //!   - `window.new` → the `window` server
 //!     (`swissarmyhammer-window-service::WindowService` over a recording spy
 //!     `WindowShell`), exposed under id `"window"`.
+//!   - `field.edit` / `field.editEnter` / `pressable.activate` /
+//!     `pressable.activateSpace` — NO backend: these are "handled in webview"
+//!     (Card D). The webview command bus owns the live effect (field edit-mode
+//!     entry / `onPress` activation); the host execute is an inert no-op,
+//!     mirroring the `grid-commands` bundle. Each is scope-gated to its
+//!     surface's literal chain moniker (`ui:field` / `ui:pressable`) so its
+//!     keys never claim a global binding.
 //!
 //! What a passing run proves:
 //!
-//! 1. **Discovery + registration** — after load, all 10 ported commands are
+//! 1. **Discovery + registration** — after load, all 14 commands are
 //!    registered.
 //! 2. **Metadata fidelity** — each command's `name` / `keys` / `menu` /
 //!    `scope` / `context_menu*` / `visible` / `undoable` / `params` match the
@@ -36,6 +45,8 @@
 //!    - `ui.setFocus` changes the `SpatialState` focused slot via the `focus`
 //!      server.
 //!    - `window.new` hits the recording `WindowShell` spy.
+//!    - `field.edit` / `pressable.activate` dispatch host-side as inert
+//!      `{ ok: true }` no-ops (the webview bus owns the live effect).
 //! 4. **Regression (`no-client-side-inspect`)** — `ui.inspect` goes through the
 //!    Command service into the `ui_state` backend, NOT a React-side shortcut:
 //!    the inspector stack mutation is observed on the shared `UIState`.
@@ -416,6 +427,11 @@ async fn ui_commands_plugin_registers_and_executes() {
         "ui.mode.set",
         "ui.setFocus",
         "window.new",
+        // Card D — UI-surface commands moved out of React, webview-bus handled.
+        "field.edit",
+        "field.editEnter",
+        "pressable.activate",
+        "pressable.activateSpace",
     ] {
         assert!(
             commands.contains_key(id),
@@ -425,8 +441,8 @@ async fn ui_commands_plugin_registers_and_executes() {
     }
     assert_eq!(
         commands.len(),
-        10,
-        "exactly the 10 ported commands should be registered, got {:?}",
+        14,
+        "exactly the 14 ui-commands registrations should be present, got {:?}",
         commands.keys().collect::<Vec<_>>()
     );
 
@@ -642,6 +658,24 @@ async fn ui_commands_plugin_registers_and_executes() {
         vec!["open_new_window:None".to_string()],
         "window.new must drive the window shell's open_new_window action"
     );
+
+    // ── (3j) field.* / pressable.* dispatch host-side as inert no-ops ───────
+    // The webview command bus owns the live effect (Card D); the host execute
+    // exists only to satisfy the registration contract. A successful
+    // `{ ok: true }` proves the execute reaches no backend.
+    for id in [
+        "field.edit",
+        "field.editEnter",
+        "pressable.activate",
+        "pressable.activateSpace",
+    ] {
+        let result = execute_ok(&service, id, json!({})).await;
+        assert_eq!(
+            result["ok"],
+            json!(true),
+            "the inert host execute for {id} returns {{ ok: true }}; got {result}"
+        );
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -651,8 +685,8 @@ async fn ui_commands_plugin_registers_and_executes() {
 /// One row of the metadata-fidelity table: a command id and its assertion.
 type MetadataAssert = (&'static str, fn(&Value));
 
-/// The metadata-fidelity table: each ported command id paired with its
-/// per-command assertion, exercised across all 10 in the test body.
+/// The metadata-fidelity table: each command id paired with its per-command
+/// assertion, exercised across all 14 in the test body.
 fn metadata_asserts() -> Vec<MetadataAssert> {
     vec![
         ("ui.inspect", assert_ui_inspect),
@@ -665,6 +699,10 @@ fn metadata_asserts() -> Vec<MetadataAssert> {
         ("ui.mode.set", assert_mode_set),
         ("ui.setFocus", assert_set_focus),
         ("window.new", assert_window_new),
+        ("field.edit", assert_field_edit),
+        ("field.editEnter", assert_field_edit_enter),
+        ("pressable.activate", assert_pressable_activate),
+        ("pressable.activateSpace", assert_pressable_activate_space),
     ]
 }
 
@@ -847,6 +885,66 @@ fn assert_set_focus(cmd: &Value) {
     assert_eq!(cmd["undoable"], json!(false), "ui.setFocus undoable:false");
     assert_no_keys(cmd, "ui.setFocus");
     assert_no_menu(cmd, "ui.setFocus");
+}
+
+/// Shared shape check for the four Card D UI-surface commands: scope-gated to
+/// the surface's literal chain moniker, no menu placement (the retired React
+/// defs had none — the OS menu stays unchanged).
+fn assert_ui_surface_command(cmd: &Value, id: &str, name: &str, keys: Value, scope: &str) {
+    assert_eq!(cmd["name"], json!(name), "{id} name");
+    assert_eq!(cmd["keys"], keys, "{id} keys");
+    // The scope keeps the keys out of the global table: they bind only while
+    // the focused scope chain contains the surface's literal moniker.
+    assert_eq!(cmd["scope"], json!([scope]), "{id} scope");
+    assert_no_menu(cmd, id);
+}
+
+/// `field.edit` — retired field.tsx def: keys vim:i / cua:Enter; gated to the
+/// `ui:field` marker scope the field zone mounts above its `<FocusScope>`.
+fn assert_field_edit(cmd: &Value) {
+    assert_ui_surface_command(
+        cmd,
+        "field.edit",
+        "Edit Field",
+        json!({ "vim": "i", "cua": "Enter" }),
+        "ui:field",
+    );
+}
+
+/// `field.editEnter` — retired field.tsx def: keys vim:Enter (vim parity for
+/// the cua Enter binding on `field.edit`).
+fn assert_field_edit_enter(cmd: &Value) {
+    assert_ui_surface_command(
+        cmd,
+        "field.editEnter",
+        "Edit Field (Enter)",
+        json!({ "vim": "Enter" }),
+        "ui:field",
+    );
+}
+
+/// `pressable.activate` — retired pressable.tsx def: keys vim:Enter /
+/// cua:Enter; gated to the `ui:pressable` marker scope.
+fn assert_pressable_activate(cmd: &Value) {
+    assert_ui_surface_command(
+        cmd,
+        "pressable.activate",
+        "Activate",
+        json!({ "vim": "Enter", "cua": "Enter" }),
+        "ui:pressable",
+    );
+}
+
+/// `pressable.activateSpace` — retired pressable.tsx def: keys cua:Space only
+/// (Web/CUA convention binds both Enter and Space; vim leaves Space free).
+fn assert_pressable_activate_space(cmd: &Value) {
+    assert_ui_surface_command(
+        cmd,
+        "pressable.activateSpace",
+        "Activate (Space)",
+        json!({ "cua": "Space" }),
+        "ui:pressable",
+    );
 }
 
 /// `window.new` — ui.yaml: keys cua/vim/emacs all Mod+Shift+N, menu

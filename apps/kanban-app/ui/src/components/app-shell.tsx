@@ -24,8 +24,8 @@ import { useUIState } from "@/lib/ui-state-context";
 import { useAppMode } from "@/lib/app-mode-context";
 import {
   createKeyHandler,
+  extractChainBindings,
   extractKeymapBindings,
-  extractScopeBindings,
   type KeymapMode,
 } from "@/lib/keybindings";
 import { useCommandList } from "@/hooks/use-command-list";
@@ -85,6 +85,11 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
   dispatchRef.current = dispatch;
   const focusedScopeRef = useRef(focusedScope);
   focusedScopeRef.current = focusedScope;
+  // The scoped-registry binding layer (below) reads the live registry at
+  // keystroke time; a ref keeps the handler effect's dependency list down to
+  // the derived global table while still seeing every registry re-fetch.
+  const registryCommandsRef = useRef(registryCommands);
+  registryCommandsRef.current = registryCommands;
 
   /** Execute a command via useDispatchCommand (focused scope preferred). */
   const executeCommand = useCallback(async (id: string): Promise<boolean> => {
@@ -111,12 +116,37 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
   }, []);
 
   useEffect(() => {
-    // Pass scope bindings so command `keys` from the focused scope (inspector,
-    // grid, board nav) are resolved through the same single key handler.
+    // Pass scope bindings so command `keys` from the focused scope are
+    // resolved through the same single key handler. Two binding sources merge
+    // here in ONE depth-interleaved inner-first walk over the focused chain
+    // (`extractChainBindings`):
+    //
+    //   1. Scope-level React `CommandDef`s (inspector close, pill untag,
+    //      Inspectable Space, root `ai.*`) — component-owned; at any given
+    //      chain depth they win over the registry layer for the same key
+    //      (inner knowledge beats catalogue metadata).
+    //   2. Scoped REGISTRY bindings — plugin-defined commands whose `scope`
+    //      names a zone moniker literally present in the focused chain (the
+    //      `grid-commands` plugin's `scope: ["ui:grid"]`, Card C; the
+    //      `ui-commands` plugin's `ui:field` / `ui:pressable` markers,
+    //      Card D). Their behaviors live on the webview command bus,
+    //      registered by the zone's component, so a literal-moniker match
+    //      implies the handler is live.
+    //
+    // The interleave (rather than two flat layers) is load-bearing: a focused
+    // `<Pressable>`'s registry-bound Space (matched at its inner
+    // `ui:pressable` marker) must beat the enclosing `<Inspectable>`'s
+    // scope-level `entity.inspect` Space def — innermost wins across BOTH
+    // sources, exactly as it did when every binding was a component def.
     const handler = createKeyHandler(
       mode,
       executeCommand,
-      () => extractScopeBindings(focusedScopeRef.current, mode),
+      () =>
+        extractChainBindings(
+          registryCommandsRef.current,
+          mode,
+          focusedScopeRef.current,
+        ),
       globalBindings,
     );
     document.addEventListener("keydown", handler);
@@ -303,7 +333,7 @@ function isInspectableSegment(segment: string): boolean {
  * focused chain to shadow it.
  *
  * The per-Inspectable scope command (`inspectable.tsx`) registers the
- * same id at scope level with the same `keys`. `extractScopeBindings`
+ * same id at scope level with the same `keys`. `extractChainBindings`
  * walks the focused scope chain inner-first and returns the closest
  * binding for a given key, so when an Inspectable wraps the focused
  * leaf its scope-level command wins and the root one never runs. When
@@ -365,7 +395,7 @@ function buildRootInspectCommand(
  * `triggerStartRename`.
  *
  * Drill commands come before `STATIC_GLOBAL_COMMANDS`-derived entries
- * in the iteration order seen by `extractScopeBindings`: that walk uses
+ * in the iteration order seen by `extractChainBindings`: that walk uses
  * "first key wins per scope", so keeping them at the head of the
  * dynamic batch — which AppShell prepends to the static batch in the
  * spread — guarantees their bindings (notably `nav.drillOut: Escape`)
@@ -416,7 +446,7 @@ function buildDynamicGlobalCommands(
  * The `ai.*` `keys` blocks here mirror `swissarmyhammer-kanban`'s
  * `builtin/commands/ai.yaml` — the YAML side feeds the palette's keybinding
  * hints and the backend completeness guard; this React side feeds
- * `extractScopeBindings`. The static `BINDING_TABLES` entries cover the
+ * `extractChainBindings`. The static `BINDING_TABLES` entries cover the
  * no-focus case where the scope walk yields nothing.
  *
  * @param streaming - Whether the AI conversation is currently streaming.

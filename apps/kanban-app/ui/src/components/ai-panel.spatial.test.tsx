@@ -109,6 +109,10 @@ import {
   type SpatialHarness,
 } from "@/test/spatial-shadow-registry";
 import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
+import {
   asSegment,
   composeFq,
   fqRoot,
@@ -277,8 +281,20 @@ function findRegisterRecord(segment: string): Record<string, unknown> | null {
  * stack hits on mount — `get_ui_state` (drives the keymap mode the
  * `KeybindingHandler` resolves against) and `get_undo_state`. Every
  * spatial command is handled by the shadow navigator before this runs.
+ *
+ * Also answers `list command` with the shared mock registry: the panel's
+ * `<Pressable>` leaves activate through the plugin-defined
+ * `pressable.activate` / `pressable.activateSpace` commands (scope
+ * `["ui:pressable"]`), whose keys reach the keymap layer only through the
+ * `useCommandList` seam.
  */
-const appShellInvokeImpl: DefaultInvokeImpl = (cmd) => {
+const appShellInvokeImpl: DefaultInvokeImpl = (cmd, args) => {
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "get_ui_state") {
     return {
       palette_open: false,
@@ -302,7 +318,7 @@ const appShellInvokeImpl: DefaultInvokeImpl = (cmd) => {
  * keystroke into a command dispatch — that is `<AppShell>`'s
  * `<KeybindingHandler>`, which attaches a `keydown` listener on
  * `document` and resolves the focused scope's `commands` via
- * `extractScopeBindings`. Mounting it here lets the test drive a real
+ * `extractChainBindings`. Mounting it here lets the test drive a real
  * Enter keystroke and observe the composer scope's `drillIn` command
  * run — the path the user reported as broken.
  */
@@ -593,7 +609,7 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     // Seed the spatial focus onto the composer leaf. The shadow
     // navigator echoes a `focus-changed` event whose `next_segment` the
     // entity-focus bridge mirrors into the store — that is the chain
-    // `extractScopeBindings` walks on the next keydown.
+    // `extractChainBindings` walks on the next keydown.
     await act(async () => {
       await harness.commitFocus(composerFq);
     });

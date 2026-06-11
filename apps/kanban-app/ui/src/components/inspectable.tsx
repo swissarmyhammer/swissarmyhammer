@@ -83,7 +83,7 @@
  *   - On the `Space` key (vim / cua / emacs) when any descendant is the
  *     focused scope, dispatches `ui.inspect` against the wrapper's
  *     `moniker`. The binding is contributed via a scope-level
- *     `entity.inspect` `CommandDef` so `extractScopeBindings` finds it
+ *     `entity.inspect` `CommandDef` so `extractChainBindings` finds it
  *     by walking the focused scope's `parent` chain — the closest
  *     enclosing `<Inspectable>` wins on nested wrappers (e.g. a focused
  *     inspector field zone resolves to its `field:…` moniker, not the
@@ -223,7 +223,7 @@ export interface InspectableProps {
  * consumer's outer ancestor and the inner spatial primitive
  * (`<FocusScope>` / `<FocusZone>`). The descendant primitive's own
  * `CommandScope` reads `parent = useContext(CommandScopeContext)` →
- * gets the Inspectable's scope → so `extractScopeBindings` finds the
+ * gets the Inspectable's scope → so `extractChainBindings` finds the
  * Space binding when any focusable descendant is focused. Inner scopes
  * win on key collisions (closest `<Inspectable>` wins on nested
  * wrappers); editable surfaces (`<input>`, `<textarea>`, `<select>`,
