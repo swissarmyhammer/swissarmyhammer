@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d380
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff9280
 project: command-cutover
 title: Delete orphaned board.yaml YAML command def + make the no-YAML guard check the filesystem
 ---

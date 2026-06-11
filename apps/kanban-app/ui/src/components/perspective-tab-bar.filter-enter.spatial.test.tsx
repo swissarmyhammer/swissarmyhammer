@@ -386,7 +386,11 @@ describe("PerspectiveTabBar filter button — Enter claims focus on the filter e
     // isolate Enter's contribution from any startup focus traffic.
     const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
     const spatialFocusBefore = mockInvoke.mock.calls.filter(
-      (c: unknown[]) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "set focus")),
+      (c: unknown[]) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as Record<string, unknown>)?.tool === "focus" &&
+          (c[1] as Record<string, unknown>)?.op === "set focus"),
     ).length;
 
     await act(async () => {
@@ -396,7 +400,11 @@ describe("PerspectiveTabBar filter button — Enter claims focus on the filter e
     });
 
     const spatialFocusAfter = mockInvoke.mock.calls.filter(
-      (c: unknown[]) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "set focus")),
+      (c: unknown[]) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as Record<string, unknown>)?.tool === "focus" &&
+          (c[1] as Record<string, unknown>)?.op === "set focus"),
     );
     expect(
       spatialFocusAfter.length - spatialFocusBefore,
@@ -410,7 +418,13 @@ describe("PerspectiveTabBar filter button — Enter claims focus on the filter e
     // regression that pointed `nav.focus` at the wrong scope (e.g. the
     // button leaf itself) is caught here.
     const lastSpatialCall = spatialFocusAfter[spatialFocusAfter.length - 1];
-    const fq = (lastSpatialCall[1] as { fq?: string })?.fq ?? "";
+    // The MCP transport wraps the op args in a `command_tool_call`
+    // envelope (`{ module, tool, op, params }`); unwrap `params` to reach
+    // the `fq` (legacy-shaped calls carry the bag directly).
+    const outer = lastSpatialCall[1] as
+      | { fq?: string; params?: { fq?: string } }
+      | undefined;
+    const fq = (outer?.params ?? outer)?.fq ?? "";
     expect(
       fq.endsWith("filter_editor:p1"),
       `spatial_focus.fq must end with filter_editor:p1 (got ${fq})`,

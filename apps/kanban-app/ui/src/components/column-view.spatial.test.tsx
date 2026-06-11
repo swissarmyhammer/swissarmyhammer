@@ -105,6 +105,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 
 import { ColumnView } from "./column-view";
 import { AppShell } from "./app-shell";
+import { commandToolCall, navDispatchCmds } from "@/test/mock-command-list";
 import { FocusLayer } from "./focus-layer";
 import { FocusScope } from "./focus-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
@@ -163,6 +164,10 @@ async function defaultInvokeImpl(
   cmd: string,
   _args?: unknown,
 ): Promise<unknown> {
+  // The global keybinding layer (arrows → `nav.*`) is sourced from the
+  // metadata-driven Command registry via `useCommandList`, fetched
+  // through the `command_tool_call` bridge's `list command` op.
+  if (cmd === "command_tool_call") return commandToolCall(_args);
   if (cmd === "get_ui_state") {
     return {
       palette_open: false,
@@ -318,41 +323,54 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 /** Collect every `spatial_focus` call's args, in order. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
       const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
       return args;
-    })
-}
-
-/** Collect every `spatial_navigate` call's `(focusedFq, direction)`
- * pair, in order. The snapshot field is omitted from the comparison —
- * tests in this file pin the IPC routing, not the snapshot payload. */
-function spatialNavigateCalls(): Array<{
-  focusedFq: FullyQualifiedMoniker;
-  direction: string;
-}> {
-  return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_navigate" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "navigate focus")))
-    .map((c) => {
-      const args = c[1] as {
-        focusedFq: FullyQualifiedMoniker;
-        direction: string;
-      };
-      return { focusedFq: args.focusedFq, direction: args.direction };
     });
 }
 
-/** Collect every `spatial_drill_out` call's args, in order. */
+/** Collect every client-side `navigate focus` IPC, in order. Host-driven
+ * nav means this must stay EMPTY for keyboard navigation — the kernel
+ * move executes in the `nav-commands` builtin plugin. */
+function spatialNavigateCalls(): Array<Record<string, unknown>> {
+  return mockInvoke.mock.calls
+    .filter(
+      (c) =>
+        c[0] === "spatial_navigate" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "navigate focus"),
+    )
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      return (outer?.params ?? outer) as Record<string, unknown>;
+    });
+}
+
+/** Collect every client-side `drill_out layer` IPC, in order. Host-driven
+ * drill means this must stay EMPTY for keyboard drill-out. */
 function spatialDrillOutCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_drill_out" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "drill_out layer")))
+    .filter(
+      (c) =>
+        c[0] === "spatial_drill_out" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "drill_out layer"),
+    )
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
       const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
       return args;
-    })
+    });
 }
 
 /** Collect every `spatial_unregister_scope` call's args, in order. */
@@ -494,7 +512,7 @@ describe("ColumnView — browser spatial behaviour", () => {
   // Test #4 — Keystrokes → navigate
   // -------------------------------------------------------------------------
 
-  it("ArrowUp while column-focused dispatches spatial_navigate(columnKey, 'up')", async () => {
+  it("ArrowUp while column-focused dispatches nav.up to the backend", async () => {
     const column = makeColumn("01ABCDEFGHJKMNPQRSTVWXYZ04");
     const { unmount } = renderColumnInAppShell(
       <ColumnView column={column} tasks={[]} />,
@@ -526,14 +544,15 @@ describe("ColumnView — browser spatial behaviour", () => {
     await userEvent.keyboard("{ArrowUp}");
     await flushSetup();
 
-    expect(spatialNavigateCalls()).toEqual([
-      { focusedFq: columnKey, direction: "up" },
-    ]);
+    // Host-driven nav: the arrow key routes the `nav.up` command id to
+    // the backend; the webview sends no client-side navigate IPC.
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.up"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
 
     unmount();
   });
 
-  it("ArrowDown while column-focused dispatches spatial_navigate(columnKey, 'down')", async () => {
+  it("ArrowDown while column-focused dispatches nav.down to the backend", async () => {
     const column = makeColumn("01ABCDEFGHJKMNPQRSTVWXYZ05");
     const { unmount } = renderColumnInAppShell(
       <ColumnView column={column} tasks={[]} />,
@@ -555,14 +574,13 @@ describe("ColumnView — browser spatial behaviour", () => {
     await userEvent.keyboard("{ArrowDown}");
     await flushSetup();
 
-    expect(spatialNavigateCalls()).toEqual([
-      { focusedFq: columnKey, direction: "down" },
-    ]);
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.down"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
 
     unmount();
   });
 
-  it("ArrowLeft while column-focused dispatches spatial_navigate(columnKey, 'left')", async () => {
+  it("ArrowLeft while column-focused dispatches nav.left to the backend", async () => {
     const column = makeColumn("01ABCDEFGHJKMNPQRSTVWXYZ06");
     const { unmount } = renderColumnInAppShell(
       <ColumnView column={column} tasks={[]} />,
@@ -584,14 +602,13 @@ describe("ColumnView — browser spatial behaviour", () => {
     await userEvent.keyboard("{ArrowLeft}");
     await flushSetup();
 
-    expect(spatialNavigateCalls()).toEqual([
-      { focusedFq: columnKey, direction: "left" },
-    ]);
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.left"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
 
     unmount();
   });
 
-  it("ArrowRight while column-focused dispatches spatial_navigate(columnKey, 'right')", async () => {
+  it("ArrowRight while column-focused dispatches nav.right to the backend", async () => {
     const column = makeColumn("01ABCDEFGHJKMNPQRSTVWXYZ07");
     const { unmount } = renderColumnInAppShell(
       <ColumnView column={column} tasks={[]} />,
@@ -613,9 +630,8 @@ describe("ColumnView — browser spatial behaviour", () => {
     await userEvent.keyboard("{ArrowRight}");
     await flushSetup();
 
-    expect(spatialNavigateCalls()).toEqual([
-      { focusedFq: columnKey, direction: "right" },
-    ]);
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.right"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
 
     unmount();
   });
@@ -624,7 +640,7 @@ describe("ColumnView — browser spatial behaviour", () => {
   // Test #5 — Drill-out (Escape)
   // -------------------------------------------------------------------------
 
-  it("Escape while column-focused dispatches spatial_drill_out(columnKey)", async () => {
+  it("Escape while column-focused dispatches nav.drillOut to the backend", async () => {
     const column = makeColumn("01ABCDEFGHJKMNPQRSTVWXYZ08");
     const { container, unmount } = renderColumnInAppShell(
       <ColumnView column={column} tasks={[]} />,
@@ -653,24 +669,17 @@ describe("ColumnView — browser spatial behaviour", () => {
     expect(columnNode.getAttribute("data-focused")).toBe("true");
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
-      if (cmd === "spatial_drill_out") {
-        // Mirror the kernel's "drill-out walks to the surrounding
-        // `ui:board` zone" answer — we don't care which moniker comes
-        // back for THIS test; we only verify the column key was the
-        // input and that the React tree later reacts to the kernel's
-        // follow-on `focus-changed` payload (asserted below).
-        return Promise.resolve(asSegment("ui:board"));
-      }
-      return defaultInvokeImpl(cmd, args);
-    });
+    mockInvoke.mockImplementation(defaultInvokeImpl);
 
     await userEvent.keyboard("{Escape}");
     await flushSetup();
 
-    const drillCalls = spatialDrillOutCalls();
-    expect(drillCalls).toHaveLength(1);
-    expect(drillCalls[0].fq).toBe(columnKey);
+    // Escape routes the `nav.drillOut` plugin command id to the backend —
+    // drill executes host-side in the `nav-commands` builtin plugin,
+    // which resolves the focused FQ itself. The webview sends no fq and
+    // no client-side drill IPC.
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.drillOut"]);
+    expect(spatialDrillOutCalls()).toHaveLength(0);
 
     // Now mimic the kernel's resulting `focus-changed` (the column
     // de-focuses; its `data-focused` flips back to absent).

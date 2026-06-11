@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: de80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff9380
 title: 'Stale drill wire-shape expectations: perspective-tab-bar.enter-rename test #3 and spatial-focus-context.test.tsx fail pre-existing'
 ---
 ## What

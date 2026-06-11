@@ -237,8 +237,19 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 function spatialFocusCalls(): Array<Record<string, unknown>> {
   const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
   return mockInvoke.mock.calls
-    .filter((c: unknown[]) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as Record<string, unknown>)?.tool === "focus" && (c[1] as Record<string, unknown>)?.op === "set focus")))
-    .map((c: unknown[]) => c[1] as Record<string, unknown>);
+    .filter(
+      (c: unknown[]) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as Record<string, unknown>)?.tool === "focus" &&
+          (c[1] as Record<string, unknown>)?.op === "set focus"),
+    )
+    .map((c: unknown[]) => {
+      // Unwrap the `command_tool_call` envelope's `params` (legacy calls
+      // carry the args bag directly).
+      const outer = c[1] as Record<string, unknown>;
+      return (outer?.params ?? outer) as Record<string, unknown>;
+    });
 }
 
 describe("ColumnView add-task button — Enter activates onAddTask via Pressable", () => {

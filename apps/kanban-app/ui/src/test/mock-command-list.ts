@@ -21,8 +21,62 @@ import { BINDING_TABLES } from "@/lib/keybindings";
 import type { CommandMetadata } from "@/hooks/use-command-list";
 
 /**
- * Build the global command registry from `BINDING_TABLES`: one command per id,
- * each carrying its `keys` map keyed by keymap mode.
+ * Key metadata for the `nav-commands` builtin plugin's directional commands,
+ * mirrored 1:1 from `builtin/plugins/nav-commands/index.ts::NAV_DIRECTIONS`.
+ *
+ * In production these reach the registry through the plugin catalogue — NOT
+ * `BINDING_TABLES`, which only carries the static no-focus fallback set (the
+ * directional keys were removed from it when nav execution moved host-side).
+ * The synthesized registry must include them or arrow-key / hjkl navigation
+ * never resolves in tests.
+ *
+ * Exported for the drift guard
+ * (`nav-plugin-commands-mirror.spatial.node.test.ts`), which parses the
+ * plugin source from disk and fails loudly when this mirror drifts.
+ */
+export const NAV_PLUGIN_COMMANDS: CommandMetadata[] = [
+  {
+    id: "nav.up",
+    name: "Navigate Up",
+    keys: { vim: "k", cua: "ArrowUp", emacs: "Ctrl+p" },
+  },
+  {
+    id: "nav.down",
+    name: "Navigate Down",
+    keys: { vim: "j", cua: "ArrowDown", emacs: "Ctrl+n" },
+  },
+  {
+    id: "nav.left",
+    name: "Navigate Left",
+    keys: { vim: "h", cua: "ArrowLeft", emacs: "Ctrl+b" },
+  },
+  {
+    id: "nav.right",
+    name: "Navigate Right",
+    keys: { vim: "l", cua: "ArrowRight", emacs: "Ctrl+f" },
+  },
+  {
+    id: "nav.first",
+    name: "Navigate to First",
+    keys: { cua: "Home", emacs: "Alt+<" },
+  },
+  {
+    id: "nav.last",
+    name: "Navigate to Last",
+    keys: { vim: "Shift+G", cua: "End", emacs: "Alt+>" },
+  },
+];
+
+/**
+ * Build the global command registry from `BINDING_TABLES` (one command per id,
+ * each carrying its `keys` map keyed by keymap mode) plus the
+ * `nav-commands` plugin's directional commands, which carry their keys on the
+ * plugin catalogue rather than the static tables.
+ *
+ * The plugin entries stay separate from the `byId` merge: a command id can
+ * own several keys per mode (e.g. cua binds both `Tab` and `ArrowRight` to
+ * `nav.right`), and `extractKeymapBindings` keys its table by KEY, so two
+ * metadata entries with the same id simply contribute two bindings.
  */
 export function globalCommandsFromBindingTables(): CommandMetadata[] {
   const byId: Record<string, CommandMetadata> = {};
@@ -32,7 +86,7 @@ export function globalCommandsFromBindingTables(): CommandMetadata[] {
       (byId[id].keys as Record<string, string>)[mode] = key;
     }
   }
-  return Object.values(byId);
+  return [...NAV_PLUGIN_COMMANDS, ...Object.values(byId)];
 }
 
 /**
@@ -63,6 +117,29 @@ export function commandToolCall(args: unknown): Promise<unknown> {
   if (op === "available command")
     return Promise.resolve({ ok: true, available: true });
   return Promise.resolve(null);
+}
+
+/**
+ * Collect every backend `dispatch_command` whose cmd is a `nav.*` id, in
+ * order, from a test's Tauri `invoke` spy.
+ *
+ * The cardinal nav and drill commands execute host-side in the
+ * `nav-commands` builtin plugin — the webview's contract is routing the
+ * command id to the backend (`invoke("dispatch_command", { cmd: "nav.*" })`)
+ * with no client-side kernel IPC. Tests pinning that contract pass their own
+ * hoisted `mockInvoke` spy (or the shared shadow-harness spy); the parameter
+ * is typed structurally so any `vi.fn` shape qualifies.
+ *
+ * @param spy - The vitest spy installed on `@tauri-apps/api/core::invoke`.
+ * @returns The dispatched `nav.*` command ids, in call order.
+ */
+export function navDispatchCmds(spy: {
+  mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> };
+}): string[] {
+  return spy.mock.calls
+    .filter((c) => c[0] === "dispatch_command")
+    .map((c) => (c[1] as { cmd?: string } | undefined)?.cmd ?? "")
+    .filter((cmd) => cmd.startsWith("nav."));
 }
 
 /**

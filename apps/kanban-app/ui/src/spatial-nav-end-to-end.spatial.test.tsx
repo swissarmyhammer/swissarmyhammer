@@ -260,7 +260,7 @@ import {
 // ---------------------------------------------------------------------------
 
 import App from "@/App";
-import { commandToolCall } from "@/test/mock-command-list";
+import { commandToolCall, navDispatchCmds } from "@/test/mock-command-list";
 import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -479,12 +479,18 @@ function dispatchCallsFor(target: string): Array<{
 /** Capture every `spatial_focus` call's args. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
       const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
       return args;
-    })
+    });
 }
 
 /** Capture every `spatial_navigate` call's args. */
@@ -493,10 +499,19 @@ function spatialNavigateCalls(): Array<{
   direction: string;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_navigate" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "navigate focus")))
+    .filter(
+      (c) =>
+        c[0] === "spatial_navigate" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "navigate focus"),
+    )
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
-      const args = (outer?.params ?? outer) as { focusedFq: FullyQualifiedMoniker; direction: string };
+      const args = (outer?.params ?? outer) as {
+        focusedFq: FullyQualifiedMoniker;
+        direction: string;
+      };
       return args;
     });
 }
@@ -518,15 +533,25 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/** Pull every `spatial_push_layer` invocation argument bag. */
+/**
+ * Pull every focus-server `push layer` op's params — exactly one entry
+ * per push. Filters ONLY the `command_tool_call` envelope (the actual
+ * wire shape): the shadow harness ALSO appends a synthetic legacy
+ * `spatial_push_layer` entry to `mock.calls` for back-compat filters,
+ * so matching both shapes would double-count each push.
+ */
 function pushLayerArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_push_layer" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "push layer")))
+    .filter(
+      (c) =>
+        c[0] === "command_tool_call" &&
+        (c[1] as any)?.tool === "focus" &&
+        (c[1] as any)?.op === "push layer",
+    )
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
-      const args = (outer?.params ?? outer) as Record<string, unknown>;
-      return args;
-    })
+      return (outer.params ?? {}) as Record<string, unknown>;
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -901,14 +926,15 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   // =========================================================================
   // Family 3 — Drill in (Enter) / drill out (Escape)
   //
-  // Pressing Enter on a focused column zone sends `spatial_drill_in`.
-  // Pressing Escape on a focused card sends `spatial_drill_out`. The
-  // resulting focus moves are kernel-side; this family asserts on the
-  // dispatched IPC, not on the post-drill `data-focused`.
+  // Pressing Enter on a focused card routes `nav.drillIn` to the backend;
+  // pressing Escape routes `nav.drillOut`. Drill executes host-side in
+  // the `nav-commands` builtin plugin (the kernel resolves the focused FQ
+  // itself), so this family asserts on the dispatched command id — and
+  // that NO client-side drill IPC leaves the webview.
   // =========================================================================
 
   describe("Family 3 — Drill in (Enter) / drill out (Escape)", () => {
-    it("Enter on a focused card dispatches spatial_drill_in for that card's key", async () => {
+    it("Enter on a focused card dispatches nav.drillIn to the backend", async () => {
       const { unmount } = renderApp();
       await flushAppMount();
 
@@ -926,19 +952,19 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       await flushAppMount();
 
       // Enter on a non-perspective entity leaf goes through the global
-      // `nav.drillIn` binding, which dispatches `spatial_drill_in`
-      // against the focused key.
-      const drillIn = spatialDrillCalls("in");
+      // `nav.drillIn` binding, which routes the command id to the
+      // backend; the webview sends no fq and no client-side drill IPC.
       expect(
-        drillIn.length,
-        "Enter on a focused card must dispatch spatial_drill_in",
+        navDispatchCmds(mockInvoke).filter((cmd) => cmd === "nav.drillIn")
+          .length,
+        "Enter on a focused card must dispatch nav.drillIn to the backend",
       ).toBeGreaterThan(0);
-      expect(drillIn.some((c) => c.fq === t1Key!)).toBe(true);
+      expect(spatialDrillCalls("in")).toHaveLength(0);
 
       unmount();
     });
 
-    it("Escape on a focused card dispatches spatial_drill_out for that card's key", async () => {
+    it("Escape on a focused card dispatches nav.drillOut to the backend", async () => {
       const { unmount } = renderApp();
       await flushAppMount();
 
@@ -955,12 +981,12 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       fireEvent.keyDown(document.body, { key: "Escape" });
       await flushAppMount();
 
-      const drillOut = spatialDrillCalls("out");
       expect(
-        drillOut.length,
-        "Escape on a focused card must dispatch spatial_drill_out",
+        navDispatchCmds(mockInvoke).filter((cmd) => cmd === "nav.drillOut")
+          .length,
+        "Escape on a focused card must dispatch nav.drillOut to the backend",
       ).toBeGreaterThan(0);
-      expect(drillOut.some((c) => c.fq === t1Key!)).toBe(true);
+      expect(spatialDrillCalls("out")).toHaveLength(0);
 
       unmount();
     });

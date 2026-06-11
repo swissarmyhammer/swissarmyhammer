@@ -15,10 +15,11 @@
  *      mount `<FocusIndicator>` (because `showFocus={false}` — see the
  *      inline comment on `BoardSpatialZone`).
  *   4. Keystrokes route through the AppShell's global nav commands and
- *      dispatch `spatial_navigate(boardKey, direction)` for arrows and
- *      hjkl.
- *   5. Enter dispatches `spatial_drill_in(boardKey)`; after the kernel
- *      resolves a child column moniker the column flips its
+ *      dispatch the `nav.{up,down,left,right}` command id to the backend
+ *      for arrows and hjkl (the kernel navigate executes host-side in
+ *      the `nav-commands` builtin plugin — no client-side IPC).
+ *   5. Enter dispatches `nav.drillIn` to the backend; after the kernel
+ *      commits focus to a child column the column flips its
  *      `data-focused`.
  *   6. Unmount unregisters via `spatial_unregister_scope`.
  *   7. Legacy nav names (`entity_focus_*`, `claim_when_*`,
@@ -128,7 +129,7 @@ vi.mock("@/components/perspective-container", () => ({
 
 import { BoardView } from "./board-view";
 import { AppShell } from "./app-shell";
-import { commandToolCall } from "@/test/mock-command-list";
+import { commandToolCall, navDispatchCmds } from "@/test/mock-command-list";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -359,12 +360,18 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 /** Pull every `spatial_focus` call's args, in order. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
       const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
       return args;
-    })
+    });
 }
 
 /** Pull every `spatial_navigate` call's args, in order. */
@@ -373,23 +380,21 @@ function spatialNavigateCalls(): Array<{
   direction: string;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_navigate" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "navigate focus")))
+    .filter(
+      (c) =>
+        c[0] === "spatial_navigate" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "navigate focus"),
+    )
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
-      const args = (outer?.params ?? outer) as { focusedFq: FullyQualifiedMoniker; direction: string };
+      const args = (outer?.params ?? outer) as {
+        focusedFq: FullyQualifiedMoniker;
+        direction: string;
+      };
       return args;
     });
-}
-
-/** Pull every `spatial_drill_in` call's args, in order. */
-function spatialDrillInCalls(): Array<{ fq: FullyQualifiedMoniker }> {
-  return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_drill_in" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "drill_in layer")))
-    .map((c) => {
-      const outer = c[1] as Record<string, unknown>;
-      const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
-      return args;
-    })
 }
 
 /** Pull every `spatial_unregister_scope` call's args, in order. */
@@ -529,7 +534,7 @@ describe("BoardView — browser spatial behaviour", () => {
     unmount();
   });
 
-  it("arrow keys and hjkl dispatch spatial_navigate for the focused board (test #4)", async () => {
+  it("arrow keys and hjkl dispatch nav.* to the backend for the focused board (test #4)", async () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
@@ -581,19 +586,21 @@ describe("BoardView — browser spatial behaviour", () => {
         await Promise.resolve();
       });
 
-      const navCalls = spatialNavigateCalls().filter(
-        (c) => c.focusedFq === boardKey,
-      );
-      expect(navCalls.length, `${key} should dispatch spatial_navigate`).toBe(
-        1,
-      );
-      expect(navCalls[0].direction).toBe(direction);
+      // The arrow key routes the global `nav.<direction>` command id to
+      // the backend — the kernel navigate executes host-side in the
+      // `nav-commands` builtin plugin, so no client-side `navigate focus`
+      // IPC (and no focused fq) leaves the webview.
+      expect(
+        navDispatchCmds(mockInvoke),
+        `${key} should dispatch nav.${direction} to the backend`,
+      ).toEqual([`nav.${direction}`]);
+      expect(spatialNavigateCalls()).toHaveLength(0);
     }
 
     unmount();
   });
 
-  it("Tab and Shift+Tab dispatch spatial_navigate right/left for the focused board", async () => {
+  it("Tab and Shift+Tab dispatch nav.right/nav.left to the backend for the focused board", async () => {
     // Mirrors the arrow-key test above: with the board zone focused,
     // Tab routes through the global `BINDING_TABLES.cua` mapping to
     // `nav.right` and dispatches `spatial_navigate(boardKey, "right")`;
@@ -631,20 +638,20 @@ describe("BoardView — browser spatial behaviour", () => {
         await Promise.resolve();
       });
 
-      const navCalls = spatialNavigateCalls().filter(
-        (c) => c.focusedFq === boardKey,
-      );
+      // Tab / Shift+Tab route `nav.right` / `nav.left` to the backend —
+      // host-driven, same contract as the arrow keys above.
       const label = shiftKey ? `Shift+${key}` : key;
-      expect(navCalls.length, `${label} should dispatch spatial_navigate`).toBe(
-        1,
-      );
-      expect(navCalls[0].direction).toBe(direction);
+      expect(
+        navDispatchCmds(mockInvoke),
+        `${label} should dispatch nav.${direction} to the backend`,
+      ).toEqual([`nav.${direction}`]);
+      expect(spatialNavigateCalls()).toHaveLength(0);
     }
 
     unmount();
   });
 
-  it("Enter dispatches spatial_drill_in for the focused board (test #5)", async () => {
+  it("Enter dispatches nav.drillIn to the backend for the focused board (test #5)", async () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
@@ -661,12 +668,9 @@ describe("BoardView — browser spatial behaviour", () => {
     expect(todoColumn).toBeTruthy();
     const todoColumnKey = todoColumn!.fq as FullyQualifiedMoniker;
 
-    // Seed the focus so `nav.drillIn`'s execute closure sees a non-null
-    // focused key. The closure hands that key to `spatial_drill_in`
-    // directly. `next_segment` is also seeded so the keybinding handler
-    // resolves Enter to `nav.drillIn` via the focused scope's bindings
-    // (Enter is bound globally too, but the contract under test is the
-    // scope-level resolution).
+    // Seed the focus so the focused-scope chain is populated (realistic
+    // production state when Enter fires; the host-side drill resolves
+    // the focused scope itself from the kernel's window slot).
     await fireFocusChanged({
       next_fq: boardKey,
       next_segment: asSegment("board:board-1"),
@@ -674,28 +678,23 @@ describe("BoardView — browser spatial behaviour", () => {
 
     mockInvoke.mockClear();
 
-    // Arrange: when Enter fires, `nav.drillIn` calls `spatial_drill_in`,
-    // awaits its result, and (when non-null) dispatches `setFocus` for
-    // the returned moniker. Hand back a column moniker so the
-    // entity-focus bridge surface in `EntityFocusProvider` mirrors it
-    // into the entity-focus store and the column flips its
-    // `data-focused` after the next focus-changed event.
-    mockInvoke.mockImplementation(async (cmd, args) => {
-      if (cmd === "spatial_drill_in") {
-        return "column:col-todo";
-      }
-      return defaultInvokeImpl(cmd, args);
-    });
-
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter" });
       await Promise.resolve();
     });
 
-    const drillCalls = spatialDrillInCalls();
-    expect(drillCalls).toHaveLength(1);
-    expect(drillCalls[0].fq).toBe(boardKey);
+    // Enter routes the `nav.drillIn` plugin command id to the backend —
+    // drill executes host-side in the `nav-commands` builtin plugin,
+    // which resolves the focused FQ itself. The webview sends no fq and
+    // no client-side drill IPC.
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.drillIn"]);
+    expect(
+      mockInvoke.mock.calls.filter((c) => c[0] === "spatial_drill_in"),
+    ).toHaveLength(0);
 
+    // The kernel commits focus to the drilled-into column and emits
+    // `focus-changed`; mimic that emission so the entity-focus bridge
+    // mirrors it and the column flips its `data-focused`.
     await fireFocusChanged({
       prev_fq: boardKey,
       next_fq: todoColumnKey,

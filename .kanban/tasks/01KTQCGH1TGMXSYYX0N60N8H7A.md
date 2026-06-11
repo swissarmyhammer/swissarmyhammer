@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: df80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff9180
 title: 'Cleanup: remove dead BoardHandle::open wrapper (dead_code warning)'
 ---
 ## What

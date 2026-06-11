@@ -187,6 +187,19 @@ export interface ShadowEntry {
 /** Cardinal direction the JS port handles. */
 export type Direction = "up" | "down" | "left" | "right";
 
+/**
+ * `nav.*` command id → cardinal direction, mirroring the host-side
+ * `nav-commands` builtin plugin (`builtin/plugins/nav-commands/index.ts`).
+ * The plugin also owns `nav.first` / `nav.last`, but the JS port models
+ * cardinal moves only — those ids fall through untranslated.
+ */
+const NAV_COMMAND_DIRECTIONS: Record<string, Direction> = {
+  "nav.up": "up",
+  "nav.down": "down",
+  "nav.left": "left",
+  "nav.right": "right",
+};
+
 // ---------------------------------------------------------------------------
 // Wire-payload helpers
 // ---------------------------------------------------------------------------
@@ -349,7 +362,6 @@ function betterCandidate(
   return !cand.hasChildren && current.hasChildren;
 }
 
-
 /**
  * JS port of `score_candidate` for cardinal directions. Returns
  * `[inBeam, score]` or `null` when the candidate is on the wrong side
@@ -422,8 +434,22 @@ function scoreCandidate(
 // ---------------------------------------------------------------------------
 
 /**
+ * The currently-installed harness's kernel focus slot.
+ *
+ * `fireFocusChanged` mimics the Rust kernel emitting a focus-changed
+ * event — and the real kernel only emits after committing the focus to
+ * its own per-window slot. The host-driven `nav.*` commands (see the
+ * `dispatch_command` handler in `installShadowNavigator`) resolve the
+ * move's origin from that slot, so the harness must mirror the commit
+ * here or a seeded focus would be invisible to host-driven navigation.
+ */
+let activeCurrentFocus: { fq: FullyQualifiedMoniker | null } | null = null;
+
+/**
  * Drive a `focus-changed` event into the React tree, mimicking the Rust
- * kernel emitting one for the active window.
+ * kernel emitting one for the active window. Also commits `next_fq` to
+ * the installed harness's kernel focus slot (the kernel emits only after
+ * committing), so host-driven `nav.*` dispatches resolve their origin.
  *
  * Wraps the dispatch in `act()` from `@testing-library/react` so React
  * state updates flush before the caller asserts on post-update DOM.
@@ -437,6 +463,7 @@ export async function fireFocusChanged({
   next_fq?: FullyQualifiedMoniker | null;
   next_segment?: SegmentMoniker | null;
 }): Promise<void> {
+  if (activeCurrentFocus) activeCurrentFocus.fq = next_fq;
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
     prev_fq,
@@ -472,6 +499,17 @@ export interface ShadowHarness {
    * live entry.
    */
   getRegisteredFqBySegment(segment: string): FullyQualifiedMoniker | null;
+  /**
+   * Commit focus to a registered scope through the production `set focus`
+   * wire shape (the terminal action of a `nav.focus` dispatch:
+   * `focus-mcp.ts::setFocus` with `{ fq, snapshot, window }`). The
+   * snapshot is derived from the shadow registry so the harness's
+   * kernel-drop modeling accepts the commit and emits `focus-changed`.
+   *
+   * Rejects when `fq` is not currently registered — jumping to an
+   * unregistered scope is a test bug, not a silent no-op.
+   */
+  commitFocus(fq: FullyQualifiedMoniker): Promise<void>;
 }
 
 /**
@@ -510,6 +548,9 @@ export function installShadowNavigator(
 ): ShadowHarness {
   const registry = new Map<FullyQualifiedMoniker, ShadowEntry>();
   const currentFocus: { fq: FullyQualifiedMoniker | null } = { fq: null };
+  // Share the kernel focus slot with `fireFocusChanged` so a test-seeded
+  // focus is visible to the host-driven `nav.*` dispatch handler below.
+  activeCurrentFocus = currentFocus;
   // Layers the React tree has pushed and not yet popped. Tracked so
   // `spatial_focus` can mirror the real kernel's drop conditions instead
   // of accepting every commit. Previously this harness ignored
@@ -714,7 +755,10 @@ export function installShadowNavigator(
       // target fq. Without this the harness accepted every commit and
       // hand-emitted focus-changed, masking window-layer focus drops.
       const snapshot = a.snapshot as
-        | { layer_fq?: FullyQualifiedMoniker; scopes?: Array<{ fq?: FullyQualifiedMoniker }> }
+        | {
+            layer_fq?: FullyQualifiedMoniker;
+            scopes?: Array<{ fq?: FullyQualifiedMoniker }>;
+          }
         | undefined
         | null;
       if (!snapshot) return undefined;
@@ -808,6 +852,39 @@ export function installShadowNavigator(
       pushedLayers.delete(a.fq as FullyQualifiedMoniker);
       return undefined;
     }
+    if (cmd === "dispatch_command") {
+      // Host-driven navigation: the cardinal `nav.*` commands execute in
+      // the `nav-commands` builtin plugin on the host — the webview only
+      // routes the command id to the backend. Mirror the plugin here:
+      // resolve the move's origin from the kernel focus slot, run the
+      // BeamNavStrategy port, and emit `focus-changed` with the result —
+      // the same end-to-end loop the legacy client-side
+      // `spatial_navigate` handler above modeled.
+      const a = (args ?? {}) as { cmd?: string };
+      const direction = NAV_COMMAND_DIRECTIONS[a.cmd ?? ""];
+      if (direction !== undefined) {
+        const fromFq = currentFocus.fq;
+        // No resolvable focus → the kernel op drops silently
+        // (window-unknown / focus-unknown contract).
+        if (fromFq === null) return undefined;
+        const result = navigateInShadow(registry, fromFq, direction);
+        if (!result) return undefined;
+        currentFocus.fq = result.nextFq;
+        const payload: FocusChangedPayload = {
+          window_label: "main" as WindowLabel,
+          prev_fq: fromFq,
+          next_fq: result.nextFq,
+          next_segment: result.nextSegment,
+        };
+        queueMicrotask(() => {
+          const handlers = listeners.get("focus-changed") ?? [];
+          for (const h of handlers) h({ payload });
+        });
+        return undefined;
+      }
+      // Non-directional commands fall through to the consumer's
+      // defaultInvokeImpl (e.g. tests asserting their own dispatches).
+    }
     return defaultInvokeImpl(cmd, args);
   };
 
@@ -841,6 +918,27 @@ export function installShadowNavigator(
         }
       }
       return null;
+    },
+    async commitFocus(fq: FullyQualifiedMoniker): Promise<void> {
+      const entry = registry.get(fq);
+      if (!entry) {
+        throw new Error(`commitFocus: ${String(fq)} is not registered`);
+      }
+      await mockInvoke("command_tool_call", {
+        module: "focus",
+        tool: "focus",
+        op: "set focus",
+        params: {
+          fq,
+          snapshot: {
+            layer_fq: entry.layerFq,
+            scopes: [...registry.values()]
+              .filter((e) => e.layerFq === entry.layerFq)
+              .map((e) => ({ fq: e.fq })),
+          },
+          window: "main",
+        },
+      });
     },
   };
 }

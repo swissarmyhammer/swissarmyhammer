@@ -37,9 +37,12 @@
  *    extended the per-tab `ui.entity.startRename: Enter` binding to every
  *    tab, not just the active one, with an activate-then-rename execute.)
  * 3. **Enter outside perspective scope still drills** — focusing a non-
- *    perspective leaf and pressing Enter dispatches `spatial_drill_in` and
- *    no `.cm-editor` mounts inside the perspective bar. Proves the binding
- *    is scope-local.
+ *    perspective leaf and pressing Enter dispatches the `nav.drillIn`
+ *    command id to the backend (`dispatch_command`) and no `.cm-editor`
+ *    mounts inside the perspective bar. Proves the binding is scope-local.
+ *    (Drill executes host-side in the `nav-commands` builtin plugin; the
+ *    webview no longer pre-resolves an `fq` or invokes `spatial_drill_in`
+ *    itself — see `app-shell.test.tsx`'s nav.drillIn wiring tests.)
  * 4. **Vim Enter** — same as case 1 with `keymap_mode: "vim"`.
  * 5. **Emacs Enter** — same as case 1 with `keymap_mode: "emacs"`.
  * 6. **Commit path still works** — after case 1 mounts the rename editor,
@@ -205,6 +208,7 @@ vi.mock("@/lib/ui-state-context", () => ({
 
 import { PerspectiveTabBar } from "./perspective-tab-bar";
 import { AppShell } from "./app-shell";
+import { commandToolCall } from "@/test/mock-command-list";
 import { FocusLayer } from "./focus-layer";
 import { FocusScope } from "./focus-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
@@ -232,6 +236,15 @@ async function defaultInvokeImpl(
   cmd: string,
   _args?: unknown,
 ): Promise<unknown> {
+  // The global keybinding layer (Enter → `nav.drillIn`, …) is sourced from
+  // the metadata-driven Command registry via `useCommandList`, which fetches
+  // through the `command_tool_call` bridge's `list command` op. Synthesize
+  // that registry from `BINDING_TABLES` so global bindings resolve — the
+  // scope-pinned `ui.entity.startRename: Enter` must shadow a REAL global
+  // `nav.drillIn: Enter`, not an empty table.
+  if (cmd === "command_tool_call") {
+    return commandToolCall(_args);
+  }
   if (cmd === "get_ui_state") {
     return {
       palette_open: false,
@@ -365,17 +378,6 @@ function findDispatch(target: string):
     }
   | undefined {
   return dispatchCalls().find((d) => d.cmd === target);
-}
-
-/** Capture every `spatial_drill_in` call's args. */
-function spatialDrillInCalls(): Array<{ fq: FullyQualifiedMoniker }> {
-  return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_drill_in" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "drill_in layer")))
-    .map((c) => {
-      const outer = c[1] as Record<string, unknown>;
-      const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
-      return args;
-    })
 }
 
 /** True when any registered scope has the given moniker. */
@@ -535,7 +537,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
   // Test #3 — Enter outside the perspective scope still drills in
   // -------------------------------------------------------------------------
 
-  it("Enter on a non-perspective focused leaf still dispatches spatial_drill_in", async () => {
+  it("Enter on a non-perspective focused leaf still dispatches nav.drillIn to the backend", async () => {
     // Mount a non-perspective FocusScope (`task:01ABC`) alongside the
     // perspective bar so the test can drive focus to a leaf that has
     // nothing to do with the perspective scope chain. Enter while that
@@ -570,9 +572,18 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     await pressKeyInAct("{Enter}");
     await flushSetup();
 
-    // Enter dispatched to the kernel as a drill-in for the focused leaf.
-    expect(spatialDrillInCalls()).toHaveLength(1);
-    expect(spatialDrillInCalls()[0].fq).toBe(taskKey);
+    // Enter routes the `nav.drillIn` plugin command id to the backend —
+    // drill executes host-side in the plugin runtime, which resolves the
+    // focused FQ itself. The webview sends no fq.
+    const drillDispatches = dispatchCalls().filter(
+      (d) => d.cmd === "nav.drillIn",
+    );
+    expect(drillDispatches).toHaveLength(1);
+
+    // No legacy client-side drill IPC — that mechanic moved host-side.
+    expect(
+      mockInvoke.mock.calls.filter((c) => c[0] === "spatial_drill_in"),
+    ).toHaveLength(0);
 
     // No rename editor mounted in any perspective tab.
     expect(

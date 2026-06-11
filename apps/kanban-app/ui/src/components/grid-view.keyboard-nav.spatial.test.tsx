@@ -5,8 +5,9 @@
  * local `CommandScopeProvider` must NOT shadow the global `nav.up` /
  * `nav.down` / `nav.left` / `nav.right` commands with broadcast-no-op
  * `grid.move{Up,Down,Left,Right}` aliases. Arrow keys (and vim hjkl) inside
- * the grid must reach the global nav commands and dispatch
- * `spatial_navigate(focusedFq, direction)` against the Rust kernel.
+ * the grid must reach the global nav commands, which route the `nav.*`
+ * command id to the backend — the kernel navigate executes host-side in the
+ * `nav-commands` builtin plugin.
  *
  * Row-extreme keys (`Home`, `End`, `0`, `$`) and grid-extreme keys
  * (`Mod+Home`, `Mod+End`, `Shift+G`, `gg`) are tested too. The grid scope
@@ -89,6 +90,7 @@ vi.mock("@/components/perspective-container", () => ({
 
 import { GridView } from "./grid-view";
 import { AppShell } from "./app-shell";
+import { commandToolCall, navDispatchCmds } from "@/test/mock-command-list";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -193,6 +195,12 @@ async function defaultInvokeImpl(
   cmd: string,
   _args?: unknown,
 ): Promise<unknown> {
+  // The global keybinding layer (arrow keys → `nav.up`/`nav.down`/…) is
+  // sourced from the metadata-driven Command registry via `useCommandList`,
+  // which fetches through the `command_tool_call` bridge's `list command`
+  // op. Synthesize that registry from `BINDING_TABLES` so the global nav
+  // bindings resolve.
+  if (cmd === "command_tool_call") return commandToolCall(_args);
   if (cmd === "list_entity_types") return ["task"];
   if (cmd === "get_entity_schema") return TASK_SCHEMA;
   if (cmd === "get_ui_state")
@@ -224,10 +232,19 @@ function spatialNavigateCalls(): Array<{
   direction: string;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_navigate" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "navigate focus")))
+    .filter(
+      (c) =>
+        c[0] === "spatial_navigate" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "navigate focus"),
+    )
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
-      const args = (outer?.params ?? outer) as { focusedFq: FullyQualifiedMoniker; direction: string };
+      const args = (outer?.params ?? outer) as {
+        focusedFq: FullyQualifiedMoniker;
+        direction: string;
+      };
       return args;
     });
 }
@@ -235,12 +252,18 @@ function spatialNavigateCalls(): Array<{
 /** Collect every `spatial_focus` call payload, in order. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
     .map((c) => {
       const outer = c[1] as Record<string, unknown>;
       const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
       return args;
-    })
+    });
 }
 
 /**
@@ -339,11 +362,15 @@ describe("GridView keyboard navigation (spatial)", () => {
 
   // -------------------------------------------------------------------------
   // Cardinal arrow keys — must reach the global nav.up/down/left/right
-  // commands which dispatch spatial_navigate against the focused cell.
+  // commands, which route the command id to the backend. The kernel
+  // navigate executes host-side in the `nav-commands` builtin plugin (it
+  // resolves the focused scope and pulls the live geometry from the
+  // webview itself), so the webview sends NO client-side `navigate focus`
+  // IPC and no focused fq.
   // -------------------------------------------------------------------------
 
-  it("ArrowDown dispatches spatial_navigate(cell, 'down') for the focused cell", async () => {
-    const { cellKey } = await mountAndSeedFocus("grid_cell:0:title");
+  it("ArrowDown dispatches nav.down to the backend for the focused cell", async () => {
+    await mountAndSeedFocus("grid_cell:0:title");
 
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
@@ -353,14 +380,13 @@ describe("GridView keyboard navigation (spatial)", () => {
       await Promise.resolve();
     });
 
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls).toHaveLength(1);
-    expect(navCalls[0].focusedFq).toBe(cellKey);
-    expect(navCalls[0].direction).toBe("down");
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.down"]);
+    // No legacy client-side navigate IPC — the kernel move is host-driven.
+    expect(spatialNavigateCalls()).toHaveLength(0);
   });
 
-  it("ArrowUp dispatches spatial_navigate(cell, 'up') for the focused cell", async () => {
-    const { cellKey } = await mountAndSeedFocus("grid_cell:1:title");
+  it("ArrowUp dispatches nav.up to the backend for the focused cell", async () => {
+    await mountAndSeedFocus("grid_cell:1:title");
 
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
@@ -370,14 +396,12 @@ describe("GridView keyboard navigation (spatial)", () => {
       await Promise.resolve();
     });
 
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls).toHaveLength(1);
-    expect(navCalls[0].focusedFq).toBe(cellKey);
-    expect(navCalls[0].direction).toBe("up");
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.up"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
   });
 
-  it("ArrowLeft dispatches spatial_navigate(cell, 'left') for the focused cell", async () => {
-    const { cellKey } = await mountAndSeedFocus("grid_cell:0:status");
+  it("ArrowLeft dispatches nav.left to the backend for the focused cell", async () => {
+    await mountAndSeedFocus("grid_cell:0:status");
 
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
@@ -387,14 +411,12 @@ describe("GridView keyboard navigation (spatial)", () => {
       await Promise.resolve();
     });
 
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls).toHaveLength(1);
-    expect(navCalls[0].focusedFq).toBe(cellKey);
-    expect(navCalls[0].direction).toBe("left");
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.left"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
   });
 
-  it("ArrowRight dispatches spatial_navigate(cell, 'right') for the focused cell", async () => {
-    const { cellKey } = await mountAndSeedFocus("grid_cell:0:title");
+  it("ArrowRight dispatches nav.right to the backend for the focused cell", async () => {
+    await mountAndSeedFocus("grid_cell:0:title");
 
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
@@ -404,10 +426,8 @@ describe("GridView keyboard navigation (spatial)", () => {
       await Promise.resolve();
     });
 
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls).toHaveLength(1);
-    expect(navCalls[0].focusedFq).toBe(cellKey);
-    expect(navCalls[0].direction).toBe("right");
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.right"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
   });
 
   // -------------------------------------------------------------------------
@@ -550,11 +570,12 @@ describe("GridView keyboard navigation (spatial)", () => {
   // `nav.down` / `nav.left` / `nav.right` should win.
   //
   // The behavioural fingerprint of the broken path is: arrow key fires, no
-  // `spatial_navigate` IPC lands, no `spatial_focus` IPC lands, the cell
-  // cursor doesn't move. The cardinal-direction tests above already assert
-  // the positive (`spatial_navigate` does fire); this test additionally
-  // pins that the same key produces zero broadcast-call side effects in
-  // the IPC log (no `dispatch_command` with a `grid.move*` cmd shape).
+  // `nav.*` dispatch lands, no `spatial_focus` IPC lands, the cell cursor
+  // doesn't move. The cardinal-direction tests above already assert the
+  // positive (the global `nav.*` command id reaches the backend); this test
+  // additionally pins that the same key produces zero broadcast-call side
+  // effects in the IPC log (no `dispatch_command` with a `grid.move*` cmd
+  // shape).
   // -------------------------------------------------------------------------
 
   it("arrow keys do not dispatch any grid.move* command (no shadow registration)", async () => {
@@ -588,14 +609,15 @@ describe("GridView keyboard navigation (spatial)", () => {
       "grid.move{Up,Down,Left,Right} must not be dispatched on arrow keys",
     ).toEqual([]);
 
-    // And the global nav commands must have fired four times (one per arrow).
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls).toHaveLength(4);
-    expect(navCalls.map((c) => c.direction)).toEqual([
-      "down",
-      "right",
-      "up",
-      "left",
+    // And the global nav commands must have fired four times (one per
+    // arrow), each routed to the backend as its `nav.*` command id.
+    expect(navDispatchCmds(mockInvoke)).toEqual([
+      "nav.down",
+      "nav.right",
+      "nav.up",
+      "nav.left",
     ]);
+    // Host-driven nav: the webview sends no client-side navigate IPC.
+    expect(spatialNavigateCalls()).toHaveLength(0);
   });
 });
