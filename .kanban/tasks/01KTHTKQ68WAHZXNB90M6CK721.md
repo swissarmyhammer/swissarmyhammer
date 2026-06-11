@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff9280
 title: 'Review OOM: serialize review pipelines process-wide (cap=1)'
 ---
 ## Symptom

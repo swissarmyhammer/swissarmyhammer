@@ -1179,46 +1179,13 @@ async fn start_http_server(
 mod tests {
     use super::*;
 
-    /// Capture writer for log-output tests. A `MakeWriter` implementation
-    /// that pushes every formatted byte into a shared `Arc<Mutex<Vec<u8>>>`
-    /// so tests can assert on `tracing::info!` lines verbatim. Used to
-    /// convert the grep-able acceptance contract into machine-checked
-    /// regression coverage.
-    #[derive(Clone)]
-    struct LineWriter {
-        buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
-    }
-    impl std::io::Write for LineWriter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            let mut guard = self.buf.lock().unwrap();
-            guard.extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LineWriter {
-        type Writer = LineWriter;
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
+    use swissarmyhammer_common::test_utils::CaptureWriter;
 
-    /// Build a fresh capture buffer + `MakeWriter`.
-    fn capture_lines() -> (std::sync::Arc<std::sync::Mutex<Vec<u8>>>, LineWriter) {
-        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let writer = LineWriter { buf: buf.clone() };
-        (buf, writer)
-    }
-
-    /// Drain captured bytes into a list of lines.
-    fn captured_lines(buf: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> Vec<String> {
-        let bytes = buf.lock().unwrap();
-        String::from_utf8_lossy(&bytes)
-            .lines()
-            .map(|s| s.to_string())
-            .collect()
+    /// Drain the shared capture writer's bytes into a list of lines, so tests
+    /// can assert on `tracing::info!` output verbatim — converting the
+    /// grep-able acceptance contract into machine-checked regression coverage.
+    fn captured_lines(capture: &CaptureWriter) -> Vec<String> {
+        capture.contents().lines().map(|s| s.to_string()).collect()
     }
 
     /// Asserts the explicit `shutdown()` path emits `event=server_shutdown`
@@ -1239,8 +1206,8 @@ mod tests {
         use tracing_subscriber::fmt;
         use tracing_subscriber::layer::SubscriberExt;
 
-        let (buf, writer) = capture_lines();
-        let layer = fmt::layer().with_writer(writer).with_ansi(false);
+        let capture = CaptureWriter::default();
+        let layer = fmt::layer().with_writer(capture.clone()).with_ansi(false);
         let subscriber = tracing_subscriber::registry()
             .with(tracing_subscriber::filter::LevelFilter::DEBUG)
             .with(layer);
@@ -1285,7 +1252,7 @@ mod tests {
         // formatter writer.
         drop(_guard);
 
-        let lines = captured_lines(&buf);
+        let lines = captured_lines(&capture);
         let shutdown_lines: Vec<&String> = lines
             .iter()
             .filter(|l| l.contains("event=\"server_shutdown\""))
@@ -1333,8 +1300,8 @@ mod tests {
         use tracing_subscriber::fmt;
         use tracing_subscriber::layer::SubscriberExt;
 
-        let (buf, writer) = capture_lines();
-        let layer = fmt::layer().with_writer(writer).with_ansi(false);
+        let capture = CaptureWriter::default();
+        let layer = fmt::layer().with_writer(capture.clone()).with_ansi(false);
         let subscriber = tracing_subscriber::registry()
             .with(tracing_subscriber::filter::LevelFilter::INFO)
             .with(layer);
@@ -1403,7 +1370,7 @@ mod tests {
         // Drop the subscriber guard before reading captured output.
         drop(_guard);
 
-        let lines = captured_lines(&buf);
+        let lines = captured_lines(&capture);
 
         // Counters: 5 requests, 1 error.
         assert_eq!(

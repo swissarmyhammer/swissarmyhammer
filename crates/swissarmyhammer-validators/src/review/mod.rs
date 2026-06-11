@@ -18,13 +18,13 @@ pub mod types;
 pub mod verify;
 
 pub use drive::run_review_over_agent;
-pub use fleet::{render_fleet_prompt, run_fleet, FleetConfig, DEFAULT_BATCH_SIZE};
+pub use fleet::{render_fleet_prompt, run_fleet, FleetConfig, FleetOutcome, DEFAULT_BATCH_SIZE};
 pub use probes::{
     probe_exists, run_probes, ChangeEntry, FileChange, ProbeCatalogEntry, ProbeKind, ProbeOp,
     ProbeResult, ProbeResults, ProbeRow, CATALOG,
 };
 pub use scope::{scope_review, FileWork, Scope, ScopeSpec, ValidatorWork, WorkList};
-pub use synthesize::{run_review, synthesize, ReviewCounts, ReviewReport};
+pub use synthesize::{run_review, synthesize, FleetTally, ReviewCounts, ReviewReport};
 pub use types::{parse_findings, Finding, RefutingLayer, Severity, VerifiedFinding};
 pub use verify::{
     render_verify_prompt, run_guard, verify_findings, Candidate, GuardOutcome, VerifyOutcome,

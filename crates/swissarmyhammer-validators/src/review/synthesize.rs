@@ -34,11 +34,42 @@ use model_embedding::TextEmbedder;
 use rusqlite::Connection;
 
 use crate::error::AvpError;
-use crate::review::fleet::{run_fleet, FleetConfig};
+use crate::review::fleet::{run_fleet, FleetConfig, FleetOutcome};
 use crate::review::scope::{scope_review, Scope, WorkList};
 use crate::review::types::{Finding, Severity, VerifiedFinding};
 use crate::review::verify::{verify_findings, Candidate};
 use crate::validators::{AgentPool, ValidatorLoader};
+
+/// The fan-out task tally synthesis carries into the report.
+///
+/// `attempted` is how many `(validator, file)` tasks [`run_fleet`] submitted;
+/// `failed` is how many of those degraded to zero findings on failure. A run
+/// where `failed` is a large fraction of `attempted` produced an empty findings
+/// set not because the diff was clean but because the review did not actually
+/// run — the tally is what makes the two distinguishable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FleetTally {
+    /// How many fan-out tasks were attempted.
+    pub attempted: usize,
+    /// How many fan-out tasks failed (and degraded to zero findings).
+    pub failed: usize,
+}
+
+impl FleetTally {
+    /// A tally of `attempted` tasks of which `failed` failed.
+    pub fn new(attempted: usize, failed: usize) -> Self {
+        Self { attempted, failed }
+    }
+}
+
+impl From<&FleetOutcome> for FleetTally {
+    fn from(outcome: &FleetOutcome) -> Self {
+        Self {
+            attempted: outcome.attempted,
+            failed: outcome.failed,
+        }
+    }
+}
 
 /// The per-severity and per-verdict tallies a [`ReviewReport`] carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -53,6 +84,11 @@ pub struct ReviewCounts {
     pub confirmed: usize,
     /// Findings the verifier refuted (across every input).
     pub refuted: usize,
+    /// How many fan-out tasks were attempted (see [`FleetTally`]).
+    pub tasks_attempted: usize,
+    /// How many fan-out tasks failed and degraded to zero findings. A non-zero
+    /// value means the rendered findings are INCOMPLETE.
+    pub tasks_failed: usize,
 }
 
 /// The synthesized review report: the rendered markdown plus its tallies.
@@ -71,7 +107,12 @@ pub struct ReviewReport {
 /// caller read from the clock (`YYYY-MM-DD HH:MM`), rendered verbatim into the
 /// section header so the engine itself never reads time. See the module docs for
 /// the full drop/dedup/group/render contract.
-pub fn synthesize(verified: Vec<VerifiedFinding>, now: &str) -> ReviewReport {
+///
+/// `tally` is the fan-out task outcome from [`run_fleet`]. When any task failed,
+/// a clearly visible warning line is rendered directly under the dated header so
+/// an incomplete run cannot be mistaken for a clean diff, and the tally is
+/// carried through into [`ReviewCounts`].
+pub fn synthesize(verified: Vec<VerifiedFinding>, tally: &FleetTally, now: &str) -> ReviewReport {
     let counts_confirmed = verified.iter().filter(|v| v.confirmed).count();
     let counts_refuted = verified.len() - counts_confirmed;
 
@@ -81,11 +122,23 @@ pub fn synthesize(verified: Vec<VerifiedFinding>, now: &str) -> ReviewReport {
     let mut counts = ReviewCounts {
         confirmed: counts_confirmed,
         refuted: counts_refuted,
+        tasks_attempted: tally.attempted,
+        tasks_failed: tally.failed,
         ..ReviewCounts::default()
     };
 
     let mut markdown = String::new();
     let _ = writeln!(markdown, "## Review Findings ({now})");
+
+    // Flag an incomplete run loudly, right under the header, when any fan-out
+    // task failed — otherwise an all-failed run is byte-identical to a clean diff.
+    if tally.failed > 0 {
+        let _ = writeln!(
+            markdown,
+            "\n> ⚠️ {}/{} review tasks failed — results are INCOMPLETE.",
+            tally.failed, tally.attempted
+        );
+    }
 
     for (severity, heading) in SECTIONS {
         let mut section: Vec<&VerifiedFinding> = kept
@@ -120,6 +173,8 @@ pub fn synthesize(verified: Vec<VerifiedFinding>, now: &str) -> ReviewReport {
         nits = counts.nits,
         confirmed = counts.confirmed,
         refuted = counts.refuted,
+        tasks_attempted = counts.tasks_attempted,
+        tasks_failed = counts.tasks_failed,
         "review synthesis complete"
     );
 
@@ -238,16 +293,21 @@ pub async fn run_review(
     );
 
     // Stage 2: fan out across the shared pool; awaiting drains every fan-out task.
-    let findings = run_fleet(&work, loader, pool, fleet_config).await;
+    // The fleet outcome carries the task tally (attempted/failed) alongside the
+    // findings so synthesis can flag an incomplete run.
+    let fleet = run_fleet(&work, loader, pool, fleet_config).await;
+    let tally = FleetTally::from(&fleet);
 
     // Stage 3: pair each candidate with its file's ground-truth context, then
     // verify on the SAME pool; awaiting drains every verify task. Once this
     // returns, the shared pool has fully drained — the single barrier.
-    let candidates = build_candidates(&work, findings);
+    let candidates = build_candidates(&work, fleet.findings);
     let outcome = verify_findings(candidates, pool).await;
 
-    // Stage 4: synthesize the deduped, severity-ranked, dated report.
-    Ok(synthesize(outcome.verified, now))
+    // Stage 4: synthesize the deduped, severity-ranked, dated report. The tally
+    // rides into the report so the tool boundary can flag/fail an incomplete run;
+    // the engine itself stays a pure data barrier and never errors on it.
+    Ok(synthesize(outcome.verified, &tally, now))
 }
 
 /// Pair each fan-out [`Finding`] back with the ground-truth context its file
@@ -337,8 +397,40 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_task_tally_flags_an_incomplete_run_in_the_markdown_and_counts() {
+        // No findings (every task degraded to zero) but a non-zero failed tally —
+        // the report must visibly flag the incomplete run rather than rendering
+        // byte-identically to a clean diff, and surface the tally in its counts.
+        let report = synthesize(vec![], &FleetTally::new(60, 60), "2026-04-11 13:08");
+
+        assert_eq!(report.counts.tasks_attempted, 60);
+        assert_eq!(report.counts.tasks_failed, 60);
+        assert!(
+            report.markdown.contains("60/60 review tasks failed"),
+            "the incomplete run must be flagged: {}",
+            report.markdown
+        );
+        assert!(
+            report.markdown.contains("INCOMPLETE"),
+            "the flag must name the run incomplete: {}",
+            report.markdown
+        );
+    }
+
+    #[test]
+    fn a_fully_successful_tally_adds_no_failure_flag() {
+        // Every task succeeded — no warning line, byte-identical to today's clean
+        // report, and a zero failed tally.
+        let report = synthesize(vec![], &FleetTally::new(8, 0), "2026-04-11 13:08");
+
+        assert_eq!(report.markdown, "## Review Findings (2026-04-11 13:08)\n");
+        assert_eq!(report.counts.tasks_attempted, 8);
+        assert_eq!(report.counts.tasks_failed, 0);
+    }
+
+    #[test]
     fn renders_dated_header_with_the_input_timestamp_verbatim() {
-        let report = synthesize(vec![], "2026-04-11 13:08");
+        let report = synthesize(vec![], &FleetTally::default(), "2026-04-11 13:08");
         assert!(
             report
                 .markdown
@@ -350,7 +442,7 @@ mod tests {
 
     #[test]
     fn empty_input_renders_only_the_header_and_zero_counts() {
-        let report = synthesize(vec![], "2026-04-11 13:08");
+        let report = synthesize(vec![], &FleetTally::default(), "2026-04-11 13:08");
         assert_eq!(report.markdown, "## Review Findings (2026-04-11 13:08)\n");
         assert_eq!(report.counts, ReviewCounts::default());
     }
@@ -371,7 +463,7 @@ mod tests {
             refuted("src/a.rs", 99, "dead-code", "`bar` is never called"),
         ];
 
-        let _report = synthesize(verified, "2026-04-11 13:08");
+        let _report = synthesize(verified, &FleetTally::default(), "2026-04-11 13:08");
 
         // The synthesis summary reports the per-severity + per-verdict tallies.
         assert!(logs_contain("review synthesis complete"));
@@ -395,7 +487,7 @@ mod tests {
             refuted("src/a.rs", 99, "dead-code", "`bar` is never called"),
         ];
 
-        let report = synthesize(verified, "2026-04-11 13:08");
+        let report = synthesize(verified, &FleetTally::default(), "2026-04-11 13:08");
 
         // The refuted finding does not appear in the rendered markdown.
         assert!(
@@ -428,7 +520,11 @@ mod tests {
             "`foo` is never called",
             Some("Delete it"),
         );
-        let report = synthesize(vec![one.clone(), one], "2026-04-11 13:08");
+        let report = synthesize(
+            vec![one.clone(), one],
+            &FleetTally::default(),
+            "2026-04-11 13:08",
+        );
 
         // Collapsed to a single checklist item.
         let occurrences = report.markdown.matches("src/a.rs:42").count();
@@ -464,7 +560,7 @@ mod tests {
             "`foo` is never called",
             Some("Delete it"),
         );
-        let report = synthesize(vec![dup, dead], "2026-04-11 13:08");
+        let report = synthesize(vec![dup, dead], &FleetTally::default(), "2026-04-11 13:08");
 
         // Both findings survive — cross-validator findings are never merged.
         assert!(
@@ -510,7 +606,7 @@ mod tests {
                 None,
             ),
         ];
-        let report = synthesize(verified, "2026-04-11 13:08");
+        let report = synthesize(verified, &FleetTally::default(), "2026-04-11 13:08");
 
         assert!(
             report.markdown.contains("### Blockers"),
@@ -562,7 +658,7 @@ mod tests {
                 None,
             ),
         ];
-        let report = synthesize(verified, "2026-04-11 13:08");
+        let report = synthesize(verified, &FleetTally::default(), "2026-04-11 13:08");
 
         let expected = "\
 ## Review Findings (2026-04-11 13:08)
@@ -611,7 +707,7 @@ mod tests {
                 None,
             ),
         ];
-        let report = synthesize(verified, "2026-04-11 13:08");
+        let report = synthesize(verified, &FleetTally::default(), "2026-04-11 13:08");
 
         let a9 = report.markdown.find("src/a.rs:9`").unwrap();
         let a90 = report.markdown.find("src/a.rs:90`").unwrap();

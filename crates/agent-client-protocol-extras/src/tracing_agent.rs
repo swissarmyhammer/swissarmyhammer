@@ -388,14 +388,7 @@ fn log_notification(
             let input = tool_call
                 .raw_input
                 .as_ref()
-                .map(|v| {
-                    let s = v.to_string();
-                    if s.len() > 200 {
-                        format!("{}...", &s[..200])
-                    } else {
-                        s
-                    }
-                })
+                .map(|v| v.to_string())
                 .unwrap_or_else(|| "(no input)".to_string());
             tracing::info!(
                 "[{}] session={}, ToolCall: {} | input: {}",
@@ -682,13 +675,15 @@ mod tests {
         assert!(!was_chunk);
     }
 
+    /// A long tool-call `raw_input` is logged in full — never truncated.
     #[test]
-    fn test_log_notification_tool_call_with_long_input_truncated() {
+    #[tracing_test::traced_test]
+    fn test_log_notification_tool_call_logs_full_input_untruncated() {
         let mut buffers: HashMap<String, ChunkBuffer> = HashMap::new();
 
         let long_input = "x".repeat(300);
         let mut tool_call = ToolCall::new("call-1", "Read");
-        tool_call.raw_input = Some(serde_json::Value::String(long_input));
+        tool_call.raw_input = Some(serde_json::Value::String(long_input.clone()));
         let notif = SessionNotification::new(
             SessionId::from("sess-1"),
             SessionUpdate::ToolCall(tool_call),
@@ -696,6 +691,11 @@ mod tests {
 
         let was_chunk = log_notification("test", &notif, &mut buffers);
         assert!(!was_chunk);
+        // The full 300-char input must appear in the log with no `...` ellipsis.
+        assert!(
+            logs_contain(&long_input),
+            "the full tool-call input must be logged without truncation"
+        );
     }
 
     #[test]

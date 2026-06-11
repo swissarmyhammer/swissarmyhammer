@@ -276,6 +276,9 @@ async fn run_prompt(
             claude_agent::AgentError::Internal(format!("Failed to create session: {}", e))
         })?;
     let session_id = session_response.session_id;
+    // Captured for the per-reply audit log below: `session_id` is moved into the
+    // `PromptRequest` before the response is collected.
+    let session_label = session_id.to_string();
 
     // 3. spawn notification collector before prompt() so streaming content is
     //    captured as it arrives.
@@ -306,6 +309,20 @@ async fn run_prompt(
         &prompt_response,
     )
     .await;
+
+    // Audit log: record this reply's full text so a `review … backend=local` run
+    // is auditable end-to-end. The review driver drains notifications through its
+    // own collector (see `review::drive::build_pool_notifier`), bypassing
+    // `TracingAgent`'s notification logger, so this is the only place the model's
+    // reply is recorded. Both fan-out and verify prompts go through the pool, so
+    // both are covered. The format mirrors `TracingAgent`'s `AgentMessage` line;
+    // the text is logged in full and is never truncated.
+    tracing::info!(
+        "session={}, AgentMessage ({} chars): {}",
+        session_label,
+        content.len(),
+        content
+    );
 
     Ok(claude_agent::CollectedResponse {
         content,
@@ -1048,5 +1065,41 @@ mod tests {
             );
         })
         .await;
+    }
+
+    /// Every prompt run through the pool logs the agent's full reply at the
+    /// `run_prompt` seam, so a `review … backend=local` run is auditable
+    /// end-to-end. The review path drains notifications through its own collector
+    /// (bypassing `TracingAgent`), so this per-reply log is the only record of
+    /// what the model said.
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_pool_logs_agent_reply_at_run_prompt_seam() {
+        let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
+        let agent = PlaybackAgent::new(fixture_path, "test");
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_playback_agent(agent, notifier, move |conn| async move {
+            let pool = AgentPool::new(conn, notifier_body, PoolConfig::local());
+            pool.submit("validate this")
+                .await
+                .expect("result")
+                .expect("playback agent should respond");
+        })
+        .await;
+
+        // The reply is logged in the existing `AgentMessage (N chars): <text>`
+        // format (the `(N chars)` shape is unique to the seam — it distinguishes
+        // our deliberate per-reply log from the framework's raw transport traces),
+        // and the FULL reply text appears inline (no truncation). The fixture
+        // reply is 52 chars long.
+        assert!(
+            logs_contain(&format!(
+                "AgentMessage ({} chars): {{\"status\": \"passed\", \"message\": \"All checks passed\"}}",
+                r#"{"status": "passed", "message": "All checks passed"}"#.len()
+            )),
+            "run_prompt must log each reply in the `AgentMessage (N chars): <full text>` format with the untruncated reply text"
+        );
     }
 }

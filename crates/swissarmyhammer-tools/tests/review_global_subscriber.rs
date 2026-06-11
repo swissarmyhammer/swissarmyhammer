@@ -33,11 +33,8 @@
 //! the bug the production `.sah/mcp.log` showed (engine lines absent) is
 //! reproduced here.
 
-use std::io::Write;
-use std::sync::{Arc, Mutex};
-
 use serde_json::json;
-use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+use swissarmyhammer_common::test_utils::{CaptureWriter, CurrentDirGuard, IsolatedTestEnvironment};
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tools::review::ReviewTool;
 use tracing_subscriber::prelude::*;
@@ -55,29 +52,6 @@ use review_fixture::{
     seed_on_disk_index, TestRepo,
 };
 
-/// A `MakeWriter` over a shared in-memory buffer, so the test can read back
-/// exactly what the global `fmt` layer wrote — the stand-in for `sah serve`'s
-/// `.sah/mcp.log` file sink.
-#[derive(Clone)]
-struct BufferWriter(Arc<Mutex<Vec<u8>>>);
-
-impl Write for BufferWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufferWriter {
-    type Writer = BufferWriter;
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
-}
-
 /// Drive the real `review working` tool path under a global subscriber installed
 /// the same way `logging.rs` installs it, and assert the engine's stage lines land
 /// in the captured buffer.
@@ -88,13 +62,15 @@ async fn review_working_engine_traces_reach_a_global_subscriber() {
     // --- install the GLOBAL subscriber exactly like `sah serve` does ---
     // registry().with(EnvFilter::new("rmcp=warn,debug")).with(fmt::layer()
     //   .with_writer(<buffer>).with_ansi(false)) via set_global_default.
-    let buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let writer = BufferWriter(buffer.clone());
+    // The shared in-memory capture writer is the stand-in for `sah serve`'s
+    // `.sah/mcp.log` file sink: it reads back exactly what the global `fmt`
+    // layer wrote.
+    let capture = CaptureWriter::default();
     let subscriber = tracing_subscriber::registry()
         .with(EnvFilter::new("rmcp=warn,debug"))
         .with(
             tracing_subscriber::fmt::layer()
-                .with_writer(writer)
+                .with_writer(capture.clone())
                 .with_ansi(false),
         );
     tracing::subscriber::set_global_default(subscriber)
@@ -123,7 +99,7 @@ async fn review_working_engine_traces_reach_a_global_subscriber() {
         .await
         .expect("review working dispatch");
 
-    let captured = String::from_utf8(buffer.lock().unwrap().clone()).expect("utf8 log buffer");
+    let captured = capture.contents();
 
     // --- the engine's three stage lines must be present in the GLOBAL sink ---
     // scope: the selection summary names the matched validators.

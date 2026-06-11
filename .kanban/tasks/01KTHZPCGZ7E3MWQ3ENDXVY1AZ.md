@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff9580
 title: 'Embedding: process-wide one-inference-at-a-time semaphore gate'
 ---
 ## Goal (generalizes the review-OOM fix)

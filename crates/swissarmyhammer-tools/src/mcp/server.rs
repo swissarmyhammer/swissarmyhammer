@@ -2064,10 +2064,21 @@ impl ServerHandler for McpServer {
         let arg_count = request.arguments.as_ref().map_or(0, |a| a.len());
         let session_id = session_id_from_context(&context);
         let session_field = session_id.clone().unwrap_or_else(|| "<stdio>".to_string());
+        // The dispatched op rides on the span so per-op log aggregation works
+        // on any line of the call — including `tool_call complete` — without
+        // joining back to the args line (which breaks under concurrent calls).
+        let op_field = request
+            .arguments
+            .as_ref()
+            .and_then(|args| args.get("op"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         let span = tracing::info_span!(
             "tool_call",
             tool = %tool_name,
+            op = op_field.as_str(),
             args = arg_count,
             session_id = %session_field,
             caller = "mcp",

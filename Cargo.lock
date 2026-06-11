@@ -105,6 +105,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "tracing-test",
 ]
 
 [[package]]
@@ -4394,6 +4395,7 @@ dependencies = [
  "chrono",
  "criterion",
  "dirs",
+ "fs2",
  "futures",
  "hf-hub",
  "http",

@@ -34,7 +34,7 @@ use std::fmt::Write as _;
 use serde::Deserialize;
 
 use crate::review::probes::{ProbeKind, ProbeResult};
-use crate::review::types::{Finding, RefutingLayer, VerifiedFinding};
+use crate::review::types::{extract_json_value, Finding, RefutingLayer, VerifiedFinding};
 use crate::validators::AgentPool;
 
 /// One candidate finding plus the ground-truth context the verify stage checks
@@ -339,12 +339,12 @@ struct VerdictJson {
 /// Parse the agent's verify response into a [`Verdict`], refuting by default
 /// when no well-formed verdict object can be read.
 ///
-/// Reuses the same fence/bracket extraction the findings parser uses, retargeted
-/// to a JSON *object*. An uncertain or malformed response — anything that is not
+/// Reuses the findings parser's shared [`extract_json_value`], retargeted to a
+/// JSON *object*. An uncertain or malformed response — anything that is not
 /// an explicit `{"confirmed": true, ...}` — resolves to refuted, so the agent
 /// must positively substantiate a finding for it to survive.
 fn parse_verdict(agent_text: &str) -> Verdict {
-    let json = extract_json_object(agent_text);
+    let json = extract_json_value(agent_text, '{', '}');
     match serde_json::from_str::<VerdictJson>(json) {
         Ok(parsed) => Verdict {
             confirmed: parsed.confirmed,
@@ -363,85 +363,6 @@ fn parse_verdict(agent_text: &str) -> Verdict {
             }
         }
     }
-}
-
-/// Extract the JSON object substring from an agent response.
-///
-/// The object analog of the findings parser's array extractor: a ```` ```json ````
-/// fenced block, then any bare fenced block, then brace-counting from the first
-/// `{` to its match, then first `{` to last `}`. Falls back to the trimmed input
-/// so a `serde_json` error carries a useful message.
-fn extract_json_object(response: &str) -> &str {
-    let trimmed = response.trim();
-
-    if let Some(start) = trimmed.find("```json") {
-        let after = &trimmed[start + "```json".len()..];
-        if let Some(end) = after.find("```") {
-            let content = after[..end].trim();
-            if looks_like_object(content) {
-                return content;
-            }
-        }
-    }
-
-    if let Some(start) = trimmed.find("```") {
-        let after = &trimmed[start + 3..];
-        let content_start = after.find('\n').map(|i| i + 1).unwrap_or(0);
-        let content = &after[content_start..];
-        if let Some(end) = content.find("```") {
-            let inner = content[..end].trim();
-            if looks_like_object(inner) {
-                return inner;
-            }
-        }
-    }
-
-    if let Some(open) = trimmed.find('{') {
-        if let Some(close) = matching_brace(&trimmed[open..]) {
-            return &trimmed[open..=open + close];
-        }
-    }
-
-    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-        if start < end {
-            return &trimmed[start..=end];
-        }
-    }
-
-    trimmed
-}
-
-/// Whether `s` is bracketed like a JSON object.
-fn looks_like_object(s: &str) -> bool {
-    s.starts_with('{') && s.ends_with('}')
-}
-
-/// Find the byte index (relative to `s`, which must start with `{`) of the `}`
-/// that closes the opening brace, honouring string literals and escapes.
-fn matching_brace(s: &str) -> Option<usize> {
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escape_next = false;
-
-    for (i, c) in s.char_indices() {
-        if escape_next {
-            escape_next = false;
-            continue;
-        }
-        match c {
-            '\\' if in_string => escape_next = true,
-            '"' => in_string = !in_string,
-            '{' if !in_string => depth += 1,
-            '}' if !in_string => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Render the adversarial verify prompt for one candidate — the inverse of the

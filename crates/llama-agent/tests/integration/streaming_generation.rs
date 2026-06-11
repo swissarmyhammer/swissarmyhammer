@@ -154,30 +154,6 @@ async fn add_assistant_message(
         .expect("add_message should succeed");
 }
 
-/// A `tracing` writer that appends everything to a shared byte buffer so a test
-/// can assert on log lines emitted by the queue worker (which runs on a
-/// different thread than the test — a thread-local/`with_test_writer` capture
-/// would miss it, so this installs a *global* subscriber).
-#[derive(Clone)]
-struct SharedLogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-impl std::io::Write for SharedLogBuffer {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedLogBuffer {
-    type Writer = SharedLogBuffer;
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
-}
-
 /// Regression test for symptom 1 (0 tokens generated).
 ///
 /// Drives the streaming path with a `max_tokens` budget that mirrors what the
@@ -467,18 +443,21 @@ async fn test_second_streaming_prompt_after_turn_succeeds() {
 /// That pair proves the save→restore lifecycle is wired on the streaming path.
 ///
 /// The worker logs from a different thread, so this installs a global tracing
-/// subscriber. Under the project's runner (nextest, process-per-test) that
-/// always succeeds; if some other test already owns the global subscriber in a
+/// subscriber with the shared in-memory
+/// [`CaptureWriter`](swissarmyhammer_common::test_utils::CaptureWriter) (a
+/// thread-local/`with_test_writer` capture would miss the worker's lines).
+/// Under the project's runner (nextest, process-per-test) installation always
+/// succeeds; if some other test already owns the global subscriber in a
 /// shared-process run, we skip rather than report a false failure (matching the
 /// rate-limit skip convention used throughout these tests).
 #[tokio::test]
 #[serial]
 async fn test_streaming_reuses_kv_cache_across_turns() {
-    let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let capture = swissarmyhammer_common::test_utils::CaptureWriter::default();
     let installed = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_ansi(false)
-        .with_writer(SharedLogBuffer(buffer.clone()))
+        .with_writer(capture.clone())
         .try_init()
         .is_ok();
     if !installed {
@@ -544,7 +523,7 @@ async fn test_streaming_reuses_kv_cache_across_turns() {
     .await;
     assert!(tokens2 > 0, "turn 2 must produce tokens, got 0: {text2:?}");
 
-    let logs = String::from_utf8_lossy(&buffer.lock().unwrap()).into_owned();
+    let logs = capture.contents();
 
     assert!(
         logs.contains("no usable cached prefix"),

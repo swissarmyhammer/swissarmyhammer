@@ -161,6 +161,8 @@ impl From<QueueError> for ValidationError {
             QueueError::WorkerError(msg) => {
                 ValidationError::invalid_state(format!("Queue worker error: {}", msg))
             }
+            QueueError::Cancelled => ValidationError::invalid_state("Queue request cancelled"),
+            QueueError::ShuttingDown => ValidationError::invalid_state("Queue is shutting down"),
         }
     }
 }

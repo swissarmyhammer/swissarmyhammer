@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffff9380
 title: 'Review OOM: share the embedder process-wide (singleton)'
 ---
 ## Problem

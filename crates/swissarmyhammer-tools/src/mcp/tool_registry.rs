@@ -659,10 +659,19 @@ impl ToolContext {
             serde_json::Value::Object(map) => map.len(),
             _ => 0,
         };
+        // The dispatched op rides on the span so per-op log aggregation works
+        // on any line of the call — including `tool_call complete` — without
+        // joining back to the args line (which breaks under concurrent calls).
+        let op_field = params
+            .get("op")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         let span = tracing::info_span!(
             "tool_call",
             tool = %tool_name,
+            op = op_field.as_str(),
             args = arg_count,
             caller = "internal",
             status = tracing::field::Empty,
