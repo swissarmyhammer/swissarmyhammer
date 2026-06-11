@@ -25,6 +25,41 @@ use fs2::FileExt;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::PathBuf;
+use std::time::Instant;
+use tracing::{debug, info};
+
+/// Failure to acquire the machine-wide GPU lock.
+///
+/// Each variant names the step that failed and carries the full lock path, so
+/// a caller (or a log line built from `Display`) can tell *which* filesystem
+/// operation on *which* lock file went wrong — not just the bare OS error.
+#[derive(Debug, thiserror::Error)]
+pub enum GpuLockError {
+    /// Creating the lock file's parent directory failed.
+    #[error("failed to create parent directory for GPU lock file {path}: {source}")]
+    CreateDir {
+        /// The lock file whose parent directory could not be created.
+        path: PathBuf,
+        /// The underlying filesystem error.
+        source: io::Error,
+    },
+    /// Opening (or creating) the lock file itself failed.
+    #[error("failed to open GPU lock file {path}: {source}")]
+    Open {
+        /// The lock file that could not be opened.
+        path: PathBuf,
+        /// The underlying filesystem error.
+        source: io::Error,
+    },
+    /// The `flock(LOCK_EX)` syscall on the opened lock file failed.
+    #[error("failed to take exclusive flock on GPU lock file {path}: {source}")]
+    Lock {
+        /// The lock file the flock was attempted on.
+        path: PathBuf,
+        /// The underlying flock error.
+        source: io::Error,
+    },
+}
 
 /// Prefix for the per-machine GPU lock file living in the system temp dir.
 ///
@@ -53,6 +88,8 @@ pub fn gpu_lock_path(model_key: &str) -> PathBuf {
 #[derive(Debug)]
 pub struct GpuLockGuard {
     file: File,
+    /// Retained so the release event can name the lock being released.
+    lock_path: PathBuf,
 }
 
 impl Drop for GpuLockGuard {
@@ -61,6 +98,7 @@ impl Drop for GpuLockGuard {
         // process never reaches here), the kernel still releases the flock when
         // the fd is closed / the process exits, so there is no stale lock.
         let _ = FileExt::unlock(&self.file);
+        debug!("released GPU lock at {}", self.lock_path.display());
     }
 }
 
@@ -86,8 +124,10 @@ impl GpuLock {
 
     /// Create a lock handle for an explicit path. Used by tests with a temp
     /// path so they never touch the real machine-wide lock.
-    pub fn at_path(lock_path: PathBuf) -> Self {
-        Self { lock_path }
+    pub fn at_path(lock_path: impl Into<PathBuf>) -> Self {
+        Self {
+            lock_path: lock_path.into(),
+        }
     }
 
     /// The path of the underlying lock file.
@@ -102,9 +142,20 @@ impl GpuLock {
     /// at which point the kernel releases it). It MUST therefore be run off the
     /// async executor — callers in async contexts wrap it in
     /// `tokio::task::spawn_blocking` so a held lock never stalls the runtime.
-    pub fn acquire_blocking(&self) -> io::Result<GpuLockGuard> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GpuLockError`] naming the failing step and the lock path:
+    /// - [`GpuLockError::CreateDir`] — the lock file's parent directory could
+    ///   not be created.
+    /// - [`GpuLockError::Open`] — the lock file could not be opened/created.
+    /// - [`GpuLockError::Lock`] — the `flock(LOCK_EX)` syscall failed.
+    pub fn acquire_blocking(&self) -> Result<GpuLockGuard, GpuLockError> {
         if let Some(parent) = self.lock_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|source| GpuLockError::CreateDir {
+                path: self.lock_path.clone(),
+                source,
+            })?;
         }
         // Do not truncate: the file is a pure lock token, its contents are
         // irrelevant, and another process may hold the lock concurrently.
@@ -113,9 +164,26 @@ impl GpuLock {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(&self.lock_path)?;
-        FileExt::lock_exclusive(&file)?;
-        Ok(GpuLockGuard { file })
+            .open(&self.lock_path)
+            .map_err(|source| GpuLockError::Open {
+                path: self.lock_path.clone(),
+                source,
+            })?;
+        info!("waiting for GPU lock at {}", self.lock_path.display());
+        let wait_started = Instant::now();
+        FileExt::lock_exclusive(&file).map_err(|source| GpuLockError::Lock {
+            path: self.lock_path.clone(),
+            source,
+        })?;
+        info!(
+            "acquired GPU lock at {} (waited {:?})",
+            self.lock_path.display(),
+            wait_started.elapsed()
+        );
+        Ok(GpuLockGuard {
+            file,
+            lock_path: self.lock_path.clone(),
+        })
     }
 }
 
@@ -137,9 +205,86 @@ mod tests {
         assert_ne!(gpu_lock_path("abc123"), gpu_lock_path("def456"));
     }
 
+    /// Acquiring the lock emits "waiting" and "acquired" tracing events that
+    /// carry the full lock file path (never truncated), and dropping the guard
+    /// emits a release event — so cross-process GPU serialization is visible
+    /// in the tracing log.
+    ///
+    /// Uses a scoped (thread-local) subscriber with the shared in-memory
+    /// [`CaptureWriter`](swissarmyhammer_common::test_utils::CaptureWriter)
+    /// rather than `#[tracing_test::traced_test]`: other tests in this binary
+    /// (the chat_template suite) install the global dispatcher via
+    /// `try_init()`, and `traced_test`'s second global registration panics.
+    /// Every event asserted here is emitted on the test thread, so a scoped
+    /// default captures all of them deterministically.
+    ///
+    /// Serialized with the other lock tests: they hit the SAME `info!`/`debug!`
+    /// callsites from their own threads, and tracing-core caches callsite
+    /// interest globally on first touch. With only a scoped dispatcher
+    /// registered, a foreign thread's first touch evaluates interest against
+    /// ITS thread default (`NoSubscriber`) and caches `Interest::never`,
+    /// silently disabling the callsite for this test too.
+    #[test]
+    #[serial_test::serial(gpu_lock)]
+    fn acquire_and_release_emit_tracing_events_with_lock_path() {
+        use swissarmyhammer_common::test_utils::CaptureWriter;
+
+        let capture = CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(capture.clone())
+            .finish();
+        let _scope = tracing::subscriber::set_default(subscriber);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gpu.lock");
+        let path_str = path.display().to_string();
+        let lock = GpuLock::at_path(path);
+
+        let guard = lock.acquire_blocking().unwrap();
+        // Waiting + acquired events, each carrying the full lock path.
+        assert!(capture.contains(&format!("waiting for GPU lock at {path_str}")));
+        assert!(capture.contains(&format!("acquired GPU lock at {path_str}")));
+        // The acquired event reports how long the acquirer waited.
+        assert!(capture.contains("waited"));
+
+        // No release event until the guard drops.
+        assert!(!capture.contains("released GPU lock"));
+        drop(guard);
+        assert!(capture.contains(&format!("released GPU lock at {path_str}")));
+    }
+
+    /// An acquisition failure must identify WHICH step failed and the lock
+    /// path involved — not just the bare OS error ("Not a directory") that a
+    /// caller cannot act on.
+    #[test]
+    fn acquire_error_names_failing_step_and_lock_path() {
+        let dir = tempfile::tempdir().unwrap();
+        // Make a component of the lock path's parent a regular FILE so
+        // creating the parent directory must fail.
+        let blocker = dir.path().join("not-a-dir");
+        std::fs::write(&blocker, b"file").unwrap();
+        let lock_path = blocker.join("sub").join("gpu.lock");
+        let lock = GpuLock::at_path(lock_path.clone());
+
+        let msg = lock.acquire_blocking().unwrap_err().to_string();
+        assert!(
+            msg.contains("create"),
+            "error should name the failing step (directory creation): {msg}"
+        );
+        assert!(
+            msg.contains(&lock_path.display().to_string()),
+            "error should carry the full lock path: {msg}"
+        );
+    }
+
     /// A second acquirer of the SAME lock path must WAIT until the first guard
     /// releases (drops), not error.
+    ///
+    /// Serialized with the tracing-assertion test above — see its doc comment
+    /// for the callsite-interest race this avoids.
     #[test]
+    #[serial_test::serial(gpu_lock)]
     fn second_acquirer_waits_until_first_releases() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gpu.lock");
@@ -157,8 +302,10 @@ mod tests {
             *acquired_at_bg.lock().unwrap() = Some(Instant::now());
         });
 
-        // Hold the lock briefly, then release.
-        std::thread::sleep(Duration::from_millis(200));
+        // Deliberate hold window: long enough for the background acquirer to
+        // park inside the blocking `flock` before we release.
+        const HOLD_BEFORE_RELEASE: Duration = Duration::from_millis(200);
+        std::thread::sleep(HOLD_BEFORE_RELEASE);
         let released_at = Instant::now();
         drop(guard);
 
@@ -177,7 +324,11 @@ mod tests {
     ///
     /// Deterministic and well under 10s: it uses a temp lock path and a
     /// short-lived child, never the real model.
+    ///
+    /// Serialized with the tracing-assertion test above — see its doc comment
+    /// for the callsite-interest race this avoids.
     #[test]
+    #[serial_test::serial(gpu_lock)]
     fn lock_auto_releases_when_holder_killed() {
         let dir = tempfile::tempdir().unwrap();
         let lock_path = dir.path().join("gpu.lock");
@@ -208,11 +359,14 @@ fn main() {{
         // child does not need a network/registry fetch.
         let child = spawn_lock_holder_child(&child_src, dir.path());
 
-        // Wait until the child reports it holds the lock.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Wait until the child reports it holds the lock. The deadline and
+        // poll interval together bound the wait loop (~250 polls max).
+        const CHILD_READY_DEADLINE: Duration = Duration::from_secs(5);
+        const READY_POLL_INTERVAL: Duration = Duration::from_millis(20);
+        let deadline = Instant::now() + CHILD_READY_DEADLINE;
         while !ready_path.exists() {
             assert!(Instant::now() < deadline, "child never acquired the lock");
-            std::thread::sleep(Duration::from_millis(20));
+            std::thread::sleep(READY_POLL_INTERVAL);
         }
 
         // Sanity: while the child holds it, WE cannot take it non-blocking.

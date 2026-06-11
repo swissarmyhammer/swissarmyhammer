@@ -43,6 +43,16 @@ pub enum QueueError {
 
     #[error("Worker thread error: {0}")]
     WorkerError(String),
+
+    /// The request's own `CancellationToken` fired — a client-initiated,
+    /// expected outcome, distinct from a worker failure.
+    #[error("Request cancelled")]
+    Cancelled,
+
+    /// The queue's sender is closed because the agent is shutting down; no
+    /// new requests can be accepted.
+    #[error("Queue is shutting down")]
+    ShuttingDown,
 }
 
 /// Errors related to session management.
@@ -139,6 +149,8 @@ impl LlamaError for QueueError {
         match self {
             QueueError::Full => ErrorCategory::System,
             QueueError::WorkerError(_) => ErrorCategory::System,
+            QueueError::Cancelled => ErrorCategory::User,
+            QueueError::ShuttingDown => ErrorCategory::System,
         }
     }
 
@@ -146,6 +158,8 @@ impl LlamaError for QueueError {
         match self {
             QueueError::Full => "QUEUE_FULL",
             QueueError::WorkerError(_) => "QUEUE_WORKER",
+            QueueError::Cancelled => "QUEUE_CANCELLED",
+            QueueError::ShuttingDown => "QUEUE_SHUTDOWN",
         }
     }
 
@@ -156,6 +170,12 @@ impl LlamaError for QueueError {
             }
             QueueError::WorkerError(msg) => {
                 format!("Worker thread error: {}\n💡 Check system resources and model availability", msg)
+            }
+            QueueError::Cancelled => {
+                "Request cancelled\n💡 The request was cancelled before it completed; resubmit if this was not intended".to_string()
+            }
+            QueueError::ShuttingDown => {
+                "Queue is shutting down\n💡 The agent is stopping; retry once it has restarted".to_string()
             }
         }
     }

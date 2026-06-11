@@ -135,30 +135,71 @@ pub struct VerifiedFinding {
 /// function strips that wrapping (reusing the same fence/bracket extraction the
 /// validator response parser uses) and deserializes the array.
 ///
+/// Real local models also sometimes emit findings as bare JSON objects
+/// instead of an array — a single `{...}`, or several consecutive
+/// (NDJSON-ish) `{...}\n{...}`; when no array parses, this falls back to
+/// collecting every consecutive bare [`Finding`] object so no part of the
+/// batch is silently dropped.
+///
 /// # Errors
 ///
-/// Returns an [`AvpError::Json`] when no findings array can be located or the
-/// extracted text is not a valid `Vec<Finding>`.
+/// Returns an [`AvpError::Json`] when neither a findings array nor at least
+/// one bare finding object can be located and deserialized.
 pub fn parse_findings(agent_text: &str) -> Result<Vec<Finding>, AvpError> {
-    let json = extract_json_array(agent_text);
-    let findings = serde_json::from_str(json)?;
-    Ok(findings)
+    let array = extract_json_value(agent_text, '[', ']');
+    match serde_json::from_str(array) {
+        Ok(findings) => Ok(findings),
+        Err(array_err) => parse_bare_object_findings(agent_text).ok_or_else(|| array_err.into()),
+    }
 }
 
-/// Extract the JSON array substring from an agent response.
+/// Parse one or more consecutive top-level bare JSON objects as findings.
 ///
-/// Ported from the validator response parser's fence-stripping, generalized
-/// from a single JSON object (`{ ... }`) to the JSON array (`[ ... ]`) a batch
-/// of findings is emitted as. Tries, in order:
+/// The fallback for the no-array shapes real local models emit: a single bare
+/// `{...}`, or several NDJSON-ish consecutive objects `{...}\n{...}`. It
+/// starts at the object [`extract_json_value`] locates (keeping its fence
+/// stripping), then keeps collecting whitespace-separated balanced objects
+/// until one is unbalanced, fails to deserialize as a [`Finding`], or the
+/// text moves on to something that is not an object. Returns `None` when not
+/// even one finding object parses, so the caller reports the array error.
+fn parse_bare_object_findings(agent_text: &str) -> Option<Vec<Finding>> {
+    let region = extract_json_value(agent_text, '{', '}');
+    // `region` is always a subslice of `agent_text`, so this offset locates it
+    // exactly; the scan then continues past the region's end for further
+    // consecutive objects the single-value extractor cannot return.
+    let offset = region.as_ptr() as usize - agent_text.as_ptr() as usize;
+    let mut rest = agent_text[offset..].trim_start();
+
+    let mut findings = Vec::new();
+    while rest.starts_with('{') {
+        let Some(end) = matching_delimiter(rest, '{', '}') else {
+            break;
+        };
+        let Ok(finding) = serde_json::from_str::<Finding>(&rest[..=end]) else {
+            break;
+        };
+        findings.push(finding);
+        rest = rest[end + 1..].trim_start();
+    }
+    (!findings.is_empty()).then_some(findings)
+}
+
+/// Extract the JSON value substring delimited by `open`/`close` from an agent
+/// response.
+///
+/// The one fence-stripping extractor for every agent-emitted JSON shape in
+/// the review pipeline: the findings array (`[ ... ]`), the bare-object
+/// findings fallback (`{ ... }`), and the verify stage's verdict object.
+/// Tries, in order:
 ///
 /// 1. A ```` ```json ```` fenced block.
 /// 2. Any bare ```` ``` ```` fenced block.
-/// 3. Bracket-counting from the first `[` to its matching `]`.
-/// 4. The first `[` to the last `]` as a last resort.
+/// 3. Delimiter-counting from the first `open` to its matching `close`.
+/// 4. The first `open` to the last `close` as a last resort.
 ///
 /// Falls back to the trimmed input so the caller's `serde_json` error carries a
-/// useful message when nothing array-shaped is present.
-fn extract_json_array(response: &str) -> &str {
+/// useful message when nothing delimited is present.
+pub(crate) fn extract_json_value(response: &str, open: char, close: char) -> &str {
     let trimmed = response.trim();
 
     // 1. JSON within a ```json fenced block.
@@ -166,7 +207,7 @@ fn extract_json_array(response: &str) -> &str {
         let after_marker = &trimmed[start + "```json".len()..];
         if let Some(end) = after_marker.find("```") {
             let content = after_marker[..end].trim();
-            if looks_like_array(content) {
+            if content.starts_with(open) && content.ends_with(close) {
                 return content;
             }
         }
@@ -180,21 +221,21 @@ fn extract_json_array(response: &str) -> &str {
         let content = &after_marker[content_start..];
         if let Some(end) = content.find("```") {
             let inner = content[..end].trim();
-            if looks_like_array(inner) {
+            if inner.starts_with(open) && inner.ends_with(close) {
                 return inner;
             }
         }
     }
 
-    // 3. Bracket-count from the first `[` to its matching `]`.
-    if let Some(open) = trimmed.find('[') {
-        if let Some(close) = matching_bracket(&trimmed[open..]) {
-            return &trimmed[open..=open + close];
+    // 3. Delimiter-count from the first `open` to its matching `close`.
+    if let Some(start) = trimmed.find(open) {
+        if let Some(end) = matching_delimiter(&trimmed[start..], open, close) {
+            return &trimmed[start..=start + end];
         }
     }
 
-    // 4. Last resort: first `[` to last `]`.
-    if let (Some(start), Some(end)) = (trimmed.find('['), trimmed.rfind(']')) {
+    // 4. Last resort: first `open` to last `close`.
+    if let (Some(start), Some(end)) = (trimmed.find(open), trimmed.rfind(close)) {
         if start < end {
             return &trimmed[start..=end];
         }
@@ -203,14 +244,10 @@ fn extract_json_array(response: &str) -> &str {
     trimmed
 }
 
-/// Whether `s` is bracketed like a JSON array.
-fn looks_like_array(s: &str) -> bool {
-    s.starts_with('[') && s.ends_with(']')
-}
-
-/// Find the byte index (relative to `s`, which must start with `[`) of the `]`
-/// that closes the opening bracket, honouring string literals and escapes.
-fn matching_bracket(s: &str) -> Option<usize> {
+/// Find the byte index (relative to `s`, which must start with `open`) of the
+/// `close` that balances the opening delimiter, honouring string literals and
+/// escapes.
+fn matching_delimiter(s: &str, open: char, close: char) -> Option<usize> {
     let mut depth = 0usize;
     let mut in_string = false;
     let mut escape_next = false;
@@ -223,8 +260,8 @@ fn matching_bracket(s: &str) -> Option<usize> {
         match c {
             '\\' if in_string => escape_next = true,
             '"' => in_string = !in_string,
-            '[' if !in_string => depth += 1,
-            ']' if !in_string => {
+            c if c == open && !in_string => depth += 1,
+            c if c == close && !in_string => {
                 depth -= 1;
                 if depth == 0 {
                     return Some(i);
@@ -431,6 +468,56 @@ Let me know if you want more detail."#;
         let findings = parse_findings(text).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].line, 9);
+    }
+
+    #[test]
+    fn parse_findings_reads_a_single_bare_object() {
+        // Real local models sometimes emit ONE finding as a bare JSON object
+        // instead of a one-element array. Seen in a real qwen review run: the
+        // magic-numbers shard emitted `{...}`, the parse failed with
+        // "invalid type: map, expected a sequence", and the whole batch
+        // degraded to zero findings plus a failed fleet task.
+        let text = r#"
+{
+  "file": "src/orders.rs",
+  "line": 10,
+  "rule": "no-magic-numbers",
+  "severity": "warning",
+  "claim": "The literal 0.0825 is a tax rate with no named constant.",
+  "evidence": "orders.rs:10: `total + total * 0.0825`",
+  "suggestion": "Define `SALES_TAX_RATE` and use it."
+}
+"#;
+        let findings = parse_findings(text).expect("a single bare finding object must parse");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule.as_deref(), Some("no-magic-numbers"));
+        assert_eq!(findings[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn parse_findings_reads_consecutive_bare_objects() {
+        // NDJSON-ish sibling of the single-bare-object shape: multiple
+        // findings as consecutive bare objects with no enclosing array. The
+        // fallback must collect ALL of them, not parse the first and
+        // silently drop the rest.
+        let text = "{\"file\": \"a.rs\", \"line\": 1, \"validator\": \"v\", \
+                    \"severity\": \"warning\", \"claim\": \"first\", \"evidence\": \"e1\"}\n\
+                    {\"file\": \"b.rs\", \"line\": 2, \"validator\": \"v\", \
+                    \"severity\": \"nit\", \"claim\": \"second\", \"evidence\": \"e2\"}";
+        let findings = parse_findings(text).expect("consecutive bare objects must parse");
+        assert_eq!(findings.len(), 2, "got: {findings:?}");
+        assert_eq!(findings[0].claim, "first");
+        assert_eq!(findings[1].claim, "second");
+    }
+
+    #[test]
+    fn parse_findings_reads_a_single_fenced_object() {
+        let text = "One issue:\n\n```json\n{\"file\": \"a.rs\", \"line\": 7, \
+                    \"severity\": \"nit\", \"claim\": \"c\", \"evidence\": \"e\"}\n```\n";
+        let findings = parse_findings(text).expect("a single fenced finding object must parse");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].line, 7);
+        assert_eq!(findings[0].severity, Severity::Nit);
     }
 
     #[test]

@@ -177,6 +177,8 @@ impl ToJsonRpcError for crate::types::QueueError {
         match self {
             crate::types::QueueError::Full => -32000, // Server error
             crate::types::QueueError::WorkerError(_) => -32603, // Internal error
+            crate::types::QueueError::Cancelled => -32000, // Server error (matches GenerationError::Cancelled)
+            crate::types::QueueError::ShuttingDown => -32000, // Server error
         }
     }
 
@@ -192,6 +194,14 @@ impl ToJsonRpcError for crate::types::QueueError {
                 "error": "worker_error",
                 "details": msg,
                 "suggestion": "Check system resources and model availability"
+            })),
+            crate::types::QueueError::Cancelled => Some(json!({
+                "error": "request_cancelled",
+                "suggestion": "The request was cancelled before it completed; resubmit if this was not intended"
+            })),
+            crate::types::QueueError::ShuttingDown => Some(json!({
+                "error": "queue_shutting_down",
+                "suggestion": "The agent is stopping; retry once it has restarted"
             })),
         }
     }

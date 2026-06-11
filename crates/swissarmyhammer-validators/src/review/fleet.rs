@@ -331,10 +331,21 @@ fn severity_default(severity: Severity) -> &'static str {
 /// four load-bearing fields the [`Finding`] type and the verify stage require:
 /// `rule`, `claim` (what + why it matters), `evidence` (a cited probe proof), and
 /// `suggestion` (the fix).
+///
+/// The contract is explicit that the reply must be the JSON array as plain
+/// message text and that tools must NOT be called: review sessions still
+/// advertise the agent's intrinsic tools, and without this instruction small
+/// models deliver their findings as a hallucinated tool call (e.g. invoking the
+/// validator name as a tool), leaving the parsed message empty and failing the
+/// task.
 const OUTPUT_CONTRACT: &str = "\
 ## Output contract
 
-Emit your findings as a JSON array. Each finding is one object with these fields:
+Reply with your findings as a JSON array, written directly as the plain text \
+of your reply — the reply is parsed as JSON. Do NOT call any tools: tools are \
+not part of this task, and a tool call is not a valid way to report findings.
+
+Each finding is one object with these fields:
 
 - `file`: the path of the file the finding is about.
 - `line`: the 1-based line number the finding points at.
