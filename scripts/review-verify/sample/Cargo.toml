@@ -1,0 +1,12 @@
+# Seeded sample crate for the review verification harness (see ../README.md).
+#
+# The empty [workspace] table detaches this crate from the repository's cargo
+# workspace: the root Cargo.toml uses an explicit members list, and this crate
+# must never join it — it exists only as review-bait for drive.py.
+[package]
+name = "review-verify-sample"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
