@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ed80
+position_column: review
+position_ordinal: '8480'
 project: ui-command-cleanup
 title: Fix pre-existing perspective-tab-bar.filter-migration.test.tsx failures (filter button click → empty spatial_focus fq)
 ---
@@ -20,3 +20,12 @@ Verified during Card E implementation (2026-06-11): restoring `perspective-tab-b
 ## Done means
 - Root cause identified (empty `fq` in the `spatial_focus` IPC, or stale test unwrap shape).
 - Both tests green without weakening their assertions.
+
+## Resolution (2026-06-12)
+Root cause: **stale test unwrap shape** (the second hypothesis), not an empty fq from production.
+
+The MCP-transport cutover moved the focus commit from `invoke("spatial_focus", { fq, snapshot })` to `invoke("command_tool_call", { module: "focus", tool: "focus", op: "set focus", params: { fq, snapshot, window } })` (see `apps/kanban-app/ui/src/lib/focus-mcp.ts::setFocus` and `mcp-transport.ts::callMcpTool`). The codemod that swept the test suite updated this file's call *filter* to match the new `command_tool_call`/`set focus` shape, but left the `fq` unwrap reading the legacy top-level field (`(lastCall[1] as { fq?: string })?.fq`). Under the new shape the FQM lives at `params.fq`, so the unwrap always yielded `""` and `endsWith("filter_editor:pN")` failed.
+
+Fix (test-only): added a local `setFocusFqOf()` helper that unwraps `bag.fq ?? bag.params.fq` (tolerating both transport vintages, mirroring `focus-scope.test.tsx`'s helper) and pointed both assertions at it. Assertions unchanged in strength — they now verify the real fq (`…filter_editor:p1` / `…filter_editor:p2`), which an empty production fq would still fail.
+
+Verification: `npx vitest run src/components/perspective-tab-bar.filter-migration.test.tsx` → 5 passed (was 2 failed / 3 passed); `npx tsc --noEmit` → exit 0, no errors. Production code untouched.

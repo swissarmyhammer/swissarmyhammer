@@ -244,6 +244,22 @@ async function flushEffects() {
   });
 }
 
+/**
+ * Unwrap the focused FQM from a captured set-focus invoke payload.
+ *
+ * The focus commit rides the generic MCP bridge:
+ * `invoke("command_tool_call", { module: "focus", tool: "focus",
+ * op: "set focus", params: { fq, snapshot, window } })` — the FQM lives
+ * under `params.fq` (see `focus-mcp.ts::setFocus`). The legacy
+ * `invoke("spatial_focus", { fq, snapshot })` shape carried it at the
+ * top level; tolerate both so the assertion tracks the seam, not the
+ * transport vintage.
+ */
+function setFocusFqOf(payload: unknown): string {
+  const bag = payload as { fq?: string; params?: { fq?: string } } | undefined;
+  return bag?.fq ?? bag?.params?.fq ?? "";
+}
+
 /** Build a registry payload for the new `perspective.filter.focus` command. */
 function focusFilterRegistryEntry() {
   return {
@@ -320,7 +336,11 @@ describe("perspective-tab-bar — Filter command migration", () => {
     // Expect at least one `spatial_focus` IPC call whose `fq` ends with
     // the filter editor's segment for the active perspective.
     const spatialFocusCalls = mockInvoke.mock.calls.filter(
-      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
     );
     expect(
       spatialFocusCalls.length,
@@ -328,7 +348,7 @@ describe("perspective-tab-bar — Filter command migration", () => {
     ).toBeGreaterThan(0);
 
     const lastCall = spatialFocusCalls[spatialFocusCalls.length - 1];
-    const fq = (lastCall[1] as { fq?: string })?.fq ?? "";
+    const fq = setFocusFqOf(lastCall[1]);
     expect(
       fq.endsWith("filter_editor:p1"),
       `spatial_focus.fq must end with filter_editor:p1 (got ${fq})`,
@@ -379,11 +399,15 @@ describe("perspective-tab-bar — Filter command migration", () => {
     });
 
     const spatialFocusCalls = mockInvoke.mock.calls.filter(
-      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
     );
     expect(spatialFocusCalls.length).toBeGreaterThan(0);
     const lastCall = spatialFocusCalls[spatialFocusCalls.length - 1];
-    const fq = (lastCall[1] as { fq?: string })?.fq ?? "";
+    const fq = setFocusFqOf(lastCall[1]);
     expect(
       fq.endsWith("filter_editor:p2"),
       `spatial_focus.fq must end with filter_editor:p2 when p2 is active (got ${fq})`,

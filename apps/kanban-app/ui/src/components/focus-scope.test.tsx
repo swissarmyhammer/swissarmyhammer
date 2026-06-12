@@ -4,8 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { answerListCommand } from "@/test/mock-command-list";
 
 // Capture focus-changed listeners so the kernel-emit simulation below can
-// fire them when the test invokes `spatial_focus`. The default invoke
-// implementation is replaced per-test where needed.
+// fire them when the test drives the focus server's `set focus` op. The
+// default invoke implementation is replaced per-test where needed.
 type ListenCallback = (event: { payload: unknown }) => void;
 const focusListeners: ListenCallback[] = [];
 
@@ -33,36 +33,67 @@ vi.mock("@tauri-apps/api/window", () => ({
 let mockRegistry: Array<Record<string, unknown>> = [];
 
 /**
+ * Extract the target FQM when an invoke call is the focus server's
+ * `set focus` commit (`command_tool_call` against the `focus` tool).
+ *
+ * Click and right-click focus claims route here in production: the
+ * primitive dispatches the plugin-owned `nav.focus` command, whose single
+ * webview execution leg (the bus handler `<SpatialFocusProvider>`
+ * registers) runs the snapshot-bearing `actions.focus(fq)` — which calls
+ * `command_tool_call({ tool: "focus", op: "set focus", params: { fq, … } })`.
+ * The legacy `spatial_focus` Tauri command is gone.
+ *
+ * @returns The `params.fq` of a `set focus` call, or `null` for any other
+ *   invoke.
+ */
+function setFocusFq(cmd: string, args?: unknown): string | null {
+  if (cmd !== "command_tool_call") return null;
+  const a = (args ?? {}) as {
+    tool?: string;
+    op?: string;
+    params?: { fq?: string };
+  };
+  if (a.tool !== "focus" || a.op !== "set focus") return null;
+  return a.params?.fq ?? null;
+}
+
+// Previous FQM emitted by the kernel simulation, so successive `set focus`
+// commits carry a faithful `prev_fq` (the real kernel reports the slot it
+// vacates). Reset per test.
+let lastEmittedFq: string | null = null;
+
+/**
  * Default invoke implementation that emits a synthetic `focus-changed`
- * event when `spatial_focus({fq})` is called. This mirrors the real
- * kernel's emit-after-write contract so tests that fire a click and
- * then read the entity-focus store see the post-emit state.
+ * event when the focus server's `set focus` op is called. This mirrors
+ * the real kernel's emit-after-write contract so tests that fire a click
+ * and then read the entity-focus store see the post-emit state. Also
+ * answers the context menu's click-time `list command` fetch from
+ * `mockRegistry`.
  */
 function emitFocusChangedDefault() {
   (invoke as ReturnType<typeof vi.fn>).mockImplementation(
     (cmd: string, args?: unknown) => {
       const listResult = answerListCommand(cmd, args, mockRegistry);
       if (listResult) return listResult;
-      if (cmd === "spatial_focus") {
-        const a = (args ?? {}) as { fq?: string };
-        const fq = a.fq ?? null;
-        // Sync emit so click-then-read tests see the post-emit state in
-        // the same tick. Wrap in `act()` so React flushes the resulting
-        // store update.
-        if (fq && focusListeners.length > 0) {
-          act(() => {
-            for (const h of focusListeners) {
-              h({
-                payload: {
-                  window_label: "main",
-                  prev_fq: null,
-                  next_fq: fq,
-                  next_segment: null,
-                },
-              });
-            }
-          });
-        }
+      const fq = setFocusFq(cmd, args);
+      // Sync emit so click-then-read tests see the post-emit state in
+      // the same tick. Wrap in `act()` so React flushes the resulting
+      // store update.
+      if (fq && focusListeners.length > 0) {
+        const prev = lastEmittedFq;
+        lastEmittedFq = fq;
+        act(() => {
+          for (const h of focusListeners) {
+            h({
+              payload: {
+                window_label: "main",
+                prev_fq: prev,
+                next_fq: fq,
+                next_segment: null,
+              },
+            });
+          }
+        });
       }
       return Promise.resolve();
     },
@@ -120,31 +151,10 @@ function mockListCommands(commands: ResolvedCommand[]) {
       context_menu_group: groupIndex.get(c.group),
     };
   });
-  (invoke as ReturnType<typeof vi.fn>).mockImplementation(
-    (cmd: string, args?: unknown) => {
-      const listResult = answerListCommand(cmd, args, mockRegistry);
-      if (listResult) return listResult;
-      if (cmd === "spatial_focus") {
-        const a = (args ?? {}) as { fq?: string };
-        const fq = a.fq ?? null;
-        if (fq && focusListeners.length > 0) {
-          act(() => {
-            for (const h of focusListeners) {
-              h({
-                payload: {
-                  window_label: "main",
-                  prev_fq: null,
-                  next_fq: fq,
-                  next_segment: null,
-                },
-              });
-            }
-          });
-        }
-      }
-      return Promise.resolve();
-    },
-  );
+  // Same invoke implementation as the default — `answerListCommand` reads
+  // the freshly published `mockRegistry`, and `set focus` commits keep
+  // emitting the synthetic `focus-changed`.
+  emitFocusChangedDefault();
 }
 
 /** Helper to read focus state from inside the provider.
@@ -176,6 +186,7 @@ describe("FocusScope", () => {
     vi.clearAllMocks();
     mockRegistry = [];
     focusListeners.length = 0;
+    lastEmittedFq = null;
     emitFocusChangedDefault();
   });
 
@@ -218,6 +229,9 @@ describe("FocusScope", () => {
         expect.objectContaining({
           tool: "window",
           op: "show context menu",
+          // `window_label` rides alongside `items`: the MCP wire has no
+          // ambient calling window, so the menu call targets this window
+          // explicitly (the mocked `getCurrentWindow().label`).
           params: {
             items: [
               expect.objectContaining({
@@ -226,6 +240,7 @@ describe("FocusScope", () => {
                 separator: false,
               }),
             ],
+            window_label: "main",
           },
         }),
       );
@@ -647,6 +662,7 @@ describe("FocusScope", () => {
                 separator: false,
               }),
             ],
+            window_label: "main",
           },
         }),
       );
@@ -727,6 +743,7 @@ describe("FocusScope", () => {
                 name: "Inspect tag",
               }),
             ],
+            window_label: "main",
           },
         }),
       );
@@ -979,7 +996,8 @@ describe("FocusScope", () => {
   /**
    * Composition tests — verify FocusScope is the leaf primitive,
    * forwards `navOverride` through to the registration call, and routes
-   * click to the primitive's `spatial_focus` invoke. Every test in this
+   * click through `nav.focus` to the focus server's `set focus` op (the
+   * legacy `spatial_focus` Tauri command is gone). Every test in this
    * file mounts the primitive inside the spatial provider stack
    * (`SpatialFocusProvider` + `FocusLayer`) — the no-spatial-context
    * fallback path was removed in card `01KQPVA127YMJ8D7NB6M824595`, so
@@ -1075,7 +1093,7 @@ describe("FocusScope", () => {
       });
     });
 
-    it("click invokes spatial_focus with the primitive's key", async () => {
+    it("click drives the focus server's set focus op with the primitive's key", async () => {
       const { getByText } = render(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
@@ -1101,14 +1119,20 @@ describe("FocusScope", () => {
       );
       const registeredKey = (registerCall![1] as { fq: string }).fq;
 
-      // Click the rendered leaf — the primitive's onClick fires
-      // `spatial_focus` with the key it minted on mount.
+      // Click the rendered leaf — the primitive's onClick dispatches the
+      // plugin-owned `nav.focus` command with the key it composed on
+      // mount; the webview bus handler completes it by committing the
+      // focus server's `set focus` op with that fq.
       fireEvent.click(getByText("card"));
 
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith(
-          "spatial_focus",
-          expect.objectContaining({ fq: registeredKey }),
+          "command_tool_call",
+          expect.objectContaining({
+            tool: "focus",
+            op: "set focus",
+            params: expect.objectContaining({ fq: registeredKey }),
+          }),
         );
       });
     });

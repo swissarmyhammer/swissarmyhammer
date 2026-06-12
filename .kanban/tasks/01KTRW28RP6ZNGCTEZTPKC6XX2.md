@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: e380
+position_column: review
+position_ordinal: '8380'
 title: Pre-existing failures in entity-inspector.field-vertical-nav.browser.test.tsx (4 tests) — stale spatial_navigate expectations, untracked by existing breakage cards
 ---
 ## What
@@ -21,5 +21,13 @@ Verified independent of the jump-targets fix: the file renders `EntityInspector`
 NOTE: the jump-targets card REPAIRED the same wire-shape staleness in jump-to-overlay.browser.test.tsx, jump-to-overlay.window-layer.browser.test.tsx, jump-to-overlay.over-inspector.browser.test.tsx, and inspectors-container.test.tsx (MCP `command_tool_call` → legacy-handler translation; `pushedLayers()` params unwrap). The same translator pattern is the likely fix here — or, per the tracked cards, update the assertions to the `dispatch_command` contract.
 
 ## Acceptance Criteria
-- [ ] All 4 tests assert the current production contract (host-driven nav via dispatch_command, or a harness translator mirroring spatial-shadow-registry)
-- [ ] `npx vitest run src/components/entity-inspector.field-vertical-nav.browser.test.tsx` green in apps/kanban-app/ui
+- [x] All 4 tests assert the current production contract (host-driven nav via dispatch_command, or a harness translator mirroring spatial-shadow-registry)
+- [x] `npx vitest run src/components/entity-inspector.field-vertical-nav.browser.test.tsx` green in apps/kanban-app/ui
+
+## Resolution (2026-06-12)
+
+Still red at HEAD (NOT covered by 7c5015141). Fixed by updating only the card's test file to the current host-driven nav contract:
+- `defaultInvokeImpl` now answers `command_tool_call` via `commandToolCall()` from `@/test/mock-command-list` so the keymap layer resolves arrows → `nav.*` from the synthesized registry (NAV_PLUGIN_COMMANDS)
+- Stale `spatialNavigateCalls() >= 1` assertions replaced with exact `navDispatchCmds(mockInvoke)` equality on `["nav.down"]`/`["nav.up"]` plus `spatialNavigateCalls()` length 0 (no client-side kernel IPC)
+- Observable-outcome assertions kept: kernel `focus-changed` → `data-focused`, `spatialUpdateRectCalls() === 0`, `scrollIntoView({ block: "nearest" })` spy
+No shared harness files (`src/test/*`) modified. Verified: vitest 4/4 pass (stable across two runs), `tsc --noEmit` exit 0.

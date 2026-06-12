@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ea80
+position_column: review
+position_ordinal: '8180'
 title: 'Stale drill wire-shape expectations: board-view.enter-drill-in.browser.test.tsx — 6 tests fail pre-existing'
 ---
 ## What
@@ -27,6 +27,10 @@ All fail like: "vim Enter on a focused column must dispatch spatial_drill_in exa
 Do NOT weaken assertions — assert the real current contract (dispatch of the command id to the backend + no legacy client-side drill IPC + the DOM/focus outcomes that remain observable in the webview).
 
 ## Acceptance Criteria
-- [ ] The 6 tests assert the current host-driven drill contract (Enter/Escape → `dispatch_command` `nav.drillIn`/`nav.drillOut`; no webview-side fq/snapshot pre-resolution for drill)
-- [ ] Stale helpers (spatialDrillInCalls-style filters, drill-response mocks) removed or updated
-- [ ] Whole file green under `npx vitest run`; adjacent files not regressed; tsc clean
+- [x] The 6 tests assert the current host-driven drill contract (Enter/Escape → `dispatch_command` `nav.drillIn`/`nav.drillOut`; no webview-side fq/snapshot pre-resolution for drill)
+- [x] Stale helpers (spatialDrillInCalls-style filters, drill-response mocks) removed or updated
+- [x] Whole file green under `npx vitest run`; adjacent files not regressed; tsc clean
+
+## Implementation notes (2026-06-12)
+
+Repaired in the 7c5015141 style. The two `passes_snapshot` tests were renamed to `*_sends_no_snapshot_or_fq_on_drill_wire` — they now pin the NEGATIVE: the `dispatch_command` payload carries no `snapshot`/`fq`/`focused_fq`, and zero client-side drill IPC leaves the webview. The drill-in/out IPC helpers were repurposed as must-stay-empty no-legacy guards (matching `column-view.spatial.test.tsx`); a `spatialFocusCalls()` guard additionally pins that no webview-side `spatial_focus` fan-out fires (the kernel commits focus host-side). DOM outcomes retained: kernel `focus-changed` emissions are mimicked and `data-focused` transitions asserted (column→first card, column→remembered t2, card→field unfocus, field→parent card refocus). No shared-helper changes. Verified: `npx vitest run src/components/board-view.enter-drill-in.browser.test.tsx` → 9/9 pass; `npx tsc --noEmit` → exit 0.

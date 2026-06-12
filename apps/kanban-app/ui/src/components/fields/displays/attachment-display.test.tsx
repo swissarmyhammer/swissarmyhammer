@@ -277,6 +277,9 @@ describe("AttachmentItem", () => {
         expect.objectContaining({
           tool: "window",
           op: "show context menu",
+          // `window_label` rides alongside `items`: the MCP wire has no
+          // ambient calling window, so the menu call targets this window
+          // explicitly (the mocked `getCurrentWindow().label`).
           params: {
             items: [
               expect.objectContaining({
@@ -290,6 +293,7 @@ describe("AttachmentItem", () => {
                 separator: false,
               }),
             ],
+            window_label: "main",
           },
         }),
       );
