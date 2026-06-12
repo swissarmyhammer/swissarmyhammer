@@ -17,9 +17,11 @@
  *      `entity.inspect` dispatch whose scope chain leads with the focused
  *      entity's moniker — and ZERO webview-side `app.inspect` dispatches
  *      (the single-plugin path; the backend owns the `ui_state` inspect).
- *   2. Nested `<Inspectable>`s — the focused (closest) entity leads the
- *      dispatched chain, so the server-side innermost-wins resolution
- *      picks it (`field:…`, not the enclosing `task:…`).
+ *   2. Nested `<Inspectable>`s — the focused (closest) scope leads the
+ *      dispatched chain. The webview's job ends there: server-side, the
+ *      innermost inspectable-ENTITY moniker wins — a leading `field:…`
+ *      projection moniker is skipped and the CONTAINING `task:…` is
+ *      inspected (kanban card 01KTY6XTJQFCG9ENKTAMC6N3JV).
  *   3. Space on an `<input>` inside an `<Inspectable>` dispatches NOTHING
  *      (the editable surface owns Space; it inserts a literal space
  *      character). Asserted via the global keybinding handler's
@@ -35,8 +37,7 @@
  *   7. Space with kernel focus on a non-Inspectable scope (e.g. a
  *      perspective tab) MUST `preventDefault` and must NOT produce any
  *      `app.inspect` — the plugin's server-side prefix filter (`task:`,
- *      `tag:`, `column:`, `board:`, `field:`, `attachment:`) no-ops on
- *      chrome.
+ *      `tag:`, `column:`, `board:`, `attachment:`) no-ops on chrome.
  *   8. Space inside an editable surface (`<input>`, `<textarea>`,
  *      `[contenteditable]`) MUST NOT `preventDefault` — the global
  *      keybinding handler's `isEditableTarget` gate short-circuits before
@@ -516,8 +517,9 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
       "Space on a focused inner inspectable must dispatch entity.inspect exactly once",
     ).toBe(1);
     // The dispatched chain is leaf-first, so its head is the CLOSEST
-    // entity — the plugin's innermost-wins resolution inspects the
-    // `field:…` moniker, not the enclosing card's `task:…`.
+    // scope — the field's projection moniker. Server-side the plugin skips
+    // `field:…` (not an entity) and inspects the CONTAINING `task:T1`; the
+    // webview contract pinned here is only the chain's leaf-first shape.
     expect(dispatches[0].scopeChain?.[0]).toBe("field:task:T1.title");
     expect(inspectDispatches().length).toBe(0);
 

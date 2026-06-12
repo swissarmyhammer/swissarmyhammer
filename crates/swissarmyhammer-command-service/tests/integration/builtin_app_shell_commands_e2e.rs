@@ -805,6 +805,44 @@ async fn ui_origin_commands_execute_against_their_backends() {
         "a second app.inspect deepens the inspector stack"
     );
 
+    // ── (a') app.inspect with NO target resolves from the scope chain ───────
+    // The palette-pick shape (kanban card 01KTY6XTJQFCG9ENKTAMC6N3JV): the
+    // palette row "Inspect Task" dispatches `app.inspect` with the focused
+    // scope chain and NO explicit target. The command must resolve the same
+    // way as `entity.inspect` — the innermost inspectable-entity moniker —
+    // never inspect the empty string (the live bug: `ctx.target ?? ""`
+    // pushed `""` onto the inspector stack, a silent visible no-op).
+    execute_inner_ok(
+        &service,
+        "app.inspect",
+        json!({
+            "scope_chain": [
+                "task:01PALETTE",
+                "column:todo",
+                format!("window:{WINDOW}"),
+                "engine",
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(
+        backends.ui_state.inspector_stack(WINDOW),
+        vec![
+            "task:01ABC".to_string(),
+            "tag:bug".to_string(),
+            "task:01PALETTE".to_string(),
+        ],
+        "app.inspect with no target must resolve the innermost inspectable \
+         moniker from the scope chain (the palette-pick shape) — never \
+         inspect the empty string"
+    );
+    execute_inner_ok(
+        &service,
+        "app.inspector.close",
+        json!({ "scope_chain": window_scope() }),
+    )
+    .await;
+
     // ── (b) app.inspector.close pops the topmost entry ──────────────────────
     execute_inner_ok(
         &service,
@@ -837,7 +875,12 @@ async fn ui_origin_commands_execute_against_their_backends() {
     //   2. With no target, the INNERMOST inspectable-entity moniker in the
     //      scope chain is inspected — replacing the React-side
     //      `INSPECTABLE_ENTITY_PREFIXES` filter (`buildRootInspectCommand`)
-    //      and the per-`<Inspectable>` scope `CommandDef`.
+    //      and the per-`<Inspectable>` scope `CommandDef`. `field:` monikers
+    //      are NOT entities (kanban card 01KTY6XTJQFCG9ENKTAMC6N3JV): a
+    //      focused field's `field:{type}:{id}.{name}` projection moniker is
+    //      skipped and the CONTAINING entity wins — Space on a task's field
+    //      inspects the task, matching the `{{entity.type}}` caption the
+    //      palette renders from the same chain.
     //   3. A chain with no inspectable entity (Space on chrome / no focus)
     //      is a harmless `{ ok: true }` no-op — nothing is pushed.
     assert!(
@@ -861,7 +904,8 @@ async fn ui_origin_commands_execute_against_their_backends() {
         "entity.inspect",
         json!({
             "scope_chain": [
-                "field:k9",
+                "field:task:01ABC.title",
+                "ui:field",
                 "task:01ABC",
                 format!("window:{WINDOW}"),
                 "engine",
@@ -871,9 +915,10 @@ async fn ui_origin_commands_execute_against_their_backends() {
     .await;
     assert_eq!(
         backends.ui_state.inspector_stack(WINDOW),
-        vec!["task:01EXPL".to_string(), "field:k9".to_string()],
-        "entity.inspect with no target must inspect the INNERMOST inspectable \
-         moniker from the scope chain (field:k9, not the enclosing task:01ABC)"
+        vec!["task:01EXPL".to_string(), "task:01ABC".to_string()],
+        "entity.inspect with no target must skip the `field:` projection \
+         moniker and inspect the CONTAINING task from the scope chain \
+         (task:01ABC, not field:task:01ABC.title)"
     );
 
     let noop = execute_inner_ok(
@@ -895,7 +940,7 @@ async fn ui_origin_commands_execute_against_their_backends() {
     );
     assert_eq!(
         backends.ui_state.inspector_stack(WINDOW),
-        vec!["task:01EXPL".to_string(), "field:k9".to_string()],
+        vec!["task:01EXPL".to_string(), "task:01ABC".to_string()],
         "entity.inspect on a chrome-only chain must NOT push an inspector entry"
     );
 

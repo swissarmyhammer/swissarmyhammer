@@ -101,6 +101,48 @@ async fn list_renders_entity_type_from_focused_scope_chain() {
 }
 
 #[tokio::test]
+async fn list_renders_containing_task_when_a_field_is_focused() {
+    let service = CommandService::new();
+    let caller = CallerId::Plugin(PluginId::new("plugin-a"));
+    register_templated(
+        &service,
+        &caller,
+        "app.inspect",
+        "Inspect {{entity.type}}",
+        None,
+    )
+    .await;
+
+    // A focused field inside a task card (kanban card
+    // 01KTY6XTJQFCG9ENKTAMC6N3JV): the chain leaf is the field's
+    // `field:{type}:{id}.{name}` projection moniker. Field monikers are not
+    // entities — the caption must resolve to the CONTAINING task ("Inspect
+    // Task", never "Inspect Field"), matching `entity.inspect`'s server-side
+    // target resolution over the same chain.
+    let commands = list_commands(
+        &service,
+        json!({
+            "op": "list command",
+            "ctx": { "scope_chain": [
+                "field:task:01HTASK.title",
+                "ui:field",
+                "task:01HTASK",
+                "column:todo",
+                "board:01HBOARD",
+            ] },
+        }),
+        &caller,
+    )
+    .await;
+
+    assert_eq!(
+        find(&commands, "app.inspect")["name"],
+        json!("Inspect Task"),
+        "a focused field's caption must render the CONTAINING task, not the field",
+    );
+}
+
+#[tokio::test]
 async fn list_without_context_falls_back_to_clean_generic_caption() {
     let service = CommandService::new();
     let caller = CallerId::Plugin(PluginId::new("plugin-a"));

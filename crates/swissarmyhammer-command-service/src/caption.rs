@@ -30,6 +30,32 @@
 
 use crate::types::CommandContext;
 
+/// Inspectable-entity moniker prefixes — the ONE chain-resolution rule shared
+/// by `{{entity.type}}` caption rendering (here) and the `entity.inspect` /
+/// `app.inspect` server-side target resolution
+/// (`builtin/plugins/app-shell-commands/commands/ui.ts`'s
+/// `INSPECTABLE_ENTITY_PREFIXES` — pinned 1:1 against this list by
+/// `tests/inspectable_prefixes_mirror.rs`).
+///
+/// Only these moniker kinds provide entity context when resolving from a
+/// scope chain. Everything else is skipped:
+///
+/// - UI chrome (`ui:*`, `perspective_tab:`, `cell:*`, `grid_cell:*`,
+///   `window:`, …) is not an entity.
+/// - `field:` monikers (`field:{type}:{id}.{name}`) are projections of their
+///   CONTAINING entity, deliberately namespaced so they never masquerade as
+///   entity monikers in the scope chain (see `fieldMoniker` in the webview
+///   and `emit_scoped_commands` in swissarmyhammer-kanban) — a focused field
+///   resolves to its containing task, not to "Field". Fields remain
+///   inspectable via an explicit `target` (double-click `<Inspectable>`),
+///   which always wins verbatim and is not filtered by this list.
+///
+/// Because caption rendering and execute-time target resolution share this
+/// rule, a palette row's caption ("Inspect Task") and what picking it
+/// inspects can never disagree.
+pub const INSPECTABLE_ENTITY_PREFIXES: [&str; 5] =
+    ["task:", "tag:", "column:", "board:", "attachment:"];
+
 /// Render a caption template against the focused object.
 ///
 /// Resolves each `{{ key }}` token (inner whitespace tolerated) via
@@ -94,9 +120,12 @@ fn resolve_placeholder(key: &str, ctx: &CommandContext) -> Option<String> {
 }
 
 /// The focused entity's type token, from the explicit target moniker when
-/// present (context-menu semantics: the entity the menu fired over wins),
-/// otherwise from the innermost scope-chain moniker (palette semantics:
-/// the focused object).
+/// present (context-menu semantics: the entity the menu fired over wins,
+/// verbatim and unfiltered), otherwise from the innermost
+/// [`INSPECTABLE_ENTITY_PREFIXES`]-prefixed scope-chain moniker (palette
+/// semantics: the closest enclosing ENTITY of the focused scope — chrome and
+/// `field:` projection monikers are skipped, mirroring `entity.inspect`'s
+/// server-side target resolution so caption and execution agree).
 ///
 /// Monikers are `type:id` (the id may itself contain colons, e.g.
 /// `attachment:/p.png`), so the type is the token before the FIRST colon.
@@ -105,7 +134,17 @@ fn focused_entity_type(ctx: &CommandContext) -> Option<&str> {
     ctx.target
         .as_deref()
         .into_iter()
-        .chain(ctx.scope_chain.first().map(String::as_str))
+        .chain(
+            ctx.scope_chain
+                .iter()
+                .map(String::as_str)
+                .filter(|moniker| {
+                    INSPECTABLE_ENTITY_PREFIXES
+                        .iter()
+                        .any(|prefix| moniker.starts_with(prefix))
+                })
+                .take(1),
+        )
         .find_map(moniker_type)
 }
 
@@ -213,11 +252,54 @@ mod tests {
 
     #[test]
     fn multi_word_entity_types_display_case_each_word() {
-        let ctx = ctx_with_chain(&["saved_search:01S"]);
+        // An explicit target wins verbatim and is NOT filtered by the
+        // entity-context prefix list, so arbitrary entity types (context-menu
+        // semantics) keep their display-cased captions.
+        let mut ctx = CommandContext::default();
+        ctx.target = Some("saved_search:01S".to_string());
         assert_eq!(
             render_caption("Open {{entity.type}}", &ctx),
             "Open Saved Search"
         );
+    }
+
+    #[test]
+    fn field_moniker_is_not_entity_context_the_containing_entity_wins() {
+        // A focused field inside a task card: the chain leaf is the field's
+        // `field:{type}:{id}.{name}` projection moniker. Field monikers are
+        // NOT entities (they must never masquerade as entity context — see
+        // `fieldMoniker` in the webview and `emit_scoped_commands` in
+        // swissarmyhammer-kanban), so the caption resolves to the CONTAINING
+        // task, exactly like `entity.inspect`'s server-side target resolution.
+        let ctx = ctx_with_chain(&[
+            "field:task:01ABC.title",
+            "ui:field",
+            "task:01ABC",
+            "column:todo",
+            "board:01B",
+        ]);
+        assert_eq!(
+            render_caption("Inspect {{entity.type}}", &ctx),
+            "Inspect Task"
+        );
+    }
+
+    #[test]
+    fn chrome_monikers_are_skipped_until_an_entity_context_moniker() {
+        // UI chrome (`perspective_tab:`, `ui:*`, `window:`) is not entity
+        // context: the innermost INSPECTABLE moniker wins, matching the
+        // plugin-side `INSPECTABLE_ENTITY_PREFIXES` chain resolution.
+        let ctx = ctx_with_chain(&["perspective_tab:active", "ui:board", "board:01B"]);
+        assert_eq!(
+            render_caption("Inspect {{entity.type}}", &ctx),
+            "Inspect Board"
+        );
+    }
+
+    #[test]
+    fn chain_with_no_entity_context_falls_back_to_generic_caption() {
+        let ctx = ctx_with_chain(&["perspective_tab:active", "window:main"]);
+        assert_eq!(render_caption("Inspect {{entity.type}}", &ctx), "Inspect");
     }
 
     #[test]

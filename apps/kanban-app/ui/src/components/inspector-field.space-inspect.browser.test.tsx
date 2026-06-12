@@ -1,7 +1,7 @@
 /**
  * Browser-mode test pinning the bug fix: pressing Space on a focused
- * inspector field zone inspects that field — regardless of which layer
- * the field is rendered in.
+ * inspector field zone dispatches the inspect with the field-led scope
+ * chain — regardless of which layer the field is rendered in.
  *
  * Before card 01KQ9XJ4XGKVW24EZSQCA6K3E2, Space ownership lived on
  * `board.inspect` registered at the BoardView's `<CommandScopeProvider>`.
@@ -12,8 +12,12 @@
  * After Card G the Space owner is the SINGLE plugin-owned `entity.inspect`
  * (`builtin/plugins/app-shell-commands/commands/ui.ts`): a global binding whose dispatch
  * carries the focused scope chain to the backend, where the plugin resolves
- * the innermost inspectable moniker. A focused field zone leads its own
- * chain, so the field inspects regardless of layer.
+ * the innermost inspectable-ENTITY moniker. A focused field zone leads its
+ * own chain, so the dispatch fires regardless of layer; server-side the
+ * `field:{type}:{id}.{name}` projection moniker is skipped and the
+ * CONTAINING entity wins (kanban card 01KTY6XTJQFCG9ENKTAMC6N3JV) — the
+ * webview's job here is only the dispatch shape, which is what this test
+ * pins.
  *
  * The test below mounts a real `<EntityInspector>`, simulates the
  * spatial kernel emitting a `focus-changed` event for the title field,

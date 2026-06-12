@@ -305,9 +305,19 @@ describe("focus-decoration architecture", () => {
    * read from this list. It is the shared webview-side mirror of the
    * app-shell-commands plugin's `INSPECTABLE_ENTITY_PREFIXES` — pinned against the
    * plugin source by
-   * `test/ui-plugin-inspectable-prefixes-mirror.spatial.node.test.ts`.
+   * `test/ui-plugin-inspectable-prefixes-mirror.spatial.node.test.ts` —
+   * extended with `field:`.
+   *
+   * `field:` is an EXPLICIT-TARGET-ONLY inspectable (kanban card
+   * 01KTY6XTJQFCG9ENKTAMC6N3JV): a `field:{type}:{id}.{name}` moniker is a
+   * projection of its containing entity, so it is excluded from the
+   * scope-chain resolution list (`entity.inspect` / `app.inspect` / the
+   * `{{entity.type}}` caption resolve a focused field to its CONTAINING
+   * task), but a field may still be wrapped in `<Inspectable>` — the
+   * double-click route dispatches with an explicit target moniker, which
+   * always wins verbatim.
    */
-  const ENTITY_PREFIXES = INSPECTABLE_ENTITY_PREFIXES;
+  const ENTITY_PREFIXES = [...INSPECTABLE_ENTITY_PREFIXES, "field:"];
 
   /** Strip line and block comments while preserving newline structure. */
   function stripJsComments(src: string): string {

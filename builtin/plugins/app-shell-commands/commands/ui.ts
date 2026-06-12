@@ -41,6 +41,8 @@
 // directly through the generic `command_tool_call` bridge, which is why the
 // plugin's `load()` still ensures `focus`.
 
+import { type Logger } from "@swissarmyhammer/plugin";
+
 import {
   type CommandContext,
   type CommandSpec,
@@ -191,10 +193,18 @@ const UI_SURFACE_COMMANDS: readonly UiSurfaceCommandSpec[] = [
 ];
 
 /**
- * Inspectable-entity moniker prefixes — the entity kinds `entity.inspect`
- * resolves from a dispatch's scope chain when no explicit target is given.
- * UI chrome (`ui:*`, `perspective_tab:`, `cell:*`, `grid_cell:*`,
- * `row_label:`, `window:`, …) is not inspectable.
+ * Inspectable-entity moniker prefixes — the entity kinds `entity.inspect` /
+ * `app.inspect` resolve from a dispatch's scope chain when no explicit
+ * target is given. UI chrome (`ui:*`, `perspective_tab:`, `cell:*`,
+ * `grid_cell:*`, `row_label:`, `window:`, …) is not inspectable, and
+ * `field:` monikers (`field:{type}:{id}.{name}`) are NOT entities: they are
+ * projections of their CONTAINING entity, deliberately namespaced so they
+ * never masquerade as entity monikers in the scope chain (see the webview's
+ * `fieldMoniker` and swissarmyhammer-kanban's `emit_scoped_commands`). A
+ * focused field therefore resolves to its containing task — never to the
+ * field (kanban card 01KTY6XTJQFCG9ENKTAMC6N3JV). Fields remain inspectable
+ * via an explicit `ctx.target` (the double-click `<Inspectable>` route),
+ * which always wins verbatim and bypasses this list.
  *
  * Card G moved this filter SERVER-SIDE: it was previously the React-side
  * `INSPECTABLE_ENTITY_PREFIXES` in `app-shell.tsx` (the root-scope Space
@@ -204,28 +214,32 @@ const UI_SURFACE_COMMANDS: readonly UiSurfaceCommandSpec[] = [
  * mirror in `kanban-app/ui/src/test/inspectable-entity-prefixes.ts`, and
  * `ui-plugin-inspectable-prefixes-mirror.spatial.node.test.ts` parses THIS
  * array out of the plugin source and asserts it equals that mirror — drift
- * between the two lists fails the suite, not a code review.
+ * between the two lists fails the suite, not a code review. The Rust
+ * caption renderer (`swissarmyhammer-command-service/src/caption.rs`)
+ * carries the third copy — the `{{entity.type}}` caption resolves entity
+ * context with the SAME rule, pinned by
+ * `tests/inspectable_prefixes_mirror.rs`, so a row's caption ("Inspect
+ * Task") and what picking it inspects can never disagree.
  */
 const INSPECTABLE_ENTITY_PREFIXES = [
   "task:",
   "tag:",
   "column:",
   "board:",
-  "field:",
   "attachment:",
 ] as const;
 
 /**
- * Resolve the moniker `entity.inspect` should inspect.
+ * Resolve the moniker `entity.inspect` / `app.inspect` should inspect.
  *
- * An explicit `ctx.target` wins verbatim (palette result rows and other
- * programmatic dispatches name their entity directly). Otherwise the
- * INNERMOST inspectable-entity moniker in the scope chain is the target —
- * the chain is leaf-first, so the first matching entry is the closest
- * enclosing entity of the focused scope (a focused inspector field resolves
- * to its `field:…` moniker, not the enclosing card's `task:…`). Returns
- * `undefined` when neither yields a target (Space on chrome / no focus) —
- * the command then no-ops.
+ * An explicit `ctx.target` wins verbatim (palette result rows, context-menu
+ * dispatches, and other programmatic dispatches name their entity directly).
+ * Otherwise the INNERMOST inspectable-entity moniker in the scope chain is
+ * the target — the chain is leaf-first, so the first matching entry is the
+ * closest enclosing ENTITY of the focused scope (a focused field's
+ * `field:…` projection moniker is skipped, so the containing `task:…`
+ * wins). Returns `undefined` when neither yields a target (inspect on
+ * chrome / no focus) — the command then no-ops (warn-logged by the caller).
  */
 function resolveInspectTarget(ctx: CommandContext): string | undefined {
   if (ctx.target !== undefined) return ctx.target;
@@ -234,19 +248,63 @@ function resolveInspectTarget(ctx: CommandContext): string | undefined {
   );
 }
 
+/**
+ * Build the shared `execute` for the two inspect commands (`app.inspect` /
+ * `entity.inspect`): resolve the target via {@link resolveInspectTarget}
+ * (explicit `ctx.target`, else the innermost inspectable scope-chain
+ * moniker), then route to ui_state `inspect inspector`.
+ *
+ * A dispatch that resolves NO target returns the inert `{ ok: true }` —
+ * inspect on chrome / with no focus must not synthesize a bogus inspect —
+ * but is warn-logged: a silent success on resolution failure is exactly how
+ * the "palette Inspect does nothing" live bug stayed invisible (kanban card
+ * 01KTY6XTJQFCG9ENKTAMC6N3JV — `app.inspect` inspected the empty string).
+ */
+function buildInspectExecute(
+  commandId: string,
+  uiState: UiStateDispatch,
+  log: Logger,
+): (rawCtx: unknown) => Promise<unknown> {
+  return async (rawCtx: unknown) => {
+    const ctx = (rawCtx ?? {}) as CommandContext;
+    const moniker = resolveInspectTarget(ctx);
+    if (moniker === undefined) {
+      log.warn(
+        `${commandId}: no inspectable target resolved — inspect is a no-op`,
+        { scope_chain: ctx.scope_chain ?? [], target: ctx.target ?? null },
+      );
+      return { ok: true };
+    }
+    return await uiState.ui_state.ui_state.inspector.inspect({
+      scope_chain: ctx.scope_chain ?? [],
+      moniker,
+    });
+  };
+}
+
 /** Build the 18 ui-origin command registrations (the former `ui-commands`
  * bundle, every id now `app.*` — plus the unrenamed `window.new`,
- * `entity.inspect`, and the webview-bus UI-surface set). */
+ * `entity.inspect`, and the webview-bus UI-surface set). `log` is the
+ * owning plugin's scoped logger — the inspect commands warn through it when
+ * a dispatch resolves no inspectable target. */
 export function uiCommands(
   uiState: UiStateDispatch,
   window: WindowDispatch,
+  log: Logger,
 ): CommandSpec[] {
   return [
     // ─── app.inspect ────────────────────────────────────────────────────────
     // ui.yaml: context_menu (group 3, order 0); param moniker(target).
-    // Routes to ui_state `inspect inspector` on the context-menu target
-    // moniker — via the Command service, NOT a React shortcut
-    // (memory `no-client-side-inspect`).
+    // Routes to ui_state `inspect inspector` — via the Command service, NOT
+    // a React shortcut (memory `no-client-side-inspect`).
+    //
+    // This is the VISIBLE "Inspect {{entity.type}}" surface (palette row +
+    // context-menu entry). Context-menu dispatches carry an explicit target
+    // (which wins verbatim); a palette pick carries only the focused scope
+    // chain, so the execute resolves the target exactly like
+    // `entity.inspect` — the shared `buildInspectExecute` — never the
+    // literal `ctx.target ?? ""` (the live bug where a palette pick
+    // inspected the empty string, kanban card 01KTY6XTJQFCG9ENKTAMC6N3JV).
     {
       id: "app.inspect",
       name: "Inspect {{entity.type}}",
@@ -254,13 +312,7 @@ export function uiCommands(
       context_menu_group: 3,
       context_menu_order: 0,
       params: [{ name: "moniker", from: "target" }],
-      execute: async (rawCtx: unknown) => {
-        const ctx = (rawCtx ?? {}) as CommandContext;
-        return await uiState.ui_state.ui_state.inspector.inspect({
-          scope_chain: ctx.scope_chain ?? [],
-          moniker: ctx.target ?? "",
-        });
-      },
+      execute: buildInspectExecute("app.inspect", uiState, log),
     },
 
     // ─── entity.inspect ─────────────────────────────────────────────────────
@@ -273,14 +325,15 @@ export function uiCommands(
     // `pressable.activateSpace` still shadows it through the keymap's
     // chain walk (scope beats global).
     //
-    // Target resolution is SERVER-SIDE (`resolveInspectTarget`): explicit
-    // `ctx.target` verbatim, else the innermost inspectable-entity moniker
-    // in the scope chain (the chain is derived from the focused FQM, so
-    // this replaces the React `INSPECTABLE_ENTITY_PREFIXES` filter), else
-    // an inert `{ ok: true }` no-op — Space on chrome / with no focus must
-    // not synthesize a bogus inspect. The keybinding handler still
-    // `preventDefault()`s on the binding match, so Space never falls
-    // through to the browser's page scroll.
+    // Target resolution is SERVER-SIDE (`resolveInspectTarget`, shared with
+    // `app.inspect` via `buildInspectExecute`): explicit `ctx.target`
+    // verbatim, else the innermost inspectable-entity moniker in the scope
+    // chain (the chain is derived from the focused FQM, so this replaces
+    // the React `INSPECTABLE_ENTITY_PREFIXES` filter), else an inert
+    // `{ ok: true }` no-op — Space on chrome / with no focus must not
+    // synthesize a bogus inspect (the no-op is warn-logged). The keybinding
+    // handler still `preventDefault()`s on the binding match, so Space
+    // never falls through to the browser's page scroll.
     //
     // Not palette-visible and no context_menu: `app.inspect` (above) owns
     // the visible "Inspect" affordances; this id owns only the Space
@@ -291,17 +344,7 @@ export function uiCommands(
       visible: false,
       undoable: false,
       keys: { vim: "Space", cua: "Space", emacs: "Space" },
-      execute: async (rawCtx: unknown) => {
-        const ctx = (rawCtx ?? {}) as CommandContext;
-        const moniker = resolveInspectTarget(ctx);
-        if (moniker === undefined) {
-          return { ok: true };
-        }
-        return await uiState.ui_state.ui_state.inspector.inspect({
-          scope_chain: ctx.scope_chain ?? [],
-          moniker,
-        });
-      },
+      execute: buildInspectExecute("entity.inspect", uiState, log),
     },
 
     // ─── app.inspector.close ────────────────────────────────────────────────

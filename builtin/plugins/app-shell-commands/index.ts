@@ -122,7 +122,7 @@ export default class AppShellCommandsPlugin extends Plugin {
       ...appCommands(app, store, uiState),
       ...settingsCommands(uiState),
       ...dragCommands(uiState),
-      ...uiCommands(uiState, window),
+      ...uiCommands(uiState, window, this.log),
     ]);
 
     this.log.info(

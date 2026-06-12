@@ -25,7 +25,7 @@ mod txn;
 mod types;
 
 pub use callbacks::CallbackHandle;
-pub use caption::{display_case, render_caption};
+pub use caption::{display_case, render_caption, INSPECTABLE_ENTITY_PREFIXES};
 pub use invoke::{
     CallbackDispatcher, CallbackInvokeError, NoopCallbackDispatcher, SharedCallbackDispatcher,
 };

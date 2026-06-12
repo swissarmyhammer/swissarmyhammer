@@ -1354,6 +1354,11 @@ mod tests {
     /// show different labels for the same focused entity. This test fails the
     /// moment the two resolvers disagree on any entity type shape, including
     /// multi-word snake_case / kebab-case types.
+    ///
+    /// The shared renderer is driven through `target` (which wins verbatim
+    /// and is not filtered): scope-chain resolution is restricted to the
+    /// `INSPECTABLE_ENTITY_PREFIXES` entity kinds, so arbitrary types like
+    /// `saved_search` only reach the renderer as explicit targets.
     #[test]
     fn entity_type_captions_match_the_shared_caption_renderer() {
         for entity_type in ["task", "tag", "saved_search", "kanban-card"] {
@@ -1366,7 +1371,7 @@ mod tests {
                     },
                 );
                 let ctx = ServiceContext {
-                    scope_chain: vec![format!("{entity_type}:01X")],
+                    target: Some(format!("{entity_type}:01X")),
                     ..Default::default()
                 };
                 let shared = render_caption(template, &ctx);

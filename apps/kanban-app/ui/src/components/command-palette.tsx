@@ -83,14 +83,30 @@ export function CommandPalette({
   // authoritative focus tree — rather than from `useUIState().scope_chain`.
   // The backend echoes scope_chain on every `app.setFocus`, but the
   // `UIStateProvider` suppresses those events to keep `useUIState()`
-  // reference-stable. Reading the chain directly from the focus context
-  // preserves the "refetch commands when focus moves while palette is
-  // open" semantic without the round-trip.
+  // reference-stable.
   const focusedScope = useContext(FocusedScopeContext);
-  const scopeChain = useMemo(
+  const liveScopeChain = useMemo(
     () => scopeChainFromScope(focusedScope),
     [focusedScope],
   );
+
+  // The palette CAPTURES the focused scope chain once, at open, and uses the
+  // captured chain for everything — the `useCommandList` caption ctx,
+  // availability, and the dispatch (passed explicitly, the context-menu
+  // pattern). The palette is an overlay: after it opens, the LIVE chain can
+  // move off the entity the captions were rendered against (the palette
+  // mounts its own `<FocusLayer>`; search rows mount `FocusScope`s), so
+  // dispatching with the live chain could execute against a different
+  // entity than the row's caption promised (kanban card
+  // 01KTY6XTJQFCG9ENKTAMC6N3JV: "Inspect Task" silently no-oped). Freezing
+  // one chain at open makes caption and execution agree by construction.
+  //
+  // The live chain is read through a ref so the capture effect depends only
+  // on `open` — focus movement while the palette is open must NOT re-capture.
+  const liveScopeChainRef = useRef(liveScopeChain);
+  liveScopeChainRef.current = liveScopeChain;
+  const [scopeChain, setScopeChain] = useState<string[]>(liveScopeChain);
+
   const dispatch = useDispatchCommand();
 
   // The innermost scope moniker is the palette's `useCommandList` filter:
@@ -101,9 +117,10 @@ export function CommandPalette({
   // Source commands from the metadata-driven Command registry rather than a
   // hardcoded list — re-fetched live on `commands/changed`. The palette only
   // renders in command mode, so the list is unused (but cheap) in search mode.
-  // The focused scope chain rides along as the list ctx so the service
-  // renders caption templates ({{entity.type}}) against the focused object —
-  // "Inspect Task", never a raw placeholder.
+  // The CAPTURED pre-open scope chain rides along as the list ctx so the
+  // service renders caption templates ({{entity.type}}) against the object
+  // that was focused when the palette opened — "Inspect Task", never a raw
+  // placeholder, and never the overlay's own chain.
   const { commands: registryCommands, epoch: registryEpoch } = useCommandList(
     currentScope !== undefined
       ? { scope: currentScope, scopeChain }
@@ -131,13 +148,18 @@ export function CommandPalette({
   // the standard command system, which updates UIState inspector_stack.
   const dispatchInspect = useDispatchCommand("app.inspect");
 
-  // Reset state when palette opens.
+  // Reset state when palette opens, and capture the pre-open scope chain
+  // (see the capture rationale above). The capture runs before the palette's
+  // own `<FocusLayer>` push can move spatial focus — child effects commit
+  // before parent effects — so the captured chain is the entity chain that
+  // was focused when the user invoked the palette.
   useEffect(() => {
     if (open) {
       setFilter("");
       setDebouncedFilter("");
       setSelectedIndex(0);
       setSearchResults([]);
+      setScopeChain(liveScopeChainRef.current);
     }
   }, [open]);
 
@@ -253,7 +275,11 @@ export function CommandPalette({
     setSelectedIndex((prev) => Math.min(prev, Math.max(0, filteredLength - 1)));
   }, [filteredLength]);
 
-  // Execute the selected command (command mode)
+  // Execute the selected command (command mode). The dispatch carries the
+  // CAPTURED pre-open scope chain explicitly (the context-menu pattern):
+  // the row's caption was rendered against that chain, so executing against
+  // the same chain guarantees caption and effect agree even though `onClose`
+  // (and the overlay itself) may have moved live focus.
   const executeSelectedCommand = useCallback(() => {
     const entry = filteredCommands[selectedIndex];
     if (!entry) return;
@@ -261,8 +287,15 @@ export function CommandPalette({
     // matching the grayed-out click affordance.
     if (availability[entry.command.id]?.available === false) return;
     onClose();
-    dispatch(entry.command.id).catch(console.error);
-  }, [filteredCommands, selectedIndex, onClose, dispatch, availability]);
+    dispatch(entry.command.id, { scopeChain }).catch(console.error);
+  }, [
+    filteredCommands,
+    selectedIndex,
+    onClose,
+    dispatch,
+    availability,
+    scopeChain,
+  ]);
 
   // Execute the selected entity result (search mode)
   const executeSelectedResult = useCallback(() => {
@@ -278,8 +311,18 @@ export function CommandPalette({
       onSwitchBoard(result.entity_id);
     }
     const entityMoniker = moniker(result.entity_type, result.entity_id);
-    dispatchInspect({ target: entityMoniker }).catch(console.error);
-  }, [searchResults, selectedIndex, onClose, dispatchInspect, onSwitchBoard]);
+    // The explicit target wins verbatim server-side; the captured pre-open
+    // chain rides along so the ui_state op resolves the correct window even
+    // though the result rows' FocusScopes moved live focus.
+    dispatchInspect({ target: entityMoniker, scopeChain }).catch(console.error);
+  }, [
+    searchResults,
+    selectedIndex,
+    onClose,
+    dispatchInspect,
+    onSwitchBoard,
+    scopeChain,
+  ]);
 
   const executeSelected =
     paletteMode === "search" ? executeSelectedResult : executeSelectedCommand;
@@ -463,10 +506,14 @@ export function CommandPalette({
                       }`}
                   onClick={() => {
                     // Unavailable commands are inert — match the grayed-out
-                    // affordance by swallowing the click.
+                    // affordance by swallowing the click. The dispatch
+                    // carries the captured pre-open chain, like
+                    // executeSelectedCommand.
                     if (isUnavailable) return;
                     onClose();
-                    dispatch(entry.command.id).catch(console.error);
+                    dispatch(entry.command.id, { scopeChain }).catch(
+                      console.error,
+                    );
                   }}
                   onMouseEnter={() => setSelectedIndex(index)}
                 >
