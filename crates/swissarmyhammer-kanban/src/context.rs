@@ -140,7 +140,21 @@ impl KanbanContext {
         // Build perspectives context
         let perspectives_dir = root.join("perspectives");
         fs::create_dir_all(&perspectives_dir).await?;
-        let perspectives = PerspectiveContext::open(&perspectives_dir).await?;
+        let mut perspectives = PerspectiveContext::open(&perspectives_dir).await?;
+
+        // Board-open reconciliation of default-perspective invariants:
+        // converge duplicate "Default" perspectives, prune unreachable
+        // vanilla defaults, and recreate the default when the board has
+        // zero perspectives. Best-effort — a reconcile failure (e.g.
+        // read-only media) must not block opening the board.
+        if let Err(e) = crate::perspective::ensure_default::reconcile_default_perspectives(
+            &mut perspectives,
+            Some(&views),
+        )
+        .await
+        {
+            tracing::warn!(error = %e, "failed to reconcile default perspectives at board open");
+        }
 
         let persp_cell = OnceCell::new();
         persp_cell.set(Arc::new(RwLock::new(perspectives))).ok();

@@ -10,6 +10,7 @@
 
 pub mod add;
 pub mod delete;
+pub mod ensure_default;
 pub mod get;
 pub mod list;
 pub mod migrate;
@@ -24,6 +25,9 @@ pub use swissarmyhammer_perspectives::{
 
 pub use add::AddPerspective;
 pub use delete::DeletePerspective;
+pub use ensure_default::{
+    default_perspective_id, reconcile_default_perspectives, DEFAULT_PERSPECTIVE_NAME,
+};
 pub use get::GetPerspective;
 pub use list::ListPerspectives;
 pub use rename::RenamePerspective;

@@ -4,7 +4,7 @@ assignees:
 position_column: todo
 position_ordinal: '8180'
 project: remove-prompts
-title: Remove the `sah prompt` CLI subcommand
+title: Remove the `sah prompt` CLI subcommand.
 ---
 ## What
 Remove the entire `sah prompt` CLI subcommand (list / test / show / new / edit) and its wiring. This is a leaf removal — nothing else in the codebase depends on these command modules.

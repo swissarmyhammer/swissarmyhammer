@@ -299,22 +299,17 @@ impl Command for SavePerspectiveCmd {
         // transiently empty on a hot reload / boot race (the provider remounts
         // with an empty list and its per-kind ref reset, then fires before the
         // refetch lands), which previously created a fresh duplicate "Default"
-        // YAML on every reload. The backend, unlike the frontend, always holds
-        // authoritative perspective state — so when `if_absent` is set we
-        // short-circuit to an existing perspective for this view scope instead
-        // of writing another one. No write means no store-changed notification,
-        // so the refetch loop is not re-triggered either.
-        if ctx
+        // YAML on every reload. `if_absent` maps onto `AddPerspective::ensure`,
+        // the STORAGE-layer guard: an existing perspective for this view scope
+        // is returned without a write (so no store-changed notification, no
+        // refetch loop re-trigger), and a genuine create lands under the
+        // deterministic `default-<scope>` id so stale-cache races in other
+        // windows or sibling processes converge on one file instead of
+        // accumulating duplicates.
+        let ensure = ctx
             .arg("if_absent")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-        {
-            if let Some(existing) =
-                first_perspective_for_view(&kanban, &view, view_id.as_deref()).await?
-            {
-                return Ok(crate::perspective::add::perspective_to_json(&existing));
-            }
-        }
+            .unwrap_or(false);
 
         let name = match supplied_name {
             Some(n) => n.to_string(),
@@ -325,6 +320,7 @@ impl Command for SavePerspectiveCmd {
         add_op.view_id = view_id;
         add_op.filter = filter;
         add_op.group = group;
+        add_op.ensure = ensure;
 
         run_op(&add_op, &kanban).await
     }
@@ -369,34 +365,6 @@ async fn generate_untitled_name(
     } else {
         format!("Untitled {}", untitled_count + 1)
     })
-}
-
-/// Return the first existing perspective belonging to a view scope, if any.
-///
-/// Uses the same view_id-first / kind-fallback matching rule as
-/// [`generate_untitled_name`] and the frontend perspective filter: when both
-/// sides carry a `view_id` they must match exactly; otherwise fall back to a
-/// view-kind match. Reads the perspective context once under its read lock.
-///
-/// Backs the idempotent `if_absent` ensure path in [`SavePerspectiveCmd`].
-async fn first_perspective_for_view(
-    kanban: &KanbanContext,
-    view: &str,
-    view_id: Option<&str>,
-) -> crate::commands_core::Result<Option<Perspective>> {
-    let pctx = kanban
-        .perspective_context()
-        .await
-        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-    let pctx = pctx.read().await;
-    Ok(pctx
-        .all()
-        .iter()
-        .find(|p| match (view_id, p.view_id.as_deref()) {
-            (Some(vid), Some(pvid)) => vid == pvid,
-            _ => p.view == view,
-        })
-        .cloned())
 }
 
 /// Delete a perspective by name or scope chain.
