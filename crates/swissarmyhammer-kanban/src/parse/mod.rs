@@ -38,7 +38,7 @@ fn parse_single(input: Value) -> Result<Operation> {
         .map(crate::types::ActorId::from_string);
 
     // Normalize parameters (resolve aliases, snake_case keys)
-    normalize_params(&mut params);
+    normalize_params(noun, &mut params);
 
     let mut operation = Operation::new(verb, noun, params);
     if let Some(actor) = actor {
@@ -181,16 +181,36 @@ fn filter_shorthand_keys(obj: &Map<String, Value>, shorthand_key: &str) -> Map<S
         .collect()
 }
 
+/// Nouns whose operations are dependent members of a task: they address
+/// BOTH the owning task (`task_id`) and the member itself (`id`), so the
+/// task-level `task_id` → `id` alias must not apply to them.
+fn is_member_noun(noun: Noun) -> bool {
+    matches!(
+        noun,
+        Noun::Comment | Noun::Comments | Noun::Attachment | Noun::Attachments
+    )
+}
+
 /// Normalize parameter keys (aliases, snake_case)
-fn normalize_params(params: &mut Map<String, Value>) {
-    // Key aliases
-    let aliases: &[(&[&str], &str)] = &[
-        (&["taskId", "task_id"], "id"),
+fn normalize_params(noun: Noun, params: &mut Map<String, Value>) {
+    // Key aliases. For task-level ops the task reference IS the entity `id`,
+    // so `task_id`/`taskId` alias to `id`. Member nouns keep `task_id` as a
+    // first-class key (camelCase still snake_cases below) — aliasing there
+    // would silently drop the owning-task reference.
+    let task_id_alias: (&[&str], &str) = (&["taskId", "task_id"], "id");
+    let common_aliases: [(&[&str], &str); 2] = [
         (&["desc", "body", "content"], "description"),
         (&["col"], "column"),
     ];
+    let aliases: Vec<(&[&str], &str)> = if is_member_noun(noun) {
+        common_aliases.to_vec()
+    } else {
+        std::iter::once(task_id_alias)
+            .chain(common_aliases)
+            .collect()
+    };
 
-    for (from_keys, to_key) in aliases {
+    for (from_keys, to_key) in &aliases {
         for from_key in *from_keys {
             if let Some(value) = params.remove(*from_key) {
                 if !params.contains_key(*to_key) {
@@ -307,6 +327,28 @@ mod tests {
         let input = json!({ "op": "get task", "taskId": "abc" });
         let ops = parse_input(input).unwrap();
         assert_eq!(ops[0].params.get("id").unwrap(), "abc");
+    }
+
+    /// Member ops (comments, attachments) address BOTH the owning task
+    /// (`task_id`) and the member (`id`) — the task-level `task_id` → `id`
+    /// alias must not apply, or the task reference is silently dropped.
+    #[test]
+    fn test_member_ops_keep_task_id_distinct_from_id() {
+        let input = json!({ "op": "get comment", "task_id": "01T", "id": "01c" });
+        let ops = parse_input(input).unwrap();
+        assert_eq!(ops[0].params.get("task_id").unwrap(), "01T");
+        assert_eq!(ops[0].params.get("id").unwrap(), "01c");
+
+        let input = json!({ "op": "add comment", "task_id": "01T", "text": "hi" });
+        let ops = parse_input(input).unwrap();
+        assert_eq!(ops[0].params.get("task_id").unwrap(), "01T");
+        assert!(ops[0].params.get("id").is_none());
+
+        // camelCase still snake_cases — to `task_id`, not `id`.
+        let input = json!({ "op": "add attachment", "taskId": "01T", "name": "a", "path": "/p" });
+        let ops = parse_input(input).unwrap();
+        assert_eq!(ops[0].params.get("task_id").unwrap(), "01T");
+        assert!(ops[0].params.get("id").is_none());
     }
 
     #[test]

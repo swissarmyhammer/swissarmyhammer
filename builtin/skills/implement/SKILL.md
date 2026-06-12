@@ -87,6 +87,16 @@ Parallel orchestrators (`finish`) always pass an explicit `<task-id>` to avoid r
 
 Full description + subtasks. Understand before writing code.
 
+### Record progress
+
+Keep a conversation log on the task. After moving to `doing` and at each meaningful milestone — research done, implementation done, blocker hit, before moving to `review` — record what happened:
+
+```json
+{"op": "add comment", "task_id": "<id>", "text": "<what happened>"}
+```
+
+The comment is attributed to the dispatching actor automatically.
+
 ### 4. Research before writing
 
 **Don't guess.** Run the Code-Context Checkpoints (above) before changing any code:
@@ -123,7 +133,7 @@ A task left in `doing` is not finished.
 
 **Do NOT use `complete task`** — it jumps to the terminal column, skipping the review gate. Use `move task` with `column: "review"` explicitly.
 
-Cannot complete? Do NOT move forward. Comment what happened, report back.
+Cannot complete? Do NOT move forward. Record what happened on the task — `{"op": "add comment", "task_id": "<id>", "text": "<what blocked you>"}` — and report back.
 
 ### 7. Stop for review
 

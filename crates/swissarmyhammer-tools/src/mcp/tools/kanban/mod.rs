@@ -184,6 +184,11 @@ fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
             | (Verb::Unassign, Noun::Task)
             | (Verb::Tag, Noun::Task)
             | (Verb::Untag, Noun::Task)
+            // Comment mutations are task mutations: their ack's top-level
+            // `id` is the owning TASK id, which feeds `affected_task_id`.
+            | (Verb::Add, Noun::Comment)
+            | (Verb::Update, Noun::Comment)
+            | (Verb::Delete, Noun::Comment)
     )
 }
 
@@ -1343,6 +1348,40 @@ mod tests {
         assert_eq!(
             data["_plan"]["_meta"]["affected_task_id"], task_id,
             "the _plan attachment must carry the assigned task id, got: {data}"
+        );
+    }
+
+    /// Same regression for `add comment`: the comment mutation ack's
+    /// top-level `id` is the TASK id and must populate
+    /// `_plan._meta.affected_task_id` — without the `(Add, Comment)` arm in
+    /// `is_task_modifying_operation` the `_plan` wrapper silently skips
+    /// comment mutations, exactly like tag/assign used to be skipped.
+    #[tokio::test]
+    async fn test_add_comment_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Plan comment target"));
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        let mut comment_args = serde_json::Map::new();
+        comment_args.insert("op".to_string(), json!("add comment"));
+        comment_args.insert("task_id".to_string(), json!(task_id));
+        comment_args.insert("text".to_string(), json!("plan-worthy remark"));
+
+        let result = tool.execute(comment_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(
+            data["_plan"]["_meta"]["affected_task_id"], task_id,
+            "the _plan attachment must carry the commented task id, got: {data}"
         );
     }
 

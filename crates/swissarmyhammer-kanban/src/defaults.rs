@@ -710,7 +710,7 @@ mod tests {
     #[test]
     fn builtin_field_definitions_load() {
         let defs = builtin_field_definitions();
-        assert_eq!(defs.len(), 30, "expected 30 builtin field definitions");
+        assert_eq!(defs.len(), 31, "expected 31 builtin field definitions");
     }
 
     #[test]
@@ -880,11 +880,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ctx.all_fields().len(), 30);
+        assert_eq!(ctx.all_fields().len(), 31);
         assert_eq!(ctx.all_entities().len(), 7);
         assert!(ctx.get_field_by_name("title").is_some());
         assert!(ctx.get_entity("task").is_some());
-        assert_eq!(ctx.fields_for_entity("task").len(), 19);
+        assert_eq!(ctx.fields_for_entity("task").len(), 20);
     }
 
     #[test]
@@ -916,6 +916,63 @@ mod tests {
             }
             other => panic!("expected FieldType::Attachment, got {:?}", other),
         }
+    }
+
+    /// The builtin `comments` field must load as a `comment-log` field placed
+    /// in a dedicated `log` section, and the task entity must declare that
+    /// section (labeled "Log") last so the conversation log renders at the
+    /// bottom of the inspector.
+    #[test]
+    fn builtin_comments_field_is_comment_log_in_log_section() {
+        let defs = builtin_field_definitions();
+        let entities = builtin_entity_definitions();
+
+        let ctx = swissarmyhammer_fields::FieldsContext::from_yaml_sources(
+            std::path::PathBuf::from("/tmp/test"),
+            &defs,
+            &entities,
+        )
+        .unwrap();
+
+        let field = ctx
+            .get_field_by_name("comments")
+            .expect("builtin 'comments' field should exist in FieldsContext");
+        assert!(
+            matches!(
+                field.type_,
+                swissarmyhammer_fields::FieldType::CommentLog {}
+            ),
+            "expected FieldType::CommentLog, got {:?}",
+            field.type_
+        );
+        assert_eq!(field.effective_editor(), "comment-log");
+        assert_eq!(field.effective_display(), "comment-log");
+        assert_eq!(field.section.as_deref(), Some("log"));
+        // A log is not a grid column — no sort, not groupable.
+        assert!(field.sort.is_none(), "comments must not declare a sort");
+        assert!(
+            field.groupable.is_none(),
+            "comments must not declare groupable"
+        );
+
+        let entity = ctx
+            .get_entity("task")
+            .expect("task entity should exist in FieldsContext");
+        assert!(
+            entity.fields.iter().any(|f| f == "comments"),
+            "task entity must list the 'comments' field"
+        );
+        let log = entity
+            .sections
+            .iter()
+            .find(|s| s.id == "log")
+            .expect("task entity should declare a `log` section");
+        assert_eq!(log.label.as_deref(), Some("Log"));
+        assert_eq!(
+            entity.sections.last().map(|s| s.id.as_str()),
+            Some("log"),
+            "`log` section must be last so the conversation log renders at the bottom"
+        );
     }
 
     #[test]

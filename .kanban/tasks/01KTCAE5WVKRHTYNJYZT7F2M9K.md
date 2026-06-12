@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTCADKCJT9WEW123VYTFZZZH
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffa280
 project: card-comments
 title: Define comments field YAML and add it to the task entity
 ---
@@ -28,15 +28,19 @@ Files:
    - Add `comments` to the `fields:` list (order in this list does not affect section grouping, but keep it near `attachments` for readability).
 
 ## Acceptance Criteria
-- [ ] `comments.yaml` exists with id `...18`, `kind: comment-log`, and `section: log`.
-- [ ] `task.yaml` declares a `log` section with `label: Log` (placed last) and lists `comments` in its fields.
-- [ ] A board initialized from builtins exposes a `comments` field on the `task` entity schema with editor/display `comment-log` and section `log`, and the task entity has a `log` section labeled "Log".
-- [ ] No duplicate sentinel id with any other file in `builtin/definitions/`.
+- [x] `comments.yaml` exists with id `...18`, `kind: comment-log`, and `section: log`.
+- [x] `task.yaml` declares a `log` section with `label: Log` (placed last) and lists `comments` in its fields.
+- [x] A board initialized from builtins exposes a `comments` field on the `task` entity schema with editor/display `comment-log` and section `log`, and the task entity has a `log` section labeled "Log".
+- [x] No duplicate sentinel id with any other file in `builtin/definitions/`.
 
 ## Tests
-- [ ] Add a test in the kanban crate (alongside existing schema/defaults tests — see `crates/swissarmyhammer-kanban/src/defaults.rs` and `schema.rs` test modules) that loads the builtin task entity definition and asserts the `comments` field is present with `effective_editor()==\"comment-log\"`, `effective_display()==\"comment-log\"`, and `section==\"log\"`, and that the entity declares a `log` section with label `Log`.
-- [ ] Add a test asserting all builtin definition sentinel ids are unique (guards against id collision).
-- [ ] `cargo nextest run -p swissarmyhammer-kanban` — green.
+- [x] Add a test in the kanban crate (alongside existing schema/defaults tests — see `crates/swissarmyhammer-kanban/src/defaults.rs` and `schema.rs` test modules) that loads the builtin task entity definition and asserts the `comments` field is present with `effective_editor()==\"comment-log\"`, `effective_display()==\"comment-log\"`, and `section==\"log\"`, and that the entity declares a `log` section with label `Log`.
+- [x] Add a test asserting all builtin definition sentinel ids are unique (guards against id collision). (Already existed as `builtin_field_ulids_are_unique` in `defaults.rs` — reused rather than duplicated; it now covers the new `...18` id.)
+- [x] `cargo nextest run -p swissarmyhammer-kanban` — green (1455 passed, 0 failed; clippy clean).
 
 ## Workflow
 - Use `/tdd` — write the schema-load assertion test first (it fails until the YAML exists), then add the YAML.
+
+## Implementation Notes
+- New test: `builtin_comments_field_is_comment_log_in_log_section` in `defaults.rs` (TDD red-green: watched it fail with "builtin 'comments' field should exist" before adding the YAML).
+- Count assertions bumped for the new builtin: `defaults.rs` (30→31 defs, 19→20 task fields) and `context.rs` (`test_open_seeds_defaults` 30→31, `test_open_preserves_customizations` 31→32, `test_fields_accessor` 19→20).

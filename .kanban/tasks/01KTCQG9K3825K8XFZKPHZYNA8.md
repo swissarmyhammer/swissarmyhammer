@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTCAEXMCAWWTE7FBGP7BE86Z
-position_column: todo
-position_ordinal: '8880'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffa480
 project: card-comments
 title: Normalize comment-log field writes in UpdateEntityField (UI field-set path)
 ---

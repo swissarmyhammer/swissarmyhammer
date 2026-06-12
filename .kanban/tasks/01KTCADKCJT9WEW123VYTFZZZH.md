@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffa180
 project: card-comments
 title: Add CommentLog structured field type to swissarmyhammer-fields
 ---

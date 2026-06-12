@@ -31,13 +31,14 @@ The kanban board is your todo list. **Never use TodoWrite, TaskCreate, or any ot
    - Assignee: `op: "next task", filter: "@alice"`
    - Combined: `op: "next task", filter: "#bug && @alice"`
 2. **Move to doing**: `op: "move task", id: "<id>", column: "doing"`
-3. **Read details**: `op: "get task", id: "<id>"`
+3. **Read details**: `op: "get task", id: "<id>"`. Then review prior context with `op: "list comments", task_id: "<id>"` — earlier attempts, review notes, and blockers live in the task's conversation log.
 4. **Work each subtask, check off immediately**:
    - Implement what it describes
    - `op: "update task", id: "<id>"`, change `- [ ]` → `- [x]` for the finished subtask
    - After EVERY subtask — never batch. The checklist is the progress indicator.
    - Preserve all other description content; only flip the one checkbox you finished.
-5. **Move to review** when all subtasks are `- [x]`: first ensure the `review` column exists (idempotent — use the partial above), then `op: "move task", id: "<id>", column: "review"`. **Never use `complete task`** — that skips the review gate. After moving, stop and tell the user the task is ready for `/review`.
+5. **Record progress**: at each milestone — picked up, blocked, done — log it on the task: `op: "add comment", task_id: "<id>", text: "<what happened>"`. The author is attributed automatically.
+6. **Move to review** when all subtasks are `- [x]`: first ensure the `review` column exists (idempotent — use the partial above), then `op: "move task", id: "<id>", column: "review"`. **Never use `complete task`** — that skips the review gate. After moving, stop and tell the user the task is ready for `/review`.
 
 ## Filtering Work
 
@@ -163,7 +164,7 @@ Tasks without a project have `"project": ""`. Filter with `$slug`:
 ## Guidelines
 
 - Every subtask must be done — never skip or mark complete without doing the work
-- Blocked or unclear → add a comment explaining
+- Blocked or unclear → record it: `op: "add comment", task_id: "<id>", text: "<why>"`
 - Run tests after each subtask
 - Only complete the task when all subtasks are done and tests pass
 - New work discovered? Add a new kanban task — don't hold it in your head

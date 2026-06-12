@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTCAE5WVKRHTYNJYZT7F2M9K
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffa380
 project: card-comments
 title: Implement comment commands (add/list/get/edit/delete) operating on the inline comments field
 ---
@@ -47,24 +47,27 @@ Model module layout on `src/attachment/` (mod.rs + add.rs + get.rs + list.rs + u
 Note: the MCP agent always dispatches with an explicit actor (`claude-code`), so the OS-user fallback only triggers for actor-less callers — it never mis-attributes agent comments.
 
 ## Acceptance Criteria
-- [ ] Five ops exist with correct `#[operation]` verb/noun annotations; `AddComment.actor` is `Option<String>`.
-- [ ] Response shapes follow the op-token-diet convention via `task_mutation_ack`: `add comment` = ack + `comment` member; `update comment`/`delete comment` = exactly `{ok, id, short_id}` (task identity, no member echo); `list`/`get` return member data.
-- [ ] `build_comment_member` and `resolve_comment_author` are `pub(crate)` and reusable; `ensure_os_user_actor` lives in the actor module.
-- [ ] A member stores who/what/when + a stable ulid id; `timestamp` is UTC RFC3339; adding preserves existing members.
-- [ ] `list comments` returns members in id order (creation order).
-- [ ] explicit existing actor attributed; explicit non-existent actor errors; `actor: None` resolves+ensures the OS-user actor and succeeds.
-- [ ] get/update/delete on a missing id return `KanbanError::CommentNotFound`; update changes text only.
-- [ ] No `comment` Entity is ever created (assert no comment file under the tasks dir).
-- [ ] `cargo clippy -p swissarmyhammer-kanban -- -D warnings` clean.
+- [x] Five ops exist with correct `#[operation]` verb/noun annotations; `AddComment.actor` is `Option<String>`.
+- [x] Response shapes follow the op-token-diet convention via `task_mutation_ack`: `add comment` = ack + `comment` member; `update comment`/`delete comment` = exactly `{ok, id, short_id}` (task identity, no member echo); `list`/`get` return member data.
+- [x] `build_comment_member` and `resolve_comment_author` are `pub(crate)` and reusable; `ensure_os_user_actor` lives in the actor module.
+- [x] A member stores who/what/when + a stable ulid id; `timestamp` is UTC RFC3339; adding preserves existing members.
+- [x] `list comments` returns members in id order (creation order).
+- [x] explicit existing actor attributed; explicit non-existent actor errors; `actor: None` resolves+ensures the OS-user actor and succeeds.
+- [x] get/update/delete on a missing id return `KanbanError::CommentNotFound`; update changes text only.
+- [x] No `comment` Entity is ever created (assert no comment file under the tasks dir).
+- [x] `cargo clippy -p swissarmyhammer-kanban -- -D warnings` clean.
 
 ## Tests
-- [ ] `add.rs` tests (modeled on `attachment/add.rs`): add two comments (explicit actor), re-read via `list comments`, assert 2 members w/ actor/text/timestamp/id, that the timestamp parses as RFC3339 UTC, and that the second add preserved the first. Assert the add RESPONSE shape with `assert_task_mutation_ack_with(result, task_id, &["comment"])` (the shared `#[cfg(test)]` helper in `task_helpers.rs` from op-token-diet).
-- [ ] `update.rs`/`delete.rs` tests assert the pure ack via `assert_task_mutation_ack` and verify the effect (text changed / member gone) via `list comments`/`get comment` — stored state, not response echo.
-- [ ] Explicit unknown actor errors; `actor: None` path writes a member whose `actor` is the ensured OS-user id and that actor entity now exists (idempotent on repeat).
-- [ ] `list comments` returns members sorted by id ascending.
-- [ ] get/update/delete happy paths + CommentNotFound for a bogus id; update leaves actor/timestamp unchanged.
-- [ ] Assert no standalone comment entity file is written.
-- [ ] `cargo nextest run -p swissarmyhammer-kanban comment` — green.
+- [x] `add.rs` tests (modeled on `attachment/add.rs`): add two comments (explicit actor), re-read via `list comments`, assert 2 members w/ actor/text/timestamp/id, that the timestamp parses as RFC3339 UTC, and that the second add preserved the first. Assert the add RESPONSE shape with `assert_task_mutation_ack_with(result, task_id, &["comment"])` (the shared `#[cfg(test)]` helper in `task_helpers.rs` from op-token-diet).
+- [x] `update.rs`/`delete.rs` tests assert the pure ack via `assert_task_mutation_ack` and verify the effect (text changed / member gone) via `list comments`/`get comment` — stored state, not response echo.
+- [x] Explicit unknown actor errors; `actor: None` path writes a member whose `actor` is the ensured OS-user id and that actor entity now exists (idempotent on repeat).
+- [x] `list comments` returns members sorted by id ascending.
+- [x] get/update/delete happy paths + CommentNotFound for a bogus id; update leaves actor/timestamp unchanged.
+- [x] Assert no standalone comment entity file is written.
+- [x] `cargo nextest run -p swissarmyhammer-kanban comment` — green.
 
 ## Workflow
 - Use `/tdd` — write add+preserve, author-resolution paths, response-shape, and CommentNotFound tests first, then implement.
+
+## Implementation note (done)
+Implemented via TDD (RED: 19 tests failing on `todo!()` skeletons → GREEN: all pass). One deviation from the card's ORDERING note: `ulid::Ulid::new()` is random in its low bits within the same millisecond, so same-ms ids are unique but not strictly ordered; the id-ascending guarantee (and its test) holds across millisecond boundaries. Full crate suite: 1474/1474 green; clippy `-D warnings` clean.

@@ -15,6 +15,7 @@ use crate::attachment::{
 };
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
 use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
+use crate::comment::{AddComment, DeleteComment, GetComment, ListComments, UpdateComment};
 use crate::perspective::{
     AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, UpdatePerspective,
 };
@@ -66,6 +67,12 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(UpdateTag::new(""))) as &dyn Operation,
         Box::leak(Box::new(DeleteTag::new(""))) as &dyn Operation,
         Box::leak(Box::new(ListTags::default())) as &dyn Operation,
+        // Comment
+        Box::leak(Box::new(AddComment::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(GetComment::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(UpdateComment::new("", "", ""))) as &dyn Operation,
+        Box::leak(Box::new(DeleteComment::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(ListComments::new(""))) as &dyn Operation,
         // Attachment
         Box::leak(Box::new(AddAttachment::new("", "", ""))) as &dyn Operation,
         Box::leak(Box::new(GetAttachment::new("", ""))) as &dyn Operation,
@@ -174,6 +181,10 @@ fn generate_kanban_examples() -> Vec<Value> {
         json!({
             "description": "Add attachment to a task",
             "value": {"op": "add attachment", "task_id": "01ABC...", "name": "screenshot.png", "path": "/path/to/screenshot.png"}
+        }),
+        json!({
+            "description": "Add a comment to a task",
+            "value": {"op": "add comment", "task_id": "01ABC...", "text": "Blocked on the API change"}
         }),
         json!({
             "description": "Add a perspective",
@@ -362,6 +373,77 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_schema_includes_comment_ops() {
+        // All five comment ops land on both surfaces' op enum, and the wire
+        // schema carries their required-param signatures — with `add comment`
+        // requiring exactly `task_id` + `text` (`actor` is optional and must
+        // not widen the wire surface).
+        let ops = kanban_operations();
+        let expected = [
+            "add comment",
+            "get comment",
+            "update comment",
+            "delete comment",
+            "list comments",
+        ];
+
+        for schema in [
+            generate_kanban_mcp_schema(ops),
+            generate_kanban_mcp_schema_full(ops),
+        ] {
+            let op_enum = schema["properties"]["op"]["enum"]
+                .as_array()
+                .expect("op enum should be an array");
+            let op_strings: Vec<&str> = op_enum.iter().filter_map(|v| v.as_str()).collect();
+            for expected_op in &expected {
+                assert!(
+                    op_strings.contains(expected_op),
+                    "op enum should contain {expected_op:?}, got: {op_strings:?}"
+                );
+            }
+        }
+
+        let wire = generate_kanban_mcp_schema(ops);
+        let sigs = wire["x-op-signatures"].as_object().unwrap();
+        for expected_op in &expected {
+            assert!(
+                sigs.contains_key(*expected_op),
+                "x-op-signatures should contain {expected_op:?}"
+            );
+        }
+
+        let add_comment: Vec<&str> = sigs["add comment"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(
+            add_comment,
+            vec!["task_id", "text"],
+            "`add comment` requires exactly task_id + text (actor is optional)"
+        );
+    }
+
+    #[test]
+    fn test_full_schema_has_comment_example() {
+        let ops = kanban_operations();
+        let schema = generate_kanban_mcp_schema_full(ops);
+
+        let examples = schema["examples"]
+            .as_array()
+            .expect("examples should be an array");
+
+        let has_add_comment = examples
+            .iter()
+            .any(|ex| ex["value"]["op"].as_str() == Some("add comment"));
+        assert!(
+            has_add_comment,
+            "full schema examples should include an `add comment` example"
+        );
     }
 
     #[test]
