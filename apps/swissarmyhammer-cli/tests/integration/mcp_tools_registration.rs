@@ -199,7 +199,18 @@ async fn test_tool_schemas_are_claude_api_compatible() {
     println!("   No oneOf/allOf/anyOf constructs found at top level");
 }
 
-/// Test that verifies kanban tool schema has all 44 operations
+/// The number of kanban operations.
+///
+/// Single source of truth for this test: the `KANBAN_OPERATIONS` table in
+/// `crates/swissarmyhammer-kanban/src/schema.rs` (the wire op enum and the full
+/// `x-operation-schemas` array both derive from it). Bump this when an op is
+/// added or removed. The assertions below also cross-check the wire schema's op
+/// enum against the full schema's `x-operation-schemas`, so a count change that
+/// touches only one of the two surfaces fails the test rather than silently
+/// disagreeing.
+const EXPECTED_KANBAN_OP_COUNT: usize = 48;
+
+/// Test that verifies kanban tool schema has all 48 operations
 #[tokio::test]
 async fn test_kanban_schema_has_all_operations() {
     let mut registry = ToolRegistry::new();
@@ -211,27 +222,40 @@ async fn test_kanban_schema_has_all_operations() {
         .find(|t| t.name == "kanban")
         .expect("kanban tool should be registered");
 
-    // Check op enum count
+    // The wire schema (advertised via `list_tools()`) keeps the op enum...
     let op_enum = &kanban_tool.input_schema["properties"]["op"]["enum"];
     let op_count = op_enum.as_array().expect("op enum should be array").len();
 
     assert_eq!(
-        op_count, 48,
-        "Expected 48 operations in op enum, got {}",
-        op_count
+        op_count, EXPECTED_KANBAN_OP_COUNT,
+        "Expected {EXPECTED_KANBAN_OP_COUNT} operations in op enum, got {op_count}"
     );
 
-    // Check x-operation-schemas count
-    let op_schemas = &kanban_tool.input_schema["x-operation-schemas"];
+    // ...but the wire schema OMITS the heavy `x-operation-schemas` key.
+    assert!(
+        kanban_tool
+            .input_schema
+            .get("x-operation-schemas")
+            .is_none(),
+        "wire schema must omit x-operation-schemas"
+    );
+
+    // The per-op `x-operation-schemas` array lives on the FULL schema, which the
+    // in-process CLI command tree consumes via `McpTool::schema_full()`. It has
+    // one entry per op, and must agree with the wire op enum.
+    let full_schema = registry
+        .get_tool("kanban")
+        .expect("kanban tool should be registered")
+        .schema_full();
+    let op_schemas = &full_schema["x-operation-schemas"];
     let op_schemas_count = op_schemas
         .as_array()
         .expect("x-operation-schemas should be array")
         .len();
 
     assert_eq!(
-        op_schemas_count, 48,
-        "Expected 48 operation schemas, got {}",
-        op_schemas_count
+        op_schemas_count, op_count,
+        "full schema x-operation-schemas count ({op_schemas_count}) must match wire op enum count ({op_count})"
     );
 
     // Verify some expected operations are present
@@ -254,5 +278,5 @@ async fn test_kanban_schema_has_all_operations() {
         );
     }
 
-    println!("✅ Kanban schema has all 49 operations");
+    println!("✅ Kanban schema has all {EXPECTED_KANBAN_OP_COUNT} operations");
 }

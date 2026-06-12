@@ -25,10 +25,6 @@ pub mod check_names {
     pub const CLAUDE_CONFIG: &str = "Claude Code MCP configuration";
     /// Human-readable check name for current directory permissions
     pub const FILE_PERMISSIONS: &str = "File permissions";
-    /// Human-readable check name for AVP binary in PATH
-    pub const AVP_IN_PATH: &str = "AVP in PATH";
-    /// Human-readable check name for AVP hooks installation
-    pub const AVP_HOOKS_INSTALLED: &str = "AVP Hooks Installed";
 
     /// Build a dynamic check name for an LSP server
     pub fn lsp_server(command: &str) -> String {
@@ -191,7 +187,7 @@ pub fn check_claude_config(checks: &mut Vec<Check>) -> Result<()> {
         let path_var = env::var("PATH").unwrap_or_default();
         // Claude Code is optional infrastructure — missing claude binary is a
         // Warning, not an Error. Matches the pattern used by
-        // `check_avp_in_path` and `check_single_lsp_server` for absent optional
+        // `check_single_lsp_server` for absent optional
         // tools, and keeps `sah doctor` runnable on CI hosts that don't have
         // Claude installed.
         checks.push(Check {
@@ -232,7 +228,7 @@ fn check_claude_mcp_list(claude_path: &Option<PathBuf>) -> Check {
     // list` (binary present but unexecutable, or non-zero exit) downgrade to
     // Warning so `sah doctor` stays useful on hosts where Claude isn't a
     // first-class dependency. Matches the optional-tool pattern used by
-    // `check_avp_in_path` and `check_single_lsp_server`.
+    // `check_single_lsp_server`.
     let output = match Command::new(command_path).arg("mcp").arg("list").output() {
         Ok(o) => o,
         Err(e) => {
@@ -394,97 +390,6 @@ fn check_single_lsp_server(spec: &swissarmyhammer_lsp::types::OwnedLspServerSpec
             fix: Some(spec.install_hint.clone()),
         },
     }
-}
-
-/// Check if AVP (Agent Validator Protocol) binary is in PATH.
-///
-/// Searches the system PATH for the `avp` executable and reports its location.
-/// This is a warning (not error) since AVP is optional.
-#[allow(dead_code)]
-pub fn check_avp_in_path(checks: &mut Vec<Check>) -> Result<()> {
-    let exe_name = if cfg!(windows) { "avp.exe" } else { "avp" };
-
-    match which::which(exe_name) {
-        Ok(path) => {
-            checks.push(Check {
-                name: check_names::AVP_IN_PATH.to_string(),
-                status: CheckStatus::Ok,
-                message: format!("Found at {}", path.display()),
-                fix: None,
-            });
-        }
-        Err(_) => {
-            checks.push(Check {
-                name: check_names::AVP_IN_PATH.to_string(),
-                status: CheckStatus::Warning,
-                message: "avp not found in PATH".to_string(),
-                fix: Some("Install AVP with: cargo install --path avp-cli".to_string()),
-            });
-        }
-    }
-
-    Ok(())
-}
-
-/// Check if AVP hooks are installed in Claude Code settings.
-///
-/// Checks `.claude/settings.json` (project) and `.claude/settings.local.json` (local)
-/// in the current directory for AVP hook entries. Uses `avp_common::install::is_avp_hook()`
-/// for canonical hook detection.
-#[allow(dead_code)]
-pub fn check_avp_hooks(checks: &mut Vec<Check>) -> Result<()> {
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let scopes: &[(&str, &str)] = &[
-        ("project", ".claude/settings.json"),
-        ("local", ".claude/settings.local.json"),
-    ];
-
-    let installed_at: Vec<&str> = scopes
-        .iter()
-        .filter(|(_, path)| has_avp_hooks_in_file(&cwd.join(path)))
-        .map(|(name, _)| *name)
-        .collect();
-
-    if installed_at.is_empty() {
-        checks.push(Check {
-            name: check_names::AVP_HOOKS_INSTALLED.to_string(),
-            status: CheckStatus::Warning,
-            message: "AVP hooks not installed".to_string(),
-            fix: Some("Run 'avp init' to install AVP hooks".to_string()),
-        });
-    } else {
-        checks.push(Check {
-            name: check_names::AVP_HOOKS_INSTALLED.to_string(),
-            status: CheckStatus::Ok,
-            message: format!("AVP hooks installed at: {}", installed_at.join(", ")),
-            fix: None,
-        });
-    }
-
-    Ok(())
-}
-
-/// Check if a settings file contains any AVP hooks.
-#[allow(dead_code)]
-fn has_avp_hooks_in_file(path: &std::path::Path) -> bool {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    let settings: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    let hooks = match settings.get("hooks").and_then(|h| h.as_object()) {
-        Some(h) => h,
-        None => return false,
-    };
-    hooks.values().any(|event_hooks| {
-        event_hooks
-            .as_array()
-            .map(|arr| arr.iter().any(avp_common::install::is_avp_hook))
-            .unwrap_or(false)
-    })
 }
 
 /// Check the full sah install stack for every doctor-enabled detected agent at
@@ -734,38 +639,6 @@ mod tests {
         }
 
         let _ = std::env::set_current_dir(&original_dir);
-    }
-
-    #[test]
-    fn test_check_avp_in_path() {
-        let mut checks = Vec::new();
-        let result = check_avp_in_path(&mut checks);
-
-        assert!(result.is_ok());
-        assert_eq!(checks.len(), 1);
-        assert_eq!(checks[0].name, check_names::AVP_IN_PATH);
-        // Status depends on whether avp is actually installed
-        assert!(checks[0].status == CheckStatus::Ok || checks[0].status == CheckStatus::Warning);
-    }
-
-    #[test]
-    #[serial_test::serial(cwd)]
-    fn test_check_avp_hooks_empty() {
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        let mut checks = Vec::new();
-        let result = check_avp_hooks(&mut checks);
-
-        std::env::set_current_dir(original_dir).unwrap();
-
-        assert!(result.is_ok());
-        assert_eq!(checks.len(), 1);
-        assert_eq!(checks[0].name, check_names::AVP_HOOKS_INSTALLED);
-        assert_eq!(checks[0].status, CheckStatus::Warning);
-        assert!(checks[0].message.contains("not installed"));
-        assert!(checks[0].fix.as_ref().unwrap().contains("avp init"));
     }
 
     /// With an isolated HOME that contains a detectable Claude Code layout, the

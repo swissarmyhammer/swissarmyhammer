@@ -65,7 +65,7 @@ pub fn init_tracing(debug: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer_common::logging::{open_log_file, LOG_FILE_NAME};
+    use swissarmyhammer_common::logging::{log_file_name, open_log_file};
     use swissarmyhammer_common::test_utils::CurrentDirGuard;
     use tempfile::TempDir;
 
@@ -90,9 +90,9 @@ mod tests {
         );
         assert!(
             root.join(CodeContextConfig::DIR_NAME)
-                .join(LOG_FILE_NAME)
+                .join(log_file_name())
                 .exists(),
-            "mcp.log should have been created inside the code-context data directory"
+            "the per-process log file should have been created inside the code-context data directory"
         );
     }
 
@@ -119,9 +119,9 @@ mod tests {
         assert!(
             tmp.path()
                 .join(CodeContextConfig::DIR_NAME)
-                .join(LOG_FILE_NAME)
+                .join(log_file_name())
                 .exists(),
-            "init_tracing should create <CodeContextConfig::DIR_NAME>/mcp.log under cwd"
+            "init_tracing should create <CodeContextConfig::DIR_NAME>/mcp.<pid>.log under cwd"
         );
     }
 }

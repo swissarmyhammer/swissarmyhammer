@@ -366,6 +366,85 @@ async fn test_use_skill_with_arguments_renders_in_output() {
     teardown(server, client).await;
 }
 
+/// A phrase that appears ONLY in the `_partials/short-ids` partial body.
+/// Finding it in a rendered skill proves the `{% include %}` resolved and the
+/// short-id guidance reached the agent.
+const SHORT_ID_MARKER: &str = "last 7 characters of the ULID";
+
+/// The kanban skill must render the short-ids partial: agents driving the board
+/// need to know to quote the short id rather than hand-abbreviate the ULID.
+#[tokio::test]
+async fn test_kanban_skill_renders_short_id_guidance() {
+    let (server, client, _temp) = setup().await;
+
+    let result = client
+        .call_tool(skill_params(
+            serde_json::json!({"op": "use skill", "name": "kanban"}),
+        ))
+        .await
+        .expect("use skill kanban should succeed");
+
+    let content_text = result
+        .content
+        .first()
+        .and_then(|c| c.raw.as_text())
+        .map(|t| t.text.as_str())
+        .unwrap_or("");
+
+    assert!(
+        content_text.contains(SHORT_ID_MARKER),
+        "kanban skill should render short-id guidance (marker '{}'), got: {}",
+        SHORT_ID_MARKER,
+        &content_text[..content_text.len().min(ASSERT_PREVIEW_LEN)]
+    );
+    // The partial's "don't hand-abbreviate by prefix" rule must reach the agent.
+    assert!(
+        content_text.contains("hand-abbreviate"),
+        "kanban skill should warn against hand-abbreviating the ULID by prefix"
+    );
+    // The raw include tag must be resolved, not passed through verbatim.
+    assert!(
+        !content_text.contains("{% include"),
+        "rendered kanban skill must not contain raw Liquid include tags"
+    );
+
+    teardown(server, client).await;
+}
+
+/// The task skill creates tasks (and `depends_on` references), so it must also
+/// render the short-ids partial so dependencies are referenced by short id.
+#[tokio::test]
+async fn test_task_skill_renders_short_id_guidance() {
+    let (server, client, _temp) = setup().await;
+
+    let result = client
+        .call_tool(skill_params(
+            serde_json::json!({"op": "use skill", "name": "task"}),
+        ))
+        .await
+        .expect("use skill task should succeed");
+
+    let content_text = result
+        .content
+        .first()
+        .and_then(|c| c.raw.as_text())
+        .map(|t| t.text.as_str())
+        .unwrap_or("");
+
+    assert!(
+        content_text.contains(SHORT_ID_MARKER),
+        "task skill should render short-id guidance (marker '{}'), got: {}",
+        SHORT_ID_MARKER,
+        &content_text[..content_text.len().min(ASSERT_PREVIEW_LEN)]
+    );
+    assert!(
+        !content_text.contains("{% include"),
+        "rendered task skill must not contain raw Liquid include tags"
+    );
+
+    teardown(server, client).await;
+}
+
 #[tokio::test]
 async fn test_skill_invoke_via_shorthand() {
     let (server, client, _temp) = setup().await;

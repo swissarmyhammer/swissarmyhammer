@@ -134,6 +134,34 @@ recordings/
     }
 }
 
+/// Configuration for `.validators` directories.
+///
+/// Validators (rules-as-data quality gates) use this configuration for the
+/// user-wide validator store (`~/.validators/`) and the project-local validator
+/// store (`./.validators/`). The user path resolves to `~/.validators/` (via
+/// `from_user_home`, consistent with the skills/agents/tools home-dotfile
+/// stores); the project path resolves to `<git_root>/.validators/`.
+///
+/// An XDG (`$XDG_DATA_HOME/validators/`) resolution is still available via
+/// `xdg_data()` for the shared VFS/YAML-expander path, but the validator store
+/// itself is the home dotfile.
+#[derive(Debug, Clone, Copy)]
+pub struct ValidatorsConfig;
+
+impl DirectoryConfig for ValidatorsConfig {
+    const DIR_NAME: &'static str = ".validators";
+    const XDG_NAME: &'static str = "validators";
+    const GITIGNORE_CONTENT: &'static str = r#"# Validators store
+# This file is automatically created by swissarmyhammer-directory
+
+# Keep validator definitions (they should be committed)
+"#;
+
+    fn init_subdirs() -> &'static [&'static str] {
+        &[]
+    }
+}
+
 /// Configuration for `.shell` directories.
 ///
 /// Shell security uses this configuration for managing permit/deny
@@ -267,6 +295,13 @@ mod tests {
         // substring of `*.log`. Check for the line anchored by a newline on each side.
         assert!(AvpConfig::GITIGNORE_CONTENT.contains("\nlog\n"));
         assert!(AvpConfig::init_subdirs().is_empty());
+    }
+
+    #[test]
+    fn test_validators_config() {
+        assert_eq!(ValidatorsConfig::DIR_NAME, ".validators");
+        assert_eq!(ValidatorsConfig::XDG_NAME, "validators");
+        assert!(ValidatorsConfig::init_subdirs().is_empty());
     }
 
     #[test]

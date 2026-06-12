@@ -787,6 +787,8 @@ mod tests {
         assert_eq!(entity.body_field, Some("body".into()));
         assert_eq!(entity.mention_prefix, Some("^".to_string()));
         assert_eq!(entity.mention_display_field, Some("title".into()));
+        // Task mentions key the slug on the derived short id, not the title.
+        assert_eq!(entity.mention_slug_field, Some("short_id".into()));
         assert!(entity.fields.iter().any(|f| f == "title"));
         assert!(entity.fields.iter().any(|f| f == "position_column"));
         assert!(entity.fields.iter().any(|f| f == "position_ordinal"));

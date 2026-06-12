@@ -618,13 +618,74 @@ pub trait HookHandler: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+// Matcher
+// ---------------------------------------------------------------------------
+
+/// How a hook matcher decides whether an event's matcher value applies.
+///
+/// Mirrors Claude Code's documented matcher rules so the same config behaves
+/// identically across both runtimes:
+///
+/// - `"*"`, `""`, or omitted → [`Matcher::All`] (fires for every occurrence).
+/// - A matcher containing only `[A-Za-z0-9_|]` → [`Matcher::Exact`]: a `|`-separated
+///   list of exact tool names, compared for FULL-string equality (not substring).
+///   This is what prevents `"Bash"` from matching `Bash2` or `xBash`.
+/// - Anything else → [`Matcher::Regex`]: a JavaScript-style regex evaluated like
+///   `RegExp(pattern).test(value)`. It is intentionally unanchored, so the
+///   pattern author controls anchoring via `^`/`$`: `mcp__memory__.*` matches
+///   `mcp__memory__create_entities`, and `^Notebook` matches `NotebookEdit`.
+#[derive(Clone, Debug)]
+pub enum Matcher {
+    /// Matches every event value.
+    All,
+    /// Matches when the event value equals one of these exact names.
+    Exact(Vec<String>),
+    /// Matches when the regex matches anywhere in the event value (JS `test`).
+    Regex(regex::Regex),
+}
+
+impl Matcher {
+    /// Classify a raw matcher string into a [`Matcher`].
+    ///
+    /// Returns [`regex::Error`] only when the string is a regex matcher that
+    /// fails to compile; exact and all matchers never error.
+    pub fn try_parse(raw: &str) -> Result<Self, regex::Error> {
+        if raw.is_empty() || raw == "*" {
+            return Ok(Self::All);
+        }
+        if is_identifier_matcher(raw) {
+            let names = raw.split('|').map(str::to_string).collect();
+            return Ok(Self::Exact(names));
+        }
+        Ok(Self::Regex(regex::Regex::new(raw)?))
+    }
+
+    /// Does this matcher accept the given event matcher value?
+    fn matches_value(&self, value: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Exact(names) => names.iter().any(|n| n == value),
+            Self::Regex(re) => re.is_match(value),
+        }
+    }
+}
+
+/// Whether a matcher string is a plain identifier / alternation of identifiers
+/// (`[A-Za-z0-9_|]` only), which Claude Code treats as exact strings rather
+/// than as a regular expression.
+fn is_identifier_matcher(raw: &str) -> bool {
+    raw.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '|')
+}
+
+// ---------------------------------------------------------------------------
 // Hook registration
 // ---------------------------------------------------------------------------
 
-/// A registered hook: event filter + optional matcher + handler.
+/// A registered hook: event filter + matcher + handler.
 pub struct HookRegistration {
     pub events: Vec<HookEventKind>,
-    pub matcher: Option<regex::Regex>,
+    pub matcher: Matcher,
     pub handler: Arc<dyn HookHandler>,
 }
 
@@ -652,7 +713,7 @@ impl HookRegistration {
     /// Create a new hook registration.
     pub fn new(
         events: Vec<HookEventKind>,
-        matcher: Option<regex::Regex>,
+        matcher: Matcher,
         handler: Arc<dyn HookHandler>,
     ) -> Self {
         Self {
@@ -667,9 +728,9 @@ impl HookRegistration {
         &self.events
     }
 
-    /// Optional regex matcher pattern.
-    pub fn matcher(&self) -> Option<&regex::Regex> {
-        self.matcher.as_ref()
+    /// The matcher applied to events of these kinds.
+    pub fn matcher(&self) -> &Matcher {
+        &self.matcher
     }
 
     /// Does this registration match the given event?
@@ -677,9 +738,10 @@ impl HookRegistration {
         if !self.events.contains(&event.kind()) {
             return false;
         }
-        match (&self.matcher, event.matcher_value()) {
-            (None, _) | (_, None) => true,
-            (Some(re), Some(val)) => re.is_match(val),
+        // Events without a matcher value (UserPromptSubmit, Stop, …) always fire.
+        match event.matcher_value() {
+            None => true,
+            Some(val) => self.matcher.matches_value(val),
         }
     }
 }
@@ -1000,12 +1062,18 @@ pub enum HookConfigError {
 struct CommandHandler {
     command: String,
     timeout: std::time::Duration,
+    /// AVP context fields (`transcript_path`, `permission_mode`) folded into the
+    /// command's JSON stdin so a hook sees the same input shape Claude Code
+    /// sends. Captured at build time from the caller's [`HookCommandContext`].
+    command_context: HookCommandContext,
 }
 
 #[async_trait::async_trait]
 impl HookHandler for CommandHandler {
     async fn handle(&self, event: &HookEvent) -> HookDecision {
-        let stdin_json = event.to_command_input().to_string();
+        let stdin_json = event
+            .to_command_input_full(&self.command_context)
+            .to_string();
         match run_command(&self.command, &stdin_json, self.timeout).await {
             Ok(output) => interpret_exit_code(&output, &self.command, event.kind()),
             Err(CommandRunError::SpawnFailed(e)) => {
@@ -1168,12 +1236,15 @@ struct PromptHandler {
     prompt_template: String,
     evaluator: Arc<dyn HookEvaluator>,
     timeout: std::time::Duration,
+    command_context: HookCommandContext,
 }
 
 #[async_trait::async_trait]
 impl HookHandler for PromptHandler {
     async fn handle(&self, event: &HookEvent) -> HookDecision {
-        let arguments_json = event.to_command_input().to_string();
+        let arguments_json = event
+            .to_command_input_full(&self.command_context)
+            .to_string();
         let prompt = self.prompt_template.replace("$ARGUMENTS", &arguments_json);
 
         let result = tokio::time::timeout(self.timeout, async {
@@ -1213,12 +1284,15 @@ struct AgentHandler {
     prompt_template: String,
     evaluator: Arc<dyn HookEvaluator>,
     timeout: std::time::Duration,
+    command_context: HookCommandContext,
 }
 
 #[async_trait::async_trait]
 impl HookHandler for AgentHandler {
     async fn handle(&self, event: &HookEvent) -> HookDecision {
-        let arguments_json = event.to_command_input().to_string();
+        let arguments_json = event
+            .to_command_input_full(&self.command_context)
+            .to_string();
         let prompt = self.prompt_template.replace("$ARGUMENTS", &arguments_json);
 
         let result = tokio::time::timeout(self.timeout, async {
@@ -1422,14 +1496,19 @@ fn interpret_prompt_response(
 // ---------------------------------------------------------------------------
 
 /// Build a handler from config, requiring an evaluator for prompt/agent types.
+///
+/// `command_context` is captured into the handler so its command/prompt JSON
+/// stdin carries the AVP context fields (`transcript_path`, `permission_mode`).
 fn build_handler(
     config: &HookHandlerConfig,
     evaluator: &Option<Arc<dyn HookEvaluator>>,
+    command_context: &HookCommandContext,
 ) -> Result<Arc<dyn HookHandler>, HookConfigError> {
     match config {
         HookHandlerConfig::Command { command, timeout } => Ok(Arc::new(CommandHandler {
             command: command.clone(),
             timeout: std::time::Duration::from_secs(*timeout),
+            command_context: command_context.clone(),
         })),
         HookHandlerConfig::Prompt {
             prompt, timeout, ..
@@ -1442,6 +1521,7 @@ fn build_handler(
                 prompt_template: prompt.clone(),
                 evaluator: eval,
                 timeout: std::time::Duration::from_secs(*timeout),
+                command_context: command_context.clone(),
             }))
         }
         HookHandlerConfig::Agent {
@@ -1455,6 +1535,7 @@ fn build_handler(
                 prompt_template: prompt.clone(),
                 evaluator: eval,
                 timeout: std::time::Duration::from_secs(*timeout),
+                command_context: command_context.clone(),
             }))
         }
     }
@@ -1465,9 +1546,30 @@ impl HookConfig {
     ///
     /// Each matcher group + handler combination becomes one `HookRegistration`.
     /// Prompt/agent handlers require an evaluator.
+    ///
+    /// Command/prompt hooks built this way carry the *default* (empty)
+    /// [`HookCommandContext`], so their JSON stdin has an empty `transcript_path`
+    /// and the default permission mode. Use
+    /// [`build_registrations_with_context`](Self::build_registrations_with_context)
+    /// to supply a real context.
     pub fn build_registrations(
         &self,
         evaluator: Option<Arc<dyn HookEvaluator>>,
+    ) -> Result<Vec<HookRegistration>, HookConfigError> {
+        self.build_registrations_with_context(evaluator, &HookCommandContext::default())
+    }
+
+    /// Build runtime [`HookRegistration`]s carrying an explicit command context.
+    ///
+    /// Identical to [`build_registrations`](Self::build_registrations) but the
+    /// supplied `command_context` is folded into every command/prompt/agent
+    /// handler's JSON stdin (as `transcript_path` and, when set,
+    /// `permission_mode`), so hooks observe the same input shape Claude Code
+    /// sends.
+    pub fn build_registrations_with_context(
+        &self,
+        evaluator: Option<Arc<dyn HookEvaluator>>,
+        command_context: &HookCommandContext,
     ) -> Result<Vec<HookRegistration>, HookConfigError> {
         let mut registrations = Vec::new();
 
@@ -1482,15 +1584,10 @@ impl HookConfig {
                     return Err(HookConfigError::EmptyHooks);
                 }
 
-                let matcher = group
-                    .matcher
-                    .as_deref()
-                    .filter(|m| !m.is_empty() && *m != "*")
-                    .map(regex::Regex::new)
-                    .transpose()?;
+                let matcher = Matcher::try_parse(group.matcher.as_deref().unwrap_or(""))?;
 
                 for handler_config in &group.hooks {
-                    let handler = build_handler(handler_config, &evaluator)?;
+                    let handler = build_handler(handler_config, &evaluator, command_context)?;
                     registrations.push(HookRegistration::new(
                         vec![event_kind],
                         matcher.clone(),
@@ -1795,7 +1892,7 @@ hooks:
         let regs = config.build_registrations(None).unwrap();
         assert_eq!(regs.len(), 1);
         assert_eq!(regs[0].events, vec![HookEventKind::PreToolUse]);
-        assert!(regs[0].matcher.is_some());
+        assert!(matches!(regs[0].matcher, Matcher::Exact(_)));
     }
 
     #[test]
@@ -1847,8 +1944,42 @@ hooks:
         assert_eq!(regs[0].events, vec![HookEventKind::Stop]);
     }
 
+    /// A command hook built via `build_registrations_with_context` receives the
+    /// context's `transcript_path` (and `permission_mode`) in its JSON stdin —
+    /// the field is captured into the handler at build time, not left at the
+    /// empty default.
+    #[tokio::test]
+    async fn command_handler_stdin_carries_context_transcript_path() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let marker = dir.path().join("stdin.json");
+        // The hook copies its JSON stdin to the marker so the test can inspect it.
+        let json = format!(
+            r#"{{ "hooks": {{ "SessionStart": [ {{ "hooks": [ {{ "type": "command", "command": "cat > {}" }} ] }} ] }} }}"#,
+            marker.display()
+        );
+        let config: HookConfig = serde_json::from_str(&json).unwrap();
+
+        let ctx = HookCommandContext {
+            transcript_path: "/state/acp/SESSION/raw.jsonl".to_string(),
+            permission_mode: "acceptEdits".to_string(),
+        };
+        let regs = config.build_registrations_with_context(None, &ctx).unwrap();
+
+        let event = HookEvent::SessionStart {
+            session_id: "SESSION".to_string(),
+            source: SessionSource::Startup,
+            cwd: std::path::PathBuf::from("/project"),
+        };
+        let _ = regs[0].handler.handle(&event).await;
+
+        let recorded = std::fs::read_to_string(&marker).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&recorded).unwrap();
+        assert_eq!(value["transcript_path"], "/state/acp/SESSION/raw.jsonl");
+        assert_eq!(value["permission_mode"], "acceptEdits");
+    }
+
     #[test]
-    fn test_build_registrations_wildcard_matcher_treated_as_none() {
+    fn test_build_registrations_wildcard_matcher_treated_as_all() {
         let json = r#"{
             "hooks": {
                 "PreToolUse": [{
@@ -1859,7 +1990,110 @@ hooks:
         }"#;
         let config: HookConfig = serde_json::from_str(json).unwrap();
         let regs = config.build_registrations(None).unwrap();
-        assert!(regs[0].matcher.is_none());
+        assert!(matches!(regs[0].matcher, Matcher::All));
+    }
+
+    // =====================================================================
+    // Matcher fidelity (exact-string vs anchored regex)
+    // =====================================================================
+
+    /// Build a PreToolUse event with the given tool name for matcher tests.
+    fn pre_tool_use(tool_name: &str) -> HookEvent {
+        HookEvent::PreToolUse {
+            session_id: "s".into(),
+            tool_name: tool_name.into(),
+            tool_input: None,
+            tool_use_id: None,
+            cwd: PathBuf::from("/tmp"),
+        }
+    }
+
+    /// Build a registration whose matcher is parsed from `matcher`.
+    fn reg_with_matcher(matcher: &str) -> HookRegistration {
+        HookRegistration::new(
+            vec![HookEventKind::PreToolUse],
+            Matcher::try_parse(matcher).unwrap(),
+            Arc::new(MockEvaluatorHook),
+        )
+    }
+
+    struct MockEvaluatorHook;
+
+    #[async_trait::async_trait]
+    impl HookHandler for MockEvaluatorHook {
+        async fn handle(&self, _event: &HookEvent) -> HookDecision {
+            HookDecision::Allow
+        }
+    }
+
+    #[test]
+    fn test_exact_matcher_is_full_string_not_substring() {
+        let reg = reg_with_matcher("Bash");
+        assert!(reg.matches(&pre_tool_use("Bash")));
+        assert!(!reg.matches(&pre_tool_use("Bash2")));
+        assert!(!reg.matches(&pre_tool_use("xBash")));
+        assert!(!reg.matches(&pre_tool_use("run-Bash")));
+    }
+
+    #[test]
+    fn test_exact_alternation_matches_each_member_exactly() {
+        let reg = reg_with_matcher("Edit|Write");
+        assert!(reg.matches(&pre_tool_use("Edit")));
+        assert!(reg.matches(&pre_tool_use("Write")));
+        assert!(!reg.matches(&pre_tool_use("Editor")));
+        assert!(!reg.matches(&pre_tool_use("Writer")));
+    }
+
+    #[test]
+    fn test_regex_matcher_uses_js_test_semantics() {
+        // Regex matchers are evaluated like RegExp(pattern).test(value):
+        // unanchored, with anchoring controlled by the pattern author.
+        let reg = reg_with_matcher("mcp__memory__.*");
+        assert!(reg.matches(&pre_tool_use("mcp__memory__create_entities")));
+
+        // A leading `^` anchors at the start, so a prefix match succeeds but a
+        // string that does not start with the pattern does not.
+        let notebook = reg_with_matcher("^Notebook");
+        assert!(notebook.matches(&pre_tool_use("NotebookEdit")));
+        assert!(!notebook.matches(&pre_tool_use("xNotebookEdit")));
+    }
+
+    #[test]
+    fn test_wildcard_and_empty_match_everything() {
+        for pat in ["*", ""] {
+            let reg = reg_with_matcher(pat);
+            assert!(reg.matches(&pre_tool_use("Bash")));
+            assert!(reg.matches(&pre_tool_use("anything-at-all")));
+        }
+    }
+
+    #[test]
+    fn test_matcher_parse_classifies_kinds() {
+        assert!(matches!(Matcher::try_parse("*").unwrap(), Matcher::All));
+        assert!(matches!(Matcher::try_parse("").unwrap(), Matcher::All));
+        assert!(matches!(
+            Matcher::try_parse("Bash").unwrap(),
+            Matcher::Exact(_)
+        ));
+        assert!(matches!(
+            Matcher::try_parse("Edit|Write").unwrap(),
+            Matcher::Exact(_)
+        ));
+        assert!(matches!(
+            Matcher::try_parse("mcp__memory__.*").unwrap(),
+            Matcher::Regex(_)
+        ));
+        assert!(matches!(
+            Matcher::try_parse("^Notebook").unwrap(),
+            Matcher::Regex(_)
+        ));
+    }
+
+    #[test]
+    fn test_invalid_regex_matcher_is_an_error() {
+        // A pattern with regex metacharacters that fails to compile is
+        // reported as an error, not silently treated as match-all.
+        assert!(Matcher::try_parse("[invalid").is_err());
     }
 
     // =====================================================================

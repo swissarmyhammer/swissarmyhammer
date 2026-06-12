@@ -23,14 +23,11 @@ use tokio::sync::{Mutex, RwLock};
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_code_context_tools, register_file_tools, register_git_tools, register_kanban_tools,
-    register_questions_tools, register_ralph_tools, register_shell_tools, register_web_tools,
-    ToolContext, ToolRegistry,
+    register_questions_tools, register_ralph_tools, register_review_tools, register_shell_tools,
+    register_web_tools, ToolContext, ToolRegistry,
 };
 use super::tools::agent::register_agent_tools;
 use super::tools::skill::register_skill_tools;
-use super::tracing_util::{
-    serialize_json_bounded, truncate_utf8_for_log, MAX_ARGS_BYTES_INFO, MAX_PREVIEW_BYTES_INFO,
-};
 use swissarmyhammer_agents::AgentLibrary;
 use swissarmyhammer_skills::SkillLibrary;
 
@@ -686,6 +683,7 @@ impl McpServer {
         register_ralph_tools(tool_registry);
         register_agent_tools(tool_registry, agent_library, prompt_library.clone());
         register_file_tools(tool_registry);
+        register_review_tools(tool_registry);
         register_skill_tools(tool_registry, skill_library, prompt_library);
 
         // Apply tool enable/disable config from tools.yaml (global + project layers)
@@ -1112,6 +1110,37 @@ impl McpServer {
                 None,
             ))
         }
+    }
+
+    /// Wire the live `review` factories into this server's tool registry.
+    ///
+    /// The server registers the `review` tool with no agent factory at
+    /// construction (see [`register_review_tools`](crate::mcp::tools::review::register_review_tools)),
+    /// so its three pipeline ops (`review file`/`working`/`sha`) return an
+    /// actionable error until a factory is wired. This is the injection seam the
+    /// wiring layer — a crate that may depend on `swissarmyhammer-agent`, which
+    /// `swissarmyhammer-tools` cannot — calls after building the server to swap
+    /// the bare tool for one that drives the configured backend.
+    ///
+    /// `agent_factory` mints a fresh ACP agent per review run; `embedder_factory`
+    /// is `None` to keep the loaded platform-embedder default; `concurrency` pins
+    /// the pool worker count (`review.concurrency`) when set. Registration is by
+    /// tool name, so this overwrites the bare `review` tool. The registry is
+    /// shared across server clones and read per `call_tool`, so the swap takes
+    /// effect for every subsequent `review` dispatch on this server.
+    pub async fn set_review_factories(
+        &self,
+        agent_factory: crate::mcp::tools::review::review_op::AgentFactory,
+        embedder_factory: Option<crate::mcp::tools::review::review_op::EmbedderFactory>,
+        concurrency: Option<usize>,
+    ) {
+        let mut registry = self.tool_registry.write().await;
+        crate::mcp::tools::review::register_review_tool_with_factories(
+            &mut registry,
+            agent_factory,
+            embedder_factory,
+            concurrency,
+        );
     }
 
     /// Get a specific prompt by name, with optional template argument rendering.
@@ -1833,16 +1862,16 @@ fn connecting_host_from_context(context: &RequestContext<RoleServer>) -> Host {
         .unwrap_or(Host::Other)
 }
 
-/// Render a [`CallToolResult`] for diagnostic preview.
+/// Render a [`CallToolResult`] as its full diagnostic text.
 ///
 /// Joins all text content blocks; non-text blocks (images, audio, etc.) are
-/// summarized as `<binary:N bytes>` placeholders so the log line stays
-/// compact even for tools that return mixed content.
+/// summarized as `<image>` / `<audio>` / `<resource>` placeholders so the log
+/// line stays readable even for tools that return mixed content.
 ///
-/// Returns `(total_text_bytes, joined_text)`. The caller is responsible for
-/// truncating the returned string before emitting it at info level — full
-/// text payloads are only safe at trace level.
-fn format_call_result_for_preview(result: &rmcp::model::CallToolResult) -> (usize, String) {
+/// Returns `(total_text_bytes, joined_text)` — the complete joined text, never
+/// truncated. Log truncation is forbidden in this codebase, so callers emit the
+/// returned string in full.
+fn format_call_result_text(result: &rmcp::model::CallToolResult) -> (usize, String) {
     use rmcp::model::RawContent;
 
     let mut joined = String::new();
@@ -2088,10 +2117,21 @@ impl ServerHandler for McpServer {
         let arg_count = request.arguments.as_ref().map_or(0, |a| a.len());
         let session_id = session_id_from_context(&context);
         let session_field = session_id.clone().unwrap_or_else(|| "<stdio>".to_string());
+        // The dispatched op rides on the span so per-op log aggregation works
+        // on any line of the call — including `tool_call complete` — without
+        // joining back to the args line (which breaks under concurrent calls).
+        let op_field = request
+            .arguments
+            .as_ref()
+            .and_then(|args| args.get("op"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         let span = tracing::info_span!(
             "tool_call",
             tool = %tool_name,
+            op = op_field.as_str(),
             args = arg_count,
             session_id = %session_field,
             caller = "mcp",
@@ -2106,39 +2146,22 @@ impl ServerHandler for McpServer {
             //   parse_ms     — pre-call args logging + lookup of the tool.
             //   dispatch_ms  — building the tool context for this peer.
             //   handler_ms   — `tool.execute()` itself.
-            //   response_ms  — formatting the response preview.
+            //   response_ms  — formatting the response text.
             let total_start = std::time::Instant::now();
             let parse_start = total_start;
 
             // Pre-call args logging — answers "what did rule X actually
-            // call?". JSON serialization is gated behind `tracing::enabled!`
+            // call?". The FULL serialized args are logged at info level, never
+            // truncated. JSON serialization is gated behind `tracing::enabled!`
             // so info-disabled runs do not allocate.
-            //
-            // Trace-level callers see the full payload; info-level callers
-            // see a UTF-8-safe truncation with a `...[+N more bytes]`
-            // marker. The info path uses a bounded writer that stops
-            // serializing at the byte budget instead of allocating the full
-            // JSON and discarding the tail.
             if let Some(args) = request.arguments.as_ref() {
-                if tracing::enabled!(tracing::Level::TRACE) {
+                if tracing::enabled!(tracing::Level::INFO) {
                     let full = serde_json::to_string(args)
                         .unwrap_or_else(|_| "<unserializable>".to_string());
-                    tracing::trace!(
-                        tool = %tool_name,
-                        args_full = %full,
-                        "tool_call args (full payload)"
-                    );
-                } else if tracing::enabled!(tracing::Level::INFO) {
-                    let (preview, total_bytes) = serialize_json_bounded(args, MAX_ARGS_BYTES_INFO);
-                    let suffix = if total_bytes > preview.len() {
-                        format!("...[+{} more bytes]", total_bytes - preview.len())
-                    } else {
-                        String::new()
-                    };
                     tracing::info!(
                         tool = %tool_name,
-                        args_preview = %format!("{}{}", preview, suffix),
-                        args_bytes = total_bytes,
+                        args_bytes = full.len(),
+                        args = %full,
                         "tool_call args"
                     );
                 }
@@ -2187,22 +2210,15 @@ impl ServerHandler for McpServer {
             };
             tracing::Span::current().record("status", if is_error { "error" } else { "ok" });
 
-            // Post-call response preview — answers "what did the tool
-            // return?". Computed when info OR trace is enabled so the trace
-            // branch never reads from an empty preview when info is
-            // suppressed by a custom subscriber.
-            //
-            // Note: This is a *preview*, not the full payload. Full
-            // responses (including `read_file` content and tool errors) are
-            // emitted only at trace level — keeps secret hygiene at info
-            // level while still surfacing diagnostic detail.
+            // Post-call response text — answers "what did the tool return?".
+            // The FULL joined result text is logged at info level, never
+            // truncated. Computed only when info is enabled so info-disabled
+            // runs do not allocate.
             let response_start = std::time::Instant::now();
-            let (result_bytes, preview): (usize, String) =
-                if tracing::enabled!(tracing::Level::INFO)
-                    || tracing::enabled!(tracing::Level::TRACE)
-                {
+            let (result_bytes, result_text): (usize, String) =
+                if tracing::enabled!(tracing::Level::INFO) {
                     match &result {
-                        Ok(call_result) => format_call_result_for_preview(call_result),
+                        Ok(call_result) => format_call_result_text(call_result),
                         Err(e) => {
                             let s = e.to_string();
                             (s.len(), s)
@@ -2213,15 +2229,6 @@ impl ServerHandler for McpServer {
                 };
             let response_ms = response_start.elapsed().as_millis() as u64;
 
-            if tracing::enabled!(tracing::Level::TRACE) {
-                tracing::trace!(
-                    tool = %tool_name,
-                    result_full = %preview,
-                    result_bytes,
-                    "tool_call result (full payload)"
-                );
-            }
-
             let total_ms = total_start.elapsed().as_millis() as u64;
             tracing::info!(
                 duration_ms = total_ms,
@@ -2231,7 +2238,7 @@ impl ServerHandler for McpServer {
                 response_ms,
                 error = is_error,
                 result_bytes,
-                preview = %truncate_utf8_for_log(&preview, MAX_PREVIEW_BYTES_INFO),
+                result = %result_text,
                 "tool_call complete"
             );
 

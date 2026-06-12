@@ -25,6 +25,7 @@
 //! }
 //! ```
 
+pub mod cli_gen;
 mod execution_result;
 mod notification;
 mod operation;
@@ -32,13 +33,17 @@ mod parameter;
 mod processor;
 pub mod schema;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use execution_result::ExecutionResult;
 pub use notification::Notification;
 pub use operation::{Execute, Operation};
 pub use parameter::{ParamMeta, ParamType};
 pub use processor::OperationProcessor;
 pub use schema::{
-    generate_mcp_schema, generate_notifications_meta, generate_operations_meta, SchemaConfig,
+    generate_mcp_schema, generate_mcp_schema_full, generate_mcp_schema_wire,
+    generate_notifications_meta, generate_operations_meta, SchemaConfig, WIRE_DROPPED_KEYS,
 };
 
 // Re-export proc macros

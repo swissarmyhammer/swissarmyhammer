@@ -18,7 +18,7 @@
 # Reference
 
 - [SwissArmyHammer CLI](reference/sah-cli.md)
-- [AVP CLI](reference/avp-cli.md)
 - [Mirdan CLI](reference/mirdan-cli.md)
 - [ShellTool CLI](reference/shelltool-cli.md)
 - [Code-Context CLI](reference/code-context-cli.md)
+- [Claude-Code Hooks (llama agent)](reference/llama-claude-hooks.md)

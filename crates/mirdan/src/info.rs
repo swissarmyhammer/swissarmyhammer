@@ -61,7 +61,7 @@ fn show_local_info(name: &str, agent_filter: Option<&str>) -> bool {
 
     // Check validator dirs (skip when --agent is set: validators are not agent-scoped)
     if agent_filter.is_none() {
-        let local_val = Path::new(".avp/validators").join(&sanitized);
+        let local_val = crate::install::validators_dir(false).join(&sanitized);
         if local_val.exists() && local_val.join("VALIDATOR.md").exists() {
             let version = read_frontmatter_field(&local_val.join("VALIDATOR.md"), "version");
             let description =
@@ -225,7 +225,7 @@ metadata:
         let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(dir.path()).unwrap();
 
         // Create a validator
-        let val_dir = dir.path().join(".avp/validators/test-val");
+        let val_dir = dir.path().join(".validators/test-val");
         std::fs::create_dir_all(&val_dir).unwrap();
         std::fs::write(
             val_dir.join("VALIDATOR.md"),
@@ -245,7 +245,7 @@ metadata:
         let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(dir.path()).unwrap();
 
         // Create a validator
-        let val_dir = dir.path().join(".avp/validators/test-val");
+        let val_dir = dir.path().join(".validators/test-val");
         std::fs::create_dir_all(&val_dir).unwrap();
         std::fs::write(
             val_dir.join("VALIDATOR.md"),

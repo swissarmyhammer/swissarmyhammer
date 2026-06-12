@@ -27,15 +27,16 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml_ng.workspace = true
 regex.workspace = true
+dirs.workspace = true
 model-context-protocol-extras = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-directory = { workspace = true }
 
 [dev-dependencies]
-avp-common = { workspace = true }
 serial_test = { workspace = true }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "net", "process", "time", "macros"] }
+tracing-test = { workspace = true }
 
 [lints]
 workspace = true

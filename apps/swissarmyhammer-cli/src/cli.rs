@@ -1,12 +1,17 @@
 //! CLI definition for the swissarmyhammer (`sah`) command-line interface.
 //!
-//! This module is self-contained — it only depends on `clap` and `std` so that
-//! `build.rs` can compile it independently via `#[path = "src/cli.rs"]` to
-//! generate documentation, man pages, and shell completions at build time.
+//! `build.rs` compiles this module independently via `#[path = "src/cli.rs"]`
+//! to generate documentation, man pages, and shell completions at build time.
+//! Beyond `clap` and `std`, it depends only on the shared
+//! [`swissarmyhammer_cli_completions::lifecycle::InstallTarget`] enum (re-exported
+//! below), which is declared as a build dependency of this crate — so `build.rs`'s
+//! `#[path]` compilation has it available. `InstallTarget` is the single canonical
+//! install-scope type shared by every tool CLI, and its
+//! `From<InstallTarget> for InitScope` lives with it in that shared crate.
 //!
-//! Cross-crate type conversions (e.g. `PromptSourceArg <-> PromptSource`,
-//! `InstallTarget -> InitScope`) live in `crate::cli_conversions` so that
-//! `cli.rs` does not pull in library dependencies.
+//! Other cross-crate type conversions (e.g. `PromptSourceArg <-> PromptSource`)
+//! live in `crate::cli_conversions` so that `cli.rs` does not pull in further
+//! library dependencies.
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::str::FromStr;
@@ -44,25 +49,11 @@ pub enum PromptSourceArg {
 }
 
 /// Target location for init/deinit operations.
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
-pub enum InstallTarget {
-    /// Project-level settings (.claude/settings.json)
-    Project,
-    /// Local project settings, not committed (.claude/settings.local.json)
-    Local,
-    /// User-level settings (~/.claude/settings.json)
-    User,
-}
-
-impl std::fmt::Display for InstallTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InstallTarget::Project => write!(f, "project"),
-            InstallTarget::Local => write!(f, "local"),
-            InstallTarget::User => write!(f, "user"),
-        }
-    }
-}
+///
+/// Re-exported from the canonical shared [`InstallTarget`] so there is exactly
+/// one such enum (and one `From<InstallTarget> for InitScope`) across every
+/// workspace CLI.
+pub use swissarmyhammer_cli_completions::lifecycle::InstallTarget;
 
 #[derive(Parser, Debug)]
 #[command(name = "swissarmyhammer")]
@@ -348,6 +339,39 @@ Example:
     },
 }
 
+/// Long help text for `sah model use`.
+///
+/// Single source of truth: the static clap derive
+/// (`ModelSubcommand::Use`) and the runtime command tree
+/// (`crate::dynamic_cli`) both reference this constant so the two cannot
+/// drift apart. It lives in `cli.rs` because this module is the one
+/// `build.rs` compiles standalone (via `#[path = "src/cli.rs"]`), so the
+/// constant must be reachable without pulling in `dynamic_cli`.
+pub const MODEL_USE_LONG_ABOUT: &str = "
+Apply a specific model configuration to the current project.
+
+This command finds the specified model by name and applies its configuration
+to the project by creating or updating .sah/sah.yaml.
+
+Model precedence (highest to lowest):
+• User models: ~/.models/<name>.yaml
+• Project models: ./models/<name>.yaml
+• Built-in models: embedded in the binary
+
+By default the model is applied as the global default (top-level `model:`).
+Use `--for <purpose>` to scope the model to a specific tool instead; the value
+is written under that purpose's mapping (e.g. `--for review` writes
+`review.model:`) and leaves the global default untouched.
+
+`--for review` sets the model the review tool runs its validator agents with.
+When `review.model` is unset, the review tool uses the global default model.
+
+Examples:
+  sah model use claude-code                # Apply Claude Code as the default model
+  sah model use qwen                       # Apply the Qwen model as the default
+  sah model use qwen --for review          # Set the review-tool model only
+";
+
 #[derive(Subcommand, Debug)]
 pub enum ModelSubcommand {
     /// List available models
@@ -396,37 +420,15 @@ Examples:
         format: OutputFormat,
     },
     /// Use a specific model
-    #[command(long_about = "
-Apply a specific model configuration to the current project.
-
-This command finds the specified model by name and applies its configuration
-to the project by creating or updating .sah/sah.yaml. The model
-configuration determines how SwissArmyHammer executes AI workflows in your
-project, including which AI model to use and how to execute tools.
-
-Model precedence (highest to lowest):
-• User models: ~/.models/<name>.yaml
-• Project models: ./models/<name>.yaml
-• Built-in models: embedded in the binary
-
-The command preserves any existing configuration sections while updating
-only the model configuration. This allows you to maintain project-specific
-settings alongside model configurations.
-
-Common model types:
-• claude-code    - Uses Claude Code CLI for AI execution
-• qwen           - Uses the local Qwen3.6 MoE model with in-process execution
-• custom models  - User-defined configurations for specialized workflows
-
-Examples:
-  sah model use claude-code                # Apply Claude Code model
-  sah model use qwen                       # Apply the Qwen model
-  sah --debug model use claude-code        # Apply with debug output
-")]
+    #[command(long_about = MODEL_USE_LONG_ABOUT)]
     Use {
         /// Model name to apply to the project
         #[arg(id = "name")]
         name: String,
+        /// Purpose to scope the model to (e.g. `review`). Absent sets the
+        /// global default model.
+        #[arg(long = "for", id = "for", value_name = "PURPOSE")]
+        for_purpose: Option<String>,
     },
 }
 

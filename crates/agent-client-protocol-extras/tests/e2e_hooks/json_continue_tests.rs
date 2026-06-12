@@ -12,6 +12,7 @@
 //!   PreToolUse, PostToolUse, PostToolUseFailure, Notification
 //!   → Cancel → cancel channel receives session ID
 
+use agent_client_protocol_extras::PreToolUseOutcome;
 use tokio::sync::broadcast;
 
 use crate::helpers;
@@ -42,9 +43,10 @@ async fn user_prompt_submit_continue_false_cancels() {
     );
 }
 
-/// PreToolUse with continue:false should send Cancel to the cancel channel.
+/// PreToolUse with continue:false stops the turn at the dispatch seam (the tool
+/// is not dispatched).
 #[tokio::test]
-async fn pre_tool_use_continue_false_cancels() {
+async fn pre_tool_use_continue_false_stops_turn() {
     let tmp = tempfile::TempDir::new().unwrap();
     let json_output = r#"{"continue":false,"stopReason":"hook requested stop"}"#;
     let script = helpers::write_json_output_script(tmp.path(), "hook.sh", json_output);
@@ -55,30 +57,20 @@ async fn pre_tool_use_continue_false_cancels() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, mut cancel_rx, _context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_completed_notifications(&tx, "test-session").await;
-
-    // Synchronize: wait for the hook script to finish before checking channel.
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
-    assert!(
-        captured.is_some(),
-        "PreToolUse hook should have been invoked"
-    );
-
-    // Hook already finished, so the channel message is already buffered.
-    let short = std::time::Duration::from_millis(200);
-    let cancel = tokio::time::timeout(short, cancel_rx.recv()).await;
-    assert!(
-        cancel.is_ok(),
-        "PreToolUse continue:false should send Cancel to cancel channel"
-    );
+    let outcome = helpers::fire_pre_tool_use(&agent, "Bash").await;
+    match outcome {
+        PreToolUseOutcome::StopTurn { reason } => assert!(
+            reason.contains("hook requested stop"),
+            "continue:false stopReason should be surfaced; got {reason:?}"
+        ),
+        other => panic!("expected StopTurn, got {other:?}"),
+    }
 }
 
-/// PostToolUse with continue:false should send Cancel to the cancel channel.
+/// PostToolUse with continue:false is a no-op: a post-hook cannot stop the turn
+/// (the action already happened), so it surfaces no context.
 #[tokio::test]
-async fn post_tool_use_continue_false_cancels() {
+async fn post_tool_use_continue_false_is_noop() {
     let tmp = tempfile::TempDir::new().unwrap();
     let json_output = r#"{"continue":false,"stopReason":"hook requested stop"}"#;
     let script = helpers::write_json_output_script(tmp.path(), "hook.sh", json_output);
@@ -89,30 +81,16 @@ async fn post_tool_use_continue_false_cancels() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, mut cancel_rx, _context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_completed_notifications(&tx, "test-session").await;
-
-    // Synchronize: wait for the hook script to finish before checking channel.
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    let ctx = helpers::fire_post_tool_use(&agent, "Bash").await;
     assert!(
-        captured.is_some(),
-        "PostToolUse hook should have been invoked"
-    );
-
-    // Hook already finished, so the channel message is already buffered.
-    let short = std::time::Duration::from_millis(200);
-    let cancel = tokio::time::timeout(short, cancel_rx.recv()).await;
-    assert!(
-        cancel.is_ok(),
-        "PostToolUse continue:false should send Cancel to cancel channel"
+        ctx.is_none(),
+        "PostToolUse continue:false cannot stop the turn; got {ctx:?}"
     );
 }
 
-/// PostToolUseFailure with continue:false should send Cancel to the cancel channel.
+/// PostToolUseFailure with continue:false is a no-op, same as PostToolUse.
 #[tokio::test]
-async fn post_tool_use_failure_continue_false_cancels() {
+async fn post_tool_use_failure_continue_false_is_noop() {
     let tmp = tempfile::TempDir::new().unwrap();
     let json_output = r#"{"continue":false,"stopReason":"hook requested stop"}"#;
     let script = helpers::write_json_output_script(tmp.path(), "hook.sh", json_output);
@@ -124,24 +102,10 @@ async fn post_tool_use_failure_continue_false_cancels() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, mut cancel_rx, _context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_failed_notifications(&tx, "test-session").await;
-
-    // Synchronize: wait for the hook script to finish before checking channel.
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    let ctx = helpers::fire_post_tool_use_failure(&agent, "Bash").await;
     assert!(
-        captured.is_some(),
-        "PostToolUseFailure hook should have been invoked"
-    );
-
-    // Hook already finished, so the channel message is already buffered.
-    let short = std::time::Duration::from_millis(200);
-    let cancel = tokio::time::timeout(short, cancel_rx.recv()).await;
-    assert!(
-        cancel.is_ok(),
-        "PostToolUseFailure continue:false should send Cancel to cancel channel"
+        ctx.is_none(),
+        "PostToolUseFailure continue:false cannot stop the turn; got {ctx:?}"
     );
 }
 

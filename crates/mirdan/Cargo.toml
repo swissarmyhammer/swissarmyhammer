@@ -43,7 +43,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 toml = { workspace = true }
-jsonc-parser = { workspace = true }
 
 # CLI
 clap = { workspace = true }
@@ -88,6 +87,12 @@ tempfile = { workspace = true }
 pathdiff = { workspace = true }
 git2 = { workspace = true, features = ["https", "vendored-openssl"] }
 url = { workspace = true }
+
+[build-dependencies]
+# Embeds the builtin validators (builtin/validators/**) into the binary so the
+# profile installer can materialize them onto disk, mirroring how the skills
+# crate embeds builtin/skills/**.
+swissarmyhammer-build = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

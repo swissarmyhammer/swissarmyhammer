@@ -3,7 +3,9 @@
 
 use crate::context::CliContext;
 use colored::Colorize;
-use swissarmyhammer_config::model::{ModelError as AgentError, ModelManager, ModelPaths};
+use swissarmyhammer_config::model::{
+    ModelError as AgentError, ModelManager, ModelPaths, ModelTarget,
+};
 
 /// Maximum number of agent name suggestions to display when an agent is not found
 const MAX_SUGGESTIONS: usize = 3;
@@ -24,12 +26,20 @@ fn format_agent_source(
 }
 
 /// Display success message after setting model
-fn display_success_message(agent_name: &str) {
-    println!(
-        "{} Successfully set model to: {}",
-        "✓".green(),
-        agent_name.green().bold()
-    );
+fn display_success_message(agent_name: &str, target: ModelTarget) {
+    match target {
+        ModelTarget::Default => println!(
+            "{} Successfully set model to: {}",
+            "✓".green(),
+            agent_name.green().bold()
+        ),
+        ModelTarget::Review => println!(
+            "{} Successfully set {} model to: {}",
+            "✓".green(),
+            "review".cyan().bold(),
+            agent_name.green().bold()
+        ),
+    }
 
     // Try to get agent info for additional context
     if let Ok(agent_info) = ModelManager::find_agent_by_name(agent_name) {
@@ -39,6 +49,50 @@ fn display_success_message(agent_name: &str) {
             println!("   Description: {}", description.dimmed());
         }
     }
+}
+
+/// The single source of truth for `--for <purpose>` values.
+///
+/// Each entry maps a CLI purpose name to the [`ModelTarget`] it writes. Both the
+/// clap value-parser (`dynamic_cli::CliBuilder::build_model_command`) and the
+/// programmatic [`target_for_purpose`] matcher consume this table, so adding a
+/// new purpose (e.g. `commit`) is a one-line edit here rather than two
+/// independent edits that can drift.
+pub const SUPPORTED_PURPOSES: &[(&str, ModelTarget)] = &[("review", ModelTarget::Review)];
+
+/// The purpose names accepted on `--for`, in declaration order.
+///
+/// This is the list the clap layer hands to its `PossibleValuesParser`, derived
+/// from [`SUPPORTED_PURPOSES`] so the parser and the matcher cannot diverge.
+pub fn supported_purpose_names() -> Vec<&'static str> {
+    SUPPORTED_PURPOSES.iter().map(|(name, _)| *name).collect()
+}
+
+/// Map an optional `--for <purpose>` value to a [`ModelTarget`].
+///
+/// Absent (`None`) selects the global default. Recognized purposes come from
+/// [`SUPPORTED_PURPOSES`]; any other value is rejected with a clear,
+/// non-panicking error so an unknown `--for` fails the command rather than
+/// silently writing the default.
+fn target_for_purpose(
+    purpose: Option<&str>,
+) -> Result<ModelTarget, Box<dyn std::error::Error + Send + Sync>> {
+    let Some(purpose) = purpose else {
+        return Ok(ModelTarget::Default);
+    };
+
+    SUPPORTED_PURPOSES
+        .iter()
+        .find(|(name, _)| *name == purpose)
+        .map(|(_, target)| *target)
+        .ok_or_else(|| {
+            format!(
+                "Unknown --for purpose '{}'. Supported purposes: {}",
+                purpose,
+                supported_purpose_names().join(", ")
+            )
+            .into()
+        })
 }
 
 /// Generic error handler that prints formatted error messages
@@ -139,21 +193,28 @@ fn handle_invalid_path_error(
 }
 
 /// Execute the model use command
+///
+/// `for_purpose` selects which configured model is written: `None` sets the
+/// global default (top-level `model:`), `Some("review")` sets the review-tool
+/// override (`review.model`). Any other purpose is rejected.
 pub async fn execute_use_command(
     name: String,
+    for_purpose: Option<String>,
     _context: &CliContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let target = target_for_purpose(for_purpose.as_deref())?;
+
     let agent_name = name.trim().to_string();
 
     if agent_name.is_empty() {
         return Err("Model name cannot be empty".into());
     }
 
-    tracing::info!("Setting model to: {}", agent_name);
+    tracing::info!("Setting {:?} model to: {}", target, agent_name);
 
-    match ModelManager::use_agent(&agent_name, &ModelPaths::sah()) {
+    match ModelManager::use_agent_for(&agent_name, target, &ModelPaths::sah()) {
         Ok(()) => {
-            display_success_message(&agent_name);
+            display_success_message(&agent_name, target);
             Ok(())
         }
         Err(AgentError::NotFound(name)) => handle_agent_not_found(name),
@@ -207,12 +268,12 @@ mod tests {
         let context = create_test_context().await;
 
         // Test empty string
-        let result = execute_use_command("".to_string(), &context).await;
+        let result = execute_use_command("".to_string(), None, &context).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cannot be empty"));
 
         // Test whitespace-only string
-        let result = execute_use_command("   ".to_string(), &context).await;
+        let result = execute_use_command("   ".to_string(), None, &context).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cannot be empty"));
     }
@@ -227,7 +288,7 @@ mod tests {
 
         let context = create_test_context().await;
 
-        let result = execute_use_command("nonexistent-agent-xyz".to_string(), &context).await;
+        let result = execute_use_command("nonexistent-agent-xyz".to_string(), None, &context).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -254,7 +315,7 @@ mod tests {
 
         let agent_name = &builtin_agents[0].name;
 
-        let result = execute_use_command(agent_name.clone(), &context).await;
+        let result = execute_use_command(agent_name.clone(), None, &context).await;
         // This might fail if no config directory exists, but we test the logic
         match result {
             Ok(()) => {
@@ -295,7 +356,7 @@ mod tests {
         let agent_name = &builtin_agents[0].name;
 
         // Test that agent names get properly trimmed
-        let result = execute_use_command(format!("  {}  ", agent_name), &context).await;
+        let result = execute_use_command(format!("  {}  ", agent_name), None, &context).await;
 
         match result {
             Ok(()) => {
@@ -334,7 +395,7 @@ mod tests {
 
         let agent_name = &builtin_agents[0].name;
 
-        let result = execute_use_command(agent_name.clone(), &context).await;
+        let result = execute_use_command(agent_name.clone(), None, &context).await;
 
         // This should succeed or fail only due to permission/config issues
         match result {
@@ -374,6 +435,52 @@ mod tests {
     }
 
     #[test]
+    fn test_supported_purposes_resolve_via_shared_table() {
+        // Every purpose name advertised to clap must resolve through
+        // `target_for_purpose` to its mapped target — proving both sites
+        // consume the same `SUPPORTED_PURPOSES` source of truth.
+        assert!(
+            !SUPPORTED_PURPOSES.is_empty(),
+            "there must be at least one supported purpose"
+        );
+        for (name, expected_target) in SUPPORTED_PURPOSES {
+            let resolved = target_for_purpose(Some(name)).expect("supported purpose must resolve");
+            assert_eq!(
+                resolved, *expected_target,
+                "purpose '{}' must map to its declared target",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_supported_purpose_names_match_table() {
+        // The name list handed to the clap parser must be exactly the keys
+        // of the shared table, in order.
+        let from_table: Vec<&str> = SUPPORTED_PURPOSES.iter().map(|(name, _)| *name).collect();
+        assert_eq!(supported_purpose_names(), from_table);
+    }
+
+    #[test]
+    fn test_unknown_purpose_error_lists_supported() {
+        let err = target_for_purpose(Some("deploy")).unwrap_err().to_string();
+        assert!(
+            err.contains("deploy"),
+            "error names the bad purpose: {}",
+            err
+        );
+        // The supported list in the error is derived from the table.
+        for (name, _) in SUPPORTED_PURPOSES {
+            assert!(
+                err.contains(name),
+                "error should list supported purpose '{}': {}",
+                name,
+                err
+            );
+        }
+    }
+
+    #[test]
     fn test_agent_name_validation_logic() {
         // Test the trimming logic separately
         assert_eq!("".trim(), "");
@@ -385,6 +492,130 @@ mod tests {
         assert!("".trim().is_empty());
         assert!("  ".trim().is_empty());
         assert!(!"agent-name".trim().is_empty());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_execute_use_command_for_review_writes_review_model() {
+        // Isolate HOME + CWD so the `.sah/sah.yaml` write lands in the temp dir.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let temp_path = env.temp_dir();
+        let _cwd = CurrentDirGuard::new(&temp_path).expect("cwd guard");
+
+        let context = create_test_context().await;
+
+        // Use the first builtin agent so the agent-existence check passes.
+        let builtin_agents =
+            ModelManager::load_builtin_models().expect("Should be able to load builtin agents");
+        let agent_name = builtin_agents[0].name.clone();
+
+        let result =
+            execute_use_command(agent_name.clone(), Some("review".to_string()), &context).await;
+        assert!(result.is_ok(), "review target should succeed: {:?}", result);
+
+        let canonical_temp = temp_path.canonicalize().unwrap_or(temp_path.clone());
+        let config_path = canonical_temp
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("sah.yaml");
+        let config_content = fs::read_to_string(&config_path).unwrap();
+
+        // The review model must be written under `review.model`, not at top level.
+        let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&config_content).unwrap();
+        let review_model = value
+            .get("review")
+            .and_then(|r| r.get("model"))
+            .and_then(|m| m.as_str());
+        assert_eq!(
+            review_model,
+            Some(agent_name.as_str()),
+            "review.model should be set, got: {}",
+            config_content
+        );
+        assert!(
+            value.get("model").is_none(),
+            "bare top-level model: must not be written for --for review, got: {}",
+            config_content
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_execute_use_command_default_writes_top_level_model() {
+        // Isolate HOME + CWD so the `.sah/sah.yaml` write lands in the temp dir.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let temp_path = env.temp_dir();
+        let _cwd = CurrentDirGuard::new(&temp_path).expect("cwd guard");
+
+        let context = create_test_context().await;
+
+        let builtin_agents =
+            ModelManager::load_builtin_models().expect("Should be able to load builtin agents");
+        let agent_name = builtin_agents[0].name.clone();
+
+        let result = execute_use_command(agent_name.clone(), None, &context).await;
+        assert!(
+            result.is_ok(),
+            "default target should succeed: {:?}",
+            result
+        );
+
+        let canonical_temp = temp_path.canonicalize().unwrap_or(temp_path.clone());
+        let config_path = canonical_temp
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("sah.yaml");
+        let config_content = fs::read_to_string(&config_path).unwrap();
+
+        let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&config_content).unwrap();
+        assert_eq!(
+            value.get("model").and_then(|m| m.as_str()),
+            Some(agent_name.as_str()),
+            "top-level model: should be set for the default path, got: {}",
+            config_content
+        );
+        assert!(
+            value.get("review").is_none(),
+            "review: must not be written for the default path, got: {}",
+            config_content
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_execute_use_command_unknown_purpose_rejected() {
+        // Isolate HOME + CWD — see `test_execute_use_command_empty_agent_name`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
+        let context = create_test_context().await;
+
+        let result = execute_use_command(
+            "claude-code".to_string(),
+            Some("deploy".to_string()),
+            &context,
+        )
+        .await;
+        assert!(result.is_err(), "unknown purpose should be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("deploy"),
+            "error should name the unknown purpose, got: {}",
+            msg
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_execute_use_command_for_review_empty_name_rejected() {
+        // Isolate HOME + CWD — see `test_execute_use_command_empty_agent_name`.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
+        let context = create_test_context().await;
+
+        let result =
+            execute_use_command("   ".to_string(), Some("review".to_string()), &context).await;
+        assert!(result.is_err(), "empty name should be rejected");
+        assert!(result.unwrap_err().to_string().contains("cannot be empty"));
     }
 
     // Integration-style test for error message formatting
@@ -400,7 +631,7 @@ mod tests {
 
         // Test that error messages are properly formatted
         let result =
-            execute_use_command("definitely-not-an-agent-12345".to_string(), &context).await;
+            execute_use_command("definitely-not-an-agent-12345".to_string(), None, &context).await;
         assert!(result.is_err());
 
         let error_msg = result.unwrap_err().to_string();

@@ -5,9 +5,10 @@ use crate::entity::position;
 use crate::error::{KanbanError, Result};
 use crate::task::shared::{auto_create_body_tags, parse_iso8601_date};
 use crate::task_helpers::task_entity_to_json;
-use crate::types::{ActorId, TaskId};
+use crate::types::{mint_unique_short_id, ActorId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
@@ -115,12 +116,40 @@ impl AddTask {
     /// and [`position::resolve_ordinal`], applies all user-set fields, and
     /// parses any ISO 8601 date inputs. The resulting entity is not yet
     /// persisted — the caller owns the write.
+    ///
+    /// The task's ULID is minted so its canonical short id is unique across
+    /// every existing task on the board (see [`build_entity_with_mint`]).
     async fn build_entity(&self, ectx: &swissarmyhammer_entity::EntityContext) -> Result<Entity> {
+        self.build_entity_with_mint(ectx, || TaskId::new().0).await
+    }
+
+    /// Build the task entity, minting its ULID via the supplied `mint` closure.
+    ///
+    /// Each minted candidate's short id is checked against the short ids of all
+    /// existing tasks; on collision the loop re-mints until the new task's
+    /// short id is board-unique. This is the enforcement point for the
+    /// board-unique short-id invariant — it lives here, at the kanban creation
+    /// layer that has board context, not at the board-unaware ULID mint in the
+    /// entity/store layer.
+    ///
+    /// `mint` is injected so the retry path is deterministically testable;
+    /// production passes `|| TaskId::new().0`, a fresh random ULID.
+    async fn build_entity_with_mint(
+        &self,
+        ectx: &swissarmyhammer_entity::EntityContext,
+        mint: impl FnMut() -> String,
+    ) -> Result<Entity> {
         let column = position::resolve_column(ectx, self.column.as_deref(), "task").await?;
         let ordinal =
             position::resolve_ordinal(ectx, "task", &column, self.ordinal.as_deref()).await?;
 
-        let task_id = TaskId::new();
+        let existing_short_ids: HashSet<String> = ectx
+            .list("task")
+            .await?
+            .iter()
+            .map(|task| crate::types::short_id(task.id.as_ref()))
+            .collect();
+        let task_id = mint_unique_short_id(&existing_short_ids, mint);
         let mut entity = Entity::new("task", task_id.as_str());
         entity.set("title", json!(self.title));
         entity.set("body", json!(self.description.clone().unwrap_or_default()));
@@ -453,6 +482,53 @@ mod tests {
         assert!(
             result.is_err(),
             "empty string due should be rejected on AddTask"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_task_mints_unique_short_id_on_forced_collision() {
+        // Seed the board with a task, then drive the create path with a mint
+        // sequence whose first candidate's short id equals the seeded task's
+        // short id. The create path must skip the colliding candidate and
+        // persist the second, unique one — proving uniqueness is enforced at
+        // the kanban creation layer, not just in the pure slice helper.
+        let (_temp, ctx) = setup().await;
+        let ectx = ctx.entity_context().await.unwrap();
+
+        // Seed: a task whose short id is the last 7 chars of its ULID.
+        let seeded = TaskId::from_string("01KT6R6HR3KJT6JVNDR0123456");
+        assert_eq!(seeded.short_id(), "0123456");
+        let mut seed_entity = Entity::new("task", seeded.as_str());
+        seed_entity.set("title", json!("Seeded"));
+        seed_entity.set("position_column", json!("todo"));
+        seed_entity.set("position_ordinal", json!("1000"));
+        ectx.write(&seed_entity).await.unwrap();
+
+        // Candidate sequence: first collides with the seeded short id, second
+        // is unique.
+        let candidates = ["01KT6SAMJAJ40XVQ9YJ0123456", "01KT6SAMJAJ40XVQ9YJABCDEFG"];
+        let mut idx = 0;
+        let cmd = AddTask::new("New task");
+        let entity = cmd
+            .build_entity_with_mint(&ectx, || {
+                let c = candidates[idx].to_string();
+                idx += 1;
+                c
+            })
+            .await
+            .unwrap();
+
+        let minted = TaskId::from_string(entity.id.to_string());
+        assert_eq!(
+            minted.as_str(),
+            candidates[1],
+            "must skip the colliding candidate and mint the unique ULID"
+        );
+        assert_eq!(minted.short_id(), "abcdefg");
+        assert_ne!(
+            minted.short_id(),
+            seeded.short_id(),
+            "minted short id must differ from the seeded one"
         );
     }
 

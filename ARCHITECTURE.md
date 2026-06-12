@@ -410,7 +410,7 @@ Defined in `swissarmyhammer-tools`. The core tool interface:
 - `execute(arguments, context)` — the actual tool logic
 - `operations()` — for operation-based tools, returns the verb/noun operation list
 
-Two convenience macros reduce boilerplate: `impl_empty_doctorable!` and `impl_empty_initializable!` for tools that don't need health checks or lifecycle.
+Two convenience macros reduce boilerplate: `impl_default_doctorable!` and `impl_empty_initializable!` for tools that don't need custom health checks or lifecycle. `impl_default_doctorable!` inherits the trait's default OK check so the tool still appears in `sah doctor`.
 
 ### Tool Registration and Discovery
 
@@ -445,7 +445,7 @@ Tools that handle multiple verbs on the same noun (like the kanban tool handling
 
 ### Practices
 
-1. **Every tool implements all three traits.** Use `impl_empty_doctorable!` / `impl_empty_initializable!` if a tool has no health checks or lifecycle, but never skip the traits.
+1. **Every tool implements all three traits.** Use `impl_default_doctorable!` / `impl_empty_initializable!` if a tool has no custom health checks or lifecycle, but never skip the traits.
 2. **init/deinit runs `Initializable` components in priority order.** Don't add setup logic outside the `Initializable` trait.
 3. **Doctor collects from the tool registry.** Don't add health checks outside the `Doctorable` trait.
 
@@ -482,6 +482,8 @@ ACP is the protocol that makes agents interoperable with editors (Zed, JetBrains
 - **Permissions** — configurable policies (AlwaysAsk, AutoApproveReads, RuleBased)
 
 The `llama-agent` crate contains the most complete ACP implementation, serving as a full protocol handler over JSON-RPC 2.0 / stdio. It builds its server via `agent_client_protocol::Agent.builder().on_receive_request(...).on_receive_notification(...).connect_with(transport, bridge)` — a single typed handler keyed on `ClientRequest` covers every ACP method (`initialize`, `authenticate`, `session/*`, plus extension channels), and the SDK demuxes by method name. The `acp-conformance` crate provides a protocol conformance test suite that validates any ACP backend against the spec.
+
+It also fires Claude-compatible `.claude/settings.json` hooks at its lifecycle seams: a per-session `HookableAgent` (from `agent-client-protocol-extras`) is built from the session cwd's settings chain and fires `SessionStart` (on `new_session`/`load_session`/`resume_session`), `UserPromptSubmit` (at `prompt` entry, which can block or inject context), and `Stop` (at `prompt` return) hooks. This is a contained extension of the ACP layer, not a new dependency edge. The tool-dispatch seam (`PreToolUse`/`PostToolUse`) is wired in a separate task.
 
 ### Subagent Metadata (not LLM inference)
 

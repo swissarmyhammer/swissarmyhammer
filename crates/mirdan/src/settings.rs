@@ -14,7 +14,8 @@
 use std::fs;
 use std::path::Path;
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
+use swissarmyhammer_common::json::{read_json_file, JsonFileError};
 
 use crate::registry::RegistryError;
 
@@ -27,17 +28,15 @@ use crate::registry::RegistryError;
 ///
 /// Returns a `RegistryError::Io` on I/O failure or `RegistryError::Validation`
 /// when the file exists but is neither valid JSON nor valid JSONC.
+///
+/// Delegates to the shared [`read_json_file`] primitive in
+/// `swissarmyhammer-common`, mapping its error variants onto mirdan's
+/// `RegistryError` so the existing `"Invalid JSON in {path}: {e}"` context is
+/// preserved.
 pub fn read_json(path: &Path) -> Result<Value, RegistryError> {
-    if !path.exists() {
-        return Ok(Value::Object(Map::new()));
-    }
-    let content = fs::read_to_string(path)?;
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return Ok(Value::Object(Map::new()));
-    }
-    crate::parse_jsonc(trimmed).map_err(|e| {
-        RegistryError::Validation(format!("Invalid JSON in {}: {}", path.display(), e))
+    read_json_file(path).map_err(|e| match e {
+        JsonFileError::Io(io) => RegistryError::Io(io),
+        JsonFileError::Parse { .. } => RegistryError::Validation(e.to_string()),
     })
 }
 

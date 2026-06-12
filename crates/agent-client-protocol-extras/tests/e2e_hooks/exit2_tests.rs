@@ -9,6 +9,7 @@
 //! Hooks that fire from the notification pipeline (`intercept_notifications`):
 //!   PreToolUse, PostToolUse, PostToolUseFailure, Notification
 
+use agent_client_protocol_extras::PreToolUseOutcome;
 use tokio::sync::broadcast;
 
 use crate::helpers;
@@ -36,10 +37,10 @@ async fn user_prompt_submit_exit2_blocks() {
     );
 }
 
-/// PreToolUse is blockable — exit 2 produces Block, but in the notification
-/// pipeline Block is a no-op (tool already initiated). Verify the hook ran.
+/// PreToolUse is blockable — exit 2 produces Block, which at the dispatch seam
+/// is a genuine Deny (the tool never runs).
 #[tokio::test]
-async fn pre_tool_use_exit2_runs_hook() {
+async fn pre_tool_use_exit2_denies() {
     let tmp = tempfile::TempDir::new().unwrap();
     let script = helpers::write_exit_script(tmp.path(), "hook.sh", 2, "tool not allowed");
 
@@ -49,26 +50,18 @@ async fn pre_tool_use_exit2_runs_hook() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, _cancel_rx, _context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_completed_notifications(&tx, "test-session").await;
-
-    // PreToolUse exit-2 → Block, but Block is silently ignored in
-    // the notification pipeline (tool call already initiated via ACP).
-    // Verify the hook script was invoked.
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
-    assert!(
-        captured.is_some(),
-        "PreToolUse hook should have been invoked"
-    );
-    let json: serde_json::Value =
-        serde_json::from_str(&captured.unwrap()).expect("Captured stdin should be valid JSON");
-    assert_eq!(json["hook_event_name"], "PreToolUse");
+    let outcome = helpers::fire_pre_tool_use(&agent, "Bash").await;
+    match outcome {
+        PreToolUseOutcome::Deny { reason } => assert!(
+            reason.contains("tool not allowed"),
+            "exit-2 stderr should become the deny reason; got {reason:?}"
+        ),
+        other => panic!("expected Deny, got {other:?}"),
+    }
 }
 
-/// PostToolUse is NOT blockable — exit 2 feeds stderr to agent as context.
-/// Tested via intercept_notifications with a broadcast channel.
+/// PostToolUse is NOT blockable — exit 2 feeds stderr to the model as context,
+/// surfaced after a successful call at the dispatch seam.
 #[tokio::test]
 async fn post_tool_use_exit2_feeds_context() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -80,34 +73,17 @@ async fn post_tool_use_exit2_feeds_context() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, _cancel_rx, mut context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_completed_notifications(&tx, "test-session").await;
-
-    // Synchronize: wait for the hook script to finish before checking channel.
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    let ctx = helpers::fire_post_tool_use(&agent, "Bash").await;
     assert!(
-        captured.is_some(),
-        "PostToolUse hook should have been invoked"
-    );
-
-    // Hook already finished, so the channel message is already buffered.
-    // PostToolUse exit-2 → AllowWithContext → context channel receives stderr
-    let short = std::time::Duration::from_millis(200);
-    let ctx = tokio::time::timeout(short, context_rx.recv()).await;
-    assert!(
-        ctx.is_ok(),
-        "PostToolUse exit-2 should feed stderr as context"
-    );
-    assert!(
-        ctx.unwrap().unwrap().contains("review this output"),
-        "Context should contain stderr message"
+        ctx.as_deref()
+            .unwrap_or_default()
+            .contains("review this output"),
+        "PostToolUse exit-2 should feed stderr as context; got {ctx:?}"
     );
 }
 
-/// PostToolUseFailure is NOT blockable — exit 2 feeds stderr to agent as context.
-/// Tested via intercept_notifications with a broadcast channel.
+/// PostToolUseFailure is NOT blockable — exit 2 feeds stderr to the model as
+/// context, surfaced after a failed call at the dispatch seam.
 #[tokio::test]
 async fn post_tool_use_failure_exit2_feeds_context() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -120,29 +96,12 @@ async fn post_tool_use_failure_exit2_feeds_context() {
 
     let _session_id = helpers::init_session(&agent).await;
 
-    let (tx, rx) = broadcast::channel(16);
-    let (_forwarded_rx, _cancel_rx, mut context_rx) = agent.intercept_notifications(rx);
-
-    helpers::send_tool_failed_notifications(&tx, "test-session").await;
-
-    // Synchronize: wait for the hook script to finish before checking channel.
-    let captured = helpers::wait_for_stdin_capture(tmp.path(), "hook.sh").await;
+    let ctx = helpers::fire_post_tool_use_failure(&agent, "Bash").await;
     assert!(
-        captured.is_some(),
-        "PostToolUseFailure hook should have been invoked"
-    );
-
-    // Hook already finished, so the channel message is already buffered.
-    // PostToolUseFailure exit-2 → AllowWithContext → context channel receives stderr
-    let short = std::time::Duration::from_millis(200);
-    let ctx = tokio::time::timeout(short, context_rx.recv()).await;
-    assert!(
-        ctx.is_ok(),
-        "PostToolUseFailure exit-2 should feed stderr as context"
-    );
-    assert!(
-        ctx.unwrap().unwrap().contains("failure feedback"),
-        "Context should contain stderr message"
+        ctx.as_deref()
+            .unwrap_or_default()
+            .contains("failure feedback"),
+        "PostToolUseFailure exit-2 should feed stderr as context; got {ctx:?}"
     );
 }
 

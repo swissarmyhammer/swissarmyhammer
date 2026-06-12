@@ -97,6 +97,9 @@ doc/book
 # Test workflow files (not part of the project source)
 builtin/workflows/*-test.md
 
+# Python bytecode caches (helper scripts under scripts/)
+__pycache__/
+
 # Node.js (no package.json in this Rust project)
 package-lock.json
 node_modules/
@@ -154,9 +157,16 @@ ane-embedding/convert/output/
 # SAH runtime state
 **/.sah/
 
+# Validators runtime store (definitions live in builtin/validators/)
+/.validators/
+**/.validators/
+
 
 # Shell tool runtime state
 **/.shell/
 .claude/worktrees
 .swissarmyhammer
 .code-context/
+
+# Isolated CARGO_TARGET_DIR scratch dirs used by implement/verify runs
+target-implement-verify/

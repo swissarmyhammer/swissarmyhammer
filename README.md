@@ -131,7 +131,7 @@ SwissArmyHammer is different. Every stage of the software development lifecycle 
 
 These tools connect into loops. `/plan` creates tasks. `/implement` works through them. `/review` finds issues and appends them as checklist items on the source task. `/finish` runs implement → test → review in a loop until each task lands in `done`. `/coverage` finds untested code and creates test tasks. It's a closed loop -- but you control the order.
 
-## Context Management -- The Hidden Superpower
+## Context Management 
 
 The biggest bottleneck for AI agents isn't intelligence -- it's context. Long test output blows the context window. The agent can't find the function it needs. It re-reads files it already scanned. SwissArmyHammer solves this at every level.
 
@@ -176,7 +176,6 @@ The core. An MCP server that gives your agent everything it needs:
 | **Kanban** | File-backed task boards -- tasks, subtasks, dependencies, tags |
 | **Code Search** | Tree-sitter powered semantic search across 25+ languages |
 | **Web** | Fetch pages and convert to markdown, search the web |
-| **JavaScript** | Embedded QuickJS expression evaluation |
 | **Questions** | Elicitation-based Q&A for capturing decisions |
 
 **Skills** -- the workflows that use those tools:
@@ -185,30 +184,6 @@ Skills are markdown files. They teach your agent *how* to do things, not just *w
 
 You can write your own skills too -- drop a `SKILL.md` in `.sah/skills/my-skill/` and your agent picks it up automatically.
 
-### [avp](https://agentvalidatorprotocol.com) -- Agent Validator Protocol
-
-Guardrails. `avp` hooks into your agent as a pre/post validator. Every time the agent writes or edits a file, validators run automatically and **block bad changes before they land**.
-
-- **code-quality** -- cognitive complexity, function length, naming, magic numbers, dead code
-- **security-rules** -- no secrets in code, input validation
-- **command-safety** -- safe shell command checks
-- **test-integrity** -- catches test cheating (skipping tests, weakening assertions, hardcoding expected values)
-
-```bash
-avp init        # Install validators into your project
-avp list        # See what's active
-```
-
-### [mirdan](https://mirdan.ai) -- Package Manager for Agent Skills
-
-npm for AI agents. Install skills and validators from a shared registry. Publish your own.
-
-```bash
-mirdan search code-quality     # Find packages
-mirdan install code-quality    # Install one
-mirdan agents                  # See your agents
-mirdan publish                 # Share your own
-```
 
 ## Architecture
 
@@ -231,8 +206,6 @@ The MCP server itself is a single Rust binary -- fast startup, no runtime depend
 **For individual developers:** Your agent becomes dramatically more capable. Instead of babysitting it through each step, you hand it a spec and walk away. It plans, implements, tests, reviews, and commits -- following the same engineering process you would.
 
 **For teams:** Consistent engineering process across every developer's agent. The same skills, the same validators, the same quality gates. Install once via `mirdan`, and every team member's agent works the same way.
-
-**For tool builders:** The skill/validator format is just markdown. Build a skill in minutes, share it with `mirdan publish`, and it works in any MCP-compatible agent. No SDK to learn, no API to integrate.
 
 ## License
 

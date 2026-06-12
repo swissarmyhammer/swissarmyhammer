@@ -37,6 +37,10 @@ impl Execute<SkillContext, SkillError> for UseSkill {
                     "instructions": skill.instructions,
                     "allowed_tools": skill.allowed_tools,
                     "source": skill.source.to_string(),
+                    // The delegated agent (e.g. `tester`), so the rendering layer
+                    // can bind it as a template var for the `delegate-to-subagent`
+                    // partial's `{% if agent %}{{ agent }}{% endif %}` block.
+                    "agent": skill.agent,
                 });
 
                 ExecutionResult::Success { value: result }

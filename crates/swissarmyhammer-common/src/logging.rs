@@ -5,11 +5,15 @@
 //! - [`FileWriterGuard`], a thread-safe writer that flushes and syncs every
 //!   write to disk. Used by MCP servers and CLIs to guarantee log data is
 //!   immediately visible for debugging, even if the process crashes.
-//! - [`open_log_file`], which resolves a per-CLI log file under a data
-//!   directory and emits a consistent stderr warning on creation failure.
+//! - [`open_log_file`], which resolves a per-process log file
+//!   (`mcp.<pid>.log`, see [`log_file_name`]) under a data directory so
+//!   concurrent processes in one workspace never clobber each other's logs,
+//!   and emits a consistent stderr warning on creation failure.
 //! - [`init_file_tracing_with_fallback`], which installs a global tracing
 //!   subscriber that writes to that log file (via `FileWriterGuard`) with a
-//!   stderr fallback.
+//!   stderr fallback, and [`init_file_tracing_with_fallback_named`] for callers
+//!   (e.g. the sah CLI's `SWISSARMYHAMMER_LOG_FILE` override) that resolve their
+//!   own file name yet still want the shared open + fallback wiring.
 //!
 //! Together, these let each CLI's `logging.rs` shrink to a `make_filter`
 //! helper plus a one-line entry point, keeping the "standard pattern"
@@ -23,11 +27,40 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
-/// The log file name written inside each CLI's data directory.
+/// The base log file name from which each process derives its own file.
 ///
-/// Every CLI writes to `<data-dir>/mcp.log`, so this constant is centralized
-/// here rather than duplicated in each wrapper.
+/// This is the stem source, not the on-disk file name: [`open_log_file`] does
+/// NOT write to `<data-dir>/mcp.log` directly. Instead [`log_file_name`]
+/// inserts the process id between the stem and extension, producing
+/// `mcp.<pid>.log`, so concurrent processes sharing a workspace never target
+/// the same file. The constant is centralized here rather than duplicated in
+/// each wrapper.
 pub const LOG_FILE_NAME: &str = "mcp.log";
+
+/// Resolve the per-process log file name derived from [`LOG_FILE_NAME`].
+///
+/// The process id from [`std::process::id`] is inserted between the stem and
+/// extension of [`LOG_FILE_NAME`], yielding e.g. `mcp.<pid>.log`. Each running
+/// process therefore owns a distinct file name, so multiple processes logging
+/// into the same data directory (for example, the parallel `sah serve`
+/// instances a batch workflow spawns) never clobber one another's output.
+///
+/// The name is data-driven from [`LOG_FILE_NAME`] rather than re-hardcoding the
+/// `mcp` stem: the stem and extension are taken from the constant, and an
+/// extensionless or stemless constant degrades gracefully (the pid is appended
+/// before any extension that exists).
+pub fn log_file_name() -> String {
+    let base = Path::new(LOG_FILE_NAME);
+    let stem = base
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(LOG_FILE_NAME);
+    let pid = std::process::id();
+    match base.extension().and_then(|e| e.to_str()) {
+        Some(ext) => format!("{stem}.{pid}.{ext}"),
+        None => format!("{stem}.{pid}"),
+    }
+}
 
 /// Policy for handling a missing data directory when opening a log file.
 ///
@@ -114,7 +147,16 @@ impl Write for FileWriterGuard {
     }
 }
 
-/// Resolve the tracing log file under `root/<dir_name>/<LOG_FILE_NAME>`.
+/// Resolve a fresh, per-process tracing log file under `root/<dir_name>/`.
+///
+/// The on-disk file name comes from [`log_file_name`], i.e. `mcp.<pid>.log`,
+/// NOT the bare [`LOG_FILE_NAME`]. This is the centralized chokepoint every CLI
+/// (sah, kanban, shell, code-context) inherits: because each process owns a
+/// distinct file name, multiple processes logging into the same data directory
+/// never truncate or interleave one another's output. The file is still
+/// created fresh (truncate-on-create) — but only this process ever owns that
+/// name, so fresh-per-run semantics and bounded per-process growth are
+/// preserved without the shared-file clobbering.
 ///
 /// The directory-creation behavior is controlled by `policy`:
 ///
@@ -141,6 +183,26 @@ pub fn open_log_file(
     dir_name: &str,
     policy: DirPolicy,
 ) -> (Option<File>, Option<std::io::Error>) {
+    open_log_file_named(root, dir_name, policy, &log_file_name())
+}
+
+/// Open a log file with an explicit `file_name` under `root/<dir_name>/`.
+///
+/// Shared implementation behind [`open_log_file`], which supplies the
+/// per-process [`log_file_name`]. Exposed so callers that resolve their own
+/// file name — for example the sah CLI, which honors an explicit
+/// `SWISSARMYHAMMER_LOG_FILE` override verbatim while defaulting to the
+/// per-process [`log_file_name`] — can reuse this exact chokepoint instead of
+/// re-implementing `File::create`. Also lets the no-clobber property be
+/// exercised with two distinct, deterministic names within a single test
+/// process (which necessarily shares one pid). `policy` controls directory
+/// creation exactly as documented on [`open_log_file`].
+pub fn open_log_file_named(
+    root: &Path,
+    dir_name: &str,
+    policy: DirPolicy,
+    file_name: &str,
+) -> (Option<File>, Option<std::io::Error>) {
     let log_dir = root.join(dir_name);
     match policy {
         DirPolicy::MustExist => {
@@ -156,7 +218,7 @@ pub fn open_log_file(
             }
         }
     }
-    let log_file_path = log_dir.join(LOG_FILE_NAME);
+    let log_file_path = log_dir.join(file_name);
     match File::create(&log_file_path) {
         Ok(file) => (Some(file), None),
         Err(e) => (None, Some(e)),
@@ -167,9 +229,12 @@ pub fn open_log_file(
 /// fallback.
 ///
 /// When [`open_log_file`] returns a file, logs are written to it via a
-/// [`FileWriterGuard`] (flush + sync on every write). When it returns `None`
-/// — whether from a silent absent-directory path or a creation failure —
-/// tracing falls back to stderr using the same filter.
+/// [`FileWriterGuard`] (flush + sync on every write). The file is per-process
+/// (`mcp.<pid>.log`, see [`log_file_name`]), so several processes initialized
+/// against the same data directory each log to their own file and remain
+/// independently readable. When [`open_log_file`] returns `None` — whether from
+/// a silent absent-directory path or a creation failure — tracing falls back to
+/// stderr using the same filter.
 ///
 /// Both layers use `with_target(false)` and `with_ansi(false)` to keep log
 /// output consistent across file and stderr destinations and free of ANSI
@@ -197,7 +262,39 @@ pub fn init_file_tracing_with_fallback(
     dir_name: &str,
     policy: DirPolicy,
 ) -> Option<std::io::Error> {
-    let (file, error) = open_log_file(root, dir_name, policy);
+    init_file_tracing_with_fallback_named(filter, root, dir_name, policy, &log_file_name())
+}
+
+/// Install a global tracing subscriber writing to an explicitly named log file,
+/// with a stderr fallback.
+///
+/// Identical to [`init_file_tracing_with_fallback`] except the on-disk file
+/// name is supplied by the caller rather than defaulting to the per-process
+/// [`log_file_name`]. This is the single chokepoint a CLI reuses when it
+/// resolves its own log file name — for example the sah CLI, which defaults to
+/// the per-process [`log_file_name`] but honors an explicit
+/// `SWISSARMYHAMMER_LOG_FILE` override verbatim — so no caller re-implements the
+/// `File::create` + `FileWriterGuard` + stderr-fallback wiring.
+///
+/// Callers that want the per-process default should call
+/// [`init_file_tracing_with_fallback`]; passing a stable name here forfeits the
+/// concurrent-process no-clobber guarantee for that name.
+///
+/// # Arguments
+///
+/// * `filter` - The `EnvFilter` to apply to every emitted record.
+/// * `root` - The directory to look under for the data directory.
+/// * `dir_name` - The name of the data directory (e.g. `.kanban`, `.sah`).
+/// * `policy` - Whether the directory may be auto-created.
+/// * `file_name` - The bare log file name to create inside the data directory.
+pub fn init_file_tracing_with_fallback_named(
+    filter: EnvFilter,
+    root: &Path,
+    dir_name: &str,
+    policy: DirPolicy,
+    file_name: &str,
+) -> Option<std::io::Error> {
+    let (file, error) = open_log_file_named(root, dir_name, policy, file_name);
 
     if let Some(file) = file {
         let shared_file = Arc::new(Mutex::new(file));
@@ -327,7 +424,8 @@ mod tests {
 
         assert!(file.is_some());
         assert!(error.is_none());
-        assert!(data_dir.join(LOG_FILE_NAME).exists());
+        // The on-disk name is per-process (`mcp.<pid>.log`), not the bare stem.
+        assert!(data_dir.join(log_file_name()).exists());
     }
 
     #[test]
@@ -340,7 +438,59 @@ mod tests {
         assert!(file.is_some());
         assert!(error.is_none());
         assert!(root.join(".shell").is_dir());
-        assert!(root.join(".shell").join(LOG_FILE_NAME).exists());
+        // The on-disk name is per-process (`mcp.<pid>.log`), not the bare stem.
+        assert!(root.join(".shell").join(log_file_name()).exists());
+    }
+
+    #[test]
+    fn log_file_name_is_per_process() {
+        // The resolved log file name must embed this process's pid so that
+        // concurrent processes sharing a workspace never target the same path.
+        let name = log_file_name();
+        assert_eq!(name, format!("mcp.{}.log", std::process::id()));
+    }
+
+    #[test]
+    fn concurrent_opens_do_not_clobber_each_other() {
+        // Two "processes" opening a log against the SAME directory must each
+        // get their own file; the first's content must survive the second's
+        // open. With the old `File::create` on a single shared `mcp.log` path,
+        // process B's open would truncate process A's file and this would fail.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let (file_a, err_a) =
+            open_log_file_named(root, ".shell", DirPolicy::AutoCreate, "mcp.1001.log");
+        assert!(err_a.is_none());
+        let mut file_a = file_a.expect("process A log file");
+        file_a.write_all(b"line from process A\n").unwrap();
+        file_a.flush().unwrap();
+
+        let (file_b, err_b) =
+            open_log_file_named(root, ".shell", DirPolicy::AutoCreate, "mcp.1002.log");
+        assert!(err_b.is_none());
+        let mut file_b = file_b.expect("process B log file");
+        file_b.write_all(b"line from process B\n").unwrap();
+        file_b.flush().unwrap();
+
+        // Process A's marker must still be present after process B opened.
+        let mut a_contents = String::new();
+        std::fs::File::open(root.join(".shell").join("mcp.1001.log"))
+            .unwrap()
+            .read_to_string(&mut a_contents)
+            .unwrap();
+        assert!(
+            a_contents.contains("line from process A"),
+            "process A's log line was clobbered by process B's open: {a_contents:?}"
+        );
+
+        // And process B's file is independently readable with its own content.
+        let mut b_contents = String::new();
+        std::fs::File::open(root.join(".shell").join("mcp.1002.log"))
+            .unwrap()
+            .read_to_string(&mut b_contents)
+            .unwrap();
+        assert!(b_contents.contains("line from process B"));
     }
 
     #[test]

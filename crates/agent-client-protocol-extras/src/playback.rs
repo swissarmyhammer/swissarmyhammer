@@ -65,13 +65,14 @@ use swissarmyhammer_common::Pretty;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use agent_client_protocol_extras::PlaybackAgent;
 /// use std::path::PathBuf;
 ///
 /// let agent = PlaybackAgent::new(PathBuf::from("session.json"), "claude");
 /// // `agent` is `ConnectTo<Client>` — wire it to a transport (stdio, ByteStreams, …)
 /// // or a duplex channel and the client will see the recorded responses.
+/// # let _ = agent;
 /// ```
 pub struct PlaybackAgent {
     /// All recorded calls, in arrival order.

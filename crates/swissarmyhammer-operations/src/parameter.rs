@@ -21,7 +21,9 @@ pub struct ParamMeta {
     pub description: &'static str,
     /// Parameter type
     pub param_type: ParamType,
-    /// Whether required (non-Option field)
+    /// Whether required. A field is required only when its Rust type is not
+    /// `Option<T>` AND it carries no `#[serde(default ...)]`; serde-defaulted
+    /// fields are optional at dispatch.
     pub required: bool,
     /// CLI short flag
     pub short: Option<char>,

@@ -68,6 +68,27 @@ pub fn acp_session_dir(session_ulid: &str) -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Resolve the per-session raw JSON-RPC transcript path (`raw.jsonl`).
+///
+/// This is the exact path [`RawMessageManager::new`] writes to: the
+/// `raw.jsonl` sibling of the session record inside [`acp_session_dir`]. It is
+/// exposed so callers that need the *path* without owning the writer — e.g. a
+/// hook layer that hands the transcript location to a `.claude` command hook —
+/// resolve it through the same helper rather than re-deriving the filename.
+///
+/// # Parameters
+///
+/// * `session_ulid` - The root session ULID identifying the transcript
+///   directory.
+///
+/// # Errors
+///
+/// Returns an [`std::io::Error`] if the session directory cannot be resolved or
+/// created (see [`acp_session_dir`]).
+pub fn raw_transcript_path(session_ulid: &str) -> std::io::Result<PathBuf> {
+    Ok(acp_session_dir(session_ulid)?.join(RAW_TRANSCRIPT_FILE))
+}
+
 /// Validate that a session id is safe to use as a single filesystem path
 /// component, returning it unchanged when so.
 ///
@@ -145,8 +166,7 @@ impl RawMessageManager {
     /// Returns an [`std::io::Error`] if the session directory cannot be
     /// resolved or created, or the transcript file cannot be opened.
     pub fn new(session_ulid: &str) -> std::io::Result<Self> {
-        let path = acp_session_dir(session_ulid)?.join(RAW_TRANSCRIPT_FILE);
-        Self::with_path(path)
+        Self::with_path(raw_transcript_path(session_ulid)?)
     }
 
     /// Create a raw message manager that writes to an explicit file path.

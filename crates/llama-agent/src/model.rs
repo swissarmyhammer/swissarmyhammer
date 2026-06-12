@@ -141,9 +141,15 @@ impl ModelManager {
             .and_then(|v| v.parse().ok())
             .unwrap_or(i32::MAX as u32);
 
-        llama_cpp_2::model::params::LlamaModelParams::default()
-            .with_n_gpu_layers(gpu_layers)
-            .with_use_mlock(true)
+        // `use_mlock` is intentionally LEFT OFF (default false). mlock pins
+        // page *residency*; it is orthogonal to the mmap *sharing* by which N
+        // `sah serve` processes already reference one physical copy of the
+        // weights (OS page cache + Metal shared buffer). With many serves on
+        // one machine, each `mlock`ing overlapping pages is redundant and counts
+        // against the per-process `RLIMIT_MEMLOCK`, which can fail the model
+        // load outright. Sharing does not depend on mlock, so dropping it
+        // removes that failure mode at no cost to the multi-process goal.
+        llama_cpp_2::model::params::LlamaModelParams::default().with_n_gpu_layers(gpu_layers)
     }
 
     pub async fn load_model(&self) -> Result<(), ModelError> {

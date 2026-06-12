@@ -8,12 +8,14 @@ use swissarmyhammer_common::Pretty;
 
 use tracing::{debug, warn};
 
-/// Maximum size limit for stress test repetitions to validate parsing robustness.
-/// This constant defines how many times test content is repeated in stress tests
-/// to ensure parsers handle large inputs correctly. The value of 10,000 repetitions
-/// creates sufficiently large inputs to detect performance issues and buffer overflows
-/// while keeping test execution time reasonable.
-const STRESS_TEST_REPEAT_SIZE: usize = 10000;
+/// Maximum number of bytes [`extract_balanced_json`] scans while looking for
+/// the `}` that balances a candidate tool call's opening `{`.
+///
+/// Real tool-call argument objects are far smaller than this; the cap keeps a
+/// stray unbalanced `{` in a large model response from turning extraction
+/// quadratic across candidate start positions. A scan the cap aborts drops a
+/// candidate tool call, so it is logged at `warn` with the full scanned text.
+const MAX_BALANCED_JSON_SCAN_BYTES: usize = 10_000;
 
 /// Wrap a `ToolDefinition` in the OpenAI-style envelope expected by the
 /// canonical Qwen3 chat template (`{"type": "function", "function": {...}}`).
@@ -2758,7 +2760,7 @@ This should give us a complete picture of the async patterns in your codebase."#
         assert!(tool_calls.len() <= 1);
 
         // Very long parameter values
-        let long_param = "x".repeat(STRESS_TEST_REPEAT_SIZE);
+        let long_param = "x".repeat(MAX_BALANCED_JSON_SCAN_BYTES);
         let long_call = format!(
             r#"<tool_call><search><query>{}</query></search></tool_call>"#,
             long_param
@@ -4885,7 +4887,7 @@ impl JsonToolCallParser {
 
                 // Try to find the matching closing brace using brace counting
                 let remaining_text = &text[start_pos..];
-                if let Some(json_str) = self.extract_balanced_json(remaining_text) {
+                if let Some(json_str) = extract_balanced_json(remaining_text) {
                     debug!("JsonToolCallParser: Extracted balanced JSON: {}", json_str);
 
                     match serde_json::from_str::<Value>(&json_str) {
@@ -4908,51 +4910,64 @@ impl JsonToolCallParser {
 
         Ok(())
     }
+}
 
-    fn extract_balanced_json(&self, text: &str) -> Option<String> {
-        let mut brace_count = 0;
-        let mut start_found = false;
-        let mut in_string = false;
-        let mut escape_next = false;
-        let mut result = String::new();
+/// Extract the prefix of `text` up to and including the `}` that balances its
+/// first `{`, honouring string literals and escapes.
+///
+/// Returns `None` when no balanced object is found within
+/// [`MAX_BALANCED_JSON_SCAN_BYTES`] bytes (logged at `warn`, since that drops
+/// a candidate tool call). Shared by [`JsonToolCallParser`]'s malformed-JSON
+/// fallback and [`FunctionCallParser`]'s argument validation.
+fn extract_balanced_json(text: &str) -> Option<String> {
+    let mut brace_count = 0;
+    let mut start_found = false;
+    let mut in_string = false;
+    let mut escape_next = false;
+    let mut result = String::new();
 
-        for ch in text.chars() {
-            result.push(ch);
+    for ch in text.chars() {
+        result.push(ch);
 
-            if escape_next {
-                escape_next = false;
-                continue;
-            }
-
-            match ch {
-                '\\' if in_string => {
-                    escape_next = true;
-                }
-                '"' => {
-                    in_string = !in_string;
-                }
-                '{' if !in_string => {
-                    brace_count += 1;
-                    start_found = true;
-                }
-                '}' if !in_string => {
-                    brace_count -= 1;
-                    if start_found && brace_count == 0 {
-                        // Found complete JSON object
-                        return Some(result);
-                    }
-                }
-                _ => {}
-            }
-
-            // If we've seen many characters without closing, give up
-            if result.len() > STRESS_TEST_REPEAT_SIZE {
-                break;
-            }
+        if escape_next {
+            escape_next = false;
+            continue;
         }
 
-        None
+        match ch {
+            '\\' if in_string => {
+                escape_next = true;
+            }
+            '"' => {
+                in_string = !in_string;
+            }
+            '{' if !in_string => {
+                brace_count += 1;
+                start_found = true;
+            }
+            '}' if !in_string => {
+                brace_count -= 1;
+                if start_found && brace_count == 0 {
+                    // Found complete JSON object
+                    return Some(result);
+                }
+            }
+            _ => {}
+        }
+
+        // Bound the scan so a stray unbalanced `{` cannot make extraction
+        // quadratic. Hitting the cap drops a candidate tool call, so say so —
+        // with the full text — or the dropped call is undiagnosable.
+        if result.len() > MAX_BALANCED_JSON_SCAN_BYTES {
+            warn!(
+                scanned_bytes = result.len(),
+                "extract_balanced_json: no balancing '}}' within {MAX_BALANCED_JSON_SCAN_BYTES} bytes; giving up on: {text}"
+            );
+            return None;
+        }
     }
+
+    None
 }
 
 /// Parser for XML-style function calls
@@ -5033,9 +5048,15 @@ impl Default for FunctionCallParser {
 
 impl FunctionCallParser {
     pub fn new() -> Self {
-        // Match patterns like "Call function_name with arguments {...}"
-        let regex = Regex::new(r"(?i)call\s+(\w+)\s+with\s+(?:arguments?\s+)?(.+)")
-            .unwrap_or_else(|_| Regex::new(r"(\w+)\s*\(([^)]*)\)").unwrap());
+        // Match patterns like "Call function_name with arguments {...}". The
+        // arguments capture must start at a `{`: without that anchor, ordinary
+        // prose such as "call it with `0.0825` from both totals" parses as a
+        // tool call named `it`, which fails execution and can abort the whole
+        // agentic loop. The `s` flag lets the capture span newlines — models
+        // commonly pretty-print argument JSON — and `extract_balanced_json`
+        // then trims the capture to the balanced object.
+        let regex = Regex::new(r"(?is)call\s+(\w+)\s+with\s+(?:arguments?\s+)?(\{.+)")
+            .expect("static function-call regex must compile");
 
         Self { regex }
     }
@@ -5056,33 +5077,32 @@ impl ToolCallParser for FunctionCallParser {
 }
 
 impl FunctionCallParser {
+    /// Turn one regex capture into a tool call, or `None` when the captured
+    /// arguments are not a balanced, parsable JSON object.
+    ///
+    /// Requiring a real JSON object is what separates an actual tool
+    /// invocation ("Call read_file with arguments {\"path\": ...}") from
+    /// natural-language prose that merely contains the words "call ... with".
     fn parse_function_call(
         &self,
         capture: &regex::Captures,
     ) -> Result<Option<ToolCall>, TemplateError> {
-        if let (Some(name), Some(args_str)) = (capture.get(1), capture.get(2)) {
-            let name = name.as_str();
-            let args_str = args_str.as_str().trim();
+        let (Some(name), Some(args_str)) = (capture.get(1), capture.get(2)) else {
+            return Ok(None);
+        };
 
-            let arguments = if args_str.starts_with('{') && args_str.ends_with('}') {
-                // Try to parse as JSON
-                match serde_json::from_str::<Value>(args_str) {
-                    Ok(json) => json,
-                    Err(_) => Value::String(args_str.to_string()),
-                }
-            } else {
-                // Treat as string parameter
-                Value::String(args_str.to_string())
-            };
+        let Some(json_str) = extract_balanced_json(args_str.as_str()) else {
+            return Ok(None);
+        };
+        let Ok(arguments) = serde_json::from_str::<Value>(&json_str) else {
+            return Ok(None);
+        };
 
-            return Ok(Some(ToolCall {
-                id: ToolCallId::new(),
-                name: name.to_string(),
-                arguments,
-            }));
-        }
-
-        Ok(None)
+        Ok(Some(ToolCall {
+            id: ToolCallId::new(),
+            name: name.as_str().to_string(),
+            arguments,
+        }))
     }
 }
 
@@ -5098,7 +5118,6 @@ mod tests {
 
     /// Performance constants for integration tests
     pub const DEFAULT_CONTEXT_SIZE: u32 = 2048;
-    pub const STRESS_TEST_REPEAT_SIZE: usize = 10000;
 
     fn create_test_session() -> Session {
         Session {
@@ -5302,6 +5321,77 @@ I apologize for the confusion. Let me try again with the correct format."#;
         let tool_calls = parser.parse_tool_calls(text).unwrap();
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].name, "list_files");
+    }
+
+    #[test]
+    fn test_function_call_parser_ignores_prose_call_it_with() {
+        // Regression: English prose like "call it with `0.0825` from both
+        // `order_total` and `cart_total`." must not become a tool call named
+        // "it". In a real qwen review run this spurious extraction failed
+        // three consecutive steps and aborted the agentic loop even though
+        // the message already contained the final answer.
+        let parser = FunctionCallParser::new();
+
+        let text = "Extract a shared function `sum_with_tax` and call it with \
+                    `0.0825` from both `order_total` and `cart_total`.";
+        let tool_calls = parser.parse_tool_calls(text).unwrap();
+        assert!(tool_calls.is_empty(), "got: {tool_calls:?}");
+    }
+
+    #[test]
+    fn test_function_call_parser_requires_json_object_arguments() {
+        // The "Call <name> with <args>" shape only denotes a real tool call
+        // when <args> is a JSON object; anything else is ordinary prose.
+        let parser = FunctionCallParser::new();
+
+        let tool_calls = parser
+            .parse_tool_calls("Call list_files with arguments not-json")
+            .unwrap();
+        assert!(tool_calls.is_empty(), "got: {tool_calls:?}");
+    }
+
+    #[test]
+    fn test_function_call_parser_parses_multiline_json_arguments() {
+        // Models commonly pretty-print argument JSON across lines. The
+        // arguments capture must span newlines; `extract_balanced_json`
+        // then trims the capture to the balanced object.
+        let parser = FunctionCallParser::new();
+
+        let text = "Call list_files with arguments {\n  \"path\": \"/tmp\"\n}\nThen stop.";
+        let tool_calls = parser.parse_tool_calls(text).unwrap();
+        assert_eq!(tool_calls.len(), 1, "got: {tool_calls:?}");
+        assert_eq!(tool_calls[0].name, "list_files");
+        assert_eq!(tool_calls[0].arguments["path"], "/tmp");
+    }
+
+    #[test]
+    fn test_extract_balanced_json_warns_when_the_scan_cap_aborts() {
+        // An opening `{` that never balances within the scan cap makes the
+        // scan give up — dropping a candidate tool call. That abort must be
+        // logged or the dropped call is undiagnosable. Captured with a
+        // thread-local subscriber so other tests' global subscribers (this
+        // suite has several `try_init()` sites) cannot swallow the event.
+        use swissarmyhammer_common::test_utils::CaptureWriter;
+
+        let capture = CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+
+        let unbalanced = format!(
+            "{{\"data\": \"{}",
+            "x".repeat(MAX_BALANCED_JSON_SCAN_BYTES + 1)
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(extract_balanced_json(&unbalanced).is_none());
+        });
+
+        let logs = capture.contents();
+        assert!(
+            logs.contains("extract_balanced_json") && logs.contains("giving up"),
+            "the cap abort must be logged at warn, got: {logs}"
+        );
     }
 
     #[test]
@@ -8460,7 +8550,7 @@ All done!"#;
                 .unwrap();
 
             // Add malformed content that will cause errors but consume buffer space
-            let malformed = "<<malformed>>".repeat(STRESS_TEST_REPEAT_SIZE); // Large malformed content
+            let malformed = "<<malformed>>".repeat(super::super::MAX_BALANCED_JSON_SCAN_BYTES); // Large malformed content
             let _ = parser.process_delta(&malformed); // May error, that's expected
 
             // Add more valid content - buffer should be manageable

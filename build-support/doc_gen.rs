@@ -1,7 +1,7 @@
 //! Shared CLI documentation generation utilities.
 //!
-//! Used by each CLI's `build.rs` (e.g. `avp-cli/build.rs`,
-//! `shelltool-cli/build.rs`, `code-context-cli/build.rs`,
+//! Used by each CLI's `build.rs` (e.g. `shelltool-cli/build.rs`,
+//! `code-context-cli/build.rs`,
 //! `swissarmyhammer-cli/build.rs`) via `#[path = ...]` includes. Functions are
 //! parameterized by binary name to support different CLI tools.
 

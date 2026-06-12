@@ -14,6 +14,10 @@
 //! - [`hook_config`] — declarative hook configuration types
 //!   ([`HookConfig`], [`MatcherGroup`], [`HookHandlerConfig`], …) and the
 //!   [`HookEvaluator`] trait.
+//! - [`hook_settings`] — the loader that reads Claude Code's
+//!   `.claude/settings.json` precedence chain for a working directory and
+//!   merges it into a [`HookConfig`] ([`load_hook_config`],
+//!   [`try_load_hook_config`]).
 //! - [`hookable_agent`] — the [`HookableAgent`] middleware that fires
 //!   lifecycle hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`,
 //!   `PostToolUse`, `Stop`, `Notification`, …) and applies their
@@ -38,9 +42,13 @@
 //! - [`session_title`] — the agent-neutral session-title derivation helper and
 //!   the shared trigger/emission contract for the built-in
 //!   `SessionUpdate::SessionInfoUpdate` rename mechanism.
+//! - [`tolerant_routing`] — the [`TolerantResponseRouter`] dispatch middleware
+//!   that keeps a connection alive when a turn's response receiver was dropped
+//!   (an abandoned turn fails that turn only, not the whole connection).
 
 pub mod fixture;
 pub mod hook_config;
+pub mod hook_settings;
 pub mod hookable_agent;
 pub mod playback;
 pub mod raw_messages;
@@ -48,6 +56,7 @@ pub mod recording;
 pub mod session_store;
 pub mod session_title;
 pub mod test_mcp_server;
+pub mod tolerant_routing;
 pub mod tracing_agent;
 
 pub use fixture::{
@@ -57,12 +66,16 @@ pub use fixture::{
 pub use hook_config::{
     HookCommandContext, HookConfig, HookConfigError, HookDecision, HookDecisionValue,
     HookEvaluator, HookEvent, HookEventKind, HookEventKindConfig, HookHandler, HookHandlerConfig,
-    HookOutput, HookRegistration, HookSpecificOutput, MatcherGroup, PromptHookResponse,
+    HookOutput, HookRegistration, HookSpecificOutput, Matcher, MatcherGroup, PromptHookResponse,
     SessionSource, UnsupportedEventKind,
 };
-pub use hookable_agent::{hookable_agent_from_config, HookableAgent};
+pub use hook_settings::{load_hook_config, try_load_hook_config, HookSettingsError};
+pub use hookable_agent::{
+    hookable_agent_from_config, hookable_agent_from_config_with_context, HookableAgent,
+    PreToolUseOutcome,
+};
 pub use playback::PlaybackAgent;
-pub use raw_messages::{acp_session_dir, RawMessageManager};
+pub use raw_messages::{acp_session_dir, raw_transcript_path, RawMessageManager};
 pub use test_mcp_server::{start_test_mcp_server_with_capture, TestMcpServer};
 // NOTE: The A3 task acceptance criteria mentioned `RecordedEvent` alongside
 // `RecordedCall`/`RecordedSession`, but no `RecordedEvent` type ever existed
@@ -79,6 +92,7 @@ pub use session_title::{
     normalize_title, title_from_first_user_message, SESSION_TITLE_MAX_CHARS,
     TITLE_GENERATION_INSTRUCTION,
 };
+pub use tolerant_routing::TolerantResponseRouter;
 pub use tracing_agent::{trace_notifications, TracingAgent};
 
 // Re-export MCP notification types for convenience

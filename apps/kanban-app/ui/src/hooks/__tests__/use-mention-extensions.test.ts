@@ -40,6 +40,7 @@ let mockMentionableTypes: Array<{
   prefix: string;
   entityType: string;
   displayField: string;
+  slugField?: string;
 }> = [{ prefix: "#", entityType: "tag", displayField: "name" }];
 
 vi.mock("@/lib/schema-context", () => ({
@@ -98,6 +99,19 @@ const mockGetEntities = vi.fn((type: string) => {
         id: "c3",
         entity_type: "column",
         fields: { name: "Done", color: "888888" },
+      },
+    ];
+  }
+  if (type === "task") {
+    return [
+      {
+        id: "01KT6R6HR3KJT6JVNDRAJV8V4T",
+        entity_type: "task",
+        fields: {
+          short_id: "ajv8v4t",
+          title: "Add login flow",
+          color: "4078c0",
+        },
       },
     ];
   }
@@ -274,6 +288,56 @@ describe("useMentionExtensions", () => {
     expect(entry!.description).toBe("Auth refactor");
   });
 
+  // ── slugField (task short-id identity) ─────────────────────────────
+  // When an entity type declares `mention_slug_field` (tasks → `short_id`),
+  // the metaMap keys on the slug field verbatim, labels the pill with the
+  // short handle, and routes the long display value (the title) into the
+  // tooltip `description`. This is the intentional task asymmetry: the
+  // pill shows `^<short>` while the title lives in the hover tooltip.
+
+  it("keys the metaMap by the slug field and routes the title into description", () => {
+    const tasks = [
+      {
+        id: "01KT6R6HR3KJT6JVNDRAJV8V4T",
+        entity_type: "task",
+        moniker: "task:01KT6R6HR3KJT6JVNDRAJV8V4T",
+        fields: {
+          short_id: "ajv8v4t",
+          title: "Fix the login bug",
+          color: "4078c0",
+        },
+      },
+    ];
+
+    const metaMap = buildMentionMetaMap(tasks, "title", "short_id");
+
+    // Keyed by the short id, NOT slugify(title).
+    expect(metaMap.has("ajv8v4t")).toBe(true);
+    expect(metaMap.has("fix-the-login-bug")).toBe(false);
+
+    const entry = metaMap.get("ajv8v4t")!;
+    // Pill label is the short id; tooltip (description) is the title.
+    expect(entry.displayName).toBe("ajv8v4t");
+    expect(entry.description).toBe("Fix the login bug");
+    expect(entry.color).toBe("4078c0");
+  });
+
+  it("falls back to slugify(displayName) when no slug field is given", () => {
+    // Backwards-compat: tag/actor entities whose ids are slug-shaped pass
+    // no slug field and keep the legacy slugify behavior.
+    const tags = [
+      {
+        id: "t1",
+        entity_type: "tag",
+        moniker: "tag:t1",
+        fields: { name: "Bug Fix", color: "ff0000" },
+      },
+    ];
+    const metaMap = buildMentionMetaMap(tags, "name");
+    expect(metaMap.has("bug-fix")).toBe(true);
+    expect(metaMap.get("bug-fix")!.displayName).toBe("Bug Fix");
+  });
+
   it("produces metaMap entries without description when entity lacks one", () => {
     const entities = [
       {
@@ -441,5 +505,142 @@ describe("useMentionExtensions", () => {
 
     view.destroy();
     parent.remove();
+  });
+
+  // ── ^task autocomplete: description editor + apply inserts short id ──
+  // Typing `^` in a task description must offer the task picker (dropdown
+  // labeled by title) and `apply` must insert the canonical `^<short>`,
+  // never the long ULID or a title-slug. The completion source is wired by
+  // the data-driven loop (task.yaml declares `mention_prefix: "^"`), and the
+  // backend ships the 7-char short id as `slug`.
+
+  /** Backend `search_mentions(entityType: "task")` fixture: one task, slug = short id. */
+  function mockTaskSearch() {
+    mockInvoke.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (command: string, args?: any) => {
+        if (command === "search_mentions" && args?.entityType === "task") {
+          return Promise.resolve([
+            {
+              id: "01KT6R6HR3KJT6JVNDRAJV8V4T",
+              display_name: "Add login flow",
+              color: "4078c0",
+              slug: "ajv8v4t",
+            },
+          ]);
+        }
+        return Promise.resolve([]);
+      },
+    );
+  }
+
+  /**
+   * Mount an EditorView with the given extensions, type `^au`, trigger
+   * autocomplete, and return the resolved completion options after the
+   * debounced async source settles.
+   */
+  async function caretCompletions(
+    extensions: import("@codemirror/state").Extension[],
+  ) {
+    const { EditorView } = await import("@codemirror/view");
+    const { EditorState } = await import("@codemirror/state");
+    const { startCompletion, currentCompletions } =
+      await import("@codemirror/autocomplete");
+
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({ doc: "^au", extensions }),
+      parent,
+    });
+    view.dispatch({ selection: { anchor: 3 } });
+    startCompletion(view);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const options = currentCompletions(view.state);
+    view.destroy();
+    parent.remove();
+    return options;
+  }
+
+  it("description editor: typing ^ offers tasks by title and apply inserts ^<short>", async () => {
+    // Production schema declares task as a `^` mentionable type (task.yaml:
+    // mention_prefix "^", mention_display_field title, mention_slug_field
+    // short_id). The description editor (markdown.tsx) calls
+    // useMentionExtensions() with no options — the `^` source must come from
+    // the data-driven loop, NOT the filter-sigils branch.
+    mockMentionableTypes = [
+      { prefix: "#", entityType: "tag", displayField: "name" },
+      {
+        prefix: "^",
+        entityType: "task",
+        displayField: "title",
+        slugField: "short_id",
+      },
+    ];
+    mockTaskSearch();
+    const { result } = renderHook(() => useMentionExtensions());
+
+    const options = await caretCompletions(result.current);
+
+    // Dropdown is labeled by title (human-pickable), apply writes the short id.
+    const taskOpt = options.find((o) => o.apply === "^ajv8v4t");
+    expect(taskOpt).toBeDefined();
+    expect(taskOpt!.label).toBe("^Add login flow");
+    // Never the long ULID, never a title-slug.
+    expect(options.some((o) => o.apply === "^01kt6r6hr3kjt6jvndrajv8v4t")).toBe(
+      false,
+    );
+    expect(options.some((o) => o.apply === "^add-login-flow")).toBe(false);
+  });
+
+  it("description editor: ^ source fires even when no tasks are loaded locally", async () => {
+    // The `^` task source queries the backend (`search_mentions`), so it must
+    // stay wired regardless of whether any task entity is mirrored into the
+    // local entity store. Decoration/tooltip legitimately need local entities;
+    // the completion source must not be coupled to that gate, or a fresh
+    // description editor (tasks not yet loaded) silently offers no `^` picker.
+    mockMentionableTypes = [
+      { prefix: "#", entityType: "tag", displayField: "name" },
+      {
+        prefix: "^",
+        entityType: "task",
+        displayField: "title",
+        slugField: "short_id",
+      },
+    ];
+    // Local store has NO tasks (empty metaMap) — but the backend still resolves.
+    mockGetEntities.mockImplementation(() => []);
+    mockTaskSearch();
+    const { result } = renderHook(() => useMentionExtensions());
+
+    const options = await caretCompletions(result.current);
+
+    const taskOpt = options.find((o) => o.apply === "^ajv8v4t");
+    expect(taskOpt).toBeDefined();
+    expect(taskOpt!.label).toBe("^Add login flow");
+  });
+
+  it("filter editor: ^ source still resolves tasks (apply inserts ^<short>)", async () => {
+    // The filter editor (includeFilterSigils: true) must offer `^task`
+    // autocomplete whose accepted value is the canonical short id, so the
+    // resulting filter expression matches on short id.
+    mockMentionableTypes = [
+      { prefix: "#", entityType: "tag", displayField: "name" },
+      {
+        prefix: "^",
+        entityType: "task",
+        displayField: "title",
+        slugField: "short_id",
+      },
+    ];
+    mockTaskSearch();
+    const { result } = renderHook(() =>
+      useMentionExtensions({ includeFilterSigils: true }),
+    );
+
+    const options = await caretCompletions(result.current);
+
+    const taskOpt = options.find((o) => o.apply === "^ajv8v4t");
+    expect(taskOpt).toBeDefined();
   });
 });

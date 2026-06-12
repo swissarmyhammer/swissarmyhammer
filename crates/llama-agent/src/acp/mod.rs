@@ -256,6 +256,8 @@ pub mod content_validation;
 pub mod elicitation;
 pub mod error;
 pub mod filesystem;
+pub(crate) mod hooks;
+pub mod llama_hook_evaluator;
 pub mod mcp_client_factory;
 pub mod permissions;
 pub mod plan;

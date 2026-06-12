@@ -2,13 +2,12 @@
 
 use agent_client_protocol::schema::{
     ContentBlock, ContentChunk, PromptRequest, PromptResponse, SessionId, SessionNotification,
-    SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
-    ToolCallUpdateFields,
+    SessionUpdate, StopReason, TextContent, ToolCall,
 };
 use agent_client_protocol::Result as AcpResult;
 use agent_client_protocol_extras::{
     hookable_agent_from_config, HookCommandContext, HookConfig, HookEvaluator, HookEventKind,
-    HookableAgent, PlaybackAgent, SessionSource,
+    HookableAgent, PlaybackAgent, PreToolUseOutcome, SessionSource,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -350,54 +349,6 @@ pub(crate) async fn run_prompt<A>(
 /// Delay between sending notifications so the spawned intercept task can process each one.
 const NOTIFY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 
-/// Send a tool-call + completed-update through a broadcast channel to trigger
-/// PreToolUse and PostToolUse hooks via `intercept_notifications`.
-pub(crate) async fn send_tool_completed_notifications(
-    tx: &broadcast::Sender<SessionNotification>,
-    session_id: &str,
-) {
-    let tool_call = ToolCall::new("call-1", "Bash");
-    let _ = tx.send(SessionNotification::new(
-        SessionId::new(session_id),
-        SessionUpdate::ToolCall(tool_call),
-    ));
-    tokio::time::sleep(NOTIFY_DELAY).await;
-
-    let update = ToolCallUpdate::new(
-        "call-1",
-        ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
-    );
-    let _ = tx.send(SessionNotification::new(
-        SessionId::new(session_id),
-        SessionUpdate::ToolCallUpdate(update),
-    ));
-    tokio::time::sleep(NOTIFY_DELAY).await;
-}
-
-/// Send a tool-call + failed-update through a broadcast channel to trigger
-/// PreToolUse and PostToolUseFailure hooks via `intercept_notifications`.
-pub(crate) async fn send_tool_failed_notifications(
-    tx: &broadcast::Sender<SessionNotification>,
-    session_id: &str,
-) {
-    let tool_call = ToolCall::new("call-1", "Bash");
-    let _ = tx.send(SessionNotification::new(
-        SessionId::new(session_id),
-        SessionUpdate::ToolCall(tool_call),
-    ));
-    tokio::time::sleep(NOTIFY_DELAY).await;
-
-    let update = ToolCallUpdate::new(
-        "call-1",
-        ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
-    );
-    let _ = tx.send(SessionNotification::new(
-        SessionId::new(session_id),
-        SessionUpdate::ToolCallUpdate(update),
-    ));
-    tokio::time::sleep(NOTIFY_DELAY).await;
-}
-
 /// Send an AgentMessageChunk notification to trigger Notification hooks.
 pub(crate) async fn send_agent_message_notification(
     tx: &broadcast::Sender<SessionNotification>,
@@ -427,6 +378,65 @@ pub(crate) async fn send_named_tool_notification(
         SessionUpdate::ToolCall(tool_call),
     ));
     tokio::time::sleep(NOTIFY_DELAY).await;
+}
+
+// ---------------------------------------------------------------------------
+// Synchronous tool-dispatch-seam helpers
+// ---------------------------------------------------------------------------
+//
+// Tool hooks (PreToolUse / PostToolUse / PostToolUseFailure) fire synchronously
+// at the dispatch seam now, not from the notification stream — so they can
+// truly gate, rewrite, and feed back a tool call. These helpers drive the
+// matching `run_*` methods directly and return their result for assertion.
+
+/// Fire `PreToolUse` hooks for `tool_name` and return the outcome the dispatch
+/// seam would act on (Deny / StopTurn / Proceed-with-context-or-updatedInput).
+pub(crate) async fn fire_pre_tool_use<A>(
+    agent: &HookableAgent<A>,
+    tool_name: &str,
+) -> PreToolUseOutcome {
+    agent
+        .run_pre_tool_use(
+            TEST_SESSION_ID,
+            tool_name,
+            Some(serde_json::json!({"command": "echo hi"})),
+            Some("call-1"),
+        )
+        .await
+}
+
+/// Fire `PostToolUse` hooks for a successful `tool_name` call and return any
+/// `additionalContext` to thread back to the model.
+pub(crate) async fn fire_post_tool_use<A>(
+    agent: &HookableAgent<A>,
+    tool_name: &str,
+) -> Option<String> {
+    agent
+        .run_post_tool_use(
+            TEST_SESSION_ID,
+            tool_name,
+            Some(serde_json::json!({"command": "echo hi"})),
+            Some(serde_json::json!("ok")),
+            Some("call-1"),
+        )
+        .await
+}
+
+/// Fire `PostToolUseFailure` hooks for a failed `tool_name` call and return any
+/// `additionalContext` to thread back to the model.
+pub(crate) async fn fire_post_tool_use_failure<A>(
+    agent: &HookableAgent<A>,
+    tool_name: &str,
+) -> Option<String> {
+    agent
+        .run_post_tool_use_failure(
+            TEST_SESSION_ID,
+            tool_name,
+            Some(serde_json::json!({"command": "false"})),
+            Some(serde_json::json!("exit code 1")),
+            Some("call-1"),
+        )
+        .await
 }
 
 // ---------------------------------------------------------------------------
