@@ -8,6 +8,7 @@ use agent_client_protocol::schema::{
     ContentBlock, PromptRequest, PromptResponse, SessionId, SessionNotification, SessionUpdate,
     StopReason, TextContent,
 };
+use agent_client_protocol_extras::MAX_TOKENS_META_KEY;
 use swissarmyhammer_common::Pretty;
 use tokio_stream::StreamExt;
 
@@ -44,7 +45,7 @@ fn estimate_chunk_tokens(text: &str) -> u64 {
 ///
 /// The ACP `PromptRequest` schema has no first-class `max_tokens` field; the
 /// validator runner attaches its per-rule defense-in-depth cap via the
-/// extensibility `_meta` map under the key `"max_tokens"`. This function
+/// extensibility `_meta` map under [`MAX_TOKENS_META_KEY`]. This function
 /// returns `Some(n)` only when the value is a positive integer that fits in
 /// `u64`. Returns `None` for all other cases (key missing, value not an
 /// integer, value zero, value negative, or meta itself is `None`). Callers
@@ -60,7 +61,7 @@ fn estimate_chunk_tokens(text: &str) -> u64 {
 pub(crate) fn extract_request_max_tokens(
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Option<u64> {
-    let value = meta?.get("max_tokens")?;
+    let value = meta?.get(MAX_TOKENS_META_KEY)?;
     let raw = value.as_u64()?;
     if raw == 0 {
         return None;
@@ -1442,7 +1443,7 @@ mod tests {
     #[test]
     fn test_extract_request_max_tokens_positive_integer() {
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!(4096_u64));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(4096_u64));
         assert_eq!(extract_request_max_tokens(Some(&meta)), Some(4096));
     }
 
@@ -1453,7 +1454,7 @@ mod tests {
     #[test]
     fn test_extract_request_max_tokens_zero_treated_as_unset() {
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!(0));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(0));
         assert_eq!(extract_request_max_tokens(Some(&meta)), None);
     }
 
@@ -1463,21 +1464,21 @@ mod tests {
     #[test]
     fn test_extract_request_max_tokens_string_treated_as_unset() {
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!("4096"));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!("4096"));
         assert_eq!(extract_request_max_tokens(Some(&meta)), None);
     }
 
     #[test]
     fn test_extract_request_max_tokens_float_treated_as_unset() {
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!(4096.5));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(4096.5));
         assert_eq!(extract_request_max_tokens(Some(&meta)), None);
     }
 
     #[test]
     fn test_extract_request_max_tokens_bool_treated_as_unset() {
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!(true));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(true));
         assert_eq!(extract_request_max_tokens(Some(&meta)), None);
     }
 
@@ -1488,7 +1489,7 @@ mod tests {
     #[test]
     fn test_extract_request_max_tokens_signed_positive_accepted() {
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!(8192_i64));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(8192_i64));
         assert_eq!(extract_request_max_tokens(Some(&meta)), Some(8192));
     }
 
@@ -1498,7 +1499,7 @@ mod tests {
     #[test]
     fn test_extract_request_max_tokens_negative_treated_as_unset() {
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!(-1_i64));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(-1_i64));
         assert_eq!(extract_request_max_tokens(Some(&meta)), None);
     }
 

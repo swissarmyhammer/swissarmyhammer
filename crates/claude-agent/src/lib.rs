@@ -54,10 +54,13 @@ pub mod protocol_translator;
 pub mod request_validation;
 pub mod session;
 pub mod session_errors;
+pub mod session_fork;
 pub mod session_resume;
 pub mod session_validation;
 pub mod size_validator;
 pub mod terminal_manager;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod tool_call_lifecycle_tests;
 pub mod tool_classification;
 pub mod tool_types;

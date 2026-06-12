@@ -61,18 +61,10 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = R>,
 {
-    let temp = tempfile::tempdir().unwrap();
-    let previous = std::env::var_os("XDG_STATE_HOME");
-    // SAFETY: callers are `#[serial]`, so no other thread reads or writes the
-    // env var concurrently; the previous value is restored below.
-    std::env::set_var("XDG_STATE_HOME", temp.path());
-    let result = body().await;
-    match previous {
-        Some(value) => std::env::set_var("XDG_STATE_HOME", value),
-        None => std::env::remove_var("XDG_STATE_HOME"),
-    }
-    drop(temp);
-    result
+    // The canonical guard from the crate that owns the `SessionStore`;
+    // callers stay `#[serial]` per its contract.
+    let _state = agent_client_protocol_extras::test_support::StateDirGuard::new();
+    body().await
 }
 
 /// A ULID-shaped session id usable as a `session.json` directory name.

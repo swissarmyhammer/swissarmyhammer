@@ -38,14 +38,27 @@ use ulid::Ulid;
 /// pay double-prefill cost for zero speedup. Some draft contexts are large
 /// (Q8 KV at full ctx) so this is bounded by the same byte budget as the
 /// target state.
+/// The state blobs are `Arc<[u8]>` so a forked session can alias its parent's
+/// snapshot with NO byte copy (see [`SessionStateStore::fork`]) — the byte
+/// budget counts a shared blob once, and handing a snapshot to a worker is an
+/// `Arc` clone instead of a multi-hundred-MB `Vec` copy.
+///
+/// `pinned` entries are skipped by budget-driven eviction
+/// ([`SessionStateStore::evict`]) so a prefix session a review fleet is
+/// actively forking from cannot be dropped mid-flight. Lifecycle-driven
+/// [`SessionStateStore::remove`] (the session is known to be gone) still
+/// reclaims pinned entries.
 struct CachedSession {
-    state_bytes: Vec<u8>,
+    state_bytes: Arc<[u8]>,
     prompt_tokens: Option<Vec<i32>>,
-    draft_state_bytes: Option<Vec<u8>>,
+    draft_state_bytes: Option<Arc<[u8]>>,
+    pinned: bool,
 }
 
 impl CachedSession {
-    /// Combined byte footprint used by the LRU byte budget.
+    /// Combined byte footprint of this entry's blobs (shared or not). The
+    /// store-wide budget uses [`SessionStateStore::cur_bytes`], which counts
+    /// each shared blob once.
     fn byte_size(&self) -> usize {
         self.state_bytes.len() + self.draft_state_bytes.as_ref().map_or(0, |b| b.len())
     }
@@ -54,8 +67,52 @@ impl CachedSession {
 /// Cloned-out snapshot of a cached session — target state bytes, prompt
 /// fingerprint tokens, and optional draft state bytes. Returned by
 /// [`SessionStateStore::get`] so callers can drop the lock before the
-/// comparatively slow `set_state_data`/`state_seq_set_data`.
-type CachedStateSnapshot = (Vec<u8>, Option<Vec<i32>>, Option<Vec<u8>>);
+/// comparatively slow `set_state_data`/`state_seq_set_data`. The byte blobs
+/// are cheap `Arc` clones.
+type CachedStateSnapshot = (Arc<[u8]>, Option<Vec<i32>>, Option<Arc<[u8]>>);
+
+/// Observable status of one session's cached state, for the
+/// `session/state_status` extension ("never fork blind"): a client confirms a
+/// snapshot exists — and carries a prompt fingerprint — before forking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionStateStatus {
+    /// Number of prompt tokens the snapshot covers, when the snapshot carries
+    /// a fingerprint (`None` for the batch path's unfingerprinted snapshots,
+    /// which cannot seed a strict-prefix fork).
+    pub prompt_tokens: Option<usize>,
+    /// Byte size of the snapshot (target + draft blobs).
+    pub state_bytes: usize,
+    /// Whether the entry is pinned against budget eviction.
+    pub pinned: bool,
+}
+
+/// Outcome of a successful session-state fork: what the child inherited.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionStateForkInfo {
+    /// Number of prompt tokens the aliased snapshot covers — the strict
+    /// prefix the fork's first decode resumes after.
+    pub prefix_tokens: usize,
+    /// Byte size of the aliased snapshot (shared with the parent, counted
+    /// once by the budget).
+    pub state_bytes: usize,
+}
+
+/// Why a session-state fork could not attach the parent's snapshot. The two
+/// cases are deliberately distinguishable so a client can tell "no such
+/// parent state" from "state exists but cannot seed a strict-prefix restore"
+/// and react accordingly (re-prime vs plain new session).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SessionStateForkError {
+    /// No cached snapshot exists for the parent session.
+    #[error("no cached state for parent session {0}")]
+    ParentStateNotFound(String),
+    /// A snapshot exists but carries no prompt-token fingerprint (a batch-path
+    /// save), so a strict-prefix restore cannot be verified against it.
+    #[error(
+        "cached state for parent session {0} has no prompt fingerprint and cannot seed a fork"
+    )]
+    ParentStateUnusable(String),
+}
 
 /// LRU, byte-bounded in-memory store of per-session llama.cpp context state for
 /// efficient multi-turn conversations (restore without disk I/O).
@@ -73,7 +130,6 @@ struct SessionStateStore {
     lru: VecDeque<String>,
     max_entries: usize,
     max_bytes: usize,
-    cur_bytes: usize,
 }
 
 impl SessionStateStore {
@@ -83,8 +139,30 @@ impl SessionStateStore {
             lru: VecDeque::new(),
             max_entries: max_entries.max(1),
             max_bytes,
-            cur_bytes: 0,
         }
+    }
+
+    /// Total bytes held by the store, counting each shared blob ONCE.
+    ///
+    /// Forked entries alias their parent's `Arc<[u8]>` blobs, so summing
+    /// per-entry sizes would charge the same hundreds-of-MB snapshot once per
+    /// fork and evict aggressively for memory that is not actually used.
+    /// Deduplication is by blob data pointer; the entry count is small (cores/2
+    /// plus live forks), so the quadratic scan is negligible next to the
+    /// multi-hundred-MB `memcpy`s this store brackets.
+    fn cur_bytes(&self) -> usize {
+        let mut seen: Vec<*const u8> = Vec::with_capacity(self.entries.len() * 2);
+        let mut total = 0;
+        for entry in self.entries.values() {
+            for blob in std::iter::once(&entry.state_bytes).chain(entry.draft_state_bytes.iter()) {
+                let ptr = blob.as_ptr();
+                if !seen.contains(&ptr) {
+                    seen.push(ptr);
+                    total += blob.len();
+                }
+            }
+        }
+        total
     }
 
     fn contains(&self, id: &str) -> bool {
@@ -187,6 +265,12 @@ impl SessionStateStore {
 
     /// Insert/replace a session's cached state, then evict LRU entries until
     /// within BOTH the entry-count and total-byte budgets.
+    ///
+    /// Replacing an existing entry preserves its pinned flag — a pin applies
+    /// to the session id until explicitly unpinned, across re-saves. A forked
+    /// child's first own save lands here too, replacing its parent-aliased
+    /// entry with fresh bytes (copy-on-write at save time) without touching
+    /// the parent's entry.
     fn insert(
         &mut self,
         id: String,
@@ -194,18 +278,16 @@ impl SessionStateStore {
         prompt_tokens: Option<Vec<i32>>,
         draft_state_bytes: Option<Vec<u8>>,
     ) {
-        let new_bytes = state_bytes.len() + draft_state_bytes.as_ref().map_or(0, |b| b.len());
-        if let Some(old) = self.entries.insert(
+        let pinned = self.entries.get(&id).is_some_and(|e| e.pinned);
+        self.entries.insert(
             id.clone(),
             CachedSession {
-                state_bytes,
+                state_bytes: Arc::from(state_bytes),
                 prompt_tokens,
-                draft_state_bytes,
+                draft_state_bytes: draft_state_bytes.map(Arc::from),
+                pinned,
             },
-        ) {
-            self.cur_bytes = self.cur_bytes.saturating_sub(old.byte_size());
-        }
-        self.cur_bytes += new_bytes;
+        );
         if self.lru.iter().any(|k| k == &id) {
             self.touch(&id);
         } else {
@@ -214,18 +296,95 @@ impl SessionStateStore {
         self.evict();
     }
 
-    /// Drop least-recently-used entries until under both budgets, always keeping
-    /// at least the most-recently-used entry.
+    /// Alias the parent's cached snapshot under `child_id` with no byte copy:
+    /// the child entry shares the parent's `Arc<[u8]>` blobs and is registered
+    /// with the parent's prompt-token fingerprint, so the child's first prompt
+    /// (which strictly extends the parent's) matches its own entry with
+    /// `lcp == donor length` — a zero-rollback restore.
+    ///
+    /// The child starts unpinned; pin it separately if it must survive
+    /// pressure. The parent entry is left untouched.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionStateForkError::ParentStateNotFound`] when the parent has no
+    /// cached snapshot, [`SessionStateForkError::ParentStateUnusable`] when
+    /// the snapshot has no prompt fingerprint (a batch-path save) and so
+    /// cannot seed a verified strict-prefix restore.
+    fn fork(
+        &mut self,
+        parent_id: &str,
+        child_id: String,
+    ) -> Result<SessionStateForkInfo, SessionStateForkError> {
+        let parent = self
+            .entries
+            .get(parent_id)
+            .ok_or_else(|| SessionStateForkError::ParentStateNotFound(parent_id.to_string()))?;
+        let Some(tokens) = parent.prompt_tokens.as_ref() else {
+            return Err(SessionStateForkError::ParentStateUnusable(
+                parent_id.to_string(),
+            ));
+        };
+        let info = SessionStateForkInfo {
+            prefix_tokens: tokens.len(),
+            state_bytes: parent.byte_size(),
+        };
+        let child = CachedSession {
+            state_bytes: parent.state_bytes.clone(),
+            prompt_tokens: parent.prompt_tokens.clone(),
+            draft_state_bytes: parent.draft_state_bytes.clone(),
+            pinned: false,
+        };
+        self.entries.insert(child_id.clone(), child);
+        if self.lru.iter().any(|k| k == &child_id) {
+            self.touch(&child_id);
+        } else {
+            self.lru.push_back(child_id);
+        }
+        self.evict();
+        Ok(info)
+    }
+
+    /// Report a session's cached-state status, or `None` when no snapshot is
+    /// cached. A pure query: does not touch the LRU order.
+    fn status(&self, id: &str) -> Option<SessionStateStatus> {
+        self.entries.get(id).map(|entry| SessionStateStatus {
+            prompt_tokens: entry.prompt_tokens.as_ref().map(|t| t.len()),
+            state_bytes: entry.byte_size(),
+            pinned: entry.pinned,
+        })
+    }
+
+    /// Pin (or unpin) a session's cached entry against budget eviction.
+    /// Returns whether an entry existed to update.
+    fn set_pinned(&mut self, id: &str, pinned: bool) -> bool {
+        match self.entries.get_mut(id) {
+            Some(entry) => {
+                entry.pinned = pinned;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Drop least-recently-used UNPINNED entries until under both budgets.
+    ///
+    /// The most-recently-used entry (the active session's fresh save) is never
+    /// a victim, and pinned entries are skipped — so when everything else is
+    /// pinned the loop terminates over budget rather than deadlocking or
+    /// evicting the active entry. Pinned bytes still count against the budget.
     fn evict(&mut self) {
-        while self.lru.len() > 1
-            && (self.entries.len() > self.max_entries || self.cur_bytes > self.max_bytes)
-        {
-            let Some(victim) = self.lru.pop_front() else {
+        while self.entries.len() > self.max_entries || self.cur_bytes() > self.max_bytes {
+            let victim = self
+                .lru
+                .iter()
+                .take(self.lru.len().saturating_sub(1))
+                .find(|id| !self.entries.get(id.as_str()).is_some_and(|e| e.pinned))
+                .cloned();
+            let Some(victim) = victim else {
                 break;
             };
-            if let Some(c) = self.entries.remove(&victim) {
-                self.cur_bytes = self.cur_bytes.saturating_sub(c.byte_size());
-            }
+            self.remove(&victim);
         }
     }
 
@@ -242,10 +401,9 @@ impl SessionStateStore {
     /// forces it out, which with only one or two live sessions never happens, so
     /// the worker eventually runs out of KV slots (`NoKvCacheSlot`).
     fn remove(&mut self, id: &str) -> bool {
-        let Some(cached) = self.entries.remove(id) else {
+        if self.entries.remove(id).is_none() {
             return false;
-        };
-        self.cur_bytes = self.cur_bytes.saturating_sub(cached.byte_size());
+        }
         if let Some(pos) = self.lru.iter().position(|k| k == id) {
             self.lru.remove(pos);
         }
@@ -256,7 +414,6 @@ impl SessionStateStore {
     fn clear(&mut self) {
         self.entries.clear();
         self.lru.clear();
-        self.cur_bytes = 0;
     }
 }
 
@@ -272,9 +429,9 @@ struct PrefixMatch {
     /// caller's session id when we share a prefix across sessions.
     source_session_id: String,
     /// Full target-context state bytes for `set_state_data`.
-    state_bytes: Vec<u8>,
+    state_bytes: Arc<[u8]>,
     /// Per-seq draft KV bytes for MTP, when the donor turn used MTP.
-    draft_state_bytes: Option<Vec<u8>>,
+    draft_state_bytes: Option<Arc<[u8]>>,
     /// Number of leading tokens that matched the new prompt.
     lcp: usize,
 }
@@ -1328,6 +1485,70 @@ impl RequestQueue {
             .remove(&session_id.to_string())
     }
 
+    /// Alias the parent session's cached context state under the child id with
+    /// no byte copy (the blobs are shared `Arc`s and counted once by the byte
+    /// budget). The child entry carries the parent's prompt-token fingerprint,
+    /// so the child's first prompt — a strict extension of the parent's —
+    /// restores the full donor state and decodes strictly forward with zero KV
+    /// rollback.
+    ///
+    /// # Errors
+    ///
+    /// Distinguishable per [`SessionStateForkError`]: the parent has no cached
+    /// snapshot, or its snapshot has no prompt fingerprint to verify a
+    /// strict-prefix restore against.
+    pub fn fork_session_state(
+        &self,
+        parent_id: &crate::types::SessionId,
+        child_id: &crate::types::SessionId,
+    ) -> Result<SessionStateForkInfo, SessionStateForkError> {
+        self.session_state_cache
+            .lock()
+            .unwrap()
+            .fork(&parent_id.to_string(), child_id.to_string())
+    }
+
+    /// Report whether a session's context state is cached — and forkable —
+    /// plus its size and pin state. `None` when no snapshot is cached.
+    pub fn session_state_status(
+        &self,
+        session_id: &crate::types::SessionId,
+    ) -> Option<SessionStateStatus> {
+        self.session_state_cache
+            .lock()
+            .unwrap()
+            .status(&session_id.to_string())
+    }
+
+    /// Pin (or unpin) a session's cached context state against budget
+    /// eviction, returning whether a cached entry existed to update. Pinned
+    /// bytes still count against the budget; lifecycle eviction
+    /// ([`evict_session_state`](Self::evict_session_state)) still reclaims
+    /// pinned entries because the caller knows the session is gone.
+    pub fn pin_session_state(&self, session_id: &crate::types::SessionId, pinned: bool) -> bool {
+        self.session_state_cache
+            .lock()
+            .unwrap()
+            .set_pinned(&session_id.to_string(), pinned)
+    }
+
+    /// Seed a session's cached state directly — test-only hook so handler
+    /// tests can fabricate a "primed" parent without running a model.
+    #[cfg(test)]
+    pub(crate) fn seed_session_state_for_test(
+        &self,
+        session_id: &crate::types::SessionId,
+        state_bytes: Vec<u8>,
+        prompt_tokens: Option<Vec<i32>>,
+    ) {
+        self.session_state_cache.lock().unwrap().insert(
+            session_id.to_string(),
+            state_bytes,
+            prompt_tokens,
+            None,
+        );
+    }
+
     /// Convenience shortcut for `self.metrics.get_stats()` — returns a
     /// consistent snapshot of the queue's counters.
     pub fn get_stats(&self) -> QueueStats {
@@ -2287,7 +2508,7 @@ impl RequestQueue {
         worker_id: usize,
         session: &Session,
         draft_ctx: &mut LlamaContext<'_>,
-        cached_bytes: Option<Vec<u8>>,
+        cached_bytes: Option<Arc<[u8]>>,
         template_offset: Option<usize>,
     ) -> bool {
         // No target reuse this turn → caller will cold-prefill the draft on
@@ -2365,7 +2586,7 @@ struct StreamingKvPrep {
     template_offset: Option<usize>,
     /// Per-seq draft-context bytes from the prior turn, when MTP was used.
     /// `None` when the prior turn didn't use MTP or no state was cached.
-    draft_state_bytes: Option<Vec<u8>>,
+    draft_state_bytes: Option<Arc<[u8]>>,
 }
 
 /// Decide the streaming resume offset from the longest-common-prefix length
@@ -2540,6 +2761,12 @@ mod tests {
     use std::path::PathBuf;
     use std::time::SystemTime;
     use tempfile::TempDir;
+
+    /// Build a synthetic state blob of `len` bytes, all set to `byte` —
+    /// shared by the session-state store unit-test submodules.
+    fn state(byte: u8, len: usize) -> Vec<u8> {
+        vec![byte; len]
+    }
 
     fn create_test_model_config() -> ModelConfig {
         ModelConfig {
@@ -4481,10 +4708,6 @@ mod tests {
     mod free_fn_unit_tests {
         use super::*;
 
-        fn state(byte: u8, len: usize) -> Vec<u8> {
-            vec![byte; len]
-        }
-
         #[test]
         fn store_evicts_lru_first_keeping_the_active_session() {
             // entry budget of 2; insert A, B, touch A (now MRU), insert C.
@@ -4511,7 +4734,7 @@ mod tests {
             store.insert("C".into(), state(3, 10), None, None);
 
             assert_eq!(store.len(), 2, "byte budget caps total entries at 2");
-            assert!(store.cur_bytes <= 25, "total bytes stay within budget");
+            assert!(store.cur_bytes() <= 25, "total bytes stay within budget");
             assert!(!store.contains("A"), "LRU evicted under byte pressure");
             assert!(store.contains("B") && store.contains("C"));
         }
@@ -4533,13 +4756,14 @@ mod tests {
             let mut store = SessionStateStore::new(4, usize::MAX);
             store.insert("A".into(), state(1, 10), None, None);
             store.insert("B".into(), state(2, 20), None, None);
-            assert_eq!(store.cur_bytes, 30);
+            assert_eq!(store.cur_bytes(), 30);
 
             assert!(store.remove("A"), "removing a present session reports true");
             assert!(!store.contains("A"), "removed session is gone");
             assert!(store.contains("B"), "other sessions are untouched");
             assert_eq!(
-                store.cur_bytes, 20,
+                store.cur_bytes(),
+                20,
                 "only the removed session's bytes are freed"
             );
             assert_eq!(store.len(), 1);
@@ -4554,7 +4778,7 @@ mod tests {
             store.insert("only".into(), state(1, 10), None, None);
             assert!(store.remove("only"));
             assert_eq!(store.len(), 0, "remove is not subject to keep-at-least-one");
-            assert_eq!(store.cur_bytes, 0, "byte accounting returns to zero");
+            assert_eq!(store.cur_bytes(), 0, "byte accounting returns to zero");
         }
 
         #[test]
@@ -4565,7 +4789,7 @@ mod tests {
                 !store.remove("missing"),
                 "removing an absent session is false"
             );
-            assert_eq!(store.cur_bytes, 10, "byte accounting unchanged");
+            assert_eq!(store.cur_bytes(), 10, "byte accounting unchanged");
             assert!(store.contains("A"));
         }
 
@@ -4575,7 +4799,7 @@ mod tests {
             store.insert("A".into(), state(1, 10), None, None);
             store.insert("A".into(), state(1, 30), None, None); // replace, larger
             assert_eq!(store.len(), 1, "replacing an id does not add an entry");
-            assert_eq!(store.cur_bytes, 30, "byte accounting follows replacement");
+            assert_eq!(store.cur_bytes(), 30, "byte accounting follows replacement");
         }
 
         #[test]
@@ -4588,9 +4812,9 @@ mod tests {
                 Some(state(8, 4)),
             );
             let (bytes, toks, draft) = store.get("A").expect("present");
-            assert_eq!(bytes, vec![7, 7, 7]);
+            assert_eq!(&bytes[..], &[7, 7, 7]);
             assert_eq!(toks, Some(vec![10, 20, 30]));
-            assert_eq!(draft, Some(vec![8, 8, 8, 8]));
+            assert_eq!(draft.as_deref(), Some(&[8, 8, 8, 8][..]));
             assert_eq!(store.get("missing"), None);
         }
 
@@ -4739,5 +4963,199 @@ mod tests {
         // generation begins, so cancellation or disconnect mid-generation
         // never affects the cache (the saved state is the prompt state,
         // which is valid regardless of whether generation completed).
+    }
+
+    /// Unit tests for session-state forking, pinning, and status — the store
+    /// machinery behind the `session/fork` / `session/state_status` /
+    /// `session/pin` ACP extension methods.
+    mod session_state_fork_tests {
+        use super::*;
+
+        /// Forking aliases the parent's state under the child id, registered
+        /// with the parent's prompt-token fingerprint — so the child's first
+        /// prompt (a strict extension of the parent's) matches its OWN entry
+        /// with `lcp == donor length`: the trim offset equals the saved KV end
+        /// and the restore needs zero rollback.
+        #[test]
+        fn fork_aliases_parent_state_with_parent_fingerprint() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert("parent".into(), state(1, 100), Some(vec![10, 20, 30]), None);
+
+            let info = store
+                .fork("parent", "child".to_string())
+                .expect("fork of a saved parent must succeed");
+            assert_eq!(info.prefix_tokens, 3, "fork reports the donor token count");
+            assert_eq!(info.state_bytes, 100, "fork reports the donor byte size");
+
+            // The child's first rendered prompt strictly extends the parent's
+            // saved prompt tokens.
+            let m = store
+                .find_best_prefix_match("child", &[10, 20, 30, 40, 50])
+                .expect("child's aliased entry must be a donor");
+            assert_eq!(m.source_session_id, "child", "child reuses its OWN entry");
+            assert_eq!(m.lcp, 3, "lcp covers the full parent fingerprint");
+            assert_eq!(
+                streaming_reuse_decision(m.lcp, 5),
+                Some(3),
+                "strict-prefix fork resumes at exactly the donor length"
+            );
+        }
+
+        /// Shared blobs are counted once against the byte budget, no matter
+        /// how many forks alias them; a child's own later save adds its own
+        /// (new) bytes.
+        #[test]
+        fn fork_shares_blob_bytes_counted_once() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert(
+                "parent".into(),
+                state(1, 100),
+                Some(vec![1]),
+                Some(state(2, 50)),
+            );
+            assert_eq!(store.cur_bytes(), 150);
+
+            store.fork("parent", "c1".to_string()).expect("fork c1");
+            store.fork("parent", "c2".to_string()).expect("fork c2");
+            assert_eq!(
+                store.cur_bytes(),
+                150,
+                "aliased forks add zero bytes — shared blobs count once"
+            );
+
+            // Copy-on-write at save time: c1's own end-of-turn save replaces
+            // its alias with fresh bytes, which DO count.
+            store.insert("c1".into(), state(3, 70), Some(vec![1, 2]), None);
+            assert_eq!(store.cur_bytes(), 220);
+        }
+
+        /// A forked child's own save must not mutate the parent's entry.
+        #[test]
+        fn forked_child_save_leaves_parent_untouched() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert("parent".into(), state(1, 100), Some(vec![10, 20, 30]), None);
+            store.fork("parent", "child".to_string()).expect("fork");
+
+            store.insert(
+                "child".into(),
+                state(9, 40),
+                Some(vec![10, 20, 30, 40]),
+                None,
+            );
+
+            let parent = store.status("parent").expect("parent entry still present");
+            assert_eq!(parent.prompt_tokens, Some(3));
+            assert_eq!(parent.state_bytes, 100);
+            let (bytes, _, _) = store.get("parent").expect("parent bytes intact");
+            assert_eq!(&bytes[..], &state(1, 100)[..]);
+        }
+
+        /// Fork failures are distinguishable: unknown parent vs a parent whose
+        /// snapshot has no prompt fingerprint (not strict-prefix restorable).
+        #[test]
+        fn fork_failures_are_distinguishable() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            assert!(matches!(
+                store.fork("missing", "child".to_string()),
+                Err(SessionStateForkError::ParentStateNotFound(_))
+            ));
+
+            store.insert("batch-only".into(), state(1, 10), None, None);
+            assert!(matches!(
+                store.fork("batch-only", "child".to_string()),
+                Err(SessionStateForkError::ParentStateUnusable(_))
+            ));
+        }
+
+        /// `status` reports saved/pinned/token-count truthfully, and `None`
+        /// for sessions with no snapshot.
+        #[test]
+        fn status_reports_saved_pinned_and_token_count() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            assert!(store.status("missing").is_none());
+
+            store.insert("a".into(), state(1, 25), Some(vec![10, 20]), None);
+            let status = store.status("a").expect("saved entry has a status");
+            assert_eq!(status.prompt_tokens, Some(2));
+            assert_eq!(status.state_bytes, 25);
+            assert!(!status.pinned);
+
+            assert!(store.set_pinned("a", true));
+            assert!(store.status("a").unwrap().pinned);
+            assert!(store.set_pinned("a", false));
+            assert!(!store.status("a").unwrap().pinned);
+
+            assert!(
+                !store.set_pinned("missing", true),
+                "pin of absent id is false"
+            );
+        }
+
+        /// Pinned entries survive cache pressure that evicts unpinned ones.
+        #[test]
+        fn pinned_entry_survives_eviction_pressure() {
+            let mut store = SessionStateStore::new(2, usize::MAX);
+            store.insert("pinned".into(), state(1, 10), Some(vec![1]), None);
+            assert!(store.set_pinned("pinned", true));
+
+            // Two more inserts exceed the entry budget of 2 — eviction must
+            // take the unpinned LRU victim, never the pinned entry.
+            store.insert("b".into(), state(2, 10), None, None);
+            store.insert("c".into(), state(3, 10), None, None);
+
+            assert!(store.contains("pinned"), "pinned entry survives pressure");
+            assert!(store.contains("c"), "newest entry survives");
+            assert!(!store.contains("b"), "unpinned LRU entry is the victim");
+        }
+
+        /// Unpinning re-exposes the entry to eviction on the next pressure.
+        #[test]
+        fn unpinned_entry_is_evicted_after_unpin() {
+            let mut store = SessionStateStore::new(2, usize::MAX);
+            store.insert("a".into(), state(1, 10), Some(vec![1]), None);
+            assert!(store.set_pinned("a", true));
+            store.insert("b".into(), state(2, 10), None, None);
+            store.insert("c".into(), state(3, 10), None, None);
+            assert!(store.contains("a"));
+
+            assert!(store.set_pinned("a", false));
+            store.insert("d".into(), state(4, 10), None, None);
+            assert!(!store.contains("a"), "unpinned LRU entry is evicted");
+        }
+
+        /// Pinned bytes still count against the budget, and eviction
+        /// terminates (keeping the most-recently-used entry) even when every
+        /// candidate is pinned — the cache can go over budget but never
+        /// deadlocks or evicts the active insert.
+        #[test]
+        fn eviction_terminates_when_everything_is_pinned() {
+            let mut store = SessionStateStore::new(8, 25);
+            store.insert("a".into(), state(1, 20), Some(vec![1]), None);
+            assert!(store.set_pinned("a", true));
+
+            // Over the byte budget: "a" is pinned and "b" is the MRU insert,
+            // so nothing is evictable and the loop must terminate over budget.
+            store.insert("b".into(), state(2, 20), Some(vec![2]), None);
+            assert!(store.contains("a"), "pinned entry kept despite pressure");
+            assert!(store.contains("b"), "active (MRU) insert is never evicted");
+
+            assert!(store.set_pinned("b", true));
+            store.insert("c".into(), state(3, 20), Some(vec![3]), None);
+            assert!(store.contains("a"), "pinned entry kept despite pressure");
+            assert!(store.contains("b"), "pinned entry kept despite pressure");
+            assert!(store.contains("c"), "active (MRU) insert is never evicted");
+        }
+
+        /// Lifecycle `remove` (session ended) reclaims even pinned entries —
+        /// the caller knows the session is gone, which trumps the pin.
+        #[test]
+        fn lifecycle_remove_reclaims_pinned_entries() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert("a".into(), state(1, 10), Some(vec![1]), None);
+            assert!(store.set_pinned("a", true));
+            assert!(store.remove("a"));
+            assert!(!store.contains("a"));
+            assert_eq!(store.cur_bytes(), 0);
+        }
     }
 }

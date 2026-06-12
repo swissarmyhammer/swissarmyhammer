@@ -20,7 +20,10 @@ pub mod types;
 pub mod verify;
 
 pub use drive::run_review_over_agent;
-pub use fleet::{render_fleet_prompt, run_fleet, FleetConfig, FleetOutcome, DEFAULT_BATCH_SIZE};
+pub use fleet::{
+    render_file_payload, render_fleet_prompt, render_validator_prefix, run_fleet, FleetConfig,
+    FleetOutcome, DEFAULT_BATCH_SIZE,
+};
 pub use probes::{
     probe_exists, run_probes, ChangeEntry, FileChange, ProbeCatalogEntry, ProbeKind, ProbeOp,
     ProbeResult, ProbeResults, ProbeRow, CATALOG,

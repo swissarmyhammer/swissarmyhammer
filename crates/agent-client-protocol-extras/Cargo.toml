@@ -31,6 +31,14 @@ dirs.workspace = true
 model-context-protocol-extras = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-directory = { workspace = true }
+# Only for the `test-support` fixtures (the canonical `StateDirGuard`).
+tempfile = { workspace = true, optional = true }
+
+[features]
+# Export the `test_support` fixtures (e.g. `StateDirGuard`, the canonical
+# XDG_STATE_HOME isolation guard for SessionStore tests) to downstream
+# crates' tests, mirroring acp-conformance's `test-support` feature.
+test-support = ["dep:tempfile"]
 
 [dev-dependencies]
 serial_test = { workspace = true }

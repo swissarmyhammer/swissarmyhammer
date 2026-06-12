@@ -429,7 +429,7 @@ impl ResumeStrategy for ClaudeAgent {
             .mcp_servers(self.config.mcp_servers.clone())
             .ephemeral(self.config.claude.ephemeral)
             .tools_override(self.config.claude.tools_override.clone())
-            .resume(true)
+            .attachment(crate::claude_process::ConversationAttachment::Resume)
             .build();
 
         self.claude_client

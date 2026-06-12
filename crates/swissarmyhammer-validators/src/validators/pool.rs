@@ -24,10 +24,15 @@
 use std::sync::Arc;
 
 use agent_client_protocol::schema::{
-    CancelNotification, ContentBlock, NewSessionRequest, PromptRequest, SessionId,
+    CancelNotification, ContentBlock, ExtRequest, NewSessionRequest, PromptRequest, SessionId,
     SessionNotification, TextContent,
 };
-use agent_client_protocol::{Agent, ConnectionTo};
+use agent_client_protocol::{Agent, ClientRequest, ConnectionTo};
+use agent_client_protocol_extras::{
+    SessionForkRequest, SessionForkResponse, SessionPinRequest, SessionPinResponse,
+    SessionStateStatusRequest, SessionStateStatusResponse, MAX_TOKENS_META_KEY,
+    SESSION_FORK_METHOD, SESSION_PIN_METHOD, SESSION_STATE_STATUS_METHOD,
+};
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
@@ -163,6 +168,30 @@ pub enum PoolError {
         /// The absolute wall-clock cap the turn exceeded.
         turn_ceiling: std::time::Duration,
     },
+    /// The `session/fork` extension call failed, so the turn's prompt never
+    /// ran. The submitter still holds the payload and can fall back to a
+    /// fresh-session monolithic prompt — a fork failure must never lose a task.
+    #[error("session fork from parent {parent_session_id} failed: {message}")]
+    ForkFailed {
+        /// The parent session the fork was requested from.
+        parent_session_id: String,
+        /// The failure the agent reported (or the transport surfaced).
+        message: String,
+    },
+    /// A quick session-extension request (`session/state_status` /
+    /// `session/pin`) failed. Typed — like [`PoolError::ForkFailed`] — so
+    /// callers can match on "the backend lacks this extension / the call
+    /// failed" without parsing message text.
+    #[error("{method} for session {session_id} failed: {message}")]
+    Extension {
+        /// The extension method that failed (a
+        /// [`agent_client_protocol_extras`] method-name constant).
+        method: &'static str,
+        /// The session the request targeted.
+        session_id: String,
+        /// The failure the agent reported (or the transport surfaced).
+        message: String,
+    },
     /// The agent connection itself failed the turn.
     #[error(transparent)]
     Agent(#[from] claude_agent::AgentError),
@@ -171,11 +200,81 @@ pub enum PoolError {
 /// Result of a single submitted prompt.
 pub type PromptResult = Result<claude_agent::CollectedResponse, PoolError>;
 
-/// A unit of work on the shared queue: a prompt plus the channel to deliver its
-/// result back to the submitter.
+/// A completed turn delivered with the session it ran on and, when the session
+/// was forked from a primed parent, what the fork attached.
+#[derive(Debug, Clone)]
+pub struct SessionTurn {
+    /// The id of the session the turn ran on (fresh or forked). A typed
+    /// [`SessionId`] so it cannot be silently swapped with prompt text at the
+    /// fork/pin call sites.
+    pub session_id: SessionId,
+    /// The collected streamed response text.
+    pub content: String,
+    /// The agent's reported stop reason.
+    pub stop_reason: agent_client_protocol::schema::StopReason,
+    /// `Some` when the turn ran on a forked session — what the fork attached.
+    pub fork: Option<ForkAttachment>,
+}
+
+/// What a `session/fork` actually attached, per the fork response — lets a
+/// caller tell a warm fork (parent state reused) from a degraded one (history
+/// cloned, cold prefill).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForkAttachment {
+    /// Whether the parent's saved generation state was attached to the fork.
+    pub state_attached: bool,
+    /// Number of prompt tokens the attached state covers (`None` when the
+    /// backend does not track token counts).
+    pub prefix_tokens: Option<u64>,
+}
+
+/// Result of a primed or forked submission: the full [`SessionTurn`].
+pub type SessionTurnResult = Result<SessionTurn, PoolError>;
+
+/// How a queued turn obtains its session.
+enum SessionSource {
+    /// Mint a fresh session via `session/new` (the default path).
+    New,
+    /// Fork from a primed parent via the `session/fork` extension.
+    Fork {
+        /// The session whose conversation and saved state seed the fork.
+        parent_session_id: SessionId,
+    },
+}
+
+/// The channel a job's result is delivered back on, shaped per submission API.
+enum Respond {
+    /// [`AgentPool::submit`]: deliver the collected response only.
+    Collected(oneshot::Sender<PromptResult>),
+    /// [`AgentPool::submit_primed`] / [`AgentPool::submit_forked`]: deliver the
+    /// full turn including its session id and fork attachment.
+    Turn(oneshot::Sender<SessionTurnResult>),
+}
+
+impl Respond {
+    /// Deliver one resolved turn on whichever channel shape the submitter
+    /// asked for. The submitter may have dropped its receiver; that is fine.
+    fn deliver(self, result: SessionTurnResult) {
+        match self {
+            Respond::Collected(tx) => {
+                let _ = tx.send(result.map(|turn| claude_agent::CollectedResponse {
+                    content: turn.content,
+                    stop_reason: turn.stop_reason,
+                }));
+            }
+            Respond::Turn(tx) => {
+                let _ = tx.send(result);
+            }
+        }
+    }
+}
+
+/// A unit of work on the shared queue: a prompt, the session source it runs
+/// on, and the channel to deliver its result back to the submitter.
 struct Job {
     prompt: String,
-    respond_to: oneshot::Sender<PromptResult>,
+    session: SessionSource,
+    respond_to: Respond,
 }
 
 /// Shared bounded pool of agent workers draining a single submission queue.
@@ -192,6 +291,10 @@ pub struct AgentPool {
     worker_count: usize,
     /// Per-call generation token cap attached to every prompt.
     max_tokens: u64,
+    /// The shared agent connection, kept for the quick session-extension
+    /// requests ([`AgentPool::session_state_status`], [`AgentPool::pin_session`])
+    /// that are not generation turns and so bypass the worker queue.
+    agent: ConnectionTo<Agent>,
 }
 
 impl AgentPool {
@@ -222,6 +325,7 @@ impl AgentPool {
             workers,
             worker_count,
             max_tokens: config.max_tokens,
+            agent,
         }
     }
 
@@ -234,22 +338,127 @@ impl AgentPool {
     /// the next free worker (pipelining).
     pub fn submit(&self, prompt: impl Into<String>) -> oneshot::Receiver<PromptResult> {
         let (respond_to, rx) = oneshot::channel();
-        let job = Job {
+        self.enqueue(Job {
             prompt: prompt.into(),
-            respond_to,
-        };
+            session: SessionSource::New,
+            respond_to: Respond::Collected(respond_to),
+        });
+        rx
+    }
+
+    /// Submit a prefix-priming prompt: a normal fresh-session turn whose
+    /// delivered [`SessionTurn`] reports the session id, so the caller can
+    /// confirm the saved state, pin it, and fork batch turns from it.
+    ///
+    /// Queueing, liveness supervision, and the token cap are identical to
+    /// [`AgentPool::submit`].
+    pub fn submit_primed(&self, prompt: impl Into<String>) -> oneshot::Receiver<SessionTurnResult> {
+        let (respond_to, rx) = oneshot::channel();
+        self.enqueue(Job {
+            prompt: prompt.into(),
+            session: SessionSource::New,
+            respond_to: Respond::Turn(respond_to),
+        });
+        rx
+    }
+
+    /// Submit a prompt that runs on a session forked from `parent_session_id`
+    /// (the `session/fork` extension), inheriting the parent's conversation
+    /// and — when the backend supports it — its saved generation state, so the
+    /// prompt decodes strictly forward from the parent's primed prefix.
+    ///
+    /// A failed fork resolves to the typed [`PoolError::ForkFailed`] without
+    /// running any prompt: the submitter still holds the payload and falls
+    /// back to a fresh-session monolithic prompt. A fork that succeeds but
+    /// attaches no parent state is reported via [`SessionTurn::fork`] (the
+    /// turn still ran, just cold).
+    ///
+    /// The parent is a typed [`SessionId`] — distinct from the stringly
+    /// `prompt` — so swapping the two arguments is a compile error rather
+    /// than a runtime `ForkFailed`.
+    pub fn submit_forked(
+        &self,
+        parent_session_id: &SessionId,
+        prompt: impl Into<String>,
+    ) -> oneshot::Receiver<SessionTurnResult> {
+        let (respond_to, rx) = oneshot::channel();
+        self.enqueue(Job {
+            prompt: prompt.into(),
+            session: SessionSource::Fork {
+                parent_session_id: parent_session_id.clone(),
+            },
+            respond_to: Respond::Turn(respond_to),
+        });
+        rx
+    }
+
+    /// Enqueue one job, delivering a shutdown error instead of hanging the
+    /// submitter's future when the pool's workers are all gone.
+    fn enqueue(&self, job: Job) {
         if let Err(returned) = self.tx.send(job) {
-            // The pool's workers are all gone; deliver an error rather than
-            // hanging the submitter's future forever.
-            let _ = returned
+            returned
                 .0
                 .respond_to
-                .send(Err(claude_agent::AgentError::Internal(
+                .deliver(Err(claude_agent::AgentError::Internal(
                     "agent pool is shut down".to_string(),
                 )
                 .into()));
         }
-        rx
+    }
+
+    /// Query a session's saved-state status (`session/state_status`) over the
+    /// shared connection — a quick request, not a generation turn, so it
+    /// bypasses the worker queue. Failures are the typed
+    /// [`PoolError::Extension`].
+    pub async fn session_state_status(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<SessionStateStatusResponse, PoolError> {
+        send_extension_request(
+            &self.agent,
+            SESSION_STATE_STATUS_METHOD,
+            &SessionStateStatusRequest {
+                session_id: session_id.to_string(),
+            },
+        )
+        .await
+        .map_err(|message| PoolError::Extension {
+            method: SESSION_STATE_STATUS_METHOD,
+            session_id: session_id.to_string(),
+            message,
+        })
+    }
+
+    /// Pin or unpin a session's saved state (`session/pin`) over the shared
+    /// connection — a quick request, not a generation turn, so it bypasses the
+    /// worker queue. The response reports the *effective* pin state (a backend
+    /// without pinning reports `false`). Failures are the typed
+    /// [`PoolError::Extension`].
+    pub async fn pin_session(
+        &self,
+        session_id: &SessionId,
+        pinned: bool,
+    ) -> Result<SessionPinResponse, PoolError> {
+        send_pin(&self.agent, session_id, pinned).await
+    }
+
+    /// Pin `session_id`'s saved state for a scope: on success the returned
+    /// [`SessionPinGuard`] guarantees the eventual unpin — explicitly via
+    /// [`SessionPinGuard::release`], or from `Drop` when the owning future is
+    /// cancelled mid-flight — so a pinned prefix session can never outlive
+    /// the fan-out that pinned it.
+    pub async fn pin_session_scoped(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<(SessionPinResponse, SessionPinGuard), PoolError> {
+        let response = send_pin(&self.agent, session_id, true).await?;
+        Ok((
+            response,
+            SessionPinGuard {
+                agent: Some(self.agent.clone()),
+                session_id: session_id.clone(),
+            },
+        ))
     }
 
     /// Number of worker tasks draining the queue — the in-flight cap.
@@ -267,6 +476,71 @@ impl Drop for AgentPool {
     fn drop(&mut self) {
         for worker in &self.workers {
             worker.abort();
+        }
+    }
+}
+
+/// RAII guard for a pinned prefix session: it guarantees the pin is released,
+/// even when the owning future is dropped mid fan-out (review cancelled,
+/// caller timeout), so a pinned entry — exempt from cache eviction — can never
+/// outlive its scope. Created by [`AgentPool::pin_session_scoped`].
+///
+/// The normal path calls [`SessionPinGuard::release`] to unpin inline and
+/// observe the result; `Drop` is the cancellation backstop. `Drop` is
+/// synchronous and the unpin is an async request, so — mirroring llama-agent's
+/// `ActiveRequestGuard` — the drop path spawns the unpin onto the runtime.
+pub struct SessionPinGuard {
+    /// `Some` until the pin is released (explicitly or by `Drop`).
+    agent: Option<ConnectionTo<Agent>>,
+    session_id: SessionId,
+}
+
+impl SessionPinGuard {
+    /// The pinned session's id (the fork parent).
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
+    /// Release the pin now and report the result, disarming the `Drop` unpin.
+    pub async fn release(mut self) -> Result<SessionPinResponse, PoolError> {
+        let agent = self
+            .agent
+            .take()
+            .expect("pin guard releases exactly once by construction");
+        send_pin(&agent, &self.session_id, false).await
+    }
+}
+
+impl Drop for SessionPinGuard {
+    fn drop(&mut self) {
+        let Some(agent) = self.agent.take() else {
+            // Already released explicitly.
+            return;
+        };
+        let session_id = self.session_id.clone();
+        // The guard lives inside pool-driven async code, so a runtime handle
+        // is normally available; without one (a purely synchronous teardown)
+        // the leak is at least logged rather than silent.
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    match send_pin(&agent, &session_id, false).await {
+                        Ok(_) => tracing::debug!(
+                            session = %session_id,
+                            "released prefix session pin on guard drop"
+                        ),
+                        Err(err) => tracing::warn!(
+                            session = %session_id,
+                            error = %err,
+                            "failed to release prefix session pin on guard drop"
+                        ),
+                    }
+                });
+            }
+            Err(_) => tracing::warn!(
+                session = %session_id,
+                "prefix pin guard dropped outside a runtime; pin not released"
+            ),
         }
     }
 }
@@ -294,9 +568,10 @@ async fn worker_loop(
             break;
         };
 
-        let result = run_turn_with_liveness(&agent, &notifier, job.prompt, config).await;
+        let result =
+            run_turn_with_liveness(&agent, &notifier, job.session, job.prompt, config).await;
         // The submitter may have dropped its receiver; that is fine.
-        let _ = job.respond_to.send(result);
+        job.respond_to.deliver(result);
     }
 }
 
@@ -320,9 +595,10 @@ async fn worker_loop(
 async fn run_turn_with_liveness(
     agent: &ConnectionTo<Agent>,
     notifier: &claude_agent::NotificationSender,
+    session: SessionSource,
     prompt: String,
     config: PoolConfig,
-) -> PromptResult {
+) -> SessionTurnResult {
     let session_slot: Arc<std::sync::Mutex<Option<SessionId>>> = Arc::default();
     // Two independent subscriptions: one consumed by `run_prompt`'s content
     // collector, one watched here for liveness.
@@ -332,6 +608,7 @@ async fn run_turn_with_liveness(
     let turn = run_prompt(
         agent,
         notifications,
+        session,
         prompt,
         config.max_tokens,
         Arc::clone(&session_slot),
@@ -427,11 +704,13 @@ fn abandon_turn(
 
 /// Drive a single prompt turn against an ACP 0.12 agent connection.
 ///
-/// Routes the two per-prompt ACP requests (`new_session` → `prompt`) through the
-/// typed [`ConnectionTo<Agent>`] handle, spawning a per-session notification
-/// collector so streaming `session/update` content is captured concurrently with
-/// the prompt. The per-call token cap is attached to the prompt request's `meta`
-/// map under the key `"max_tokens"`.
+/// Routes the per-prompt ACP requests (session establishment → `prompt`)
+/// through the typed [`ConnectionTo<Agent>`] handle, spawning a per-session
+/// notification collector so streaming `session/update` content is captured
+/// concurrently with the prompt. The session is established per the job's
+/// [`SessionSource`]: a fresh `session/new`, or a `session/fork` from a primed
+/// parent (see [`establish_session`]). The per-call token cap is attached to
+/// the prompt request's `meta` map under [`MAX_TOKENS_META_KEY`].
 ///
 /// `initialize` is deliberately NOT here: it is a once-per-connection handshake
 /// the driver performs before any worker runs (see
@@ -439,33 +718,26 @@ fn abandon_turn(
 /// concurrent handshakes over the single shared connection and wedged the real
 /// agent.
 ///
-/// `session_slot` is filled with the new session's id as soon as `new_session`
-/// completes, giving the liveness supervisor a handle for progress attribution
-/// and cancel-on-abandonment.
+/// `session_slot` is filled with the session's id as soon as it is established,
+/// giving the liveness supervisor a handle for progress attribution and
+/// cancel-on-abandonment.
 async fn run_prompt(
     agent: &ConnectionTo<Agent>,
     notifications: broadcast::Receiver<SessionNotification>,
+    session: SessionSource,
     prompt: String,
     max_tokens: u64,
     session_slot: Arc<std::sync::Mutex<Option<SessionId>>>,
-) -> PromptResult {
-    // new_session
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-    let session_response = agent
-        .send_request(NewSessionRequest::new(cwd))
-        .block_task()
-        .await
-        .map_err(|e| {
-            claude_agent::AgentError::Internal(format!("failed to create session: {}", e))
-        })?;
-    let session_id = session_response.session_id;
+) -> SessionTurnResult {
+    let (session_id, fork) = establish_session(agent, session).await?;
     // Publish the session id to the liveness supervisor
     // (`run_turn_with_liveness`) so it can attribute streaming progress to this
     // turn and cancel the session if the turn is abandoned.
     *session_slot.lock().expect("session slot lock poisoned") = Some(session_id.clone());
-    // Captured for the per-reply audit log below: `session_id` is moved into the
-    // `PromptRequest` before the response is collected.
-    let session_label = session_id.to_string();
+    // Captured for the per-reply audit log and the delivered turn below:
+    // `session_id` is moved into the `PromptRequest` before the response is
+    // collected.
+    let session_label = session_id.clone();
 
     // 3. spawn notification collector before prompt() so streaming content is
     //    captured as it arrives.
@@ -474,7 +746,10 @@ async fn run_prompt(
 
     // 4. prompt, with the per-call token cap attached via `meta`.
     let mut meta = serde_json::Map::new();
-    meta.insert("max_tokens".to_string(), serde_json::json!(max_tokens));
+    meta.insert(
+        MAX_TOKENS_META_KEY.to_string(),
+        serde_json::json!(max_tokens),
+    );
     let prompt_request = PromptRequest::new(
         session_id,
         vec![ContentBlock::Text(TextContent::new(prompt))],
@@ -511,10 +786,113 @@ async fn run_prompt(
         content
     );
 
-    Ok(claude_agent::CollectedResponse {
+    Ok(SessionTurn {
+        session_id: session_label,
         content,
         stop_reason: prompt_response.stop_reason,
+        fork,
     })
+}
+
+/// Establish the session a turn runs on, per its [`SessionSource`].
+///
+/// - [`SessionSource::New`] issues `session/new` (today's path).
+/// - [`SessionSource::Fork`] issues the `session/fork` extension against the
+///   parent; the returned [`ForkAttachment`] reports whether the parent's
+///   saved state was attached (and how many prefix tokens it covers) so the
+///   caller can log warm vs degraded forks. Any fork failure maps onto the
+///   typed [`PoolError::ForkFailed`] so the submitter can fall back to a
+///   fresh-session monolithic prompt rather than lose the task.
+async fn establish_session(
+    agent: &ConnectionTo<Agent>,
+    session: SessionSource,
+) -> Result<(SessionId, Option<ForkAttachment>), PoolError> {
+    match session {
+        SessionSource::New => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+            let session_response = agent
+                .send_request(NewSessionRequest::new(cwd))
+                .block_task()
+                .await
+                .map_err(|e| {
+                    claude_agent::AgentError::Internal(format!("failed to create session: {}", e))
+                })?;
+            Ok((session_response.session_id, None))
+        }
+        SessionSource::Fork { parent_session_id } => {
+            let response: SessionForkResponse = send_extension_request(
+                agent,
+                SESSION_FORK_METHOD,
+                &SessionForkRequest {
+                    parent_session_id: parent_session_id.to_string(),
+                },
+            )
+            .await
+            .map_err(|message| PoolError::ForkFailed {
+                parent_session_id: parent_session_id.to_string(),
+                message,
+            })?;
+            let attachment = ForkAttachment {
+                state_attached: response.state_attached,
+                prefix_tokens: response.prefix_tokens,
+            };
+            Ok((SessionId::new(response.session_id), Some(attachment)))
+        }
+    }
+}
+
+/// Pin or unpin `session_id`'s saved state over `agent`, mapping failures onto
+/// the typed [`PoolError::Extension`]. Shared by [`AgentPool::pin_session`]
+/// and the pin guard's release paths.
+async fn send_pin(
+    agent: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    pinned: bool,
+) -> Result<SessionPinResponse, PoolError> {
+    send_extension_request(
+        agent,
+        SESSION_PIN_METHOD,
+        &SessionPinRequest {
+            session_id: session_id.to_string(),
+            pinned,
+        },
+    )
+    .await
+    .map_err(|message| PoolError::Extension {
+        method: SESSION_PIN_METHOD,
+        session_id: session_id.to_string(),
+        message,
+    })
+}
+
+/// Send one session-extension request (`session/fork` / `session/state_status`
+/// / `session/pin`) over the connection and parse its typed response.
+///
+/// The wire method is the canonical bare name prefixed with `_`, which is how
+/// the ACP SDK routes extension methods (`ClientRequest::parse_message` only
+/// dispatches `_`-prefixed methods to `ExtMethodRequest`; the receiver strips
+/// the prefix back off). Failures are returned as the human-readable message
+/// so each caller can wrap them in its own typed error.
+async fn send_extension_request<Request, Response>(
+    agent: &ConnectionTo<Agent>,
+    method: &str,
+    request: &Request,
+) -> Result<Response, String>
+where
+    Request: serde::Serialize,
+    Response: serde::de::DeserializeOwned,
+{
+    let params = serde_json::value::to_raw_value(request)
+        .map_err(|e| format!("failed to serialize {method} params: {e}"))?;
+    let value: serde_json::Value = agent
+        .send_request(ClientRequest::ExtMethodRequest(ExtRequest::new(
+            format!("_{method}"),
+            Arc::from(params),
+        )))
+        .block_task()
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::from_value(value).map_err(|e| format!("malformed {method} response: {e}"))
 }
 
 #[cfg(test)]
@@ -523,7 +901,9 @@ mod tests {
 
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::review::test_support::new_notifier;
+    use crate::review::test_support::{
+        new_notifier, with_pool, ForkMode, ScriptedAgent, ScriptedAgentConfig, MOCK_PREFIX_TOKENS,
+    };
 
     use acp_conformance::test_utils::{numbered_session_response, MockAgent, MockAgentAdapter};
     use agent_client_protocol::schema::{
@@ -815,7 +1195,7 @@ mod tests {
             let max_tokens = request
                 .meta
                 .as_ref()
-                .and_then(|m| m.get("max_tokens"))
+                .and_then(|m| m.get(MAX_TOKENS_META_KEY))
                 .and_then(|v| v.as_u64());
             self.recorded_max_tokens.lock().unwrap().push(max_tokens);
             Box::pin(async move {
@@ -1258,6 +1638,220 @@ mod tests {
                 recorded[0],
                 Some(DEFAULT_MAX_TOKENS),
                 "every prompt must carry the per-call max_tokens cap in meta",
+            );
+        })
+        .await;
+    }
+
+    /// A fork-capable shared scripted agent (`crate::review::test_support`) —
+    /// the same mock the fleet tests run, so the pool and the fleet exercise
+    /// one implementation of the session-fork wire contract.
+    fn fork_capable_agent() -> Arc<ScriptedAgent> {
+        ScriptedAgent::with_config(
+            vec![],
+            ScriptedAgentConfig {
+                fork_mode: ForkMode::Supported,
+                ..ScriptedAgentConfig::default()
+            },
+        )
+    }
+
+    /// `submit_primed` runs a normal fresh-session turn but reports the session
+    /// id back, so the caller can confirm/pin and fork from it.
+    #[tokio::test]
+    async fn test_pool_submit_primed_reports_session_id() {
+        let agent = Arc::new(PassingAgent::new());
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let pool = AgentPool::new(conn, notifier_body, PoolConfig::local());
+            let turn = pool
+                .submit_primed("the shared prefix")
+                .await
+                .expect("result")
+                .expect("prime turn should succeed");
+            assert_eq!(turn.session_id, SessionId::new("pass-sess-0"));
+            assert!(turn.fork.is_none(), "a primed turn is not a fork");
+        })
+        .await;
+    }
+
+    /// `submit_forked` forks the parent via the `session/fork` extension, runs
+    /// the prompt on the child session, and reports what the fork attached.
+    #[tokio::test]
+    async fn test_pool_submit_forked_prompts_the_forked_session() {
+        let agent = fork_capable_agent();
+        let agent_probe = Arc::clone(&agent);
+
+        with_pool(agent, PoolConfig::local(), move |pool| async move {
+            // Prime a parent session whose completed turn the fork attaches.
+            let parent = pool
+                .submit_primed("the shared prefix")
+                .await
+                .expect("result")
+                .expect("prime turn should succeed");
+            let turn = pool
+                .submit_forked(&parent.session_id, "payload only")
+                .await
+                .expect("result")
+                .expect("forked turn should succeed");
+            assert_eq!(
+                turn.session_id,
+                SessionId::new("sess-1"),
+                "the fork minted a child session"
+            );
+            assert_eq!(
+                turn.fork,
+                Some(ForkAttachment {
+                    state_attached: true,
+                    prefix_tokens: Some(MOCK_PREFIX_TOKENS),
+                }),
+                "a forked turn reports its full attachment"
+            );
+            assert_eq!(
+                agent_probe.prompted_sessions(),
+                vec!["sess-0".to_string(), "sess-1".to_string()],
+                "the payload prompt must run on the forked session, not a fresh one"
+            );
+        })
+        .await;
+    }
+
+    /// A backend without the fork extension fails a forked submission with the
+    /// typed `ForkFailed` error, so the caller can fall back to a monolithic
+    /// fresh-session prompt instead of losing the task.
+    #[tokio::test]
+    async fn test_pool_submit_forked_without_ext_support_is_fork_failed() {
+        // PassingAgent inherits MockAgent's default ext_method: method_not_found.
+        let agent = Arc::new(PassingAgent::new());
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let pool = AgentPool::new(conn, notifier_body, PoolConfig::local());
+            let err = pool
+                .submit_forked(&SessionId::new("parent-1"), "payload")
+                .await
+                .expect("result")
+                .expect_err("a fork against a fork-less backend must fail");
+            assert!(
+                matches!(err, PoolError::ForkFailed { .. }),
+                "the failure must be the typed fork variant, got: {err:?}"
+            );
+        })
+        .await;
+    }
+
+    /// The pool's direct extension helpers round-trip `session/state_status`
+    /// and `session/pin` over the shared connection (no worker involved).
+    #[tokio::test]
+    async fn test_pool_state_status_and_pin_helpers_round_trip() {
+        let agent = fork_capable_agent();
+        let agent_probe = Arc::clone(&agent);
+
+        with_pool(agent, PoolConfig::local(), move |pool| async move {
+            // A completed turn gives the session saved, pinnable state.
+            let turn = pool
+                .submit_primed("the shared prefix")
+                .await
+                .expect("result")
+                .expect("prime turn should succeed");
+
+            let status = pool
+                .session_state_status(&turn.session_id)
+                .await
+                .expect("state status should round-trip");
+            assert!(status.saved);
+            assert_eq!(status.prompt_tokens, Some(MOCK_PREFIX_TOKENS));
+
+            let pin = pool
+                .pin_session(&turn.session_id, true)
+                .await
+                .expect("pin should round-trip");
+            assert!(pin.pinned);
+            assert_eq!(
+                agent_probe.pin_calls(),
+                vec![(turn.session_id.to_string(), true)]
+            );
+        })
+        .await;
+    }
+
+    /// The quick extension helpers fail with the typed [`PoolError::Extension`]
+    /// variant — like the fork path's `ForkFailed` — so callers can tell "the
+    /// backend lacks this extension" apart without parsing message text.
+    #[tokio::test]
+    async fn test_pool_extension_helper_failure_is_typed() {
+        // The default shared agent implements NO extension methods.
+        let agent = ScriptedAgent::new(vec![]);
+
+        with_pool(agent, PoolConfig::local(), move |pool| async move {
+            let session = SessionId::new("sess-0");
+            let err = pool
+                .session_state_status(&session)
+                .await
+                .expect_err("a backend without the extension must fail the status call");
+            assert!(
+                matches!(
+                    err,
+                    PoolError::Extension {
+                        method: SESSION_STATE_STATUS_METHOD,
+                        ..
+                    }
+                ),
+                "the failure must be the typed extension variant, got: {err:?}"
+            );
+
+            let err = pool
+                .pin_session(&session, true)
+                .await
+                .expect_err("a backend without the extension must fail the pin call");
+            assert!(
+                matches!(
+                    err,
+                    PoolError::Extension {
+                        method: SESSION_PIN_METHOD,
+                        ..
+                    }
+                ),
+                "the failure must be the typed extension variant, got: {err:?}"
+            );
+        })
+        .await;
+    }
+
+    /// `pin_session_scoped` returns a guard whose explicit `release()` unpins
+    /// inline AND disarms the `Drop` backstop: exactly one unpin is issued.
+    #[tokio::test]
+    async fn test_pool_pin_guard_release_unpins_exactly_once() {
+        let agent = fork_capable_agent();
+        let agent_probe = Arc::clone(&agent);
+
+        with_pool(agent, PoolConfig::local(), move |pool| async move {
+            let turn = pool
+                .submit_primed("the shared prefix")
+                .await
+                .expect("result")
+                .expect("prime turn should succeed");
+            let (pin, guard) = pool
+                .pin_session_scoped(&turn.session_id)
+                .await
+                .expect("scoped pin should round-trip");
+            assert!(pin.pinned);
+
+            guard.release().await.expect("release should round-trip");
+
+            // Give a (would-be) spawned drop-unpin time to land, then prove it
+            // never fired: exactly one pin and one unpin.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            assert_eq!(
+                agent_probe.pin_calls(),
+                vec![
+                    (turn.session_id.to_string(), true),
+                    (turn.session_id.to_string(), false),
+                ],
+                "release() must unpin exactly once — the Drop backstop is disarmed"
             );
         })
         .await;

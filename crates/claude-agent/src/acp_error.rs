@@ -67,6 +67,26 @@ pub fn internal_error(message: impl Into<String>) -> Error {
     with_message(ErrorCode::InternalError, message)
 }
 
+/// [`invalid_params`] carrying the uniform `{sessionId, error: <kind>}` data
+/// payload every session-scoped failure uses: the message is human-readable
+/// and `data.error` is the machine-readable kind a client branches on.
+///
+/// This is the single canonical builder for that shape — the core
+/// "session not found" error and the session-fork extension errors
+/// (`fork_parent_not_found`, `fork_parent_state_unavailable`,
+/// `session_state_not_found` from
+/// [`agent_client_protocol_extras::session_fork`]) are all expressed through
+/// it, keeping the wire shape identical to llama-agent's so clients treat
+/// both backends the same. Logs the failure as a warning.
+#[must_use]
+pub fn session_error(session_id: &str, kind: &str, message: impl std::fmt::Display) -> Error {
+    tracing::warn!("Session call failed for {session_id}: {message}");
+    invalid_params(message.to_string()).data(serde_json::json!({
+        "sessionId": session_id,
+        "error": kind,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -105,6 +105,10 @@ pub(crate) fn model_identifier_for_strategy(model: &crate::types::ModelConfig) -
 /// each hosting a different tool set. The tool sets are discovered once at
 /// attach time, so the index is built then and reused for every dispatch —
 /// routing never re-issues a `tools/list` round-trip on the hot path.
+///
+/// `Clone` is cheap (the clients are `Arc`s) and is how a forked session
+/// shares its parent's attached backends and routing index.
+#[derive(Clone)]
 pub(crate) struct SessionMcpClients {
     /// All clients attached to the session, in attachment order. The first is
     /// the routing fallback when no client advertises a requested tool.

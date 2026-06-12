@@ -28,6 +28,21 @@
 //! Each [`VerifiedFinding`] records which layer refuted it
 //! ([`VerifiedFinding::refuted_by`]) so synthesis can report confirmed/refuted
 //! counts and reasons.
+//!
+//! # Why verify does NOT use primed prefix sessions
+//!
+//! The fleet stage primes each validator's shared prompt prefix once and forks
+//! it per batch (see [`fleet`](crate::review::fleet)) because the shared
+//! sections dominate its prompts (~80–90% of the bytes). Verify prompts do not
+//! have that shape: the only shared text is the adversary header (~280 bytes
+//! before the first per-candidate byte) and the output contract (~420 bytes,
+//! at the END of the prompt, so not even a shared prefix without reordering).
+//! The dominant content — the finding, the file's bounded `source_slice`, and
+//! the probe evidence — is per-candidate. Even with the contract reordered to
+//! the front, the shared prefix is ~700 bytes (~175 tokens) of a typically
+//! multi-thousand-token prompt: under ~10% prefix share. A prime turn plus
+//! fork/status/pin round-trips per review would cost more than the reuse
+//! saves, so verify keeps fresh-session prompts.
 
 use std::fmt::Write as _;
 
@@ -472,7 +487,6 @@ merely plausible.
 mod tests {
     use super::*;
     use crate::review::probes::ProbeRow;
-    use crate::review::test_support::new_notifier;
     use crate::review::types::Severity;
 
     /// A `dead-code` finding about `symbol` in `file`.
@@ -752,192 +766,28 @@ mod tests {
         );
     }
 
-    // ---- scripted mock-agent harness -------------------------------------
+    // ---- scripted mock-agent harness (shared) ------------------------------
     //
-    // A minimal ACP agent that maps each incoming verify prompt onto a scripted
-    // verdict by substring match (the finding's claim), delivering it as a
-    // streamed `agent_message_chunk` — the same shape the pool's collector reads.
-    // A script entry can be set to error, proving a failing verify task resolves
-    // to refuted without deadlocking the rest.
+    // The scripted ACP agent lives in `crate::review::test_support`. The
+    // verifier flavor differs only in its default reply: a malformed body so
+    // the verdict parser refutes by default when no script entry matches.
 
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
-    use acp_conformance::test_utils::numbered_session_response;
-    use agent_client_protocol::schema::{
-        ContentBlock as AcpContentBlock, ContentChunk, InitializeResponse, PromptRequest,
-        PromptResponse, SessionNotification, SessionUpdate, TextContent,
+    use crate::review::test_support::{
+        verdict_json, with_pool, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
     };
-    use agent_client_protocol::{Channel, Client, ConnectTo, ConnectionTo, Role};
+    use crate::validators::PoolConfig;
 
-    use crate::validators::{AgentPool, PoolConfig};
-
-    struct ScriptedAgent {
-        next_session: AtomicUsize,
-        /// (claim-substring, Some(verdict-json) | None=error), matched in order.
-        script: Vec<(String, Option<String>)>,
-        seen: Mutex<Vec<String>>,
-    }
-
-    impl ScriptedAgent {
-        fn new(script: Vec<(String, Option<String>)>) -> Arc<Self> {
-            Arc::new(Self {
-                next_session: AtomicUsize::new(0),
-                script,
-                seen: Mutex::new(Vec::new()),
-            })
-        }
-
-        fn seen_prompts(&self) -> Vec<String> {
-            self.seen.lock().unwrap().clone()
-        }
-
-        fn response_for(&self, prompt: &str) -> Option<String> {
-            for (needle, response) in &self.script {
-                if prompt.contains(needle) {
-                    return response.clone();
-                }
-            }
-            // No script entry → a malformed body so the parser refutes by default.
-            Some("no verdict here".to_string())
-        }
-
-        fn is_error(&self, prompt: &str) -> bool {
-            self.script
-                .iter()
-                .find(|(needle, _)| prompt.contains(needle))
-                .map(|(_, response)| response.is_none())
-                .unwrap_or(false)
-        }
-    }
-
-    struct ScriptedAdapter(Arc<ScriptedAgent>);
-
-    impl ConnectTo<Client> for ScriptedAdapter {
-        async fn connect_to(
-            self,
-            client: impl ConnectTo<<Client as Role>::Counterpart>,
-        ) -> agent_client_protocol::Result<()> {
-            let mock = Arc::clone(&self.0);
-            agent_client_protocol::Agent
-                .builder()
-                .name("scripted-verifier")
-                .on_receive_request(
-                    {
-                        let mock = Arc::clone(&mock);
-                        async move |req: agent_client_protocol::ClientRequest, responder, cx| {
-                            dispatch(&mock, req, responder, &cx)
-                        }
-                    },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .on_receive_notification(
-                    async move |_n: agent_client_protocol::ClientNotification, _cx| Ok(()),
-                    agent_client_protocol::on_receive_notification!(),
-                )
-                .connect_to(client)
-                .await
-        }
-    }
-
-    fn dispatch(
-        mock: &Arc<ScriptedAgent>,
-        request: agent_client_protocol::ClientRequest,
-        responder: agent_client_protocol::Responder<serde_json::Value>,
-        cx: &ConnectionTo<Client>,
-    ) -> agent_client_protocol::Result<()> {
-        use agent_client_protocol::ClientRequest as Req;
-
-        let mock = Arc::clone(mock);
-        let cx = cx.clone();
-        cx.clone().spawn(async move {
-            match request {
-                Req::InitializeRequest(_) => responder
-                    .cast()
-                    .respond_with_result(Ok(InitializeResponse::new(1.into()))),
-                Req::NewSessionRequest(_req) => responder.cast().respond_with_result(
-                    numbered_session_response(&mock.next_session, "sess").await,
-                ),
-                Req::PromptRequest(req) => {
-                    let prompt = prompt_text(&req);
-                    mock.seen.lock().unwrap().push(prompt.clone());
-                    if mock.is_error(&prompt) {
-                        return responder
-                            .cast::<PromptResponse>()
-                            .respond_with_error(agent_client_protocol::Error::internal_error());
-                    }
-                    if let Some(text) = mock.response_for(&prompt) {
-                        let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(
-                            AcpContentBlock::Text(TextContent::new(text)),
-                        ));
-                        let notif = SessionNotification::new(req.session_id.clone(), update);
-                        let _ = cx.send_notification(notif);
-                    }
-                    responder.cast().respond_with_result(Ok(PromptResponse::new(
-                        agent_client_protocol::schema::StopReason::EndTurn,
-                    )))
-                }
-                _ => responder
-                    .cast::<serde_json::Value>()
-                    .respond_with_error(agent_client_protocol::Error::method_not_found()),
-            }
-        })
-    }
-
-    fn prompt_text(req: &PromptRequest) -> String {
-        req.prompt
-            .iter()
-            .filter_map(|block| match block {
-                AcpContentBlock::Text(t) => Some(t.text.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("")
-    }
-
-    /// Run `body` against a pool backed by the scripted verifier agent.
-    async fn with_pool<F, Fut, R>(agent: Arc<ScriptedAgent>, config: PoolConfig, body: F) -> R
-    where
-        F: FnOnce(AgentPool) -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = R> + Send + 'static,
-        R: Send + 'static,
-    {
-        let notifier = new_notifier();
-        let notifier_body = Arc::clone(&notifier);
-        let (channel_a, channel_b) = Channel::duplex();
-
-        let agent_task = tokio::spawn(async move {
-            let _ = ScriptedAdapter(agent).connect_to(channel_a).await;
-        });
-
-        let notifier_for_handler = Arc::clone(&notifier);
-        let result = Client
-            .builder()
-            .name("verify-test-client")
-            .on_receive_notification(
-                async move |notif: SessionNotification, _cx| {
-                    let _ = notifier_for_handler.send_update(notif).await;
-                    Ok(())
-                },
-                agent_client_protocol::on_receive_notification!(),
-            )
-            .connect_with(channel_b, async move |conn: ConnectionTo<_>| {
-                let pool = AgentPool::new(conn, notifier_body, config);
-                Ok(body(pool).await)
-            })
-            .await
-            .expect("client connect_with failed");
-
-        agent_task.abort();
-        let _ = agent_task.await;
-        result
-    }
-
-    /// A verdict object as the verifier agent would emit it, fenced in prose.
-    fn verdict_json(confirmed: bool, reason: &str) -> String {
-        format!(
-            "After trying to disprove the claim:\n\n```json\n{{\"confirmed\": {confirmed}, \
-             \"reason\": \"{reason}\"}}\n```\n"
+    /// A scripted verifier agent: unmatched prompts get a malformed body so
+    /// the parser refutes by default.
+    fn verifier_agent(script: Vec<(String, ScriptedReply)>) -> Arc<ScriptedAgent> {
+        ScriptedAgent::with_config(
+            script,
+            ScriptedAgentConfig {
+                default_response: "no verdict here".to_string(),
+                ..ScriptedAgentConfig::default()
+            },
         )
     }
 
@@ -975,21 +825,21 @@ mod tests {
             survivor("delta"),
         ];
 
-        let agent = ScriptedAgent::new(vec![
+        let agent = verifier_agent(vec![
             (
                 "CLAIM[alpha]".to_string(),
-                Some(verdict_json(true, "alpha is substantiated")),
+                ScriptedReply::Text(verdict_json(true, "alpha is substantiated")),
             ),
             (
                 "CLAIM[beta]".to_string(),
-                Some(verdict_json(true, "beta is substantiated")),
+                ScriptedReply::Text(verdict_json(true, "beta is substantiated")),
             ),
             (
                 "CLAIM[gamma]".to_string(),
-                Some(verdict_json(false, "gamma is disproven")),
+                ScriptedReply::Text(verdict_json(false, "gamma is disproven")),
             ),
             // delta's verify task errors → must resolve to refuted by default.
-            ("CLAIM[delta]".to_string(), None),
+            ("CLAIM[delta]".to_string(), ScriptedReply::Error),
         ]);
 
         let outcome = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
@@ -1029,14 +879,14 @@ mod tests {
         // is no separate verify stage/pool, they share one queue.
         let candidate = survivor("pipelined");
 
-        let agent = ScriptedAgent::new(vec![
+        let agent = verifier_agent(vec![
             (
                 "FANOUT_MARKER".to_string(),
-                Some("fan-out done".to_string()),
+                ScriptedReply::Text("fan-out done".to_string()),
             ),
             (
                 "CLAIM[pipelined]".to_string(),
-                Some(verdict_json(true, "pipelined and confirmed")),
+                ScriptedReply::Text(verdict_json(true, "pipelined and confirmed")),
             ),
         ]);
         let agent_probe = Arc::clone(&agent);

@@ -61,6 +61,9 @@ rusqlite = { workspace = true }
 
 # Async runtime backing the agent pool's worker tasks
 tokio = { workspace = true }
+# `join_all` drives the per-validator prime→fork fan-out runs concurrently
+# (the pool still owns the only real concurrency control)
+futures = { workspace = true }
 
 [build-dependencies]
 swissarmyhammer-build = { workspace = true }
@@ -73,7 +76,6 @@ tracing-test = { workspace = true }
 # The shared ACP mock-agent harness (MockAgent trait + adapter + dispatch) the
 # pool tests drive their scripted agents through — reused, never copied.
 acp-conformance = { workspace = true, features = ["test-support"] }
-futures = { workspace = true }
 # Deterministic embedder for the probe-runner tests (no 600MB model load)
 model-embedding = { workspace = true, features = ["test-support"] }
 # Real temp git repos for the scope-stage tests (init/commit/working-tree).

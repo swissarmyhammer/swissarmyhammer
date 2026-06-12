@@ -8,8 +8,10 @@ homepage.workspace = true
 description = "Local LLM agent using llama.cpp"
 
 [dependencies]
-# Fixture support
-agent-client-protocol-extras = { workspace = true }
+# Fixture support. `test-support` exports the canonical `StateDirGuard`,
+# re-exported by `acp::test_utils` (compiled into non-test builds so
+# integration tests and acp-conformance can import it).
+agent-client-protocol-extras = { workspace = true, features = ["test-support"] }
 
 # Core inference
 llama-cpp-2 = { workspace = true }
@@ -98,6 +100,10 @@ swissarmyhammer-config = { workspace = true }
 swissarmyhammer-skills = { workspace = true }
 
 chrono = { workspace = true }
+
+# Used by `acp::test_utils` (compiled in non-test builds so integration
+# tests can import it) for the shared model-free test-config helpers.
+tempfile = { workspace = true }
 
 # Unix signal handling for graceful shutdown
 [target.'cfg(unix)'.dependencies]
