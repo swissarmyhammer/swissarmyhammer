@@ -8,12 +8,12 @@
 //!
 //! The module also includes example tests demonstrating proper usage patterns for:
 //! - Listing tools and verifying tool availability
-//! - Listing prompts
 //! - Calling tools with arguments
 //!
 //! Tests using these utilities avoid subprocess overhead and build lock contention that
 //! occurs with `cargo run` based tests.
 
+use crate::mcp::unified_server::{start_mcp_server_with_options, McpServerHandle, McpServerMode};
 use once_cell::sync::Lazy;
 use rmcp::{
     model::{ClientCapabilities, ClientInfo, Implementation},
@@ -21,6 +21,7 @@ use rmcp::{
     transport::streamable_http_client::StreamableHttpClientTransport,
     ServiceExt,
 };
+use tempfile::TempDir;
 
 /// Process-wide HTTP client for the RMCP test transport, with system-proxy
 /// detection disabled.
@@ -92,9 +93,53 @@ pub async fn create_test_client_named(
         .expect("Failed to create RMCP client")
 }
 
+/// Starts an in-process HTTP MCP server bound to a fresh temp dir and connects a
+/// default test RMCP client to it.
+///
+/// This is the canonical bootstrap for in-process MCP server tests. It captures
+/// the conventions that every such test needs, in one place:
+/// - A fresh [`TempDir`] is used as the server's working directory, so
+///   `startup_cleanup`/`initialize_code_context` see no enclosing git repository
+///   and skip the synchronous walk/hash of the host monorepo (which otherwise
+///   makes startup take minutes under full-workspace nextest).
+/// - The HTTP server binds to a random free port (`McpServerMode::Http { port:
+///   None }`) and the connected [`create_test_client`] completes the RMCP
+///   handshake via the shared no-proxy transport.
+///
+/// The returned [`TempDir`] **must** be kept alive for the duration of the test:
+/// dropping it deletes the server's working directory out from under it. Bind it
+/// to a named variable (e.g. `let (mut server, client, _temp) = ...`).
+///
+/// In-process MCP server tests must run on a `multi_thread` tokio runtime — the
+/// test both hosts the server and drives the client, and a current-thread
+/// runtime cannot advance the server's SSE response task while blocked on the
+/// client handshake (see `test_client_handshake_is_fast`).
+///
+/// # Returns
+/// A tuple of `(server handle, connected client, working-dir guard)`.
+pub async fn start_test_server_and_client() -> (
+    McpServerHandle,
+    RunningService<rmcp::RoleClient, ClientInfo>,
+    TempDir,
+) {
+    let temp = TempDir::new().expect("Failed to create temp working dir");
+    let server = start_mcp_server_with_options(
+        McpServerMode::Http { port: None },
+        None,
+        None,
+        Some(temp.path().to_path_buf()),
+    )
+    .await
+    .expect("Failed to start in-process MCP server");
+
+    let client = create_test_client(server.url()).await;
+
+    (server, client, temp)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::create_test_client;
+    use super::{create_test_client, start_test_server_and_client};
     use crate::mcp::unified_server::{start_mcp_server_with_options, McpServerMode};
     use rmcp::model::CallToolRequestParams;
 
@@ -152,19 +197,8 @@ mod tests {
         // advertised set per connecting client. The default `test-client` name
         // is an unknown host → `Shared` only, so `Agent`-category tools like
         // `files` are NOT advertised (host-specific behavior is asserted in the
-        // `per_client_tool_composition` integration test). Pass a tempdir as
-        // working_dir so the server doesn't bind to the host monorepo.
-        let temp = tempfile::TempDir::new().unwrap();
-        let mut server = start_mcp_server_with_options(
-            McpServerMode::Http { port: None },
-            None,
-            None,
-            Some(temp.path().to_path_buf()),
-        )
-        .await
-        .unwrap();
-
-        let client = create_test_client(server.url()).await;
+        // `per_client_tool_composition` integration test).
+        let (mut server, client, _temp) = start_test_server_and_client().await;
 
         let tools = client.list_tools(Default::default()).await.unwrap();
         assert!(!tools.tools.is_empty());
@@ -187,41 +221,10 @@ mod tests {
 
     // multi_thread required — see `test_client_handshake_is_fast`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_client_list_prompts() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let mut server = start_mcp_server_with_options(
-            McpServerMode::Http { port: None },
-            None,
-            None,
-            Some(temp.path().to_path_buf()),
-        )
-        .await
-        .unwrap();
-
-        let client = create_test_client(server.url()).await;
-
-        let _prompts = client.list_prompts(Default::default()).await.unwrap();
-
-        client.cancel().await.unwrap();
-        server.shutdown().await.unwrap();
-    }
-
-    // multi_thread required — see `test_client_handshake_is_fast`.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_client_call_tool() {
         // The full tool union (including agent tools like `files`) is always
         // registered.
-        let temp = tempfile::TempDir::new().unwrap();
-        let mut server = start_mcp_server_with_options(
-            McpServerMode::Http { port: None },
-            None,
-            None,
-            Some(temp.path().to_path_buf()),
-        )
-        .await
-        .unwrap();
-
-        let client = create_test_client(server.url()).await;
+        let (mut server, client, _temp) = start_test_server_and_client().await;
 
         let result = client
             .call_tool(

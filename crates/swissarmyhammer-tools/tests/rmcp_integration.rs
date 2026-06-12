@@ -4,36 +4,21 @@
 //! and verify they implement the MCP protocol correctly.
 
 use rmcp::model::CallToolRequestParams;
-use swissarmyhammer_tools::mcp::{
-    test_utils::create_test_client,
-    unified_server::{start_mcp_server_with_options, McpServerMode},
-};
+use swissarmyhammer_tools::mcp::test_utils::start_test_server_and_client;
 
 /// Test MCP server with RMCP client (Fast In-Process)
 ///
-/// Tests MCP server tool/prompt functionality without subprocess overhead:
+/// Tests MCP server tool functionality without subprocess overhead:
 /// - Uses in-process HTTP MCP server
 /// - No cargo build/run overhead
-/// - Tests tool listing, prompt listing, and tool calls
+/// - Tests tool listing and tool calls
 /// - Fast execution (<1s instead of 20-30s)
 #[tokio::test]
 async fn test_mcp_server_with_rmcp_client() {
-    // Start in-process HTTP MCP server. The full tool union (including agent
-    // tools) is always registered. Run against an isolated temp dir so
-    // `initialize_code_context` skips the synchronous monorepo walk that would
-    // otherwise run when MCP Initialize fires.
-    let temp = tempfile::TempDir::new().expect("Failed to create temp dir");
-    let mut server = start_mcp_server_with_options(
-        McpServerMode::Http { port: None },
-        None,
-        None,
-        Some(temp.path().to_path_buf()),
-    )
-    .await
-    .expect("Failed to start in-process MCP server");
-
-    // Create RMCP client
-    let client = create_test_client(server.url()).await;
+    // The shared helper starts the in-process HTTP server bound to a fresh temp
+    // dir (so `initialize_code_context` skips the host-monorepo walk) and
+    // connects a client. `_temp` holds the working-dir guard alive.
+    let (mut server, client, _temp) = start_test_server_and_client().await;
 
     // List tools to verify our server provides the expected tools
     let tools = client
@@ -57,12 +42,6 @@ async fn test_mcp_server_with_rmcp_client() {
         !tool_names.contains(&"shell".to_string()),
         "unknown host must not be advertised the Replacement-category shell tool"
     );
-
-    // List prompts to verify prompt functionality
-    let _prompts = client
-        .list_prompts(Default::default())
-        .await
-        .expect("Failed to list prompts");
 
     // Test a simple tool call - files with glob op should work
     let tool_result = client
@@ -105,7 +84,11 @@ async fn test_mcp_server_with_rmcp_client() {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn tool_call_complete_log_emits_full_result_untruncated() {
-    let temp = tempfile::TempDir::new().expect("Failed to create temp dir");
+    // The shared helper starts the in-process HTTP server bound to a fresh temp
+    // dir (so `initialize_code_context` skips the host-monorepo walk) and
+    // connects a client. `temp` is the server's working dir — the fixture file
+    // is written into it below, before the tool call that reads it.
+    let (mut server, client, temp) = start_test_server_and_client().await;
 
     // A single unique token, 600 bytes long — comfortably past the old 256-byte
     // preview cap. The tail (`...TAIL_MARKER`) only lands in the log if the full
@@ -113,17 +96,6 @@ async fn tool_call_complete_log_emits_full_result_untruncated() {
     let token = format!("FULLRESULTMARKER_{}_TAIL", "x".repeat(600));
     let read_target = temp.path().join("big_result.txt");
     std::fs::write(&read_target, &token).expect("write big result fixture");
-
-    let mut server = start_mcp_server_with_options(
-        McpServerMode::Http { port: None },
-        None,
-        None,
-        Some(temp.path().to_path_buf()),
-    )
-    .await
-    .expect("Failed to start in-process MCP server");
-
-    let client = create_test_client(server.url()).await;
 
     let tool_result = client
         .call_tool(

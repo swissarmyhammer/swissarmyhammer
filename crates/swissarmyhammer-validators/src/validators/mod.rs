@@ -82,7 +82,7 @@ pub use types::{
 ///
 /// This is a type alias for the generic [`LibraryPartialAdapter`] specialized
 /// for [`ValidatorLoader`]. This follows the same unified pattern as
-/// [`swissarmyhammer_prompts::PromptPartialAdapter`].
+/// [`swissarmyhammer_templating::PartialAdapter`].
 ///
 /// The underlying loader implements [`swissarmyhammer_templating::partials::TemplateContentProvider`],
 /// enabling validators to participate in the unified partial system.

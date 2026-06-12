@@ -72,7 +72,7 @@ pub trait TemplateContentProvider: Send + Sync + std::fmt::Debug {
 
 /// A generic partial adapter that works with any [`TemplateContentProvider`].
 ///
-/// This eliminates the need for separate `PromptPartialAdapter`, `RulePartialAdapter`,
+/// This eliminates the need for separate `PartialAdapter`, `RulePartialAdapter`,
 /// etc. by providing a single unified adapter that can wrap any library implementing
 /// the `TemplateContentProvider` trait.
 ///

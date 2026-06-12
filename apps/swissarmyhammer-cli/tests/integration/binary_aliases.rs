@@ -16,24 +16,7 @@ async fn test_swissarmyhammer_has_expected_commands() {
     assert_eq!(result.exit_code, 0, "Help command should succeed");
 
     let output = result.stdout;
-    assert!(
-        output.contains("serve"),
-        "Help should mention serve command"
-    );
-    assert!(
-        output.contains("doctor"),
-        "Help should mention doctor command"
-    );
-    assert!(
-        output.contains("prompt"),
-        "Help should mention prompt command"
-    );
-    assert!(
-        output.contains("completion"),
-        "Help should mention completion command"
-    );
-    assert!(
-        output.contains("validate"),
-        "Help should mention validate command"
-    );
+    for cmd in ["serve", "doctor", "completion", "validate"] {
+        assert!(output.contains(cmd), "Help should mention {cmd} command");
+    }
 }

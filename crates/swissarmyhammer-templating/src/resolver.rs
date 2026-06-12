@@ -1,9 +1,7 @@
-use crate::{PromptLibrary, PromptLoader, Result};
+use crate::prompts::{Prompt, TemplateLibrary, TemplateLoader};
 use std::collections::HashMap;
 use swissarmyhammer_common::file_loader::{FileSource, VirtualFileSystem};
-
-// Include the generated builtin prompts
-include!(concat!(env!("OUT_DIR"), "/builtin_prompts.rs"));
+use swissarmyhammer_common::Result;
 
 // Include shared partials from builtin/_partials/ (shared across prompts, skills, and agents)
 include!(concat!(env!("OUT_DIR"), "/builtin_partials.rs"));
@@ -38,20 +36,20 @@ impl PromptResolver {
     }
 
     /// Load all prompts following the correct precedence:
-    /// 1. Builtin prompts (least specific, embedded in binary)
-    /// 2. User prompts from $XDG_DATA_HOME/sah/prompts
-    /// 3. Local prompts from .prompts in the project root (most specific)
+    /// 1. User prompts from $XDG_DATA_HOME/sah/prompts
+    /// 2. Local prompts from .prompts in the project root (most specific)
     ///
-    /// Also loads partials into the library's storage for template rendering.
-    pub fn load_all_prompts(&mut self, library: &mut PromptLibrary) -> Result<()> {
-        // Load builtin prompts first (least precedence)
-        self.load_builtin_prompts()?;
+    /// Also loads the shared builtin partials (used by skills and agents) into
+    /// the library's storage for template rendering.
+    pub fn load_all_prompts(&mut self, library: &mut TemplateLibrary) -> Result<()> {
+        // Register the shared builtin partials first (least precedence)
+        self.load_builtin_partials();
 
         // Load all files from directories using VFS
         self.vfs.load_all()?;
 
         // Process all loaded files into prompts and partials
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         for file in self.vfs.list() {
             // Check if this is a partial template - either by tag or frontmatter
             let has_partial_tag = file.content.trim_start().starts_with("{% partial %}");
@@ -76,8 +74,7 @@ impl PromptResolver {
                 };
 
                 // Add the partial with the base name (e.g., "workflow_guards")
-                let mut partial_prompt =
-                    crate::prompts::Prompt::new(base_name, template_content.clone());
+                let mut partial_prompt = Prompt::new(base_name, template_content.clone());
                 partial_prompt
                     .metadata
                     .insert("partial".to_string(), serde_json::Value::Bool(true));
@@ -87,8 +84,7 @@ impl PromptResolver {
 
                 // Also add with .md extension (e.g., "workflow_guards.md")
                 let name_with_md = format!("{}.md", base_name);
-                let mut partial_with_md =
-                    crate::prompts::Prompt::new(&name_with_md, template_content.clone());
+                let mut partial_with_md = Prompt::new(&name_with_md, template_content.clone());
                 partial_with_md
                     .metadata
                     .insert("partial".to_string(), serde_json::Value::Bool(true));
@@ -99,7 +95,7 @@ impl PromptResolver {
                 // Also add with .liquid extension (e.g., "workflow_guards.liquid")
                 let name_with_liquid = format!("{}.liquid", base_name);
                 let mut partial_with_liquid =
-                    crate::prompts::Prompt::new(&name_with_liquid, template_content.clone());
+                    Prompt::new(&name_with_liquid, template_content.clone());
                 partial_with_liquid
                     .metadata
                     .insert("partial".to_string(), serde_json::Value::Bool(true));
@@ -127,23 +123,16 @@ impl PromptResolver {
         Ok(())
     }
 
-    /// Load builtin prompts from embedded binary data
-    fn load_builtin_prompts(&mut self) -> Result<()> {
-        let builtin_prompts = get_builtin_prompts();
-
-        // Add builtin prompts to VFS
-        for (name, content) in builtin_prompts {
-            self.vfs.add_builtin(name, content);
-        }
-
-        // Add shared partials from builtin/_partials/ with _partials/ prefix
-        // so {% include "_partials/..." %} references resolve correctly
+    /// Register the shared builtin partials from embedded binary data.
+    ///
+    /// Adds shared partials from `builtin/_partials/` with the `_partials/`
+    /// prefix so `{% include "_partials/..." %}` references (used by skills and
+    /// agents) resolve correctly.
+    fn load_builtin_partials(&mut self) {
         let builtin_partials = get_builtin_partials();
         for (name, content) in builtin_partials {
             self.vfs.add_builtin(format!("_partials/{}", name), content);
         }
-
-        Ok(())
     }
 }
 
@@ -163,6 +152,24 @@ mod tests {
 
     #[test]
     #[serial]
+    fn test_load_all_prompts_registers_builtin_partials() {
+        // The shared builtin partials (used by skills and agents) must always be
+        // registered after load_all_prompts, even though builtin prompts no longer exist.
+        let mut resolver = PromptResolver::new();
+        let mut library = TemplateLibrary::new();
+
+        resolver
+            .load_all_prompts(&mut library)
+            .expect("load_all_prompts should succeed");
+
+        // The delegate-to-subagent partial lives in builtin/_partials/ and must be present.
+        library
+            .get("_partials/delegate-to-subagent")
+            .expect("_partials/delegate-to-subagent should be registered");
+    }
+
+    #[test]
+    #[serial]
     fn test_prompt_resolver_loads_user_prompts() {
         let temp_dir = TempDir::new().unwrap();
         // VFS dot-directory mode now uses $XDG_DATA_HOME/{xdg_name}/prompts for user-level
@@ -177,7 +184,7 @@ mod tests {
         std::env::set_var("XDG_DATA_HOME", temp_dir.path());
 
         let mut resolver = PromptResolver::new();
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
 
         let result = resolver.load_all_prompts(&mut library);
 
@@ -219,7 +226,7 @@ mod tests {
         .unwrap();
 
         let mut resolver = PromptResolver::new();
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
 
         // Change to the temp directory to simulate local prompts. The RAII
         // guard restores the original working directory on drop, even on panic.
@@ -296,7 +303,7 @@ This is a user-defined debug/error prompt that should override the builtin one.
         fs::write(&prompt_file, user_prompt_content).unwrap();
 
         let mut resolver = PromptResolver::new();
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
 
         // Store original XDG_DATA_HOME to restore later
         let original_xdg = std::env::var("XDG_DATA_HOME").ok();
@@ -346,7 +353,7 @@ This is a user-defined debug/error prompt that should override the builtin one.
     #[test]
     fn test_partial_frontmatter_registers_all_name_variants() {
         // Create a partial with frontmatter `partial: true`
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         let partial_content = r#"---
 partial: true
 ---
@@ -368,16 +375,13 @@ This is partial content"#;
         // Register with all variants like the resolver does
         let base_name = "test_partial";
         library
-            .add(crate::prompts::Prompt::new(base_name, partial_content))
+            .add(Prompt::new(base_name, partial_content))
             .unwrap();
         library
-            .add(crate::prompts::Prompt::new(
-                format!("{}.md", base_name),
-                partial_content,
-            ))
+            .add(Prompt::new(format!("{}.md", base_name), partial_content))
             .unwrap();
         library
-            .add(crate::prompts::Prompt::new(
+            .add(Prompt::new(
                 format!("{}.liquid", base_name),
                 partial_content,
             ))
@@ -403,39 +407,27 @@ This is partial content"#;
         use swissarmyhammer_config::TemplateContext;
 
         // Create a library with a partial that uses frontmatter
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
 
         // Add the partial with all name variants
         let partial_content = "PARTIAL_CONTENT_HERE";
         library
-            .add(crate::prompts::Prompt::new(
-                "_test/my_partial",
-                partial_content,
-            ))
+            .add(Prompt::new("_test/my_partial", partial_content))
             .unwrap();
         library
-            .add(crate::prompts::Prompt::new(
-                "_test/my_partial.md",
-                partial_content,
-            ))
+            .add(Prompt::new("_test/my_partial.md", partial_content))
             .unwrap();
 
         // Add a template that references the partial WITHOUT extension
         let template_without_ext = r#"Before {% render "_test/my_partial" %} After"#;
         library
-            .add(crate::prompts::Prompt::new(
-                "test_without_ext",
-                template_without_ext,
-            ))
+            .add(Prompt::new("test_without_ext", template_without_ext))
             .unwrap();
 
         // Add a template that references the partial WITH extension
         let template_with_ext = r#"Before {% render "_test/my_partial.md" %} After"#;
         library
-            .add(crate::prompts::Prompt::new(
-                "test_with_ext",
-                template_with_ext,
-            ))
+            .add(Prompt::new("test_with_ext", template_with_ext))
             .unwrap();
 
         let ctx = TemplateContext::new();

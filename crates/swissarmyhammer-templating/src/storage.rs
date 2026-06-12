@@ -4,10 +4,9 @@
 //! to persist and retrieve prompts from various storage backends.
 
 use crate::prompts::Prompt;
-use crate::Result;
 use std::collections::HashMap;
 use std::path::Path;
-use swissarmyhammer_common::SwissArmyHammerError;
+use swissarmyhammer_common::{Result, SwissArmyHammerError};
 
 /// Trait for storage backends that can persist and retrieve prompts
 pub trait StorageBackend: Send + Sync {

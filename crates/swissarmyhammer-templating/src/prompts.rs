@@ -8,7 +8,7 @@
 //! Creating a simple prompt:
 //!
 //! ```
-//! use swissarmyhammer_prompts::Prompt;
+//! use swissarmyhammer_templating::Prompt;
 //! use swissarmyhammer_common::{Parameter, ParameterType};
 //!
 //! let prompt = Prompt::new("greet", "Hello {{name}}!")
@@ -72,7 +72,7 @@ pub use swissarmyhammer_common::{Parameter, ParameterProvider, ParameterType};
 /// # Examples
 ///
 /// ```
-/// use swissarmyhammer_prompts::Prompt;
+/// use swissarmyhammer_templating::Prompt;
 /// use swissarmyhammer_common::{Parameter, ParameterType};
 ///
 /// // Create a prompt programmatically
@@ -174,7 +174,7 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_prompts::Prompt;
+    /// use swissarmyhammer_templating::Prompt;
     ///
     /// let prompt = Prompt::new("hello", "Hello {{name}}!");
     /// assert_eq!(prompt.name, "hello");
@@ -205,7 +205,7 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_prompts::Prompt;
+    /// use swissarmyhammer_templating::Prompt;
     /// use swissarmyhammer_common::{Parameter, ParameterType};
     ///
     /// let prompt = Prompt::new("example", "Processing {{file}}")
@@ -235,7 +235,7 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_prompts::Prompt;
+    /// use swissarmyhammer_templating::Prompt;
     ///
     /// let prompt = Prompt::new("debug", "Debug this error: {{error}}")
     ///     .with_description("Helps analyze and debug programming errors");
@@ -260,7 +260,7 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_prompts::Prompt;
+    /// use swissarmyhammer_templating::Prompt;
     ///
     /// let prompt = Prompt::new("code-review", "Review this code: {{code}}")
     ///     .with_category("development");
@@ -286,7 +286,7 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_prompts::Prompt;
+    /// use swissarmyhammer_templating::Prompt;
     ///
     /// let prompt = Prompt::new("sql-gen", "Generate SQL: {{description}}")
     ///     .with_tags(vec![
@@ -317,7 +317,7 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_prompts::Prompt;
+    /// use swissarmyhammer_templating::Prompt;
     ///
     /// let partial = Prompt::new("header", "{% partial %}\n# Common Header");
     /// assert!(partial.is_partial_template());
@@ -569,7 +569,7 @@ impl Prompt {
 
 /// Manages a collection of prompts with storage and retrieval capabilities.
 ///
-/// The [`PromptLibrary`] is the main interface for working with collections of prompts.
+/// The [`TemplateLibrary`] is the main interface for working with collections of prompts.
 /// It provides methods to load prompts from directories, search through them, and
 /// manage them programmatically. The library uses a pluggable storage backend
 /// system to support different storage strategies.
@@ -577,10 +577,10 @@ impl Prompt {
 /// # Examples
 ///
 /// ```no_run
-/// use swissarmyhammer_prompts::PromptLibrary;
+/// use swissarmyhammer_templating::TemplateLibrary;
 ///
 /// // Create a new library with default in-memory storage
-/// let mut library = PromptLibrary::new();
+/// let mut library = TemplateLibrary::new();
 ///
 /// // Load prompts from a directory
 /// let count = library.add_directory("./.prompts").unwrap();
@@ -592,19 +592,19 @@ impl Prompt {
 /// // Search for prompts
 /// let debug_prompts = library.search("debug").unwrap();
 /// ```
-pub struct PromptLibrary {
+pub struct TemplateLibrary {
     storage: Box<dyn crate::StorageBackend>,
 }
 
-impl std::fmt::Debug for PromptLibrary {
+impl std::fmt::Debug for TemplateLibrary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PromptLibrary")
+        f.debug_struct("TemplateLibrary")
             .field("storage", &"<StorageBackend>")
             .finish()
     }
 }
 
-impl PromptLibrary {
+impl TemplateLibrary {
     /// Creates a new prompt library with default in-memory storage.
     ///
     /// The default storage backend stores prompts in memory, which is suitable
@@ -614,9 +614,9 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_prompts::PromptLibrary;
+    /// use swissarmyhammer_templating::TemplateLibrary;
     ///
-    /// let library = PromptLibrary::new();
+    /// let library = TemplateLibrary::new();
     /// // Library is ready to use with in-memory storage
     /// ```
     #[must_use]
@@ -638,10 +638,10 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_prompts::{PromptLibrary, MemoryStorage};
+    /// use swissarmyhammer_templating::{TemplateLibrary, MemoryStorage};
     ///
     /// let storage = Box::new(MemoryStorage::new());
-    /// let library = PromptLibrary::with_storage(storage);
+    /// let library = TemplateLibrary::with_storage(storage);
     /// ```
     #[must_use]
     pub fn with_storage(storage: Box<dyn crate::StorageBackend>) -> Self {
@@ -672,14 +672,14 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```no_run
-    /// use swissarmyhammer_prompts::PromptLibrary;
+    /// use swissarmyhammer_templating::TemplateLibrary;
     ///
-    /// let mut library = PromptLibrary::new();
+    /// let mut library = TemplateLibrary::new();
     /// let count = library.add_directory("./.prompts").unwrap();
     /// println!("Loaded {} prompts from directory", count);
     /// ```
     pub fn add_directory(&mut self, path: impl AsRef<Path>) -> Result<usize> {
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompts = loader.load_directory(path)?;
         let count = prompts.len();
 
@@ -709,9 +709,9 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_prompts::{PromptLibrary, Prompt};
+    /// use swissarmyhammer_templating::{TemplateLibrary, Prompt};
     ///
-    /// let mut library = PromptLibrary::new();
+    /// let mut library = TemplateLibrary::new();
     ///
     /// // Add a prompt first
     /// let prompt = Prompt::new("test", "Hello {{name}}!");
@@ -743,9 +743,9 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_prompts::{PromptLibrary, Prompt};
+    /// use swissarmyhammer_templating::{TemplateLibrary, Prompt};
     ///
-    /// let mut library = PromptLibrary::new();
+    /// let mut library = TemplateLibrary::new();
     /// library.add(Prompt::new("test1", "Template 1")).unwrap();
     /// library.add(Prompt::new("test2", "Template 2")).unwrap();
     ///
@@ -786,10 +786,10 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```text
-    /// use swissarmyhammer_prompts::PromptLibrary;
+    /// use swissarmyhammer_templating::TemplateLibrary;
     /// use std::collections::HashMap;
     ///
-    /// let library = PromptLibrary::new();
+    /// let library = TemplateLibrary::new();
     /// let mut args = HashMap::new();
     /// args.insert("name".to_string(), "World".to_string());
     ///
@@ -797,7 +797,7 @@ impl PromptLibrary {
     /// ```
     /// **THE ONE TRUE RENDER METHOD**
     ///
-    /// ⚠️  **WARNING: DO NOT CREATE ANY OTHER RENDER METHODS ON PromptLibrary** ⚠️
+    /// ⚠️  **WARNING: DO NOT CREATE ANY OTHER RENDER METHODS ON TemplateLibrary** ⚠️
     /// ⚠️  **THIS IS THE ONLY METHOD THAT SHOULD EXIST FOR RENDERING PROMPTS** ⚠️
     /// ⚠️  **DO NOT ADD render_with_*, render_using_*, or ANY OTHER RENDER METHOD** ⚠️
     /// ⚠️  **IF YOU ADD ANOTHER RENDER METHOD, YOU ARE A FUCKING ASSHOLE** ⚠️
@@ -875,9 +875,9 @@ impl PromptLibrary {
     }
 
     /// Build a full library with all prompts loaded (builtin + user + local + self overrides).
-    fn build_full_library(&self) -> Result<PromptLibrary> {
-        let mut resolver = crate::PromptResolver::new();
-        let mut full_library = PromptLibrary::new();
+    fn build_full_library(&self) -> Result<TemplateLibrary> {
+        let mut resolver = crate::resolver::PromptResolver::new();
+        let mut full_library = TemplateLibrary::new();
         resolver.load_all_prompts(&mut full_library)?;
         // load in prompts from self as overrides of the base library
         // this is used in testing in particular
@@ -905,18 +905,16 @@ impl PromptLibrary {
     fn render_with_library(
         template: &str,
         context: &TemplateContext,
-        library: PromptLibrary,
+        library: TemplateLibrary,
     ) -> Result<String> {
         let liquid_vars = context.to_liquid_context();
         tracing::debug!("Liquid Context: {}", Pretty(&liquid_vars));
 
-        let partial_adapter =
-            crate::prompt_partial_adapter::PromptPartialAdapter::new(Arc::new(library));
-        let template_with_partials =
-            swissarmyhammer_templating::Template::with_partials(template, partial_adapter)
-                .map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Failed to create template with partials: {e}"),
-                })?;
+        let partial_adapter = crate::partial_adapter::PartialAdapter::new(Arc::new(library));
+        let template_with_partials = crate::Template::with_partials(template, partial_adapter)
+            .map_err(|e| SwissArmyHammerError::Other {
+                message: format!("Failed to create template with partials: {e}"),
+            })?;
 
         template_with_partials
             .render_with_context(context)
@@ -942,9 +940,9 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_prompts::{PromptLibrary, Prompt};
+    /// use swissarmyhammer_templating::{TemplateLibrary, Prompt};
     ///
-    /// let mut library = PromptLibrary::new();
+    /// let mut library = TemplateLibrary::new();
     /// library.add(Prompt::new("debug-js", "Debug JavaScript code")
     ///     .with_description("Helps debug JavaScript errors")).unwrap();
     /// library.add(Prompt::new("format-py", "Format Python code")).unwrap();
@@ -955,49 +953,6 @@ impl PromptLibrary {
     /// ```
     pub fn search(&self, query: &str) -> Result<Vec<Prompt>> {
         self.storage.search(query)
-    }
-
-    /// Lists prompts filtered by the given criteria.
-    ///
-    /// This method provides a flexible way to filter prompts based on various criteria
-    /// such as source, category, search terms, and argument requirements. It works
-    /// with a `PromptResolver` to determine prompt sources.
-    ///
-    /// # Arguments
-    ///
-    /// * `filter` - A `PromptFilter` specifying the filtering criteria
-    /// * `sources` - A `HashMap` mapping prompt names to their sources
-    ///
-    /// # Returns
-    ///
-    /// A vector of prompts matching all the specified filter criteria.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use swissarmyhammer_prompts::{PromptLibrary, PromptFilter, PromptSource, Prompt};
-    /// use std::collections::HashMap;
-    ///
-    /// let mut library = PromptLibrary::new();
-    /// library.add(Prompt::new("code-review", "Review code")
-    ///     .with_category("development")).unwrap();
-    /// library.add(Prompt::new("write-essay", "Write essay")
-    ///     .with_category("writing")).unwrap();
-    ///
-    /// let filter = PromptFilter::new().with_category("development");
-    /// let sources = HashMap::new(); // Empty sources for this example
-    /// let results = library.list_filtered(&filter, &sources).unwrap();
-    /// assert_eq!(results.len(), 1);
-    /// assert_eq!(results[0].name, "code-review");
-    /// ```
-    pub fn list_filtered(
-        &self,
-        filter: &crate::prompt_filter::PromptFilter,
-        sources: &HashMap<String, crate::PromptSource>,
-    ) -> Result<Vec<Prompt>> {
-        let all_prompts = self.list()?;
-        let prompt_refs: Vec<&Prompt> = all_prompts.iter().collect();
-        Ok(filter.apply(prompt_refs, sources))
     }
 
     /// Adds a single prompt to the library.
@@ -1011,9 +966,9 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_prompts::{PromptLibrary, Prompt};
+    /// use swissarmyhammer_templating::{TemplateLibrary, Prompt};
     ///
-    /// let mut library = PromptLibrary::new();
+    /// let mut library = TemplateLibrary::new();
     /// let prompt = Prompt::new("example", "Example template");
     /// library.add(prompt).unwrap();
     ///
@@ -1036,9 +991,9 @@ impl PromptLibrary {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_prompts::{PromptLibrary, Prompt};
+    /// use swissarmyhammer_templating::{TemplateLibrary, Prompt};
     ///
-    /// let mut library = PromptLibrary::new();
+    /// let mut library = TemplateLibrary::new();
     /// library.add(Prompt::new("temp", "Temporary prompt")).unwrap();
     ///
     /// library.remove("temp").unwrap();
@@ -1050,13 +1005,13 @@ impl PromptLibrary {
     }
 }
 
-impl Default for PromptLibrary {
+impl Default for TemplateLibrary {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl swissarmyhammer_templating::partials::TemplateContentProvider for PromptLibrary {
+impl crate::partials::TemplateContentProvider for TemplateLibrary {
     fn get_template_content(&self, name: &str) -> Option<String> {
         self.get(name).ok().map(|prompt| prompt.template.clone())
     }
@@ -1067,12 +1022,12 @@ impl swissarmyhammer_templating::partials::TemplateContentProvider for PromptLib
 }
 
 /// Loads prompts from various sources
-pub struct PromptLoader {
+pub struct TemplateLoader {
     /// File extensions to consider
     extensions: Vec<String>,
 }
 
-impl PromptLoader {
+impl TemplateLoader {
     /// Create a new prompt loader
     #[must_use]
     pub fn new() -> Self {
@@ -1453,7 +1408,7 @@ impl PromptLoader {
     }
 }
 
-impl Default for PromptLoader {
+impl Default for TemplateLoader {
     fn default() -> Self {
         Self::new()
     }
@@ -1481,7 +1436,7 @@ mod tests {
         template_vars.insert("name".to_string(), json!("World"));
 
         let template_context = TemplateContext::from_template_vars(template_vars);
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         library.add(prompt).unwrap();
         let result = library.render("test", &template_context).unwrap();
         assert_eq!(result, "Hello World!");
@@ -1489,7 +1444,7 @@ mod tests {
 
     #[test]
     fn test_extension_stripping() {
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
 
         // Test various extensions
         let test_cases = vec![
@@ -1513,7 +1468,7 @@ mod tests {
         use std::fs;
         use tempfile::TempDir;
 
-        // This test verifies that PromptLoader only successfully loads files
+        // This test verifies that TemplateLoader only successfully loads files
         // that are valid prompts (with proper YAML front matter)
         let temp_dir = TempDir::new().unwrap();
 
@@ -1563,7 +1518,7 @@ This is another prompt.
 ";
         fs::write(&sub_prompt, sub_content).unwrap();
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompts = loader.load_directory(temp_dir.path()).unwrap();
 
         // Should load all markdown files (5 total: 3 invalid + 2 valid)
@@ -1663,7 +1618,7 @@ This is another prompt.
 {{section_content}}";
         fs::write(&partial3_path, partial3_content).unwrap();
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompts = loader.load_directory(temp_dir.path()).unwrap();
 
         assert_eq!(prompts.len(), 3, "Should load 3 partial templates");
@@ -1689,7 +1644,7 @@ This is another prompt.
         template_context.set("version".to_string(), json!("1.0.0"));
         template_context.set("author".to_string(), json!("Test User"));
 
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         let prompt = Prompt::new(
             "project_info",
             "Project: {{project_name}} v{{version}} by {{author}}",
@@ -1709,7 +1664,7 @@ This is another prompt.
         template_context.set("project_name".to_string(), json!("ConfigProject"));
         template_context.set("version".to_string(), json!("1.0.0"));
 
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         let prompt = Prompt::new("project_info", "Project: {{project_name}} v{{version}}");
         library.add(prompt).unwrap();
 
@@ -1728,7 +1683,7 @@ This is another prompt.
         let mut template_context = TemplateContext::new();
         template_context.set("version".to_string(), json!("1.0.0"));
 
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         let prompt = Prompt::new("project_info", "Project: {{project_name}} v{{version}}")
             .add_parameter(
                 Parameter::new("project_name", "Project name", ParameterType::String)
@@ -1751,7 +1706,7 @@ This is another prompt.
         template_context.set("project_name".to_string(), json!("ConfigProject"));
         template_context.set("version".to_string(), json!("1.0.0"));
 
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         let prompt = Prompt::new("project_info", "Project: {{project_name}} v{{version}}")
             .add_parameter(
                 Parameter::new("project_name", "Project name", ParameterType::String)
@@ -1769,7 +1724,7 @@ This is another prompt.
         use serde_json::json;
 
         // Create library and add test prompt
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         let prompt = Prompt::new("test_prompt", "Hello {{name}} from {{project}}!");
         library.add(prompt).unwrap();
 
@@ -1795,7 +1750,7 @@ This is another prompt.
         use serde_json::json;
 
         // Create library and add test prompt
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         let prompt = Prompt::new("env_prompt", "App: {{app_name}} User: {{USER}}");
         library.add(prompt).unwrap();
 
@@ -1815,7 +1770,7 @@ This is another prompt.
 
         // Test that with_storage constructs a library using the provided backend
         let storage = Box::new(MemoryStorage::new());
-        let mut library = PromptLibrary::with_storage(storage);
+        let mut library = TemplateLibrary::with_storage(storage);
 
         let prompt = Prompt::new("test-storage", "Storage backend test");
         library.add(prompt).unwrap();
@@ -1826,7 +1781,7 @@ This is another prompt.
 
     #[test]
     fn test_prompt_library_add_and_remove() {
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
 
         // Add a prompt
         let prompt = Prompt::new("to-remove", "This will be removed");
@@ -1843,7 +1798,7 @@ This is another prompt.
 
     #[test]
     fn test_prompt_library_add_replaces_existing() {
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
 
         library
             .add(Prompt::new("replaceable", "Original content"))
@@ -1872,7 +1827,7 @@ This is another prompt.
         )
         .unwrap();
 
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         let count = library.add_directory(temp_dir.path()).unwrap();
 
         assert_eq!(count, 1);
@@ -1883,14 +1838,14 @@ This is another prompt.
 
     #[test]
     fn test_prompt_library_add_directory_missing_path() {
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         let result = library.add_directory("/nonexistent/path/to/prompts");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_prompt_library_search() {
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
 
         library
             .add(
@@ -1930,7 +1885,7 @@ This is another prompt.
 
     #[test]
     fn test_prompt_library_search_by_tag() {
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
 
         library
             .add(
@@ -1948,36 +1903,8 @@ This is another prompt.
     }
 
     #[test]
-    fn test_prompt_library_list_filtered() {
-        use crate::prompt_filter::PromptFilter;
-        use crate::PromptSource;
-        use std::collections::HashMap;
-
-        let mut library = PromptLibrary::new();
-        library
-            .add(Prompt::new("code-review", "Review code").with_category("development"))
-            .unwrap();
-        library
-            .add(Prompt::new("write-essay", "Write essay").with_category("writing"))
-            .unwrap();
-        library
-            .add(Prompt::new("debug-rust", "Debug Rust code").with_category("development"))
-            .unwrap();
-
-        let filter = PromptFilter::new().with_category("development");
-        let sources: HashMap<String, PromptSource> = HashMap::new();
-        let results = library.list_filtered(&filter, &sources).unwrap();
-
-        assert_eq!(results.len(), 2);
-        let names: Vec<&str> = results.iter().map(|p| p.name.as_str()).collect();
-        assert!(names.contains(&"code-review"));
-        assert!(names.contains(&"debug-rust"));
-        assert!(!names.contains(&"write-essay"));
-    }
-
-    #[test]
     fn test_prompt_library_render_text() {
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         library
             .add(Prompt::new("greeting", "Hello {{name}}!"))
             .unwrap();
@@ -2002,7 +1929,7 @@ This is another prompt.
         )
         .unwrap();
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_file(&file_path).unwrap();
 
         assert_eq!(prompt.name, "my_prompt");
@@ -2029,7 +1956,7 @@ parameters:
 
 Discuss {{topic}} in detail."#;
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_from_string("string-prompt", content).unwrap();
 
         assert_eq!(prompt.name, "string-prompt");
@@ -2045,7 +1972,7 @@ Discuss {{topic}} in detail."#;
     #[test]
     fn test_prompt_loader_load_from_string_no_frontmatter() {
         let content = "Just template content with {{variable}}";
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_from_string("simple-prompt", content).unwrap();
 
         assert_eq!(prompt.name, "simple-prompt");
@@ -2070,7 +1997,7 @@ arguments:
 
 Use {{arg1}}."#;
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_from_string("legacy-prompt", content).unwrap();
 
         assert_eq!(prompt.parameters.len(), 1);
@@ -2092,7 +2019,7 @@ parameters:
 
 {{greeting}} World!"#;
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_from_string("default-param", content).unwrap();
 
         assert_eq!(prompt.parameters.len(), 1);
@@ -2103,7 +2030,7 @@ parameters:
     #[test]
     fn test_prompt_loader_load_from_string_with_partial_marker() {
         let content = "{% partial %}\nThis is a partial template with {{slot}}.";
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_from_string("_partial", content).unwrap();
 
         assert_eq!(
@@ -2696,21 +2623,21 @@ parameters:
 
     #[test]
     fn test_prompt_library_debug_impl() {
-        let library = PromptLibrary::new();
+        let library = TemplateLibrary::new();
         let debug_str = format!("{:?}", library);
-        assert!(debug_str.contains("PromptLibrary"));
+        assert!(debug_str.contains("TemplateLibrary"));
         assert!(debug_str.contains("StorageBackend"));
     }
 
     #[test]
     fn test_prompt_library_default() {
-        let library = PromptLibrary::default();
+        let library = TemplateLibrary::default();
         assert!(library.list().unwrap().is_empty());
     }
 
     #[test]
     fn test_prompt_library_get_not_found() {
-        let library = PromptLibrary::new();
+        let library = TemplateLibrary::new();
         let result = library.get("nonexistent");
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -2723,7 +2650,7 @@ parameters:
     #[test]
     fn test_prompt_library_render_with_defaults() {
         // Test that parameter defaults are applied during render
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         let prompt = Prompt::new("test", "Hello {{name}}!").add_parameter(
             Parameter::new("name", "Name", ParameterType::String)
                 .with_default(serde_json::Value::String("World".to_string())),
@@ -2737,7 +2664,7 @@ parameters:
 
     #[test]
     fn test_prompt_library_render_nonexistent() {
-        let library = PromptLibrary::new();
+        let library = TemplateLibrary::new();
         let context = TemplateContext::new();
         let result = library.render("nonexistent", &context);
         assert!(result.is_err());
@@ -2745,9 +2672,9 @@ parameters:
 
     #[test]
     fn test_prompt_library_template_content_provider() {
-        use swissarmyhammer_templating::partials::TemplateContentProvider;
+        use crate::partials::TemplateContentProvider;
 
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         library
             .add(Prompt::new("test-prompt", "Template body"))
             .unwrap();
@@ -2764,7 +2691,7 @@ parameters:
 
     #[test]
     fn test_prompt_loader_default() {
-        let loader = PromptLoader::default();
+        let loader = TemplateLoader::default();
         // Should have extensions configured
         let path = Path::new("test.md");
         assert!(loader.is_prompt_file(path));
@@ -2772,7 +2699,7 @@ parameters:
 
     #[test]
     fn test_prompt_loader_is_prompt_file_extensions() {
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
 
         assert!(loader.is_prompt_file(Path::new("test.md")));
         assert!(loader.is_prompt_file(Path::new("test.md.liquid")));
@@ -2789,7 +2716,7 @@ parameters:
 
     #[test]
     fn test_prompt_loader_extract_prompt_name_fallback() {
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
 
         // Fallback to file_stem when no matching extension
         let name = loader.extract_prompt_name(Path::new("test.txt"));
@@ -2798,7 +2725,7 @@ parameters:
 
     #[test]
     fn test_prompt_loader_extract_prompt_name_compound_extensions() {
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
 
         assert_eq!(
             loader.extract_prompt_name(Path::new("my-prompt.liquid.md")),
@@ -2816,7 +2743,7 @@ parameters:
 
     #[test]
     fn test_prompt_loader_extract_prompt_name_with_base() {
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
 
         // Nested path should include parent dirs
         let name = loader
@@ -2832,13 +2759,13 @@ parameters:
     #[test]
     fn test_prompt_loader_is_likely_partial_by_name() {
         // Name contains "partial"
-        assert!(PromptLoader::is_likely_partial(
+        assert!(TemplateLoader::is_likely_partial(
             "my-partial-template",
             "---\ntitle: Test\n---\nContent"
         ));
 
         // Name starts with underscore
-        assert!(PromptLoader::is_likely_partial(
+        assert!(TemplateLoader::is_likely_partial(
             "_header",
             "---\ntitle: Test\n---\nContent"
         ));
@@ -2846,7 +2773,7 @@ parameters:
 
     #[test]
     fn test_prompt_loader_is_likely_partial_no_frontmatter() {
-        assert!(PromptLoader::is_likely_partial(
+        assert!(TemplateLoader::is_likely_partial(
             "regular",
             "No frontmatter here"
         ));
@@ -2856,7 +2783,7 @@ parameters:
     fn test_prompt_loader_is_likely_partial_short_content() {
         // Short content with front matter but no headers
         let content = "---\ntitle: Test\n---\nOne line\nTwo lines";
-        assert!(PromptLoader::is_likely_partial("regular", content));
+        assert!(TemplateLoader::is_likely_partial("regular", content));
     }
 
     #[test]
@@ -2864,7 +2791,7 @@ parameters:
         // Long content with headers should not be partial
         let content =
             "---\ntitle: Test\n---\n# Heading\nLine 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6";
-        assert!(!PromptLoader::is_likely_partial("regular", content));
+        assert!(!TemplateLoader::is_likely_partial("regular", content));
     }
 
     #[test]
@@ -2885,7 +2812,7 @@ parameters:
 
 Write {{language}} code."#;
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_from_string("choice-prompt", content).unwrap();
 
         assert_eq!(prompt.parameters.len(), 1);
@@ -2909,7 +2836,7 @@ custom_field: value
 
 Template content."#;
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_from_string("metadata-prompt", content).unwrap();
 
         // All metadata should be in the metadata map
@@ -2943,7 +2870,7 @@ parameters:
 
 Count: {{count}}, Verbose: {{verbose}}."#;
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_from_string("typed-params", content).unwrap();
 
         assert_eq!(prompt.parameters.len(), 2);
@@ -2964,7 +2891,7 @@ Count: {{count}}, Verbose: {{verbose}}."#;
         )
         .unwrap();
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_file(&file_path).unwrap();
 
         assert!(
@@ -2976,7 +2903,7 @@ Count: {{count}}, Verbose: {{verbose}}."#;
 
     #[test]
     fn test_prompt_loader_load_directory_nonexistent() {
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let result = loader.load_directory("/nonexistent/path");
         assert!(result.is_err());
     }
@@ -3004,7 +2931,7 @@ Count: {{count}}, Verbose: {{verbose}}."#;
         )
         .unwrap();
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompts = loader.load_directory(temp_dir.path()).unwrap();
 
         assert_eq!(prompts.len(), 2);
@@ -3032,7 +2959,7 @@ Count: {{count}}, Verbose: {{verbose}}."#;
         )
         .unwrap();
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompts = loader.load_directory(temp_dir.path()).unwrap();
 
         assert_eq!(prompts.len(), 1);
@@ -3073,7 +3000,7 @@ Process {{input}} in {{mode}} mode."#;
 
         fs::write(&file_path, content).unwrap();
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_file(&file_path).unwrap();
 
         assert_eq!(prompt.name, "parameterized");
@@ -3100,7 +3027,7 @@ Process {{input}} in {{mode}} mode."#;
 
     #[test]
     fn test_prompt_library_render_text_with_partials() {
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         library
             .add(Prompt::new("_helper", "HELPER_CONTENT"))
             .unwrap();
@@ -3114,7 +3041,7 @@ Process {{input}} in {{mode}} mode."#;
 
     #[test]
     fn test_prompt_library_list_names() {
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         library.add(Prompt::new("alpha", "Template A")).unwrap();
         library.add(Prompt::new("beta", "Template B")).unwrap();
 
@@ -3125,7 +3052,7 @@ Process {{input}} in {{mode}} mode."#;
 
     #[test]
     fn test_prompt_library_remove_nonexistent() {
-        let mut library = PromptLibrary::new();
+        let mut library = TemplateLibrary::new();
         // Should succeed even if prompt doesn't exist (remove returns Ok(false))
         let result = library.remove("nonexistent");
         assert!(result.is_ok());
@@ -3183,7 +3110,7 @@ parameters:
 
 Use {{value}}."#;
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_from_string("empty-choices", content).unwrap();
 
         assert_eq!(prompt.parameters.len(), 1);
@@ -3197,7 +3124,7 @@ Use {{value}}."#;
     #[test]
     fn test_prompt_loader_load_from_string_partial_by_name_underscore() {
         let content = "Just content, no frontmatter";
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_from_string("_sidebar", content).unwrap();
 
         assert_eq!(
@@ -3209,7 +3136,7 @@ Use {{value}}."#;
     #[test]
     fn test_prompt_loader_load_from_string_partial_by_name_contains_partial() {
         let content = "Just content, no frontmatter";
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader
             .load_from_string("my-partial-template", content)
             .unwrap();
@@ -3231,7 +3158,7 @@ Use {{value}}."#;
         let partial_path = temp_dir.path().join("reusable.md");
         fs::write(&partial_path, "{% partial %}\nReusable content").unwrap();
 
-        let loader = PromptLoader::new();
+        let loader = TemplateLoader::new();
         let prompt = loader.load_file(&partial_path).unwrap();
         assert_eq!(
             prompt.description,

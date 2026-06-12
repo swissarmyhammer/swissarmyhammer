@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 
 use swissarmyhammer::PromptResolver;
-use swissarmyhammer::{Prompt, PromptLibrary};
+use swissarmyhammer::{Prompt, TemplateLibrary};
 
 use crate::exit_codes::EXIT_SUCCESS;
 
@@ -22,7 +22,7 @@ pub struct TestConfig {
 }
 
 pub struct TestRunner {
-    library: PromptLibrary,
+    library: TemplateLibrary,
 }
 
 impl Default for TestRunner {
@@ -34,7 +34,7 @@ impl Default for TestRunner {
 impl TestRunner {
     pub fn new() -> Self {
         Self {
-            library: PromptLibrary::new(),
+            library: TemplateLibrary::new(),
         }
     }
 

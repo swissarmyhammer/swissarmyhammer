@@ -1,11 +1,10 @@
-//! YAML frontmatter parsing for prompt files
+//! YAML frontmatter parsing for template files
 //!
 //! This module provides functionality to parse YAML frontmatter from
-//! markdown files containing prompts.
+//! markdown files containing templates.
 
-use crate::Result;
 use serde_json::Value;
-use swissarmyhammer_common::SwissArmyHammerError;
+use swissarmyhammer_common::{Result, SwissArmyHammerError};
 
 /// Represents parsed frontmatter and content
 #[derive(Debug, Clone)]

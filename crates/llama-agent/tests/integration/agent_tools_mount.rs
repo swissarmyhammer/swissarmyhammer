@@ -22,7 +22,7 @@
 //! the standard MCP `tools/list` path.
 
 use llama_agent::{AgentToolsMount, InProcessMount};
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_tools::McpServer;
 
 /// With an empty external/ACP server list, the agent-tools mount alone still
@@ -32,7 +32,7 @@ async fn agent_tools_mount_lists_intrinsic_tools_with_no_external_servers() {
     // Real SAH server → agent-tools-only filtered server (compose_per_client =
     // false, so it serves its registry verbatim). This is the exact handler the
     // production wiring mounts.
-    let server = McpServer::new(PromptLibrary::default())
+    let server = McpServer::new(TemplateLibrary::default())
         .await
         .expect("build SAH McpServer");
     let agent_tools_server = server.create_agent_tools_server();

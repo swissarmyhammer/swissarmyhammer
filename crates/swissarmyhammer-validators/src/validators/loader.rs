@@ -551,7 +551,7 @@ pub struct ValidatorDiagnostics {
 /// Implement TemplateContentProvider for ValidatorLoader.
 ///
 /// This allows the validator loader to be used with the unified LibraryPartialAdapter,
-/// following the same pattern as PromptLibrary and RuleLibrary. Validators can then
+/// following the same pattern as TemplateLibrary and RuleLibrary. Validators can then
 /// use `{% include 'partial-name' %}` to include partials from the _partials/ directory.
 impl TemplateContentProvider for ValidatorLoader {
     fn get_template_content(&self, name: &str) -> Option<String> {
