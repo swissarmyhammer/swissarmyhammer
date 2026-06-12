@@ -83,6 +83,20 @@ pub struct SavePerspective {
     /// Optional group-by field name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// Idempotent "ensure" mode.
+    ///
+    /// When `true`, the op first looks for an existing perspective matching
+    /// the target view scope (`view_id` when set and known to the views
+    /// registry, else view kind) and returns it WITHOUT writing. When nothing
+    /// matches, the perspective is created under the deterministic
+    /// scope-derived id (`default-<scope>`) instead of a fresh ULID, so
+    /// concurrent windows and sibling processes with stale caches converge on
+    /// ONE file instead of accumulating duplicates (the "perspectives gone
+    /// missing" live bug, task 01KTY6T1GPY94VYWANE9X41SKJ). The wire name
+    /// matches the frontend auto-create's `if_absent` arg, which the
+    /// `perspective-commands` plugin forwards verbatim.
+    #[serde(default)]
+    pub if_absent: bool,
 }
 
 /// Delete a perspective by id.

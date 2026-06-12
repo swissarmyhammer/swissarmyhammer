@@ -7,6 +7,7 @@ import {
   type Availability,
   type CommandContext,
   scopeId,
+  unwrapResult,
 } from "@swissarmyhammer/plugin";
 
 import { type CommandSpec, type ViewsDispatch } from "./context.ts";
@@ -101,12 +102,20 @@ export function lifecycleCommands(views: ViewsDispatch): CommandSpec[] {
 
     // ─── perspective.list ───────────────────────────────────────────────────
     // YAML: visible:false, no params. Routes to views `list perspective`.
+    //
+    // The command result must be the op's JSON payload, not the raw
+    // `CallToolResult` wire envelope of the `views` call: the frontend
+    // (`usePerspectivesFetch` in perspective-context.tsx) reads
+    // `result.perspectives` off the dispatch result. Returning the envelope
+    // verbatim left every window's perspectives state permanently empty —
+    // the "Default perspectives gone missing" live regression
+    // (01KTY6T1GPY94VYWANE9X41SKJ).
     {
       id: "perspective.list",
       name: "List Perspectives",
       visible: false,
       execute: async () => {
-        return await views.views.views.perspective.list({});
+        return unwrapResult(await views.views.views.perspective.list({}));
       },
     },
   ];

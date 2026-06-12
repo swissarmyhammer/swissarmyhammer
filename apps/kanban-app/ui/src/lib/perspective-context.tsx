@@ -11,7 +11,7 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { subscribeStoreChanged } from "@/lib/mcp-notifications";
 import { useDispatchCommand } from "@/lib/command-scope";
-import type { PerspectiveDef } from "@/types/kanban";
+import { perspectiveVisibleInView, type PerspectiveDef } from "@/types/kanban";
 import { useUIState } from "./ui-state-context";
 import { useViews } from "./views-context";
 
@@ -115,25 +115,44 @@ function usePerspectivesFetch(
 }
 
 /**
- * Auto-create a "Default" perspective when none exist for the current view
- * kind. Uses a ref to avoid repeated creation attempts per kind.
+ * Auto-create a "Default" perspective when the active view's tab bar would
+ * render empty. Uses a ref to avoid repeated creation attempts per view.
+ *
+ * Emptiness is judged with [`perspectiveVisibleInView`] — the SAME
+ * view_id-first / kind-fallback predicate the tab bar filters with — not a
+ * kind-only check. A view whose same-kind perspectives are all pinned
+ * (`view_id`) to OTHER views renders an empty bar and must still get its
+ * Default ensured (owner directive: never show zero perspectives). The
+ * backend `if_absent` ensure keeps the dispatch idempotent, so the ref is
+ * keyed per view instance (falling back to kind before views load).
  *
  * `dispatch` is read through `dispatchRef` so the effect does not re-run on
  * every focus change. The only legitimate re-entry signals are `loaded`,
- * `perspectives`, and `viewKind` — they pick up real state changes.
+ * `perspectives`, `activeViewId`, and `viewKind` — they pick up real state
+ * changes.
  */
 function useAutoCreateDefaultPerspective(
   loaded: boolean,
   perspectives: PerspectiveDef[],
+  activeViewId: string | undefined,
   viewKind: string,
   dispatchRef: React.MutableRefObject<DispatchFn>,
 ) {
-  const autoCreatedForKindRef = useRef<string | null>(null);
+  const autoCreatedForViewRef = useRef<string | null>(null);
+  // Per-view-instance re-fire key; before views load there is no instance
+  // id yet, so fall back to the kind.
+  const viewKey = activeViewId ?? viewKind;
   useEffect(() => {
     if (!loaded) return;
-    if (autoCreatedForKindRef.current === viewKind) return;
-    if (perspectives.some((p) => p.view === viewKind)) return;
-    autoCreatedForKindRef.current = viewKind;
+    if (autoCreatedForViewRef.current === viewKey) return;
+    if (
+      perspectives.some((p) =>
+        perspectiveVisibleInView(p, activeViewId, viewKind),
+      )
+    ) {
+      return;
+    }
+    autoCreatedForViewRef.current = viewKey;
     dispatchRef
       .current("perspective.save", {
         // `if_absent` makes the seed idempotent against the backend's
@@ -146,7 +165,7 @@ function useAutoCreateDefaultPerspective(
         args: { name: "Default", view: viewKind, if_absent: true },
       })
       .catch(console.error);
-  }, [loaded, perspectives, viewKind, dispatchRef]);
+  }, [loaded, perspectives, viewKey, activeViewId, viewKind, dispatchRef]);
 }
 
 /**
@@ -282,6 +301,7 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
   const filtered_task_ids_defined =
     uiState.windows?.[WINDOW_LABEL]?.filtered_task_ids !== undefined;
   const { activeView } = useViews();
+  const activeViewId = activeView?.id;
   const viewKind = activeView?.kind ?? "board";
   const dispatch = useDispatchCommand();
 
@@ -292,7 +312,13 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
   const dispatchRef = useDispatchRef(dispatch);
 
   const { perspectives, loaded, refresh } = usePerspectivesFetch(dispatchRef);
-  useAutoCreateDefaultPerspective(loaded, perspectives, viewKind, dispatchRef);
+  useAutoCreateDefaultPerspective(
+    loaded,
+    perspectives,
+    activeViewId,
+    viewKind,
+    dispatchRef,
+  );
   useAutoSelectActivePerspective(
     loaded,
     perspectives,

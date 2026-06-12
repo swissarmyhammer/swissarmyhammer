@@ -7,6 +7,7 @@
 //! plugin host.
 
 mod common;
+mod ensure_save;
 mod meta_snapshot;
 mod undo;
 mod views_e2e;

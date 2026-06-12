@@ -97,6 +97,7 @@ struct ExposedViews {
     _dir: TempDir,
     _store_ctx: Arc<StoreContext>,
     perspectives: Arc<RwLock<PerspectiveContext>>,
+    views: Arc<RwLock<ViewsContext>>,
 }
 
 /// Build a `views` substrate (mirroring `builtin_kanban_misc_e2e`), wrap a
@@ -152,6 +153,7 @@ async fn expose_views_module(host: &PluginHost) -> ExposedViews {
         _dir: dir,
         _store_ctx: store_ctx,
         perspectives,
+        views,
     }
 }
 
@@ -426,6 +428,163 @@ async fn perspective_commands_plugin_registers_and_executes() {
         op_payload(&switched)["perspective"]["id"],
         json!(persp_id),
         "perspective.switch must resolve the perspective by id, got {switched}"
+    );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Live-regression pins (01KTY6T1GPY94VYWANE9X41SKJ)
+// ───────────────────────────────────────────────────────────────────────────
+
+/// A booted perspective-commands plugin over a live views substrate, with
+/// every temp root kept alive for the test's duration.
+struct PluginFixture {
+    _user_root: TempDir,
+    _builtin_root: TempDir,
+    _host: PluginHost,
+    service: Arc<swissarmyhammer_command_service::CommandService>,
+    views: ExposedViews,
+}
+
+/// Stage the committed bundle, boot a host, install the command service,
+/// expose the live `views` substrate, and load the plugin.
+async fn boot_perspective_plugin() -> PluginFixture {
+    let user_root = TempDir::new().expect("user root temp dir");
+    let builtin_root = TempDir::new().expect("builtin layer root temp dir");
+    stage_perspective_commands(builtin_root.path());
+
+    let host = PluginHost::new(
+        Some(builtin_root.path().to_path_buf()),
+        user_root.path().to_path_buf(),
+        None,
+        user_root.path().to_path_buf(),
+        false,
+        user_root.path().to_path_buf(),
+    );
+    let service = install_commands_module(&host)
+        .await
+        .expect("install_commands_module must succeed");
+    let views = tokio::time::timeout(TIMEOUT, expose_views_module(&host))
+        .await
+        .expect("exposing views should not hang");
+    let loaded = tokio::time::timeout(TIMEOUT, host.discover_and_load_all::<KanbanConfig>())
+        .await
+        .expect("discovery should not hang")
+        .expect("discovering the perspective-commands builtin plugin should succeed");
+    assert_eq!(loaded.len(), 1, "one plugin expected, got {loaded:?}");
+
+    PluginFixture {
+        _user_root: user_root,
+        _builtin_root: builtin_root,
+        _host: host,
+        service,
+        views,
+    }
+}
+
+/// `perspective.list` must return the op's JSON payload — NOT the raw
+/// `CallToolResult` wire envelope of the plugin's `views` call.
+///
+/// The frontend (`usePerspectivesFetch` in
+/// `apps/kanban-app/ui/src/lib/perspective-context.tsx`) reads
+/// `result.perspectives` off the dispatch result. When the plugin port
+/// returned the envelope verbatim, that read was always `undefined`, the
+/// window's perspectives state stayed empty forever, and the tab bar showed
+/// NO perspectives at all — the user-visible "Default perspectives gone
+/// missing" live regression.
+#[tokio::test]
+async fn perspective_list_returns_the_op_payload_for_the_frontend() {
+    let fx = boot_perspective_plugin().await;
+
+    // Seed one perspective through the real command path.
+    let saved = call_command(
+        &fx.service,
+        CallerId::HostInternal,
+        json!({
+            "op": "execute command",
+            "id": "perspective.save",
+            "ctx": { "args": { "name": "Ready", "view": "board" } },
+        }),
+    )
+    .await;
+    assert_eq!(saved["structuredContent"]["ok"], json!(true));
+
+    let listed = call_command(
+        &fx.service,
+        CallerId::HostInternal,
+        json!({ "op": "execute command", "id": "perspective.list", "ctx": {} }),
+    )
+    .await;
+    let result = &listed["structuredContent"]["result"];
+    let perspectives = result
+        .get("perspectives")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| {
+            panic!(
+                "perspective.list must surface `perspectives` directly on the \
+                 command result (the frontend reads `result.perspectives`), got {listed}"
+            )
+        });
+    assert_eq!(perspectives.len(), 1, "one seeded perspective expected");
+    assert_eq!(perspectives[0]["name"], json!("Ready"));
+}
+
+/// `perspective.save` with `if_absent` through the REAL plugin path must
+/// converge on one default — even when the dispatching window's scope chain
+/// carries the frontend's `"default"` placeholder view id (the exact live
+/// shape: views not yet loaded → `view:default` scope moniker → a Default
+/// pinned to a nonexistent view minted per window per boot).
+#[tokio::test]
+async fn if_absent_save_through_the_plugin_converges_on_one_default() {
+    let fx = boot_perspective_plugin().await;
+
+    // A real view exists, so the views registry is authoritative and the
+    // `"default"` placeholder is verifiably dead.
+    {
+        let mut views = fx.views.views.write().await;
+        let def = swissarmyhammer_views::ViewDef {
+            id: "01JMVIEW0000000000BOARD0".to_string(),
+            name: "Board".to_string(),
+            icon: None,
+            kind: swissarmyhammer_views::ViewKind::Board,
+            entity_type: Some("task".to_string()),
+            card_fields: Vec::new(),
+            commands: Vec::new(),
+        };
+        views
+            .write_view(&def)
+            .await
+            .expect("seeding the board view should succeed");
+    }
+
+    let ensure = json!({
+        "op": "execute command",
+        "id": "perspective.save",
+        "ctx": {
+            "scope_chain": ["view:default"],
+            "args": { "name": "Default", "view": "board", "if_absent": true },
+        },
+    });
+    // Two windows / two boots dispatching the same auto-create.
+    let first = call_command(&fx.service, CallerId::HostInternal, ensure.clone()).await;
+    assert_eq!(first["structuredContent"]["ok"], json!(true));
+    let second = call_command(&fx.service, CallerId::HostInternal, ensure).await;
+    assert_eq!(second["structuredContent"]["ok"], json!(true));
+
+    let pctx = fx.views.perspectives.read().await;
+    let all = pctx.all();
+    assert_eq!(
+        all.len(),
+        1,
+        "repeated if_absent saves must converge on ONE default, got {all:?}"
+    );
+    assert_eq!(all[0].name, "Default");
+    assert_eq!(
+        all[0].view_id, None,
+        "the dead `default` placeholder view id must fall back to the kind scope"
+    );
+    assert_eq!(
+        all[0].id, "default-board",
+        "the ensured default must land under the deterministic scope id"
     );
 }
 

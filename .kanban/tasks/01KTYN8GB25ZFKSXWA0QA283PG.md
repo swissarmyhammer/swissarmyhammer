@@ -1,0 +1,41 @@
+---
+assignees:
+- claude-code
+position_column: todo
+position_ordinal: f580
+title: 'Perspective + button: create immediately with a generated name and focus inline rename — no popup; placeholder text for blank names'
+---
+## What
+
+UX directive from the owner, two parts on the perspective tab bar:
+
+1. **The + button is bad UX** ("popups and buttons, sheesh"): clicking + currently opens a popup with buttons. Instead, **+ should immediately create a perspective** with a generated name (e.g. "Untitled" / "Untitled 2" — check the codebase for an existing generated-name convention before inventing one) **and focus the name field in inline-rename mode** so the user can type the real name right away. Same interaction class as the existing tab inline-rename (ScopedPerspectiveTab's Enter-rename path — reuse that machinery, don't build new).
+2. **Blank-name placeholder**: if a perspective ends up with a blank/empty name (e.g. user cleared it during rename and committed), the tab must render placeholder text (e.g. "Untitled" styled as placeholder — match how other blank-value placeholders render in the app, check Field display conventions) — never an invisible/zero-width tab.
+
+## Design constraints
+
+- The CREATE is durable → dispatches through the existing perspective.save command path (commands-in-rust; the ensure/save semantics just landed in card 01KTY6T1GPY94VYWANE9X41SKJ — the + create is NOT if_absent, it's an explicit new perspective).
+- Inline rename arming after create: the new tab must mount, get focus, and arm rename — mind the async create→event→render loop (StoreContext command → event → UI; wait for the entity to appear rather than racing it).
+- Name generation: dedupe against existing perspective names for the active view scope ("Untitled", "Untitled 2", ...).
+- Blank-name placeholder is PRESENTATION (metadata-driven-ui): render-side only, the stored name stays blank unless the user types one. Decide + document whether committing an EMPTY rename is allowed (placeholder makes it survivable) or reverts to the prior name — check what the current rename commit does with empty input and keep/improve consistently.
+- Remove the popup path for + entirely (no dead code left).
+
+## Acceptance Criteria
+- [ ] Click + → new perspective appears immediately in the bar with a generated unique name, its name field focused in rename mode; typing + Enter commits the name
+- [ ] Escape during that first rename: decide + pin the semantics (keep generated name vs delete the just-created perspective — pick the least surprising; document)
+- [ ] No popup remains in the + flow
+- [ ] A blank-named perspective renders a visible placeholder in the tab (and anywhere else the name displays)
+- [ ] Create dispatches through the command service (no client-side store writes)
+
+## Tests
+- [ ] vitest: + click dispatches the create command with a generated deduped name; on the entity appearing, rename arms (focused input)
+- [ ] vitest: blank name renders the placeholder; non-blank renders the name
+- [ ] vitest: Escape-during-first-rename pinned semantics
+- [ ] tsc clean; touched suites green
+
+## Constraints
+- NO whole-workspace cargo build/clippy. Never touch .kanban/actors/wballard.jsonl.
+- Reuse ScopedPerspectiveTab's rename machinery and the established command dispatch — no new frameworks.
+
+## Workflow
+- /tdd — red-first per behavior.

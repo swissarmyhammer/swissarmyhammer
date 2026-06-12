@@ -62,13 +62,18 @@ vi.mock("./ui-state-context", () => ({
   useUIState: () => mockUIState,
 }));
 
+// Mock views so tests can swap the active view (mirrors the mockUIState
+// pattern above). Defaults to a single board view; individual tests mutate
+// `mockViews` to simulate sibling views of the same kind.
+let mockViews = {
+  views: [{ id: "board-1", name: "Board", kind: "board" }],
+  activeView: { id: "board-1", name: "Board", kind: "board" },
+  setActiveViewId: vi.fn(),
+  refresh: vi.fn(() => Promise.resolve()),
+};
+
 vi.mock("./views-context", () => ({
-  useViews: () => ({
-    views: [{ id: "board-1", name: "Board", kind: "board" }],
-    activeView: { id: "board-1", name: "Board", kind: "board" },
-    setActiveViewId: vi.fn(),
-    refresh: vi.fn(() => Promise.resolve()),
-  }),
+  useViews: () => mockViews,
 }));
 
 import { PerspectiveProvider, usePerspectives } from "./perspective-context";
@@ -109,6 +114,12 @@ describe("PerspectiveProvider", () => {
       clipboard_entity_type: null,
       windows: {},
       recent_boards: [],
+    };
+    mockViews = {
+      views: [{ id: "board-1", name: "Board", kind: "board" }],
+      activeView: { id: "board-1", name: "Board", kind: "board" },
+      setActiveViewId: vi.fn(),
+      refresh: vi.fn(() => Promise.resolve()),
     };
     // Default: perspective.list returns empty (wrapped in dispatch envelope)
     mockInvoke.mockResolvedValue({
@@ -655,6 +666,156 @@ describe("PerspectiveProvider", () => {
     // No perspective.switch — only perspective.save would be dispatched by
     // the sibling hook (not asserted here; covered elsewhere).
     expect(perspectiveSwitchCalls().length).toBe(0);
+  });
+
+  // -----------------------------------------------------------------------
+  // useAutoCreateDefaultPerspective: guard mirrors the tab bar predicate
+  // -----------------------------------------------------------------------
+  //
+  // The tab bar filters perspectives view_id-first (`perspective-tab-bar.tsx`:
+  // a pinned perspective renders only on its pinned view; a legacy
+  // `view_id`-less perspective renders on every view of matching kind). The
+  // auto-create guard must use the SAME predicate: a view whose tab bar would
+  // render empty must trigger the `perspective.save { if_absent }` ensure,
+  // even when same-kind perspectives exist pinned to OTHER views. Owner
+  // directive: "we should never have 0 perspectives [showing]".
+
+  /** Collect every `perspective.save` dispatch recorded by the mock. */
+  function perspectiveSaveCalls() {
+    return mockInvoke.mock.calls.filter(
+      (call) =>
+        call[0] === "dispatch_command" &&
+        (call[1] as { cmd?: string })?.cmd === "perspective.save",
+    );
+  }
+
+  it("auto-creates a Default when every same-kind perspective is pinned to a different view (tab bar would be empty)", async () => {
+    // One perspective of the SAME kind exists, but it is pinned (view_id)
+    // to a sibling view — the tab bar for the active view renders empty.
+    const ps = [
+      { ...makePerspective("pA", "Default"), view_id: "board-other" },
+    ];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const calls = perspectiveSaveCalls();
+    expect(calls.length).toBe(1);
+    expect(calls[0][1]).toMatchObject({
+      cmd: "perspective.save",
+      args: { name: "Default", view: "board", if_absent: true },
+    });
+  });
+
+  it("does NOT auto-create when a perspective is pinned to the active view", async () => {
+    const ps = [{ ...makePerspective("pA", "Default"), view_id: "board-1" }];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(perspectiveSaveCalls().length).toBe(0);
+  });
+
+  it("does NOT auto-create when a legacy kind-shared perspective matches the view kind", async () => {
+    // Legacy `view_id`-less perspectives render on every view of matching
+    // kind — the bar is not empty, so no ensure dispatch.
+    const ps = [makePerspective("pA", "Default")];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(perspectiveSaveCalls().length).toBe(0);
+  });
+
+  it("auto-creates again when switching to a same-kind sibling view whose tab bar is empty", async () => {
+    // The re-fire guard is keyed per view instance, not per kind: board-1
+    // has a pinned Default (no dispatch), then the user switches to the
+    // same-kind sibling board-2 whose bar is empty — the ensure must fire.
+    const ps = [{ ...makePerspective("pA", "Default"), view_id: "board-1" }];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    const { rerender } = renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(perspectiveSaveCalls().length).toBe(0);
+
+    mockViews = {
+      ...mockViews,
+      views: [
+        { id: "board-1", name: "Board", kind: "board" },
+        { id: "board-2", name: "Board Two", kind: "board" },
+      ],
+      activeView: { id: "board-2", name: "Board Two", kind: "board" },
+    };
+    rerender();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const calls = perspectiveSaveCalls();
+    expect(calls.length).toBe(1);
+    expect(calls[0][1]).toMatchObject({
+      cmd: "perspective.save",
+      args: { name: "Default", view: "board", if_absent: true },
+    });
+  });
+
+  it("auto-creates again on an empty same-kind sibling view after firing on an empty view (re-fire ref keyed per view instance)", async () => {
+    // Regression guard for the re-fire KEYING itself (not the visibility
+    // predicate): the ensure FIRES on the empty board-1 — recording the ref
+    // key — then switching to the equally empty same-kind sibling board-2
+    // must fire a SECOND ensure. If the ref were keyed per kind instead of
+    // per view instance, the first fire would record the kind key and
+    // permanently block the sibling, leaving its tab bar empty.
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
+
+    const { rerender } = renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // The empty board-1 fires the ensure, setting the ref key.
+    expect(perspectiveSaveCalls().length).toBe(1);
+
+    mockViews = {
+      ...mockViews,
+      views: [
+        { id: "board-1", name: "Board", kind: "board" },
+        { id: "board-2", name: "Board Two", kind: "board" },
+      ],
+      activeView: { id: "board-2", name: "Board Two", kind: "board" },
+    };
+    rerender();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // board-2's bar is also empty — a second ensure must fire.
+    expect(perspectiveSaveCalls().length).toBe(2);
   });
 
   // -----------------------------------------------------------------------

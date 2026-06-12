@@ -37,9 +37,10 @@ import { useBoardData } from "@/components/window-container";
 import { moniker } from "@/lib/moniker";
 import { useCommandList } from "@/hooks/use-command-list";
 import { CommandButton } from "@/components/command-button";
-import type {
-  CommandDef as RegistryCommandDef,
-  TabButtonDef,
+import {
+  perspectiveVisibleInView,
+  type CommandDef as RegistryCommandDef,
+  type TabButtonDef,
 } from "@/types/kanban";
 import {
   FilterEditor,
@@ -218,17 +219,18 @@ function usePerspectiveTabBar() {
   // focus the CM6 editor when the spatial-nav scope drives down.
   const activeViewId = activeView?.id;
   const viewKind = activeView?.kind ?? "board";
-  // view_id-first / kind-fallback rule (see `PerspectiveDef` JSDoc in
-  // `kanban-app/ui/src/types/kanban.ts`): a perspective with `view_id` is
-  // pinned to that specific view instance; a perspective without `view_id`
-  // is the legacy shared-by-kind shape and appears in every view whose
-  // kind matches.
+  // view_id-first / kind-fallback rule (see `perspectiveVisibleInView` and
+  // the `PerspectiveDef` JSDoc in `kanban-app/ui/src/types/kanban.ts`): a
+  // perspective with `view_id` is pinned to that specific view instance; a
+  // perspective without `view_id` is the legacy shared-by-kind shape and
+  // appears in every view whose kind matches. The predicate is shared with
+  // the auto-create-Default guard in `perspective-context.tsx` so "the bar
+  // is empty" and "ensure a Default" can never disagree.
   const filteredPerspectives = useMemo(
     () =>
-      perspectives.filter((p) => {
-        if (p.view_id != null) return p.view_id === activeViewId;
-        return p.view === viewKind;
-      }),
+      perspectives.filter((p) =>
+        perspectiveVisibleInView(p, activeViewId, viewKind),
+      ),
     [perspectives, activeViewId, viewKind],
   );
 

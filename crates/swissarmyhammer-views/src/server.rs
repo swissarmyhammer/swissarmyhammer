@@ -25,7 +25,7 @@ use swissarmyhammer_operations_macros::operation_tool;
 use tokio::sync::RwLock;
 
 use swissarmyhammer_perspectives::{
-    Perspective, PerspectiveContext, PerspectiveError, SortDirection, SortEntry,
+    default_scope, Perspective, PerspectiveContext, PerspectiveError, SortDirection, SortEntry,
 };
 
 use crate::context::ViewsContext;
@@ -196,7 +196,16 @@ impl ViewsServer {
     }
 
     /// Handle `save perspective` — build a perspective and write it.
+    ///
+    /// With `if_absent` set this becomes the idempotent ensure path the
+    /// frontend's auto-create-default dispatches (via the
+    /// `perspective-commands` plugin): see [`Self::handle_ensure_save`].
     async fn handle_save(&self, req: SavePerspective) -> Result<Value, McpError> {
+        let services = self.services()?;
+        if req.if_absent {
+            return self.handle_ensure_save(req, &services).await;
+        }
+
         let id = req
             .id
             .filter(|s| !s.is_empty())
@@ -206,8 +215,76 @@ impl ViewsServer {
         perspective.filter = req.filter;
         perspective.group = req.group;
 
-        let services = self.services()?;
         let mut pctx = services.perspectives.write().await;
+        let entry_id = pctx.write(&perspective).await.map_err(persp_error_to_mcp)?;
+        Ok(json!({
+            "ok": true,
+            "perspective": perspective_to_json(&perspective)?,
+            "entry_id": entry_id.map(|e| e.to_string()),
+        }))
+    }
+
+    /// Handle `save perspective` in `if_absent` (ensure) mode.
+    ///
+    /// Storage-layer convergence guard for the auto-created "Default"
+    /// perspective (live bug 01KTY6T1GPY94VYWANE9X41SKJ — duplicate Defaults
+    /// minted per window per boot, pinned to the frontend's `"default"`
+    /// placeholder view id):
+    ///
+    /// 1. A `view_id` the views registry does not know falls back to the
+    ///    view-kind scope — otherwise an ensure against a dead view re-mints
+    ///    a default the next board-open reconciliation prunes (create/prune
+    ///    churn). With an EMPTY registry the filename-safety check is the
+    ///    backstop against path separators and overlong components.
+    /// 2. An existing perspective for the scope is returned WITHOUT a write
+    ///    (no store-changed notification, no refetch loop re-trigger).
+    /// 3. A genuine create lands under the deterministic `default-<scope>`
+    ///    id so racing creators converge on the same file.
+    ///
+    /// The scope rules are shared with the kanban board-open reconciliation
+    /// via `swissarmyhammer_perspectives::default_scope`.
+    async fn handle_ensure_save(
+        &self,
+        req: SavePerspective,
+        services: &ViewsBoardServices,
+    ) -> Result<Value, McpError> {
+        let mut view_id = req.view_id.filter(|s| !s.is_empty());
+        if let Some(vid) = view_id.clone() {
+            let views = services.views.read().await;
+            let valid = if views.all_views().is_empty() {
+                default_scope::is_safe_scope_component(&vid)
+            } else {
+                views.get_by_id(&vid).is_some()
+            };
+            if !valid {
+                tracing::warn!(
+                    view_id = %vid,
+                    "ensure save: view_id is unknown or unsafe — falling back to view-kind scope"
+                );
+                view_id = None;
+            }
+        }
+
+        let mut pctx = services.perspectives.write().await;
+        if let Some(existing) = pctx
+            .all()
+            .iter()
+            .find(|p| default_scope::matches_scope(p, view_id.as_deref(), &req.view))
+        {
+            return Ok(json!({
+                "ok": true,
+                "perspective": perspective_to_json(existing)?,
+                "entry_id": Value::Null,
+            }));
+        }
+
+        let scope = view_id.clone().unwrap_or_else(|| req.view.clone());
+        let id = default_scope::default_perspective_id(&scope);
+        let mut perspective = Perspective::new(id, req.name, req.view);
+        perspective.view_id = view_id;
+        perspective.filter = req.filter;
+        perspective.group = req.group;
+
         let entry_id = pctx.write(&perspective).await.map_err(persp_error_to_mcp)?;
         Ok(json!({
             "ok": true,
