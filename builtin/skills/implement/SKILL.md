@@ -89,13 +89,7 @@ Full description + subtasks. Understand before writing code.
 
 ### Record progress
 
-Keep a conversation log on the task. After moving to `doing` and at each meaningful milestone — research done, implementation done, blocker hit, before moving to `review` — record what happened:
-
-```json
-{"op": "add comment", "task_id": "<id>", "text": "<what happened>"}
-```
-
-The comment is attributed to the dispatching actor automatically.
+{% include "_partials/record-progress" %}
 
 ### 4. Research before writing
 

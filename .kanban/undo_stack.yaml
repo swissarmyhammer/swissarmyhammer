@@ -7,5 +7,9 @@ entries:
   label: create perspective 01KTXMMD7J2MEK84TH7CA9TH80
   item_id: 01KTXMMD7J2MEK84TH7CA9TH80
   group_id: null
-pointer: 2
+- id: 01KTY6K8MWP1F5P6NJ9ZB9EWKB
+  label: create perspective 01KTY6K8MWCDT786K8Z45EJVRD
+  item_id: 01KTY6K8MWCDT786K8Z45EJVRD
+  group_id: null
+pointer: 3
 max_size: 100

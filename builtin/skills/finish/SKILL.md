@@ -64,13 +64,9 @@ The Stop hook blocks stopping while ralph is active. Only `clear ralph` when the
 
 ### Record progress (both modes)
 
-Keep a conversation log on each task as the loop drives it. After every iteration / state transition — implement batch landed in `review`, tests run, review verdict, task stuck — record the outcome on the task:
+Log each iteration / state transition — implement batch landed in `review`, tests run, review verdict, task stuck — on the task being driven.
 
-```json
-{"op": "add comment", "task_id": "<task-id>", "text": "<iteration outcome>"}
-```
-
-Comments are attributed to the dispatching actor automatically and give the next iteration (and the user) an audit trail of what each pass did.
+{% include "_partials/record-progress" %}
 
 ### Single-task mode
 
