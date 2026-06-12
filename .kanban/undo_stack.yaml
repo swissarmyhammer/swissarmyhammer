@@ -3,5 +3,9 @@ entries:
   label: update actor wballard
   item_id: wballard
   group_id: null
-pointer: 1
+- id: 01KTXMMD7KC0P6VK7T96BF5P99
+  label: create perspective 01KTXMMD7J2MEK84TH7CA9TH80
+  item_id: 01KTXMMD7J2MEK84TH7CA9TH80
+  group_id: null
+pointer: 2
 max_size: 100

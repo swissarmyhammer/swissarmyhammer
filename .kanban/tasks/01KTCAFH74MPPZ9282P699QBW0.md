@@ -15,6 +15,8 @@ NOTE: No `comment.yaml` command file and no `register_commands` changes are need
 
 SCHEMA SURFACES (the full-vs-wire split is MERGED — see `crates/swissarmyhammer-kanban/src/schema.rs`): `generate_kanban_mcp_schema` is now the slim WIRE surface (`generate_mcp_schema_wire`: `op` enum + compact `x-op-signatures` required-param map; drops `WIRE_DROPPED_KEYS` = x-operation-schemas/x-operation-groups/x-forgiving-input/examples), and `generate_kanban_mcp_schema_full` is the CLI-facing FULL surface (keeps all the heavy keys). Registering the five ops in `KANBAN_OPERATIONS` automatically lands them on BOTH surfaces — but tests must assert against the right surface (see below).
 
+RESPONSE SHAPES (op-token-diet, landed): comment mutations return the `task_mutation_ack` envelope with top-level `id` = TASK id (`add comment` additionally carries the new member under `comment`); see the dependency card ^p7be86z. Dispatch passes responses through unchanged.
+
 Files:
 1. `crates/swissarmyhammer-kanban/src/dispatch.rs`:
    - Add `async fn execute_comment_operation(processor, ctx, op)` modeled on `execute_attachment_operation` (~line 849). Map `Verb::Add → AddComment`, `Verb::List → ListComments`, `Verb::Get → GetComment`, `Verb::Update → UpdateComment`, `Verb::Delete → DeleteComment`. Use the same `req`/`req_task_id`/`op.get_string` helpers.
@@ -23,6 +25,8 @@ Files:
 2. `crates/swissarmyhammer-kanban/src/schema.rs`:
    - Import the five comment structs and add them to the `KANBAN_OPERATIONS` static list (in a `// Comment` group, mirroring the `// Attachment` group).
    - Add an `add comment` example to `generate_kanban_examples()` (examples are FULL/CLI-surface only — the wire drops them by contract; do not assert examples on the wire schema).
+3. `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs`:
+   - Extend `is_task_modifying_operation` to include `(Add, Comment)`, `(Update, Comment)`, `(Delete, Comment)` so comment mutations attach `_plan` with `_plan._meta.affected_task_id` populated from the ack's top-level `id` (the task id). This mirrors the Tag/Untag fix landed by op-token-diet card ^5jxh97r — without it, comment mutations are silently missed by the `_plan` extraction exactly like tag/assign were.
 
 ## Acceptance Criteria
 - [ ] `execute_operation` routes `Noun::Comment | Noun::Comments` to the comment handler (no longer "unsupported operation").
@@ -30,14 +34,16 @@ Files:
 - [ ] All five comment ops appear in the FULL schema's `x-operation-schemas` (`generate_kanban_mcp_schema_full`).
 - [ ] An `add comment` example appears in the FULL schema's examples.
 - [ ] `add comment` dispatched with a dispatching actor records that actor; dispatched with none still succeeds (fallback handled in `AddComment::execute`).
+- [ ] `add comment` / `update comment` / `delete comment` dispatched through the MCP kanban tool attach `_plan` with `affected_task_id` = the task id.
 - [ ] No `comment.yaml` command file is created and `register_commands` is unchanged.
-- [ ] `cargo clippy -p swissarmyhammer-kanban -- -D warnings` clean.
+- [ ] `cargo clippy -p swissarmyhammer-kanban -p swissarmyhammer-tools -- -D warnings` clean.
 
 ## Tests
 - [ ] In `dispatch.rs` test module: parse + execute `{"op":"add comment","task_id":...,"text":"hi"}` then `{"op":"list comments","task_id":...}` returns the member. Round-trip through `parse_input` → `execute_operation`.
 - [ ] In `schema.rs` test module: extend the existing wire/full surface tests (`test_wire_schema_structure_omits_heavy_keys`, `test_full_schema_structure_keeps_heavy_keys`, the `x-op-signatures` tests) to require the five comment ops in the wire `op` enum + `x-op-signatures` (with `add comment` requiring exactly `task_id`,`text`), and the full schema's `x-operation-schemas` count to match the op count.
 - [ ] Dispatch with an explicit dispatching actor attributes that actor on the resulting member.
-- [ ] `cargo nextest run -p swissarmyhammer-kanban` — green.
+- [ ] In `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs` tests: `test_add_comment_plan_carries_affected_task_id` modeled on `test_tag_task_plan_carries_affected_task_id` (from ^5jxh97r) — `add comment` response carries `_plan._meta.affected_task_id` equal to the commented task's id.
+- [ ] `cargo nextest run -p swissarmyhammer-kanban` and the tools kanban-filtered run — green.
 
 ## Workflow
-- Use `/tdd` — write the dispatch round-trip + wire/full schema assertions first.
+- Use `/tdd` — write the dispatch round-trip + wire/full schema assertions + the `_plan` regression test first.
