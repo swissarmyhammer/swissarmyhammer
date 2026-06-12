@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: e480
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffa280
 title: filter_integration::s17_tag_names_with_special_chars fails at HEAD — merge reverted tag-parser slug charset tightening
 ---
 ## What
