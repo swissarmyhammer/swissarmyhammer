@@ -11,6 +11,9 @@ install:
 sah:
     cargo install --path apps/swissarmyhammer-cli
 
+kanban:
+    cargo install --path apps/kanban-cli
+
 shelltool:
     cargo install --path apps/shelltool-cli
 
