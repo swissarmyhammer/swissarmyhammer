@@ -5,27 +5,37 @@
 //! - `shelltool init [target]`: Install shelltool into Claude Code settings
 //! - `shelltool deinit [target]`: Remove shelltool from Claude Code settings
 //! - `shelltool doctor`: Diagnose shelltool setup
+//! - `shelltool completion <shell>`: Generate shell completion scripts
+//! - `shelltool <noun> <verb> ...`: Run a shell operation (e.g.
+//!   `shelltool command execute`, `processes list`, `history grep`,
+//!   `lines get`, `process kill`), generated at runtime from the shell tool
+//!   schema.
 //!
 //! Exit codes:
 //! - 0: Success
 //! - 1: Error
 
-use clap::Parser;
+use clap::Command;
+use swissarmyhammer_cli_completions::lifecycle;
 use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope};
 use swissarmyhammer_common::reporter::CliReporter;
+use swissarmyhammer_operations::cli_gen::extract_noun_verb_arguments;
+use swissarmyhammer_tools::mcp::tool_registry::McpTool;
+use swissarmyhammer_tools::mcp::tools::shell::ShellExecuteTool;
+use tracing::error;
+
+/// The program name — used for the clap root command, completion target, and
+/// completion dispatch. Sourced once so a rename can't desync the sites.
+const PROGRAM: &str = "shelltool";
 
 mod banner;
 mod cli;
 mod commands;
-mod completions;
 mod logging;
-
-use cli::{Cli, Commands, InstallTarget};
 
 // Re-exports used by the in-file `tests` module so that `use super::*;` resolves
 // `Arc`, `Mutex`, and `FileWriterGuard` without modifying the test code. These
-// are consumed by the `FileWriterGuard` tests only — the `dispatch_command`
-// tests use `CurrentDirGuard` from `swissarmyhammer_common::test_utils`.
+// are consumed by the `FileWriterGuard` tests only.
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
@@ -39,22 +49,37 @@ async fn main() {
         banner::print_banner();
     }
 
-    let cli = Cli::parse();
+    // The op subcommand tree is built in-process from the shell tool's FULL
+    // schema (per-op `x-operation-schemas` + flat properties), not the slim
+    // wire form — that's what the shared `cli_gen` generator consumes.
+    let schema = ShellExecuteTool::new().schema_full();
 
-    // Configure tracing: file-based logging to .shell/mcp.log, with stderr fallback.
-    logging::init_tracing(cli.debug);
+    // `--debug` is a global flag declared on the lifecycle root; pull it off the
+    // raw args before clap so tracing is configured before dispatch.
+    let debug = args.iter().any(|a| a == "--debug" || a == "-d");
+    logging::init_tracing(debug);
 
-    let exit_code = dispatch_command(cli).await;
+    let cmd = build_cli(&schema);
+    let matches = cmd.get_matches();
+
+    let exit_code = dispatch(&matches, &schema).await;
     std::process::exit(exit_code);
 }
 
-/// Map an `InstallTarget` from the CLI to the corresponding lifecycle `InitScope`.
-fn install_target_to_scope(target: InstallTarget) -> InitScope {
-    match target {
-        InstallTarget::Project => InitScope::Project,
-        InstallTarget::Local => InitScope::Local,
-        InstallTarget::User => InitScope::User,
-    }
+/// Build the clap command tree for `shelltool`.
+///
+/// Delegates the whole root assembly — root command + global `--debug` +
+/// schema-driven `noun → verb` shell operation subcommands + the five lifecycle
+/// subcommands (`serve`/`init`/`deinit`/`doctor`/`completion`) — to the shared
+/// [`lifecycle::standard_op_cli`]. shelltool has no app-specific subcommands of
+/// its own, so it returns the standard tree unchanged. The lifecycle surface
+/// mirrors the static `cli.rs` definition consumed by `build.rs`.
+fn build_cli(schema: &serde_json::Value) -> Command {
+    lifecycle::standard_op_cli(
+        PROGRAM,
+        "Replaces Bash/exec with a searchable shell that saves tokens",
+        schema,
+    )
 }
 
 /// Return `true` if any `InitResult` has `Error` status.
@@ -70,8 +95,7 @@ fn any_init_error(results: &[swissarmyhammer_common::lifecycle::InitResult]) -> 
 /// deploys the builtin `shell` skill) followed by the genuine tool-lifecycle
 /// components (`Bash` deny + `.shell/config.yaml`). A single errored result from
 /// either phase demotes the run to exit code 1.
-fn run_init(target: InstallTarget) -> i32 {
-    let scope = install_target_to_scope(target);
+fn run_init(scope: InitScope) -> i32 {
     let reporter = CliReporter;
 
     let mut reg = InitRegistry::new();
@@ -96,8 +120,7 @@ fn run_init(target: InstallTarget) -> i32 {
 /// Mirrors [`run_init`]: deinits the genuine tool-lifecycle components, then runs
 /// the mirdan profile deinstaller (unregisters the MCP server and removes the
 /// `shell` skill).
-fn run_deinit(target: InstallTarget) -> i32 {
-    let scope = install_target_to_scope(target);
+fn run_deinit(scope: InitScope) -> i32 {
     let reporter = CliReporter;
 
     let mut reg = InitRegistry::new();
@@ -117,28 +140,43 @@ fn run_deinit(target: InstallTarget) -> i32 {
     }
 }
 
-/// Dispatch the parsed CLI command to the appropriate handler.
+/// Route the matched CLI invocation to the correct handler and return an exit code.
+///
+/// The lifecycle subcommands (`serve`, `init`, `deinit`, `doctor`, `completion`)
+/// are handled inline, mirroring the static `cli.rs` surface. Any other
+/// subcommand is a schema-driven shell operation: it is converted to a
+/// `{ "op": "verb noun", ...args }` map via [`extract_noun_verb_arguments`] and
+/// dispatched to [`commands::ops::run_operation`].
 ///
 /// Returns an exit code: 0 for success, 1 for error.
-async fn dispatch_command(cli: Cli) -> i32 {
-    match cli.command {
-        Commands::Serve => match commands::serve::run_serve().await {
+async fn dispatch(matches: &clap::ArgMatches, schema: &serde_json::Value) -> i32 {
+    match matches.subcommand() {
+        Some(("serve", _)) => match commands::serve::run_serve().await {
             Ok(()) => 0,
             Err(e) => {
-                eprintln!("Error: {}", e);
+                error!("Error: {}", e);
                 1
             }
         },
-        Commands::Init { target } => run_init(target),
-        Commands::Deinit { target } => run_deinit(target),
-        Commands::Doctor { verbose } => commands::doctor::run_doctor(verbose),
-        Commands::Completion { shell } => match completions::print_completion(shell) {
-            Ok(()) => 0,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                1
+        Some(("init", sub_m)) => run_init(lifecycle::target_scope(sub_m)),
+        Some(("deinit", sub_m)) => run_deinit(lifecycle::target_scope(sub_m)),
+        Some(("doctor", sub_m)) => commands::doctor::run_doctor(sub_m.get_flag("verbose")),
+        Some(("completion", sub_m)) => lifecycle::run_completion(build_cli(schema), PROGRAM, sub_m),
+        Some((noun, _)) => {
+            // A non-lifecycle subcommand is a schema-driven shell operation.
+            match extract_noun_verb_arguments(matches, schema) {
+                Ok(arguments) => commands::ops::run_operation(arguments).await,
+                Err(e) => {
+                    error!("Error: {}", e);
+                    error!("Run '{PROGRAM} {noun} --help' or '{PROGRAM} --help' for usage.");
+                    1
+                }
             }
-        },
+        }
+        None => {
+            error!("No command specified. Run '{PROGRAM} --help' for usage information.");
+            1
+        }
     }
 }
 
@@ -239,84 +277,112 @@ mod tests {
         assert_eq!(contents, b"payload");
     }
 
-    // ── dispatch_command arms ────────────────────────────────────────────
+    // ── dispatch arms ────────────────────────────────────────────────────
 
-    /// `dispatch_command` must route `Commands::Init { target: Local }`
-    /// through the init registry and return an exit code derived from
-    /// the component results. Running under a fresh tempdir-as-CWD keeps
-    /// the writes hermetic: `.claude/settings.local.json` and `.shell/`
-    /// are scoped beneath the tempdir and discarded on drop.
+    /// Parse an argv slice through the runtime command tree built by
+    /// [`build_cli`] from the shell tool's full schema.
+    fn matches_from(argv: &[&str]) -> (serde_json::Value, clap::ArgMatches) {
+        let schema = ShellExecuteTool::new().schema_full();
+        let matches = build_cli(&schema)
+            .try_get_matches_from(argv)
+            .expect("argv should parse against the runtime command tree");
+        (schema, matches)
+    }
+
+    /// `dispatch` must route `init local` through the init registry and create
+    /// the tool-lifecycle artifact. We assert the observable side effect — the
+    /// `.shell/config.yaml` the `ShellExecuteTool` lifecycle writes — rather than
+    /// the host-variable exit code (the MCP-registration phase depends on
+    /// detectable agents). Running under a fresh tempdir-as-CWD keeps the writes
+    /// hermetic and discarded on drop.
     ///
     /// `#[serial_test::serial(cwd)]` joins the crate-wide `cwd` serialization
-    /// group shared by every CWD-touching test in this crate. The internal
-    /// `CURRENT_DIR_LOCK` inside [`CurrentDirGuard`] only serializes against
-    /// other `CurrentDirGuard` users; it does NOT serialize against the raw
-    /// `std::env::set_current_dir` tests in `doctor.rs` and `registry.rs`.
-    /// The `cwd` group is the single mutex covering all four.
+    /// group shared by every CWD-touching test in this crate.
     #[test]
     #[serial_test::serial(cwd)]
-    fn dispatch_command_init_local_runs_registry() {
+    fn dispatch_init_local_creates_shell_config() {
         let tempdir = TempDir::new().expect("create tempdir");
         let _cwd = CurrentDirGuard::new(tempdir.path()).expect("enter tempdir");
 
-        let cli = Cli {
-            debug: false,
-            command: Commands::Init {
-                target: InstallTarget::Local,
-            },
-        };
+        let (schema, matches) = matches_from(&[PROGRAM, "init", "local"]);
+        let _ = block_on(dispatch(&matches, &schema));
 
-        let exit_code = block_on(dispatch_command(cli));
-        // The registry may return 0 (success) or 1 (some component
-        // errored on the host — e.g. no detectable agents). Either
-        // outcome exercises the arm; we just require a valid code.
+        let config = tempdir.path().join(".shell").join("config.yaml");
         assert!(
-            exit_code == 0 || exit_code == 1,
-            "unexpected exit code: {exit_code}"
+            config.exists(),
+            "init local should create .shell/config.yaml under the CWD"
         );
     }
 
-    /// `dispatch_command` must route `Commands::Deinit { target: Local }`
-    /// through the deinit registry and return an exit code derived from
-    /// the component results. As with init, we pin CWD to a tempdir so
-    /// any file writes/removes land in a throwaway scope, and use
-    /// `#[serial_test::serial(cwd)]` so the CWD change is serialized against
-    /// every other CWD-touching test via the crate-wide `cwd` group.
+    /// `dispatch` must route `deinit local` through the deinit registry and
+    /// remove the `.shell/` config directory the matching `init` created. We
+    /// assert the observable side effect (the directory is gone afterward)
+    /// rather than the host-variable exit code.
     #[test]
     #[serial_test::serial(cwd)]
-    fn dispatch_command_deinit_local_runs_registry() {
+    fn dispatch_deinit_local_removes_shell_config() {
         let tempdir = TempDir::new().expect("create tempdir");
         let _cwd = CurrentDirGuard::new(tempdir.path()).expect("enter tempdir");
 
-        let cli = Cli {
-            debug: false,
-            command: Commands::Deinit {
-                target: InstallTarget::Local,
-            },
-        };
+        // Seed the artifact via init so deinit has something to remove.
+        let (schema, init_m) = matches_from(&[PROGRAM, "init", "local"]);
+        let _ = block_on(dispatch(&init_m, &schema));
+        let shell_dir = tempdir.path().join(".shell");
+        assert!(shell_dir.exists(), "precondition: init created .shell/");
 
-        let exit_code = block_on(dispatch_command(cli));
+        let (schema, deinit_m) = matches_from(&[PROGRAM, "deinit", "local"]);
+        let _ = block_on(dispatch(&deinit_m, &schema));
         assert!(
-            exit_code == 0 || exit_code == 1,
-            "unexpected exit code: {exit_code}"
+            !shell_dir.exists(),
+            "deinit local should remove the .shell/ config directory"
         );
     }
 
-    /// `dispatch_command` must route `Commands::Doctor { verbose: false }`
-    /// straight through to `doctor::run_doctor`. `run_doctor` is already
-    /// covered in `doctor::tests`; this test just pins down the dispatch
-    /// arm. The host-dependent exit code is either 0, 1, or 2.
+    /// `dispatch` must route `doctor` through `doctor::run_doctor`, returning
+    /// the doctor's own exit code. We assert on the value `dispatch` itself
+    /// returns (its observable contract), mirroring how the sibling `init`/
+    /// `deinit` tests assert on the side effect dispatch produced.
     ///
-    /// No CWD change here — `run_doctor` is read-only with respect to
-    /// the working directory — so no [`CurrentDirGuard`] is needed.
+    /// To make the assertion deterministic AND distinguish the doctor arm from
+    /// the catch-all op-extraction arm, we seed a malformed `.shell/config.yaml`
+    /// under a hermetic tempdir-as-CWD: the project-config health check then
+    /// fails to parse, forcing the doctor verdict to exit code 2 (error). If the
+    /// `doctor` arm were deleted, `"doctor"` would fall through to the
+    /// schema-op arm, fail `extract_noun_verb_arguments`, and return 1 — so this
+    /// assertion would fail, which is exactly what we want.
     #[test]
-    fn dispatch_command_doctor_runs_diagnostics() {
-        let cli = Cli {
-            debug: false,
-            command: Commands::Doctor { verbose: false },
-        };
+    #[serial_test::serial(cwd)]
+    fn dispatch_doctor_returns_doctor_verdict() {
+        let tempdir = TempDir::new().expect("create tempdir");
+        let _cwd = CurrentDirGuard::new(tempdir.path()).expect("enter tempdir");
 
-        let exit_code = block_on(dispatch_command(cli));
-        assert!(exit_code <= 2, "unexpected exit code: {exit_code}");
+        // Seed a project config that fails to parse so the shell-tool health
+        // check emits an Error, pinning the doctor verdict to exit code 2.
+        let shell_dir = tempdir.path().join(".shell");
+        std::fs::create_dir_all(&shell_dir).expect("create .shell dir");
+        std::fs::write(shell_dir.join("config.yaml"), "deny: [unclosed")
+            .expect("write malformed config");
+
+        let (schema, matches) = matches_from(&[PROGRAM, "doctor"]);
+        let exit_code = block_on(dispatch(&matches, &schema));
+
+        assert_eq!(
+            exit_code, 2,
+            "dispatch should route to the doctor and return its error-verdict \
+             exit code (2) for a malformed project config"
+        );
+    }
+
+    /// `dispatch` must route a schema-driven shell op (`list processes`) through
+    /// [`extract_noun_verb_arguments`] into [`commands::ops::run_operation`] and
+    /// return success.
+    #[test]
+    fn dispatch_shell_op_reaches_tool() {
+        let (schema, matches) = matches_from(&[PROGRAM, "processes", "list"]);
+        let exit_code = block_on(dispatch(&matches, &schema));
+        assert_eq!(
+            exit_code, 0,
+            "list processes should reach the tool and succeed"
+        );
     }
 }

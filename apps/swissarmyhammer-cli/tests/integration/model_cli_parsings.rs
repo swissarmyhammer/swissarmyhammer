@@ -49,10 +49,17 @@ fn assert_list_subcommand(cli: &Cli, expected_format: OutputFormat) {
 
 /// Assert that CLI parsed to a Model command with a Use subcommand
 fn assert_use_subcommand(cli: &Cli, expected_name: &str) {
+    assert_use_subcommand_for(cli, expected_name, None)
+}
+
+/// Assert that CLI parsed to a Model command with a Use subcommand, checking
+/// both the model name and the `--for <purpose>` value.
+fn assert_use_subcommand_for(cli: &Cli, expected_name: &str, expected_purpose: Option<&str>) {
     match &cli.command {
         Some(Commands::Model { subcommand }) => match subcommand {
-            Some(ModelSubcommand::Use { name }) => {
+            Some(ModelSubcommand::Use { name, for_purpose }) => {
                 assert_eq!(name, expected_name);
+                assert_eq!(for_purpose.as_deref(), expected_purpose);
             }
             _ => panic!("Should parse as Use subcommand"),
         },
@@ -180,6 +187,19 @@ fn test_model_use_with_special_characters() {
     // Test with model name containing numbers
     let result = try_parse_cli(&["model", "use", "agent-v2"]);
     assert!(result.is_ok(), "Agent name with numbers should parse");
+}
+
+#[test]
+fn test_model_use_for_review_parses() {
+    let cli = try_parse_cli(&["model", "use", "qwen-0.6b-test", "--for", "review"])
+        .expect("--for review should parse");
+    assert_use_subcommand_for(&cli, "qwen-0.6b-test", Some("review"));
+}
+
+#[test]
+fn test_model_use_without_for_has_no_purpose() {
+    let cli = try_parse_cli(&["model", "use", "claude-code"]).expect("should parse");
+    assert_use_subcommand_for(&cli, "claude-code", None);
 }
 
 #[test]
@@ -315,6 +335,15 @@ fn test_model_use_help_text_content() {
         &help_text,
         &["switch", "use", "select", "Apply"],
         "Model use help should describe switching",
+    );
+
+    // Must document per-purpose model scoping, including the review tool's
+    // `review.model` key. This guards against the static clap `long_about`
+    // diverging from the runtime command tree's help text.
+    assert_help_text_contains(
+        &help_text,
+        &["--for review", "review.model"],
+        "Model use help should document per-purpose model scoping for review",
     );
 }
 

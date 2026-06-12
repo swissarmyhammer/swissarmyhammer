@@ -43,6 +43,7 @@ pub fn profile(_scope: InitScope) -> mirdan::install::Profile {
         mcp_server: Some(mirdan::install::ProfileMcpServer::serve(SERVER_NAME)),
         skills: Some(skills_selector()),
         agents: None,
+        validators: None,
         statusline: false,
         preamble: false,
     }

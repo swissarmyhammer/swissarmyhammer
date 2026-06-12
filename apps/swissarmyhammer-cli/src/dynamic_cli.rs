@@ -9,9 +9,8 @@ use clap::{Arg, ArgAction, Command};
 use once_cell::sync::Lazy;
 use owo_colors::OwoColorize;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use swissarmyhammer_operations::Operation;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolRegistry};
 use tokio::sync::RwLock;
 
@@ -768,21 +767,13 @@ Examples:
   sah --debug model use qwen         # Use model with debug output
 ";
 
-const MODEL_USE_LONG_ABOUT: &str = "
-Apply a specific model configuration to the current project.
-
-This command finds the specified model by name and applies its configuration
-to the project by creating or updating .sah/sah.yaml.
-
-Model precedence (highest to lowest):
-• User models: ~/.models/<name>.yaml
-• Project models: ./models/<name>.yaml
-• Built-in models: embedded in the binary
-
-Examples:
-  sah model use claude-code                # Apply Claude Code model
-  sah model use qwen                       # Apply the Qwen model
-";
+/// Long help text for `sah model use`.
+///
+/// Re-exported from `crate::cli` so the static clap derive and this runtime
+/// command tree share a single source of truth. The canonical definition
+/// lives in `cli.rs` because that module is the one `build.rs` compiles
+/// standalone for doc generation.
+use crate::cli::MODEL_USE_LONG_ABOUT;
 
 /// Statistics about CLI tool validation results
 #[derive(Debug, Clone, Default)]
@@ -916,30 +907,90 @@ impl CliBuilder {
         Self::iter_registry(registry, RegistryIterType::AllTools, f)
     }
 
-    /// Pre-compute command data for a tool with validation
+    /// Build the clap subcommand for one MCP tool, scoped per operation.
     ///
-    /// # Validation Flow
+    /// # Build Flow
     ///
-    /// This function is the entry point for converting MCP tools into CLI commands.
-    /// The validation and command creation follows this chain:
+    /// The schema is validated via `validate_tool_schema_for_cli`, then the build
+    /// dispatches on whether the tool is operation-based:
     ///
-    /// 1. `precompute_tool_command` - Entry point, orchestrates validation and creation
-    /// 2. `validate_tool_schema_for_cli` - Validates schema structure using SchemaValidator
-    /// 3. `create_command_data_from_tool` - Creates CommandData from validated tool
-    /// 4. `precompute_args` - Extracts argument data from schema properties
-    /// 5. `SchemaParser::parse_arg_data` - Parses individual argument from schema
+    /// - Operation-based tools route through the shared
+    ///   [`swissarmyhammer_operations::cli_gen::build_commands_from_schema`], which
+    ///   reads the FULL schema's `x-operation-schemas` to build a `noun → verb`
+    ///   tree where each verb advertises ONLY its own operation's params, with that
+    ///   op's required flags enforced (not the global union of every op's params).
+    /// - Schema-based tools use the `CommandData` + `precompute_args` path.
     ///
-    /// Early returns are used throughout to skip invalid tools gracefully rather than
-    /// failing the entire CLI build. Invalid tools are logged and skipped.
-    fn precompute_tool_command(tool: &dyn McpTool) -> Option<CommandData> {
-        let schema = tool.schema();
+    /// Returns `None` (logged) for tools whose schema fails validation, so one bad
+    /// tool does not fail the whole CLI build.
+    ///
+    /// # Arguments
+    ///
+    /// * `cli_tool_name` - The full tool name used as the `tool <name>` subcommand id.
+    /// * `tool` - The MCP tool to build a subcommand for.
+    fn build_tool_subcommand(cli_tool_name: &str, tool: &dyn McpTool) -> Option<Command> {
+        // The CLI command tree is built in-process from the schema's flat
+        // per-op `properties` and `x-operation-schemas`, so it needs the FULL
+        // schema. Operation-based tools serve a slim wire schema from `schema()`;
+        // `schema_full()` returns the full surface (and falls back to `schema()`
+        // for tools whose schema is already full).
+        let schema = tool.schema_full();
 
         // Early return if schema validation fails
         if !Self::validate_tool_schema_for_cli(tool, &schema) {
             return None;
         }
 
-        Self::create_command_data_from_tool(tool, &schema)
+        if tool.operations().is_empty() {
+            // Schema-based (non-operation) tool: build args from the flat schema.
+            let data = CommandData {
+                name: cli_tool_name.to_string(),
+                about: tool.cli_about().map(|s| s.to_string()),
+                long_about: Some(tool.description().to_string()),
+                args: Self::precompute_args(&schema),
+                subcommands: Vec::new(),
+            };
+            Some(Self::build_tool_subcommand_from_data(cli_tool_name, &data))
+        } else {
+            // Operation-based tool: delegate the noun → verb tree (with per-op
+            // arg scoping and required flags) to the shared generator so every
+            // CLI on the `Operation` trait shares one engine.
+            Some(Self::build_operation_tool_subcommand(
+                cli_tool_name,
+                tool,
+                &schema,
+            ))
+        }
+    }
+
+    /// Build an operation-based tool's clap subcommand via the shared generator.
+    ///
+    /// Wraps the tool's name / about / long-about around the `noun → verb`
+    /// subcommands produced by
+    /// [`swissarmyhammer_operations::cli_gen::build_commands_from_schema`]. Each
+    /// verb is scoped to exactly its operation's params (read from the schema's
+    /// `x-operation-schemas`), with that op's required fields enforced.
+    fn build_operation_tool_subcommand(
+        cli_tool_name: &str,
+        tool: &dyn McpTool,
+        schema: &Value,
+    ) -> Command {
+        // Reuse the shared name/about/long_about preamble builder rather than
+        // re-spelling the `Command::new(intern_string(..)) → .about → .long_about`
+        // sequence, then attach the schema-driven noun subcommands.
+        let data = CommandData {
+            name: cli_tool_name.to_string(),
+            about: tool.cli_about().map(|s| s.to_string()),
+            long_about: Some(tool.description().to_string()),
+            args: Vec::new(),
+            subcommands: Vec::new(),
+        };
+        let mut cmd = Self::build_command_base(&data);
+
+        for noun_cmd in swissarmyhammer_operations::cli_gen::build_commands_from_schema(schema) {
+            cmd = cmd.subcommand(noun_cmd);
+        }
+        cmd
     }
 
     /// Validate tool schema for CLI integration
@@ -955,94 +1006,6 @@ impl CliBuilder {
             return false;
         }
         true
-    }
-
-    /// Create command data from validated tool
-    fn create_command_data_from_tool(tool: &dyn McpTool, schema: &Value) -> Option<CommandData> {
-        let operations = tool.operations();
-
-        // If tool has operations, create noun-grouped subcommands
-        // Structure: tool -> noun -> verb (e.g., kanban -> board -> init)
-        if !operations.is_empty() {
-            // For operation-based tools, use schema args for each verb subcommand
-            let schema_args = Self::precompute_args(schema);
-
-            // Group operations by noun
-            let mut noun_groups: HashMap<&str, Vec<&dyn Operation>> = HashMap::new();
-            for op in operations {
-                noun_groups.entry(op.noun()).or_default().push(*op);
-            }
-
-            // Create noun subcommands, each containing verb subcommands
-            let mut subcommands: Vec<CommandData> = noun_groups
-                .into_iter()
-                .map(|(noun, ops)| Self::create_noun_command_data(noun, ops, &schema_args))
-                .collect();
-
-            // Sort by noun name for consistent ordering
-            subcommands.sort_by(|a, b| a.name.cmp(&b.name));
-
-            Some(CommandData {
-                name: tool.cli_name().to_string(),
-                about: tool.cli_about().map(|s| s.to_string()),
-                long_about: Some(tool.description().to_string()),
-                args: Vec::new(), // No direct args - use noun subcommands
-                subcommands,
-            })
-        } else {
-            // Non-operation-based tool - use schema for args
-            Some(CommandData {
-                name: tool.cli_name().to_string(),
-                about: tool.cli_about().map(|s| s.to_string()),
-                long_about: Some(tool.description().to_string()),
-                args: Self::precompute_args(schema),
-                subcommands: Vec::new(),
-            })
-        }
-    }
-
-    /// Create command data for a noun grouping (e.g., "board", "task", "column")
-    fn create_noun_command_data(
-        noun: &str,
-        ops: Vec<&dyn Operation>,
-        schema_args: &[ArgData],
-    ) -> CommandData {
-        let mut verb_subcommands: Vec<CommandData> = ops
-            .into_iter()
-            .map(|op| Self::create_verb_command_data(op, schema_args))
-            .collect();
-
-        // Sort by verb name for consistent ordering
-        verb_subcommands.sort_by(|a, b| a.name.cmp(&b.name));
-
-        CommandData {
-            name: noun.to_string(),
-            about: Some(format!("{} operations", noun)),
-            long_about: None,
-            args: Vec::new(),
-            subcommands: verb_subcommands,
-        }
-    }
-
-    /// Create command data for a verb (e.g., "init", "add", "move")
-    fn create_verb_command_data(op: &dyn Operation, schema_args: &[ArgData]) -> CommandData {
-        // Use just the verb as the subcommand name
-        let verb_name = op.verb().to_string();
-
-        // Use schema args (excluding "op" since that's set by the noun+verb path)
-        let args: Vec<ArgData> = schema_args
-            .iter()
-            .filter(|arg| arg.name != "op")
-            .cloned()
-            .collect();
-
-        CommandData {
-            name: verb_name,
-            about: Some(op.description().to_string()),
-            long_about: None,
-            args,
-            subcommands: Vec::new(),
-        }
     }
 
     /// Pre-compute argument data from JSON schema
@@ -1189,7 +1152,7 @@ impl CliBuilder {
             .expect("ToolRegistry should not be locked");
 
         // Collect all tools with their full names
-        let mut all_tools: Vec<_> = Vec::new();
+        let mut all_tools: Vec<(String, Command)> = Vec::new();
         for category in registry.get_cli_categories() {
             for tool in registry.get_tools_for_category(&category) {
                 if tool.hidden_from_cli() {
@@ -1197,8 +1160,8 @@ impl CliBuilder {
                 }
                 // Use full tool name as-is (e.g., web_search, treesitter_search)
                 let cli_tool_name = <dyn McpTool as McpTool>::name(tool).to_string();
-                if let Some(tool_data) = Self::precompute_tool_command(tool) {
-                    all_tools.push((cli_tool_name, tool_data));
+                if let Some(subcmd) = Self::build_tool_subcommand(&cli_tool_name, tool) {
+                    all_tools.push((cli_tool_name, subcmd));
                 }
             }
         }
@@ -1206,8 +1169,7 @@ impl CliBuilder {
         // Sort by name for consistent ordering
         all_tools.sort_by(|a, b| a.0.cmp(&b.0));
 
-        for (tool_name, tool_data) in all_tools {
-            let subcmd = Self::build_tool_subcommand_from_data(&tool_name, &tool_data);
+        for (_tool_name, subcmd) in all_tools {
             tool_cmd = tool_cmd.subcommand(subcmd);
         }
 
@@ -1630,42 +1592,10 @@ impl CliBuilder {
         cli.subcommand(Self::build_model_command())
             .subcommand(Self::build_agent_command())
             .subcommand(Self::build_statusline_command())
-            .subcommand(Self::build_completion_command())
-    }
-
-    /// Build the `completion` subcommand.
-    ///
-    /// Emits a shell completion script for `sah` to stdout for the
-    /// shell selected by the positional `<shell>` argument. The shell
-    /// names accepted here mirror the variants of `clap_complete::Shell`
-    /// (bash, zsh, fish, powershell, elvish). The dispatcher in
-    /// `main.rs::handle_completion_command` consumes the parsed value and
-    /// calls `completions::print_completion_for`.
-    fn build_completion_command() -> Command {
-        Command::new("completion")
-            .about("Generate shell completion scripts")
-            .long_about(
-                "Generates shell completion scripts for various shells. Supports:\n\
-                 - bash\n\
-                 - zsh\n\
-                 - fish\n\
-                 - powershell\n\n\
-                 Examples:\n  \
-                 # Bash (add to ~/.bashrc or ~/.bash_profile)\n  \
-                 sah completion bash > ~/.local/share/bash-completion/completions/sah\n\n  \
-                 # Zsh (add to ~/.zshrc or a file in fpath)\n  \
-                 sah completion zsh > ~/.zfunc/_sah\n\n  \
-                 # Fish\n  \
-                 sah completion fish > ~/.config/fish/completions/sah.fish\n\n  \
-                 # PowerShell\n  \
-                 sah completion powershell >> $PROFILE",
-            )
-            .arg(
-                Arg::new("shell")
-                    .help("Shell to generate completion for")
-                    .required(true)
-                    .value_parser(clap::builder::EnumValueParser::<clap_complete::Shell>::new()),
-            )
+            // The completion subcommand (builder + script-rendering dispatch) is
+            // shared with the other workspace CLIs via the cli-completions crate;
+            // the long_about template is parameterised on the binary name.
+            .subcommand(swissarmyhammer_cli_completions::lifecycle::completion_subcommand("sah"))
     }
 
     /// Build the model command with all its subcommands
@@ -1688,12 +1618,20 @@ impl CliBuilder {
             SubcommandSpec::new("list", "List available models").args(vec![format_arg]),
             SubcommandSpec::new("use", "Use a specific model")
                 .long_about(MODEL_USE_LONG_ABOUT)
-                .args(vec![ArgSpec::new(
-                    "name",
-                    "Model name to apply to the project",
-                )
-                .value_name("NAME")
-                .required(true)]),
+                .args(vec![
+                    ArgSpec::new("name", "Model name to apply to the project")
+                        .value_name("NAME")
+                        .required(true),
+                    ArgSpec::new(
+                        "for",
+                        "Scope the model to a purpose (e.g. review); absent sets the global default",
+                    )
+                    .long("for")
+                    .value_name("PURPOSE")
+                    .value_parser(ArgSpecValueParser::Strings(
+                        crate::commands::model::use_command::supported_purpose_names(),
+                    )),
+                ]),
         ];
 
         Self::build_command_with_subcommands(

@@ -17,8 +17,8 @@ pub async fn handle_command(subcommand: Option<ModelSubcommand>, context: &CliCo
     let result = match subcommand {
         Some(ModelSubcommand::List { format }) => list::execute_list_command(format, context).await,
         Some(ModelSubcommand::Show { .. }) | None => show::execute_show_command(context).await,
-        Some(ModelSubcommand::Use { name }) => {
-            use_command::execute_use_command(name, context).await
+        Some(ModelSubcommand::Use { name, for_purpose }) => {
+            use_command::execute_use_command(name, for_purpose, context).await
         }
     };
 

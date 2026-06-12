@@ -5,7 +5,7 @@
 //! `build.rs` compile `cli.rs` independently via `#[path = "src/cli.rs"]`
 //! to generate documentation, man pages, and shell completions at build time.
 
-use crate::cli::{InstallTarget, SourceArg};
+use crate::cli::SourceArg;
 
 // Re-export FileSource from the common crate so call sites can use
 // `crate::cli_conversions::FileSource` alongside the conversion impls below.
@@ -33,15 +33,9 @@ impl From<FileSource> for SourceArg {
     }
 }
 
-impl From<InstallTarget> for swissarmyhammer_common::lifecycle::InitScope {
-    fn from(target: InstallTarget) -> Self {
-        match target {
-            InstallTarget::Project => Self::Project,
-            InstallTarget::Local => Self::Local,
-            InstallTarget::User => Self::User,
-        }
-    }
-}
+// `From<InstallTarget> for InitScope` is provided by the canonical shared
+// `InstallTarget` in `swissarmyhammer_cli_completions::lifecycle`, which
+// `crate::cli` re-exports — so it is not redeclared here.
 
 #[cfg(test)]
 mod tests {

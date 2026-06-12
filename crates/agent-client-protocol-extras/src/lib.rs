@@ -42,6 +42,9 @@
 //! - [`session_title`] — the agent-neutral session-title derivation helper and
 //!   the shared trigger/emission contract for the built-in
 //!   `SessionUpdate::SessionInfoUpdate` rename mechanism.
+//! - [`tolerant_routing`] — the [`TolerantResponseRouter`] dispatch middleware
+//!   that keeps a connection alive when a turn's response receiver was dropped
+//!   (an abandoned turn fails that turn only, not the whole connection).
 
 pub mod fixture;
 pub mod hook_config;
@@ -53,6 +56,7 @@ pub mod recording;
 pub mod session_store;
 pub mod session_title;
 pub mod test_mcp_server;
+pub mod tolerant_routing;
 pub mod tracing_agent;
 
 pub use fixture::{
@@ -88,6 +92,7 @@ pub use session_title::{
     normalize_title, title_from_first_user_message, SESSION_TITLE_MAX_CHARS,
     TITLE_GENERATION_INSTRUCTION,
 };
+pub use tolerant_routing::TolerantResponseRouter;
 pub use tracing_agent::{trace_notifications, TracingAgent};
 
 // Re-export MCP notification types for convenience

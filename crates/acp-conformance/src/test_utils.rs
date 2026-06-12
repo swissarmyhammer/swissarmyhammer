@@ -21,20 +21,50 @@
 //!   [`agent_client_protocol_extras::AgentWithFixture::connection`] handle so
 //!   conformance helpers can run against either path uniformly.
 //!
-//! The shape closely mirrors the equivalent pattern in
-//! `avp-common/src/validator/runner.rs` — kept identical so reviewers can
-//! cross-reference both implementations without surprise.
+//! The module is also exported under the `test-support` cargo feature so
+//! downstream crates' tests (e.g. the agent-pool tests in
+//! `swissarmyhammer-validators`) reuse this harness as a dev-dependency
+//! instead of carrying their own copy of the ACP mock-agent wiring.
 
 use agent_client_protocol::schema::{
     AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
     ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
-    NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, SetSessionModeRequest,
-    SetSessionModeResponse,
+    NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, SessionId,
+    SetSessionModeRequest, SetSessionModeResponse,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectTo, ConnectionTo};
 use agent_client_protocol_extras::AgentWithFixture;
 use futures::future::BoxFuture;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+
+/// Allocate the next sequential mock session id (`"<prefix>-<n>"`) and box it
+/// as a ready `new_session` response.
+///
+/// Every counted-session mock used to carry its own copy of this
+/// fetch-add → format → [`NewSessionResponse`] block, and the copies drifted.
+/// A [`MockAgent::new_session`] override delegates here instead, keeping the
+/// mock session shape in exactly one place:
+///
+/// ```ignore
+/// fn new_session<'a>(
+///     &'a self,
+///     _request: NewSessionRequest,
+/// ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+///     numbered_session_response(&self.next_session, "mock-sess")
+/// }
+/// ```
+///
+/// The counter is bumped eagerly (before the future is awaited) so concurrent
+/// allocations never observe the same id.
+pub fn numbered_session_response(
+    counter: &AtomicUsize,
+    prefix: &str,
+) -> BoxFuture<'static, agent_client_protocol::Result<NewSessionResponse>> {
+    let n = counter.fetch_add(1, Ordering::SeqCst);
+    let id = SessionId::new(format!("{prefix}-{n}"));
+    Box::pin(async move { Ok(NewSessionResponse::new(id)) })
+}
 
 /// Project-local replacement for the removed `agent_client_protocol::Agent`
 /// trait, scoped to the conformance test scaffolding.
@@ -356,6 +386,19 @@ mod tests {
             resp.protocol_version,
             agent_client_protocol::schema::ProtocolVersion::V1
         );
+    }
+
+    #[tokio::test]
+    async fn numbered_session_response_allocates_sequential_prefixed_ids() {
+        let counter = std::sync::atomic::AtomicUsize::new(0);
+        let first = numbered_session_response(&counter, "mock-sess")
+            .await
+            .expect("first allocation should succeed");
+        let second = numbered_session_response(&counter, "mock-sess")
+            .await
+            .expect("second allocation should succeed");
+        assert_eq!(first.session_id.to_string(), "mock-sess-0");
+        assert_eq!(second.session_id.to_string(), "mock-sess-1");
     }
 
     #[tokio::test]

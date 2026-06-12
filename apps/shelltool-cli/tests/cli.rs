@@ -106,6 +106,60 @@ fn doctor_verbose_is_accepted() {
     );
 }
 
+/// `shelltool --help` must also list the schema-driven shell operation nouns,
+/// proving the runtime command tree built from `ShellExecuteTool::operations()`
+/// is wired into the binary alongside the lifecycle commands.
+///
+/// The shell ops are grouped by noun (the second token of each `"verb noun"` op
+/// string), so the five operations surface as the nouns `command`, `processes`,
+/// `process`, `history`, and `lines`.
+#[test]
+fn help_lists_schema_driven_operation_nouns() {
+    let output = Command::new(SHELLTOOL_BIN)
+        .arg("--help")
+        .output()
+        .expect("failed to launch shelltool binary");
+
+    assert!(output.status.success(), "shelltool --help should exit 0");
+
+    let stdout = String::from_utf8(output.stdout).expect("help output must be UTF-8");
+
+    for noun in ["command", "processes", "process", "history", "lines"] {
+        assert!(
+            stdout.contains(noun),
+            "shelltool --help should list the `{noun}` operation noun; got:\n{stdout}",
+        );
+    }
+}
+
+/// A schema-generated shell op invocation must reach `ShellExecuteTool::execute`
+/// and emit the operation's output.
+///
+/// `execute command` is grouped under the `command` noun with the `execute`
+/// verb, so the CLI form is `shelltool command execute --command "..."`. The
+/// shell tool echoes a YAML result containing `command_id` and `exit_code`,
+/// which proves the generated op routed through the tool and produced output.
+#[test]
+fn generated_op_reaches_tool_and_returns_output() {
+    let output = Command::new(SHELLTOOL_BIN)
+        .args(["command", "execute", "--command", "echo schema_op_e2e"])
+        .output()
+        .expect("failed to launch shelltool binary");
+
+    assert!(
+        output.status.success(),
+        "generated `command execute` op should exit 0, got {:?} (stderr: {})",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("op output must be UTF-8");
+    assert!(
+        stdout.contains("command_id") && stdout.contains("exit_code"),
+        "op output should contain the shell execution result; got:\n{stdout}",
+    );
+}
+
 /// `shelltool completion <shell>` must exit 0 and emit a non-empty script
 /// to stdout that mentions the binary name `shelltool` for every supported
 /// shell.

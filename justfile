@@ -1,19 +1,22 @@
 # Install all CLI binaries and the Tauri apps
+# --locked: build against the workspace Cargo.lock (what CI/tests verified).
+# A bare `cargo install --path` re-resolves dependencies fresh, so a new
+# upstream release (e.g. time 0.3.48 breaking cookie 0.18.1) fails the
+# install even though the workspace builds clean.
 install:
-    cargo install --path apps/swissarmyhammer-cli
-    cargo install --path apps/avp-cli
-    cargo install --path apps/mirdan-cli
-    cargo install --path apps/kanban-cli
-    cargo install --path apps/shelltool-cli
-    cargo install --path apps/code-context-cli
+    cargo install --locked --path apps/swissarmyhammer-cli
+    cargo install --locked --path apps/mirdan-cli
+    cargo install --locked --path apps/kanban-cli
+    cargo install --locked --path apps/shelltool-cli
+    cargo install --locked --path apps/code-context-cli
     just mirdan-install
     just kanban-install
 
 sah:
-    cargo install --path apps/swissarmyhammer-cli
+    cargo install --locked --path apps/swissarmyhammer-cli
 
 shelltool:
-    cargo install --path apps/shelltool-cli
+    cargo install --locked --path apps/shelltool-cli
 
 # Build the Mirdan tray app (debug) and install to /Applications for deep link testing
 # Build all Tauri apps (debug)

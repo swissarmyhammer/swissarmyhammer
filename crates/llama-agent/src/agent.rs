@@ -336,6 +336,19 @@ impl AgentServer {
         &self.request_queue
     }
 
+    /// Whether this server can still run generation: its request queue is open
+    /// and has live workers.
+    ///
+    /// Returns `false` once the queue is closed — after shutdown, or after the
+    /// worker tasks died (panicked or were aborted, e.g. because the runtime
+    /// that spawned them was dropped). Holders of a long-lived shared
+    /// `AgentServer` (process-wide caches) must check this before reuse and
+    /// rebuild an unhealthy server instead of handing out one whose every
+    /// generation fails with `QueueError::ShuttingDown`.
+    pub fn is_healthy(&self) -> bool {
+        !self.request_queue.is_closed()
+    }
+
     /// Execute an MCP tool directly via the MCP client
     ///
     /// This method provides direct access to MCP tool execution without requiring

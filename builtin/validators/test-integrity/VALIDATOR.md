@@ -1,29 +1,34 @@
 ---
 name: test-integrity
-description: Ensure tests are not inappropriately skipped, disabled, or mocked
+description: >-
+  Flag test cheating — skipped/disabled tests, commented-out test bodies,
+  over-mocking, trivial assertions, swallowed failures — and implementations that
+  hard-code values to make a test pass ("return 42"). A confirmed integrity
+  violation is a blocker.
 metadata:
   version: "{{version}}"
-trigger: Stop
 match:
   files:
     - "@file_groups/source_code"
     - "@file_groups/test_files"
-tags:
-  - testing
-  - blocking
-  - quality
 severity: error
-timeout: 300
 ---
 
-# Test Integrity RuleSet
+# Test Integrity Validator
 
-Validates that tests are properly maintained and not being circumvented.
+Re-homed into a focused review-time validator covering two one-concern rules:
 
-This RuleSet checks for:
-- Tests being skipped or disabled inappropriately
-- Test bodies commented out
-- Excessive mocking that defeats test purpose
-- Incomplete test implementations
+- `no-test-cheating` — tests being skipped, disabled, commented out, over-mocked,
+  or otherwise circumvented (migrated from the old `test-integrity` set).
+- `no-hard-code` — implementations that hard-code a value to make a test appear
+  to pass, the classic "return 42" bug (moved here from the deleted code-quality
+  set).
 
-All rules in this RuleSet have error severity and will block changes that compromise test quality.
+Both are **in-file judgments** — they read the diff and need no engine probe, so
+this validator declares none.
+
+This concern used to fire in real time on the Stop hook, blocking the agent from
+finishing while a test was circumvented. It is now a **review-time** validator: a
+confirmed integrity violation stops work via the review-column gate (a blocker),
+not a pre-stop block. The bar is unchanged — every test should be real and should
+run when we run tests.

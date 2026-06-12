@@ -13,6 +13,51 @@ use tempfile::TempDir;
 /// This prevents race conditions when multiple tests run in parallel
 static CURRENT_DIR_LOCK: Mutex<()> = Mutex::new(());
 
+/// In-memory `tracing` capture writer for log-output tests.
+///
+/// The canonical capture sink for asserting on formatted tracing output:
+/// install a clone as a subscriber's writer (scoped via
+/// `tracing::subscriber::set_default` or global), emit events, then read them
+/// back with [`contents`](Self::contents) / [`contains`](Self::contains).
+/// Clones share the same underlying buffer, so the handle kept by the test
+/// sees everything the subscriber wrote — including from other threads.
+///
+/// Use this instead of `#[tracing_test::traced_test]` when the test binary
+/// also contains tests that install their own global dispatcher (e.g. via
+/// `try_init()`): `traced_test` panics if it loses that race, while a scoped
+/// default with this writer is deterministic.
+#[derive(Clone, Debug, Default)]
+pub struct CaptureWriter(std::sync::Arc<Mutex<Vec<u8>>>);
+
+impl CaptureWriter {
+    /// Everything written so far, decoded as (lossy) UTF-8.
+    pub fn contents(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+
+    /// Whether the captured output contains `needle`.
+    pub fn contains(&self, needle: &str) -> bool {
+        self.contents().contains(needle)
+    }
+}
+
+impl std::io::Write for CaptureWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
+    type Writer = CaptureWriter;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
 /// RAII guard for temporarily changing the current directory
 ///
 /// This structure changes to a new directory and automatically restores
@@ -509,6 +554,25 @@ pub fn create_temp_dir() -> TempDir {
 mod tests {
     use super::*;
 
+    /// `CaptureWriter` records the formatted output of a tracing subscriber so
+    /// a test can assert on emitted log lines verbatim.
+    #[test]
+    fn test_capture_writer_records_tracing_output() {
+        let capture = CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(capture.clone())
+            .finish();
+        let _scope = tracing::subscriber::set_default(subscriber);
+
+        assert!(!capture.contains("capture writer sees this event"));
+        tracing::info!("capture writer sees this event");
+        assert!(capture.contains("capture writer sees this event"));
+        assert!(capture
+            .contents()
+            .contains("capture writer sees this event"));
+    }
+
     #[test]
     fn test_isolated_home_basic_functionality() {
         // Simple test that verifies IsolatedTestHome basic functionality without
@@ -837,7 +901,14 @@ mod tests {
     /// serialises the final read against any other parallel `HOME` mutator.
     /// We restore the *real* `HOME` before releasing so we don't leak the
     /// sentinel value into the rest of the suite.
+    ///
+    /// The `serial(home_env)` group keeps this test from interleaving with
+    /// `test_isolated_test_home_drop_restores_home_none`, which uses the
+    /// same phased-locking structure: between phases the lock is released,
+    /// so two phased tests could otherwise clobber each other's `HOME`
+    /// state in those windows.
     #[test]
+    #[serial_test::serial(home_env)]
     fn test_isolated_test_environment_drop_restores_home() {
         const SENTINEL: &str = "/swissarmyhammer-test-home-restoration-sentinel";
 
@@ -894,25 +965,49 @@ mod tests {
         assert!(home_path.join(".prompts").exists());
     }
 
+    /// Verify that `IsolatedTestHome::drop` restores `HOME` to *unset* when
+    /// `HOME` was unset at creation time.
+    ///
+    /// Mirrors the phased-locking structure of
+    /// `test_isolated_test_environment_drop_restores_home`: every direct
+    /// `HOME` mutation happens under `acquire_home_env_lock()` (the guard's
+    /// internal lock is not reentrant, so phase 2 must run outside it), and
+    /// the `serial(home_env)` group keeps the two phased tests from
+    /// interleaving each other's between-phase windows.
     #[test]
+    #[serial_test::serial(home_env)]
     fn test_isolated_test_home_drop_restores_home_none() {
-        // Save current HOME
-        let saved = std::env::var("HOME").ok();
-
-        {
-            // Remove HOME temporarily
+        // Phase 1: under the lock, capture the real HOME and unset it.
+        let real_home = {
+            let _lock = acquire_home_env_lock();
+            let real = std::env::var("HOME").ok();
             std::env::remove_var("HOME");
+            real
+        };
 
-            // Create isolated home - it will save original_home as None
+        // Phase 2: create + drop the guard outside the lock so it can
+        // acquire the lock itself. It captures None as its baseline and
+        // removes HOME again on drop.
+        {
             let home = IsolatedTestHome::new();
             assert!(home.home_path().exists());
-            // HOME is now set to isolated dir
+            // HOME is now set to the isolated dir (guard holds the lock).
             assert!(std::env::var("HOME").is_ok());
         }
-        // After drop, HOME should be removed (restored to None)
-        // But we need to restore it for other tests
-        if let Some(h) = &saved {
-            std::env::set_var("HOME", h);
-        }
+
+        // Phase 3: re-acquire the lock, observe HOME atomically against any
+        // other parallel mutator, then restore the real HOME so this test
+        // does not pollute the rest of the suite.
+        let restored = {
+            let _lock = acquire_home_env_lock();
+            let observed = std::env::var("HOME").ok();
+            if let Some(h) = &real_home {
+                std::env::set_var("HOME", h);
+            }
+            observed
+        };
+
+        // After drop, HOME is removed again (restored to the None baseline).
+        assert_eq!(restored, None);
     }
 }

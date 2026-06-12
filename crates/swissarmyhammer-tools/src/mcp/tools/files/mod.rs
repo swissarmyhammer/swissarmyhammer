@@ -123,6 +123,15 @@ impl McpTool for FilesTool {
         }
     }
 
+    fn schema_full(&self) -> serde_json::Value {
+        match self.operations {
+            FileOperationSubset::All => schema::generate_files_mcp_schema_full(&FILE_OPERATIONS),
+            FileOperationSubset::ReadOnly => {
+                schema::generate_files_mcp_schema_full(&READ_ONLY_OPERATIONS)
+            }
+        }
+    }
+
     fn cli_category(&self) -> Option<&'static str> {
         Some("files")
     }
@@ -369,14 +378,26 @@ mod tests {
     }
 
     #[test]
-    fn test_files_tool_schema_has_operation_schemas() {
+    fn test_files_tool_full_schema_has_operation_schemas() {
         let tool = FilesTool::new();
-        let schema = tool.schema();
+        let schema = tool.schema_full();
 
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
         assert_eq!(op_schemas.len(), 5);
+    }
+
+    #[test]
+    fn test_files_tool_wire_schema_omits_operation_schemas() {
+        let tool = FilesTool::new();
+        let schema = tool.schema();
+
+        assert!(
+            schema.get("x-operation-schemas").is_none(),
+            "wire schema must omit x-operation-schemas"
+        );
+        assert!(schema["x-op-signatures"].is_object());
     }
 
     #[tokio::test]

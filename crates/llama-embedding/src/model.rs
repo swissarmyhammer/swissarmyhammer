@@ -136,9 +136,12 @@ impl EmbeddingModel {
             .and_then(|v| v.parse().ok())
             .unwrap_or(i32::MAX as u32);
 
-        llama_cpp_2::model::params::LlamaModelParams::default()
-            .with_n_gpu_layers(gpu_layers)
-            .with_use_mlock(true)
+        // See the matching note in `llama-agent`'s `default_model_params`:
+        // `use_mlock` is intentionally left off. It pins residency (orthogonal
+        // to the mmap sharing that lets N serves share one resident copy) and,
+        // across many processes, counts against `RLIMIT_MEMLOCK` and can fail
+        // the load. Sharing does not depend on it.
+        llama_cpp_2::model::params::LlamaModelParams::default().with_n_gpu_layers(gpu_layers)
     }
 
     /// Extract context length from model metadata

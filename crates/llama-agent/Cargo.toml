@@ -65,6 +65,10 @@ model-loader = { workspace = true }
 # Shared common utilities
 llama-common = { workspace = true }
 
+# Cross-process advisory file lock (flock) for the machine-wide GPU gate.
+# Same crate the leader-election flock uses; kernel-released on process death.
+fs2 = { workspace = true }
+
 # JSON Schema validation
 jsonschema = { workspace = true }
 md5 = { workspace = true }

@@ -8,7 +8,7 @@
 //! in all detected agent directories. This correctly handles nested store paths
 //! (e.g. `anthropics/skills/algorithmic-art`) that arise from URL-based installs.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::agents::{
     self, agent_global_agent_dir, agent_global_skill_dir, agent_project_agent_dir,
@@ -146,14 +146,7 @@ pub fn sync(
                 }
             }
             PackageType::Validator => {
-                let validators_dir = if global {
-                    dirs::home_dir()
-                        .expect("Could not find home directory")
-                        .join(".avp")
-                        .join("validators")
-                } else {
-                    PathBuf::from(".avp").join("validators")
-                };
+                let validators_dir = crate::install::validators_dir(global);
                 let val_path = validators_dir.join(store::sanitize_dir_name(name));
                 if val_path.exists() {
                     report.packages_verified += 1;
@@ -231,6 +224,7 @@ pub fn run_sync(agent_filter: Option<&str>, global: bool) -> Result<(), Registry
 mod tests {
     use super::*;
     use crate::lockfile::LockedPackage;
+    use serial_test::serial;
 
     #[test]
     fn test_sync_empty_project() {
@@ -345,8 +339,14 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_sync_validator_missing() {
         let dir = tempfile::tempdir().unwrap();
+        // Isolate CWD so the project-relative `.validators/` lookup resolves to
+        // the (empty) tempdir rather than whatever directory the test runner
+        // happens to be in.
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
 
         let mut lf = Lockfile::default();
         lf.add_package(
@@ -363,8 +363,49 @@ mod tests {
         lf.save(dir.path()).unwrap();
 
         let report = sync(dir.path(), None, false).unwrap();
+
+        std::env::set_current_dir(old_dir).unwrap();
+
         assert_eq!(report.packages_verified, 0);
         assert_eq!(report.missing_packages, vec!["my-validator"]);
+    }
+
+    #[test]
+    #[serial]
+    fn test_sync_validator_present_in_project_dir() {
+        // A validator deployed to the project `.validators/` directory (where
+        // `deploy_validator` writes via `validators_dir(false)`) must be
+        // verified by sync — not reported missing. This guards against the
+        // validator branch checking the wrong (old avp) layout.
+        let dir = tempfile::tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        // Deploy a validator where `validators_dir(false)` resolves it.
+        let val_dir = crate::install::validators_dir(false).join("my-validator");
+        std::fs::create_dir_all(&val_dir).unwrap();
+        std::fs::write(val_dir.join("VALIDATOR.md"), "# test").unwrap();
+
+        let mut lf = Lockfile::default();
+        lf.add_package(
+            "my-validator".to_string(),
+            LockedPackage {
+                package_type: PackageType::Validator,
+                version: "1.0.0".to_string(),
+                resolved: "file:my-validator".to_string(),
+                integrity: String::new(),
+                installed_at: "2026-01-01T00:00:00Z".to_string(),
+                targets: vec![],
+            },
+        );
+        lf.save(dir.path()).unwrap();
+
+        let report = sync(dir.path(), None, false).unwrap();
+
+        std::env::set_current_dir(old_dir).unwrap();
+
+        assert_eq!(report.packages_verified, 1);
+        assert!(report.missing_packages.is_empty());
     }
 
     #[test]

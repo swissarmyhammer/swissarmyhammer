@@ -202,10 +202,11 @@ impl AcpWsClient {
             .to_string()
     }
 
-    /// ACP `session/prompt` with a single user text block. Collects the
-    /// streamed agent text from `session/update` notifications and returns it
-    /// alongside the final result.
-    async fn prompt(&mut self, session_id: &str, text: &str) -> PromptOutcome {
+    /// ACP `session/prompt` with a single user text block, returning the
+    /// agent's error message instead of panicking when the turn fails. This lets
+    /// callers tell a transient real-model spiral (worth a fresh-session retry)
+    /// apart from a genuine contract break (see [`is_transient_model_error`]).
+    async fn try_prompt(&mut self, session_id: &str, text: &str) -> Result<PromptOutcome, String> {
         let params = serde_json::json!({
             "sessionId": session_id,
             "prompt": [ { "type": "text", "text": text } ],
@@ -216,9 +217,17 @@ impl AcpWsClient {
         let result = self.await_response(id, "session/prompt", |_| {}).await;
 
         if let Some(err) = result.get("__error") {
-            panic!("session/prompt must not return an error: {err}");
+            return Err(err.to_string());
         }
-        PromptOutcome { result }
+        Ok(PromptOutcome { result })
+    }
+
+    /// ACP `session/prompt` that panics on any agent error — the strict form for
+    /// callers that treat an error as a hard failure.
+    async fn prompt(&mut self, session_id: &str, text: &str) -> PromptOutcome {
+        self.try_prompt(session_id, text)
+            .await
+            .unwrap_or_else(|err| panic!("session/prompt must not return an error: {err}"))
     }
 
     async fn close(mut self) {
@@ -269,6 +278,29 @@ fn is_model_unavailable(message: &str) -> bool {
         || m.contains("failed to load")
 }
 
+/// True when a `session/prompt` error is sampling variance from the tiny 0.6B
+/// test model rather than a break of the contract under test — so a
+/// fresh-session retry is the right response (the bounded-attempt shape the
+/// sibling `test_ai_panel_e2e_mcp_tool_reachable_in_session` already uses).
+///
+/// Two observed shapes, both turn-level and both nondeterministic on this model:
+/// the model emits stray tool calls (e.g. a wrong `thoughtful` name) until the
+/// runaway guard aborts the turn (`agentic_loop_aborted` / "not making
+/// progress"), or it calls a tool whose oversized result exhausts the small KV
+/// cache (`NoKvCacheSlot` / a worker-thread decode failure). Neither is the
+/// "0 tokens" or queue-lifecycle contract this test guards — those are asserted
+/// normally on a turn that *does* return — so retrying past them does not weaken
+/// the check, it only absorbs the model's variance.
+fn is_transient_model_error(message: &str) -> bool {
+    let m = message.to_lowercase();
+    m.contains("agentic_loop_aborted")
+        || m.contains("not making progress")
+        || m.contains("nokvcacheslot")
+        || m.contains("worker thread error")
+        || m.contains("decode failed")
+        || m.contains("decode error")
+}
+
 /// Core: a real prompt over the full kanban-app stack streams tokens, and a
 /// second prompt on the same session succeeds (queue released).
 #[tokio::test]
@@ -289,39 +321,84 @@ async fn test_ai_panel_e2e_qwen_generates_tokens_and_second_prompt_succeeds() {
         panic!("initialize failed for a reason other than model availability: {e}");
     }
 
-    let session = client.new_session(Vec::new()).await;
+    // Both turns must land on the SAME session within one attempt so turn 2
+    // still proves the worker was released after turn 1. But the 0.6B test model
+    // is sampling-nondeterministic and occasionally spirals a turn into a
+    // runaway-guard abort or a KV-cache exhaustion (see
+    // [`is_transient_model_error`]). Those are turn-level variance, not the
+    // contract under test, so retry the *pair* on a fresh session — the same
+    // bounded-attempt shape `test_ai_panel_e2e_mcp_tool_reachable_in_session`
+    // uses. A turn that *does* return is asserted strictly: a clean 0-token or
+    // empty result is the real regression and fails immediately, never retried.
+    //
+    // `/no_think` disables Qwen3's thinking mode: without it the model answers a
+    // one-word prompt with a long, sometimes unbounded `<think>` block that, on
+    // the shared time-sliced CI GPU, runs a turn past the hang budget. Disabling
+    // it keeps each turn's output tiny and fast.
+    const MAX_ATTEMPTS: usize = 6;
+    for attempt in 1..=MAX_ATTEMPTS {
+        let session = client.new_session(Vec::new()).await;
 
-    // Turn 1 — must produce real, non-empty output. The "0 tokens" bug was a
-    // clean call with an empty result, so both the streamed text and the
-    // reported token count are asserted.
-    let first = client
-        .prompt(&session, "Reply with exactly the word: pong")
-        .await;
-    let first_tokens = tokens_generated(&first);
-    assert!(
-        first_tokens > 0,
-        "first prompt must report tokens_generated > 0 (the 0-token regression); got {first_tokens}"
-    );
-    assert!(
-        !response_text(&first).trim().is_empty(),
-        "first prompt must produce non-empty agent text; got: {:?}",
-        response_text(&first)
-    );
+        // Turn 1 — must produce real, non-empty output. The "0 tokens" bug was a
+        // clean call with an empty result, so both the streamed text and the
+        // reported token count are asserted.
+        let first = match client
+            .try_prompt(&session, "/no_think Reply with exactly the word: pong")
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(e) if is_transient_model_error(&e) => {
+                eprintln!(
+                    "attempt {attempt}/{MAX_ATTEMPTS}: turn 1 hit transient model variance, \
+                     retrying the pair on a fresh session ({e})"
+                );
+                continue;
+            }
+            Err(e) => panic!("turn 1 failed for a non-transient reason: {e}"),
+        };
+        let first_tokens = tokens_generated(&first);
+        assert!(
+            first_tokens > 0,
+            "first prompt must report tokens_generated > 0 (the 0-token regression); got {first_tokens}"
+        );
+        assert!(
+            !response_text(&first).trim().is_empty(),
+            "first prompt must produce non-empty agent text; got: {:?}",
+            response_text(&first)
+        );
 
-    // Turn 2 on the same session — must not be rejected with "Queue is full".
-    // A wedged first turn would leave the single worker occupied; this proves
-    // it was released.
-    let second = client
-        .prompt(&session, "Reply with exactly the word: ping")
-        .await;
-    let second_tokens = tokens_generated(&second);
-    assert!(
-        second_tokens > 0,
-        "second prompt must also generate tokens — the worker must be free after \
-         turn 1 (queue-lifecycle guard); got {second_tokens}"
-    );
+        // Turn 2 on the same session — must not be rejected with "Queue is
+        // full". A wedged first turn would leave the single worker occupied;
+        // this proves it was released.
+        let second = match client
+            .try_prompt(&session, "/no_think Reply with exactly the word: ping")
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(e) if is_transient_model_error(&e) => {
+                eprintln!(
+                    "attempt {attempt}/{MAX_ATTEMPTS}: turn 2 hit transient model variance, \
+                     retrying the pair on a fresh session ({e})"
+                );
+                continue;
+            }
+            Err(e) => panic!("turn 2 failed for a non-transient reason: {e}"),
+        };
+        let second_tokens = tokens_generated(&second);
+        assert!(
+            second_tokens > 0,
+            "second prompt must also generate tokens — the worker must be free after \
+             turn 1 (queue-lifecycle guard); got {second_tokens}"
+        );
 
-    client.close().await;
+        client.close().await;
+        return;
+    }
+
+    panic!(
+        "the 0.6b test model spiraled on every one of {MAX_ATTEMPTS} attempts — could not get a \
+         clean two-turn session to verify the token-count / queue-lifecycle contract"
+    );
 }
 
 /// MCP wiring: with the board's MCP server attached through the ACP

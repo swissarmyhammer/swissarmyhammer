@@ -1,0 +1,6 @@
+# Build and runtime artifacts of the standalone sample crate. These rules
+# apply both in the parent repository and in the nested git repo that
+# drive.py initializes here at runtime.
+/target
+/Cargo.lock
+/.sah/
