@@ -3,10 +3,9 @@
 use super::server::McpServer;
 use rmcp::ServerHandler;
 use serial_test::serial;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use swissarmyhammer_common::Pretty;
-use swissarmyhammer_prompts::{Prompt, PromptLibrary, PromptResolver};
+use swissarmyhammer_templating::{PromptResolver, TemplateLibrary};
 
 /// RAII guard to ensure working directory is restored when dropped
 struct DirGuard(PathBuf);
@@ -42,7 +41,7 @@ async fn test_mcp_server_creation() {
     std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
-    let library = PromptLibrary::new();
+    let library = TemplateLibrary::new();
     let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
         .await
         .unwrap();
@@ -60,7 +59,7 @@ async fn test_mcp_server_creation() {
 #[serial(cwd)]
 async fn test_mcp_server_exposes_shell_tools() {
     // Create a test library and server
-    let library = PromptLibrary::new();
+    let library = TemplateLibrary::new();
     let server = McpServer::new(library).await.unwrap();
 
     // Test that server info includes shell tools capabilities
@@ -79,142 +78,6 @@ async fn test_mcp_server_exposes_shell_tools() {
 
 #[tokio::test]
 #[serial(cwd)]
-async fn test_mcp_server_list_prompts() {
-    let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = safe_current_dir();
-    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
-    let _guard = DirGuard(original_dir);
-
-    let mut library = PromptLibrary::new();
-    let prompt = Prompt::new("test", "Test prompt: {{ name }}")
-        .with_description("Test description".to_string());
-    library.add(prompt).unwrap();
-
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
-        .await
-        .unwrap();
-    let prompts = server.list_prompts().await.unwrap();
-
-    assert_eq!(prompts.len(), 1);
-    assert_eq!(prompts[0], "test");
-}
-
-#[tokio::test]
-#[serial(cwd)]
-async fn test_mcp_server_excludes_partials_and_system_prompts_from_list() {
-    let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = safe_current_dir();
-    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
-    let _guard = DirGuard(original_dir);
-
-    let mut library = PromptLibrary::new();
-
-    // Add a regular prompt
-    let regular_prompt = Prompt::new("regular", "Regular prompt: {{ content }}")
-        .with_description("A regular prompt".to_string());
-    library.add(regular_prompt).unwrap();
-
-    // Add a partial with partial: true in metadata
-    let mut partial_metadata = HashMap::new();
-    partial_metadata.insert("partial".to_string(), serde_json::Value::Bool(true));
-    let mut partial_prompt = Prompt::new("_partials/header", "Partial template content")
-        .with_description("Partial template for reuse in other prompts".to_string());
-    partial_prompt.metadata = partial_metadata;
-    library.add(partial_prompt).unwrap();
-
-    // Add another partial with _partials in name and partial: true metadata
-    let mut partial_by_name = Prompt::new("_partials/footer", "Footer partial")
-        .with_description("Footer partial template".to_string());
-    partial_by_name
-        .metadata
-        .insert("partial".to_string(), serde_json::Value::Bool(true));
-    library.add(partial_by_name).unwrap();
-
-    // Add a system prompt with hidden: true in metadata
-    let mut system_metadata = HashMap::new();
-    system_metadata.insert("hidden".to_string(), serde_json::Value::Bool(true));
-    let mut system_prompt = Prompt::new(".system/tester", "System prompt for testing")
-        .with_description("System prompt for test mode".to_string());
-    system_prompt.metadata = system_metadata;
-    library.add(system_prompt).unwrap();
-
-    // Add another system prompt with hidden: true metadata
-    let mut system_by_name = Prompt::new(".system/implementer", "System prompt for implementation")
-        .with_description("System prompt for implementer mode".to_string());
-    system_by_name
-        .metadata
-        .insert("hidden".to_string(), serde_json::Value::Bool(true));
-    library.add(system_by_name).unwrap();
-
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
-        .await
-        .unwrap();
-    let prompts = server.list_prompts().await.unwrap();
-
-    // Only the regular prompt should be in the list
-    assert_eq!(
-        prompts.len(),
-        1,
-        "Only non-partial and non-system prompts should be listed"
-    );
-    assert_eq!(prompts[0], "regular");
-
-    // Verify partials are not in the list
-    assert!(!prompts.contains(&"_partials/header".to_string()));
-    assert!(!prompts.contains(&"_partials/footer".to_string()));
-
-    // Verify system prompts are not in the list
-    assert!(!prompts.contains(&".system/tester".to_string()));
-    assert!(!prompts.contains(&".system/implementer".to_string()));
-}
-
-#[tokio::test]
-#[serial(cwd)]
-async fn test_mcp_server_get_prompt() {
-    let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = safe_current_dir();
-    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
-    let _guard = DirGuard(original_dir);
-
-    let mut library = PromptLibrary::new();
-    let prompt =
-        Prompt::new("test", "Hello {{ name }}!").with_description("Greeting prompt".to_string());
-    library.add(prompt).unwrap();
-
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
-        .await
-        .unwrap();
-    let mut arguments = HashMap::new();
-    arguments.insert("name".to_string(), "World".to_string());
-
-    let result = server.get_prompt("test", Some(&arguments)).await.unwrap();
-    assert_eq!(result, "Hello World!");
-
-    // Test without arguments
-    let result = server.get_prompt("test", None).await.unwrap();
-    assert_eq!(result, "Hello {{ name }}!");
-}
-
-#[tokio::test]
-#[serial(cwd)]
-async fn test_mcp_server_exposes_prompt_capabilities() {
-    let library = PromptLibrary::new();
-    let server = McpServer::new(library).await.unwrap();
-
-    let info = server.get_info();
-
-    // Verify server exposes prompt capabilities
-    assert!(info.capabilities.prompts.is_some());
-    let prompts_cap = info.capabilities.prompts.unwrap();
-    assert_eq!(prompts_cap.list_changed, Some(true));
-
-    // Verify server info is set correctly
-    assert_eq!(info.server_info.name, "SwissArmyHammer");
-    assert_eq!(info.server_info.version, crate::VERSION);
-}
-
-#[tokio::test]
-#[serial(cwd)]
 async fn test_mcp_server_uses_same_prompt_paths_as_cli() {
     // This test verifies the fix for issue 000054.md
     // MCP server now uses the same PromptResolver as CLI
@@ -228,8 +91,8 @@ async fn test_mcp_server_uses_same_prompt_paths_as_cli() {
 
     let mut resolver1 = PromptResolver::new();
     let mut resolver2 = PromptResolver::new();
-    let mut lib1 = PromptLibrary::new();
-    let mut lib2 = PromptLibrary::new();
+    let mut lib1 = TemplateLibrary::new();
+    let mut lib2 = TemplateLibrary::new();
 
     // Both should use the same loading logic without errors
     let result1 = resolver1.load_all_prompts(&mut lib1);
@@ -247,7 +110,7 @@ async fn test_mcp_server_uses_same_prompt_paths_as_cli() {
 #[serial(cwd)]
 async fn test_mcp_server_file_watching_integration() {
     // Create a test library and server
-    let library = PromptLibrary::new();
+    let library = TemplateLibrary::new();
     let server = McpServer::new(library).await.unwrap();
 
     // Test that file watching requires a peer connection
@@ -257,10 +120,6 @@ async fn test_mcp_server_file_watching_integration() {
     // Test manual reload functionality
     let reload_result = server.reload_prompts().await;
     assert!(reload_result.is_ok(), "Manual prompt reload should work");
-
-    // Test that the server can list prompts (even if empty)
-    let prompts = server.list_prompts().await.unwrap();
-    tracing::debug!("Server has {} prompts loaded", prompts.len());
 
     // Notifications are sent via the peer connection when prompts change
     tracing::debug!("File watching active - notifications will be sent when prompts change");
@@ -280,7 +139,7 @@ async fn test_mcp_server_uses_same_directory_discovery() {
 
     // The server should use the same directories for file watching
     // This test ensures the fix for hardcoded paths is working
-    let library = PromptLibrary::new();
+    let library = TemplateLibrary::new();
     let _server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
         .await
         .unwrap();
@@ -302,39 +161,9 @@ async fn test_mcp_server_uses_same_directory_discovery() {
 
 #[tokio::test]
 #[serial(cwd)]
-async fn test_mcp_server_graceful_error_for_missing_prompt() {
-    // Create a test library and server with one prompt
-    let mut library = PromptLibrary::new();
-    library
-        .add(Prompt::new("test", "Hello {{ name }}!").with_description("Test prompt"))
-        .unwrap();
-    let server = McpServer::new(library).await.unwrap();
-
-    // Test getting an existing prompt works
-    let mut args = HashMap::new();
-    args.insert("name".to_string(), "World".to_string());
-    let result = server.get_prompt("test", Some(&args)).await;
-    assert!(result.is_ok(), "Should successfully get existing prompt");
-
-    // Test getting a non-existent prompt returns proper error
-    let result = server.get_prompt("nonexistent", None).await;
-    assert!(result.is_err(), "Should return error for missing prompt");
-
-    let error_msg = result.unwrap_err().to_string();
-    tracing::debug!("Error for missing prompt: {error_msg}");
-
-    // Should contain helpful message about prompt not being available
-    assert!(
-        error_msg.contains("not available") || error_msg.contains("not found"),
-        "Error should mention prompt issue: {error_msg}"
-    );
-}
-
-#[tokio::test]
-#[serial(cwd)]
-async fn test_mcp_server_exposes_prompts_tools_capability() {
+async fn test_mcp_server_advertises_tools_but_not_prompts_capability() {
     // Create a test library and server
-    let library = PromptLibrary::new();
+    let library = TemplateLibrary::new();
     let server = McpServer::new(library).await.unwrap();
 
     let info = server.get_info();
@@ -344,73 +173,15 @@ async fn test_mcp_server_exposes_prompts_tools_capability() {
     let tools_cap = info.capabilities.tools.unwrap();
     assert_eq!(tools_cap.list_changed, Some(true));
 
-    // Verify prompts capability is still present
-    assert!(info.capabilities.prompts.is_some());
-    let prompts_cap = info.capabilities.prompts.unwrap();
-    assert_eq!(prompts_cap.list_changed, Some(true));
+    // The prompts protocol surface was removed — no prompts capability.
+    assert!(
+        info.capabilities.prompts.is_none(),
+        "Server must not advertise the prompts capability"
+    );
 
     // Verify server info is set correctly
     assert_eq!(info.server_info.name, "SwissArmyHammer");
     assert_eq!(info.server_info.version, crate::VERSION);
-}
-
-#[tokio::test]
-#[serial(cwd)]
-async fn test_mcp_server_does_not_expose_partial_templates() {
-    let test_dir = tempfile::tempdir().unwrap();
-    let original_dir = safe_current_dir();
-    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
-    let _guard = DirGuard(original_dir);
-
-    // Create a test library with both regular and partial templates
-    let mut library = PromptLibrary::new();
-
-    // Add a regular prompt
-    let regular_prompt = Prompt::new("regular_prompt", "This is a regular prompt: {{ name }}")
-        .with_description("A regular prompt".to_string());
-    library.add(regular_prompt).unwrap();
-
-    // Add a partial template (marked as partial with metadata)
-    let mut partial_prompt = Prompt::new("partial_template", "This is a partial template")
-        .with_description("A partial template".to_string());
-    partial_prompt
-        .metadata
-        .insert("partial".to_string(), serde_json::Value::Bool(true));
-    library.add(partial_prompt).unwrap();
-
-    // Add another partial template with {% partial %} marker
-    let partial_with_marker = Prompt::new(
-        "partial_with_marker",
-        "{% partial %}\nThis is a partial with marker",
-    )
-    .with_description("Another partial template".to_string());
-    library.add(partial_with_marker).unwrap();
-
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
-        .await
-        .unwrap();
-
-    // Test list_prompts - should only return regular prompts
-    let prompts = server.list_prompts().await.unwrap();
-    assert_eq!(prompts.len(), 1);
-    assert_eq!(prompts[0], "regular_prompt");
-    assert!(!prompts.contains(&"partial_template".to_string()));
-    assert!(!prompts.contains(&"partial_with_marker".to_string()));
-
-    // Test get_prompt - should work for regular prompts
-    let result = server.get_prompt("regular_prompt", None).await;
-    assert!(result.is_ok());
-
-    // Test get_prompt - should fail for partial templates
-    let result = server.get_prompt("partial_template", None).await;
-    assert!(result.is_err());
-    let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("hidden prompt") || error_msg.contains("partial"));
-
-    let result = server.get_prompt("partial_with_marker", None).await;
-    assert!(result.is_err());
-    let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("hidden prompt") || error_msg.contains("partial"));
 }
 
 #[tokio::test]
@@ -439,7 +210,7 @@ async fn test_reload_prompts_detects_no_changes() {
     file.sync_all().unwrap();
 
     // Create server and load prompts
-    let library = PromptLibrary::new();
+    let library = TemplateLibrary::new();
     let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
         .await
         .unwrap();
@@ -495,7 +266,7 @@ async fn test_reload_prompts_detects_content_changes() {
     file.sync_all().unwrap();
 
     // Create server and load prompts
-    let library = PromptLibrary::new();
+    let library = TemplateLibrary::new();
     let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
         .await
         .unwrap();
@@ -547,7 +318,7 @@ async fn test_reload_prompts_detects_new_prompts() {
     file.sync_all().unwrap();
 
     // Create server and load prompts
-    let library = PromptLibrary::new();
+    let library = TemplateLibrary::new();
     let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
         .await
         .unwrap();
@@ -609,7 +380,7 @@ async fn test_reload_prompts_detects_deleted_prompts() {
     file.sync_all().unwrap();
 
     // Create server and load prompts
-    let library = PromptLibrary::new();
+    let library = TemplateLibrary::new();
     let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
         .await
         .unwrap();
@@ -631,9 +402,11 @@ async fn test_reload_prompts_detects_deleted_prompts() {
 
 #[tokio::test]
 #[serial(cwd)]
-async fn test_builtin_partials_not_exposed_in_mcp() {
-    // Test that actual builtin partials with partial: true metadata are filtered correctly
-    let test_dir = tempfile::tempdir().unwrap();
+async fn test_builtin_partials_load_into_library_for_rendering() {
+    // The MCP prompt protocol surface is gone, but skill/agent rendering still
+    // depends on `load_all_prompts` populating the library with partials. This
+    // test proves that partial loading survived: builtin partials must be
+    // present in the library so liquid `{% render %}` can resolve them.
     let original_dir = safe_current_dir();
 
     // We need to be in the project root to load builtin prompts
@@ -646,62 +419,24 @@ async fn test_builtin_partials_not_exposed_in_mcp() {
     std::env::set_current_dir(&project_root).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
-    // Load builtin prompts
-    let mut library = PromptLibrary::new();
+    // Load builtin prompts (and partials) the same way the server does.
+    let mut library = TemplateLibrary::new();
     let mut resolver = PromptResolver::new();
     resolver
         .load_all_prompts(&mut library)
         .expect("Failed to load prompts");
 
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
-        .await
-        .unwrap();
-
-    // List all prompts via MCP
-    let mcp_prompts = server.list_prompts().await.unwrap();
-
-    // Check that none of the partial templates from _partials/ are exposed
-    let partial_names = vec![
-        "detected-projects",
-        "git-practices",
-        "test-driven-development",
-        "coding-standards",
-        "tool_use",
-    ];
-
-    for partial_name in partial_names {
-        assert!(
-            !mcp_prompts.contains(&partial_name.to_string()),
-            "Partial '{}' should not be exposed via MCP but was found in: {:?}",
-            partial_name,
-            mcp_prompts
-        );
-    }
-
-    // Check that hidden prompts (like .check) are not exposed
-    let hidden_names = vec![".check"];
-
-    for hidden_name in hidden_names {
-        assert!(
-            !mcp_prompts.contains(&hidden_name.to_string()),
-            "Hidden prompt '{}' should not be exposed via MCP but was found in: {:?}",
-            hidden_name,
-            mcp_prompts
-        );
-    }
-
-    // Verify that at least some regular prompts are exposed
+    let all = library.list().expect("library should list prompts");
     assert!(
-        !mcp_prompts.is_empty(),
-        "MCP should expose some non-partial prompts"
+        !all.is_empty(),
+        "builtin prompts should load into the library"
     );
 
-    println!(
-        "MCP exposed {} prompts (partials correctly filtered)",
-        mcp_prompts.len()
-    );
-    println!(
-        "Sample of exposed prompts: {:?}",
-        &mcp_prompts[..mcp_prompts.len().min(5)]
+    // At least one partial template must be present, proving partial loading
+    // (the rendering dependency) survived the protocol-surface removal.
+    let has_partial = all.iter().any(|p| p.is_partial_template());
+    assert!(
+        has_partial,
+        "builtin partials must load into the library for skill/agent rendering"
     );
 }

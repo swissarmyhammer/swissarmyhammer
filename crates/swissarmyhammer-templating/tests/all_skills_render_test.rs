@@ -8,8 +8,7 @@ use markdowndown::frontmatter::strip_frontmatter;
 use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
-use swissarmyhammer_prompts::{Prompt, PromptLibrary, PromptPartialAdapter};
-use swissarmyhammer_templating::Template;
+use swissarmyhammer_templating::{PartialAdapter, Prompt, Template, TemplateLibrary};
 
 fn get_builtin_skills_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -29,17 +28,8 @@ fn get_builtin_partials_path() -> PathBuf {
         .join("builtin/_partials")
 }
 
-fn get_builtin_prompts_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("builtin/prompts")
-}
-
 /// Load shared partials from builtin/_partials/ into the library with _partials/ prefix
-fn load_shared_partials(library: &mut PromptLibrary) {
+fn load_shared_partials(library: &mut TemplateLibrary) {
     let partials_path = get_builtin_partials_path();
     for entry in walkdir::WalkDir::new(&partials_path)
         .into_iter()
@@ -81,10 +71,7 @@ fn discover_skills() -> Vec<(String, String)> {
 #[test]
 fn test_all_builtin_skills_render_without_errors() {
     // Build a prompt library with all partials loaded
-    let mut library = PromptLibrary::new();
-    library
-        .add_directory(get_builtin_prompts_path())
-        .expect("Failed to load builtin prompts");
+    let mut library = TemplateLibrary::new();
     load_shared_partials(&mut library);
 
     let library = Arc::new(library);
@@ -106,7 +93,7 @@ fn test_all_builtin_skills_render_without_errors() {
     let mut failed = Vec::new();
 
     for (name, body) in &skills {
-        let adapter = PromptPartialAdapter::new(library.clone());
+        let adapter = PartialAdapter::new(library.clone());
         match Template::with_partials(body, adapter) {
             Ok(template) => match template.render_with_context(&context) {
                 Ok(rendered) => {

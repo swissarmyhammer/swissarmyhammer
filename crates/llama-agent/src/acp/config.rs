@@ -129,7 +129,7 @@ impl AcpConfig {
 
         // Prompt library + template context for Liquid rendering of agent
         // instructions; skill library for resolving any preloaded skills.
-        let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
+        let prompt_library = swissarmyhammer_templating::TemplateLibrary::default();
         let template_context = swissarmyhammer_config::TemplateContext::new();
         let mut skill_library = swissarmyhammer_skills::SkillLibrary::new();
         skill_library.load_defaults();
@@ -418,7 +418,7 @@ impl Default for TerminalSettings {
 /// skill is a config problem, not a fatal one.
 fn resolve_agent_system_prompt(
     agent: &swissarmyhammer_agents::Agent,
-    prompt_library: &swissarmyhammer_prompts::PromptLibrary,
+    prompt_library: &swissarmyhammer_templating::TemplateLibrary,
     skill_library: &swissarmyhammer_skills::SkillLibrary,
     template_context: &swissarmyhammer_config::TemplateContext,
 ) -> String {
@@ -794,7 +794,7 @@ capabilities:
     #[test]
     fn resolve_agent_system_prompt_renders_instructions() {
         let agent_library = test_agent_library();
-        let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
+        let prompt_library = swissarmyhammer_templating::TemplateLibrary::default();
         let skill_library = test_skill_library();
         let template_context = swissarmyhammer_config::TemplateContext::new();
 
@@ -811,7 +811,7 @@ capabilities:
     #[test]
     fn resolve_agent_system_prompt_appends_skill_instructions() {
         let agent_library = test_agent_library();
-        let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
+        let prompt_library = swissarmyhammer_templating::TemplateLibrary::default();
         let skill_library = test_skill_library();
         let template_context = swissarmyhammer_config::TemplateContext::new();
 

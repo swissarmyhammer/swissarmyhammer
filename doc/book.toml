@@ -1,6 +1,6 @@
 [book]
 title = "SwissArmyHammer Documentation"
-description = "Complete guide to using SwissArmyHammer - AI prompt management, workflows, and MCP integration"
+description = "Complete guide to using SwissArmyHammer - skills, workflows, agents, and MCP integration"
 authors = ["SwissArmyHammer Contributors"]
 language = "en"
 src = "src"

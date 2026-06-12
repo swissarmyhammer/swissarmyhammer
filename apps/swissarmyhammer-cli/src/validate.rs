@@ -59,7 +59,7 @@ impl Validator {
     ) -> Result<ValidationResult> {
         let mut result = ValidationResult::new();
 
-        let mut library = swissarmyhammer::PromptLibrary::new();
+        let mut library = swissarmyhammer::TemplateLibrary::new();
         let mut resolver = swissarmyhammer::PromptResolver::new();
         resolver.load_all_prompts(&mut library)?;
 
@@ -85,7 +85,7 @@ impl Validator {
     fn validate_one_prompt(
         &self,
         prompt: &swissarmyhammer::Prompt,
-        library: &swissarmyhammer::PromptLibrary,
+        library: &swissarmyhammer::TemplateLibrary,
         resolver: &swissarmyhammer::PromptResolver,
         result: &mut ValidationResult,
     ) {
@@ -151,7 +151,7 @@ impl Validator {
     fn validate_liquid_syntax_with_partials(
         &self,
         prompt: &swissarmyhammer::Prompt,
-        library: &swissarmyhammer::PromptLibrary,
+        library: &swissarmyhammer::TemplateLibrary,
         file_path: &Path,
         result: &mut ValidationResult,
         content_title: Option<String>,

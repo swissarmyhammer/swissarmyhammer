@@ -848,8 +848,8 @@ async fn deploy_agent(
 
 use swissarmyhammer_agents::AgentResolver;
 use swissarmyhammer_config::TemplateContext;
-use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_skills::SkillResolver;
+use swissarmyhammer_templating::TemplateLibrary;
 
 /// Selects which builtin items (skills or agents) a profile installs.
 ///
@@ -972,7 +972,7 @@ fn scope_is_global(scope: InitScope) -> bool {
 /// Build the template context used to render builtin skill/agent bodies.
 ///
 /// Exposes `{{version}}` (this crate's package version) so skill/agent metadata
-/// and instructions that reference it expand. `PromptLibrary::render_text`
+/// and instructions that reference it expand. `TemplateLibrary::render_text`
 /// additionally injects default variables and environment variables.
 fn profile_template_context() -> TemplateContext {
     let mut ctx = TemplateContext::new();
@@ -991,7 +991,7 @@ fn profile_template_context() -> TemplateContext {
 /// matching the per-CLI deploy behavior so a partial-resolution failure degrades
 /// instead of aborting the whole install.
 fn render_profile_skill(
-    library: &PromptLibrary,
+    library: &TemplateLibrary,
     ctx: &TemplateContext,
     skill: &swissarmyhammer_skills::Skill,
 ) -> (String, std::collections::HashMap<String, String>) {
@@ -1077,7 +1077,7 @@ fn install_profile_skills(
         .map(|(name, skill)| (name.clone(), skill.profiles.clone()))
         .collect();
 
-    let library = PromptLibrary::default();
+    let library = TemplateLibrary::default();
     let ctx = profile_template_context();
 
     let selected = selector.select(&available);
@@ -1118,7 +1118,7 @@ fn install_profile_agents(
         .map(|name| (name.clone(), Vec::new()))
         .collect();
 
-    let library = PromptLibrary::default();
+    let library = TemplateLibrary::default();
     let ctx = profile_template_context();
 
     let selected = selector.select(&available);

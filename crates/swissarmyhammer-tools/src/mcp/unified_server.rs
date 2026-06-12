@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
 use std::time::Instant;
 use swissarmyhammer_common::{Pretty, Result, SwissArmyHammerError, SwissarmyhammerDirectory};
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -588,7 +588,7 @@ impl Drop for McpServerHandle {
 /// * `Result<McpServerHandle>` - Server handle with connection info
 pub async fn start_mcp_server(
     mode: McpServerMode,
-    library: Option<PromptLibrary>,
+    library: Option<TemplateLibrary>,
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
 ) -> Result<McpServerHandle> {
@@ -615,7 +615,7 @@ pub async fn start_mcp_server(
 /// * `Result<McpServerHandle>` - Server handle with connection info
 pub async fn start_mcp_server_with_options(
     mode: McpServerMode,
-    library: Option<PromptLibrary>,
+    library: Option<TemplateLibrary>,
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
 ) -> Result<McpServerHandle> {
@@ -674,7 +674,7 @@ async fn resolve_port(port: Option<u16>) -> Result<u16> {
 /// # Returns
 /// * `Result<Arc<McpServer>>` - Initialized server with self-reference configured
 async fn initialize_mcp_server(
-    library: Option<PromptLibrary>,
+    library: Option<TemplateLibrary>,
     port: u16,
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
@@ -997,7 +997,7 @@ fn spawn_http_server_for_stdio(
 /// 1. Stdio transport for client communication (Claude Code)
 /// 2. HTTP server on random localhost port for workflows to execute Claude prompts
 async fn start_stdio_server(
-    library: Option<PromptLibrary>,
+    library: Option<TemplateLibrary>,
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
 ) -> Result<McpServerHandle> {
@@ -1132,7 +1132,7 @@ async fn resolve_http_port(port: Option<u16>) -> Result<u16> {
 /// Start MCP server with HTTP transport using rmcp SseServer
 async fn start_http_server(
     port: Option<u16>,
-    library: Option<PromptLibrary>,
+    library: Option<TemplateLibrary>,
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
 ) -> Result<McpServerHandle> {
@@ -1480,7 +1480,7 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_server_with_custom_library() {
         // Test that custom library is properly used
-        let custom_library = PromptLibrary::default();
+        let custom_library = TemplateLibrary::default();
 
         let mode = McpServerMode::Http { port: None };
         let mut server = start_mcp_server(mode, Some(custom_library), None, None)

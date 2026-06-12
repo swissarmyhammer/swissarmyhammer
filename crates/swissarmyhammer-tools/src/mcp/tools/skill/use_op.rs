@@ -6,15 +6,15 @@ use rmcp::ErrorData as McpError;
 use serde_json::Value;
 use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
-use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_skills::{Execute, ExecutionResult, SkillContext, SkillLibrary, UseSkill};
+use swissarmyhammer_templating::TemplateLibrary;
 use tokio::sync::RwLock;
 
 /// Execute the use skill operation, rendering templates through the prompt library
 pub async fn execute_use(
     arguments: serde_json::Map<String, serde_json::Value>,
     library: &Arc<RwLock<SkillLibrary>>,
-    prompt_library: &Arc<RwLock<PromptLibrary>>,
+    prompt_library: &Arc<RwLock<TemplateLibrary>>,
 ) -> Result<CallToolResult, McpError> {
     let name = arguments
         .get("name")
@@ -52,7 +52,7 @@ pub async fn execute_use(
 /// `{{arguments}}` in the template.
 async fn render_skill_instructions(
     mut value: Value,
-    prompt_library: &Arc<RwLock<PromptLibrary>>,
+    prompt_library: &Arc<RwLock<TemplateLibrary>>,
     arguments: Option<&str>,
 ) -> Value {
     if let Some(instructions) = value.get("instructions").and_then(|v| v.as_str()) {
@@ -85,7 +85,7 @@ async fn render_skill_instructions(
 #[cfg(test)]
 pub async fn render_skill_instructions_for_test(
     value: Value,
-    prompt_library: &Arc<RwLock<PromptLibrary>>,
+    prompt_library: &Arc<RwLock<TemplateLibrary>>,
     arguments: Option<&str>,
 ) -> Value {
     render_skill_instructions(value, prompt_library, arguments).await
@@ -95,8 +95,8 @@ pub async fn render_skill_instructions_for_test(
 mod tests {
     use super::*;
 
-    fn default_prompt_library() -> Arc<RwLock<PromptLibrary>> {
-        Arc::new(RwLock::new(PromptLibrary::default()))
+    fn default_prompt_library() -> Arc<RwLock<TemplateLibrary>> {
+        Arc::new(RwLock::new(TemplateLibrary::default()))
     }
 
     #[tokio::test]

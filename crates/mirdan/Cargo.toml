@@ -35,7 +35,6 @@ swissarmyhammer-templating = { workspace = true }
 # and the template context type — the profile installer resolves, renders, and
 # deploys builtin skills and agents through these.
 swissarmyhammer-agents = { workspace = true }
-swissarmyhammer-prompts = { workspace = true }
 swissarmyhammer-config = { workspace = true }
 
 # Serialization

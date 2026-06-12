@@ -42,7 +42,7 @@ typed-builder = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-kanban = { workspace = true }
 swissarmyhammer-agents = { workspace = true }
-swissarmyhammer-prompts = { workspace = true }
+swissarmyhammer-templating = { workspace = true }
 swissarmyhammer-config = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

@@ -48,8 +48,8 @@ pub fn create_simple_test_prompt() -> swissarmyhammer::Prompt {
     }
 }
 
-pub fn create_test_prompt_library() -> swissarmyhammer::PromptLibrary {
-    swissarmyhammer::PromptLibrary::new()
+pub fn create_test_prompt_library() -> swissarmyhammer::TemplateLibrary {
+    swissarmyhammer::TemplateLibrary::new()
 }
 
 pub fn create_test_prompts() -> Vec<swissarmyhammer::Prompt> {

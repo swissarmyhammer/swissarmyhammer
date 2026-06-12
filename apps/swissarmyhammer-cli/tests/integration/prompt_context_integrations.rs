@@ -3,7 +3,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use swissarmyhammer::PromptLibrary;
+use swissarmyhammer::TemplateLibrary;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::TemplateContext;
 
@@ -37,10 +37,10 @@ User: {{user_name}}"#;
     template_context.set("user_name".to_string(), serde_json::json!(""));
 
     // Load prompts
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
 
     // Add the test prompts directory to the library
-    let loader = swissarmyhammer::PromptLoader::new();
+    let loader = swissarmyhammer::TemplateLoader::new();
     let prompts = loader.load_directory(prompts_dir).unwrap();
     for prompt in prompts {
         library.add(prompt).unwrap();
@@ -116,8 +116,8 @@ Current User: {{USER}}"#;
     );
 
     // Load prompts
-    let mut library = PromptLibrary::new();
-    let loader = swissarmyhammer::PromptLoader::new();
+    let mut library = TemplateLibrary::new();
+    let loader = swissarmyhammer::TemplateLoader::new();
     let prompts = loader.load_directory(prompts_dir).unwrap();
     for prompt in prompts {
         library.add(prompt).unwrap();

@@ -1122,10 +1122,10 @@ async fn create_llama_agent(
 /// Returns [`AcpError::InitializationError`] if the underlying SAH
 /// [`McpServer`](swissarmyhammer_tools::McpServer) cannot be constructed.
 pub async fn build_agent_tools_mount() -> AcpResult<Arc<dyn llama_agent::AgentToolsMount>> {
-    use swissarmyhammer_prompts::PromptLibrary;
+    use swissarmyhammer_templating::TemplateLibrary;
     use swissarmyhammer_tools::McpServer;
 
-    let server = McpServer::new(PromptLibrary::default())
+    let server = McpServer::new(TemplateLibrary::default())
         .await
         .map_err(|e| {
             AcpError::InitializationError(format!("failed to build agent-tools server: {e}"))

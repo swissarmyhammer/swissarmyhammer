@@ -89,7 +89,7 @@ swissarmyhammer-kanban = { workspace = true }
 swissarmyhammer-agents = { workspace = true }
 
 # Prompt library for Liquid template rendering
-swissarmyhammer-prompts = { workspace = true }
+swissarmyhammer-templating = { workspace = true }
 
 # Template context for Liquid rendering
 swissarmyhammer-config = { workspace = true }

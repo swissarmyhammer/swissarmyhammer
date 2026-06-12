@@ -46,7 +46,6 @@ swissarmyhammer-build = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = { workspace = true }
-swissarmyhammer-prompts = { workspace = true }
 
 
 # NEVER add features or feature flags to this Cargo.toml!
