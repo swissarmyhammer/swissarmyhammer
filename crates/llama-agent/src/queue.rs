@@ -130,6 +130,13 @@ struct SessionStateStore {
     lru: VecDeque<String>,
     max_entries: usize,
     max_bytes: usize,
+    /// Count of budget-driven evictions ([`evict`](Self::evict)) since
+    /// construction. Each increment is also emitted as a `warn!` so a
+    /// pin-failure cluster is diagnosable from the log; the counter is the
+    /// deterministic in-process observable the tests assert on (a `warn!`
+    /// reaches whichever tracing subscriber is installed, which is racy to
+    /// capture under a concurrent test harness, but the count is not).
+    evictions: u64,
 }
 
 impl SessionStateStore {
@@ -139,6 +146,7 @@ impl SessionStateStore {
             lru: VecDeque::new(),
             max_entries: max_entries.max(1),
             max_bytes,
+            evictions: 0,
         }
     }
 
@@ -278,7 +286,42 @@ impl SessionStateStore {
         prompt_tokens: Option<Vec<i32>>,
         draft_state_bytes: Option<Vec<u8>>,
     ) {
-        let pinned = self.entries.get(&id).is_some_and(|e| e.pinned);
+        self.insert_inner(id, state_bytes, prompt_tokens, draft_state_bytes, false);
+    }
+
+    /// Insert/replace a session's cached state ATOMICALLY PINNED: the entry is
+    /// born pinned, so it is never an eviction candidate from the moment its
+    /// bytes land. This closes the prime→pin race — under the two-step
+    /// "save then pin" protocol a freshly-saved (still unpinned) prefix could
+    /// be evicted by another session's concurrent save before its pin landed,
+    /// and the pin would then fail with `failed to pin primed prefix state`.
+    /// Pinning at save time removes that window entirely.
+    ///
+    /// Used by the store-level race tests to validate the born-pinned
+    /// invariant. Production currently relies on the RAM-scaled byte budget
+    /// ([`default_max_cache_bytes`]) plus the [`MIN_SESSION_CACHE_ENTRIES`]
+    /// floor holding every concurrently-primed prefix so the two-step protocol's
+    /// pin always lands. Wiring this atomic save through the cross-crate prime
+    /// path — so the race is closed structurally rather than only by budget
+    /// headroom — is tracked as kanban task `01KV13WRXZSNYVDYDQRG3Z7786`
+    /// (`local-review` project); these tests are its spec.
+    #[cfg(test)]
+    fn insert_pinned(&mut self, id: String, state_bytes: Vec<u8>, prompt_tokens: Option<Vec<i32>>) {
+        self.insert_inner(id, state_bytes, prompt_tokens, None, true);
+    }
+
+    /// Shared insert body. `pin_on_save` forces the new entry pinned; otherwise
+    /// the entry inherits any existing pin for this id (a pin applies to the
+    /// session id across re-saves).
+    fn insert_inner(
+        &mut self,
+        id: String,
+        state_bytes: Vec<u8>,
+        prompt_tokens: Option<Vec<i32>>,
+        draft_state_bytes: Option<Vec<u8>>,
+        pin_on_save: bool,
+    ) {
+        let pinned = pin_on_save || self.entries.get(&id).is_some_and(|e| e.pinned);
         self.entries.insert(
             id.clone(),
             CachedSession {
@@ -384,12 +427,34 @@ impl SessionStateStore {
             let Some(victim) = victim else {
                 break;
             };
+            // Eviction is the only way a not-yet-pinned prefix can vanish out
+            // from under an imminent pin. It used to be silent — `grep evict`
+            // on the log returned nothing — so a pin-failure cluster was
+            // undiagnosable. Warn with the pressure that forced this drop so a
+            // future cluster can be traced to budget rather than a logic bug.
+            warn!(
+                evicted_session = %victim,
+                cur_bytes = self.cur_bytes(),
+                max_bytes = self.max_bytes,
+                entries = self.entries.len(),
+                max_entries = self.max_entries,
+                "session-state cache eviction under budget pressure (an unpinned entry was dropped)"
+            );
+            self.evictions += 1;
             self.remove(&victim);
         }
     }
 
     fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Number of budget-driven evictions since construction. Each eviction
+    /// also emits a `warn!`; this counter is the deterministic observable the
+    /// tests assert on.
+    #[cfg(test)]
+    fn eviction_count(&self) -> u64 {
+        self.evictions
     }
 
     /// Reclaim a single session's cached state, returning whether an entry was
@@ -436,19 +501,84 @@ struct PrefixMatch {
     lcp: usize,
 }
 
-/// Default entry ceiling for the session-state cache: cpu cores / 2 (min 1),
-/// preserving the previous count-based limit.
-fn default_max_cache_entries() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| (n.get() / 2).max(1))
-        .unwrap_or(4)
+/// Floor for the session-state cache entry ceiling: enough slots to hold a
+/// full review fleet's concurrently-primed prefixes (plus a margin for their
+/// forks) so the entry-COUNT budget never count-evicts a not-yet-pinned
+/// prefix before its pin lands. A review fans out ~15 validators; 64 covers
+/// that fleet and its in-flight forks comfortably.
+///
+/// Memory is bounded by the RAM-scaled BYTE budget
+/// ([`default_max_cache_bytes`]), so a generous entry floor does not risk
+/// unbounded memory — it only stops the count budget from being the binding
+/// constraint that reintroduces the prime→pin eviction race.
+const MIN_SESSION_CACHE_ENTRIES: usize = 64;
+
+/// How the entry ceiling scales with core count, expressed as
+/// `numerator / denominator` (cores / 2 → one cache slot per two cores).
+/// A scaling pair (mirroring [`SESSION_CACHE_RAM_FRACTION_NUM`]/`_DEN` for the
+/// byte budget) rather than a bare `/ 2` literal so the cores→entries ratio is
+/// self-documenting and consistent with the byte-budget fraction.
+const SESSION_CACHE_ENTRIES_PER_CORE_NUM: usize = 1;
+const SESSION_CACHE_ENTRIES_PER_CORE_DEN: usize = 2;
+
+/// Entry ceiling for the session-state cache given a core count:
+/// `max(MIN_SESSION_CACHE_ENTRIES, cores × NUM / DEN)`. Pure (takes the core
+/// count) so it is unit-testable independent of the test machine's parallelism.
+fn cache_entry_ceiling_for_cores(cores: usize) -> usize {
+    (cores * SESSION_CACHE_ENTRIES_PER_CORE_NUM / SESSION_CACHE_ENTRIES_PER_CORE_DEN)
+        .max(MIN_SESSION_CACHE_ENTRIES)
 }
 
-/// Total-byte ceiling for the session-state cache. Each entry is a full llama
-/// context-state copy, so this bounds worst-case memory regardless of entry
-/// count. 2 GiB is a generous ceiling for in-memory KV state on a workstation;
-/// tune via [`SessionStateStore::new`] if a deployment needs more or less.
-const MAX_SESSION_CACHE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+/// Default entry ceiling for the session-state cache: at least a full
+/// validator fleet ([`MIN_SESSION_CACHE_ENTRIES`]), scaling with
+/// [`SESSION_CACHE_ENTRIES_PER_CORE_NUM`]/`_DEN` (cores / 2) on larger machines.
+fn default_max_cache_entries() -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8);
+    cache_entry_ceiling_for_cores(cores)
+}
+
+/// Floor for the session-state cache byte budget: 2 GiB, the previous
+/// hardcoded ceiling. The budget never drops below this even on a small or
+/// memory-unreadable machine — a sub-2 GiB budget would evict prefixes
+/// aggressively and reintroduce the prime→pin eviction race.
+const MIN_SESSION_CACHE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// Fraction of total system RAM the session-state cache may use, expressed as
+/// `numerator / denominator` (0.25). Each cached entry is a full llama
+/// context-state copy (hundreds of MB on large models), and a review fleet
+/// primes ~15 validator prefixes plus their forks concurrently; a quarter of a
+/// high-RAM box holds them all, so a pin requested for a just-saved prefix is
+/// not defeated by another validator's concurrent save evicting it under a
+/// too-small fixed budget.
+const SESSION_CACHE_RAM_FRACTION_NUM: u64 = 1;
+const SESSION_CACHE_RAM_FRACTION_DEN: u64 = 4;
+
+/// Compute the cache byte budget from a machine's total memory:
+/// `max(MIN_SESSION_CACHE_BYTES, total × fraction)`.
+///
+/// Pure (takes total bytes as an argument) so it is unit-testable without a
+/// live `sysinfo` probe. A `total_memory` of 0 (sysinfo unavailable) yields
+/// the floor.
+fn cache_byte_budget_for_total_memory(total_memory: u64) -> usize {
+    let scaled = total_memory / SESSION_CACHE_RAM_FRACTION_DEN * SESSION_CACHE_RAM_FRACTION_NUM;
+    (scaled as usize).max(MIN_SESSION_CACHE_BYTES)
+}
+
+/// Total-byte ceiling for the session-state cache, scaled to detected system
+/// RAM ([`cache_byte_budget_for_total_memory`]). Each entry is a full llama
+/// context-state copy, so this bounds worst-case memory; scaling with RAM
+/// (rather than a fixed 2 GiB) lets a high-RAM machine hold every validator
+/// prefix + fork so no prime's pin loses the eviction race.
+fn default_max_cache_bytes() -> usize {
+    let total = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing()
+            .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
+    )
+    .total_memory();
+    cache_byte_budget_for_total_memory(total)
+}
 
 /// Detect whether a loaded model has an MTP / NextN head by sniffing the
 /// GGUF metadata for an `*.nextn_predict_layers` entry.
@@ -1093,7 +1223,7 @@ impl RequestQueue {
         let chat_template = Arc::new(ChatTemplateEngine::with_model_strategy(&model_identifier));
         let session_state_cache: SessionStateCache = Arc::new(Mutex::new(SessionStateStore::new(
             default_max_cache_entries(),
-            MAX_SESSION_CACHE_BYTES,
+            default_max_cache_bytes(),
         )));
 
         let executor: Arc<dyn QueueExecutor> = Arc::new(ModelManagerExecutor::new(
@@ -1214,7 +1344,7 @@ impl RequestQueue {
         let chat_template = Arc::new(ChatTemplateEngine::new());
         let session_state_cache: SessionStateCache = Arc::new(Mutex::new(SessionStateStore::new(
             default_max_cache_entries(),
-            MAX_SESSION_CACHE_BYTES,
+            default_max_cache_bytes(),
         )));
         let session_config = crate::types::SessionConfig::default();
 
@@ -5156,6 +5286,184 @@ mod tests {
             assert!(store.remove("a"));
             assert!(!store.contains("a"));
             assert_eq!(store.cur_bytes(), 0);
+        }
+
+        /// (c) The RAM-scaled budget helper returns `max(2GiB, total × fraction)`:
+        /// a generous fraction of a large machine's RAM, but never below the
+        /// 2 GiB floor on a small one. This is what the cache must be built with
+        /// so a high-RAM box holds every validator prefix + fork.
+        #[test]
+        fn cache_byte_budget_is_ram_scaled_floored_at_2gib() {
+            const FLOOR: usize = 2 * 1024 * 1024 * 1024;
+            const FRACTION_NUM: u64 = 1;
+            const FRACTION_DEN: u64 = 4; // 0.25
+
+            // A 128 GiB machine: 0.25 × 128 GiB = 32 GiB, well above the floor.
+            let big = 128u64 * 1024 * 1024 * 1024;
+            assert_eq!(
+                cache_byte_budget_for_total_memory(big),
+                (big / FRACTION_DEN * FRACTION_NUM) as usize,
+                "high-RAM budget is a fraction of total memory"
+            );
+
+            // A 4 GiB machine: 0.25 × 4 GiB = 1 GiB < floor → floored at 2 GiB.
+            let small = 4u64 * 1024 * 1024 * 1024;
+            assert_eq!(
+                cache_byte_budget_for_total_memory(small),
+                FLOOR,
+                "low-RAM budget is floored at 2 GiB"
+            );
+
+            // A machine that reports 0 total memory (sysinfo unavailable) still
+            // gets the floor, never a 0-byte budget that would evict everything.
+            assert_eq!(cache_byte_budget_for_total_memory(0), FLOOR);
+        }
+
+        /// (a, count axis) The entry-COUNT budget — not just bytes — drove the
+        /// race: a review fleet primes ~15 validator prefixes concurrently, but
+        /// the old `cores / 2` ceiling (4-8 on a typical box) count-evicted the
+        /// earliest, not-yet-pinned prefixes before their pins landed,
+        /// regardless of how much RAM the byte budget allowed. The entry
+        /// ceiling must comfortably hold a full fleet on a low-core machine so
+        /// count eviction is never the binding constraint for it.
+        #[test]
+        fn entry_ceiling_holds_a_full_validator_fleet_on_a_low_core_box() {
+            const FLEET: usize = 15;
+            // A 4-core machine: the old `cores / 2 = 2` ceiling would
+            // count-evict 13 of a 15-validator fleet's prefixes before their
+            // pins landed. The floor must hold the whole fleet.
+            assert!(
+                cache_entry_ceiling_for_cores(4) >= FLEET,
+                "the entry ceiling on a 4-core box ({}) must hold a {FLEET}-validator \
+                 fleet so count eviction does not drop a not-yet-pinned prefix",
+                cache_entry_ceiling_for_cores(4)
+            );
+            // A high-core machine still scales above the floor (cores / 2).
+            assert!(
+                cache_entry_ceiling_for_cores(128) >= 64,
+                "a high-core box scales the entry ceiling above the fleet floor"
+            );
+        }
+
+        /// (a) The eviction-race: ~15 validators prime concurrently, the single
+        /// GPU serializes them, so each prime's `save → evict()` runs in turn.
+        /// With a post-save pin and a budget the saves exceed, an earlier
+        /// validator's not-yet-pinned entry is the LRU victim of a later
+        /// validator's save — its pin then fails. Born-pinned saves
+        /// (`insert_pinned`) make every entry an eviction non-candidate from the
+        /// moment its bytes land, so no concurrent save can defeat the pin.
+        #[test]
+        fn pin_on_save_survives_concurrent_eviction_race() {
+            // Budget holds only ~3 of the 15 entries: post-save pinning loses
+            // the race badly here, which is exactly the production failure.
+            let n = 15usize;
+            let entry_bytes = 100usize;
+            let budget = 3 * entry_bytes;
+            let mut store = SessionStateStore::new(n + 5, budget);
+
+            for i in 0..n {
+                let id = format!("validator-{i}");
+                // Born pinned: the save and the pin are one atomic step, so the
+                // entry is never an unpinned eviction candidate.
+                store.insert_pinned(
+                    id.clone(),
+                    state(i as u8, entry_bytes),
+                    Some(vec![i as i32]),
+                );
+            }
+
+            // Every primed prefix is still resident and pinned — no pin was
+            // defeated by another validator's save.
+            for i in 0..n {
+                let id = format!("validator-{i}");
+                let status = store
+                    .status(&id)
+                    .unwrap_or_else(|| panic!("{id} must still be cached"));
+                assert!(status.pinned, "{id} must be pinned");
+            }
+        }
+
+        /// (a, RED-guard) Post-save pinning under the same pressure DOES lose
+        /// the race: this documents the bug the atomic pin-on-save closes. The
+        /// LRU early entries are evicted by later saves before their pin lands,
+        /// so `set_pinned` returns false for them.
+        #[test]
+        fn post_save_pin_loses_the_race_without_pin_on_save() {
+            let n = 15usize;
+            let entry_bytes = 100usize;
+            let budget = 3 * entry_bytes;
+            let mut store = SessionStateStore::new(n + 5, budget);
+
+            // All saves first (the GPU-serialized prime turns), then all pins —
+            // the production prime→status→pin protocol's window.
+            for i in 0..n {
+                store.insert(
+                    format!("validator-{i}"),
+                    state(i as u8, entry_bytes),
+                    Some(vec![i as i32]),
+                    None,
+                );
+            }
+            let pinned_ok = (0..n)
+                .filter(|i| store.set_pinned(&format!("validator-{i}"), true))
+                .count();
+            assert!(
+                pinned_ok < n,
+                "post-save pinning must lose the race for at least one early entry \
+                 (got {pinned_ok}/{n} pinned) — this is the bug pin-on-save fixes"
+            );
+        }
+
+        /// (b) A pinned entry is never evicted even when a single later save
+        /// would itself exceed the whole byte budget.
+        #[test]
+        fn pinned_entry_survives_a_single_oversized_save() {
+            let mut store = SessionStateStore::new(8, 50);
+            store.insert_pinned("prefix".into(), state(1, 40), Some(vec![1]));
+            assert!(store.status("prefix").unwrap().pinned);
+
+            // One save bigger than the entire budget. It cannot evict the pinned
+            // prefix; the cache simply goes over budget (and warns).
+            store.insert("huge".into(), state(2, 200), Some(vec![2]), None);
+
+            assert!(
+                store.contains("prefix"),
+                "pinned prefix survives an oversized save"
+            );
+            assert!(store.contains("huge"), "the active (MRU) save is kept");
+        }
+
+        /// (d) Eviction while the cache is at/over budget emits an observable
+        /// warn carrying the bytes/budget/entry-count pressure, so a future
+        /// pin-failure cluster is diagnosable from the log (today eviction is
+        /// silent).
+        #[test]
+        fn eviction_near_budget_is_observable() {
+            // The eviction `warn!` is emitted alongside `evictions`; the
+            // counter is the deterministic in-process observable (a `warn!`
+            // only reaches whichever tracing subscriber is installed, which is
+            // racy to capture under the concurrent test harness).
+            let mut store = SessionStateStore::new(100, 25);
+            store.insert("a".into(), state(1, 10), None, None);
+            store.insert("b".into(), state(2, 10), None, None);
+            assert_eq!(
+                store.eviction_count(),
+                0,
+                "two 10-byte entries fit a 25-byte budget — no eviction yet"
+            );
+
+            // This third 10-byte save pushes total to 30 > 25 and evicts the
+            // LRU under budget pressure, which is observed (and warned).
+            store.insert("c".into(), state(3, 10), None, None);
+            assert_eq!(
+                store.eviction_count(),
+                1,
+                "an eviction under budget pressure must be observable"
+            );
+            assert!(
+                !store.contains("a"),
+                "the LRU entry was the eviction victim"
+            );
         }
     }
 }
