@@ -976,18 +976,26 @@ interface ScopedPerspectiveTabProps {
  * than Pressables. Both have distinct rects from the tab name and are
  * independently navigable.
  *
- * Per-tab keyboard contract (card 01KTYQY0ZB62KHN6BPK3FBMBD7 — Enter
- * SELECTS, rename is a deliberate gesture):
+ * Per-tab keyboard contract (cards 01KTYQY0ZB62KHN6BPK3FBMBD7 — Enter
+ * selects/activates; 01KV0MBDBW06NRXCWVZBJ0445S — Enter on the
+ * already-active tab drills into the name editor):
  *
- *   - **Enter = activate.** Every tab registers a positional `nav.drillIn`
- *     shadow `CommandDef` (the documented scope-local-execute pattern —
- *     same as the jump overlay's `app.dismiss` shadow). The global Enter
- *     binding resolves to `nav.drillIn`; while this tab is the focused
- *     scope, `useDispatchCommand`'s fast-path runs the shadow's execute —
- *     dispatch `perspective.switch` with THIS tab's id — instead of
- *     drilling into a leaf that has nothing to drill into. The shadow
- *     carries no keys, so binding extraction is untouched: Enter still
- *     resolves to the global `nav.drillIn` id everywhere.
+ *   - **Enter = the tab/drill idiom.** Every tab registers a positional
+ *     `nav.drillIn` shadow `CommandDef` (the documented
+ *     scope-local-execute pattern — same as the jump overlay's
+ *     `app.dismiss` shadow). The global Enter binding resolves to
+ *     `nav.drillIn`; while this tab is the focused scope,
+ *     `useDispatchCommand`'s fast-path runs the shadow's execute, which
+ *     branches on whether THIS tab is already the active perspective:
+ *       - INACTIVE tab → dispatch `perspective.switch` with this tab's id
+ *         (activate / select), instead of drilling into a leaf that has
+ *         nothing to drill into.
+ *       - ALREADY-ACTIVE tab → drill in: arm the existing inline rename
+ *         machinery (`triggerStartRename` with this tab's id), reusing the
+ *         same caption editor F2 / double-click use, and do NOT re-dispatch
+ *         switch (re-selecting the active perspective is a no-op).
+ *     The shadow carries no keys, so binding extraction is untouched: Enter
+ *     still resolves to the global `nav.drillIn` id everywhere.
  *   - **F2 = rename.** Every tab — active or inactive — registers an
  *     `app.entity.startRename` `CommandDef` whose `keys` block (F2 for
  *     cua / vim / emacs) is picked up by `extractChainBindings` when this
@@ -1018,12 +1026,26 @@ function ScopedPerspectiveTab({
   const tabScopeCommands = useMemo<readonly CommandDef[]>(() => {
     return [
       {
-        // Enter — the tab's primary action: ACTIVATE this perspective.
+        // Enter — the tab/drill idiom (card 01KV0MBDBW06NRXCWVZBJ0445S).
         // Positional shadow of the global `nav.drillIn: Enter`; no keys of
         // its own (see the component docblock).
+        //
+        //   - On an INACTIVE tab → ACTIVATE this perspective
+        //     (`perspective.switch`), the established select behavior.
+        //   - On the ALREADY-ACTIVE tab → DRILL IN: arm the EXISTING inline
+        //     rename machinery (`triggerStartRename` with this tab's id) and
+        //     do NOT re-dispatch switch. Re-selecting the active perspective
+        //     is a no-op; the drill idiom says Enter on the already-active
+        //     item edits it. This reuses the SAME caption editor the F2 /
+        //     double-click / `+`-create paths arm — no new machinery, no new
+        //     backend command (presentation-layer routing only).
         id: "nav.drillIn",
         name: "Switch Perspective",
         execute: async () => {
+          if (isActive) {
+            triggerStartRename(perspective.id);
+            return;
+          }
           await dispatchPerspectiveSwitch({
             args: { perspective_id: perspective.id },
           });

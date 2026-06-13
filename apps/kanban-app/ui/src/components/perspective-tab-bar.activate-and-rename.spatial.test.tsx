@@ -9,15 +9,17 @@
  * old Enter→rename carrier (cards 01KQ7GE3KY91X2YR6BX5AY40VK /
  * 01KQAXPRTCNH8ARTYJJEBTYWW0).
  *
- * The contract:
+ * The contract (Enter-drill idiom refined by card
+ * 01KV0MBDBW06NRXCWVZBJ0445S):
  *
- * - **Enter = activate.** A focused tab's primary action selects the
- *   perspective, like every other tab UI. The tab registers a positional
+ * - **Enter = the tab/drill idiom.** A focused tab registers a positional
  *   `nav.drillIn` shadow `CommandDef` (the documented scope-local-execute
  *   pattern — same as the jump overlay's `app.dismiss` shadow): the global
  *   Enter binding resolves to `nav.drillIn`, and while the tab is the
- *   focused scope the shadow dispatches `perspective.switch` with the
- *   tab's id instead of drilling into a leaf.
+ *   focused scope the shadow's execute branches on active-ness — an
+ *   INACTIVE tab dispatches `perspective.switch` (select/activate); the
+ *   ALREADY-ACTIVE tab drills into the caption editor by arming the
+ *   existing inline rename (no re-switch, the same editor F2 uses).
  * - **F2 = rename.** Rename is a deliberate, separate gesture — F2 is the
  *   platform-wide rename idiom (and the per-keymap rename key on all three
  *   modes). The per-tab `app.entity.startRename` `CommandDef` carries the
@@ -30,14 +32,15 @@
  *
  * Test cases:
  *
- * 1. **Enter activates the focused active tab** — dispatches
- *    `perspective.switch` for it; NO inline rename editor mounts.
+ * 1. **Enter on the already-active tab drills into rename** — arms the
+ *    inline caption editor and does NOT re-dispatch `perspective.switch`.
  * 2. **Enter on a focused inactive tab activates that tab** — dispatches
  *    `perspective.switch` with the focused tab's id; no rename editor.
  * 3. **Enter outside perspective scope still drills** — focusing a non-
  *    perspective leaf and pressing Enter dispatches `nav.drillIn` to the
  *    backend. Proves the shadow is scope-local.
- * 4. **Vim / emacs Enter** — same as case 1 per keymap mode.
+ * 4. **Vim / emacs Enter on the already-active tab** — same as case 1 per
+ *    keymap mode (arms rename, no re-switch).
  * 5. **F2 mounts the inline rename editor** (cua / vim / emacs) on the
  *    focused active tab.
  * 6. **F2 on a focused inactive tab activates then renames** — dispatches
@@ -433,10 +436,11 @@ describe("PerspectiveTabBar — Enter activates the focused tab; F2 renames", ()
   });
 
   // -------------------------------------------------------------------------
-  // Test #1 — Enter on the focused active tab dispatches perspective.switch
+  // Test #1 — Enter on the ALREADY-ACTIVE tab arms inline rename (drill-in),
+  // and does NOT re-dispatch perspective.switch (the tab/drill idiom).
   // -------------------------------------------------------------------------
 
-  it("Enter on the focused active perspective tab dispatches perspective.switch (no rename editor)", async () => {
+  it("Enter on the focused already-active perspective tab arms inline rename and does NOT re-dispatch perspective.switch", async () => {
     const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
@@ -449,16 +453,18 @@ describe("PerspectiveTabBar — Enter activates the focused tab; F2 renames", ()
     await pressKeyInAct("{Enter}");
     await flushSetup();
 
-    // The tab's positional nav.drillIn shadow intercepts Enter and
-    // dispatches the canonical activation command for THIS tab.
-    const switchDispatch = findDispatch("perspective.switch");
-    expect(switchDispatch).toBeTruthy();
-    expect(switchDispatch!.args).toEqual(
-      expect.objectContaining({ perspective_id: "p1" }),
-    );
+    // Drill idiom: Enter on the tab that is ALREADY the active perspective
+    // drills into the caption editor — the same inline rename machinery F2
+    // and double-click use — instead of re-selecting (a no-op switch).
+    await waitFor(() => {
+      const renameEditor = container.querySelector(
+        "[data-segment='perspective_tab:p1'] .cm-editor",
+      );
+      expect(renameEditor).not.toBeNull();
+    });
 
-    // Enter no longer arms rename — no inline editor anywhere in the bar.
-    expectNoRenameEditor(container);
+    // The already-active tab must NOT re-dispatch the switch command.
+    expect(dispatchedCommand("perspective.switch")).toBe(false);
 
     // And the shadow swallowed the drill — no backend nav.drillIn dispatch.
     expect(dispatchedCommand("nav.drillIn")).toBe(false);
@@ -556,10 +562,10 @@ describe("PerspectiveTabBar — Enter activates the focused tab; F2 renames", ()
   });
 
   // -------------------------------------------------------------------------
-  // Test #4 — Vim / emacs Enter activates the focused tab
+  // Test #4 — Vim / emacs Enter on the already-active tab arms inline rename
   // -------------------------------------------------------------------------
 
-  it("vim: Enter on the focused active perspective tab dispatches perspective.switch", async () => {
+  it("vim: Enter on the focused already-active perspective tab arms inline rename, no re-switch", async () => {
     mockKeymapMode = "vim";
     const { container, unmount } = await renderInAppShell();
     await flushSetup();
@@ -572,17 +578,18 @@ describe("PerspectiveTabBar — Enter activates the focused tab; F2 renames", ()
     await pressKeyInAct("{Enter}");
     await flushSetup();
 
-    const switchDispatch = findDispatch("perspective.switch");
-    expect(switchDispatch).toBeTruthy();
-    expect(switchDispatch!.args).toEqual(
-      expect.objectContaining({ perspective_id: "p1" }),
-    );
-    expectNoRenameEditor(container);
+    await waitFor(() => {
+      const renameEditor = container.querySelector(
+        "[data-segment='perspective_tab:p1'] .cm-editor",
+      );
+      expect(renameEditor).not.toBeNull();
+    });
+    expect(dispatchedCommand("perspective.switch")).toBe(false);
 
     unmount();
   });
 
-  it("emacs: Enter on the focused active perspective tab dispatches perspective.switch", async () => {
+  it("emacs: Enter on the focused already-active perspective tab arms inline rename, no re-switch", async () => {
     mockKeymapMode = "emacs";
     const { container, unmount } = await renderInAppShell();
     await flushSetup();
@@ -595,12 +602,13 @@ describe("PerspectiveTabBar — Enter activates the focused tab; F2 renames", ()
     await pressKeyInAct("{Enter}");
     await flushSetup();
 
-    const switchDispatch = findDispatch("perspective.switch");
-    expect(switchDispatch).toBeTruthy();
-    expect(switchDispatch!.args).toEqual(
-      expect.objectContaining({ perspective_id: "p1" }),
-    );
-    expectNoRenameEditor(container);
+    await waitFor(() => {
+      const renameEditor = container.querySelector(
+        "[data-segment='perspective_tab:p1'] .cm-editor",
+      );
+      expect(renameEditor).not.toBeNull();
+    });
+    expect(dispatchedCommand("perspective.switch")).toBe(false);
 
     unmount();
   });
