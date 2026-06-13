@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a180
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffa880
 project: claude-model-select
 title: Make claude-code-haiku the baked-in default for the review scope
 ---
@@ -16,18 +16,24 @@ Two resolution paths exist (confirm both during implementation):
 Keep `claude-code-haiku` as a named constant in one place; do not scatter the string literal.
 
 ## Acceptance Criteria
-- [ ] With no `review.model` set, the review scope resolves to the `claude-code-haiku` model config.
-- [ ] An explicitly set `review.model` overrides the baked-in default.
-- [ ] An invalid `review.model` warns and falls back (to claude-code-haiku, the new review default).
-- [ ] The global/default scope (non-review) is unchanged — still `claude-code`.
-- [ ] The `claude-code-haiku` name exists as a single shared constant.
+- [x] With no `review.model` set, the review scope resolves to the `claude-code-haiku` model config.
+- [x] An explicitly set `review.model` overrides the baked-in default.
+- [x] An invalid `review.model` warns and falls back (to claude-code-haiku, the new review default).
+- [x] The global/default scope (non-review) is unchanged — still `claude-code`.
+- [x] The `claude-code-haiku` name exists as a single shared constant.
 
 ## Tests
-- [ ] In `crates/swissarmyhammer-config/src/model.rs` tests: with empty config, `resolve_review_agent_config` returns a `ModelConfig` whose executor args are `["--model", "haiku"]` (i.e. claude-code-haiku).
-- [ ] A test that an explicit `review.model: claude-code` overrides the default and yields plain claude-code (no `--model haiku`).
-- [ ] A test that the default (non-review) scope is still claude-code with empty args.
-- [ ] In `apps/swissarmyhammer-cli` (serve module tests): `review_model_config` with unset `review.model` resolves to claude-code-haiku (not None / not the global default).
-- [ ] Run: `cargo test -p swissarmyhammer-config` and `cargo test -p swissarmyhammer-cli` — all green.
+- [x] In `crates/swissarmyhammer-config/src/model.rs` tests: with empty config, `resolve_review_agent_config` returns a `ModelConfig` whose executor args are `["--model", "haiku"]` (i.e. claude-code-haiku).
+- [x] A test that an explicit `review.model: claude-code` overrides the default and yields plain claude-code (no `--model haiku`).
+- [x] A test that the default (non-review) scope is still claude-code with empty args.
+- [x] In `apps/swissarmyhammer-cli` (serve module tests): `review_model_config` with unset `review.model` resolves to claude-code-haiku (not None / not the global default).
+- [x] Run: `cargo test -p swissarmyhammer-config` and `cargo test -p swissarmyhammer-cli` — all green.
 
 ## Workflow
-- Use `/tdd` — write failing tests first, then implement to make them pass.
+- Use `/tdd` — write failing tests first, then implement to make them pass. #haiku
+
+## Implementation Notes
+- Shared constant: `swissarmyhammer_config::model::REVIEW_DEFAULT_AGENT = "claude-code-haiku"` (also re-exported from crate root via `pub use model::{...}` not required; referenced through the `model` module). Single source of truth.
+- New constructor: `ModelConfig::claude_code_haiku() -> Result<Self, ModelError>` resolves the builtin by `REVIEW_DEFAULT_AGENT` via `find_agent_by_name` + `parse_model_config`.
+- `resolve_review_agent_config` chain: `review.model` → `claude_code_haiku()` → `resolve_agent_config` (only if the builtin cannot be resolved).
+- serve `review_model_config`: unset OR invalid name both fall back to `claude_code_haiku()` via new helper `review_default_config()`; explicit valid name still wins.

@@ -1,0 +1,1 @@
+{"id":"01KV0PD5Q9EM83ACQ5N63NWG7R","timestamp":"2026-06-13T14:33:06.537229Z","op":"create","item_id":"01KV0PD5Q2KFEJWH4HFT5K4KQ4","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: e36209\n+tag_name: haiku\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: e36209\n-tag_name: haiku\n","transaction_id":null}
