@@ -27,12 +27,17 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use swissarmyhammer_command_service::bootstrap::install_commands_module;
 use swissarmyhammer_directory::KanbanConfig;
-use swissarmyhammer_perspectives::{PerspectiveContext, PerspectiveStore};
+use swissarmyhammer_entity_mcp::EntityServer;
+use swissarmyhammer_kanban::board::InitBoard;
+use swissarmyhammer_kanban::clipboard::{ClipboardProvider, InMemoryClipboard};
+use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor, OperationProcessor};
+use swissarmyhammer_perspectives::PerspectiveContext;
 use swissarmyhammer_plugin::{
     CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR,
 };
-use swissarmyhammer_store::{StoreContext, StoreHandle};
-use swissarmyhammer_views::{ViewStore, ViewsContext, ViewsServer};
+use swissarmyhammer_store::StoreContext;
+use swissarmyhammer_ui_state::UIState;
+use swissarmyhammer_views::{ViewsContext, ViewsServer};
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 
@@ -87,56 +92,55 @@ fn stage_perspective_commands(layer_root: &Path) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Exposing the real in-process `views` tool over a real kernel substrate
+// Exposing the real in-process `views` + `entity` tools over ONE board
+// substrate
 // ───────────────────────────────────────────────────────────────────────────
 
-/// A handle to the live views substrate, kept alive for the test's duration so
-/// the storage root and shared contexts outlive the plugin's `load()` and every
-/// `execute`.
+/// A handle to the live board substrate, kept alive for the test's duration
+/// so the storage root and shared contexts outlive the plugin's `load()` and
+/// every `execute`.
 struct ExposedViews {
     _dir: TempDir,
     _store_ctx: Arc<StoreContext>,
     perspectives: Arc<RwLock<PerspectiveContext>>,
     views: Arc<RwLock<ViewsContext>>,
+    /// The shared per-window UI state the activation commands
+    /// (`perspective.switch` / `.next` / `.prev`) write through the exposed
+    /// `entity` module — observed directly by the activation pins.
+    ui_state: Arc<UIState>,
 }
 
-/// Build a `views` substrate (mirroring `builtin_kanban_misc_e2e`), wrap a
-/// `ViewsServer` over it in an `InProcessServer`, and expose it to `host` under
-/// id `"views"`.
+/// Build ONE `KanbanContext` board substrate and expose BOTH backends the
+/// plugin's `ensureServices(this, ["commands", "views", "entity"])` needs:
+///
+/// - `views` — `ViewsServer` over the board's own perspective + views
+///   kernels (resolution + perspective CRUD).
+/// - `entity` — clipboard-wired `EntityServer` over the same
+///   `KanbanContext` plus a shared `UIState` (the board-bundle server the
+///   three activation commands route to).
+///
+/// Sharing one substrate mirrors the production wiring in
+/// `apps/kanban-app/src/commands.rs`, where both modules resolve the SAME
+/// active board's kernels.
 async fn expose_views_module(host: &PluginHost) -> ExposedViews {
-    let dir = TempDir::new().expect("views substrate temp dir");
-    let store_ctx = Arc::new(StoreContext::new(dir.path().to_path_buf()));
+    let dir = TempDir::new().expect("board substrate temp dir");
+    let kanban_dir = dir.path().join(".kanban");
+    std::fs::create_dir_all(&kanban_dir).expect("kanban dir");
+    let kanban = KanbanContext::open(&kanban_dir)
+        .await
+        .expect("kanban context should open");
+    KanbanOperationProcessor::new()
+        .process(&InitBoard::new("Perspective Commands Board"), &kanban)
+        .await
+        .expect("board init");
+    let kanban = Arc::new(kanban);
+    let store_ctx = swissarmyhammer_kanban::wire_store_substrate(&kanban).await;
 
-    // Perspective context + store.
-    let perspectives_dir = dir.path().join("perspectives");
-    let perspective_ctx = PerspectiveContext::open(&perspectives_dir)
+    let perspectives = kanban
+        .perspective_context_arc()
         .await
         .expect("perspective context should open");
-    let perspective_store = PerspectiveStore::new(&perspectives_dir);
-    let p_handle = Arc::new(StoreHandle::new(Arc::new(perspective_store)));
-    store_ctx.register(p_handle.clone()).await;
-    let perspectives = {
-        let mut pctx = perspective_ctx;
-        pctx.set_store_handle(p_handle);
-        pctx.set_store_context(Arc::clone(&store_ctx));
-        Arc::new(RwLock::new(pctx))
-    };
-
-    // Views context + store.
-    let views_dir = dir.path().join("views");
-    let views_ctx = ViewsContext::open(&views_dir)
-        .build()
-        .await
-        .expect("views context should open");
-    let view_store = ViewStore::new(&views_dir);
-    let v_handle = Arc::new(StoreHandle::new(Arc::new(view_store)));
-    store_ctx.register(v_handle.clone()).await;
-    let views = {
-        let mut vctx = views_ctx;
-        vctx.set_store_handle(v_handle);
-        vctx.set_store_context(Arc::clone(&store_ctx));
-        Arc::new(RwLock::new(vctx))
-    };
+    let views = kanban.views_arc().expect("views context should open");
 
     let server = ViewsServer::new(Arc::clone(&perspectives), Arc::clone(&views));
     let module = InProcessServer::new(server)
@@ -149,11 +153,30 @@ async fn expose_views_module(host: &PluginHost) -> ExposedViews {
     .await
     .expect("exposing the views module should succeed");
 
+    let ui_state = Arc::new(UIState::new());
+    let entity_server = EntityServer::with_clipboard(
+        Arc::clone(&kanban),
+        Arc::new(InMemoryClipboard::new()) as Arc<dyn ClipboardProvider>,
+        Arc::clone(&ui_state),
+    )
+    .await
+    .expect("board-wired entity server");
+    let entity_module = InProcessServer::new(entity_server)
+        .await
+        .expect("wrapping the entity server in an InProcessServer should succeed");
+    host.expose_rust_module(
+        "entity".to_string(),
+        Arc::new(entity_module) as Arc<dyn PluginMcpServer>,
+    )
+    .await
+    .expect("exposing the entity module should succeed");
+
     ExposedViews {
         _dir: dir,
         _store_ctx: store_ctx,
         perspectives,
         views,
+        ui_state,
     }
 }
 
@@ -181,6 +204,11 @@ fn commands_by_id(list_result: &Value) -> BTreeMap<String, Value> {
 /// `views` call returns that backend's full `CallToolResult`
 /// (`{ content, structuredContent: <op payload>, isError }`). So the op's JSON
 /// payload lives under `structuredContent.result.structuredContent`.
+///
+/// Exception: `perspective.save` and `perspective.list` unwrap the views
+/// envelope in the plugin (`unwrapResult`) because the frontend reads their
+/// payloads off the dispatch result — for those two the op payload sits at
+/// `structuredContent.result` directly.
 fn op_payload(execute_result: &Value) -> &Value {
     &execute_result["structuredContent"]["result"]["structuredContent"]
 }
@@ -255,6 +283,21 @@ async fn perspective_commands_plugin_registers_and_executes() {
         assert_command_metadata(cmd, &spec);
     }
 
+    // Menu placement (card 01KTYQY0ZB62KHN6BPK3FBMBD7): the cycling pair
+    // surfaces on the OS View menu — the menu whose existing occupant
+    // (`ai.toggle`) also changes what the window shows. The MetaSpec table
+    // predates the `menu` field, so the pair is pinned explicitly here.
+    assert_eq!(
+        commands["perspective.next"]["menu"],
+        json!({ "path": ["View"], "group": 1, "order": 0 }),
+        "perspective.next menu placement"
+    );
+    assert_eq!(
+        commands["perspective.prev"]["menu"],
+        json!({ "path": ["View"], "group": 1, "order": 1 }),
+        "perspective.prev menu placement"
+    );
+
     // ── (3a) lifecycle: save → load roundtrip ───────────────────────────────
     // Save a perspective and capture its minted id off the op payload.
     let saved = call_command(
@@ -275,13 +318,19 @@ async fn perspective_commands_plugin_registers_and_executes() {
         json!(true),
         "perspective.save should succeed, got {saved}"
     );
-    let persp_id = op_payload(&saved)["perspective"]["id"]
+    // `perspective.save` unwraps the views envelope (`unwrapResult`, same
+    // precedent as `perspective.list`) so the frontend's `+` flow can read
+    // the created `perspective.id` straight off the dispatch result — its
+    // payload therefore sits at `structuredContent.result`, NOT at the
+    // double-nested `op_payload` location the un-unwrapped commands use.
+    let saved_payload = &saved["structuredContent"]["result"];
+    let persp_id = saved_payload["perspective"]["id"]
         .as_str()
         .expect("save must return the minted perspective id")
         .to_string();
     // The view_id scope-chain param threaded through to the saved perspective.
     assert_eq!(
-        op_payload(&saved)["perspective"]["view_id"],
+        saved_payload["perspective"]["view_id"],
         json!("01VIEWINSTANCE0000000000000"),
         "perspective.save must resolve view_id from the view: scope moniker"
     );
@@ -414,7 +463,10 @@ async fn perspective_commands_plugin_registers_and_executes() {
         json!({
             "op": "execute command",
             "id": "perspective.switch",
-            "ctx": { "args": { "perspective_id": persp_id } },
+            "ctx": {
+                "scope_chain": ["window:main"],
+                "args": { "perspective_id": persp_id },
+            },
         }),
     )
     .await;
@@ -423,11 +475,17 @@ async fn perspective_commands_plugin_registers_and_executes() {
         json!(true),
         "perspective.switch should succeed, got {switched}"
     );
-    // switch surfaces the perspective's filter for the caller to evaluate.
+    // switch ACTIVATES: the window's active perspective flips and the
+    // atomic PerspectiveSwitch change surfaces on the result envelope.
     assert_eq!(
-        op_payload(&switched)["perspective"]["id"],
+        views.ui_state.active_perspective_id("main"),
+        persp_id,
+        "perspective.switch must write the window's active_perspective_id"
+    );
+    assert_eq!(
+        op_payload(&switched)["change"]["PerspectiveSwitch"]["perspective_id"],
         json!(persp_id),
-        "perspective.switch must resolve the perspective by id, got {switched}"
+        "perspective.switch must return the PerspectiveSwitch change, got {switched}"
     );
 }
 
@@ -524,8 +582,13 @@ async fn perspective_list_returns_the_op_payload_for_the_frontend() {
                  command result (the frontend reads `result.perspectives`), got {listed}"
             )
         });
-    assert_eq!(perspectives.len(), 1, "one seeded perspective expected");
-    assert_eq!(perspectives[0]["name"], json!("Ready"));
+    // The board substrate's open-reconciliation seeds a "Default"
+    // perspective for the built-in Board view, so the saved one is found by
+    // name rather than by exact count.
+    assert!(
+        perspectives.iter().any(|p| p["name"] == json!("Ready")),
+        "the saved perspective must appear in the list payload, got {listed}"
+    );
 }
 
 /// `perspective.save` with `if_absent` through the REAL plugin path must
@@ -572,19 +635,27 @@ async fn if_absent_save_through_the_plugin_converges_on_one_default() {
 
     let pctx = fx.views.perspectives.read().await;
     let all = pctx.all();
+    // The board substrate's open-reconciliation already seeded the Board
+    // view's pinned Default; the dead `default` placeholder must fall back
+    // to the kind scope and CONVERGE on that existing perspective — never
+    // mint a kind-scoped sibling per window per boot (the create/prune
+    // churn this regression test pins).
     assert_eq!(
         all.len(),
         1,
         "repeated if_absent saves must converge on ONE default, got {all:?}"
     );
     assert_eq!(all[0].name, "Default");
+    let converged_id = all[0].id.clone();
     assert_eq!(
-        all[0].view_id, None,
-        "the dead `default` placeholder view id must fall back to the kind scope"
+        first["structuredContent"]["result"]["perspective"]["id"],
+        json!(converged_id),
+        "the first ensure must resolve to the one converged default"
     );
     assert_eq!(
-        all[0].id, "default-board",
-        "the ensured default must land under the deterministic scope id"
+        second["structuredContent"]["result"]["perspective"]["id"],
+        json!(converged_id),
+        "the second ensure must resolve to the SAME converged default"
     );
 }
 
@@ -977,4 +1048,357 @@ fn metadata_specs() -> Vec<MetaSpec> {
             params: json!([{ "name": "perspective_id", "from": "args" }]),
         },
     ]
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Activation pins (01KTYQY0ZB62KHN6BPK3FBMBD7 — "perspectives can't be
+// SELECTED")
+//
+// The plugin port routed `perspective.switch` / `perspective.next` /
+// `perspective.prev` to the `views` server's RESOLUTION ops, which hold no
+// UIState — so dispatching them stopped writing the window's
+// `active_perspective_id` + `filtered_task_ids` and clicking a tab no longer
+// activated anything. These tests pin the restored contract over the
+// PRODUCTION substrate shape: one `KanbanContext` board backing BOTH the
+// `views` module (perspective storage) and the `entity` module (the
+// board-bundle server that holds the `KanbanContext` + `UIState` pair, same
+// wiring as `apps/kanban-app/src/commands.rs`), with a shared `UIState`
+// observed directly.
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Save a board-kind perspective through the real plugin path; returns its id.
+async fn save_board_perspective(fx: &PluginFixture, name: &str) -> String {
+    let saved = call_command(
+        &fx.service,
+        CallerId::HostInternal,
+        json!({
+            "op": "execute command",
+            "id": "perspective.save",
+            "ctx": { "args": { "name": name, "view": "board" } },
+        }),
+    )
+    .await;
+    assert_eq!(
+        saved["structuredContent"]["ok"],
+        json!(true),
+        "perspective.save should succeed, got {saved}"
+    );
+    saved["structuredContent"]["result"]["perspective"]["id"]
+        .as_str()
+        .expect("save must return the minted perspective id")
+        .to_string()
+}
+
+/// Dispatch one of the activation commands with a `window:main` scope chain.
+async fn dispatch_with_window(fx: &PluginFixture, id: &str, args: Value) -> Value {
+    call_command(
+        &fx.service,
+        CallerId::HostInternal,
+        json!({
+            "op": "execute command",
+            "id": id,
+            "ctx": { "scope_chain": ["window:main"], "args": args },
+        }),
+    )
+    .await
+}
+
+/// `perspective.switch` must ACTIVATE: write the dispatching window's
+/// `active_perspective_id` + `filtered_task_ids` atomically and surface the
+/// `PerspectiveSwitch` change envelope the host's `ui-state-changed` emit
+/// unwraps (`structuredContent.change`). This is the click-a-tab /
+/// Enter-on-a-tab live bug: routing to the views RESOLUTION op left UIState
+/// untouched, so the bar never switched and the board never re-filtered.
+#[tokio::test]
+async fn perspective_switch_activates_the_perspective_for_the_window() {
+    let fx = boot_perspective_plugin().await;
+    let _p1 = save_board_perspective(&fx, "One").await;
+    let p2 = save_board_perspective(&fx, "Two").await;
+
+    let switched =
+        dispatch_with_window(&fx, "perspective.switch", json!({ "perspective_id": p2 })).await;
+    assert_eq!(
+        switched["structuredContent"]["ok"],
+        json!(true),
+        "perspective.switch should succeed, got {switched}"
+    );
+
+    assert_eq!(
+        fx.views.ui_state.active_perspective_id("main"),
+        p2,
+        "perspective.switch must write the window's active_perspective_id"
+    );
+
+    // The change envelope must surface where the host's
+    // `emit_ui_state_change_if_needed` unwraps it: the plugin returns the
+    // entity call's CallToolResult, so the change sits at
+    // `structuredContent.result.structuredContent.change`.
+    let change = &switched["structuredContent"]["result"]["structuredContent"]["change"];
+    assert_eq!(
+        change["PerspectiveSwitch"]["perspective_id"],
+        json!(p2),
+        "perspective.switch must return the atomic PerspectiveSwitch change, got {switched}"
+    );
+}
+
+/// `perspective.next` / `perspective.prev` must cycle the window's visible
+/// perspectives — including wrap-around in both directions — and ACTIVATE
+/// the resolved target (UIState write, not just resolution).
+#[tokio::test]
+async fn perspective_next_prev_cycle_visible_perspectives_with_wraparound() {
+    let fx = boot_perspective_plugin().await;
+    let p1 = save_board_perspective(&fx, "One").await;
+    let p2 = save_board_perspective(&fx, "Two").await;
+    let p3 = save_board_perspective(&fx, "Three").await;
+
+    // Establish the starting active perspective.
+    dispatch_with_window(&fx, "perspective.switch", json!({ "perspective_id": p1 })).await;
+    assert_eq!(fx.views.ui_state.active_perspective_id("main"), p1);
+
+    // next: p1 → p2 → p3, then wraps to p1.
+    dispatch_with_window(&fx, "perspective.next", json!({})).await;
+    assert_eq!(
+        fx.views.ui_state.active_perspective_id("main"),
+        p2,
+        "next p1→p2"
+    );
+    dispatch_with_window(&fx, "perspective.next", json!({})).await;
+    assert_eq!(
+        fx.views.ui_state.active_perspective_id("main"),
+        p3,
+        "next p2→p3"
+    );
+    dispatch_with_window(&fx, "perspective.next", json!({})).await;
+    assert_eq!(
+        fx.views.ui_state.active_perspective_id("main"),
+        p1,
+        "next wraps p3→p1"
+    );
+
+    // prev: wraps backwards p1 → p3.
+    dispatch_with_window(&fx, "perspective.prev", json!({})).await;
+    assert_eq!(
+        fx.views.ui_state.active_perspective_id("main"),
+        p3,
+        "prev wraps p1→p3"
+    );
+}
+
+/// With a single visible perspective there is nothing to cycle to —
+/// `perspective.next` succeeds as a no-op and the active perspective is
+/// unchanged.
+#[tokio::test]
+async fn perspective_next_is_a_noop_with_a_single_visible_perspective() {
+    let fx = boot_perspective_plugin().await;
+    let p1 = save_board_perspective(&fx, "Only").await;
+
+    dispatch_with_window(&fx, "perspective.switch", json!({ "perspective_id": p1 })).await;
+    assert_eq!(fx.views.ui_state.active_perspective_id("main"), p1);
+
+    let next = dispatch_with_window(&fx, "perspective.next", json!({})).await;
+    assert_eq!(
+        next["structuredContent"]["ok"],
+        json!(true),
+        "perspective.next should succeed (as a no-op), got {next}"
+    );
+    assert_eq!(
+        fx.views.ui_state.active_perspective_id("main"),
+        p1,
+        "a single visible perspective must leave the active id unchanged"
+    );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Delete pins (01KTYVSA68WDFGXCEJ44T4VFNW — "Delete fails on a perspective
+// tab")
+//
+// The tab's context-menu Delete dispatches `perspective.delete` with the
+// tab's scope chain — the innermost moniker is `perspective:<id>` (see
+// `usePerspectiveScopeChain` in perspective-tab-bar.tsx). The plugin port
+// resolves the id off that moniker and routes to the `entity` server's
+// `delete perspective` op (NOT views — the entity server holds the per-window
+// UIState the active-selection fallback writes). These pins drive the LIVE
+// shape end-to-end through the real plugin path.
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Dispatch `perspective.delete` exactly as the tab's context menu does: the
+/// tab's scope chain — `perspective:<id>` innermost, the dispatching
+/// `window:main` outermost (the frontend's command-scope provider appends the
+/// window moniker) — and no `name` arg. Returns the raw execute envelope.
+async fn delete_via_tab_scope(fx: &PluginFixture, perspective_id: &str) -> Value {
+    call_command(
+        &fx.service,
+        CallerId::HostInternal,
+        json!({
+            "op": "execute command",
+            "id": "perspective.delete",
+            "ctx": {
+                "scope_chain": [
+                    format!("perspective:{perspective_id}"),
+                    "window:main",
+                ],
+                "args": {},
+            },
+        }),
+    )
+    .await
+}
+
+/// Deleting a non-default perspective from its tab succeeds: the command
+/// resolves the id off the `perspective:<id>` scope moniker, the views op
+/// removes it from the kernel, and the dispatch envelope reports `ok: true`.
+#[tokio::test]
+async fn perspective_delete_from_tab_scope_succeeds() {
+    let fx = boot_perspective_plugin().await;
+    let _survivor = save_board_perspective(&fx, "Survivor").await;
+    let doomed = save_board_perspective(&fx, "Doomed").await;
+
+    // Sanity: both perspectives are present before the delete.
+    assert!(
+        fx.views
+            .perspectives
+            .read()
+            .await
+            .get_by_id(&doomed)
+            .is_some(),
+        "the doomed perspective must exist before the delete"
+    );
+
+    let deleted = delete_via_tab_scope(&fx, &doomed).await;
+    assert_eq!(
+        deleted["structuredContent"]["ok"],
+        json!(true),
+        "deleting a perspective from the tab scope must succeed, got {deleted}"
+    );
+
+    // The perspective is gone from the kernel; the survivor remains.
+    let pctx = fx.views.perspectives.read().await;
+    assert!(
+        pctx.get_by_id(&doomed).is_none(),
+        "the deleted perspective must be removed from the kernel"
+    );
+    assert!(
+        pctx.all().iter().any(|p| p.name == "Survivor"),
+        "the survivor perspective must remain after the delete"
+    );
+}
+
+/// Deleting the ACTIVE perspective from its tab must leave the window
+/// pointing at a surviving perspective — never at the just-deleted id (the
+/// "empty bar" the never-zero invariant forbids). The delete itself routes
+/// through `perspective.delete`; selection must fall back to another visible
+/// perspective for the dispatching window.
+#[tokio::test]
+async fn perspective_delete_of_active_falls_back_to_a_survivor() {
+    let fx = boot_perspective_plugin().await;
+    let survivor = save_board_perspective(&fx, "Survivor").await;
+    let active = save_board_perspective(&fx, "Active").await;
+
+    // Make the doomed perspective the window's active selection.
+    dispatch_with_window(
+        &fx,
+        "perspective.switch",
+        json!({ "perspective_id": active }),
+    )
+    .await;
+    assert_eq!(
+        fx.views.ui_state.active_perspective_id("main"),
+        active,
+        "the doomed perspective must be active before the delete"
+    );
+
+    let deleted = delete_via_tab_scope(&fx, &active).await;
+    assert_eq!(
+        deleted["structuredContent"]["ok"],
+        json!(true),
+        "deleting the active perspective must succeed, got {deleted}"
+    );
+
+    // The window must NOT still point at the deleted perspective.
+    let now_active = fx.views.ui_state.active_perspective_id("main");
+    assert_ne!(
+        now_active, active,
+        "after deleting the active perspective the window must not still select it"
+    );
+    assert_eq!(
+        now_active, survivor,
+        "selection must fall back to the surviving perspective, got {now_active}"
+    );
+}
+
+/// Deleting the ACTIVE perspective must FORWARD the reselection's
+/// `PerspectiveSwitch` change on the result envelope — the same
+/// `structuredContent.change` contract `perspective.switch` rides — so the
+/// host's `ui-state-changed` emit fires for the new selection. Without this
+/// the backend reselect is invisible to the UI: it writes the new active id
+/// server-side but emits no event, leaving the app to recover only via the
+/// frontend list-reconciliation. The change must carry the SURVIVOR id.
+#[tokio::test]
+async fn perspective_delete_of_active_forwards_the_reselect_change() {
+    let fx = boot_perspective_plugin().await;
+    let survivor = save_board_perspective(&fx, "Survivor").await;
+    let active = save_board_perspective(&fx, "Active").await;
+
+    dispatch_with_window(
+        &fx,
+        "perspective.switch",
+        json!({ "perspective_id": active }),
+    )
+    .await;
+    assert_eq!(
+        fx.views.ui_state.active_perspective_id("main"),
+        active,
+        "the doomed perspective must be active before the delete"
+    );
+
+    let deleted = delete_via_tab_scope(&fx, &active).await;
+    assert_eq!(
+        deleted["structuredContent"]["ok"],
+        json!(true),
+        "deleting the active perspective must succeed, got {deleted}"
+    );
+
+    // The reselect change must surface where the host's
+    // `emit_ui_state_change_if_needed` unwraps it — the plugin returns the
+    // entity call's CallToolResult raw, so the change sits at
+    // `structuredContent.result.structuredContent.change`, exactly like switch.
+    let change = &deleted["structuredContent"]["result"]["structuredContent"]["change"];
+    assert_eq!(
+        change["PerspectiveSwitch"]["perspective_id"],
+        json!(survivor),
+        "delete of the active perspective must forward the reselect's \
+         PerspectiveSwitch change to the survivor, got {deleted}"
+    );
+}
+
+/// Deleting the ONLY perspective for the active view clears the window's
+/// active id (the no-survivor branch). There is nothing to fall back to, so
+/// the selection fallback writes an empty active id rather than leaving a
+/// dangling pointer; never-zero recovery (recreating a Default) is an external
+/// save/open reconciliation concern, so this pins only the clear.
+#[tokio::test]
+async fn perspective_delete_of_the_only_perspective_clears_the_active_id() {
+    let fx = boot_perspective_plugin().await;
+    let only = save_board_perspective(&fx, "Only").await;
+
+    dispatch_with_window(&fx, "perspective.switch", json!({ "perspective_id": only })).await;
+    assert_eq!(
+        fx.views.ui_state.active_perspective_id("main"),
+        only,
+        "the only perspective must be active before the delete"
+    );
+
+    let deleted = delete_via_tab_scope(&fx, &only).await;
+    assert_eq!(
+        deleted["structuredContent"]["ok"],
+        json!(true),
+        "deleting the only perspective must succeed, got {deleted}"
+    );
+
+    assert_eq!(
+        fx.views.ui_state.active_perspective_id("main"),
+        "",
+        "with no survivor the window's active id must be cleared, not left \
+         dangling at the deleted id"
+    );
 }

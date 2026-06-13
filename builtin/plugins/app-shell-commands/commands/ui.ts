@@ -439,17 +439,27 @@ export function uiCommands(
     },
 
     // ─── app.entity.startRename ─────────────────────────────────────────────
-    // ui.yaml: scope `entity:perspective`; keys cua/vim/emacs all Enter. The
-    // scope filter keeps Enter from claiming nav.drillIn on board/column/card
-    // focus. The command service's `scope` is a list (`Option<Vec<String>>`),
-    // so the YAML's single string is passed as a one-element list. Routes to
-    // ui_state `start rename` (backend no-op; the frontend intercepts before
-    // it reaches the backend).
+    // Scope `entity:perspective`; keys cua/vim/emacs all F2 — rename is a
+    // DELIBERATE gesture (card 01KTYQY0ZB62KHN6BPK3FBMBD7). Enter on a
+    // focused tab is the primary action and ACTIVATES the perspective
+    // (`perspective.switch`, via the tab's `nav.drillIn` shadow in
+    // `perspective-tab-bar.tsx`); F2 is the platform-wide rename idiom, the
+    // double-click on a tab stays as the pointer gesture, and `context_menu`
+    // puts a "Rename Perspective" row on the tab's right-click menu. These
+    // catalogue keys stay in lockstep with the per-tab React `CommandDef`'s
+    // F2 keys (the live binding source — registry scope expressions like
+    // `entity:perspective` never literal-match a `perspective:{id}` chain
+    // moniker in `extractChainBindings`). The scope filter keeps F2 from
+    // claiming a global binding. The command service's `scope` is a list
+    // (`Option<Vec<String>>`), so the YAML's single string is passed as a
+    // one-element list. Routes to ui_state `start rename` (backend no-op;
+    // the frontend intercepts before it reaches the backend).
     {
       id: "app.entity.startRename",
       name: "Rename Perspective",
       scope: ["entity:perspective"],
-      keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+      context_menu: true,
+      keys: { cua: "F2", vim: "F2", emacs: "F2" },
       execute: async (rawCtx: unknown) => {
         const ctx = (rawCtx ?? {}) as CommandContext;
         return await uiState.ui_state.ui_state.rename.start({

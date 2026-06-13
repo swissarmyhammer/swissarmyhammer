@@ -338,6 +338,128 @@ pub struct Paste {
     pub scope: Vec<String>,
 }
 
+// Perspective activation operations ─────────────────────────────────────
+//
+// Switch / Next / Prev reuse the *exact* command structs that back the
+// kanban command layer — `SwitchPerspectiveCmd`, `NextPerspectiveCmd`,
+// `PrevPerspectiveCmd` from
+// `swissarmyhammer_kanban::commands::perspective_commands`. They live on
+// the `entity` tool for the same reason the clipboard ops do: it is the
+// board-bundle server — the only in-process module holding BOTH the
+// board's `KanbanContext` (perspective lookup + filter-DSL evaluation)
+// and the shared `UIState` (the per-window `active_perspective_id` /
+// `filtered_task_ids` slots an activation writes). The `views` server's
+// perspective nav ops, by design, only RESOLVE a target perspective; the
+// activation half — the UIState write — is this server's job.
+//
+// All three are per-window operations: the dispatching window is resolved
+// from the `window:<label>` moniker in `scope`, and a missing moniker is
+// an error (no silent "main" fallback — same hardening as the ui_state
+// server's per-window ops).
+
+/// Activate a perspective for the dispatching window.
+///
+/// Runs the shared `SwitchPerspectiveCmd`: look the perspective up by id,
+/// evaluate its filter DSL against the board's tasks, and atomically write
+/// BOTH `active_perspective_id` and `filtered_task_ids` on the window —
+/// producing one `UIStateChange::PerspectiveSwitch`.
+///
+/// Returns `{ ok: true, change: <UIStateChange|null> }` — the host's
+/// `ui-state-changed` emit unwraps `change`.
+#[operation(
+    verb = "switch",
+    noun = "perspective",
+    description = "Activate a perspective for the dispatching window (atomic active_perspective_id + filtered_task_ids write)"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SwitchPerspective {
+    /// The perspective id to activate.
+    #[serde(default)]
+    pub perspective_id: String,
+    /// Scope chain (innermost-first monikers). MUST carry the dispatching
+    /// `window:<label>` moniker — the activation is per-window state.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<String>,
+}
+
+/// Activate the next perspective visible in the window's active view.
+///
+/// Runs the shared `NextPerspectiveCmd`: filter perspectives to the active
+/// view (explicit `view_kind`/`view_id` args win; else the `view:{id}`
+/// scope moniker resolves the kind via the views registry; else `"board"`),
+/// advance one position from the window's current active perspective
+/// (wrapping), and switch to it — the same atomic filter-evaluating write
+/// as `switch perspective`. A no-op (`change: null`) when fewer than two
+/// perspectives match.
+#[operation(
+    verb = "next",
+    noun = "perspective",
+    description = "Activate the next perspective visible in the window's active view (wrapping; no-op when fewer than two match)"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NextPerspective {
+    /// Optional explicit view kind to cycle within (e.g. `"board"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_kind: Option<String>,
+    /// Optional explicit view instance id to cycle within.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_id: Option<String>,
+    /// Scope chain (innermost-first monikers). MUST carry the dispatching
+    /// `window:<label>` moniker; a `view:{id}` moniker scopes the cycle.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<String>,
+}
+
+/// Activate the previous perspective visible in the window's active view.
+///
+/// The reverse of [`NextPerspective`] — one position backward, wrapping.
+/// Same no-op semantics with fewer than two matching perspectives.
+#[operation(
+    verb = "prev",
+    noun = "perspective",
+    description = "Activate the previous perspective visible in the window's active view (wrapping; no-op when fewer than two match)"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PrevPerspective {
+    /// Optional explicit view kind to cycle within (e.g. `"board"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_kind: Option<String>,
+    /// Optional explicit view instance id to cycle within.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_id: Option<String>,
+    /// Scope chain (innermost-first monikers). MUST carry the dispatching
+    /// `window:<label>` moniker; a `view:{id}` moniker scopes the cycle.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<String>,
+}
+
+/// Delete a perspective, re-selecting a survivor when it was active.
+///
+/// Runs the shared `DeletePerspectiveCmd`: trash the perspective (undoable),
+/// then — because this server holds the per-window `UIState` — fall back the
+/// dispatching window's selection to a surviving perspective when the deleted
+/// one was active, so the tab bar is never left pointing at a dangling id (the
+/// "empty bar" the never-zero invariant forbids). The `views` server's
+/// `delete perspective` op only mutates STORAGE; the selection fallback — the
+/// UIState write — is this server's job, same split as `switch perspective`.
+#[operation(
+    verb = "delete",
+    noun = "perspective",
+    description = "Delete a perspective, re-selecting a survivor when it was the window's active selection"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DeletePerspective {
+    /// The perspective id to delete. When omitted, the id is resolved from a
+    /// `perspective:{id}` moniker in `scope`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// Scope chain (innermost-first monikers). Carries the dispatching
+    /// `window:<label>` moniker (for the per-window selection fallback) and,
+    /// when `id` is omitted, the `perspective:{id}` target moniker.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<String>,
+}
+
 /// All entity operations — the canonical list used for schema generation.
 ///
 /// Both the wire-schema generator (`generate_mcp_schema`) and the
@@ -357,6 +479,10 @@ static ENTITY_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::<Copy>::default()) as &dyn Operation,
         Box::leak(Box::<Cut>::default()) as &dyn Operation,
         Box::leak(Box::<Paste>::default()) as &dyn Operation,
+        Box::leak(Box::<SwitchPerspective>::default()) as &dyn Operation,
+        Box::leak(Box::<NextPerspective>::default()) as &dyn Operation,
+        Box::leak(Box::<PrevPerspective>::default()) as &dyn Operation,
+        Box::leak(Box::<DeletePerspective>::default()) as &dyn Operation,
     ]
 });
 

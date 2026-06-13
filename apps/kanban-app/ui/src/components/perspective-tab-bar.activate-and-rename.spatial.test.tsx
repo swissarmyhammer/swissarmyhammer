@@ -1,61 +1,54 @@
 /**
- * Browser-mode test for the spatial-focus → Enter → inline-rename keyboard
- * path on `<PerspectiveTabBar>`.
+ * Browser-mode test for the spatial-focus keyboard contract on
+ * `<PerspectiveTabBar>` tabs: Enter ACTIVATES, F2 renames.
  *
- * Source of truth for acceptance of card `01KQ7GE3KY91X2YR6BX5AY40VK`
- * ("Fix: Enter on focused perspective tab does not start inline rename").
+ * Source of truth for acceptance of card `01KTYQY0ZB62KHN6BPK3FBMBD7`
+ * ("Perspectives can't be SELECTED — Enter arms rename instead, click
+ * doesn't activate"). Supersedes the previous
+ * `perspective-tab-bar.enter-rename.spatial.test.tsx`, which pinned the
+ * old Enter→rename carrier (cards 01KQ7GE3KY91X2YR6BX5AY40VK /
+ * 01KQAXPRTCNH8ARTYJJEBTYWW0).
  *
- * Background. Before card 01KQ7GE3KY91X2YR6BX5AY40VK the rename trigger
- * `triggerStartRename()` had only two callers: the command palette's
- * `app.entity.startRename` row and the `onDoubleClick` handler on each tab.
- * Pressing Enter while a perspective tab was the spatial focus fell through
- * to the global `nav.drillIn: Enter` binding, which is a no-op for a leaf
- * scope. That card scoped a fresh `app.entity.startRename` `CommandDef`
- * (with `keys: { cua: "Enter", vim: "Enter", emacs: "Enter" }`) onto the
- * active tab's `<CommandScopeProvider>` so `extractChainBindings` claims
- * Enter away from the global drill-in binding while the active perspective
- * tab is focused.
+ * The contract:
  *
- * Card 01KQAXPRTCNH8ARTYJJEBTYWW0 then extended the binding to every tab
- * (not just the active one). Inactive tabs now also claim Enter; their
- * execute closure first dispatches `perspective.switch` to activate the
- * focused tab, then calls `triggerStartRename(perspective.id)` so the
- * rename editor mounts on the focused tab regardless of which perspective
- * is currently active. The broadcaster carries an explicit id so the
- * rename target does not depend on the (asynchronous) UI-state propagation
- * that updates `activePerspective`.
+ * - **Enter = activate.** A focused tab's primary action selects the
+ *   perspective, like every other tab UI. The tab registers a positional
+ *   `nav.drillIn` shadow `CommandDef` (the documented scope-local-execute
+ *   pattern — same as the jump overlay's `app.dismiss` shadow): the global
+ *   Enter binding resolves to `nav.drillIn`, and while the tab is the
+ *   focused scope the shadow dispatches `perspective.switch` with the
+ *   tab's id instead of drilling into a leaf.
+ * - **F2 = rename.** Rename is a deliberate, separate gesture — F2 is the
+ *   platform-wide rename idiom (and the per-keymap rename key on all three
+ *   modes). The per-tab `app.entity.startRename` `CommandDef` carries the
+ *   F2 keys and keeps the activate-then-rename execute: on an inactive tab
+ *   it dispatches `perspective.switch` first, then arms the inline editor
+ *   on the focused tab by explicit id. Double-click stays as the pointer
+ *   rename gesture, and the catalogue registration
+ *   (`app-shell-commands/commands/ui.ts`) mirrors the F2 keys +
+ *   `context_menu` for the right-click row.
  *
- * Test cases (per the card's "Browser Tests (mandatory)" section):
+ * Test cases:
  *
- * 1. **Enter triggers rename** — focusing the active perspective tab and
- *    pressing Enter mounts the inline `<InlineRenameEditor>` (a CM6
- *    `.cm-editor`) inside the active tab's button.
- * 2. **Enter on inactive tab activates then starts rename** — focusing a
- *    perspective tab whose `id !== activePerspective.id` and pressing
- *    Enter dispatches `perspective.switch` for that tab AND mounts the
- *    inline rename editor on that same tab. (Card 01KQAXPRTCNH8ARTYJJEBTYWW0
- *    extended the per-tab `app.entity.startRename: Enter` binding to every
- *    tab, not just the active one, with an activate-then-rename execute.)
+ * 1. **Enter activates the focused active tab** — dispatches
+ *    `perspective.switch` for it; NO inline rename editor mounts.
+ * 2. **Enter on a focused inactive tab activates that tab** — dispatches
+ *    `perspective.switch` with the focused tab's id; no rename editor.
  * 3. **Enter outside perspective scope still drills** — focusing a non-
- *    perspective leaf and pressing Enter dispatches the `nav.drillIn`
- *    command id to the backend (`dispatch_command`) and no `.cm-editor`
- *    mounts inside the perspective bar. Proves the binding is scope-local.
- *    (Drill executes host-side in the `nav-commands` builtin plugin; the
- *    webview no longer pre-resolves an `fq` or invokes `spatial_drill_in`
- *    itself — see `app-shell.test.tsx`'s nav.drillIn wiring tests.)
- * 4. **Vim Enter** — same as case 1 with `keymap_mode: "vim"`.
- * 5. **Emacs Enter** — same as case 1 with `keymap_mode: "emacs"`.
- * 6. **Commit path still works** — after case 1 mounts the rename editor,
- *    typing into the editor and pressing Enter dispatches
- *    `perspective.rename` with `{ id, new_name }`. Regression guard for the
- *    inner CM6 keymap winning over the outer scope-bound Enter.
- * 7. **Escape preserves existing policy** — after case 1 mounts the editor,
- *    Escape in cua/emacs cancels (no rename dispatch), while Escape in vim
- *    normal mode commits per the existing `useInlineRenamePolicy` contract.
+ *    perspective leaf and pressing Enter dispatches `nav.drillIn` to the
+ *    backend. Proves the shadow is scope-local.
+ * 4. **Vim / emacs Enter** — same as case 1 per keymap mode.
+ * 5. **F2 mounts the inline rename editor** (cua / vim / emacs) on the
+ *    focused active tab.
+ * 6. **F2 on a focused inactive tab activates then renames** — dispatches
+ *    `perspective.switch` AND mounts the editor on that tab.
+ * 7. **Commit path** — after F2 mounts the editor, typing + Enter
+ *    dispatches `perspective.rename` with `{ id, new_name }`.
+ * 8. **Escape preserves existing policy** — cua/emacs cancel, vim commits,
+ *    per the existing `useInlineRenamePolicy` contract.
  *
- * Mock pattern matches `column-view.spatial.test.tsx` /
- * `perspective-bar.spatial.test.tsx`: `vi.hoisted` builds the
- * `mockInvoke` / `mockListen` / `listeners` triple; `fireFocusChanged`
+ * Mock pattern matches `column-view.spatial.test.tsx`: `vi.hoisted` builds
+ * the `mockInvoke` / `mockListen` / `listeners` triple; `fireFocusChanged`
  * drives the React tree as if the Rust kernel emitted a `focus-changed`
  * event for the captured spatial key.
  *
@@ -239,9 +232,9 @@ async function defaultInvokeImpl(
   // The global keybinding layer (Enter → `nav.drillIn`, …) is sourced from
   // the metadata-driven Command registry via `useCommandList`, which fetches
   // through the `command_tool_call` bridge's `list command` op. Synthesize
-  // that registry from `BINDING_TABLES` so global bindings resolve — the
-  // scope-pinned `app.entity.startRename: Enter` must shadow a REAL global
-  // `nav.drillIn: Enter`, not an empty table.
+  // that registry from `BINDING_TABLES` so global bindings resolve — Enter
+  // must resolve to a REAL global `nav.drillIn` whose execution the focused
+  // tab's positional shadow then intercepts.
   if (cmd === "command_tool_call") {
     return commandToolCall(_args);
   }
@@ -289,11 +282,6 @@ async function flushSetup() {
 /**
  * Drive a `focus-changed` event into the React tree as if the Rust kernel
  * had emitted one for the active window.
- *
- * The payload's `prev_fq` / `next_fq` mirror the kernel's emit shape
- * after `spatial_focus` / `spatial_navigate`. Wrapping the dispatch in
- * `act()` flushes React state updates so callers can assert against
- * post-update DOM in the next tick.
  */
 async function fireFocusChanged({
   prev_fq = null,
@@ -321,8 +309,8 @@ async function fireFocusChanged({
  * Render the bar inside the full `<AppShell>` provider stack.
  *
  * AppShell wires the global keydown listener that drives the
- * `nav.drillIn` / `app.entity.startRename` commands, so tests for
- * keystroke → rename / drill-in need that wiring to fire on
+ * `nav.drillIn` (Enter) and per-tab `app.entity.startRename` (F2)
+ * commands, so keystroke tests need that wiring to fire on
  * `userEvent.keyboard()`.
  */
 async function renderInAppShell(extraChildren?: ReactElement) {
@@ -386,11 +374,32 @@ function findScopeKey(moniker: string): FullyQualifiedMoniker | undefined {
   return scope?.fq as FullyQualifiedMoniker | undefined;
 }
 
+/** Spatially focus the scope with the given moniker and wait for the claim. */
+async function focusTab(container: HTMLElement, moniker: string) {
+  const key = findScopeKey(moniker);
+  expect(key).toBeTruthy();
+  await fireFocusChanged({
+    next_fq: key!,
+    next_segment: asSegment(moniker),
+  });
+  await waitFor(() => {
+    const focusedTab = container.querySelector(`[data-segment='${moniker}']`);
+    expect(focusedTab?.getAttribute("data-focused")).toBe("true");
+  });
+}
+
+/** Assert no inline rename editor is mounted inside any perspective tab. */
+function expectNoRenameEditor(container: HTMLElement) {
+  expect(
+    container.querySelectorAll("[data-segment^='perspective_tab:'] .cm-editor"),
+  ).toHaveLength(0);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", () => {
+describe("PerspectiveTabBar — Enter activates the focused tab; F2 renames", () => {
   beforeEach(() => {
     mockInvoke.mockClear();
     mockListen.mockClear();
@@ -424,78 +433,14 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
   });
 
   // -------------------------------------------------------------------------
-  // Test #1 — Enter on the focused active tab triggers inline rename
+  // Test #1 — Enter on the focused active tab dispatches perspective.switch
   // -------------------------------------------------------------------------
 
-  it("Enter on the focused active perspective tab mounts the inline rename editor", async () => {
+  it("Enter on the focused active perspective tab dispatches perspective.switch (no rename editor)", async () => {
     const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
-    // The rename editor is NOT mounted before Enter. The active perspective
-    // is `p1`, and the formula bar contributes one CM6 editor on the right
-    // side — so we expect at most one `.cm-editor` and assert no rename
-    // editor is inside any tab button.
-    expect(
-      container.querySelectorAll(
-        "[data-segment^='perspective_tab:'] .cm-editor",
-      ),
-    ).toHaveLength(0);
-
-    const p1Key = findScopeKey("perspective_tab:p1");
-    expect(p1Key).toBeTruthy();
-
-    await fireFocusChanged({
-      next_fq: p1Key!,
-      next_segment: asSegment("perspective_tab:p1"),
-    });
-
-    await waitFor(() => {
-      const focusedTab = container.querySelector(
-        "[data-segment='perspective_tab:p1']",
-      );
-      expect(focusedTab?.getAttribute("data-focused")).toBe("true");
-    });
-
-    // Press Enter at the document level — the global keymap handler picks
-    // it up and dispatches `app.entity.startRename`, which the AppShell's
-    // execute closure forwards to `triggerStartRename()`.
-    await pressKeyInAct("{Enter}");
-    await flushSetup();
-
-    // The active tab now hosts the inline CM6 rename editor.
-    await waitFor(() => {
-      const renameEditor = container.querySelector(
-        "[data-segment='perspective_tab:p1'] .cm-editor",
-      );
-      expect(renameEditor).not.toBeNull();
-    });
-
-    unmount();
-  });
-
-  // -------------------------------------------------------------------------
-  // Test #2 — Enter on a focused INACTIVE tab activates AND starts rename
-  // -------------------------------------------------------------------------
-
-  it("Enter on a focused inactive perspective tab activates that tab AND mounts the rename editor", async () => {
-    const { container, unmount } = await renderInAppShell();
-    await flushSetup();
-
-    // Active perspective is `p1`; spatially focus the inactive `p2` tab.
-    const p2Key = findScopeKey("perspective_tab:p2");
-    expect(p2Key).toBeTruthy();
-
-    await fireFocusChanged({
-      next_fq: p2Key!,
-      next_segment: asSegment("perspective_tab:p2"),
-    });
-
-    await waitFor(() => {
-      const focusedTab = container.querySelector(
-        "[data-segment='perspective_tab:p2']",
-      );
-      expect(focusedTab?.getAttribute("data-focused")).toBe("true");
-    });
+    await focusTab(container, "perspective_tab:p1");
 
     // Reset invoke calls so the assertion measures only Enter's IPC.
     mockInvoke.mockClear();
@@ -504,31 +449,47 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     await pressKeyInAct("{Enter}");
     await flushSetup();
 
-    // The scope-pinned `app.entity.startRename` on the inactive tab fires
-    // its execute closure, which (per card 01KQAXPRTCNH8ARTYJJEBTYWW0):
-    //   1. Dispatches `perspective.switch` for the focused (inactive) tab.
-    //   2. Calls `triggerStartRename(p2.id)` so the rename editor mounts
-    //      on this tab even before the activate's UI-state event has
-    //      propagated.
-    const setDispatch = findDispatch("perspective.switch");
-    expect(setDispatch).toBeTruthy();
-    expect(setDispatch!.args).toEqual(
+    // The tab's positional nav.drillIn shadow intercepts Enter and
+    // dispatches the canonical activation command for THIS tab.
+    const switchDispatch = findDispatch("perspective.switch");
+    expect(switchDispatch).toBeTruthy();
+    expect(switchDispatch!.args).toEqual(
+      expect.objectContaining({ perspective_id: "p1" }),
+    );
+
+    // Enter no longer arms rename — no inline editor anywhere in the bar.
+    expectNoRenameEditor(container);
+
+    // And the shadow swallowed the drill — no backend nav.drillIn dispatch.
+    expect(dispatchedCommand("nav.drillIn")).toBe(false);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Test #2 — Enter on a focused INACTIVE tab activates that tab
+  // -------------------------------------------------------------------------
+
+  it("Enter on a focused inactive perspective tab dispatches perspective.switch for that tab", async () => {
+    const { container, unmount } = await renderInAppShell();
+    await flushSetup();
+
+    // Active perspective is `p1`; spatially focus the inactive `p2` tab.
+    await focusTab(container, "perspective_tab:p2");
+
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation(defaultInvokeImpl);
+
+    await pressKeyInAct("{Enter}");
+    await flushSetup();
+
+    const switchDispatch = findDispatch("perspective.switch");
+    expect(switchDispatch).toBeTruthy();
+    expect(switchDispatch!.args).toEqual(
       expect.objectContaining({ perspective_id: "p2" }),
     );
 
-    // The inline editor mounts on the focused tab (p2), not on the
-    // currently-active tab (p1).
-    await waitFor(() => {
-      const renameEditor = container.querySelector(
-        "[data-segment='perspective_tab:p2'] .cm-editor",
-      );
-      expect(renameEditor).not.toBeNull();
-    });
-    expect(
-      container.querySelectorAll(
-        "[data-segment='perspective_tab:p1'] .cm-editor",
-      ),
-    ).toHaveLength(0);
+    expectNoRenameEditor(container);
 
     unmount();
   });
@@ -542,8 +503,8 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     // perspective bar so the test can drive focus to a leaf that has
     // nothing to do with the perspective scope chain. Enter while that
     // leaf is focused MUST hit the global `nav.drillIn` binding — proving
-    // the new `app.entity.startRename: Enter` binding is scope-local and
-    // does not leak to other focus contexts.
+    // the tab's nav.drillIn shadow is scope-local and does not leak to
+    // other focus contexts.
     const { container, unmount } = await renderInAppShell(
       <FocusScope moniker={asSegment("task:01ABC")} commands={[]}>
         <div data-testid="non-perspective-leaf">leaf</div>
@@ -585,10 +546,169 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
       mockInvoke.mock.calls.filter((c) => c[0] === "spatial_drill_in"),
     ).toHaveLength(0);
 
+    // No activation either — the tab shadow must not fire off-tab.
+    expect(dispatchedCommand("perspective.switch")).toBe(false);
+
     // No rename editor mounted in any perspective tab.
+    expectNoRenameEditor(container);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Test #4 — Vim / emacs Enter activates the focused tab
+  // -------------------------------------------------------------------------
+
+  it("vim: Enter on the focused active perspective tab dispatches perspective.switch", async () => {
+    mockKeymapMode = "vim";
+    const { container, unmount } = await renderInAppShell();
+    await flushSetup();
+
+    await focusTab(container, "perspective_tab:p1");
+
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation(defaultInvokeImpl);
+
+    await pressKeyInAct("{Enter}");
+    await flushSetup();
+
+    const switchDispatch = findDispatch("perspective.switch");
+    expect(switchDispatch).toBeTruthy();
+    expect(switchDispatch!.args).toEqual(
+      expect.objectContaining({ perspective_id: "p1" }),
+    );
+    expectNoRenameEditor(container);
+
+    unmount();
+  });
+
+  it("emacs: Enter on the focused active perspective tab dispatches perspective.switch", async () => {
+    mockKeymapMode = "emacs";
+    const { container, unmount } = await renderInAppShell();
+    await flushSetup();
+
+    await focusTab(container, "perspective_tab:p1");
+
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation(defaultInvokeImpl);
+
+    await pressKeyInAct("{Enter}");
+    await flushSetup();
+
+    const switchDispatch = findDispatch("perspective.switch");
+    expect(switchDispatch).toBeTruthy();
+    expect(switchDispatch!.args).toEqual(
+      expect.objectContaining({ perspective_id: "p1" }),
+    );
+    expectNoRenameEditor(container);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Test #5 — F2 mounts the inline rename editor (cua / vim / emacs)
+  // -------------------------------------------------------------------------
+
+  it("F2 on the focused active perspective tab mounts the inline rename editor", async () => {
+    const { container, unmount } = await renderInAppShell();
+    await flushSetup();
+
+    expectNoRenameEditor(container);
+
+    await focusTab(container, "perspective_tab:p1");
+
+    await pressKeyInAct("{F2}");
+    await flushSetup();
+
+    await waitFor(() => {
+      const renameEditor = container.querySelector(
+        "[data-segment='perspective_tab:p1'] .cm-editor",
+      );
+      expect(renameEditor).not.toBeNull();
+    });
+
+    unmount();
+  });
+
+  it("vim: F2 on the focused active perspective tab mounts the inline rename editor", async () => {
+    mockKeymapMode = "vim";
+    const { container, unmount } = await renderInAppShell();
+    await flushSetup();
+
+    await focusTab(container, "perspective_tab:p1");
+
+    await pressKeyInAct("{F2}");
+    await flushSetup();
+
+    await waitFor(() => {
+      const renameEditor = container.querySelector(
+        "[data-segment='perspective_tab:p1'] .cm-editor",
+      );
+      expect(renameEditor).not.toBeNull();
+    });
+
+    unmount();
+  });
+
+  it("emacs: F2 on the focused active perspective tab mounts the inline rename editor", async () => {
+    mockKeymapMode = "emacs";
+    const { container, unmount } = await renderInAppShell();
+    await flushSetup();
+
+    await focusTab(container, "perspective_tab:p1");
+
+    await pressKeyInAct("{F2}");
+    await flushSetup();
+
+    await waitFor(() => {
+      const renameEditor = container.querySelector(
+        "[data-segment='perspective_tab:p1'] .cm-editor",
+      );
+      expect(renameEditor).not.toBeNull();
+    });
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Test #6 — F2 on a focused INACTIVE tab activates AND starts rename
+  // -------------------------------------------------------------------------
+
+  it("F2 on a focused inactive perspective tab activates that tab AND mounts the rename editor", async () => {
+    const { container, unmount } = await renderInAppShell();
+    await flushSetup();
+
+    // Active perspective is `p1`; spatially focus the inactive `p2` tab.
+    await focusTab(container, "perspective_tab:p2");
+
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation(defaultInvokeImpl);
+
+    await pressKeyInAct("{F2}");
+    await flushSetup();
+
+    // The per-tab `app.entity.startRename` execute:
+    //   1. Dispatches `perspective.switch` for the focused (inactive) tab.
+    //   2. Calls `triggerStartRename(p2.id)` so the rename editor mounts
+    //      on this tab even before the activate's UI-state event has
+    //      propagated.
+    const setDispatch = findDispatch("perspective.switch");
+    expect(setDispatch).toBeTruthy();
+    expect(setDispatch!.args).toEqual(
+      expect.objectContaining({ perspective_id: "p2" }),
+    );
+
+    // The inline editor mounts on the focused tab (p2), not on the
+    // currently-active tab (p1).
+    await waitFor(() => {
+      const renameEditor = container.querySelector(
+        "[data-segment='perspective_tab:p2'] .cm-editor",
+      );
+      expect(renameEditor).not.toBeNull();
+    });
     expect(
       container.querySelectorAll(
-        "[data-segment^='perspective_tab:'] .cm-editor",
+        "[data-segment='perspective_tab:p1'] .cm-editor",
       ),
     ).toHaveLength(0);
 
@@ -596,101 +716,17 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
   });
 
   // -------------------------------------------------------------------------
-  // Test #4 — Vim Enter triggers rename on the focused active tab
-  // -------------------------------------------------------------------------
-
-  it("vim: Enter on the focused active perspective tab mounts the inline rename editor", async () => {
-    mockKeymapMode = "vim";
-    const { container, unmount } = await renderInAppShell();
-    await flushSetup();
-
-    const p1Key = findScopeKey("perspective_tab:p1");
-    expect(p1Key).toBeTruthy();
-
-    await fireFocusChanged({
-      next_fq: p1Key!,
-      next_segment: asSegment("perspective_tab:p1"),
-    });
-    await waitFor(() => {
-      const focusedTab = container.querySelector(
-        "[data-segment='perspective_tab:p1']",
-      );
-      expect(focusedTab?.getAttribute("data-focused")).toBe("true");
-    });
-
-    await pressKeyInAct("{Enter}");
-    await flushSetup();
-
-    await waitFor(() => {
-      const renameEditor = container.querySelector(
-        "[data-segment='perspective_tab:p1'] .cm-editor",
-      );
-      expect(renameEditor).not.toBeNull();
-    });
-
-    unmount();
-  });
-
-  // -------------------------------------------------------------------------
-  // Test #5 — Emacs Enter triggers rename on the focused active tab
-  // -------------------------------------------------------------------------
-
-  it("emacs: Enter on the focused active perspective tab mounts the inline rename editor", async () => {
-    mockKeymapMode = "emacs";
-    const { container, unmount } = await renderInAppShell();
-    await flushSetup();
-
-    const p1Key = findScopeKey("perspective_tab:p1");
-    expect(p1Key).toBeTruthy();
-
-    await fireFocusChanged({
-      next_fq: p1Key!,
-      next_segment: asSegment("perspective_tab:p1"),
-    });
-    await waitFor(() => {
-      const focusedTab = container.querySelector(
-        "[data-segment='perspective_tab:p1']",
-      );
-      expect(focusedTab?.getAttribute("data-focused")).toBe("true");
-    });
-
-    await pressKeyInAct("{Enter}");
-    await flushSetup();
-
-    await waitFor(() => {
-      const renameEditor = container.querySelector(
-        "[data-segment='perspective_tab:p1'] .cm-editor",
-      );
-      expect(renameEditor).not.toBeNull();
-    });
-
-    unmount();
-  });
-
-  // -------------------------------------------------------------------------
-  // Test #6 — Commit path: typing + Enter dispatches perspective.rename
+  // Test #7 — Commit path: F2, typing + Enter dispatches perspective.rename
   // -------------------------------------------------------------------------
 
   it("commit path: typing in the rename editor and pressing Enter dispatches perspective.rename", async () => {
     const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
-    const p1Key = findScopeKey("perspective_tab:p1");
-    expect(p1Key).toBeTruthy();
+    await focusTab(container, "perspective_tab:p1");
 
-    await fireFocusChanged({
-      next_fq: p1Key!,
-      next_segment: asSegment("perspective_tab:p1"),
-    });
-    await waitFor(() => {
-      const focusedTab = container.querySelector(
-        "[data-segment='perspective_tab:p1']",
-      );
-      expect(focusedTab?.getAttribute("data-focused")).toBe("true");
-    });
-
-    // Outer Enter mounts the rename editor.
-    await pressKeyInAct("{Enter}");
+    // F2 mounts the rename editor.
+    await pressKeyInAct("{F2}");
     await flushSetup();
 
     const renameEditor = await waitFor(() => {
@@ -705,8 +741,8 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     // keymap (built by `buildSubmitCancelExtensions` with
     // `alwaysSubmitOnEnter: true`) commits and the wrapper dispatches
     // `perspective.rename`. The CM6 editor owns focus, so the outer
-    // scope-bound Enter binding does NOT fire — that is the regression
-    // guard this case pins.
+    // global Enter binding does NOT fire — that is the regression guard
+    // this case pins.
     const { EditorView } = await import("@codemirror/view");
     const view = EditorView.findFromDOM(renameEditor);
     expect(view).toBeTruthy();
@@ -747,28 +783,16 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
   });
 
   // -------------------------------------------------------------------------
-  // Test #7 — Escape preserves existing per-keymap policy
+  // Test #8 — Escape preserves existing per-keymap policy
   // -------------------------------------------------------------------------
 
   it("cua: Escape inside the rename editor cancels (no perspective.rename dispatch)", async () => {
     const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
-    const p1Key = findScopeKey("perspective_tab:p1");
-    expect(p1Key).toBeTruthy();
+    await focusTab(container, "perspective_tab:p1");
 
-    await fireFocusChanged({
-      next_fq: p1Key!,
-      next_segment: asSegment("perspective_tab:p1"),
-    });
-    await waitFor(() => {
-      const focusedTab = container.querySelector(
-        "[data-segment='perspective_tab:p1']",
-      );
-      expect(focusedTab?.getAttribute("data-focused")).toBe("true");
-    });
-
-    await pressKeyInAct("{Enter}");
+    await pressKeyInAct("{F2}");
     await flushSetup();
 
     const renameEditor = await waitFor(() => {
@@ -815,21 +839,9 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
-    const p1Key = findScopeKey("perspective_tab:p1");
-    expect(p1Key).toBeTruthy();
+    await focusTab(container, "perspective_tab:p1");
 
-    await fireFocusChanged({
-      next_fq: p1Key!,
-      next_segment: asSegment("perspective_tab:p1"),
-    });
-    await waitFor(() => {
-      const focusedTab = container.querySelector(
-        "[data-segment='perspective_tab:p1']",
-      );
-      expect(focusedTab?.getAttribute("data-focused")).toBe("true");
-    });
-
-    await pressKeyInAct("{Enter}");
+    await pressKeyInAct("{F2}");
     await flushSetup();
 
     const renameEditor = await waitFor(() => {
@@ -883,21 +895,9 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
-    const p1Key = findScopeKey("perspective_tab:p1");
-    expect(p1Key).toBeTruthy();
+    await focusTab(container, "perspective_tab:p1");
 
-    await fireFocusChanged({
-      next_fq: p1Key!,
-      next_segment: asSegment("perspective_tab:p1"),
-    });
-    await waitFor(() => {
-      const focusedTab = container.querySelector(
-        "[data-segment='perspective_tab:p1']",
-      );
-      expect(focusedTab?.getAttribute("data-focused")).toBe("true");
-    });
-
-    await pressKeyInAct("{Enter}");
+    await pressKeyInAct("{F2}");
     await flushSetup();
 
     const renameEditor = await waitFor(() => {
@@ -934,61 +934,6 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
     // Emacs follows cua semantics: Escape cancels.
     expect(dispatchedCommand("perspective.rename")).toBe(false);
-
-    unmount();
-  });
-
-  // -------------------------------------------------------------------------
-  // Test #8 — regression guard for card 01KQ9X3A9NMRYK50GWP4S4ZMJ4
-  //
-  // After the Enter-drill-in card removed `board.inspect`'s vim Enter
-  // binding and added a per-field-zone `field.edit: Enter` binding, the
-  // perspective tab's scope-pinned `app.entity.startRename: Enter` must
-  // continue to fire on the active tab regardless of which keymap is
-  // active. The pre-existing cua / vim / emacs tests above already
-  // assert this; this additional case pins the regression explicitly so
-  // a future edit to either of the two precision-targeted scope bindings
-  // (field zone or board) cannot silently swallow this one.
-  // -------------------------------------------------------------------------
-
-  it("regression: scope-pinned app.entity.startRename: vim Enter still fires after Enter-drill-in card", async () => {
-    mockKeymapMode = "vim";
-    const { container, unmount } = await renderInAppShell();
-    await flushSetup();
-
-    const p1Key = findScopeKey("perspective_tab:p1");
-    expect(p1Key).toBeTruthy();
-
-    await fireFocusChanged({
-      next_fq: p1Key!,
-      next_segment: asSegment("perspective_tab:p1"),
-    });
-    await waitFor(() => {
-      const focusedTab = container.querySelector(
-        "[data-segment='perspective_tab:p1']",
-      );
-      expect(focusedTab?.getAttribute("data-focused")).toBe("true");
-    });
-
-    await pressKeyInAct("{Enter}");
-    await flushSetup();
-
-    // The active perspective tab's scope still carries the
-    // `app.entity.startRename: Enter` binding; pressing Enter mounts
-    // the inline rename editor inside the tab. Regression failure
-    // would manifest either as no editor mounting (drill-in or
-    // field.edit shadowed it) or as a `app.inspect` dispatch (a
-    // resurrected `board.inspect` shadow).
-    await waitFor(() => {
-      const renameEditor = container.querySelector(
-        "[data-segment='perspective_tab:p1'] .cm-editor",
-      );
-      expect(renameEditor).not.toBeNull();
-    });
-
-    // No `app.inspect` dispatch must appear — Enter belongs to rename
-    // here, not inspect.
-    expect(dispatchedCommand("app.inspect")).toBe(false);
 
     unmount();
   });

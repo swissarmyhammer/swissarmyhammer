@@ -2,7 +2,7 @@
 //!
 //! Pins the discovery surface so changes to the operation set are visible in
 //! code review. The tree shape is the noun->verb->{op} layout produced by
-//! `generate_operations_meta`. All 18 operations are pinned.
+//! `generate_operations_meta`. All 14 operations are pinned.
 
 use rmcp::ServerHandler;
 use serde_json::Value;
@@ -40,7 +40,8 @@ async fn views_tool_meta_operations_tree_is_complete() {
         // lifecycle
         ("perspective", "load", "load perspective"),
         ("perspective", "save", "save perspective"),
-        ("perspective", "delete", "delete perspective"),
+        // delete is NOT a views op — it routes to the `entity` server (which
+        // holds the per-window UIState the active-selection fallback writes).
         ("perspective", "rename", "rename perspective"),
         ("perspective", "list", "list perspective"),
         // filter
@@ -54,15 +55,12 @@ async fn views_tool_meta_operations_tree_is_complete() {
         ("sort", "set", "set sort"),
         ("sort", "clear", "clear sort"),
         ("sort", "toggle", "toggle sort"),
-        // nav
-        ("perspective", "next", "next perspective"),
-        ("perspective", "prev", "prev perspective"),
+        // nav (resolution only; activation lives on the entity tool)
         ("perspective", "goto", "goto perspective"),
-        ("perspective", "switch", "switch perspective"),
         // view
         ("view", "set", "set view"),
     ];
-    assert_eq!(expected.len(), 18, "the views tool exposes 18 operations");
+    assert_eq!(expected.len(), 14, "the views tool exposes 14 operations");
 
     for (noun, verb, op_str) in &expected {
         let leaf = ops_tree

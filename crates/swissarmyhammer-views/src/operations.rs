@@ -15,14 +15,14 @@
 //! shared `StoreContext` reverts them for free — this tool implements no undo
 //! of its own.
 //!
-//! The eighteen operations group into six sub-domains:
+//! The fourteen operations group into six sub-domains:
 //!
-//! - **lifecycle** (`load`, `save`, `delete`, `rename`, `list`) — CRUD over
+//! - **lifecycle** (`load`, `save`, `rename`, `list`) — CRUD over
 //!   perspective definitions.
 //! - **filter** (`set`, `clear`, `focus`) — the perspective `filter` field.
 //! - **group** (`set`, `clear`) — the perspective `group` field.
 //! - **sort** (`set`, `clear`, `toggle`) — the perspective `sort` list.
-//! - **nav** (`next`, `prev`, `goto`, `switch`) — resolve a perspective within
+//! - **nav** (`goto`) — resolve a perspective within
 //!   a view's ordered list.
 //! - **view** (`set`) — write a `ViewDef` through the views kernel.
 
@@ -97,24 +97,6 @@ pub struct SavePerspective {
     /// `perspective-commands` plugin forwards verbatim.
     #[serde(default)]
     pub if_absent: bool,
-}
-
-/// Delete a perspective by id.
-///
-/// Routes through `PerspectiveContext::delete`, which trashes the YAML file
-/// for undo support. The delete is undoable and emits a `PerspectiveEvent`.
-///
-/// Returns `{ ok: true, entry_id: <string|null> }`.
-#[operation(
-    verb = "delete",
-    noun = "perspective",
-    description = "Delete a perspective by id"
-)]
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct DeletePerspective {
-    /// The perspective id to delete.
-    #[serde(default)]
-    pub id: String,
 }
 
 /// Rename a perspective.
@@ -321,56 +303,13 @@ pub struct ToggleSort {
 }
 
 // Navigation operations ────────────────────────────────────────────────────
-
-/// Resolve the next perspective in a view's ordered list.
-///
-/// Filters perspectives belonging to the given view (by `view_id` when
-/// present, else by view kind), finds `current` in that ordered slice, and
-/// returns the next one (wrapping). A no-op (`{ ok: true, perspective: null }`)
-/// when fewer than two perspectives match.
-///
-/// This server holds no UIState, so navigation only *resolves* the target
-/// perspective from the perspective context's ordered list; persisting the
-/// active selection is the caller's (window/ui-state server's) concern.
-#[operation(
-    verb = "next",
-    noun = "perspective",
-    description = "Resolve the next perspective in a view's ordered list"
-)]
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct NextPerspective {
-    /// The view kind to scope cycling to (e.g. "board", "grid").
-    #[serde(default)]
-    pub view: String,
-    /// Optional view instance id to scope cycling to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub view_id: Option<String>,
-    /// The currently-active perspective id to cycle from.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current: Option<String>,
-}
-
-/// Resolve the previous perspective in a view's ordered list.
-///
-/// The reverse of [`NextPerspective`] — moves one position backward (wrapping)
-/// within the perspectives matching the view. Same no-op semantics.
-#[operation(
-    verb = "prev",
-    noun = "perspective",
-    description = "Resolve the previous perspective in a view's ordered list"
-)]
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct PrevPerspective {
-    /// The view kind to scope cycling to (e.g. "board", "grid").
-    #[serde(default)]
-    pub view: String,
-    /// Optional view instance id to scope cycling to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub view_id: Option<String>,
-    /// The currently-active perspective id to cycle from.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current: Option<String>,
-}
+//
+// NOTE: perspective activation (next / prev / switch) lives on the `entity`
+// tool, not here — see card 01KTYQY0ZB62KHN6BPK3FBMBD7. Activation must write
+// the dispatching window's `active_perspective_id` + `filtered_task_ids`, which
+// requires the shared `UIState` that only the board-bundle (`entity`) server
+// holds. This server holds no UIState, so it exposes only the `goto`
+// RESOLUTION op below (used by the visible-false `perspective.goto` command).
 
 /// Resolve a perspective by id, optionally validating it belongs to a view.
 ///
@@ -394,25 +333,6 @@ pub struct GotoPerspective {
     /// Optional view instance id to validate the perspective against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_id: Option<String>,
-}
-
-/// Resolve a perspective by id and surface its filter for evaluation.
-///
-/// The state-layer half of the `perspective.switch` command: looks the
-/// perspective up by id and returns it plus its filter expression. The
-/// command layer pairs this with the entity filter evaluator + UIState write;
-/// this server, holding neither, returns the filter so the caller can drive
-/// evaluation.
-#[operation(
-    verb = "switch",
-    noun = "perspective",
-    description = "Resolve a perspective by id and surface its filter"
-)]
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct SwitchPerspective {
-    /// The perspective id to switch to.
-    #[serde(default)]
-    pub perspective_id: String,
 }
 
 // View operations ──────────────────────────────────────────────────────────
@@ -462,7 +382,6 @@ static VIEWS_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(|
         // lifecycle
         Box::leak(Box::<LoadPerspective>::default()) as &dyn Operation,
         Box::leak(Box::<SavePerspective>::default()) as &dyn Operation,
-        Box::leak(Box::<DeletePerspective>::default()) as &dyn Operation,
         Box::leak(Box::<RenamePerspective>::default()) as &dyn Operation,
         Box::leak(Box::<ListPerspective>::default()) as &dyn Operation,
         // filter
@@ -476,11 +395,8 @@ static VIEWS_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(|
         Box::leak(Box::<SetSort>::default()) as &dyn Operation,
         Box::leak(Box::<ClearSort>::default()) as &dyn Operation,
         Box::leak(Box::<ToggleSort>::default()) as &dyn Operation,
-        // nav
-        Box::leak(Box::<NextPerspective>::default()) as &dyn Operation,
-        Box::leak(Box::<PrevPerspective>::default()) as &dyn Operation,
+        // nav (resolution only; activation lives on the entity tool)
         Box::leak(Box::<GotoPerspective>::default()) as &dyn Operation,
-        Box::leak(Box::<SwitchPerspective>::default()) as &dyn Operation,
         // view
         Box::leak(Box::<SetView>::default()) as &dyn Operation,
     ]

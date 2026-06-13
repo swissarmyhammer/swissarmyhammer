@@ -27,8 +27,10 @@
  *
  * # Style
  *
- * Visually matches the existing `<FilterFocusButton>` / `<GroupPopoverButton>`
- * tab-button affordances so a mixed render (legacy + generic) looks uniform.
+ * The visual / spatial-nav shell is the shared `<TabIconButton>`
+ * (`tab-icon-button.tsx`), also consumed by the
+ * `<FilterFocusCommandButton>` / `<AddPerspectiveCommandButton>` adapters
+ * in `perspective-tab-bar.tsx` — one shell, three press semantics.
  */
 
 import { useCallback, useState } from "react";
@@ -37,11 +39,9 @@ import {
   PopoverTrigger,
   PopoverContent,
 } from "@/components/ui/popover";
-import { Pressable } from "@/components/pressable";
+import { TabIconButton } from "@/components/tab-icon-button";
 import { useDispatchCommand } from "@/lib/command-scope";
 import { asSegment } from "@/types/spatial";
-import { cn } from "@/lib/utils";
-import { commandIconFor } from "./command-icon-registry";
 import { CommandPopover } from "./command-popover";
 import type { CommandDef, ParamDef } from "@/types/kanban";
 
@@ -113,7 +113,6 @@ export function CommandButton({
       `CommandButton: surface must be a non-empty string (command=${command.id})`,
     );
   }
-  const Icon = commandIconFor(command.tab_button?.icon ?? "");
   const dispatch = useDispatchCommand();
   const needsPicker = hasPickableParam(command.params);
   const [open, setOpen] = useState(false);
@@ -169,27 +168,20 @@ export function CommandButton({
     [dispatchWith, command.id, command.params],
   );
 
+  // The shared `<TabIconButton>` shell owns the visual / spatial-nav
+  // contract; this component contributes the dispatch-or-popover press
+  // semantics. In the popover branch the button doubles as the
+  // `<PopoverTrigger asChild>` slot child — `<TabIconButton>` forwards the
+  // injected trigger props through to the underlying `<Pressable>`.
   const moniker = asSegment(`${surface}.${command.id}:${surfaceId}`);
   const pressable = (
-    <Pressable
-      asChild
+    <TabIconButton
       moniker={moniker}
       ariaLabel={command.name}
+      icon={command.tab_button?.icon ?? ""}
+      isActive={isActive}
       onPress={handlePress}
-    >
-      <button
-        type="button"
-        className={cn(
-          "inline-flex items-center justify-center h-5 w-5 rounded transition-colors -ml-1",
-          isActive
-            ? "text-primary"
-            : "text-muted-foreground/50 hover:text-muted-foreground",
-        )}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Icon className="h-3 w-3" fill={isActive ? "currentColor" : "none"} />
-      </button>
-    </Pressable>
+    />
   );
 
   // No popover branch — render the bare Pressable.

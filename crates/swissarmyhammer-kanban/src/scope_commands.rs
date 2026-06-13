@@ -382,6 +382,17 @@ fn emit_window_focus(
     }
 }
 
+/// Caption placeholder for a perspective whose stored name is blank.
+///
+/// PRESENTATION only — the stored name stays blank. Cross-surface mirror of
+/// the frontend tab placeholder (`BLANK_NAME_PLACEHOLDER` in
+/// `apps/kanban-app/ui/src/components/perspective-tab-bar.tsx`); the two
+/// literals must stay in lockstep, each side pinned by a test
+/// (`blank_perspective_names_get_the_untitled_placeholder_caption` here,
+/// `blank_name_placeholder_literal_matches_the_rust_caption_placeholder`
+/// there).
+const BLANK_PERSPECTIVE_NAME_PLACEHOLDER: &str = "Untitled";
+
 /// Emit one "Go to Perspective: <Name>" palette row per known perspective,
 /// each dispatching the canonical `perspective.switch` command with its
 /// `perspective_id` pre-filled in `args`.
@@ -405,12 +416,19 @@ fn emit_perspective_goto(
     result: &mut Vec<ResolvedCommand>,
 ) {
     for perspective in perspectives {
+        // Blank names render the shared placeholder so the palette row is
+        // never an empty "Go to Perspective: " suffix.
+        let display_name = if perspective.name.trim().is_empty() {
+            BLANK_PERSPECTIVE_NAME_PLACEHOLDER
+        } else {
+            perspective.name.as_str()
+        };
         push_dedup(
             seen,
             result,
             ResolvedCommand {
                 id: "perspective.switch".into(),
-                name: format!("Go to Perspective: {}", perspective.name),
+                name: format!("Go to Perspective: {display_name}"),
                 menu_name: None,
                 target: None,
                 group: "perspective".into(),
@@ -1343,8 +1361,10 @@ mod tests {
     // under `swissarmyhammer-command-service/tests/integration/builtin_*_commands_e2e.rs`
     // and the new `full_baseline_e2e` integration test.
 
-    use super::{resolve_name_template, TemplateParams};
+    use super::{emit_perspective_goto, resolve_name_template, TemplateParams};
+    use std::collections::HashSet;
     use swissarmyhammer_command_service::{render_caption, CommandContext as ServiceContext};
+    use swissarmyhammer_perspectives::PerspectiveInfo;
 
     /// Lockstep guard: this module's `{{entity.type}}` arm and the shared
     /// caption renderer in `swissarmyhammer-command-service` resolve the SAME
@@ -1383,5 +1403,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Build a minimal [`PerspectiveInfo`] for the goto-caption tests.
+    fn perspective_info(id: &str, name: &str) -> PerspectiveInfo {
+        PerspectiveInfo {
+            id: id.into(),
+            name: name.into(),
+            view: "board".into(),
+            fields: Vec::new(),
+        }
+    }
+
+    /// A blank-named perspective must render the "Untitled" placeholder in
+    /// its "Go to Perspective: …" palette caption — never an empty suffix.
+    ///
+    /// Mirrors the frontend tab placeholder (`BLANK_NAME_PLACEHOLDER` in
+    /// `apps/kanban-app/ui/src/components/perspective-tab-bar.tsx`): the two
+    /// surfaces share ONE placeholder convention, each side pinning the
+    /// literal with a test (card 01KTYN8GB25ZFKSXWA0QA283PG, warning W2).
+    #[test]
+    fn blank_perspective_names_get_the_untitled_placeholder_caption() {
+        // Literal drift pin: the frontend's `BLANK_NAME_PLACEHOLDER` pins
+        // the same string — change both or neither.
+        assert_eq!(super::BLANK_PERSPECTIVE_NAME_PLACEHOLDER, "Untitled");
+
+        let perspectives = vec![
+            perspective_info("01P1", ""),
+            perspective_info("01P2", "   "),
+            perspective_info("01P3", "Sprint"),
+        ];
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        emit_perspective_goto(&perspectives, &mut seen, &mut result);
+
+        assert_eq!(
+            result[0].name, "Go to Perspective: Untitled",
+            "an empty perspective name must render the placeholder caption"
+        );
+        assert_eq!(
+            result[1].name, "Go to Perspective: Untitled",
+            "a whitespace-only perspective name must render the placeholder caption"
+        );
+        assert_eq!(
+            result[2].name, "Go to Perspective: Sprint",
+            "a non-blank perspective name must render verbatim"
+        );
     }
 }

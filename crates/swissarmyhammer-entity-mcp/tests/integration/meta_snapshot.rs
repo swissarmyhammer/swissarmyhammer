@@ -48,6 +48,10 @@ async fn entity_tool_meta_operations_tree_is_complete() {
         ("entity", "copy", "copy entity"),
         ("entity", "cut", "cut entity"),
         ("entity", "paste", "paste entity"),
+        ("perspective", "switch", "switch perspective"),
+        ("perspective", "next", "next perspective"),
+        ("perspective", "prev", "prev perspective"),
+        ("perspective", "delete", "delete perspective"),
     ];
 
     for (noun, verb, op_str) in &expected {

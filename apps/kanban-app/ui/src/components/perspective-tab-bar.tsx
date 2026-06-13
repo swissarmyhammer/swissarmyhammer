@@ -20,10 +20,14 @@ import { Filter } from "lucide-react";
 // `perspective.group` YAML entry's `tab_button.icon: group`
 // annotation. The `<AddPerspectiveButton>` (which used a hardcoded
 // `Plus` icon import) was deleted in 01KRE21GJMPP289N1HSTMJG5HE —
-// the `+` affordance is now a registry-rendered `<CommandButton>`
-// for `perspective.save` rendered by `<BarRegistryTabButtons>` at
-// the tab-bar level. All three icons are resolved at render time by
-// `commandIconFor` in `command-icon-registry.ts`.
+// the `+` affordance is the registry-rendered
+// `<AddPerspectiveCommandButton>` adapter for `perspective.save`
+// rendered by `<BarRegistryTabButtons>` at the tab-bar level (the
+// popover-collecting `<CommandButton>` path for `+` was deleted in
+// 01KTYN8GB25ZFKSXWA0QA283PG — clicking `+` now creates immediately
+// with a generated name and arms inline rename). All three icons are
+// resolved at render time by `commandIconFor` in
+// `command-icon-registry.ts`.
 import { cn } from "@/lib/utils";
 import { usePerspectives } from "@/lib/perspective-context";
 import { useViews } from "@/lib/views-context";
@@ -50,13 +54,12 @@ import { TextEditor } from "@/components/fields/text-editor";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { useUIState } from "@/lib/ui-state-context";
 import { FocusScope } from "@/components/focus-scope";
-import { Pressable } from "@/components/pressable";
+import { TabIconButton } from "@/components/tab-icon-button";
 import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { useFocusedWebviewCommandHandlers } from "@/lib/use-focused-webview-command-handlers";
 import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
-import { commandIconFor } from "@/components/command-icon-registry";
 
 // ---------------------------------------------------------------------------
 // Filter-editor FQM context — carries the spatial-nav FQM of the active
@@ -190,6 +193,212 @@ function usePerspectiveRename() {
 }
 
 // ---------------------------------------------------------------------------
+// Create hook — `+` creates immediately with a generated name, then arms
+// inline rename when the entity lands.
+// ---------------------------------------------------------------------------
+
+/**
+ * Placeholder text rendered wherever a perspective's blank name displays.
+ *
+ * PRESENTATION only — the stored name stays blank. Cross-surface mirror of
+ * the Rust palette caption placeholder
+ * (`BLANK_PERSPECTIVE_NAME_PLACEHOLDER` in
+ * `crates/swissarmyhammer-kanban/src/scope_commands.rs`); the two literals
+ * must stay in lockstep, each side pinned by a test
+ * (`blank_name_placeholder_literal_matches_the_rust_caption_placeholder`
+ * here, `blank_perspective_names_get_the_untitled_placeholder_caption`
+ * there).
+ */
+export const BLANK_NAME_PLACEHOLDER = "Untitled";
+
+/**
+ * Generate a unique "Untitled" / "Untitled N" name for a new perspective:
+ * the first FREE slot by exact-name match against the visible list.
+ *
+ * Cross-language mirror of the backend's `first_free_untitled_name` in
+ * `crates/swissarmyhammer-kanban/src/commands/perspective_commands.rs` —
+ * ONE convention, pinned on both sides by lockstep drift-guard tests
+ * (`generates_the_first_free_untitled_slot` here,
+ * `first_free_untitled_name_matches_the_frontend_generator` there). The
+ * export exists FOR that drift-guard test; production usage is internal to
+ * {@link useCreatePerspective}.
+ *
+ * Scanning for the first free slot (rather than counting `Untitled`-prefixed
+ * names) guarantees the generated name never collides with a visible
+ * perspective — a count regenerates an EXISTING name when the sequence has
+ * gaps (e.g. "Untitled" deleted, "Untitled 2" surviving), and a prefix count
+ * also miscounts user names like "Untitled tasks".
+ *
+ * The dedupe set is the caller's `filteredPerspectives` — the SAME
+ * `perspectiveVisibleInView`-filtered list the tab bar renders — so the
+ * generated name is unique among the tabs the user can actually see.
+ *
+ * @param perspectives Perspectives visible in the active view scope.
+ * @returns A name unique among the given perspectives.
+ */
+export function generateUntitledName(
+  perspectives: readonly { name: string }[],
+): string {
+  const taken = new Set(perspectives.map((p) => p.name));
+  if (!taken.has("Untitled")) return "Untitled";
+  for (let n = 2; ; n += 1) {
+    const candidate = `Untitled ${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+/**
+ * The `+` click flow: create a perspective immediately (no popup), then arm
+ * inline rename when the created entity appears in the store.
+ *
+ * # Create (durable, command-routed)
+ *
+ * Dispatches `perspective.save` with a frontend-generated unique name (see
+ * {@link generateUntitledName}) plus the active view's kind and instance id —
+ * an EXPLICIT create, never `if_absent` (the ensure semantics from card
+ * 01KTY6T1GPY94VYWANE9X41SKJ are reserved for the auto-create-Default guard
+ * in `perspective-context.tsx`). The follow-up `refresh()` matches the
+ * rename-commit path so the new tab shows up without waiting for the
+ * store-changed notification round-trip.
+ *
+ * # Arm rename (by id, event-loop driven, no store race)
+ *
+ * The create→render loop is async: dispatch → backend write → store event →
+ * `perspective.list` refetch → context state → tab mount. Rather than racing
+ * that loop, this hook reads the created perspective's ID off the dispatch
+ * result (the views `save perspective` op returns
+ * `{ ok, perspective: { id, … } }`; the plugin's `perspective.save` unwraps
+ * it via `unwrapResult` — same precedent as `perspective.list`), records it
+ * as pending, and watches `filteredPerspectives`; when the perspective with
+ * that id appears, it activates the tab (`perspective.switch` via
+ * `setActivePerspectiveId`) and arms the EXISTING inline-rename machinery
+ * (`startRename`) — the same editor the per-tab Enter / double-click paths
+ * use. Arming by id (not by generated name) means a name collision with a
+ * pre-existing tab can never arm rename on the wrong perspective.
+ *
+ * # Escape semantics (pinned)
+ *
+ * Escape during that first rename cancels the EDIT only — the perspective
+ * keeps its generated name. The entity was durably created on click;
+ * deleting it on Escape would be surprising (no other rename in the app
+ * deletes on cancel).
+ */
+function useCreatePerspective(
+  filteredPerspectives: readonly Perspective[],
+  activeViewId: string | undefined,
+  viewKind: string,
+  setActivePerspectiveId: (id: string) => void,
+  startRename: (id: string) => void,
+) {
+  const dispatchPerspectiveSave = useDispatchCommand("perspective.save");
+  const { refresh } = usePerspectives();
+  const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(
+    null,
+  );
+
+  const createPerspective = useCallback(async () => {
+    const name = generateUntitledName(filteredPerspectives);
+    try {
+      const wrapped = (await dispatchPerspectiveSave({
+        args: { name, view: viewKind, view_id: activeViewId },
+      })) as { result?: { perspective?: { id?: unknown } } } | null;
+      const createdId = wrapped?.result?.perspective?.id;
+      if (typeof createdId === "string" && createdId) {
+        setPendingCreate({ id: createdId, viewId: activeViewId });
+      } else {
+        // Defensive: an id-less result means we cannot identify the created
+        // entity, so inline rename does not arm — the create itself landed.
+        console.warn(
+          "[add-perspective] perspective.save returned no created perspective id; inline rename will not arm",
+          wrapped,
+        );
+      }
+      await refresh();
+    } catch (e) {
+      console.error("[add-perspective] perspective.save dispatch failed", e);
+    }
+  }, [
+    filteredPerspectives,
+    dispatchPerspectiveSave,
+    viewKind,
+    activeViewId,
+    refresh,
+  ]);
+
+  useArmRenameOnArrival(
+    pendingCreate,
+    setPendingCreate,
+    filteredPerspectives,
+    activeViewId,
+    setActivePerspectiveId,
+    startRename,
+  );
+
+  return createPerspective;
+}
+
+/**
+ * A `+` create whose entity has not appeared in the visible list yet.
+ *
+ * `viewId` is the view instance the create was dispatched for — the arrival
+ * watcher abandons the pending create when the active view changes, so a
+ * stale create can never arm rename after the user has moved on.
+ */
+interface PendingCreate {
+  /** Created perspective id, returned by the `perspective.save` dispatch. */
+  id: string;
+  /** Active view instance id captured at dispatch time. */
+  viewId: string | undefined;
+}
+
+/**
+ * Watch the visible perspective list for the pending created id; on arrival,
+ * activate the tab and arm the existing inline-rename machinery.
+ *
+ * The id comes from the create dispatch's own result, so the match is exact
+ * — no name heuristics, no "newest arrival" scanning. Inert while no create
+ * is pending: perspectives arriving from other sources (another window,
+ * undo, …) never arm rename.
+ *
+ * The pending create is bound to the view it was dispatched for: when
+ * `activeViewId` changes before the entity lands, the pending state is
+ * cleared so a later view switch back (or any other list change) cannot
+ * spuriously activate a tab and arm rename on a long-forgotten create.
+ */
+function useArmRenameOnArrival(
+  pendingCreate: PendingCreate | null,
+  setPendingCreate: (pending: PendingCreate | null) => void,
+  filteredPerspectives: readonly Perspective[],
+  activeViewId: string | undefined,
+  setActivePerspectiveId: (id: string) => void,
+  startRename: (id: string) => void,
+) {
+  // View-switch guard: abandon the pending create when the user navigates
+  // away from the view it was dispatched for.
+  useEffect(() => {
+    if (pendingCreate && pendingCreate.viewId !== activeViewId) {
+      setPendingCreate(null);
+    }
+  }, [pendingCreate, activeViewId, setPendingCreate]);
+
+  useEffect(() => {
+    if (!pendingCreate) return;
+    const created = filteredPerspectives.find((p) => p.id === pendingCreate.id);
+    if (created) {
+      setPendingCreate(null);
+      setActivePerspectiveId(created.id);
+      startRename(created.id);
+    }
+  }, [
+    pendingCreate,
+    setPendingCreate,
+    filteredPerspectives,
+    setActivePerspectiveId,
+    startRename,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // Tab bar state hook — derived state and refs for PerspectiveTabBar
 // ---------------------------------------------------------------------------
 
@@ -254,6 +463,16 @@ function usePerspectiveTabBar() {
     });
   }, [activePerspective, startRename]);
 
+  // The `+` flow: immediate explicit create with a generated name, then
+  // arm inline rename when the entity lands (see useCreatePerspective).
+  const createPerspective = useCreatePerspective(
+    filteredPerspectives,
+    activeViewId,
+    viewKind,
+    setActivePerspectiveId,
+    startRename,
+  );
+
   return {
     activeView,
     activePerspective,
@@ -264,6 +483,7 @@ function usePerspectiveTabBar() {
     startRename,
     commitRename,
     cancelRename,
+    createPerspective,
   };
 }
 
@@ -526,8 +746,8 @@ function RegistryTabButtons({
  * adapter reads the ref at click time so it always picks up the
  * currently-active perspective's editor FQM, not a stale snapshot.
  *
- * Visual / spatial-nav contract: matches `<CommandButton>` exactly —
- * same icon, same `text-primary` highlight when `isActive`, same
+ * Visual / spatial-nav contract: the shared `<TabIconButton>` shell —
+ * the same component `<CommandButton>` renders — with the
  * `${surface}.${command.id}:${surfaceId}` moniker built from the
  * registry payload. Only the click semantics differ.
  */
@@ -540,7 +760,6 @@ function FilterFocusCommandButton({
   perspectiveId: string;
   isActive: boolean;
 }) {
-  const Icon = commandIconFor(command.tab_button?.icon ?? "");
   const dispatchNavFocus = useDispatchCommand("nav.focus");
   const fqRef = useOptionalFilterEditorFqRef();
 
@@ -564,30 +783,14 @@ function FilterFocusCommandButton({
     );
   }, [dispatchNavFocus, fqRef]);
 
-  const monikerSegment = asSegment(
-    `perspective_tab.${command.id}:${perspectiveId}`,
-  );
-
   return (
-    <Pressable
-      asChild
-      moniker={monikerSegment}
+    <TabIconButton
+      moniker={asSegment(`perspective_tab.${command.id}:${perspectiveId}`)}
       ariaLabel={command.name}
+      icon={command.tab_button?.icon ?? ""}
+      isActive={isActive}
       onPress={handlePress}
-    >
-      <button
-        type="button"
-        className={cn(
-          "inline-flex items-center justify-center h-5 w-5 rounded transition-colors -ml-1",
-          isActive
-            ? "text-primary"
-            : "text-muted-foreground/50 hover:text-muted-foreground",
-        )}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Icon className="h-3 w-3" fill={isActive ? "currentColor" : "none"} />
-      </button>
-    </Pressable>
+    />
   );
 }
 
@@ -616,6 +819,7 @@ export function PerspectiveTabBar() {
     startRename,
     commitRename,
     cancelRename,
+    createPerspective,
   } = usePerspectiveTabBar();
   const boardData = useBoardData();
   const activeBoardId = boardData?.board?.id;
@@ -654,6 +858,7 @@ export function PerspectiveTabBar() {
           <BarRegistryTabButtons
             activeViewId={activeView.id}
             activeBoardId={activeBoardId}
+            onCreatePerspective={createPerspective}
           />
         </div>
         {/* Right: filter formula bar — always visible when a perspective is active */}
@@ -759,9 +964,9 @@ interface ScopedPerspectiveTabProps {
  * spatial-nav target — there is no inner `perspective_tab.name` leaf
  * because that would register at the exact same rect as the outer
  * wrapper and trip the kernel's needless-nesting warning. Enter on a
- * focused tab triggers rename via the `app.entity.startRename` command
- * this component registers, which shadows the global `nav.drillIn:
- * Enter` on the perspective scope.
+ * focused tab ACTIVATES the perspective via the `nav.drillIn` shadow
+ * this component registers; F2 starts rename via the
+ * `app.entity.startRename` command alongside it.
  *
  * The filter icon and group icon to the right of the name remain as
  * inner focus leaves with distinct monikers — both affordances are now
@@ -771,20 +976,33 @@ interface ScopedPerspectiveTabProps {
  * than Pressables. Both have distinct rects from the tab name and are
  * independently navigable.
  *
- * Per-tab rename binding: every perspective tab — active or inactive —
- * registers a `app.entity.startRename` `CommandDef` whose `keys` block
- * (Enter for cua / vim / emacs) is picked up by `extractChainBindings`
- * when this tab is the spatial focus. That binding shadows the global
- * `nav.drillIn: Enter` for the perspective scope only, matching the YAML
- * `scope: "entity:perspective"` filter on the same id in
- * `swissarmyhammer-commands/builtin/commands/ui.yaml`. The execute path:
+ * Per-tab keyboard contract (card 01KTYQY0ZB62KHN6BPK3FBMBD7 — Enter
+ * SELECTS, rename is a deliberate gesture):
  *
- *   - On the active tab: trigger rename on the active perspective.
- *   - On an inactive tab: dispatch `perspective.switch` to activate the tab,
- *     then trigger rename targeted at this tab's id. The broadcaster
- *     accepts an explicit id so the rename is independent of the
- *     async UI-state propagation that would otherwise leave the
- *     subscriber's `activePerspective` snapshot stale.
+ *   - **Enter = activate.** Every tab registers a positional `nav.drillIn`
+ *     shadow `CommandDef` (the documented scope-local-execute pattern —
+ *     same as the jump overlay's `app.dismiss` shadow). The global Enter
+ *     binding resolves to `nav.drillIn`; while this tab is the focused
+ *     scope, `useDispatchCommand`'s fast-path runs the shadow's execute —
+ *     dispatch `perspective.switch` with THIS tab's id — instead of
+ *     drilling into a leaf that has nothing to drill into. The shadow
+ *     carries no keys, so binding extraction is untouched: Enter still
+ *     resolves to the global `nav.drillIn` id everywhere.
+ *   - **F2 = rename.** Every tab — active or inactive — registers an
+ *     `app.entity.startRename` `CommandDef` whose `keys` block (F2 for
+ *     cua / vim / emacs) is picked up by `extractChainBindings` when this
+ *     tab is the spatial focus. F2 is the platform-wide rename idiom;
+ *     double-click stays as the pointer gesture, and the catalogue
+ *     registration (`app-shell-commands/commands/ui.ts`, scope
+ *     `entity:perspective`, `context_menu: true`) mirrors the F2 keys and
+ *     adds the right-click "Rename Perspective" row. The execute path:
+ *
+ *       - On the active tab: trigger rename on the active perspective.
+ *       - On an inactive tab: dispatch `perspective.switch` to activate
+ *         the tab, then trigger rename targeted at this tab's id. The
+ *         broadcaster accepts an explicit id so the rename is independent
+ *         of the async UI-state propagation that would otherwise leave
+ *         the subscriber's `activePerspective` snapshot stale.
  */
 function ScopedPerspectiveTab({
   perspective,
@@ -797,16 +1015,29 @@ function ScopedPerspectiveTab({
 }: ScopedPerspectiveTabProps) {
   const isActive = activePerspectiveId === perspective.id;
   const dispatchPerspectiveSwitch = useDispatchCommand("perspective.switch");
-  const startRenameCommands = useMemo<readonly CommandDef[]>(() => {
+  const tabScopeCommands = useMemo<readonly CommandDef[]>(() => {
     return [
       {
+        // Enter — the tab's primary action: ACTIVATE this perspective.
+        // Positional shadow of the global `nav.drillIn: Enter`; no keys of
+        // its own (see the component docblock).
+        id: "nav.drillIn",
+        name: "Switch Perspective",
+        execute: async () => {
+          await dispatchPerspectiveSwitch({
+            args: { perspective_id: perspective.id },
+          });
+        },
+      },
+      {
+        // F2 — rename, the deliberate gesture (see the component docblock).
         id: "app.entity.startRename",
         name: "Rename Perspective",
-        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+        keys: { cua: "F2", vim: "F2", emacs: "F2" },
         execute: async () => {
           if (!isActive) {
             // Activate the focused tab before mounting the rename editor —
-            // the user's mental model is "Enter edits the name of the tab
+            // the user's mental model is "F2 edits the name of the tab
             // I am on", which implies the tab also becomes active.
             await dispatchPerspectiveSwitch({
               args: { perspective_id: perspective.id },
@@ -823,7 +1054,7 @@ function ScopedPerspectiveTab({
   return (
     <CommandScopeProvider
       moniker={moniker("perspective", perspective.id)}
-      commands={startRenameCommands}
+      commands={tabScopeCommands}
     >
       <PerspectiveTabFocusable id={perspective.id}>
         <PerspectiveTab
@@ -847,12 +1078,12 @@ function ScopedPerspectiveTab({
  * # Single scope, no inner name leaf
  *
  * The tab IS the focusable target — clicking anywhere on the tab area
- * focuses `perspective_tab:${id}`, and Enter triggers rename via the
- * `app.entity.startRename` command on the surrounding `perspective:${id}`
- * CommandScope (which shadows the global `nav.drillIn: Enter`). There is
- * no inner `perspective_tab.name` FocusScope because it would register
- * at the same rect as this wrapper and trigger the kernel's
- * needless-nesting warning.
+ * focuses `perspective_tab:${id}`, Enter ACTIVATES the perspective via
+ * the `nav.drillIn` shadow on the surrounding `perspective:${id}`
+ * CommandScope, and F2 starts rename via the `app.entity.startRename`
+ * command alongside it. There is no inner `perspective_tab.name`
+ * FocusScope because it would register at the same rect as this wrapper
+ * and trigger the kernel's needless-nesting warning.
  *
  * The icon affordances on an active tab are registry-rendered
  * `<CommandButton>`s, so each mounts its own inner FocusScope leaf
@@ -1127,9 +1358,12 @@ const FilterEditorEscapeContext = createContext<(() => void) | null>(null);
 function BarRegistryTabButtons({
   activeViewId,
   activeBoardId,
+  onCreatePerspective,
 }: {
   activeViewId: string;
   activeBoardId: string | undefined;
+  /** Immediate-create handler for the `+` (`perspective.save`) affordance. */
+  onCreatePerspective: () => void;
 }) {
   // Bar-level slot renders GLOBAL (unscoped) tab-button commands only — today
   // just `perspective.save` (the `+` affordance). Sourced from the live
@@ -1157,25 +1391,89 @@ function BarRegistryTabButtons({
   // zone is a `FocusLayer` segment — and the existing call sites for
   // both shapes follow this convention, so they are deliberately not
   // unified here.
+  // `perspective.save` (the `+`) is special-cased onto the
+  // `<AddPerspectiveCommandButton>` adapter: its click creates a
+  // perspective IMMEDIATELY with a generated name and arms inline rename
+  // (card 01KTYN8GB25ZFKSXWA0QA283PG). The generic `<CommandButton>` would
+  // open a name-collecting popover (the command's `name` param is
+  // text-shaped) — that popup path is deliberately dead for `+`.
   return (
     <>
-      {commands.map((cmd) => (
-        <CommandButton
-          key={cmd.id}
-          command={
-            {
-              id: cmd.id,
-              name: cmd.name,
-              keys: cmd.keys,
-              params: cmd.params,
-              tab_button: cmd.tab_button,
-            } as RegistryCommandDef
-          }
-          surface="perspective_bar"
-          surfaceId={activeViewId}
-        />
-      ))}
+      {commands.map((cmd) => {
+        if (cmd.id === "perspective.save") {
+          return (
+            <AddPerspectiveCommandButton
+              key={cmd.id}
+              command={
+                {
+                  id: cmd.id,
+                  name: cmd.name,
+                  keys: cmd.keys,
+                  params: cmd.params,
+                  tab_button: cmd.tab_button,
+                } as RegistryCommandDef
+              }
+              surfaceId={activeViewId}
+              onCreate={onCreatePerspective}
+            />
+          );
+        }
+        return (
+          <CommandButton
+            key={cmd.id}
+            command={
+              {
+                id: cmd.id,
+                name: cmd.name,
+                keys: cmd.keys,
+                params: cmd.params,
+                tab_button: cmd.tab_button,
+              } as RegistryCommandDef
+            }
+            surface="perspective_bar"
+            surfaceId={activeViewId}
+          />
+        );
+      })}
     </>
+  );
+}
+
+/**
+ * Bar-level tab-button affordance for `perspective.save` (`+`) that creates
+ * a perspective immediately instead of opening the generic
+ * `<CommandButton>` popover.
+ *
+ * Why a dedicated adapter (not the generic `<CommandButton>`): the command's
+ * `name` param is text-shaped, so the generic button would open a
+ * `<CommandPopover>` to collect it. The owner's UX directive (card
+ * 01KTYN8GB25ZFKSXWA0QA283PG — "popups and buttons, sheesh") replaces that
+ * with an immediate create: the click handler (`onCreate`, wired to
+ * `useCreatePerspective`) generates a unique name, dispatches the create
+ * through the command service, and arms inline rename when the entity
+ * appears. Same adapter pattern as `<FilterFocusCommandButton>` — registry-
+ * driven render (icon, aria-label, moniker), overridden click semantics.
+ *
+ * Visual / spatial-nav contract: the shared `<TabIconButton>` shell — the
+ * same component `<CommandButton>` renders — with the
+ * `perspective_bar.${command.id}:${surfaceId}` moniker shape.
+ */
+function AddPerspectiveCommandButton({
+  command,
+  surfaceId,
+  onCreate,
+}: {
+  command: RegistryCommandDef;
+  surfaceId: string;
+  onCreate: () => void;
+}) {
+  return (
+    <TabIconButton
+      moniker={asSegment(`perspective_bar.${command.id}:${surfaceId}`)}
+      ariaLabel={command.name}
+      icon={command.tab_button?.icon ?? ""}
+      onPress={onCreate}
+    />
   );
 }
 
@@ -1232,11 +1530,12 @@ function PerspectiveTab({
   // (PerspectiveTabFocusable) already covers the same rect: an inactive tab
   // is just the name text plus padding, so an inner `perspective_tab.name`
   // leaf would register at the exact same (x, y) and trigger the kernel's
-  // needless-nesting warning. Enter on a focused tab triggers rename via
-  // the `app.entity.startRename` command registered by `ScopedPerspectiveTab`'s
-  // CommandScopeProvider — that binding shadows the global `nav.drillIn:
-  // Enter`, so the focused-component-knows-it's-focused contract holds via
-  // command-scope chain resolution, not a separate inner scope.
+  // needless-nesting warning. Enter on a focused tab ACTIVATES the
+  // perspective (the `nav.drillIn` shadow registered by
+  // `ScopedPerspectiveTab`'s CommandScopeProvider) and F2 starts rename
+  // (the `app.entity.startRename` def alongside it) — so the
+  // focused-component-knows-it's-focused contract holds via command-scope
+  // chain resolution, not a separate inner scope.
   //
   // The registry-rendered `<CommandButton>`s inside `<RegistryTabButtons>`
   // below each own their own inner FocusScope leaf — they live to the
@@ -1325,8 +1624,16 @@ function TabButton({
           onCommit={onRenameCommit}
           onCancel={onRenameCancel}
         />
-      ) : (
+      ) : name.trim() ? (
         name
+      ) : (
+        // Blank-name placeholder — presentation only (the stored name stays
+        // blank). Styled per the app's blank-value display convention
+        // (muted + italic, e.g. `markdown-display.tsx`'s "Empty") so a
+        // blank-named perspective never renders an invisible tab.
+        <span className="text-muted-foreground italic">
+          {BLANK_NAME_PLACEHOLDER}
+        </span>
       )}
     </button>
   );

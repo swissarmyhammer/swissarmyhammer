@@ -10,10 +10,17 @@ import {
   unwrapResult,
 } from "@swissarmyhammer/plugin";
 
-import { type CommandSpec, type ViewsDispatch } from "./context.ts";
+import {
+  type CommandSpec,
+  type EntityPerspectiveDispatch,
+  type ViewsDispatch,
+} from "./context.ts";
 
 /** Build the five lifecycle-sub-domain command registrations. */
-export function lifecycleCommands(views: ViewsDispatch): CommandSpec[] {
+export function lifecycleCommands(
+  views: ViewsDispatch,
+  entity: EntityPerspectiveDispatch,
+): CommandSpec[] {
   return [
     // ─── perspective.load ───────────────────────────────────────────────────
     // YAML: param name(args). Routes to views `load perspective`.
@@ -33,6 +40,13 @@ export function lifecycleCommands(views: ViewsDispatch): CommandSpec[] {
     // view_id(scope_chain, entity_type view). Routes to views `save
     // perspective`, threading any other perspective fields (id / view /
     // filter / group) the dispatching surface pre-fills in args.
+    //
+    // The command result is the op's JSON payload
+    // (`{ ok, perspective, entry_id }`), not the raw `CallToolResult` wire
+    // envelope — the frontend's `+` flow (`useCreatePerspective` in
+    // `perspective-tab-bar.tsx`) reads the created `perspective.id` off the
+    // dispatch result to arm inline rename on the new entity. Same
+    // `unwrapResult` precedent as `perspective.list` below.
     {
       id: "perspective.save",
       name: "Save Perspective",
@@ -47,14 +61,23 @@ export function lifecycleCommands(views: ViewsDispatch): CommandSpec[] {
         const viewId = scopeId(ctx, "view");
         const args: Record<string, unknown> = { ...(ctx.args ?? {}) };
         if (viewId !== undefined) args.view_id = viewId;
-        return await views.views.views.perspective.save(args);
+        return unwrapResult(await views.views.views.perspective.save(args));
       },
     },
 
     // ─── perspective.delete ─────────────────────────────────────────────────
     // YAML: scope entity:perspective, undoable, context_menu; param
-    // name(args). Routes to views `delete perspective` (which takes an `id`):
-    // prefer the in-scope perspective moniker, else the `name` arg.
+    // name(args). Routes to the `entity` server's `delete perspective` (NOT
+    // the views server): deleting the ACTIVE perspective must fall the
+    // dispatching window's selection back to a survivor, and only the
+    // board-bundle `entity` server holds the per-window `UIState` that write
+    // needs (same backend split as switch/next/prev — the views server only
+    // mutates STORAGE; the selection fallback is the entity server's job).
+    //
+    // The id is resolved off the `perspective:{id}` scope moniker (the tab's
+    // context-menu dispatch) or the `name` arg, and the full `scope_chain` is
+    // threaded through so the backend resolves both the perspective target and
+    // the `window:<label>` moniker the selection fallback reads.
     {
       id: "perspective.delete",
       name: "Delete Perspective",
@@ -76,7 +99,10 @@ export function lifecycleCommands(views: ViewsDispatch): CommandSpec[] {
       execute: async (rawCtx: unknown) => {
         const ctx = (rawCtx ?? {}) as CommandContext;
         const id = scopeId(ctx, "perspective") ?? ctx.args?.name;
-        return await views.views.views.perspective.delete({ id });
+        return await entity.entity.entity.perspective.delete({
+          id,
+          scope: ctx.scope_chain ?? [],
+        });
       },
     },
 

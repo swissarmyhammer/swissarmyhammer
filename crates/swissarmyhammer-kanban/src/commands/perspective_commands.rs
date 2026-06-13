@@ -242,10 +242,11 @@ impl Command for LoadPerspectiveCmd {
 ///
 /// `available()` is always `true` so the registry-rendered tab-button
 /// (`tab_button: { icon: plus }` on the YAML entry) emits regardless of
-/// whether `name` is pre-supplied — the popover collects it before
-/// dispatch. The dispatcher's empty-name fallback mirrors the legacy
-/// `<AddPerspectiveButton>`'s `"Untitled"` / `"Untitled N+1"` inference
-/// so the user-visible behavior survives the command-driven migration.
+/// whether `name` is pre-supplied. The dispatcher's empty-name fallback
+/// mirrors the frontend's `generateUntitledName`
+/// (`apps/kanban-app/ui/src/components/perspective-tab-bar.tsx`, the `+`
+/// immediate-create flow) — see [`first_free_untitled_name`] for the
+/// shared convention and its drift pin.
 pub struct SavePerspectiveCmd;
 
 #[async_trait]
@@ -257,13 +258,10 @@ impl Command for SavePerspectiveCmd {
     async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
-        // Empty / missing `name` falls back to a generated "Untitled" /
-        // "Untitled N+1" name so the registry-rendered tab-button popover
-        // can submit with an empty text input and still produce a
-        // sensibly-named perspective. The legacy `<AddPerspectiveButton>`
-        // computed this on the frontend; moving the fallback into the
-        // dispatcher means every entry point (palette, keybind, tab
-        // button, etc.) gets the same defaulting behavior.
+        // Empty / missing `name` falls back to the first free "Untitled" /
+        // "Untitled N" slot so every entry point (palette, keybind, tab
+        // button, etc.) gets the same defaulting behavior when no name is
+        // supplied.
         let supplied_name = ctx
             .arg("name")
             .and_then(|v| v.as_str())
@@ -326,15 +324,13 @@ impl Command for SavePerspectiveCmd {
     }
 }
 
-/// Generate a unique "Untitled" / "Untitled N+1" name for a perspective
+/// Generate a unique "Untitled" / "Untitled N" name for a perspective
 /// missing an explicit `name` arg.
 ///
-/// Mirrors the legacy `<AddPerspectiveButton>` frontend logic: count how
-/// many `Untitled`-prefixed perspectives already share this view (matched
+/// Scopes the taken-name set to the perspectives sharing this view (matched
 /// by `view_id` when present, else by view kind — the same
-/// view_id-first / kind-fallback rule on `PerspectiveDef`). Returns
-/// `"Untitled"` when none exist, or `"Untitled N"` where N is the
-/// running count + 1.
+/// view_id-first / kind-fallback rule on `PerspectiveDef`), then picks the
+/// first free slot via [`first_free_untitled_name`].
 ///
 /// Reads the perspective list once under the perspective context's read
 /// lock; the caller drops the lock before the eventual write through
@@ -349,28 +345,62 @@ async fn generate_untitled_name(
         .await
         .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
     let pctx = pctx.read().await;
-    let untitled_count = pctx
-        .all()
-        .iter()
-        .filter(|p| match (view_id, p.view_id.as_deref()) {
-            (Some(vid), Some(pvid)) => vid == pvid,
-            // Either side without a view_id falls back to view-kind
-            // match — same rule as the frontend's perspective filter.
-            _ => p.view == view,
-        })
-        .filter(|p| p.name.starts_with("Untitled"))
-        .count();
-    Ok(if untitled_count == 0 {
-        "Untitled".to_string()
-    } else {
-        format!("Untitled {}", untitled_count + 1)
-    })
+    Ok(first_free_untitled_name(
+        pctx.all()
+            .iter()
+            .filter(|p| match (view_id, p.view_id.as_deref()) {
+                (Some(vid), Some(pvid)) => vid == pvid,
+                // Either side without a view_id falls back to view-kind
+                // match — same rule as the frontend's perspective filter.
+                _ => p.view == view,
+            })
+            .map(|p| p.name.as_str()),
+    ))
+}
+
+/// Pick the first free "Untitled" / "Untitled N" slot given the names
+/// already taken in the view scope.
+///
+/// Cross-language mirror of `generateUntitledName` in
+/// `apps/kanban-app/ui/src/components/perspective-tab-bar.tsx` — ONE
+/// convention, pinned on both sides by lockstep drift-guard tests
+/// (`first_free_untitled_name_matches_the_frontend_generator` here,
+/// `generates_the_first_free_untitled_slot` there).
+///
+/// Scanning for the first free slot by EXACT name match (rather than
+/// counting `Untitled`-prefixed names) guarantees the generated name never
+/// collides with an existing perspective — a count re-mints an EXISTING
+/// name when the sequence has gaps (e.g. "Untitled" deleted, "Untitled 2"
+/// surviving), and a prefix count also miscounts user names like
+/// "Untitled tasks".
+fn first_free_untitled_name<'a>(taken: impl Iterator<Item = &'a str>) -> String {
+    let taken: std::collections::HashSet<&str> = taken.collect();
+    if !taken.contains("Untitled") {
+        return "Untitled".to_string();
+    }
+    let mut n = 2u64;
+    loop {
+        let candidate = format!("Untitled {n}");
+        if !taken.contains(candidate.as_str()) {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 /// Delete a perspective by name or scope chain.
 ///
 /// Accepts `name` arg (the perspective name or ID), or resolves the
 /// perspective ID from the scope chain moniker `perspective:{id}`.
+///
+/// When the dispatch carries a [`UIState`](swissarmyhammer_ui_state::UIState)
+/// (the board-bundle `entity` server's wiring) and the deleted perspective was
+/// the dispatching window's ACTIVE selection, selection falls back to a
+/// surviving perspective so the tab bar is never left pointing at a
+/// just-deleted id (the "empty bar" the never-zero invariant forbids). The
+/// fallback is the first perspective still belonging to the active view; when
+/// none survive the active id is cleared. The command-layer dispatch (no
+/// UIState) skips the reselect — there the delete is purely a storage mutation.
 pub struct DeletePerspectiveCmd;
 
 #[async_trait]
@@ -382,31 +412,114 @@ impl Command for DeletePerspectiveCmd {
     async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
-        // Try explicit name arg first, then fall back to scope chain moniker.
-        let id = if let Some(name) = ctx.arg("name").and_then(|v| v.as_str()) {
-            // Resolve name to ID if necessary
+        let id = Self::resolve_delete_target(ctx, &kanban).await?;
+
+        let op = DeletePerspective::new(id.clone());
+        let mut result = run_op(&op, &kanban).await?;
+
+        // If the deleted perspective was the dispatching window's active
+        // selection, re-select a survivor so the tab bar never points at a
+        // dangling id. Only the UIState-bearing dispatch (the `entity` server)
+        // can do this; the command-layer dispatch has no UIState and skips it
+        // (the reselect returns `Null`). FORWARD the reselect's
+        // `PerspectiveSwitch` change on the result so the UIState-bearing
+        // caller can surface it where the host's `ui-state-changed` emit
+        // unwraps the selection — the backend write would otherwise be
+        // invisible to the UI.
+        let change = Self::reselect_after_delete(ctx, &kanban, &id).await?;
+        if let Value::Object(map) = &mut result {
+            map.insert("change".to_string(), change);
+        }
+
+        Ok(result)
+    }
+}
+
+impl DeletePerspectiveCmd {
+    /// Resolve the perspective id to delete: explicit `name` arg (resolved by
+    /// name then id) wins, else the `perspective:{id}` scope-chain moniker.
+    async fn resolve_delete_target(
+        ctx: &CommandContext,
+        kanban: &KanbanContext,
+    ) -> crate::commands_core::Result<String> {
+        if let Some(name) = ctx.arg("name").and_then(|v| v.as_str()) {
             let pctx = kanban
                 .perspective_context()
                 .await
                 .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
             let pctx = pctx.read().await;
             if let Some(p) = pctx.get_by_name(name) {
-                p.id.to_string()
+                Ok(p.id.to_string())
             } else if pctx.get_by_id(name).is_some() {
-                name.to_string()
+                Ok(name.to_string())
             } else {
-                return Err(CommandError::ExecutionFailed(format!(
+                Err(CommandError::ExecutionFailed(format!(
                     "perspective not found: {name}"
-                )));
+                )))
             }
         } else if let Some(scope_id) = ctx.resolve_entity_id("perspective") {
-            scope_id.to_string()
+            Ok(scope_id.to_string())
         } else {
-            return Err(CommandError::MissingArg("name".into()));
+            Err(CommandError::MissingArg("name".into()))
+        }
+    }
+
+    /// After a successful delete, re-point the window's active perspective at a
+    /// survivor when the deleted id was the active one.
+    ///
+    /// Returns the reselection's `UIStateChange::PerspectiveSwitch` (as JSON)
+    /// when a survivor was activated, so the caller can FORWARD it on the
+    /// result envelope and the host's `ui-state-changed` emit fires for the
+    /// new selection — the same `change` contract switch/next/prev ride.
+    /// Returns `Value::Null` when there is nothing to forward: no
+    /// [`UIState`](swissarmyhammer_ui_state::UIState) in scope, the deleted
+    /// perspective was not the window's active selection, or no survivor
+    /// existed (the active id is cleared, which carries no switch change).
+    ///
+    /// The survivor is the first perspective still belonging to the active
+    /// view (id-scoped strictly, legacy by kind — see
+    /// [`perspective_belongs_to_active_view`]); when none survive, the active
+    /// id is cleared so the bar shows no stale selection.
+    async fn reselect_after_delete(
+        ctx: &CommandContext,
+        kanban: &KanbanContext,
+        deleted_id: &str,
+    ) -> crate::commands_core::Result<Value> {
+        let Some(ui) = ctx.ui_state.as_ref() else {
+            return Ok(Value::Null);
+        };
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        if ui.active_perspective_id(window_label) != deleted_id {
+            return Ok(Value::Null);
+        }
+
+        let (view_kind, view_id) = resolve_active_view(ctx, kanban).await;
+        let survivor = {
+            let pctx = kanban
+                .perspective_context()
+                .await
+                .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+            let pctx = pctx.read().await;
+            pctx.all()
+                .iter()
+                .find(|p| perspective_belongs_to_active_view(p, view_id.as_deref(), &view_kind))
+                .map(|p| p.id.clone())
         };
 
-        let op = DeletePerspective::new(id);
-        run_op(&op, &kanban).await
+        match survivor {
+            Some(new_id) => {
+                // Forward the switch change so the UI's emit fires for the
+                // new selection — not just the server-side write.
+                switch_to_perspective(kanban, ui, window_label, &new_id).await
+            }
+            None => {
+                // No survivor for this view — clear the dangling active id so
+                // the bar shows no stale selection. There is no switch change
+                // to forward (the never-zero recovery is an external concern).
+                ui.set_active_perspective(window_label, "");
+                Ok(Value::Null)
+            }
+        }
     }
 }
 
@@ -843,8 +956,12 @@ async fn cycle_perspective(
     };
 
     let new_id = &matching[next_index];
-    let change = ui.set_active_perspective(window_label, new_id);
-    Ok(serde_json::to_value(change).unwrap_or(Value::Null))
+    // Full atomic switch — evaluate the target's filter and write both
+    // per-window slots, exactly like `perspective.switch`. An id-only
+    // `set_active_perspective` here would leave `filtered_task_ids` stale,
+    // so the board would keep showing the PREVIOUS perspective's tasks
+    // after a next/prev cycle.
+    switch_to_perspective(&kanban, ui, window_label, new_id).await
 }
 
 /// Switch to a perspective by its ID.
@@ -948,26 +1065,46 @@ impl Command for SwitchPerspectiveCmd {
         let perspective_id = ctx.require_arg_str("perspective_id")?;
         let window_label = ctx.window_label_from_scope().unwrap_or("main");
 
-        // Look up the perspective + capture its filter. Drop the read guard
-        // before doing the (potentially long) filter evaluation so a
-        // concurrent perspective mutation does not block on us.
-        let filter = {
-            let pctx = kanban
-                .perspective_context()
-                .await
-                .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-            let pctx = pctx.read().await;
-            let perspective = pctx.get_by_id(perspective_id).ok_or_else(|| {
-                CommandError::ExecutionFailed(format!("perspective not found: {perspective_id}"))
-            })?;
-            perspective.filter.clone().unwrap_or_default()
-        };
-
-        let filtered_task_ids = evaluate_perspective_filter(&kanban, filter.as_str()).await?;
-
-        let change = ui.switch_perspective(window_label, perspective_id, filtered_task_ids);
-        Ok(serde_json::to_value(change).unwrap_or(Value::Null))
+        switch_to_perspective(&kanban, ui, window_label, perspective_id).await
     }
+}
+
+/// Switch a window's active perspective: look the perspective up, evaluate
+/// its filter DSL, and atomically write BOTH `active_perspective_id` and
+/// `filtered_task_ids` via [`UIState::switch_perspective`].
+///
+/// The single switch pipeline shared by [`SwitchPerspectiveCmd`] (switch by
+/// explicit id) and [`cycle_perspective`] (next/prev) — cycling re-filters
+/// the window exactly like a direct switch, producing the same atomic
+/// `UIStateChange::PerspectiveSwitch`. Returns that change as JSON, or
+/// `Value::Null` when the switch is a no-op.
+///
+/// [`UIState::switch_perspective`]: swissarmyhammer_ui_state::UIState::switch_perspective
+pub async fn switch_to_perspective(
+    kanban: &KanbanContext,
+    ui: &swissarmyhammer_ui_state::UIState,
+    window_label: &str,
+    perspective_id: &str,
+) -> crate::commands_core::Result<Value> {
+    // Look up the perspective + capture its filter. Drop the read guard
+    // before doing the (potentially long) filter evaluation so a
+    // concurrent perspective mutation does not block on us.
+    let filter = {
+        let pctx = kanban
+            .perspective_context()
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+        let pctx = pctx.read().await;
+        let perspective = pctx.get_by_id(perspective_id).ok_or_else(|| {
+            CommandError::ExecutionFailed(format!("perspective not found: {perspective_id}"))
+        })?;
+        perspective.filter.clone().unwrap_or_default()
+    };
+
+    let filtered_task_ids = evaluate_perspective_filter(kanban, filter.as_str()).await?;
+
+    let change = ui.switch_perspective(window_label, perspective_id, filtered_task_ids);
+    Ok(serde_json::to_value(change).unwrap_or(Value::Null))
 }
 
 /// Evaluate a perspective's filter DSL against the board's tasks and return
@@ -1633,6 +1770,68 @@ mod tests {
         assert_eq!(
             result["name"], "Untitled 3",
             "whitespace-only name must be treated as empty and increment to 'Untitled 3'"
+        );
+    }
+
+    /// Lockstep drift pin for the generated-name convention — mirrored
+    /// verbatim by the frontend's `generates_the_first_free_untitled_slot`
+    /// in
+    /// `apps/kanban-app/ui/src/components/perspective-tab-bar.add-create-rename.test.tsx`.
+    /// The two generators (`first_free_untitled_name` here,
+    /// `generateUntitledName` there) are cross-language mirrors of ONE
+    /// convention: scan for the first free "Untitled" / "Untitled N" slot
+    /// by EXACT name match. If either side changes, both tables must change
+    /// together.
+    #[test]
+    fn first_free_untitled_name_matches_the_frontend_generator() {
+        let table: &[(&[&str], &str)] = &[
+            (&[], "Untitled"),
+            (&["Untitled"], "Untitled 2"),
+            (&["Untitled", "Untitled 2"], "Untitled 3"),
+            // Gap shape: the first free slot is reused, never a colliding
+            // re-mint.
+            (&["Untitled 2"], "Untitled"),
+            // Prefix-only names are user names, not generated slots — no
+            // collision.
+            (&["Untitled tasks"], "Untitled"),
+            (&["Sprint", "Untitled", "Untitled 3"], "Untitled 2"),
+        ];
+        for (taken, expected) in table {
+            assert_eq!(
+                first_free_untitled_name(taken.iter().copied()),
+                *expected,
+                "taken={taken:?}"
+            );
+        }
+    }
+
+    /// The untitled fallback fills the first FREE slot instead of counting
+    /// `Untitled`-prefixed names — counting re-mints an EXISTING name when
+    /// the sequence has gaps (e.g. "Untitled" was deleted but "Untitled 2"
+    /// survives), creating duplicate-named siblings (card
+    /// 01KTYN8GB25ZFKSXWA0QA283PG review blocker B1).
+    #[tokio::test]
+    async fn test_save_perspective_cmd_untitled_fallback_fills_gaps_not_counts() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        // Seed an explicit "Untitled 2" — the gap shape ("Untitled" absent).
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("Untitled 2".into()));
+        args.insert("view".into(), Value::String("board".into()));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+
+        // Missing name → the generator must pick the first free slot
+        // ("Untitled"), never the already-taken "Untitled 2".
+        let mut args = HashMap::new();
+        args.insert("view".into(), Value::String("board".into()));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result["name"], "Untitled",
+            "a gap in the Untitled sequence must be filled, not re-minted as \
+             a duplicate of the existing 'Untitled 2'"
         );
     }
 

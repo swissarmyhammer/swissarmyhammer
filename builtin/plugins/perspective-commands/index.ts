@@ -21,15 +21,16 @@
 //      ids) — 1:1, so each command behaves identically to the YAML-driven
 //      version.
 //   4. The plugin holds NO business logic: each `execute` makes exactly ONE
-//      MCP call into the `views` server (the in-process face over the
-//      PerspectiveContext + ViewsContext kernels), and each `available` only
-//      encodes the YAML's scope preconditions.
+//      MCP call into its backend — the `views` server (the in-process face
+//      over the PerspectiveContext + ViewsContext kernels) for resolution +
+//      CRUD, or the `entity` server's perspective ops for the three
+//      activation commands — and each `available` only encodes the YAML's
+//      scope preconditions.
 //
 // Backend routing — all 17 commands target the `views` server's perspective
 // operations:
 //   perspective.load         → views `load perspective`    (perspective.load)
 //   perspective.save         → views `save perspective`    (perspective.save)
-//   perspective.delete       → views `delete perspective`  (perspective.delete)
 //   perspective.rename       → views `rename perspective`  (perspective.rename)
 //   perspective.list         → views `list perspective`    (perspective.list)
 //   perspective.filter.focus → views `focus filter`        (filter.focus)
@@ -40,10 +41,17 @@
 //   perspective.sort.set     → views `set sort`            (sort.set)
 //   perspective.sort.clear   → views `clear sort`          (sort.clear)
 //   perspective.sort.toggle  → views `toggle sort`         (sort.toggle)
-//   perspective.next         → views `next perspective`    (perspective.next)
-//   perspective.prev         → views `prev perspective`    (perspective.prev)
 //   perspective.goto         → views `goto perspective`    (perspective.goto)
-//   perspective.switch       → views `switch perspective`  (perspective.switch)
+//
+// …except the activation + delete commands, which target the `entity`
+// server's perspective ops (the board-bundle module holding the KanbanContext
+// + UIState pair the per-window activation / selection-fallback write needs —
+// the views server only RESOLVES + mutates STORAGE; see commands/nav.ts and
+// commands/lifecycle.ts):
+//   perspective.next         → entity `next perspective`   (perspective.next)
+//   perspective.prev         → entity `prev perspective`   (perspective.prev)
+//   perspective.switch       → entity `switch perspective` (perspective.switch)
+//   perspective.delete       → entity `delete perspective` (perspective.delete)
 
 import {
   Plugin,
@@ -51,7 +59,10 @@ import {
   registerCommands,
 } from "@swissarmyhammer/plugin";
 
-import { type ViewsDispatch } from "./commands/context.ts";
+import {
+  type EntityPerspectiveDispatch,
+  type ViewsDispatch,
+} from "./commands/context.ts";
 import { filterCommands } from "./commands/filter.ts";
 import { groupCommands } from "./commands/group.ts";
 import { sortCommands } from "./commands/sort.ts";
@@ -83,15 +94,19 @@ export default class PerspectiveCommandsPlugin extends Plugin {
    * registration is `perspective.yaml`'s metadata, 1:1.
    */
   async load(): Promise<void> {
-    await ensureServices(this, ["commands", "views"]);
+    // `views` backs resolution + perspective CRUD; `entity` backs the
+    // ACTIVATION half of switch/next/prev (the board-bundle server holding
+    // the KanbanContext + UIState pair the per-window write needs).
+    await ensureServices(this, ["commands", "views", "entity"]);
 
     const views = this as unknown as ViewsDispatch;
+    const entity = this as unknown as EntityPerspectiveDispatch;
     await registerCommands(this, [
-      ...lifecycleCommands(views),
+      ...lifecycleCommands(views, entity),
       ...filterCommands(views),
       ...groupCommands(views),
       ...sortCommands(views),
-      ...navCommands(views),
+      ...navCommands(views, entity),
     ]);
 
     this.log.info(

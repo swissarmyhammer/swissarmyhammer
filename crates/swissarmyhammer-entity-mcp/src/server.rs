@@ -36,13 +36,17 @@ use swissarmyhammer_kanban::clipboard::{ClipboardProvider, ClipboardProviderExt}
 use swissarmyhammer_kanban::commands::clipboard_commands::{
     CopyEntityCmd, CutEntityCmd, PasteEntityCmd,
 };
+use swissarmyhammer_kanban::commands::perspective_commands::{
+    DeletePerspectiveCmd, NextPerspectiveCmd, PrevPerspectiveCmd, SwitchPerspectiveCmd,
+};
 use swissarmyhammer_kanban::commands_core::{Command, CommandContext};
 use swissarmyhammer_kanban::KanbanContext;
 use swissarmyhammer_ui_state::UIState;
 
 use crate::operations::{
-    operations, AddEntity, ArchiveEntity, Copy, Cut, DeleteEntity, GetEntity, ListEntities, Paste,
-    Search, UnarchiveEntity, UpdateField,
+    operations, AddEntity, ArchiveEntity, Copy, Cut, DeleteEntity, DeletePerspective, GetEntity,
+    ListEntities, NextPerspective, Paste, PrevPerspective, Search, SwitchPerspective,
+    UnarchiveEntity, UpdateField,
 };
 
 /// The per-board services an [`EntityServer`] needs at tool-call time.
@@ -547,6 +551,160 @@ impl EntityServer {
             .await
             .map_err(command_error_to_mcp)
     }
+
+    /// Build a `CommandContext` for the perspective-activation ops.
+    ///
+    /// Mirrors [`Self::build_clipboard_command_context`] but wires only what
+    /// the shared perspective commands need: the [`KanbanContext`]
+    /// (perspective lookup + filter evaluation) and the [`UIState`] (the
+    /// per-window slots the activation writes). The scope chain MUST carry
+    /// the dispatching `window:<label>` moniker — activation is per-window
+    /// state, and a silent "main" fallback would bleed one window's switch
+    /// into another (same hardening as the ui_state server's per-window
+    /// ops).
+    fn build_perspective_command_context(
+        services: &EntityBoardServices,
+        command_id: &str,
+        scope: Vec<String>,
+        args: HashMap<String, Value>,
+    ) -> Result<CommandContext, McpError> {
+        if !scope.iter().any(|m| m.starts_with("window:")) {
+            return Err(McpError::invalid_params(
+                format!(
+                    "{command_id} requires a `window:<label>` moniker in `scope` \
+                     (per-window operation; no silent main fallback), got {scope:?}"
+                ),
+                None,
+            ));
+        }
+        let kanban = services.kanban.as_ref().ok_or_else(|| {
+            McpError::internal_error(
+                "this entity server was constructed without board wiring \
+                 (EntityServer::new); use with_clipboard / with_resolver",
+                None,
+            )
+        })?;
+        let ui_state = services.ui_state.as_ref().ok_or_else(|| {
+            McpError::internal_error(
+                "this entity server was constructed without board wiring \
+                 (EntityServer::new); use with_clipboard / with_resolver",
+                None,
+            )
+        })?;
+        let mut ctx = CommandContext::new(command_id, scope, None, args);
+        ctx.set_extension(Arc::clone(kanban));
+        ctx.ui_state = Some(Arc::clone(ui_state));
+        Ok(ctx)
+    }
+
+    /// Handle a `SwitchPerspective` call — activate a perspective by id for
+    /// the dispatching window via the shared [`SwitchPerspectiveCmd`].
+    async fn handle_switch_perspective(&self, req: SwitchPerspective) -> Result<Value, McpError> {
+        let services = self.services()?;
+        let mut args = HashMap::new();
+        args.insert(
+            "perspective_id".to_string(),
+            Value::String(req.perspective_id),
+        );
+        let ctx = Self::build_perspective_command_context(
+            &services,
+            "perspective.switch",
+            req.scope,
+            args,
+        )?;
+        let change = SwitchPerspectiveCmd
+            .execute(&ctx)
+            .await
+            .map_err(command_error_to_mcp)?;
+        Ok(serde_json::json!({ "ok": true, "change": change }))
+    }
+
+    /// Handle a `NextPerspective` call — cycle forward and activate, via the
+    /// shared [`NextPerspectiveCmd`].
+    async fn handle_next_perspective(&self, req: NextPerspective) -> Result<Value, McpError> {
+        let services = self.services()?;
+        let args = Self::view_cycle_args(req.view_kind, req.view_id);
+        let ctx = Self::build_perspective_command_context(
+            &services,
+            "perspective.next",
+            req.scope,
+            args,
+        )?;
+        let change = NextPerspectiveCmd
+            .execute(&ctx)
+            .await
+            .map_err(command_error_to_mcp)?;
+        Ok(serde_json::json!({ "ok": true, "change": change }))
+    }
+
+    /// Handle a `PrevPerspective` call — cycle backward and activate, via the
+    /// shared [`PrevPerspectiveCmd`].
+    async fn handle_prev_perspective(&self, req: PrevPerspective) -> Result<Value, McpError> {
+        let services = self.services()?;
+        let args = Self::view_cycle_args(req.view_kind, req.view_id);
+        let ctx = Self::build_perspective_command_context(
+            &services,
+            "perspective.prev",
+            req.scope,
+            args,
+        )?;
+        let change = PrevPerspectiveCmd
+            .execute(&ctx)
+            .await
+            .map_err(command_error_to_mcp)?;
+        Ok(serde_json::json!({ "ok": true, "change": change }))
+    }
+
+    /// Handle a `DeletePerspective` call — delete the perspective and, when it
+    /// was the dispatching window's active selection, fall the selection back
+    /// to a survivor, via the shared [`DeletePerspectiveCmd`].
+    ///
+    /// The command resolves its delete target from the `id` arg first, else the
+    /// `perspective:{id}` moniker in `scope`; the per-window selection fallback
+    /// reads the `window:<label>` moniker the same chain carries.
+    async fn handle_delete_perspective(&self, req: DeletePerspective) -> Result<Value, McpError> {
+        let services = self.services()?;
+        let mut args = HashMap::new();
+        if !req.id.is_empty() {
+            args.insert("name".to_string(), Value::String(req.id));
+        }
+        let ctx = Self::build_perspective_command_context(
+            &services,
+            "perspective.delete",
+            req.scope,
+            args,
+        )?;
+        let mut result = DeletePerspectiveCmd
+            .execute(&ctx)
+            .await
+            .map_err(command_error_to_mcp)?;
+        // Forward the reselect's `PerspectiveSwitch` change on the same
+        // `{ ok, change }` envelope switch/next/prev ride, so the host's
+        // `ui-state-changed` emit fires for the new selection. `change` is
+        // null when the delete was not of the window's active perspective (or
+        // no survivor existed) — the emit is then correctly a no-op.
+        let change = result
+            .as_object_mut()
+            .and_then(|m| m.remove("change"))
+            .unwrap_or(Value::Null);
+        Ok(serde_json::json!({ "ok": true, "change": change }))
+    }
+
+    /// Fold the optional explicit view scoping args into the command-args
+    /// map the shared cycle commands read (`view_kind` / `view_id`).
+    fn view_cycle_args(
+        view_kind: Option<String>,
+        view_id: Option<String>,
+    ) -> HashMap<String, Value> {
+        let mut args = HashMap::new();
+        if let Some(kind) = view_kind {
+            args.insert("view_kind".to_string(), Value::String(kind));
+        }
+        if let Some(id) = view_id {
+            args.insert("view_id".to_string(), Value::String(id));
+        }
+        args
+    }
 }
 
 /// Maximum number of search hits returned by a `Search` call.
@@ -701,6 +859,22 @@ impl ServerHandler for EntityServer {
             "paste entity" => {
                 let req: Paste = deserialize_op(arguments, &op)?;
                 self.handle_paste(req).await?
+            }
+            "switch perspective" => {
+                let req: SwitchPerspective = deserialize_op(arguments, &op)?;
+                self.handle_switch_perspective(req).await?
+            }
+            "next perspective" => {
+                let req: NextPerspective = deserialize_op(arguments, &op)?;
+                self.handle_next_perspective(req).await?
+            }
+            "prev perspective" => {
+                let req: PrevPerspective = deserialize_op(arguments, &op)?;
+                self.handle_prev_perspective(req).await?
+            }
+            "delete perspective" => {
+                let req: DeletePerspective = deserialize_op(arguments, &op)?;
+                self.handle_delete_perspective(req).await?
             }
             other => {
                 return Err(McpError::invalid_params(

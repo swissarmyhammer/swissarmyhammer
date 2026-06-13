@@ -1529,8 +1529,10 @@ fn assert_palette_close(cmd: &Value) {
     assert_no_menu(cmd, "app.palette.close");
 }
 
-/// `app.entity.startRename` — ui.yaml: scope entity:perspective; keys
-/// cua/vim/emacs all Enter; no menu.
+/// `app.entity.startRename` — scope entity:perspective; keys cua/vim/emacs
+/// all F2 (rename is a deliberate gesture; Enter on a focused tab ACTIVATES
+/// the perspective — card 01KTYQY0ZB62KHN6BPK3FBMBD7); context_menu so the
+/// tab's right-click menu carries a Rename row; no menu.
 fn assert_start_rename(cmd: &Value) {
     assert_eq!(
         cmd["name"],
@@ -1544,8 +1546,13 @@ fn assert_start_rename(cmd: &Value) {
     );
     assert_eq!(
         cmd["keys"],
-        json!({ "cua": "Enter", "vim": "Enter", "emacs": "Enter" }),
+        json!({ "cua": "F2", "vim": "F2", "emacs": "F2" }),
         "app.entity.startRename keys"
+    );
+    assert_eq!(
+        cmd["context_menu"],
+        json!(true),
+        "app.entity.startRename context_menu"
     );
     assert_no_menu(cmd, "app.entity.startRename");
 }

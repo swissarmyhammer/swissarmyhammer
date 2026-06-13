@@ -40,6 +40,29 @@ export interface ViewsDispatch {
   };
 }
 
+/**
+ * The plugin `this` proxy face for the `entity` server's perspective
+ * ACTIVATION ops (`this.entity.entity.perspective.<verb>(...)`).
+ *
+ * The `views` server's perspective nav ops only RESOLVE a target
+ * perspective; the activation half — evaluating the filter and writing the
+ * window's `active_perspective_id` + `filtered_task_ids` — lives on the
+ * `entity` server, the board-bundle module that holds both the
+ * `KanbanContext` and the shared `UIState`.
+ */
+export interface EntityPerspectiveDispatch {
+  entity: {
+    entity: {
+      perspective: {
+        switch: (args: Record<string, unknown>) => Promise<unknown>;
+        next: (args: Record<string, unknown>) => Promise<unknown>;
+        prev: (args: Record<string, unknown>) => Promise<unknown>;
+        delete: (args: Record<string, unknown>) => Promise<unknown>;
+      };
+    };
+  };
+}
+
 /** A registration row, as `registerCommands` accepts. */
 export type CommandSpec = Record<string, unknown>;
 

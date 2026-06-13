@@ -31,9 +31,8 @@ use swissarmyhammer_perspectives::{
 use crate::context::ViewsContext;
 use crate::error::ViewsError;
 use crate::operations::{
-    operations, ClearFilter, ClearGroup, ClearSort, DeletePerspective, GotoPerspective,
-    LoadPerspective, NextPerspective, PrevPerspective, RenamePerspective, SavePerspective,
-    SetFilter, SetGroup, SetSort, SetView, SwitchPerspective, ToggleSort,
+    operations, ClearFilter, ClearGroup, ClearSort, GotoPerspective, LoadPerspective,
+    RenamePerspective, SavePerspective, SetFilter, SetGroup, SetSort, SetView, ToggleSort,
 };
 use crate::types::{ViewDef, ViewKind};
 
@@ -293,14 +292,6 @@ impl ViewsServer {
         }))
     }
 
-    /// Handle `delete perspective` — trash a perspective by id.
-    async fn handle_delete(&self, req: DeletePerspective) -> Result<Value, McpError> {
-        let services = self.services()?;
-        let mut pctx = services.perspectives.write().await;
-        let (_deleted, entry_id) = pctx.delete(&req.id).await.map_err(persp_error_to_mcp)?;
-        Ok(json!({ "ok": true, "entry_id": entry_id.map(|e| e.to_string()) }))
-    }
-
     /// Handle `rename perspective` — change a perspective's name.
     async fn handle_rename(&self, req: RenamePerspective) -> Result<Value, McpError> {
         let services = self.services()?;
@@ -420,60 +411,10 @@ impl ViewsServer {
     }
 
     // --- Navigation ------------------------------------------------------
-
-    /// Handle `next perspective` — resolve the next perspective in a view.
-    async fn handle_next(&self, req: NextPerspective) -> Result<Value, McpError> {
-        self.cycle(&req.view, req.view_id.as_deref(), req.current.as_deref(), 1)
-            .await
-    }
-
-    /// Handle `prev perspective` — resolve the previous perspective in a view.
-    async fn handle_prev(&self, req: PrevPerspective) -> Result<Value, McpError> {
-        self.cycle(
-            &req.view,
-            req.view_id.as_deref(),
-            req.current.as_deref(),
-            -1,
-        )
-        .await
-    }
-
-    /// Shared cycling body for next/prev navigation.
-    ///
-    /// Builds the ordered list of perspectives belonging to the view, finds
-    /// `current` in it, and steps by `step` (wrapping). Returns
-    /// `{ ok: true, perspective: null }` when fewer than two match — there is
-    /// nothing to cycle to.
-    async fn cycle(
-        &self,
-        view: &str,
-        view_id: Option<&str>,
-        current: Option<&str>,
-        step: isize,
-    ) -> Result<Value, McpError> {
-        let services = self.services()?;
-        let pctx = services.perspectives.read().await;
-        let matching: Vec<&Perspective> = pctx
-            .all()
-            .iter()
-            .filter(|p| perspective_belongs_to_view(p, view_id, view))
-            .collect();
-
-        if matching.len() < 2 {
-            return Ok(json!({ "ok": true, "perspective": Value::Null }));
-        }
-
-        let len = matching.len() as isize;
-        let current_index = current.and_then(|id| matching.iter().position(|p| p.id == id));
-        let next_index = match current_index {
-            Some(i) => (((i as isize) + step).rem_euclid(len)) as usize,
-            // No current match: forward starts at the front, backward at the end.
-            None if step > 0 => 0,
-            None => (len - 1) as usize,
-        };
-
-        Ok(json!({ "ok": true, "perspective": perspective_to_json(matching[next_index])? }))
-    }
+    //
+    // Only `goto` (pure resolution) lives here. Perspective ACTIVATION
+    // (next / prev / switch) moved to the `entity` tool — it needs the shared
+    // `UIState` this server does not hold. See card 01KTYQY0ZB62KHN6BPK3FBMBD7.
 
     /// Handle `goto perspective` — resolve by id, optionally validating view.
     async fn handle_goto(&self, req: GotoPerspective) -> Result<Value, McpError> {
@@ -496,20 +437,6 @@ impl ViewsServer {
         }
 
         Ok(json!({ "ok": true, "perspective": perspective_to_json(perspective)? }))
-    }
-
-    /// Handle `switch perspective` — resolve by id and surface its filter.
-    async fn handle_switch(&self, req: SwitchPerspective) -> Result<Value, McpError> {
-        let services = self.services()?;
-        let pctx = services.perspectives.read().await;
-        let perspective = pctx
-            .get_by_id(&req.perspective_id)
-            .ok_or_else(|| perspective_not_found(&req.perspective_id))?;
-        Ok(json!({
-            "ok": true,
-            "perspective": perspective_to_json(perspective)?,
-            "filter": perspective.filter.clone().unwrap_or_default(),
-        }))
     }
 
     // --- Views -----------------------------------------------------------
@@ -698,7 +625,6 @@ impl ViewsServer {
         match op {
             "load perspective" => self.handle_load(deserialize_op(arguments, op)?).await,
             "save perspective" => self.handle_save(deserialize_op(arguments, op)?).await,
-            "delete perspective" => self.handle_delete(deserialize_op(arguments, op)?).await,
             "rename perspective" => self.handle_rename(deserialize_op(arguments, op)?).await,
             "list perspective" => self.handle_list().await,
             "set filter" => self.handle_set_filter(deserialize_op(arguments, op)?).await,
@@ -718,10 +644,7 @@ impl ViewsServer {
                 self.handle_toggle_sort(deserialize_op(arguments, op)?)
                     .await
             }
-            "next perspective" => self.handle_next(deserialize_op(arguments, op)?).await,
-            "prev perspective" => self.handle_prev(deserialize_op(arguments, op)?).await,
             "goto perspective" => self.handle_goto(deserialize_op(arguments, op)?).await,
-            "switch perspective" => self.handle_switch(deserialize_op(arguments, op)?).await,
             "set view" => self.handle_set_view(deserialize_op(arguments, op)?).await,
             other => Err(McpError::invalid_params(
                 format!("unknown op {other:?} for views tool"),

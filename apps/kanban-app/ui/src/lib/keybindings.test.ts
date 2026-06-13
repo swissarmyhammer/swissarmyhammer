@@ -982,76 +982,79 @@ describe("extractChainBindings — component defs only", () => {
     expect(extractChainBindings([], "cua", null)).toEqual({});
   });
 
-  /* ---------- app.entity.startRename — perspective-scoped Enter binding ---------- */
+  /* ---------- app.entity.startRename — perspective-scoped F2 binding ---------- */
   //
-  // The active perspective tab's `<CommandScopeProvider>` (in
+  // Every perspective tab's `<CommandScopeProvider>` (in
   // `kanban-app/ui/src/components/perspective-tab-bar.tsx`) registers
-  // `app.entity.startRename` with `keys: { cua: "Enter", vim: "Enter", emacs: "Enter" }`
-  // when the tab is the currently active perspective. The YAML mirror
-  // (`swissarmyhammer-commands/builtin/commands/ui.yaml`) carries the same
-  // `keys` block plus `scope: "entity:perspective"` so the palette / context
-  // menu sees the binding too.
+  // `app.entity.startRename` with `keys: { cua: "F2", vim: "F2", emacs: "F2" }`.
+  // Rename is a DELIBERATE gesture (card 01KTYQY0ZB62KHN6BPK3FBMBD7):
+  // Enter on a focused tab ACTIVATES the perspective via the tab's
+  // positional `nav.drillIn` shadow, which carries NO keys — the global
+  // Enter → nav.drillIn binding stays authoritative and the shadow only
+  // intercepts the EXECUTION while the tab is focused. The catalogue
+  // mirror (`app-shell-commands/commands/ui.ts`) carries the same F2 keys
+  // plus `scope: ["entity:perspective"]` and `context_menu: true`.
   //
-  // These three guards pin the React-side contract: from any perspective scope
-  // that surfaces the command, `extractChainBindings` must return
-  // `{ Enter: "app.entity.startRename" }` for cua, vim, AND emacs. The
-  // cross-cutting tests below pin the dispatch side; here we pin the
-  // extraction side independently so a future regression that drops one of
-  // the three modes from the React-side `keys` block fails this assertion
-  // before any browser test runs.
+  // These guards pin the React-side contract: from any perspective scope
+  // that surfaces the command, `extractChainBindings` must return F2 →
+  // `app.entity.startRename` for cua, vim, AND emacs — and must NOT claim
+  // Enter, which keeps resolving to the parent/global `nav.drillIn`.
 
-  it("app.entity.startRename surfaces Enter on a perspective scope (cua)", () => {
+  it("app.entity.startRename surfaces F2 on a perspective scope (cua)", () => {
     const scope = makeScope([
       {
         id: "app.entity.startRename",
-        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+        keys: { cua: "F2", vim: "F2", emacs: "F2" },
       },
     ]);
     const bindings = extractChainBindings([], "cua", scope);
-    expect(bindings).toEqual({ Enter: "app.entity.startRename" });
+    expect(bindings).toEqual({ F2: "app.entity.startRename" });
   });
 
-  it("app.entity.startRename surfaces Enter on a perspective scope (vim)", () => {
+  it("app.entity.startRename surfaces F2 on a perspective scope (vim)", () => {
     const scope = makeScope([
       {
         id: "app.entity.startRename",
-        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+        keys: { cua: "F2", vim: "F2", emacs: "F2" },
       },
     ]);
     const bindings = extractChainBindings([], "vim", scope);
-    expect(bindings).toEqual({ Enter: "app.entity.startRename" });
+    expect(bindings).toEqual({ F2: "app.entity.startRename" });
   });
 
-  it("app.entity.startRename surfaces Enter on a perspective scope (emacs)", () => {
+  it("app.entity.startRename surfaces F2 on a perspective scope (emacs)", () => {
     const scope = makeScope([
       {
         id: "app.entity.startRename",
-        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+        keys: { cua: "F2", vim: "F2", emacs: "F2" },
       },
     ]);
     const bindings = extractChainBindings([], "emacs", scope);
-    expect(bindings).toEqual({ Enter: "app.entity.startRename" });
+    expect(bindings).toEqual({ F2: "app.entity.startRename" });
   });
 
-  it("app.entity.startRename's Enter shadows a parent nav.drillIn: Enter", () => {
-    // The global drill-in binding lives at the AppShell root — a perspective
-    // scope that registers `app.entity.startRename: Enter` must shadow it so
-    // Enter inside the perspective scope chain triggers rename, not drill-in.
-    // `extractChainBindings` walks innermost-first with first-key-wins
-    // semantics, so the inner perspective scope's command claims `Enter`
-    // before the parent scope's nav.drillIn is reached.
+  it("a perspective tab scope leaves Enter to the parent nav.drillIn", () => {
+    // Enter = activate: the tab's `nav.drillIn` shadow carries no keys, so
+    // the BINDING for Enter keeps resolving to the (global / parent)
+    // `nav.drillIn` id — the tab only shadows that id's EXECUTION through
+    // `useDispatchCommand`'s scope-local fast-path. F2 is the only key the
+    // tab's own defs claim.
     const outer = makeScope([{ id: "nav.drillIn", keys: { cua: "Enter" } }]);
     const inner = makeScope(
       [
+        // The tab's two scope defs, as ScopedPerspectiveTab registers them:
+        // a key-less nav.drillIn shadow plus the F2 rename def.
+        { id: "nav.drillIn" },
         {
           id: "app.entity.startRename",
-          keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+          keys: { cua: "F2", vim: "F2", emacs: "F2" },
         },
       ],
       outer,
     );
     const bindings = extractChainBindings([], "cua", inner);
-    expect(bindings.Enter).toBe("app.entity.startRename");
+    expect(bindings.Enter).toBe("nav.drillIn");
+    expect(bindings.F2).toBe("app.entity.startRename");
   });
 });
 
@@ -1418,18 +1421,23 @@ describe("Escape resolves to nav.drillOut (production registry + scope wiring)",
 // The contract pinned here: a command carrying a non-empty `scope` filter
 // contributes NO global keybinding — its keys apply only through the
 // focused-scope walk (`extractChainBindings`), exactly as the app-shell-commands
-// source comments intend ("The scope filter keeps Enter from claiming
-// nav.drillIn on board/column/card focus"). Global key ownership is therefore
-// order-independent.
+// source comments intend ("The scope filter keeps F2 from claiming a global
+// binding"). Global key ownership is therefore order-independent.
+//
+// (The historical regression used Enter — at the time the scope-gated rename
+// command carried Enter keys. Rename has since moved to F2, with Enter
+// activating the perspective via the tab's nav.drillIn shadow — card
+// 01KTYQY0ZB62KHN6BPK3FBMBD7 — but the order-independence contract is
+// unchanged and the slice below mirrors the CURRENT catalogue shape.)
 describe("Enter resolves to nav.drillIn regardless of registry order (third-window regression)", () => {
-  /** The Enter-bearing registry slice in the THIRD window's adverse order:
-   * the scope-gated rename command iterates before the global drill. */
+  /** The registry slice in the THIRD window's adverse order: the scope-gated
+   * rename command iterates before the global drill. */
   const ADVERSE_ORDER = [
     {
       id: "app.entity.startRename",
       name: "Rename Perspective",
       scope: ["entity:perspective"],
-      keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+      keys: { cua: "F2", vim: "F2", emacs: "F2" },
     },
     {
       id: "nav.drillIn",
@@ -1445,6 +1453,13 @@ describe("Enter resolves to nav.drillIn regardless of registry order (third-wind
     it(`${mode}: Enter binds to nav.drillIn even when the scoped rename command iterates first`, () => {
       const bindings = extractKeymapBindings([...ADVERSE_ORDER], mode);
       expect(bindings["Enter"]).toBe("nav.drillIn");
+    });
+  }
+
+  for (const mode of ["cua", "vim", "emacs"] as const) {
+    it(`${mode}: the scope-gated F2 rename key contributes no global binding`, () => {
+      const bindings = extractKeymapBindings([...ADVERSE_ORDER], mode);
+      expect(bindings["F2"]).toBeUndefined();
     });
   }
 

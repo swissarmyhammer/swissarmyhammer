@@ -1,7 +1,8 @@
 /**
- * Browser-mode test: Enter on the focused Add Perspective leaf opens
- * the registry-rendered `<CommandPopover>` (the new keyboard-activation
- * contract after card `01KRE21GJMPP289N1HSTMJG5HE`).
+ * Browser-mode test: Enter on the focused Add Perspective leaf
+ * dispatches `perspective.save` IMMEDIATELY with a generated unique
+ * name — no popup (the keyboard-activation contract after card
+ * `01KTYN8GB25ZFKSXWA0QA283PG`).
  *
  * # Migration history
  *
@@ -11,36 +12,37 @@
  * `perspective.save` directly with a frontend-computed name.
  *
  * Card `01KRE21GJMPP289N1HSTMJG5HE` (Add + Sort migration) deleted
- * `<AddPerspectiveButton>`. The `+` affordance is now a
- * registry-rendered `<CommandButton>` for `perspective.save` rendered
- * by `<BarRegistryTabButtons>` at the bar level. The CommandButton's
- * `handlePress` opens a `<CommandPopover>` (because the command has a
- * pickable `name` param) instead of dispatching directly — the user
- * fills in the form and submits to actually save the perspective.
+ * `<AddPerspectiveButton>` in favour of a registry-rendered
+ * `<CommandButton>` whose press opened a `<CommandPopover>` (because
+ * the command has a text-shaped `name` param).
+ *
+ * Card `01KTYN8GB25ZFKSXWA0QA283PG` deleted that popup path: the `+`
+ * is now the `<AddPerspectiveCommandButton>` adapter whose press
+ * creates the perspective immediately with a generated name
+ * ("Untitled" / "Untitled N" — the first free slot by exact-name match
+ * against the visible list) and arms inline rename once the entity
+ * appears — full-circle back to the original immediate-dispatch UX,
+ * but registry-rendered and command-routed.
  *
  * # Spatial-nav moniker
  *
- * Changed from `ui:perspective-bar.add` (the legacy Pressable's
- * deliberately-chosen segment) to
- * `perspective_bar.perspective.save:<view-id>` (the moniker
- * `<CommandButton>` builds from `${surface}.${command.id}:${surfaceId}`).
- * Same migration pattern as the Filter / Group buttons before it.
+ * Unchanged from the CommandButton era:
+ * `perspective_bar.perspective.save:<view-id>` (the
+ * `${surface}.${command.id}:${surfaceId}` shape).
  *
- *   1. `<BarRegistryTabButtons>` queries the registry and renders one
- *      `<CommandButton>` per global tab-button command.
- *   2. `<CommandButton>` wraps the `<button>` in a `<Pressable>` with
+ *   1. `<BarRegistryTabButtons>` queries the registry and renders the
+ *      `<AddPerspectiveCommandButton>` adapter for `perspective.save`.
+ *   2. The adapter wraps the `<button>` in a `<Pressable>` with
  *      moniker `perspective_bar.perspective.save:<view-id>` and an
- *      `onPress` that opens the popover.
+ *      `onPress` that creates immediately.
  *   3. AppShell's `KeybindingHandler` resolves Enter on the focused
  *      leaf through `extractChainBindings`, dispatches
- *      `pressable.activate` → opens the popover.
+ *      `pressable.activate` → immediate `perspective.save` dispatch.
  *
- * Asserts: the focused leaf registers under the new moniker AND Enter
- * opens the popover (`<CommandPopover>` mounts under the
- * `data-testid="command-popover"` attribute). The submit → dispatch
- * chain is covered by `perspective-tab-bar.add-and-sort-migration.test.tsx`
- * — pinning it here too would couple this spatial-nav test to the
- * picker-pipeline render path it doesn't own.
+ * Asserts: the focused leaf registers under the moniker AND Enter
+ * dispatches `perspective.save` with the generated name without
+ * opening any popover. The dedupe / rename-arming contracts are
+ * covered by `perspective-tab-bar.add-create-rename.test.tsx`.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -346,7 +348,7 @@ describe("PerspectiveTabBar add button — Enter activates the registry-rendered
     }
   });
 
-  it("seeds focus on perspective_bar.perspective.save:<view-id> → Enter opens the popover", async () => {
+  it("seeds focus on perspective_bar.perspective.save:<view-id> → Enter creates immediately", async () => {
     const result = await renderTabBar();
     await flushSetup();
     // Two extra microtask flushes cover the registry's async resolve →
@@ -392,33 +394,30 @@ describe("PerspectiveTabBar add button — Enter activates the registry-rendered
       await Promise.resolve();
     });
 
-    // Enter on the focused leaf must open the popover — the new
-    // contract for the registry-rendered tab button is "click /
-    // keyboard-activate opens the popover", NOT immediate dispatch.
-    // The popover-submit → `perspective.save` dispatch chain is
-    // covered by `perspective-tab-bar.add-and-sort-migration.test.tsx`.
+    // Enter on the focused leaf must dispatch `perspective.save`
+    // IMMEDIATELY with a generated unique name — the popup path for `+`
+    // was deleted by card 01KTYN8GB25ZFKSXWA0QA283PG.
     //
-    // Note: Radix Popover portals its content into `document.body`, NOT
-    // inside `result.container` — query at the document level so the
-    // portalled popover surface is visible to the assertion. Voiding
-    // the unused `result` so the harness's render is still required for
-    // its side-effects (mounting the bar + the popover root).
+    // Note: Radix Popover would portal its content into `document.body`,
+    // NOT inside `result.container` — query at the document level so a
+    // regression re-introducing the popover is visible to the assertion.
+    // Voiding the unused `result` so the harness's render is still
+    // required for its side-effects (mounting the bar).
     void result;
-    const popover = document.querySelector('[data-testid="command-popover"]');
     expect(
-      popover,
-      "Enter on the focused add leaf must open <CommandPopover>",
-    ).toBeTruthy();
+      document.querySelector('[data-testid="command-popover"]'),
+      "Enter on the focused add leaf must NOT open a popover — the + popup path is deleted",
+    ).toBeNull();
 
-    // No `perspective.save` dispatch fires until the user submits the
-    // popover — guards against a regression that wires Enter to both
-    // the popover open AND a direct dispatch.
     const saveCalls = dispatchCommandCalls().filter(
       (c) => c.cmd === "perspective.save",
     );
     expect(
       saveCalls.length,
-      "Enter on the focused add leaf must NOT dispatch perspective.save directly — it opens the popover first",
-    ).toBe(0);
+      "Enter on the focused add leaf must dispatch perspective.save immediately",
+    ).toBe(1);
+    expect(saveCalls[0]).toMatchObject({
+      args: { name: "Untitled", view: "board", view_id: "board-1" },
+    });
   });
 });

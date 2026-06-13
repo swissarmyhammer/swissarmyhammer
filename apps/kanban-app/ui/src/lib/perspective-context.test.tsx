@@ -12,8 +12,19 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
 }));
 
+// Array-of-callbacks per event — a single last-writer-wins slot is a flake
+// factory: React 18 StrictMode double-mounts the provider's subscription
+// effect, and the two lazy `listen` registrations resolve in scheduler-
+// dependent order, so a single slot sometimes holds the DISPOSED first
+// subscription's callback (whose batcher drops events) instead of the live
+// one. Storing every callback and firing them all (`fireStoreChanged`)
+// makes delivery order-independent — disposed batchers ignore their event,
+// the live one refetches.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let listenCallbacks: Record<string, (event: { payload: any }) => void> = {};
+let listenCallbacks: Record<
+  string,
+  Array<(event: { payload: any }) => void>
+> = {};
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(
     (
@@ -21,11 +32,19 @@ vi.mock("@tauri-apps/api/event", () => ({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       cb: (e: { payload: any }) => void,
     ) => {
-      listenCallbacks[event] = cb;
+      (listenCallbacks[event] ??= []).push(cb);
       return Promise.resolve(() => {});
     },
   ),
 }));
+
+/** Fire a `store/changed` event to EVERY registered listener. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function fireStoreChanged(event: { payload: any }) {
+  for (const cb of listenCallbacks["notifications/store/changed"] ?? []) {
+    cb(event);
+  }
+}
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
@@ -282,11 +301,11 @@ describe("PerspectiveProvider", () => {
     // swallows the dispatch and the refetch never happens.
     await act(async () => {
       for (let i = 0; i < 50; i++) {
-        if (listenCallbacks["notifications/store/changed"]) break;
+        if (listenCallbacks["notifications/store/changed"]?.length) break;
         await new Promise((r) => setTimeout(r, 0));
       }
     });
-    expect(listenCallbacks["notifications/store/changed"]).toBeDefined();
+    expect(listenCallbacks["notifications/store/changed"]?.length).toBeTruthy();
 
     // Next `perspective.list` call returns p1 with an updated name —
     // simulating a field edit that was just written to disk.
@@ -299,10 +318,16 @@ describe("PerspectiveProvider", () => {
       undoable: false,
     });
 
-    const initialInvokeCount = mockInvoke.mock.calls.length;
+    const countListCalls = () =>
+      mockInvoke.mock.calls.filter(
+        (call) =>
+          call[0] === "dispatch_command" &&
+          (call[1] as { cmd: string })?.cmd === "perspective.list",
+      ).length;
+    const listCallsBefore = countListCalls();
 
     await act(async () => {
-      listenCallbacks["notifications/store/changed"]?.({
+      fireStoreChanged({
         payload: {
           store: "perspective",
           item: "p1",
@@ -311,24 +336,19 @@ describe("PerspectiveProvider", () => {
           origin: "user",
         },
       });
-      await new Promise((r) => setTimeout(r, 0));
+      // The refetch chain (batch flush → refresh → lazy transport import →
+      // invoke) can need multiple timer hops under the full-suite
+      // scheduler — poll, mirroring the listener-registration wait above,
+      // instead of assuming one hop suffices.
+      for (let i = 0; i < 50; i++) {
+        if (countListCalls() > listCallsBefore) break;
+        await new Promise((r) => setTimeout(r, 0));
+      }
     });
 
     // The listener triggered a refetch, so `perspective.list` was invoked
     // once more than before the event.
-    const listCallsAfter = mockInvoke.mock.calls.filter(
-      (call) =>
-        call[0] === "dispatch_command" &&
-        (call[1] as { cmd: string })?.cmd === "perspective.list",
-    ).length;
-    const listCallsBefore = mockInvoke.mock.calls
-      .slice(0, initialInvokeCount)
-      .filter(
-        (call) =>
-          call[0] === "dispatch_command" &&
-          (call[1] as { cmd: string })?.cmd === "perspective.list",
-      ).length;
-    expect(listCallsAfter).toBe(listCallsBefore + 1);
+    expect(countListCalls()).toBe(listCallsBefore + 1);
 
     // And the fresh state is reflected in the hook's perspectives.
     expect(result.current.perspectives.find((p) => p.id === "p1")?.name).toBe(
@@ -360,7 +380,7 @@ describe("PerspectiveProvider", () => {
     });
 
     await act(async () => {
-      listenCallbacks["notifications/store/changed"]?.({
+      fireStoreChanged({
         payload: {
           store: "perspective",
           item: "p2",
@@ -397,7 +417,7 @@ describe("PerspectiveProvider", () => {
     });
 
     await act(async () => {
-      listenCallbacks["notifications/store/changed"]?.({
+      fireStoreChanged({
         payload: {
           store: "perspective",
           item: "p2",
@@ -426,7 +446,7 @@ describe("PerspectiveProvider", () => {
     const callCountBefore = mockInvoke.mock.calls.length;
 
     await act(async () => {
-      listenCallbacks["notifications/store/changed"]?.({
+      fireStoreChanged({
         payload: {
           store: "task",
           item: "t1",
@@ -461,7 +481,7 @@ describe("PerspectiveProvider", () => {
     });
 
     await act(async () => {
-      listenCallbacks["notifications/store/changed"]?.({
+      fireStoreChanged({
         payload: {
           store: "board",
           item: "b1",
@@ -863,7 +883,7 @@ describe("PerspectiveProvider", () => {
     // shape omits `changes` (perspectives re-fetch from canonical YAML). The
     // subscriber must treat it as a refetch signal.
     await act(async () => {
-      listenCallbacks["notifications/store/changed"]?.({
+      fireStoreChanged({
         payload: {
           store: "perspective",
           item: "p1",
@@ -902,7 +922,7 @@ describe("PerspectiveProvider", () => {
     });
 
     await act(async () => {
-      listenCallbacks["notifications/store/changed"]?.({
+      fireStoreChanged({
         payload: {
           store: "perspective",
           item: "p1",

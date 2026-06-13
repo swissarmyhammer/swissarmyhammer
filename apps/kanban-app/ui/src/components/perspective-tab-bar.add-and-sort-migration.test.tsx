@@ -13,13 +13,17 @@
  *     enforced in palettes / context menus only; no surfaced tab button
  *     meant no view-kind-driven hide on the board view either.
  *
- * After the migration both affordances are registry-rendered
- * `<CommandButton>`s driven by YAML annotations:
+ * After the migration both affordances are registry-rendered and driven
+ * by YAML annotations:
  *
- *   - `perspective.save`: `tab_button: { icon: plus }`; the `name` param
- *     is `shape: text`. The dispatcher's empty-input fallback to
- *     `"Untitled"` keeps the user-visible behavior aligned with the
- *     legacy button.
+ *   - `perspective.save`: `tab_button: { icon: plus }`. Card
+ *     01KTYN8GB25ZFKSXWA0QA283PG replaced the popover-collecting
+ *     `<CommandButton>` with the `<AddPerspectiveCommandButton>` adapter:
+ *     clicking `+` now creates IMMEDIATELY with a generated unique name
+ *     ("Untitled" / "Untitled N" — the first free slot by exact-name
+ *     match against the visible list) and arms inline rename — no popup.
+ *     The full create→rename flow is covered by
+ *     `perspective-tab-bar.add-create-rename.test.tsx`.
  *   - `perspective.sort.set`: `tab_button: { icon: arrow-up-down }`;
  *     `field` is enum-shaped sourced from `perspective.fields`,
  *     `direction` is enum-shaped sourced from `sort.directions`. The
@@ -29,10 +33,10 @@
  *
  * Five contracts locked here:
  *
- *   1. The Add `<CommandButton>` mounts at the bar level with the
- *      `plus` lucide icon (resolved from `tab_button.icon`).
- *   2. Submitting the Add popover with a typed name dispatches
- *      `perspective.save` with `{ name, view_id }`.
+ *   1. The Add button mounts at the bar level with the `plus` lucide
+ *      icon (resolved from `tab_button.icon`).
+ *   2. Clicking the Add button dispatches `perspective.save` immediately
+ *      with a generated name — no popover opens.
  *   3. The Sort `<CommandButton>` mounts on a grid view (with the
  *      `arrow-up-down` icon) and is absent on a board view — the
  *      regression test the original perspective-sort bug needed and
@@ -273,7 +277,11 @@ function sortRegistryEntry(
           { value: "desc", label: "Descending" },
         ],
       },
-      { name: "perspective_id", from: "scope_chain", entity_type: "perspective" },
+      {
+        name: "perspective_id",
+        from: "scope_chain",
+        entity_type: "perspective",
+      },
     ],
     keys: {},
   };
@@ -387,24 +395,20 @@ describe("perspective-tab-bar — Add perspective migration", () => {
   });
 
   // -------------------------------------------------------------------------
-  // 2. Submitting the Add popover with a typed name dispatches
-  //    `perspective.save` with the name.
+  // 2. Clicking the Add button dispatches `perspective.save` IMMEDIATELY
+  //    with a generated unique name — no popover opens (card
+  //    01KTYN8GB25ZFKSXWA0QA283PG deleted the popup path for `+`).
   //
-  //    The `view_id` arg is NOT asserted on the wire here on purpose:
-  //    the production dispatcher (`SavePerspectiveCmd::execute`) reads
-  //    `view_id` from the scope chain when the args bag does not supply
-  //    one (see `test_save_perspective_cmd_resolves_view_id_from_scope_chain`
-  //    in `swissarmyhammer-kanban/src/commands/perspective_commands.rs`).
-  //    There is no backend scope-chain-to-args injection pass in
-  //    `dispatch_command_internal`; the fallback lives in
-  //    `SavePerspectiveCmd::execute` itself, so the wire payload that
-  //    reaches the backend from the popover carries only `{ name }`.
-  //    The dispatch-time `view_id` resolution is pinned by the Rust
-  //    integration tests cited above; this frontend test only checks
-  //    that the popover collects `name` and dispatches the command.
+  //    The generated name follows the backend's `generate_untitled_name`
+  //    convention ("Untitled" / "Untitled N" — the first free slot by
+  //    exact-name match against the perspectives visible in the active
+  //    view scope). The dedupe and
+  //    rename-arming contracts live in
+  //    `perspective-tab-bar.add-create-rename.test.tsx`; this migration
+  //    file pins only the no-popup immediate dispatch.
   // -------------------------------------------------------------------------
 
-  it("submitting_add_popover_dispatches_perspective_save_with_name", async () => {
+  it("clicking_add_dispatches_perspective_save_immediately_without_popover", async () => {
     mockResolvedCommands([addRegistryEntry()]);
 
     renderTabBar();
@@ -416,27 +420,8 @@ describe("perspective-tab-bar — Add perspective migration", () => {
       await Promise.resolve();
     });
 
-    const popover = await screen.findByTestId("command-popover");
-    // The single-text-param case takes the form branch — one input
-    // labelled `name` + a Submit button.
-    const nameInput = popover.querySelector(
-      'input[type="text"]',
-    ) as HTMLInputElement;
-    expect(nameInput).toBeTruthy();
-
-    await act(async () => {
-      fireEvent.change(nameInput, { target: { value: "My Sprint" } });
-      await Promise.resolve();
-    });
-
-    const submit = popover.querySelector(
-      'button[type="submit"]',
-    ) as HTMLButtonElement;
-    expect(submit).toBeTruthy();
-    await act(async () => {
-      fireEvent.click(submit);
-      await Promise.resolve();
-    });
+    // No popover — the `+` popup path is deleted.
+    expect(screen.queryByTestId("command-popover")).toBeNull();
 
     const saveCalls = mockInvoke.mock.calls.filter(
       (c) =>
@@ -446,7 +431,7 @@ describe("perspective-tab-bar — Add perspective migration", () => {
     expect(saveCalls).toHaveLength(1);
     expect(saveCalls[0][1]).toMatchObject({
       cmd: "perspective.save",
-      args: { name: "My Sprint" },
+      args: { name: "Untitled", view: "board", view_id: "board-1" },
     });
   });
 });
@@ -522,7 +507,12 @@ describe("perspective-tab-bar — Sort migration", () => {
     // returning an empty list for the board scope.
     mockViewsValue = {
       ...mockViewsValue,
-      activeView: { id: "board-1", name: "Board", kind: "board", icon: "kanban" },
+      activeView: {
+        id: "board-1",
+        name: "Board",
+        kind: "board",
+        icon: "kanban",
+      },
     };
     mockPerspectivesValue = {
       ...mockPerspectivesValue,

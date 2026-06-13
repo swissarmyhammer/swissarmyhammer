@@ -62,9 +62,12 @@ async fn save_then_load_round_trip() {
     assert_eq!(by_id["perspective"]["name"], json!("Sprint"));
 }
 
-/// list reflects saved perspectives; rename and delete mutate the set.
+/// list reflects saved perspectives; rename mutates the set. (Delete is NOT a
+/// views op — it routes to the `entity` server, which holds the per-window
+/// UIState the active-selection fallback writes; see
+/// `swissarmyhammer-entity-mcp`.)
 #[tokio::test]
-async fn list_rename_delete_lifecycle() {
+async fn list_rename_lifecycle() {
     let h = Harness::new().await;
     let server = h.server();
 
@@ -89,25 +92,6 @@ async fn list_rename_delete_lifecycle() {
     .await
     .unwrap();
     assert_eq!(renamed["perspective"]["name"], json!("Renamed"));
-
-    // Delete.
-    let deleted = call_tool(
-        &server,
-        "delete perspective",
-        json!({ "op": "delete perspective", "id": id }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(deleted["ok"], json!(true));
-
-    let after = call_tool(
-        &server,
-        "list perspective",
-        json!({ "op": "list perspective" }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(after["count"], json!(1));
 }
 
 /// set filter stores the expression; clear filter drops it.
@@ -275,45 +259,18 @@ async fn set_sort_rejects_bad_direction() {
     assert!(err.message.contains("invalid sort direction"));
 }
 
-/// next/prev cycle through perspectives matching a view kind, wrapping.
+/// goto resolves a perspective by id.
+///
+/// Activation ops (next / prev / switch) moved to the `entity` tool — this
+/// server exposes only the `goto` RESOLUTION op (card 01KTYQY0ZB62KHN6BPK3FBMBD7).
 #[tokio::test]
-async fn nav_next_prev_goto_switch() {
+async fn nav_goto_resolves_by_id() {
     let h = Harness::new().await;
     let server = h.server();
 
-    let a = save_perspective(&h, "A", "board").await;
+    save_perspective(&h, "A", "board").await;
     let b = save_perspective(&h, "B", "board").await;
-    let c = save_perspective(&h, "C", "board").await;
-
-    // next from A -> B.
-    let next = call_tool(
-        &server,
-        "next perspective",
-        json!({ "op": "next perspective", "view": "board", "current": a }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(next["perspective"]["id"], json!(b));
-
-    // next from C wraps to A.
-    let wrap = call_tool(
-        &server,
-        "next perspective",
-        json!({ "op": "next perspective", "view": "board", "current": c }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(wrap["perspective"]["id"], json!(a));
-
-    // prev from A wraps to C.
-    let prev = call_tool(
-        &server,
-        "prev perspective",
-        json!({ "op": "prev perspective", "view": "board", "current": a }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(prev["perspective"]["id"], json!(c));
+    save_perspective(&h, "C", "board").await;
 
     // goto by id returns it.
     let goto = call_tool(
@@ -324,34 +281,6 @@ async fn nav_next_prev_goto_switch() {
     .await
     .unwrap();
     assert_eq!(goto["perspective"]["id"], json!(b));
-
-    // switch returns perspective + its (empty) filter.
-    let switch = call_tool(
-        &server,
-        "switch perspective",
-        json!({ "op": "switch perspective", "perspective_id": c }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(switch["perspective"]["id"], json!(c));
-    assert_eq!(switch["filter"], json!(""));
-}
-
-/// next is a no-op (null perspective) when fewer than two match the view.
-#[tokio::test]
-async fn nav_next_noop_with_single_match() {
-    let h = Harness::new().await;
-    let server = h.server();
-    let only = save_perspective(&h, "Solo", "board").await;
-
-    let res = call_tool(
-        &server,
-        "next perspective",
-        json!({ "op": "next perspective", "view": "board", "current": only }),
-    )
-    .await
-    .unwrap();
-    assert!(res["perspective"].is_null());
 }
 
 /// goto validates view membership and errors on mismatch.

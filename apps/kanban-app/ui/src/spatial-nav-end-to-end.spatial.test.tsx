@@ -1279,15 +1279,16 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   });
 
   // =========================================================================
-  // Family 5 — Enter → rename on focused active perspective tab
+  // Family 5 — Enter activates / F2 renames on a focused perspective tab
   //
-  // Pins `01KQ7GE3KY91X2YR6BX5AY40VK`: pressing Enter on a focused
-  // active perspective tab mounts the inline rename editor; pressing
-  // Enter while the editor is open commits via `perspective.rename`.
+  // Pins `01KTYQY0ZB62KHN6BPK3FBMBD7`: Enter on a focused tab is the
+  // primary action — it ACTIVATES the perspective (the tab's positional
+  // `nav.drillIn` shadow dispatches `perspective.switch`); F2 is the
+  // deliberate rename gesture that mounts the inline editor.
   // =========================================================================
 
-  describe("Family 5 — Enter → rename on focused active perspective tab", () => {
-    it("Enter on the focused active perspective tab mounts the inline rename editor", async () => {
+  describe("Family 5 — Enter activates / F2 renames on focused perspective tab", () => {
+    it("Enter on the focused active perspective tab dispatches perspective.switch (no rename editor)", async () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
@@ -1310,19 +1311,74 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         expect(tab).not.toBeNull();
       });
 
+      mockInvoke.mockClear();
       fireEvent.keyDown(document.body, { key: "Enter" });
       await flushAppMount();
 
-      // The active-tab-only `app.entity.startRename: Enter` binding mounts
-      // an inline `<InlineRenameEditor>` (a CodeMirror `.cm-editor`)
-      // inside the tab.
+      // The tab's positional `nav.drillIn` shadow intercepts Enter and
+      // dispatches the canonical activation command for this tab.
+      await waitFor(() => {
+        const switchCalls = dispatchCallsFor("perspective.switch");
+        expect(
+          switchCalls.length,
+          "Enter on a focused tab must dispatch perspective.switch",
+        ).toBeGreaterThan(0);
+        const targetsTab = switchCalls.some(
+          (c) =>
+            (c.args as { perspective_id?: unknown })?.perspective_id ===
+            "default",
+        );
+        expect(
+          targetsTab,
+          "the activation must target the focused tab's perspective id",
+        ).toBe(true);
+      });
+
+      // Enter no longer arms rename.
+      expect(
+        container.querySelector(
+          "[data-segment='perspective_tab:default'] .cm-editor",
+        ),
+        "Enter must NOT mount the inline rename editor",
+      ).toBeNull();
+
+      unmount();
+    });
+
+    it("F2 on the focused active perspective tab mounts the inline rename editor", async () => {
+      const { container, unmount } = renderApp();
+      await flushAppMount();
+
+      const tabKey = harness.getRegisteredFqBySegment(
+        "perspective_tab:default",
+      );
+      expect(tabKey).not.toBeNull();
+
+      await harness.fireFocusChanged({
+        next_fq: tabKey!,
+        next_segment: asSegment("perspective_tab:default"),
+      });
+      await flushAppMount();
+
+      await waitFor(() => {
+        const tab = container.querySelector(
+          "[data-segment='perspective_tab:default'][data-focused='true']",
+        );
+        expect(tab).not.toBeNull();
+      });
+
+      fireEvent.keyDown(document.body, { key: "F2" });
+      await flushAppMount();
+
+      // The per-tab `app.entity.startRename: F2` binding mounts an inline
+      // `<InlineRenameEditor>` (a CodeMirror `.cm-editor`) inside the tab.
       await waitFor(() => {
         const editor = container.querySelector(
           "[data-segment='perspective_tab:default'] .cm-editor",
         );
         expect(
           editor,
-          "Enter on focused active tab must mount the inline rename editor",
+          "F2 on focused active tab must mount the inline rename editor",
         ).not.toBeNull();
       });
 
@@ -1738,7 +1794,8 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
-      // Mount the inline rename editor via the family-5 path.
+      // Mount the inline rename editor via the family-5 path (F2 is the
+      // rename gesture; Enter would activate the perspective instead).
       const tabKey = harness.getRegisteredFqBySegment(
         "perspective_tab:default",
       );
@@ -1748,7 +1805,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         next_segment: asSegment("perspective_tab:default"),
       });
       await flushAppMount();
-      fireEvent.keyDown(document.body, { key: "Enter" });
+      fireEvent.keyDown(document.body, { key: "F2" });
       await flushAppMount();
 
       const editor = await waitFor(() => {
