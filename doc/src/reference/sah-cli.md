@@ -95,10 +95,8 @@ Example usage:
 Run as MCP server. This is the default mode when
 invoked via stdio (e.g., by Claude Code). The server will:
 
-- Load all prompts from builtin, user, and local directories
-- Watch for file changes and reload prompts automatically  
-- Expose prompts via the MCP protocol
-- Support template substitution with {{variables}}
+- Expose the SwissArmyHammer tools and workflows via the MCP protocol
+- Watch for file changes and reload automatically
 
 Example:
   swissarmyhammer serve        # Stdio mode (default)
@@ -331,7 +329,7 @@ and best practice violations before they impact your workflows.
 ## Quality Assurance
 
 Comprehensive Validation:
-• Skills from all sources (builtin, user, project)
+• Skill files from all sources (builtin, user, project)
 • Workflow definitions from standard locations
 • MCP tool schemas and CLI integration (with --validate-tools)
 • Template syntax and variable usage
@@ -547,7 +545,7 @@ YAML format:
 
 ## Troubleshooting
 
-Validation errors in prompts:
+Validation errors in skills:
 • Check YAML frontmatter syntax
 • Verify all required fields present
 • Ensure template variables declared
@@ -623,7 +621,7 @@ Support Automation:
 • Continuous quality monitoring
 
 The validate command is your quality assurance system for SwissArmyHammer
-configuration, ensuring that prompts, workflows, and tools are correct,
+configuration, ensuring that skills, workflows, and tools are correct,
 complete, and ready for reliable operation.
 
 **Usage:** `swissarmyhammer validate [OPTIONS]`

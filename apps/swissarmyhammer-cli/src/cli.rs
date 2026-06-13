@@ -119,10 +119,8 @@ pub enum Commands {
 Run as MCP server. This is the default mode when
 invoked via stdio (e.g., by Claude Code). The server will:
 
-- Load all prompts from builtin, user, and local directories
-- Watch for file changes and reload prompts automatically  
-- Expose prompts via the MCP protocol
-- Support template substitution with {{variables}}
+- Expose the SwissArmyHammer tools and workflows via the MCP protocol
+- Watch for file changes and reload automatically
 
 Example:
   swissarmyhammer serve        # Stdio mode (default)
@@ -139,7 +137,7 @@ Set up SwissArmyHammer for all detected AI coding agents.
 
 This command:
 1. Registers sah as an MCP server for all detected agents (Claude Code, Cursor, Windsurf, etc.)
-2. Creates the .sah/ project directory and .prompts/
+2. Creates the .sah/ project directory
 3. Installs builtin skills to the central .skills/ store with symlinks to each agent
 
 The command is idempotent - safe to run multiple times.
@@ -164,7 +162,7 @@ Examples:
 Remove SwissArmyHammer from all detected AI coding agents.
 
 By default, only the MCP server entries are removed from agent config files.
-Use --remove-directory to also delete .sah/, .prompts/, and installed skills.
+Use --remove-directory to also delete .sah/ and installed skills.
 
 Examples:
   sah deinit                     # Remove from project settings
@@ -208,7 +206,7 @@ Examples:
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
-    /// Validate prompt files for syntax and best practices
+    /// Validate skills and workflows for syntax and best practices
     #[command(long_about = include_str!("commands/validate/description.md"))]
     Validate {
         /// Suppress all output except errors. In quiet mode, warnings are hidden from both output and summary.

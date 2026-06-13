@@ -9,7 +9,7 @@ WHAT IT CHECKS
 The doctor command runs a complete health assessment of your environment:
 • PATH Configuration - Verifies swissarmyhammer is accessible from your shell
 • Claude Code Integration - Validates MCP server configuration and connectivity
-• Prompt System - Checks directories, file permissions, and YAML syntax
+• Skills - Checks directories, file permissions, and YAML syntax
 • File Watching - Tests file system event monitoring capabilities
 • System Resources - Validates required dependencies and system capabilities
 
