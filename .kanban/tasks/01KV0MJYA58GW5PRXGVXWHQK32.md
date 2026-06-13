@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: fa80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffab80
 title: Perspective filter change doesn't refresh the view until click-away/back — needs event-driven debounced refresh on filter change
 ---
 ## What

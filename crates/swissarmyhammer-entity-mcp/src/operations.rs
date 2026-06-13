@@ -460,6 +460,48 @@ pub struct DeletePerspective {
     pub scope: Vec<String>,
 }
 
+/// Set a perspective's filter and refresh the dispatching window.
+///
+/// Runs the shared `SetFilterAndRefreshCmd`: persist the new filter to STORAGE,
+/// then — when the edited perspective is the dispatching window's *active*
+/// selection — recompute the window's `filtered_task_ids` (re-evaluating the
+/// just-written filter via the same DSL pipeline `switch perspective` uses) and
+/// emit a `UIStateChange::PerspectiveSwitch`. Lives on the `entity` server for
+/// the same reason switch/next/prev/delete do: it is the only module holding
+/// BOTH the board's `KanbanContext` and the shared `UIState`.
+///
+/// This is the fix for the filter-edit refresh bug (card
+/// 01KV0MJYA58GW5PRXGVXWHQK32): the `perspective.filter` command used to route
+/// to the `views` server's storage-only `set filter`, which never wrote
+/// `UIState`, so a filter change did not re-filter the view until a later
+/// `perspective.switch` (the click-away/back) re-evaluated it.
+///
+/// Returns `{ ok: true, change: <UIStateChange|null> }` — the host's
+/// `ui-state-changed` emit unwraps `change`. `change` is null when the edited
+/// perspective is not the window's active selection (storage updated, no
+/// window refresh needed).
+#[operation(
+    verb = "filter",
+    noun = "perspective",
+    description = "Set a perspective's filter and refresh the dispatching window when it is the active selection (recompute filtered_task_ids)"
+)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FilterPerspective {
+    /// The perspective id whose filter to set. When omitted, the id is
+    /// resolved from a `perspective:{id}` moniker in `scope` (else the active
+    /// perspective for the active view).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub perspective_id: String,
+    /// The filter DSL expression to store. An empty string clears the filter
+    /// (shows every task).
+    #[serde(default)]
+    pub filter: String,
+    /// Scope chain (innermost-first monikers). MUST carry the dispatching
+    /// `window:<label>` moniker — the refresh comparison is per-window state.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<String>,
+}
+
 /// All entity operations — the canonical list used for schema generation.
 ///
 /// Both the wire-schema generator (`generate_mcp_schema`) and the
@@ -483,6 +525,7 @@ static ENTITY_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::<NextPerspective>::default()) as &dyn Operation,
         Box::leak(Box::<PrevPerspective>::default()) as &dyn Operation,
         Box::leak(Box::<DeletePerspective>::default()) as &dyn Operation,
+        Box::leak(Box::<FilterPerspective>::default()) as &dyn Operation,
     ]
 });
 

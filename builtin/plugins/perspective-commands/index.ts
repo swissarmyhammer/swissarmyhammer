@@ -34,7 +34,6 @@
 //   perspective.rename       → views `rename perspective`  (perspective.rename)
 //   perspective.list         → views `list perspective`    (perspective.list)
 //   perspective.filter.focus → views `focus filter`        (filter.focus)
-//   perspective.filter       → views `set filter`          (filter.set)
 //   perspective.clearFilter  → views `clear filter`        (filter.clear)
 //   perspective.group        → views `set group`           (group.set)
 //   perspective.clearGroup   → views `clear group`         (group.clear)
@@ -52,6 +51,9 @@
 //   perspective.prev         → entity `prev perspective`   (perspective.prev)
 //   perspective.switch       → entity `switch perspective` (perspective.switch)
 //   perspective.delete       → entity `delete perspective` (perspective.delete)
+//   perspective.filter       → entity `filter perspective` (perspective.filter)
+//                              (set the filter AND refresh the active window —
+//                              card 01KV0MJYA58GW5PRXGVXWHQK32)
 
 import {
   Plugin,
@@ -103,7 +105,7 @@ export default class PerspectiveCommandsPlugin extends Plugin {
     const entity = this as unknown as EntityPerspectiveDispatch;
     await registerCommands(this, [
       ...lifecycleCommands(views, entity),
-      ...filterCommands(views),
+      ...filterCommands(views, entity),
       ...groupCommands(views),
       ...sortCommands(views),
       ...navCommands(views, entity),

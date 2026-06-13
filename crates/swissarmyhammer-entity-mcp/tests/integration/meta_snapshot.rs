@@ -52,6 +52,7 @@ async fn entity_tool_meta_operations_tree_is_complete() {
         ("perspective", "next", "next perspective"),
         ("perspective", "prev", "prev perspective"),
         ("perspective", "delete", "delete perspective"),
+        ("perspective", "filter", "filter perspective"),
     ];
 
     for (noun, verb, op_str) in &expected {

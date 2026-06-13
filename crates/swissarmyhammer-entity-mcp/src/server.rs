@@ -37,16 +37,17 @@ use swissarmyhammer_kanban::commands::clipboard_commands::{
     CopyEntityCmd, CutEntityCmd, PasteEntityCmd,
 };
 use swissarmyhammer_kanban::commands::perspective_commands::{
-    DeletePerspectiveCmd, NextPerspectiveCmd, PrevPerspectiveCmd, SwitchPerspectiveCmd,
+    DeletePerspectiveCmd, NextPerspectiveCmd, PrevPerspectiveCmd, SetFilterAndRefreshCmd,
+    SwitchPerspectiveCmd,
 };
 use swissarmyhammer_kanban::commands_core::{Command, CommandContext};
 use swissarmyhammer_kanban::KanbanContext;
 use swissarmyhammer_ui_state::UIState;
 
 use crate::operations::{
-    operations, AddEntity, ArchiveEntity, Copy, Cut, DeleteEntity, DeletePerspective, GetEntity,
-    ListEntities, NextPerspective, Paste, PrevPerspective, Search, SwitchPerspective,
-    UnarchiveEntity, UpdateField,
+    operations, AddEntity, ArchiveEntity, Copy, Cut, DeleteEntity, DeletePerspective,
+    FilterPerspective, GetEntity, ListEntities, NextPerspective, Paste, PrevPerspective, Search,
+    SwitchPerspective, UnarchiveEntity, UpdateField,
 };
 
 /// The per-board services an [`EntityServer`] needs at tool-call time.
@@ -690,6 +691,40 @@ impl EntityServer {
         Ok(serde_json::json!({ "ok": true, "change": change }))
     }
 
+    /// Handle a `FilterPerspective` call — set a perspective's filter and, when
+    /// it is the dispatching window's active selection, recompute the window's
+    /// `filtered_task_ids`, via the shared [`SetFilterAndRefreshCmd`].
+    ///
+    /// This is the event-driven replacement for routing `perspective.filter`
+    /// to the `views` server's storage-only `set filter` op (card
+    /// 01KV0MJYA58GW5PRXGVXWHQK32): that path never wrote `UIState`, so a
+    /// filter edit did not re-filter the view until a later switch. Here the
+    /// `{ ok, change }` envelope carries the `PerspectiveSwitch` change the
+    /// host's `ui-state-changed` emit unwraps — `change` is null when the
+    /// edited perspective is not the window's active selection.
+    async fn handle_filter_perspective(&self, req: FilterPerspective) -> Result<Value, McpError> {
+        let services = self.services()?;
+        let mut args = HashMap::new();
+        if !req.perspective_id.is_empty() {
+            args.insert(
+                "perspective_id".to_string(),
+                Value::String(req.perspective_id),
+            );
+        }
+        args.insert("filter".to_string(), Value::String(req.filter));
+        let ctx = Self::build_perspective_command_context(
+            &services,
+            "perspective.filter",
+            req.scope,
+            args,
+        )?;
+        let change = SetFilterAndRefreshCmd
+            .execute(&ctx)
+            .await
+            .map_err(command_error_to_mcp)?;
+        Ok(serde_json::json!({ "ok": true, "change": change }))
+    }
+
     /// Fold the optional explicit view scoping args into the command-args
     /// map the shared cycle commands read (`view_kind` / `view_id`).
     fn view_cycle_args(
@@ -875,6 +910,10 @@ impl ServerHandler for EntityServer {
             "delete perspective" => {
                 let req: DeletePerspective = deserialize_op(arguments, &op)?;
                 self.handle_delete_perspective(req).await?
+            }
+            "filter perspective" => {
+                let req: FilterPerspective = deserialize_op(arguments, &op)?;
+                self.handle_filter_perspective(req).await?
             }
             other => {
                 return Err(McpError::invalid_params(

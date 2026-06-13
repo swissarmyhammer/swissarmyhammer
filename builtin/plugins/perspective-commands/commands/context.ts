@@ -58,6 +58,7 @@ export interface EntityPerspectiveDispatch {
         next: (args: Record<string, unknown>) => Promise<unknown>;
         prev: (args: Record<string, unknown>) => Promise<unknown>;
         delete: (args: Record<string, unknown>) => Promise<unknown>;
+        filter: (args: Record<string, unknown>) => Promise<unknown>;
       };
     };
   };

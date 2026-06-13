@@ -574,6 +574,79 @@ impl Command for SetFilterCmd {
     }
 }
 
+/// Set a perspective's filter AND refresh the dispatching window when the
+/// edited perspective is its active selection.
+///
+/// The event-driven counterpart to [`SetFilterCmd`]. `SetFilterCmd` writes
+/// STORAGE only (`UpdatePerspective`) and returns the op JSON — that is the
+/// resolution-only path the `views` server rides, which never recomputes
+/// `filtered_task_ids` and never produces a `{ok,change}` the host can emit
+/// as `ui-state-changed`. That is exactly why a filter edit used to require a
+/// click-away/back to take effect: only the subsequent `perspective.switch`
+/// re-evaluated the filter (card 01KV0MJYA58GW5PRXGVXWHQK32 — the same dead
+/// `views` path switch/next/prev and delete were moved off of in cards
+/// 01KTYQY0ZB62KHN6BPK3FBMBD7 / 01KTYVSA68WDFGXCEJ44T4VFNW).
+///
+/// This command lives on the board-bundle `entity` server (the only module
+/// holding BOTH the [`KanbanContext`] and the [`UIState`]). It:
+///
+/// 1. Resolves + persists the target perspective id and validates the filter,
+///    then writes the new filter to STORAGE via `UpdatePerspective` (same as
+///    [`SetFilterCmd`]).
+/// 2. If the edited perspective is the dispatching window's *active*
+///    selection, re-runs the shared [`switch_to_perspective`] pipeline — which
+///    re-reads the perspective's now-updated filter, re-evaluates it via
+///    [`evaluate_perspective_filter`], and writes the window's
+///    `filtered_task_ids` atomically via `UIState::switch_perspective`,
+///    returning the resulting [`UIStateChange::PerspectiveSwitch`].
+///    Otherwise it returns `Value::Null`: storage is updated but no window
+///    needs refreshing.
+///
+/// Required args: `perspective_id` (resolved via [`resolve_perspective_id`]
+/// when omitted) and `filter`. The `window:<label>` moniker in the scope chain
+/// selects the window whose active-perspective comparison drives the refresh.
+///
+/// [`UIStateChange::PerspectiveSwitch`]: swissarmyhammer_ui_state::UIStateChange::PerspectiveSwitch
+pub struct SetFilterAndRefreshCmd;
+
+#[async_trait]
+impl Command for SetFilterAndRefreshCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+        let ui = ctx
+            .ui_state
+            .as_ref()
+            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+
+        let perspective_id = resolve_and_persist_perspective_id(ctx, &kanban).await?;
+
+        let filter = ctx
+            .arg("filter")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| CommandError::MissingArg("filter".into()))?;
+
+        validate_filter(filter)?;
+
+        // Persist the new filter to storage (same write SetFilterCmd makes).
+        let op = UpdatePerspective::new(&perspective_id).with_filter(Some(filter.to_string()));
+        run_op(&op, &kanban).await?;
+
+        // Drive the window refresh only when the edited perspective IS the
+        // dispatching window's active selection — re-using the shared switch
+        // pipeline so it re-reads the just-written filter and re-evaluates it.
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        if ui.active_perspective_id(window_label) == perspective_id {
+            switch_to_perspective(&kanban, ui, window_label, &perspective_id).await
+        } else {
+            Ok(Value::Null)
+        }
+    }
+}
+
 /// Clear the filter on an active perspective.
 ///
 /// Always available. The target perspective is resolved at execute time via
@@ -3164,6 +3237,144 @@ mod tests {
             CommandError::MissingArg(name) => assert_eq!(name, "perspective_id"),
             other => panic!("expected MissingArg(perspective_id), got: {other:?}"),
         }
+    }
+
+    // =========================================================================
+    // SetFilterAndRefreshCmd tests
+    //
+    // The filter-edit refresh seam (card 01KV0MJYA58GW5PRXGVXWHQK32): editing
+    // the ACTIVE perspective's filter must recompute the window's
+    // `filtered_task_ids` and emit a `PerspectiveSwitch` change — the same
+    // event-driven refresh switch/next/prev/delete ride — so the view
+    // re-filters without a click-away/back. Editing a NON-active perspective
+    // only persists STORAGE (no window refresh to drive).
+    // =========================================================================
+
+    /// Build a CommandContext with KanbanContext + UIState + `perspective_id`
+    /// and `filter` args and a `window:<label>` scope — the shape the entity
+    /// server's `handle_set_filter` produces.
+    fn set_filter_ctx(
+        kanban: Arc<KanbanContext>,
+        ui: Arc<swissarmyhammer_ui_state::UIState>,
+        perspective_id: &str,
+        filter: &str,
+        window_label: &str,
+    ) -> CommandContext {
+        let mut args = HashMap::new();
+        args.insert(
+            "perspective_id".into(),
+            Value::String(perspective_id.into()),
+        );
+        args.insert("filter".into(), Value::String(filter.into()));
+        let mut ctx = CommandContext::new(
+            "perspective.filter",
+            vec![format!("window:{window_label}")],
+            None,
+            args,
+        );
+        ctx.set_extension(kanban);
+        ctx.ui_state = Some(ui);
+        ctx
+    }
+
+    #[tokio::test]
+    async fn set_filter_on_active_perspective_recomputes_filtered_task_ids_and_emits_change() {
+        // The dispatching window's active perspective is the one being
+        // edited: persisting the new filter must recompute the window's
+        // `filtered_task_ids` and return a `PerspectiveSwitch` change so the
+        // host's `ui-state-changed` emit fires — no click-away required.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+
+        let t_bug = add_task_with_body(&kanban, "Bug", "#bug top").await;
+        let _t_feat = add_task_with_body(&kanban, "Feature", "#feature pretty").await;
+
+        // The active perspective starts with no filter (shows everything).
+        let pid = create_perspective_with_view(&kanban, "All", "board").await;
+        let switch_ctx = switch_ctx(Arc::clone(&kanban), Arc::clone(&ui), &pid);
+        SwitchPerspectiveCmd.execute(&switch_ctx).await.unwrap();
+        assert_eq!(
+            ui.filtered_task_ids("main").len(),
+            2,
+            "precondition: no-filter perspective shows every task"
+        );
+
+        // Now edit that ACTIVE perspective's filter to `#bug`.
+        let cmd_ctx = set_filter_ctx(Arc::clone(&kanban), Arc::clone(&ui), &pid, "#bug", "main");
+        let result = SetFilterAndRefreshCmd.execute(&cmd_ctx).await.unwrap();
+
+        // The result must be a single `PerspectiveSwitch` change carrying the
+        // recomputed id list.
+        let change: swissarmyhammer_ui_state::UIStateChange =
+            serde_json::from_value(result).expect("result must be a single UIStateChange");
+        match change {
+            swissarmyhammer_ui_state::UIStateChange::PerspectiveSwitch {
+                perspective_id,
+                filtered_task_ids,
+            } => {
+                assert_eq!(perspective_id, pid);
+                assert_eq!(filtered_task_ids, vec![t_bug.clone()]);
+            }
+            other => panic!("expected PerspectiveSwitch, got: {other:?}"),
+        }
+
+        // And the window's slot is now narrowed to the `#bug` task.
+        assert_eq!(ui.filtered_task_ids("main"), vec![t_bug]);
+    }
+
+    #[tokio::test]
+    async fn set_filter_on_non_active_perspective_returns_null_and_leaves_active_window_unchanged()
+    {
+        // Editing a perspective that is NOT the dispatching window's active
+        // selection only persists STORAGE — there is no window to refresh, so
+        // the change is null and the active window's `filtered_task_ids` is
+        // untouched.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+
+        let t_bug = add_task_with_body(&kanban, "Bug", "#bug top").await;
+        let t_feat = add_task_with_body(&kanban, "Feature", "#feature pretty").await;
+
+        // Active perspective (no filter) — shows everything.
+        let active_pid = create_perspective_with_view(&kanban, "Active", "board").await;
+        // A second, NON-active perspective we will edit.
+        let other_pid = create_perspective_with_view(&kanban, "Other", "board").await;
+
+        let switch_ctx = switch_ctx(Arc::clone(&kanban), Arc::clone(&ui), &active_pid);
+        SwitchPerspectiveCmd.execute(&switch_ctx).await.unwrap();
+        let before = ui.filtered_task_ids("main");
+        assert_eq!(before.len(), 2);
+
+        // Edit the OTHER perspective's filter.
+        let cmd_ctx = set_filter_ctx(
+            Arc::clone(&kanban),
+            Arc::clone(&ui),
+            &other_pid,
+            "#bug",
+            "main",
+        );
+        let result = SetFilterAndRefreshCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result,
+            Value::Null,
+            "editing a non-active perspective must not produce a window-refresh change"
+        );
+
+        // The active window is unchanged.
+        let after = ui.filtered_task_ids("main");
+        assert_eq!(after.len(), 2);
+        assert!(after.contains(&t_bug));
+        assert!(after.contains(&t_feat));
+        assert_eq!(ui.active_perspective_id("main"), active_pid);
+
+        // But the storage write landed: the other perspective now carries the
+        // `#bug` filter.
+        let pctx = kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        let other = pctx.get_by_id(&other_pid).unwrap();
+        assert_eq!(other.filter.as_deref(), Some("#bug"));
     }
 
     // =========================================================================

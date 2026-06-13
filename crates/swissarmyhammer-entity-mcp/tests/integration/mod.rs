@@ -8,6 +8,7 @@
 
 mod common;
 mod entity_clipboard_e2e;
+mod entity_perspective_filter_e2e;
 mod entity_search_e2e;
 mod entity_server_e2e;
 mod meta_snapshot;

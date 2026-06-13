@@ -359,7 +359,14 @@ async fn perspective_commands_plugin_registers_and_executes() {
             "op": "execute command",
             "id": "perspective.filter",
             "ctx": {
-                "scope_chain": [format!("perspective:{persp_id}")],
+                // `perspective.filter` now routes to the entity server's
+                // `filter perspective` op (card 01KV0MJYA58GW5PRXGVXWHQK32),
+                // a per-window operation that requires the dispatching
+                // `window:<label>` moniker so it can decide whether the edited
+                // perspective is the window's active selection (and thus
+                // recompute `filtered_task_ids`). The production scope chain
+                // always carries it.
+                "scope_chain": [format!("perspective:{persp_id}"), "window:main"],
                 "args": { "perspective_id": persp_id, "filter": "#bug" },
             },
         }),
