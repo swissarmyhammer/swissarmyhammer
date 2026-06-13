@@ -75,8 +75,10 @@ use std::fmt::Write as _;
 use crate::review::scope::{FileWork, ValidatorWork, WorkList};
 use crate::review::types::{parse_findings, Finding};
 use crate::validators::{
-    AgentPool, PoolError, RuleSet, SessionPinGuard, SessionTurnResult, Severity, ValidatorLoader,
+    AgentPool, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult, Severity,
+    ValidatorLoader,
 };
+use agent_client_protocol_extras::SessionStateStatusResponse;
 
 /// Default number of files packed into a single fan-out task.
 ///
@@ -307,13 +309,28 @@ async fn run_validator_fleet(
 }
 
 /// Prime one validator's shared prompt prefix in a dedicated session, confirm
-/// the agent saved restorable state for it ("never fork blind"), and pin that
-/// state for the validator's fan-out.
+/// the agent saved restorable state for it ("never fork blind"), and acquire
+/// the scoped pin guard that governs the fan-out's pin lifecycle.
 ///
-/// Returns the pin guard for the primed session (carrying its id, the fork
-/// parent), or `None` when any step failed — the caller degrades to monolithic
-/// prompts (correct, just cold), never a lost task. The guard guarantees the
-/// unpin even if the fan-out future is cancelled mid-flight.
+/// The prime turn is submitted with a born-pinned save intent
+/// ([`AgentPool::submit_primed`] carries `pin_on_save` in `_meta`), so the
+/// prefix is pinned **atomically at save time** — never an unpinned eviction
+/// candidate, so a concurrent session's save cannot evict it before the fan-out
+/// forks from it. That is the structural close of the prime→pin eviction race.
+///
+/// The post-turn [`AgentPool::pin_session_scoped`] is therefore no longer the
+/// load-bearing pin: it is an **idempotent re-pin / confirm** that (a) verifies
+/// the state is still resident and (b) returns the [`SessionPinGuard`] whose
+/// `release()`/`Drop` performs the matching unpin when the validator's batches
+/// complete (or the fan-out future is dropped mid-flight). There is one pin
+/// protocol — born-pinned at save, unpinned by the guard — not two competing
+/// ones. A backend without a KV cache (claude) born-pins as a no-op and reports
+/// `pinned: false`; forking still works, consistent with the pin=no-op
+/// contract.
+///
+/// Returns the guard for the primed session (carrying its id, the fork parent),
+/// or `None` when any step failed — the caller degrades to monolithic prompts
+/// (correct, just cold), never a lost task.
 async fn prime_validator_prefix(
     change_purpose: &str,
     validator: &ValidatorWork,
@@ -322,29 +339,45 @@ async fn prime_validator_prefix(
 ) -> Option<SessionPinGuard> {
     let name = validator.validator_name.as_str();
     let prefix = render_validator_prefix(change_purpose, validator, ruleset);
-    let turn = match pool.submit_primed(prefix).await {
-        Ok(Ok(turn)) => turn,
+    let turn = submit_prime(pool, name, prefix).await?;
+    let status = confirm_saved_state(pool, name, &turn).await?;
+    pin_prefix(pool, name, &turn, &status).await
+}
+
+/// Submit the born-pinned prime turn for a validator's shared prefix.
+/// `None` (and a warn) on either a turn failure or a dropped result —
+/// the caller degrades to monolithic prompts.
+async fn submit_prime(pool: &AgentPool, name: &str, prefix: String) -> Option<SessionTurn> {
+    match pool.submit_primed(prefix).await {
+        Ok(Ok(turn)) => Some(turn),
         Ok(Err(err)) => {
             tracing::warn!(
                 validator = %name,
                 error = %err,
                 "prefix prime turn failed; falling back to monolithic prompts"
             );
-            return None;
+            None
         }
         Err(_) => {
             tracing::warn!(
                 validator = %name,
                 "prefix prime result was dropped; falling back to monolithic prompts"
             );
-            return None;
+            None
         }
-    };
+    }
+}
 
-    // Confirm the prime actually saved restorable state. `saved` is the
-    // contract's gate; a backend that tracks token counts must also report a
-    // non-empty prefix. Backends without token counts (`prompt_tokens: None`,
-    // e.g. the claude CLI) are still forkable per the contract.
+/// Confirm the prime actually saved restorable state ("never fork blind").
+/// `saved` is the contract's gate; a backend that tracks token counts must also
+/// report a non-empty prefix. Backends without token counts (`prompt_tokens:
+/// None`, e.g. the claude CLI) are still forkable per the contract. `None` (and
+/// a warn) when the status check fails or the state is not restorable.
+async fn confirm_saved_state(
+    pool: &AgentPool,
+    name: &str,
+    turn: &SessionTurn,
+) -> Option<SessionStateStatusResponse> {
     let status = match pool.session_state_status(&turn.session_id).await {
         Ok(status) => status,
         Err(err) => {
@@ -367,20 +400,33 @@ async fn prime_validator_prefix(
         );
         return None;
     }
+    Some(status)
+}
 
-    // Pin the saved state for the fan-out so cache eviction cannot drop it
-    // while forks are in flight. A backend without pinning reports an
-    // effective `pinned: false` and forking still works; only a pin ERROR
-    // (the state vanished) degrades. The scoped pin's guard releases the pin
-    // even when the fan-out future is dropped mid-collect.
+/// Acquire the scoped pin guard that governs the fan-out's pin lifecycle.
+///
+/// The prefix was already born pinned by the prime turn (the `_meta`
+/// pin-on-save intent). This scoped call is therefore an idempotent
+/// re-pin/confirm — it re-asserts the pin (a no-op when the state is already
+/// born pinned) and, crucially, returns the guard that owns the matching unpin
+/// for the fan-out's lifetime. A backend without pinning reports an effective
+/// `pinned: false` and forking still works; only a pin ERROR (the state
+/// vanished) degrades to monolithic prompts.
+async fn pin_prefix(
+    pool: &AgentPool,
+    name: &str,
+    turn: &SessionTurn,
+    status: &SessionStateStatusResponse,
+) -> Option<SessionPinGuard> {
     match pool.pin_session_scoped(&turn.session_id).await {
         Ok((pin, guard)) => {
             tracing::info!(
                 validator = %name,
                 session = %turn.session_id,
                 prefix_tokens = ?status.prompt_tokens,
+                born_pinned = status.pinned,
                 pinned = pin.pinned,
-                "primed validator prefix session"
+                "primed validator prefix session (born pinned at save; pin confirmed)"
             );
             Some(guard)
         }
@@ -1355,6 +1401,45 @@ mod tests {
         assert!(logs_contain("primed validator prefix session"));
     }
 
+    /// The primed prefix is born pinned through the PRODUCTION prime path:
+    /// `prime_validator_prefix` → `submit_primed` → the prompt's `_meta`
+    /// pin-on-save intent → the agent saving its prefix pinned atomically at
+    /// turn completion — BEFORE any separate `session/pin` confirm runs. This is
+    /// the end-to-end (scripted agent, no real model) assertion for the
+    /// structural close of the prime→pin eviction race: the prefix is never an
+    /// unpinned eviction candidate, independent of any post-turn pin.
+    #[tokio::test]
+    async fn primed_prefix_is_born_pinned_through_the_production_path() {
+        let rs = ruleset("val", "mandate", &[("r", "body")]);
+        let loader = loader_with(vec![rs]);
+        let files: Vec<FileWork> = (0..2)
+            .map(|i| file_work(&format!("src/f{i}.rs"), &format!("sym{i}"), "src/x.rs"))
+            .collect();
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work("val", files)],
+        };
+
+        let agent = forking_agent(vec![]);
+        let agent_probe = Arc::clone(&agent);
+
+        with_pool(agent, PoolConfig::remote(2), move |pool| async move {
+            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 2 }).await
+        })
+        .await;
+
+        // The prefix session the validator primed (`sess-0`) was born pinned by
+        // the prime turn's `_meta` intent — recorded at turn completion, before
+        // the post-turn `session/pin` confirm. Forked batch sessions are NOT
+        // born pinned (they save their own cold state unpinned).
+        assert_eq!(
+            agent_probe.born_pinned_sessions(),
+            vec!["sess-0".to_string()],
+            "the primed prefix must be born pinned through the production prime path, \
+             and only the prefix (not the forked batch sessions)"
+        );
+    }
+
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn fork_failure_falls_back_to_monolithic_without_losing_tasks() {
@@ -1556,13 +1641,18 @@ mod tests {
         );
     }
 
-    /// Poll `condition` every 10ms until it holds, panicking after ~3s.
+    /// Poll `condition` every [`POLL_INTERVAL`] until it holds, panicking after
+    /// [`POLL_TIMEOUT`]. The retry count is derived from the two so the wait
+    /// budget is expressed once, not as a product of two coupled literals.
     async fn wait_for(what: &str, condition: impl Fn() -> bool) {
-        for _ in 0..300 {
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+        const POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+        let attempts = POLL_TIMEOUT.as_millis() / POLL_INTERVAL.as_millis();
+        for _ in 0..attempts {
             if condition() {
                 return;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            tokio::time::sleep(POLL_INTERVAL).await;
         }
         panic!("timed out waiting for {what}");
     }

@@ -284,6 +284,7 @@ use agent_client_protocol::schema::{
     TextContent,
 };
 use agent_client_protocol::{Channel, Client, ConnectTo, ConnectionTo, Role};
+use agent_client_protocol_extras::PIN_ON_SAVE_META_KEY;
 use tokio::sync::broadcast;
 
 use crate::review::fleet::PRIME_HANDOFF;
@@ -385,6 +386,12 @@ pub(crate) struct ScriptedAgent {
     sessions: Mutex<HashMap<String, SessionState>>,
     /// Every `session/pin` call, in order: (session id, requested pin).
     pin_calls: Mutex<Vec<(String, bool)>>,
+    /// Sessions whose prefix was born pinned (saved pinned atomically at the
+    /// prime turn's completion, via the `_meta` pin-on-save intent) — recorded
+    /// at turn time, BEFORE any separate `session/pin` call, so a fleet test can
+    /// prove the prefix is pinned through the production prime path rather than
+    /// only by the post-turn confirm.
+    born_pinned: Mutex<Vec<String>>,
     /// Number of successful `session/fork` calls.
     forks: AtomicUsize,
     /// Content received from `fs/read_text_file` round-trips, in order.
@@ -407,6 +414,7 @@ impl ScriptedAgent {
             seen: Mutex::new(Vec::new()),
             sessions: Mutex::new(HashMap::new()),
             pin_calls: Mutex::new(Vec::new()),
+            born_pinned: Mutex::new(Vec::new()),
             forks: AtomicUsize::new(0),
             observed_reads: Mutex::new(Vec::new()),
         })
@@ -434,6 +442,13 @@ impl ScriptedAgent {
 
     pub(crate) fn pin_calls(&self) -> Vec<(String, bool)> {
         self.pin_calls.lock().unwrap().clone()
+    }
+
+    /// Sessions whose prefix was born pinned by the prime turn's `_meta`
+    /// pin-on-save intent — recorded at turn completion, before any separate
+    /// `session/pin` call.
+    pub(crate) fn born_pinned_sessions(&self) -> Vec<String> {
+        self.born_pinned.lock().unwrap().clone()
     }
 
     pub(crate) fn fork_count(&self) -> usize {
@@ -470,10 +485,22 @@ impl ScriptedAgent {
         state.history.clone()
     }
 
-    /// Mark one completed turn on the session: it now has saved state.
-    fn complete_turn(&self, session_id: &str) {
+    /// Mark one completed turn on the session: it now has saved state. When
+    /// `pin_on_save` is set (the prime turn's born-pinned intent, carried in the
+    /// prompt's `_meta`), the saved state is born pinned — pinned atomically at
+    /// save time, mirroring the llama backend's `insert_inner(.., true)`. This
+    /// is what lets a fleet test assert the primed prefix is born pinned through
+    /// the production path, before any separate `session/pin` lands.
+    fn complete_turn(&self, session_id: &str, pin_on_save: bool) {
         if let Some(state) = self.sessions.lock().unwrap().get_mut(session_id) {
             state.completed_turns += 1;
+            if pin_on_save {
+                state.pinned = true;
+                self.born_pinned
+                    .lock()
+                    .unwrap()
+                    .push(session_id.to_string());
+            }
         }
     }
 
@@ -620,8 +647,17 @@ async fn handle_prompt(
         ScriptedReply::Text(text) => text,
     };
     mock.emit_reply(cx, &req.session_id, text);
-    // The turn completed: the session now has saved state.
-    mock.complete_turn(&session_key);
+    // The turn completed: the session now has saved state. A prime turn carries
+    // the born-pinned save intent in its `_meta` (`PIN_ON_SAVE_META_KEY`), so
+    // the saved prefix is pinned atomically at save time — the production
+    // prime→pin race close — rather than relying on a separate post-turn pin.
+    let pin_on_save = req
+        .meta
+        .as_ref()
+        .and_then(|m| m.get(PIN_ON_SAVE_META_KEY))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    mock.complete_turn(&session_key, pin_on_save);
     responder
         .cast()
         .respond_with_result(Ok(PromptResponse::new(StopReason::EndTurn)))

@@ -276,6 +276,7 @@ async fn demonstrate_generation_errors() -> Result<(), Box<dyn std::error::Error
                 top_p: Some(1.0),
                 stop_tokens: vec![],
                 stopping_config: None,
+                pin_on_save: false,
             };
 
             match agent.generate(request).await {

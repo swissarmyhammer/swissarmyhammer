@@ -107,6 +107,24 @@ pub use session_fork::{
 /// claude and llama agents honor it — so the key is named here, alongside the
 /// session-extension method names, and changes in exactly one place.
 pub const MAX_TOKENS_META_KEY: &str = "max_tokens";
+
+/// `PromptRequest` `_meta` key carrying a "pin the saved state on this turn"
+/// intent.
+///
+/// A prime turn for a review fan-out wants its just-saved prefix to be pinned
+/// against cache eviction *atomically at save time* — born pinned — so a
+/// concurrent session's save can never evict the not-yet-pinned prefix before a
+/// separate post-turn `session/pin` lands (the prime→pin eviction race). Like
+/// [`MAX_TOKENS_META_KEY`], the ACP `PromptRequest` schema has no first-class
+/// field for this, so the intent rides the protocol's extensibility `_meta` map
+/// under this key. It is a cross-crate wire contract — the validators pool
+/// produces it on the prime turn, the llama agent honors it by saving the
+/// prefix born pinned, and an agent without a KV cache (claude) ignores it,
+/// consistent with its existing pin=no-op contract. The value is a boolean
+/// (`true` to pin on save); absent or non-`true` means the default unpinned
+/// save.
+pub const PIN_ON_SAVE_META_KEY: &str = "pin_on_save";
+
 pub use session_store::{
     ResumeStrategy, SessionListPage, SessionRecord, SessionStore, SessionStoreError,
 };

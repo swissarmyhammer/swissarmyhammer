@@ -31,7 +31,7 @@ use agent_client_protocol::{Agent, ClientRequest, ConnectionTo};
 use agent_client_protocol_extras::{
     SessionForkRequest, SessionForkResponse, SessionPinRequest, SessionPinResponse,
     SessionStateStatusRequest, SessionStateStatusResponse, MAX_TOKENS_META_KEY,
-    SESSION_FORK_METHOD, SESSION_PIN_METHOD, SESSION_STATE_STATUS_METHOD,
+    PIN_ON_SAVE_META_KEY, SESSION_FORK_METHOD, SESSION_PIN_METHOD, SESSION_STATE_STATUS_METHOD,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -291,6 +291,13 @@ struct Job {
     prompt: String,
     session: SessionSource,
     respond_to: Respond,
+    /// Whether this turn should ask the agent to save its session state born
+    /// pinned (carried over ACP in `_meta` under [`PIN_ON_SAVE_META_KEY`]).
+    /// Set only by [`AgentPool::submit_primed`]: a prime turn's prefix must be
+    /// pinned atomically at save time so a concurrent save cannot evict it
+    /// before the fan-out forks from it. An agent without a KV cache ignores
+    /// the intent (pin = no-op), consistent with the fork/pin contract.
+    pin_on_save: bool,
 }
 
 /// Shared bounded pool of agent workers draining a single submission queue.
@@ -358,6 +365,7 @@ impl AgentPool {
             prompt: prompt.into(),
             session: SessionSource::New,
             respond_to: Respond::Collected(respond_to),
+            pin_on_save: false,
         });
         rx
     }
@@ -374,6 +382,10 @@ impl AgentPool {
             prompt: prompt.into(),
             session: SessionSource::New,
             respond_to: Respond::Turn(respond_to),
+            // A prime turn's saved prefix must be born pinned so a concurrent
+            // save cannot evict it before the fan-out forks from it — the
+            // structural close of the prime→pin eviction race.
+            pin_on_save: true,
         });
         rx
     }
@@ -404,6 +416,9 @@ impl AgentPool {
                 parent_session_id: parent_session_id.clone(),
             },
             respond_to: Respond::Turn(respond_to),
+            // A forked batch turn saves its own (cold) state unpinned; only the
+            // primed parent prefix is pinned for the fan-out.
+            pin_on_save: false,
         });
         rx
     }
@@ -584,8 +599,15 @@ async fn worker_loop(
             break;
         };
 
-        let result =
-            run_turn_with_liveness(&agent, &notifier, job.session, job.prompt, config).await;
+        let result = run_turn_with_liveness(
+            &agent,
+            &notifier,
+            job.session,
+            job.prompt,
+            job.pin_on_save,
+            config,
+        )
+        .await;
         // The submitter may have dropped its receiver; that is fine.
         job.respond_to.deliver(result);
     }
@@ -619,6 +641,7 @@ async fn run_turn_with_liveness(
     notifier: &claude_agent::NotificationSender,
     session: SessionSource,
     prompt: String,
+    pin_on_save: bool,
     config: PoolConfig,
 ) -> SessionTurnResult {
     let session_slot: Arc<std::sync::Mutex<Option<SessionId>>> = Arc::default();
@@ -632,6 +655,7 @@ async fn run_turn_with_liveness(
         notifications,
         session,
         prompt,
+        pin_on_save,
         config.max_tokens,
         Arc::clone(&session_slot),
     );
@@ -757,6 +781,7 @@ async fn run_prompt(
     notifications: broadcast::Receiver<SessionNotification>,
     session: SessionSource,
     prompt: String,
+    pin_on_save: bool,
     max_tokens: u64,
     session_slot: Arc<std::sync::Mutex<Option<SessionId>>>,
 ) -> SessionTurnResult {
@@ -775,12 +800,18 @@ async fn run_prompt(
     let (collector, collected_text, notification_count, _matched_count) =
         claude_agent::spawn_notification_collector(notifications, session_id.clone());
 
-    // 4. prompt, with the per-call token cap attached via `meta`.
+    // 4. prompt, with the per-call token cap attached via `meta`. A prime turn
+    //    also carries the born-pinned save intent so the prefix it leaves
+    //    cached is pinned atomically at save time — the structural close of the
+    //    prime→pin eviction race. An ordinary turn omits the key (no pin).
     let mut meta = serde_json::Map::new();
     meta.insert(
         MAX_TOKENS_META_KEY.to_string(),
         serde_json::json!(max_tokens),
     );
+    if pin_on_save {
+        meta.insert(PIN_ON_SAVE_META_KEY.to_string(), serde_json::json!(true));
+    }
     let prompt_request = PromptRequest::new(
         session_id,
         vec![ContentBlock::Text(TextContent::new(prompt))],
@@ -1192,10 +1223,12 @@ mod tests {
         }
     }
 
-    /// Records the `max_tokens` value from each prompt's `meta` map.
+    /// Records the `max_tokens` value and the pin-on-save intent from each
+    /// prompt's `meta` map.
     struct MetaRecordingAgent {
         next_session: AtomicUsize,
         recorded_max_tokens: std::sync::Mutex<Vec<Option<u64>>>,
+        recorded_pin_on_save: std::sync::Mutex<Vec<bool>>,
     }
 
     impl MetaRecordingAgent {
@@ -1203,11 +1236,18 @@ mod tests {
             Self {
                 next_session: AtomicUsize::new(0),
                 recorded_max_tokens: std::sync::Mutex::new(Vec::new()),
+                recorded_pin_on_save: std::sync::Mutex::new(Vec::new()),
             }
         }
 
         fn recorded(&self) -> Vec<Option<u64>> {
             self.recorded_max_tokens.lock().unwrap().clone()
+        }
+
+        /// The pin-on-save intent (`_meta` boolean, defaulting to `false`) seen
+        /// on each prompt, in order.
+        fn recorded_pin_on_save(&self) -> Vec<bool> {
+            self.recorded_pin_on_save.lock().unwrap().clone()
         }
     }
 
@@ -1229,6 +1269,13 @@ mod tests {
                 .and_then(|m| m.get(MAX_TOKENS_META_KEY))
                 .and_then(|v| v.as_u64());
             self.recorded_max_tokens.lock().unwrap().push(max_tokens);
+            let pin_on_save = request
+                .meta
+                .as_ref()
+                .and_then(|m| m.get(PIN_ON_SAVE_META_KEY))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            self.recorded_pin_on_save.lock().unwrap().push(pin_on_save);
             Box::pin(async move {
                 Ok(PromptResponse::new(
                     agent_client_protocol::schema::StopReason::EndTurn,
@@ -1912,6 +1959,38 @@ mod tests {
                 recorded[0],
                 Some(DEFAULT_MAX_TOKENS),
                 "every prompt must carry the per-call max_tokens cap in meta",
+            );
+        })
+        .await;
+    }
+
+    /// A `submit_primed` turn carries the born-pinned save intent
+    /// (`pin_on_save: true`) in its prompt `_meta`, while an ordinary `submit`
+    /// turn does not. This is the producer half of the prime→pin race fix: the
+    /// prime turn tells the agent to save its prefix born pinned, so a
+    /// concurrent save can never evict it before a separate pin would land.
+    #[tokio::test]
+    async fn test_pool_submit_primed_carries_pin_on_save_intent() {
+        let agent = Arc::new(MetaRecordingAgent::new());
+        let agent_probe = Arc::clone(&agent);
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let pool = AgentPool::new(conn, notifier_body, PoolConfig::remote(1));
+
+            // Ordinary submit: no pin-on-save.
+            pool.submit("ordinary").await.expect("result").expect("ok");
+            // Prime turn: born-pinned save requested.
+            pool.submit_primed("the shared prefix")
+                .await
+                .expect("result")
+                .expect("ok");
+
+            assert_eq!(
+                agent_probe.recorded_pin_on_save(),
+                vec![false, true],
+                "only the primed turn carries the pin-on-save intent in _meta",
             );
         })
         .await;

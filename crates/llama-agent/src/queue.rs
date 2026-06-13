@@ -297,14 +297,15 @@ impl SessionStateStore {
     /// and the pin would then fail with `failed to pin primed prefix state`.
     /// Pinning at save time removes that window entirely.
     ///
-    /// Used by the store-level race tests to validate the born-pinned
-    /// invariant. Production currently relies on the RAM-scaled byte budget
-    /// ([`default_max_cache_bytes`]) plus the [`MIN_SESSION_CACHE_ENTRIES`]
-    /// floor holding every concurrently-primed prefix so the two-step protocol's
-    /// pin always lands. Wiring this atomic save through the cross-crate prime
-    /// path — so the race is closed structurally rather than only by budget
-    /// headroom — is tracked as kanban task `01KV13WRXZSNYVDYDQRG3Z7786`
-    /// (`local-review` project); these tests are its spec.
+    /// A test-only one-blob convenience wrapper over the born-pinned
+    /// [`insert_inner`](Self::insert_inner)`(.., pin_on_save = true)` path that
+    /// production now also takes: the streaming prompt-boundary save passes the
+    /// caller's pin-on-save intent (threaded from a review fan-out's prime turn
+    /// over ACP `_meta`) through to `insert_inner`, so the race is closed
+    /// structurally — born pinned at save time — not only by the RAM-scaled
+    /// byte budget ([`default_max_cache_bytes`]) plus the
+    /// [`MIN_SESSION_CACHE_ENTRIES`] floor. The store-level race tests use this
+    /// wrapper to validate the born-pinned invariant directly.
     #[cfg(test)]
     fn insert_pinned(&mut self, id: String, state_bytes: Vec<u8>, prompt_tokens: Option<Vec<i32>>) {
         self.insert_inner(id, state_bytes, prompt_tokens, None, true);
@@ -1312,6 +1313,7 @@ impl RequestQueue {
                 top_p: None,
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             },
             session: session.clone(),
             response_sender,
@@ -2048,6 +2050,37 @@ impl RequestQueue {
         }
     }
 
+    /// Copy the llama.cpp context's serialized state into a freshly sized,
+    /// truncated `Vec<u8>`. Returns `None` (and warns) on the 0-bytes-written
+    /// failure case so callers uniformly skip caching an unusable snapshot.
+    ///
+    /// This is the single owner of the `unsafe copy_state_data` snapshot
+    /// sequence (`get_state_size` → zeroed buffer → `copy_state_data` →
+    /// 0-write guard → `truncate`). Both save paths
+    /// (`save_session_state` on the batch path and `save_prompt_boundary_state`
+    /// on the streaming path) call through here, so a future fix to the unsafe
+    /// snapshot handling lives in exactly one place.
+    fn snapshot_ctx_state(
+        worker_id: usize,
+        request_id: &str,
+        ctx: &LlamaContext<'_>,
+    ) -> Option<Vec<u8>> {
+        let state_size = ctx.get_state_size();
+        let mut state_bytes = vec![0u8; state_size];
+        let bytes_written = unsafe { ctx.copy_state_data(state_bytes.as_mut_ptr()) };
+
+        if bytes_written == 0 {
+            warn!(
+                "Worker {} failed to copy state data (wrote 0 bytes) for request {}",
+                worker_id, request_id
+            );
+            return None;
+        }
+
+        state_bytes.truncate(bytes_written);
+        Some(state_bytes)
+    }
+
     /// Snapshot the target context's state at the prompt boundary into the
     /// session cache.
     ///
@@ -2074,6 +2107,7 @@ impl RequestQueue {
         draft_ctx: Option<&LlamaContext<'_>>,
         session_state_cache: &SessionStateCache,
         prompt_tokens: &[i32],
+        pin_on_save: bool,
     ) {
         if prompt_tokens.is_empty() {
             warn!(
@@ -2083,18 +2117,10 @@ impl RequestQueue {
             return;
         }
 
-        let state_size = ctx.get_state_size();
-        let mut state_bytes = vec![0u8; state_size];
-        let bytes_written = unsafe { ctx.copy_state_data(state_bytes.as_mut_ptr()) };
-
-        if bytes_written == 0 {
-            warn!(
-                "Worker {} failed to snapshot prompt-boundary state (wrote 0 bytes) for request {}",
-                worker_id, request_id
-            );
+        let Some(state_bytes) = Self::snapshot_ctx_state(worker_id, request_id, ctx) else {
             return;
-        }
-        state_bytes.truncate(bytes_written);
+        };
+        let bytes_written = state_bytes.len();
 
         // Snapshot the MTP draft's per-seq KV when this turn ran with MTP.
         // The draft mirrors the target up to the prompt boundary at this
@@ -2104,20 +2130,27 @@ impl RequestQueue {
         let draft_bytes_len = draft_state_bytes.as_ref().map_or(0, |b| b.len());
 
         let mut cache = session_state_cache.lock().unwrap();
-        cache.insert(
+        // `pin_on_save` makes the entry born pinned — never an unpinned eviction
+        // candidate from the moment its bytes land — so a concurrent session's
+        // save cannot evict a primed prefix before a separate post-turn pin
+        // would land (the prime→pin race). A `false` save inherits any existing
+        // pin for the id, exactly as `insert` does.
+        cache.insert_inner(
             session.id.to_string(),
             state_bytes,
             Some(prompt_tokens.to_vec()),
             draft_state_bytes,
+            pin_on_save,
         );
         info!(
-            "Worker {} cached {} bytes of target + {} bytes of draft state at prompt boundary for session {} ({} messages, {} prompt tokens)",
+            "Worker {} cached {} bytes of target + {} bytes of draft state at prompt boundary for session {} ({} messages, {} prompt tokens, pin_on_save={})",
             worker_id,
             bytes_written,
             draft_bytes_len,
             session.id,
             session.messages.len(),
-            prompt_tokens.len()
+            prompt_tokens.len(),
+            pin_on_save
         );
     }
 
@@ -2125,45 +2158,49 @@ impl RequestQueue {
     /// turn can resume without reprocessing prior messages. The store evicts
     /// LRU entries to stay within its entry-count and byte budgets.
     ///
+    /// This is the BATCH path's post-generation save. It is a deliberately
+    /// separate saver from `save_prompt_boundary_state` (the streaming path's
+    /// pre-generation save), not a duplicate: the two differ in *when* they run
+    /// and in their insert semantics, not in the snapshot mechanics (which they
+    /// now share via `snapshot_ctx_state`).
+    ///   - Timing: batch saves the FULL post-generation state at end of turn;
+    ///     streaming saves the prompt-boundary state BEFORE any token is
+    ///     sampled (so the next turn's LCP rollback is ~0). A batch turn never
+    ///     reaches a streaming prompt boundary, so it cannot use that path.
+    ///   - Insert semantics: this calls `insert` (always unpinned — the batch
+    ///     path has no pin-on-save intent), whereas the streaming saver calls
+    ///     `insert_inner(.., pin_on_save)` to support the born-pinned prime
+    ///     turn. There is no production batch path that needs a born-pinned
+    ///     save, so collapsing them would only add an unused parameter.
+    ///
     /// `prompt_tokens` is the tokenization of the prompt these state bytes were
-    /// produced from. The streaming path passes `Some(..)` so the next turn can
-    /// verify the cache is still a valid prefix (longest-common-prefix) before
-    /// reusing it; the batch path passes `None` (it gates reuse differently).
+    /// produced from. The batch path passes `None` (it gates reuse via its own
+    /// message bookkeeping, not the streaming path's longest-common-prefix
+    /// check).
     ///
     /// `draft_state_bytes` is the MTP draft context's per-seq KV snapshot (via
-    /// `state_seq_get_data(0)`). Passed `Some(..)` by the streaming MTP path
-    /// only — the next turn restores both target and draft together so the
-    /// speculative head keeps its prefix context across turns. `None` everywhere
-    /// else (batch turns and streaming turns that didn't use MTP).
+    /// `state_seq_get_data(0)`). The batch path passes `None` — it does not run
+    /// MTP, so there is no draft context to snapshot.
     fn save_session_state(
         worker_id: usize,
         request_id: &str,
         session: &Session,
-        ctx: &mut LlamaContext<'_>,
+        ctx: &LlamaContext<'_>,
         session_state_cache: &SessionStateCache,
         prompt_tokens: Option<Vec<i32>>,
         draft_state_bytes: Option<Vec<u8>>,
     ) {
-        let state_size = ctx.get_state_size();
         info!(
             "Worker {} saving session state to memory: {} bytes for {} messages",
             worker_id,
-            state_size,
+            ctx.get_state_size(),
             session.messages.len()
         );
 
-        let mut state_bytes = vec![0u8; state_size];
-        let bytes_written = unsafe { ctx.copy_state_data(state_bytes.as_mut_ptr()) };
-
-        if bytes_written == 0 {
-            warn!(
-                "Worker {} failed to copy state data (wrote 0 bytes) for request {}",
-                worker_id, request_id
-            );
+        let Some(state_bytes) = Self::snapshot_ctx_state(worker_id, request_id, ctx) else {
             return;
-        }
-
-        state_bytes.truncate(bytes_written);
+        };
+        let bytes_written = state_bytes.len();
 
         let draft_bytes_len = draft_state_bytes.as_ref().map_or(0, |b| b.len());
         let mut cache = session_state_cache.lock().unwrap();
@@ -2181,6 +2218,55 @@ impl RequestQueue {
             session.id,
             session.messages.len()
         );
+    }
+
+    /// Run the standard (non-MTP) streaming generation arm: stream tokens and,
+    /// at the prompt boundary, save the target-only context state (no draft).
+    ///
+    /// Owns the single definition of the standard arm's prompt-boundary save
+    /// closure so the three call sites in [`Self::process_streaming_request_sync`]
+    /// (non-MTP, draft-not-ready fallback, draft-create-error fallback) cannot
+    /// drift in how they thread `pin_on_save` or build the snapshot.
+    #[allow(clippy::too_many_arguments)]
+    fn run_standard_stream(
+        worker_id: usize,
+        request_id: &str,
+        session: &Session,
+        model: &LlamaModel,
+        ctx: &mut LlamaContext<'_>,
+        prompt: &str,
+        request: &GenerationRequest,
+        stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
+        cancellation_token: &CancellationToken,
+        model_manager: &ModelManager,
+        template_token_count: Option<usize>,
+        session_state_cache: &SessionStateCache,
+        prompt_tokens_for_save: &[i32],
+        pin_on_save: bool,
+    ) -> Result<(), QueueError> {
+        GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+            model,
+            ctx,
+            prompt,
+            request,
+            stream_sender,
+            cancellation_token,
+            model_manager.get_batch_size(),
+            template_token_count,
+            |target_at_boundary| {
+                Self::save_prompt_boundary_state(
+                    worker_id,
+                    request_id,
+                    session,
+                    target_at_boundary,
+                    None,
+                    session_state_cache,
+                    prompt_tokens_for_save,
+                    pin_on_save,
+                );
+            },
+        )
+        .map_err(|e| crate::types::QueueError::WorkerError(format!("Generation failed: {e}")))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2246,6 +2332,12 @@ impl RequestQueue {
             .map(|toks| toks.into_iter().map(|t| t.0).collect())
             .unwrap_or_default();
 
+        // Whether THIS turn's prompt-boundary save should be born pinned. A
+        // review fan-out's prime turn sets it (over ACP `_meta`) so the cached
+        // prefix is pinned atomically at save time, closing the prime→pin
+        // eviction race structurally. Ordinary turns save unpinned.
+        let pin_on_save = request.pin_on_save;
+
         // Auto-detect MTP: when the loaded model carries the NextN/MTP head,
         // run the draft-mtp speculative loop with a second MTP-context on the
         // same model (target=this ctx + draft=ctx_type::Mtp). Same KV-reuse on
@@ -2305,6 +2397,7 @@ impl RequestQueue {
                                     Some(draft_at_boundary),
                                     session_state_cache,
                                     &prompt_tokens_for_save,
+                                    pin_on_save,
                                 );
                             },
                         )
@@ -2317,30 +2410,22 @@ impl RequestQueue {
                         // Draft restore/trim failed — fall back to standard
                         // streaming for this turn. Drops the stale draft_ctx
                         // (and its now-cleared KV) so next turn starts fresh.
-                        GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+                        Self::run_standard_stream(
+                            worker_id,
+                            &request_id,
+                            session,
                             model,
                             &mut ctx,
                             &prompt,
                             request,
                             &stream_sender,
                             cancellation_token,
-                            model_manager.get_batch_size(),
+                            model_manager,
                             template_token_count,
-                            |target_at_boundary| {
-                                Self::save_prompt_boundary_state(
-                                    worker_id,
-                                    &request_id,
-                                    session,
-                                    target_at_boundary,
-                                    None,
-                                    session_state_cache,
-                                    &prompt_tokens_for_save,
-                                );
-                            },
+                            session_state_cache,
+                            &prompt_tokens_for_save,
+                            pin_on_save,
                         )
-                        .map_err(|e| {
-                            crate::types::QueueError::WorkerError(format!("Generation failed: {e}"))
-                        })
                     }
                 }
                 Err(e) => {
@@ -2348,55 +2433,41 @@ impl RequestQueue {
                         "Worker {} failed to create MTP draft context ({}); falling back to standard streaming",
                         worker_id, e
                     );
-                    GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+                    Self::run_standard_stream(
+                        worker_id,
+                        &request_id,
+                        session,
                         model,
                         &mut ctx,
                         &prompt,
                         request,
                         &stream_sender,
                         cancellation_token,
-                        model_manager.get_batch_size(),
+                        model_manager,
                         template_token_count,
-                        |target_at_boundary| {
-                            Self::save_prompt_boundary_state(
-                                worker_id,
-                                &request_id,
-                                session,
-                                target_at_boundary,
-                                None,
-                                session_state_cache,
-                                &prompt_tokens_for_save,
-                            );
-                        },
+                        session_state_cache,
+                        &prompt_tokens_for_save,
+                        pin_on_save,
                     )
-                    .map_err(|e| {
-                        crate::types::QueueError::WorkerError(format!("Generation failed: {e}"))
-                    })
                 }
             }
         } else {
-            GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+            Self::run_standard_stream(
+                worker_id,
+                &request_id,
+                session,
                 model,
                 &mut ctx,
                 &prompt,
                 request,
                 &stream_sender,
                 cancellation_token,
-                model_manager.get_batch_size(),
+                model_manager,
                 template_token_count,
-                |target_at_boundary| {
-                    Self::save_prompt_boundary_state(
-                        worker_id,
-                        &request_id,
-                        session,
-                        target_at_boundary,
-                        None,
-                        session_state_cache,
-                        &prompt_tokens_for_save,
-                    );
-                },
+                session_state_cache,
+                &prompt_tokens_for_save,
+                pin_on_save,
             )
-            .map_err(|e| crate::types::QueueError::WorkerError(format!("Generation failed: {e}")))
         };
 
         // No post-generation save: the prompt-boundary hook above already
@@ -2898,6 +2969,13 @@ mod tests {
         vec![byte; len]
     }
 
+    /// Worker-drain poll budget for tests in this module that wait for the live
+    /// queue to return to size 0 after a turn. Named so the CI-timing budget is
+    /// retuned in one place (mirroring `worker_lifecycle_tests::POLL_ATTEMPTS`).
+    const DRAIN_POLL_ATTEMPTS: usize = 50;
+    /// Sleep between drain-poll attempts. See [`DRAIN_POLL_ATTEMPTS`].
+    const DRAIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
     fn create_test_model_config() -> ModelConfig {
         ModelConfig {
             source: ModelSource::Local {
@@ -3021,6 +3099,7 @@ mod tests {
             top_p: Some(0.9),
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let result = queue.submit_request(request, &session).await;
@@ -3042,6 +3121,7 @@ mod tests {
             top_p: Some(0.9),
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let result = queue.submit_request(request, &session).await;
@@ -3070,6 +3150,7 @@ mod tests {
             top_p: Some(0.9),
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let mut receiver = queue
@@ -3116,6 +3197,7 @@ mod tests {
             top_p: None,
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         // First streaming turn: drain it fully so the worker finishes and the
@@ -3131,11 +3213,11 @@ mod tests {
 
         // Give the worker a moment to record completion metrics after the stream
         // sender is dropped.
-        for _ in 0..50 {
+        for _ in 0..DRAIN_POLL_ATTEMPTS {
             if queue.get_queue_size() == 0 {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            tokio::time::sleep(DRAIN_POLL_INTERVAL).await;
         }
         assert_eq!(
             queue.get_queue_size(),
@@ -3183,6 +3265,7 @@ mod tests {
             top_p: Some(0.9),
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let mut receiver = queue
@@ -3243,6 +3326,7 @@ mod tests {
             top_p: Some(0.9),
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let result = queue.submit_request(request, &session).await;
@@ -3270,6 +3354,7 @@ mod tests {
                 top_p: Some(0.9),
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             },
             session,
             response_sender: sender,
@@ -3339,6 +3424,7 @@ mod tests {
                 top_p: Some(0.9),
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             };
 
             let result = queue.submit_request(request, &session).await;
@@ -3390,6 +3476,7 @@ mod tests {
                 top_p: Some(0.9),
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             };
 
             let result = queue.submit_request(request, &session).await;
@@ -3439,6 +3526,7 @@ mod tests {
                 top_p: Some(0.9),
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             };
 
             let result = queue.submit_request(request, &session).await;
@@ -3486,6 +3574,7 @@ mod tests {
                 top_p: Some(0.9),
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             };
 
             let stream_result = queue.submit_streaming_request(request, &session).await;
@@ -3550,6 +3639,7 @@ mod tests {
                     top_p: Some(0.9),
                     stop_tokens: Vec::new(),
                     stopping_config: None,
+                    pin_on_save: false,
                 };
 
                 let result = queue.submit_request(request, &session).await;
@@ -3860,6 +3950,7 @@ mod tests {
                 top_p: None,
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             }
         }
 
