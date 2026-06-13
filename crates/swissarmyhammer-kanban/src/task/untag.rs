@@ -3,7 +3,6 @@
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::tag_parser;
-use crate::task_helpers::task_tags;
 use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -56,9 +55,6 @@ impl Execute<KanbanContext, KanbanError> for UntagTask {
                 };
             let mut entity = ectx.read("task", self.id.as_str()).await?;
 
-            // Check if tag is present in body
-            let was_present = task_tags(&entity).iter().any(|t| t == &slug);
-
             // Remove #tag from body
             let body = entity.get_str("body").unwrap_or("").to_string();
             let new_body = tag_parser::remove_tag(&body, &slug);
@@ -67,11 +63,9 @@ impl Execute<KanbanContext, KanbanError> for UntagTask {
                 ectx.write(&entity).await?;
             }
 
-            Ok(serde_json::json!({
-                "untagged": was_present,
-                "task_id": self.id.to_string(),
-                "tag": slug
-            }))
+            // Thin ack — success implies the tag is gone (idempotent);
+            // `get task` is the escape hatch for the post-op tag list.
+            Ok(crate::task_helpers::task_mutation_ack(&entity))
         }
         .await;
 
@@ -79,5 +73,89 @@ impl Execute<KanbanContext, KanbanError> for UntagTask {
             Ok(value) => ExecutionResult::Success { value },
             Err(error) => ExecutionResult::Failed { error },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::InitBoard;
+    use crate::task::{AddTask, GetTask, TagTask};
+    use crate::task_helpers::assert_task_mutation_ack;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        (temp, ctx)
+    }
+
+    /// `untag task` returns exactly the thin ack; the tag's removal is
+    /// asserted via `get task` (stored state, not response echo).
+    #[tokio::test]
+    async fn test_untag_task_returns_thin_ack() {
+        let (_temp, ctx) = setup().await;
+
+        let add_result = AddTask::new("Untag me")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        TagTask::new(task_id, "bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let result = UntagTask::new(task_id, "bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_task_mutation_ack(&result, task_id);
+
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert!(
+            !task["tags"].as_array().unwrap().contains(&json!("bug")),
+            "tag must be removed from the stored task, got: {}",
+            task["tags"]
+        );
+    }
+
+    /// Untagging a tag that isn't present is idempotent and still acks.
+    #[tokio::test]
+    async fn test_untag_task_absent_tag_returns_thin_ack() {
+        let (_temp, ctx) = setup().await;
+
+        let add_result = AddTask::new("Nothing to untag")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        let result = UntagTask::new(task_id, "ghost")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_task_mutation_ack(&result, task_id);
     }
 }

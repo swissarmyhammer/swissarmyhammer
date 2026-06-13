@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::task::shared::parse_filter_expr;
+use crate::task::shared::{parse_detail, parse_filter_expr};
 use crate::task_helpers::{
     enrich_all_task_entities, task_entity_to_rich_json, EntitySlugRegistry, TaskFilterAdapter,
 };
@@ -43,6 +43,10 @@ pub struct ListTasks {
     /// Tasks per page. Defaults to [`DEFAULT_PAGE_SIZE`] (10) when unset;
     /// clamped to `1..=MAX_PAGE_SIZE` otherwise.
     pub page_size: Option<usize>,
+    /// Per-task payload shape: "slim" (default) returns an allowlist
+    /// projection without `description` or `attachments`; "full" returns the
+    /// complete enriched task JSON. Any other value is an error.
+    pub detail: Option<String>,
 }
 
 impl ListTasks {
@@ -74,6 +78,12 @@ impl ListTasks {
         self.page_size = Some(page_size);
         self
     }
+
+    /// Set the per-task payload shape ("slim" or "full").
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
 }
 
 #[async_trait]
@@ -100,6 +110,7 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
             let slug_registry = EntitySlugRegistry::build(&all_projects, &all_actors, &all_tasks);
 
             let expr = parse_filter_expr(self.filter.as_deref())?;
+            let detail = parse_detail(self.detail.as_deref())?;
             let column = &self.column;
 
             let filtered: Vec<Value> = all_tasks
@@ -119,7 +130,7 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
                     }
                     true
                 })
-                .map(task_entity_to_rich_json)
+                .map(|t| detail.project(task_entity_to_rich_json(t)))
                 .collect();
 
             // Pagination — applied AFTER filtering so the page metadata
@@ -829,6 +840,114 @@ mod tests {
         assert_eq!(result["total"], 6, "6 of 12 tasks have #bug");
         assert_eq!(result["count"], 6, "fits on default page");
         assert_eq!(result["total_pages"], 1);
+    }
+
+    // --- Detail (slim/full) ---------------------------------------------------
+
+    /// The default listing shape is slim: heavy payload fields are absent
+    /// while the orient/select fields survive.
+    #[tokio::test]
+    async fn test_list_tasks_default_detail_is_slim() {
+        let (_temp, ctx) = setup().await;
+        AddTask::new("Heavy task")
+            .with_description("A very long description")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let result = ListTasks::new().execute(&ctx).await.into_result().unwrap();
+        assert_eq!(result["count"], 1);
+        let task = result["tasks"][0].as_object().unwrap();
+        for heavy in ["description", "comments", "attachments"] {
+            assert!(
+                !task.contains_key(heavy),
+                "slim listing must not contain {heavy:?}"
+            );
+        }
+        assert_eq!(result["tasks"][0]["title"], "Heavy task");
+        assert!(task.contains_key("id"));
+        assert!(task.contains_key("position"));
+        assert!(task.contains_key("ready"));
+    }
+
+    /// `detail: "full"` returns the enriched shape, description included.
+    #[tokio::test]
+    async fn test_list_tasks_detail_full_includes_description() {
+        let (_temp, ctx) = setup().await;
+        AddTask::new("Heavy task")
+            .with_description("A very long description")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let result = ListTasks::new()
+            .with_detail("full")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["tasks"][0]["description"], "A very long description");
+        assert!(result["tasks"][0]["attachments"].is_array());
+    }
+
+    /// `detail: "slim"` is accepted explicitly and matches the default shape.
+    #[tokio::test]
+    async fn test_list_tasks_detail_slim_explicit() {
+        let (_temp, ctx) = setup().await;
+        AddTask::new("Heavy task")
+            .with_description("A very long description")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let result = ListTasks::new()
+            .with_detail("slim")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task = result["tasks"][0].as_object().unwrap();
+        assert!(!task.contains_key("description"));
+        assert_eq!(result["tasks"][0]["title"], "Heavy task");
+    }
+
+    /// An unknown `detail` value is a clear error, never a silent fallback.
+    #[tokio::test]
+    async fn test_list_tasks_detail_unknown_errors() {
+        let (_temp, ctx) = setup().await;
+        let err = ListTasks::new()
+            .with_detail("verbose")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("detail") && msg.contains("verbose"),
+            "error must name the bad detail value: {msg}"
+        );
+    }
+
+    /// `get task` is unaffected by the slim listing default — a single-task
+    /// fetch always returns the full enriched task.
+    #[tokio::test]
+    async fn test_get_task_still_returns_description() {
+        use crate::task::GetTask;
+
+        let (_temp, ctx) = setup().await;
+        let added = AddTask::new("Heavy task")
+            .with_description("A very long description")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = added["id"].as_str().unwrap();
+
+        let task = GetTask::new(id).execute(&ctx).await.into_result().unwrap();
+        assert_eq!(task["description"], "A very long description");
     }
 
     #[tokio::test]

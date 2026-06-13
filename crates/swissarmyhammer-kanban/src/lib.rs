@@ -86,6 +86,7 @@ pub mod actor;
 pub mod attachment;
 pub mod board;
 pub mod column;
+pub mod comment;
 pub mod entity;
 pub mod focus;
 pub mod project;

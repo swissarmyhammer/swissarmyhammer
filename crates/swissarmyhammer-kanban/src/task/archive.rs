@@ -6,10 +6,12 @@
 //!
 //! `UnarchiveTask` restores a previously archived task back to live storage.
 //!
-//! `ListArchived` returns all archived tasks with a count.
+//! `ListArchived` returns all archived tasks with a count — slim by default,
+//! full via `detail: "full"` (the same projection semantics as `ListTasks`).
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
+use crate::task::shared::parse_detail;
 use crate::task_helpers::task_entity_to_json;
 use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
@@ -45,12 +47,11 @@ impl Execute<KanbanContext, KanbanError> for ArchiveTask {
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
 
-            // Read the task first to verify it exists and get its data
+            // Read the task first to verify it exists
             let entity = ectx
                 .read("task", self.id.as_str())
                 .await
                 .map_err(KanbanError::from_entity_error)?;
-            let title = entity.get_str("title").unwrap_or("").to_string();
 
             // Remove this task from the depends_on list of all other tasks
             // (same cleanup as DeleteTask — archive is just delete with different storage)
@@ -72,11 +73,10 @@ impl Execute<KanbanContext, KanbanError> for ArchiveTask {
             // Move the task to the archive directory
             ectx.archive("task", self.id.as_str()).await?;
 
-            Ok(serde_json::json!({
-                "archived": true,
-                "id": self.id.to_string(),
-                "title": title
-            }))
+            // Standard identity envelope plus the op-specific flag.
+            let mut ack = crate::task_helpers::task_mutation_ack(&entity);
+            ack["archived"] = serde_json::json!(true);
+            Ok(ack)
         }
         .await;
 
@@ -119,18 +119,16 @@ impl Execute<KanbanContext, KanbanError> for UnarchiveTask {
             // Restore the task from the archive
             ectx.unarchive("task", self.id.as_str()).await?;
 
-            // Read the restored entity to return its data
+            // Read the restored entity to confirm the restore landed
             let entity = ectx
                 .read("task", self.id.as_str())
                 .await
                 .map_err(KanbanError::from_entity_error)?;
-            let title = entity.get_str("title").unwrap_or("").to_string();
 
-            Ok(serde_json::json!({
-                "unarchived": true,
-                "id": self.id.to_string(),
-                "title": title
-            }))
+            // Standard identity envelope plus the op-specific flag.
+            let mut ack = crate::task_helpers::task_mutation_ack(&entity);
+            ack["unarchived"] = serde_json::json!(true);
+            Ok(ack)
         }
         .await;
 
@@ -145,19 +143,42 @@ impl Execute<KanbanContext, KanbanError> for UnarchiveTask {
 ///
 /// Returns tasks from the archive directory. These are tasks that were
 /// archived via `ArchiveTask` and are no longer visible in normal task listings.
-/// Each entry is the full task JSON as produced by `task_entity_to_json`.
+/// By default each entry is the slim allowlist projection; `detail: "full"`
+/// returns the full task JSON as produced by `task_entity_to_json`.
 #[operation(verb = "list", noun = "archived", description = "List archived tasks")]
 #[derive(Debug, Default, Deserialize, Serialize)]
-pub struct ListArchived;
+pub struct ListArchived {
+    /// Per-task payload shape: "slim" (default) returns an allowlist
+    /// projection without `description` or `attachments`; "full" returns the
+    /// complete task JSON. Any other value is an error.
+    pub detail: Option<String>,
+}
+
+impl ListArchived {
+    /// Create a new ListArchived command with the default (slim) detail.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the per-task payload shape ("slim" or "full").
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+}
 
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for ListArchived {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
+            let detail = parse_detail(self.detail.as_deref())?;
             let ectx = ctx.entity_context().await?;
             let archived = ectx.list_archived("task").await?;
 
-            let tasks: Vec<Value> = archived.iter().map(task_entity_to_json).collect();
+            let tasks: Vec<Value> = archived
+                .iter()
+                .map(|entity| detail.project(task_entity_to_json(entity)))
+                .collect();
             let count = tasks.len();
 
             Ok(serde_json::json!({
@@ -178,6 +199,7 @@ mod tests {
     use super::*;
     use crate::board::InitBoard;
     use crate::task::{AddTask, NextTask};
+    use crate::task_helpers::assert_task_mutation_ack_with;
     use crate::types::TaskId;
     use tempfile::TempDir;
 
@@ -212,8 +234,9 @@ mod tests {
             .into_result()
             .unwrap();
 
+        // Standard identity envelope plus the op-specific flag — no echo.
+        assert_task_mutation_ack_with(&result, task_id, &["archived"]);
         assert_eq!(result["archived"], true);
-        assert_eq!(result["title"], "Task to archive");
 
         // Verify task is no longer in the live task list
         let ectx = ctx.entity_context().await.unwrap();
@@ -337,9 +360,9 @@ mod tests {
             .into_result()
             .unwrap();
 
+        // Standard identity envelope plus the op-specific flag — no echo.
+        assert_task_mutation_ack_with(&result, &task_id, &["unarchived"]);
         assert_eq!(result["unarchived"], true);
-        assert_eq!(result["id"].as_str().unwrap(), task_id);
-        assert_eq!(result["title"], "Task to unarchive");
 
         // Verify task is back in the live list
         let tasks = ectx.list("task").await.unwrap();
@@ -385,7 +408,11 @@ mod tests {
             .unwrap();
 
         // ListArchived should return exactly 2
-        let result = ListArchived.execute(&ctx).await.into_result().unwrap();
+        let result = ListArchived::new()
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         assert_eq!(result["count"], 2, "should list 2 archived tasks");
         let tasks = result["tasks"].as_array().unwrap();
@@ -395,5 +422,72 @@ mod tests {
         assert!(titles.contains(&"Archived One"));
         assert!(titles.contains(&"Archived Two"));
         assert!(!titles.contains(&"Still live"));
+    }
+
+    /// Archive a task with a description and list it back at the given
+    /// detail level; returns the listed task value.
+    async fn archive_and_list(ctx: &KanbanContext, detail: Option<&str>) -> Value {
+        let added = AddTask::new("Heavy archived")
+            .with_description("A very long description")
+            .execute(ctx)
+            .await
+            .into_result()
+            .unwrap();
+        ArchiveTask::new(added["id"].as_str().unwrap())
+            .execute(ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let mut cmd = ListArchived::new();
+        if let Some(d) = detail {
+            cmd = cmd.with_detail(d);
+        }
+        let result = cmd.execute(ctx).await.into_result().unwrap();
+        assert_eq!(result["count"], 1);
+        result["tasks"][0].clone()
+    }
+
+    /// The default `list archived` shape is the same slim projection as
+    /// `list tasks`: no heavy payload fields.
+    #[tokio::test]
+    async fn test_list_archived_default_detail_is_slim() {
+        let (_temp, ctx) = setup().await;
+        let task = archive_and_list(&ctx, None).await;
+        let obj = task.as_object().unwrap();
+        for heavy in ["description", "comments", "attachments"] {
+            assert!(
+                !obj.contains_key(heavy),
+                "slim archived listing must not contain {heavy:?}"
+            );
+        }
+        assert_eq!(task["title"], "Heavy archived");
+        assert!(obj.contains_key("id"));
+    }
+
+    /// `detail: "full"` returns the full `task_entity_to_json` shape.
+    #[tokio::test]
+    async fn test_list_archived_detail_full_includes_description() {
+        let (_temp, ctx) = setup().await;
+        let task = archive_and_list(&ctx, Some("full")).await;
+        assert_eq!(task["description"], "A very long description");
+        assert!(task["attachments"].is_array());
+    }
+
+    /// An unknown `detail` value is a clear error, never a silent fallback.
+    #[tokio::test]
+    async fn test_list_archived_detail_unknown_errors() {
+        let (_temp, ctx) = setup().await;
+        let err = ListArchived::new()
+            .with_detail("verbose")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("detail") && msg.contains("verbose"),
+            "error must name the bad detail value: {msg}"
+        );
     }
 }

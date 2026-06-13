@@ -1,3 +1,11 @@
 {
-  "context_servers": {}
+  "context_servers": {
+    "kanban": {
+      "args": [
+        "serve"
+      ],
+      "command": "kanban",
+      "source": "custom"
+    }
+  }
 }

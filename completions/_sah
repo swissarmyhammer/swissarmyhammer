@@ -550,7 +550,7 @@ _sah_commands() {
 'deinit:Remove sah from all detected AI coding agents (skills + MCP)' \
 'doctor:Diagnose configuration and setup issues' \
 'completion:Generate shell completion scripts' \
-'validate:Validate prompt files for syntax and best practices' \
+'validate:Validate skills and workflows for syntax and best practices' \
 'model:Manage and interact with models' \
 'agent:Manage and interact with Agent Client Protocol server' \
 'tools:Manage tool enable/disable state' \
@@ -613,7 +613,7 @@ _sah__subcmd__help_commands() {
 'deinit:Remove sah from all detected AI coding agents (skills + MCP)' \
 'doctor:Diagnose configuration and setup issues' \
 'completion:Generate shell completion scripts' \
-'validate:Validate prompt files for syntax and best practices' \
+'validate:Validate skills and workflows for syntax and best practices' \
 'model:Manage and interact with models' \
 'agent:Manage and interact with Agent Client Protocol server' \
 'tools:Manage tool enable/disable state' \

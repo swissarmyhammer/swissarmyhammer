@@ -8,7 +8,7 @@ use crate::clipboard;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::tag::tag_name_exists_entity;
-use crate::task_helpers::{compute_ordinal_for_neighbors, task_entity_to_json};
+use crate::task_helpers::{compute_ordinal_for_neighbors, slim_task_json, task_entity_to_json};
 use crate::types::{ColumnId, Ordinal, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -210,7 +210,9 @@ impl Execute<KanbanContext, KanbanError> for PasteTask {
                 }
             }
 
-            Ok(task_entity_to_json(&entity))
+            // Slim projection — the caller needs the identity and placement
+            // it didn't have, not the pasted body/attachments echoed back.
+            Ok(slim_task_json(&task_entity_to_json(&entity)))
         }
         .await;
 
@@ -253,6 +255,37 @@ mod tests {
         result["id"].as_str().unwrap().to_string()
     }
 
+    /// The paste response is the slim projection — no `description` /
+    /// `attachments` echo. The stored body is verified from disk.
+    #[tokio::test]
+    async fn test_paste_returns_slim_projection() {
+        let (_temp, ctx) = setup().await;
+
+        let fields = json!({
+            "title": "Slim paste",
+            "body": "Body the agent already has",
+        });
+        let clipboard_json = clipboard::serialize_to_clipboard("task", "01OLD", "copy", fields);
+
+        let result = PasteTask::new("todo", None, clipboard_json)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        crate::task_helpers::assert_slim_task_response(&result);
+
+        let ectx = ctx.entity_context().await.unwrap();
+        let entity = ectx
+            .read("task", result["id"].as_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            entity.get_str("body").unwrap(),
+            "Body the agent already has"
+        );
+    }
+
     #[tokio::test]
     async fn test_paste_creates_new_task_from_clipboard() {
         let (_temp, ctx) = setup().await;
@@ -272,17 +305,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(result["title"], "Original task");
-        assert_eq!(result["description"], "Task body with #feature");
         assert_eq!(result["position"]["column"], "todo");
 
         // Verify the new task has a different ID from the source
         let new_id = result["id"].as_str().unwrap();
         assert_ne!(new_id, "01OLD");
 
-        // Verify the task actually exists on disk
+        // Verify the task actually exists on disk — the response is slim,
+        // so the copied body is asserted from the stored entity.
         let ectx = ctx.entity_context().await.unwrap();
         let entity = ectx.read("task", new_id).await.unwrap();
         assert_eq!(entity.get_str("title").unwrap(), "Original task");
+        assert_eq!(entity.get_str("body").unwrap(), "Task body with #feature");
     }
 
     #[tokio::test]

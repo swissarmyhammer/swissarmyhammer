@@ -3,7 +3,7 @@
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::task::shared::{auto_create_body_tags, parse_iso8601_date};
-use crate::task_helpers::task_entity_to_json;
+use crate::task_helpers::task_mutation_ack;
 use crate::types::{ActorId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -202,7 +202,9 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
             self.apply_to(&mut entity)?;
             ectx.write(&entity).await?;
             auto_create_body_tags(&ectx, &entity).await?;
-            Ok(task_entity_to_json(&entity))
+            // Thin ack — the caller already has every field it sent; the full
+            // card is one `get task` away.
+            Ok(task_mutation_ack(&entity))
         }
         .await;
 
@@ -234,8 +236,21 @@ mod tests {
         (temp, ctx)
     }
 
+    /// Fetch the full task via `get task` — mutation responses are thin
+    /// acks, so effect assertions go through the stored state.
+    async fn fetch(ctx: &KanbanContext, id: &str) -> Value {
+        crate::task::GetTask::new(id)
+            .execute(ctx)
+            .await
+            .into_result()
+            .unwrap()
+    }
+
+    /// The update response is the thin ack `{ok, id, short_id}` — no field
+    /// echo of any kind. The mutation's effect is verified via `get task`,
+    /// the agreed escape hatch for the full card.
     #[tokio::test]
-    async fn test_update_task_title() {
+    async fn test_update_task_returns_thin_ack_and_stores_effect() {
         let (_temp, ctx) = setup().await;
 
         let add_result = AddTask::new("Original")
@@ -247,33 +262,21 @@ mod tests {
 
         let result = UpdateTask::new(task_id)
             .with_title("Updated")
+            .with_description("New body")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        assert_eq!(result["title"], "Updated");
-    }
+        crate::task_helpers::assert_task_mutation_ack(&result, task_id);
 
-    #[tokio::test]
-    async fn test_update_task_description() {
-        let (_temp, ctx) = setup().await;
-
-        let add_result = AddTask::new("Task")
+        let fetched = crate::task::GetTask::new(task_id)
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let task_id = add_result["id"].as_str().unwrap();
-
-        let result = UpdateTask::new(task_id)
-            .with_description("New description")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        assert_eq!(result["description"], "New description");
+        assert_eq!(fetched["title"], "Updated");
+        assert_eq!(fetched["description"], "New body");
     }
 
     #[tokio::test]
@@ -302,14 +305,15 @@ mod tests {
         let task_id = add_result["id"].as_str().unwrap();
 
         // Replace assignees — should only have bob now
-        let result = UpdateTask::new(task_id)
+        UpdateTask::new(task_id)
             .with_assignees(vec![ActorId::from("bob")])
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        let assignees = result["assignees"].as_array().unwrap();
+        let task = fetch(&ctx, task_id).await;
+        let assignees = task["assignees"].as_array().unwrap();
         assert_eq!(assignees.len(), 1);
         assert_eq!(assignees[0], "bob");
     }
@@ -336,14 +340,14 @@ mod tests {
         assert!(add_result["project"].is_null());
 
         // Set the project
-        let result = UpdateTask::new(task_id)
+        UpdateTask::new(task_id)
             .with_project("backend")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        assert_eq!(result["project"], "backend");
+        assert_eq!(fetch(&ctx, task_id).await["project"], "backend");
     }
 
     #[tokio::test]
@@ -372,14 +376,14 @@ mod tests {
         assert_eq!(add_result["project"], "backend");
 
         // Change to a different project
-        let result = UpdateTask::new(task_id)
+        UpdateTask::new(task_id)
             .with_project("frontend")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        assert_eq!(result["project"], "frontend");
+        assert_eq!(fetch(&ctx, task_id).await["project"], "frontend");
     }
 
     #[tokio::test]
@@ -408,14 +412,15 @@ mod tests {
         let id_c = c["id"].as_str().unwrap();
 
         // Set two dependencies on task C.
-        let result = UpdateTask::new(id_c)
+        UpdateTask::new(id_c)
             .with_depends_on(vec![TaskId::from_string(id_a), TaskId::from_string(id_b)])
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        let deps = result["depends_on"]
+        let task = fetch(&ctx, id_c).await;
+        let deps = task["depends_on"]
             .as_array()
             .expect("depends_on should be an array");
         assert_eq!(deps.len(), 2, "should have exactly 2 dependencies");
@@ -439,14 +444,14 @@ mod tests {
             .unwrap();
         let id = add["id"].as_str().unwrap();
 
-        let result = UpdateTask::new(id)
+        UpdateTask::new(id)
             .with_due("2026-04-30")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        assert_eq!(result["due"], "2026-04-30");
+        assert_eq!(fetch(&ctx, id).await["due"], "2026-04-30");
     }
 
     #[tokio::test]
@@ -460,14 +465,14 @@ mod tests {
             .unwrap();
         let id = add["id"].as_str().unwrap();
 
-        let result = UpdateTask::new(id)
+        UpdateTask::new(id)
             .with_scheduled("2026-04-15")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        assert_eq!(result["scheduled"], "2026-04-15");
+        assert_eq!(fetch(&ctx, id).await["scheduled"], "2026-04-15");
     }
 
     #[tokio::test]
@@ -485,14 +490,17 @@ mod tests {
         assert_eq!(add["due"], "2026-04-30");
 
         // Clear the due date.
-        let result = UpdateTask::new(id)
+        UpdateTask::new(id)
             .clear_due()
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        assert!(result["due"].is_null(), "due should be null after clearing");
+        assert!(
+            fetch(&ctx, id).await["due"].is_null(),
+            "due should be null after clearing"
+        );
     }
 
     #[tokio::test]
@@ -515,10 +523,10 @@ mod tests {
             "scheduled": "",
         });
         let cmd: UpdateTask = serde_json::from_value(cmd_json).unwrap();
-        let result = cmd.execute(&ctx).await.into_result().unwrap();
+        cmd.execute(&ctx).await.into_result().unwrap();
 
         assert!(
-            result["scheduled"].is_null(),
+            fetch(&ctx, id).await["scheduled"].is_null(),
             "scheduled should be null after empty-string clear"
         );
     }
@@ -543,7 +551,7 @@ mod tests {
         assert_eq!(add["due"], "2026-04-30");
 
         // Whitespace-only via the builder must clear, not error.
-        let result = UpdateTask::new(id)
+        UpdateTask::new(id)
             .with_due("   ")
             .execute(&ctx)
             .await
@@ -551,7 +559,7 @@ mod tests {
             .unwrap();
 
         assert!(
-            result["due"].is_null(),
+            fetch(&ctx, id).await["due"].is_null(),
             "due should be null after whitespace-only clear via builder"
         );
     }
@@ -594,16 +602,17 @@ mod tests {
             .unwrap();
         let id = add["id"].as_str().unwrap();
 
-        let result = UpdateTask::new(id)
+        UpdateTask::new(id)
             .with_title("Renamed")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        assert_eq!(result["title"], "Renamed");
+        let task = fetch(&ctx, id).await;
+        assert_eq!(task["title"], "Renamed");
         assert_eq!(
-            result["due"], "2026-04-30",
+            task["due"], "2026-04-30",
             "due date should remain when not touched"
         );
     }
@@ -619,7 +628,7 @@ mod tests {
             .unwrap();
         let id = add["id"].as_str().unwrap();
 
-        let result = UpdateTask::new(id)
+        UpdateTask::new(id)
             .with_due("2026-04-30T12:34:56Z")
             .execute(&ctx)
             .await
@@ -627,7 +636,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            result["due"], "2026-04-30",
+            fetch(&ctx, id).await["due"],
+            "2026-04-30",
             "RFC 3339 datetime should be truncated to the date portion"
         );
     }
@@ -658,13 +668,14 @@ mod tests {
             "completed": "1999-01-01",
         });
         let cmd: UpdateTask = serde_json::from_value(cmd_json).unwrap();
-        let result = cmd.execute(&ctx).await.into_result().unwrap();
+        cmd.execute(&ctx).await.into_result().unwrap();
 
-        assert_eq!(result["title"], "Updated");
+        let task = fetch(&ctx, id).await;
+        assert_eq!(task["title"], "Updated");
         // The system date fields are still present in output (derived from
         // changelog) but must NOT equal "1999-01-01" because the update
         // parameters for them are not defined on the struct.
-        if let Some(created) = result["created"].as_str() {
+        if let Some(created) = task["created"].as_str() {
             assert_ne!(
                 created, "1999-01-01",
                 "created must not be settable via public API"

@@ -54,13 +54,9 @@ impl Execute<KanbanContext, KanbanError> for AssignTask {
 
             ectx.write(&entity).await?;
 
-            // Return confirmation with task info
-            Ok(serde_json::json!({
-                "assigned": true,
-                "task_id": self.id,
-                "assignee": self.assignee,
-                "all_assignees": assignees,
-            }))
+            // Thin ack — success implies the assignment took effect;
+            // `get task` is the escape hatch for the post-op assignee list.
+            Ok(crate::task_helpers::task_mutation_ack(&entity))
         }
         .await;
 
@@ -76,7 +72,9 @@ mod tests {
     use super::*;
     use crate::actor::AddActor;
     use crate::board::InitBoard;
-    use crate::task::AddTask;
+    use crate::task::{AddTask, GetTask};
+    use crate::task_helpers::assert_task_mutation_ack;
+    use serde_json::json;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -116,13 +114,19 @@ mod tests {
             .into_result()
             .unwrap();
 
-        assert_eq!(result["assigned"], true);
-        assert_eq!(result["task_id"], task_id);
-        assert_eq!(result["assignee"], "assistant");
-        assert!(result["all_assignees"]
+        // Mutations acknowledge, they don't echo — the assignee's presence
+        // is asserted via `get task` (stored state).
+        assert_task_mutation_ack(&result, task_id);
+
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert!(task["assignees"]
             .as_array()
             .unwrap()
-            .contains(&serde_json::json!("assistant")));
+            .contains(&json!("assistant")));
     }
 
     #[tokio::test]
@@ -153,7 +157,18 @@ mod tests {
             .into_result()
             .unwrap();
 
-        assert_eq!(result["all_assignees"].as_array().unwrap().len(), 1);
+        assert_task_mutation_ack(&result, task_id);
+
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            task["assignees"].as_array().unwrap().len(),
+            1,
+            "duplicate assignment must not add the actor twice"
+        );
     }
 
     #[tokio::test]

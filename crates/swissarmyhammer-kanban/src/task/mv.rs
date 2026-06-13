@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::task_helpers::{compute_ordinal_for_neighbors, task_entity_to_json};
+use crate::task_helpers::{compute_ordinal_for_neighbors, task_mutation_ack};
 use crate::types::{ColumnId, Ordinal, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -243,7 +243,9 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
             entity.set("position_ordinal", json!(ordinal.as_str()));
 
             ectx.write(&entity).await?;
-            Ok(task_entity_to_json(&entity))
+            // Thin ack — success implies the move took effect; `get task`
+            // returns the stored position when it matters.
+            Ok(task_mutation_ack(&entity))
         }
         .await;
 
@@ -275,8 +277,10 @@ mod tests {
         (temp, ctx)
     }
 
+    /// The move response is the thin ack `{ok, id, short_id}` — no position
+    /// echo. The stored effect is verified via `get task`.
     #[tokio::test]
-    async fn test_move_task_to_column() {
+    async fn test_move_task_returns_thin_ack_and_stores_position() {
         let (_temp, ctx) = setup().await;
 
         let add_result = AddTask::new("Task")
@@ -292,7 +296,14 @@ mod tests {
             .into_result()
             .unwrap();
 
-        assert_eq!(result["position"]["column"], "done");
+        crate::task_helpers::assert_task_mutation_ack(&result, task_id);
+
+        let fetched = crate::task::GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(fetched["position"]["column"], "done");
     }
 
     /// Helper: add a task and return its ID.
@@ -406,14 +417,16 @@ mod tests {
         let a = add_task(&ctx, "A").await;
 
         // Move A with before_id referencing nonexistent task — should append
-        let result = MoveTask::to_column(a.as_str(), "todo")
+        MoveTask::to_column(a.as_str(), "todo")
             .with_before("nonexistent")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        assert_eq!(result["position"]["column"], "todo");
+        let ectx = ctx.entity_context().await.unwrap();
+        let entity = ectx.read("task", &a).await.unwrap();
+        assert_eq!(entity.get_str("position_column"), Some("todo"));
     }
 
     #[tokio::test]
@@ -456,16 +469,17 @@ mod tests {
             .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
-        let result = MoveTask::to_column(task_id, "in-review")
+        MoveTask::to_column(task_id, "in-review")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        assert_eq!(result["position"]["column"], "in-review");
+        let ectx = ctx.entity_context().await.unwrap();
+        let entity = ectx.read("task", task_id).await.unwrap();
+        assert_eq!(entity.get_str("position_column"), Some("in-review"));
 
         // Verify the column was created as an entity
-        let ectx = ctx.entity_context().await.unwrap();
         let col_entity = ectx.read("column", "in-review").await.unwrap();
         assert_eq!(col_entity.get_str("name").unwrap(), "In Review");
     }
