@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -305,6 +305,16 @@ pub struct UIState {
     inner: RwLock<UIStateInner>,
     /// Path to the YAML config file, if persistence is enabled.
     config_path: Option<PathBuf>,
+    /// When true, auto-save is disabled for the lifetime of this instance:
+    /// the on-disk config could not be read (or a corrupt config could not
+    /// be backed up), so writing would clobber user data we never saw.
+    persist_blocked: bool,
+    /// The serialized form of the state as last loaded from / written to
+    /// disk. [`Self::save`] skips the write entirely when the current state
+    /// serializes to the same string, so a change-free session never touches
+    /// the file. Also serializes concurrent saves (the lock is held across
+    /// write + rename).
+    last_persisted_yaml: Mutex<Option<String>>,
 }
 
 /// Interior mutable state behind the RwLock.
@@ -378,6 +388,40 @@ impl Default for UIStateInner {
     }
 }
 
+/// Wraps a YAML serialization failure for transport inside `std::io::Error`
+/// while keeping the underlying `serde_yaml_ng::Error` reachable through
+/// `Error::source()`, so callers can distinguish serialization failures from
+/// real I/O failures.
+#[derive(Debug)]
+struct YamlSerializeError(serde_yaml_ng::Error);
+
+impl std::fmt::Display for YamlSerializeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "YAML serialization failed: {}", self.0)
+    }
+}
+
+impl std::error::Error for YamlSerializeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+/// Outcome of reading the config file at load time.
+///
+/// Carries the loaded (or default) state plus the persistence policy the
+/// load determined: whether saving is blocked, and the serialized baseline
+/// used to skip change-free saves.
+struct LoadedConfig {
+    /// The deserialized state, or defaults when the file was missing/bad.
+    inner: UIStateInner,
+    /// True when saving must be disabled to protect the on-disk file.
+    persist_blocked: bool,
+    /// Serialized form of `inner` when it came from a successful parse;
+    /// `None` for defaults (so a first save always writes).
+    baseline: Option<String>,
+}
+
 impl UIState {
     /// Create a new UIState with default values and no persistence.
     ///
@@ -387,6 +431,8 @@ impl UIState {
         Self {
             inner: RwLock::new(UIStateInner::default()),
             config_path: None,
+            persist_blocked: false,
+            last_persisted_yaml: Mutex::new(None),
         }
     }
 
@@ -395,37 +441,108 @@ impl UIState {
     ///
     /// Once loaded, all subsequent mutations will auto-save to the same path.
     /// Parent directories are created on first save if they don't exist.
+    ///
+    /// Parse-or-preserve: a failed load never lets defaults clobber the
+    /// user's file. An unparseable config is backed up to a sibling
+    /// `<name>.corrupt-<unix-secs>` file before this instance is allowed to
+    /// overwrite it; an unreadable config (or a failed backup) disables
+    /// persistence for this instance entirely.
     pub fn load(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
-        let inner = Self::read_from_file(&path);
+        let loaded = Self::read_from_file(&path);
         Self {
-            inner: RwLock::new(inner),
+            inner: RwLock::new(loaded.inner),
             config_path: Some(path),
+            persist_blocked: loaded.persist_blocked,
+            last_persisted_yaml: Mutex::new(loaded.baseline),
         }
     }
 
     /// Read state from a YAML file, returning defaults on any error.
-    fn read_from_file(path: &Path) -> UIStateInner {
+    ///
+    /// Loading never writes to the config file itself. On a parse failure the
+    /// original bytes are copied to a `.corrupt-<ts>` sibling so a later save
+    /// cannot destroy them; on a read failure (other than NotFound) or a
+    /// failed backup, persistence is blocked for the returned instance.
+    fn read_from_file(path: &Path) -> LoadedConfig {
         match std::fs::read_to_string(path) {
             Ok(contents) => match serde_yaml_ng::from_str::<UIStateInner>(&contents) {
-                Ok(inner) => inner,
+                Ok(inner) => {
+                    let baseline = serde_yaml_ng::to_string(&inner).ok();
+                    LoadedConfig {
+                        inner,
+                        persist_blocked: false,
+                        baseline,
+                    }
+                }
                 Err(err) => {
-                    tracing::warn!(
+                    tracing::error!(
                         path = %path.display(),
                         error = %err,
-                        "UIState: failed to parse YAML config, using defaults"
+                        "UIState: failed to parse YAML config; preserving the \
+                         file and running with in-memory defaults"
                     );
-                    UIStateInner::default()
+                    let backed_up = Self::backup_corrupt_file(path);
+                    LoadedConfig {
+                        inner: UIStateInner::default(),
+                        persist_blocked: !backed_up,
+                        baseline: None,
+                    }
                 }
             },
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => UIStateInner::default(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => LoadedConfig {
+                inner: UIStateInner::default(),
+                persist_blocked: false,
+                baseline: None,
+            },
             Err(err) => {
-                tracing::warn!(
+                tracing::error!(
                     path = %path.display(),
                     error = %err,
-                    "UIState: failed to read config file, using defaults"
+                    "UIState: failed to read config file; persistence disabled \
+                     so the unreadable file is never overwritten with defaults"
                 );
-                UIStateInner::default()
+                LoadedConfig {
+                    inner: UIStateInner::default(),
+                    persist_blocked: true,
+                    baseline: None,
+                }
+            }
+        }
+    }
+
+    /// Copy a corrupt config file to a `<name>.corrupt-<unix-secs>` sibling.
+    ///
+    /// Returns `true` once the original bytes are safely preserved. Copies
+    /// rather than renames so the original stays in place for inspection; a
+    /// later save may overwrite it only because this backup exists.
+    fn backup_corrupt_file(path: &Path) -> bool {
+        let file_name = path
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "ui-state.yaml".to_string());
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let backup = path.with_file_name(format!("{file_name}.corrupt-{secs}"));
+        match std::fs::copy(path, &backup) {
+            Ok(_) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    backup = %backup.display(),
+                    "UIState: backed up corrupt config before continuing with defaults"
+                );
+                true
+            }
+            Err(err) => {
+                tracing::error!(
+                    path = %path.display(),
+                    error = %err,
+                    "UIState: could not back up corrupt config; persistence \
+                     disabled so the file is never overwritten with defaults"
+                );
+                false
             }
         }
     }
@@ -433,20 +550,66 @@ impl UIState {
     /// Save current state to the configured YAML path.
     ///
     /// Creates parent directories if needed. Returns an error if writing fails.
-    /// No-op if no config path was set (i.e. constructed via `UIState::new()`).
+    /// No-op if no config path was set (i.e. constructed via `UIState::new()`),
+    /// if persistence was blocked by a failed load, or if the state is
+    /// unchanged since it was last loaded/saved (so a change-free session
+    /// never touches the file).
+    ///
+    /// The write is atomic: the YAML goes to a temp sibling which is then
+    /// renamed over the target, so a mid-write kill leaves either the old or
+    /// the new file — never a torn one.
     pub fn save(&self) -> std::io::Result<()> {
         let Some(ref path) = self.config_path else {
             return Ok(());
         };
-        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        let yaml = serde_yaml_ng::to_string(&*inner)
-            .map_err(|e| std::io::Error::other(format!("YAML serialization failed: {e}")))?;
+        if self.persist_blocked {
+            tracing::warn!(
+                path = %path.display(),
+                "UIState: skipping save — persistence is disabled because the \
+                 config file could not be safely read or backed up at load"
+            );
+            return Ok(());
+        }
+        // Hold the baseline lock across serialize + write + rename so
+        // concurrent saves are serialized (no temp-file races) and the
+        // baseline always matches the bytes on disk.
+        let mut baseline = self
+            .last_persisted_yaml
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let yaml = {
+            let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+            serde_yaml_ng::to_string(&*inner)
+                .map_err(|e| std::io::Error::other(YamlSerializeError(e)))?
+        };
+        if baseline.as_deref() == Some(yaml.as_str()) {
+            return Ok(());
+        }
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)?;
             }
         }
-        std::fs::write(path, yaml)
+        let temp = Self::temp_sibling(path);
+        std::fs::write(&temp, &yaml)?;
+        if let Err(err) = std::fs::rename(&temp, path) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(err);
+        }
+        *baseline = Some(yaml);
+        Ok(())
+    }
+
+    /// Build a unique temp sibling path (same directory, so the rename in
+    /// [`Self::save`] stays on one filesystem and is atomic).
+    fn temp_sibling(path: &Path) -> PathBuf {
+        static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let file_name = path
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "ui-state.yaml".to_string());
+        path.with_file_name(format!(".{file_name}.tmp-{}-{n}", std::process::id()))
     }
 
     /// Try to save; log errors but never panic or propagate.
@@ -1618,12 +1781,16 @@ mod tests {
 
     #[test]
     fn load_malformed_yaml_returns_defaults() {
-        let path = temp_yaml_path("malformed");
-        fs::write(&path, b":::not valid yaml:::").unwrap();
+        // Tempdir so the .corrupt-<ts> backup the load creates is cleaned up.
+        // Note: the content must genuinely fail the YAML parse — a mapping
+        // with unknown keys (e.g. ":::garbage:::") parses fine and is just
+        // ignored by serde.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        fs::write(&path, b"keymap_mode: [unterminated").unwrap();
         let state = UIState::load(&path);
         assert_eq!(state.keymap_mode(), "cua");
         assert!(state.inspector_stack("main").is_empty());
-        let _ = fs::remove_file(&path);
     }
 
     #[test]
@@ -2913,5 +3080,239 @@ mod tests {
             );
         }
         let _ = fs::remove_file(&path);
+    }
+
+    // --- Clobber-protection tests ---
+    //
+    // A load failure or restart churn must never overwrite user settings:
+    // parse-or-preserve (corrupt file backed up, never silently replaced by
+    // defaults), atomic writes (old-or-new, never torn), and no save-on-load
+    // (a clean start/exit with no changes leaves the file byte-identical).
+
+    /// Find the `.corrupt-<ts>` backup sibling for a config path, if any.
+    fn find_corrupt_backup(dir: &Path) -> Option<PathBuf> {
+        fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.contains(".corrupt-"))
+            })
+    }
+
+    #[test]
+    fn corrupt_config_file_preserved_and_backed_up_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        // An unterminated flow sequence — the shape a torn/truncated write
+        // leaves behind, and guaranteed to fail the YAML parse.
+        let garbage = b"keymap_mode: vim\nopen_boards: [/a/.kanban, /b";
+        fs::write(&path, garbage).unwrap();
+
+        let state = UIState::load(&path);
+        // App runs with in-memory defaults...
+        assert_eq!(state.keymap_mode(), "cua");
+        // ...but the original file is untouched on disk...
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            garbage,
+            "load must never modify a corrupt config file"
+        );
+        // ...and a .corrupt-<ts> backup preserves the original bytes.
+        let backup = find_corrupt_backup(dir.path())
+            .expect("a .corrupt-<ts> backup must be created for an unparseable config");
+        assert_eq!(fs::read(&backup).unwrap(), garbage);
+    }
+
+    #[test]
+    fn mutation_after_corrupt_load_keeps_backup_of_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        let garbage = b"keymap_mode: [unterminated";
+        fs::write(&path, garbage).unwrap();
+
+        let state = UIState::load(&path);
+        // A real user change after the failed load may overwrite the live
+        // file — but only because the original was backed up first.
+        state.set_keymap_mode("vim");
+
+        let reloaded = UIState::load(&path);
+        assert_eq!(reloaded.keymap_mode(), "vim");
+        let backup = find_corrupt_backup(dir.path())
+            .expect("backup must exist before the corrupt file is overwritten");
+        assert_eq!(fs::read(&backup).unwrap(), garbage);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_config_blocks_auto_save_clobber() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        let original = "keymap_mode: vim\nopen_boards:\n- /a/.kanban\n";
+        fs::write(&path, original).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let state = UIState::load(&path);
+        // Read failed → defaults in memory; a mutation must NOT save those
+        // defaults over a file whose contents we never saw (and couldn't
+        // back up).
+        state.set_keymap_mode("emacs");
+        state.save().unwrap();
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            original,
+            "an unreadable config must never be overwritten"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_after_load_with_no_changes_does_not_touch_file() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        {
+            let state = UIState::load(&path);
+            state.set_keymap_mode("vim");
+            state.add_open_board("/a/.kanban");
+            state.save().unwrap();
+        }
+        let before_bytes = fs::read(&path).unwrap();
+        let before_meta = fs::metadata(&path).unwrap();
+        // Ensure a rewrite would be observable via mtime even on coarse clocks.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        // Simulate a clean start + clean exit with no setting changes:
+        // load, then the exit-path save().
+        let state = UIState::load(&path);
+        state.save().unwrap();
+
+        let after_meta = fs::metadata(&path).unwrap();
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before_bytes,
+            "bytes must be identical"
+        );
+        assert_eq!(
+            after_meta.ino(),
+            before_meta.ino(),
+            "file must not be replaced"
+        );
+        assert_eq!(
+            after_meta.modified().unwrap(),
+            before_meta.modified().unwrap(),
+            "file must not be rewritten at all when nothing changed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_replaces_file_atomically_via_rename() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        {
+            let state = UIState::load(&path);
+            state.set_keymap_mode("vim");
+            state.save().unwrap();
+        }
+        let ino_before = fs::metadata(&path).unwrap().ino();
+
+        let state = UIState::load(&path);
+        state.set_keymap_mode("emacs"); // auto-saves
+
+        let ino_after = fs::metadata(&path).unwrap().ino();
+        assert_ne!(
+            ino_before, ino_after,
+            "save must write a temp file and rename it into place \
+             (in-place truncate can leave a torn file on mid-write kill)"
+        );
+        // No temp litter left behind.
+        let leftovers: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p != &path)
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
+        assert_eq!(UIState::load(&path).keymap_mode(), "emacs");
+    }
+
+    #[test]
+    fn settings_survive_rapid_restart_cycles() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        let boards = vec![
+            "/a/.kanban".to_string(),
+            "/b/.kanban".to_string(),
+            "/c/.kanban".to_string(),
+            "/d/.kanban".to_string(),
+        ];
+        {
+            let state = UIState::load(&path);
+            state.set_keymap_mode("vim");
+            for b in &boards {
+                state.add_open_board(b);
+            }
+            state.save().unwrap();
+        }
+        // Simulate tauri-dev restart churn: each cycle is the app lifecycle
+        // (load at start, unconditional save() at exit) with no user changes.
+        for _ in 0..10 {
+            let state = UIState::load(&path);
+            state.save().unwrap();
+        }
+        let state = UIState::load(&path);
+        assert_eq!(state.keymap_mode(), "vim");
+        assert_eq!(state.open_boards(), boards);
+    }
+
+    #[test]
+    fn concurrent_load_during_save_never_sees_torn_state() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+
+        // One large state (keymap vim) so a torn read has a wide window to
+        // land in with a non-atomic truncate-then-write.
+        let writer_state = UIState::load(&path);
+        writer_state.set_keymap_mode("vim");
+        for i in 0..500 {
+            writer_state.add_open_board(&format!("/very/long/board/path/{i:04}/.kanban"));
+        }
+        writer_state.save().unwrap();
+
+        let done = Arc::new(AtomicBool::new(false));
+        let done_w = done.clone();
+        let writer = std::thread::spawn(move || {
+            // Each iteration is a real change, so every cycle truly rewrites
+            // the file (an unchanged save is allowed to skip the write).
+            for i in 0..300 {
+                writer_state.set_active_view("w", &format!("view-{i}"));
+            }
+            done_w.store(true, Ordering::SeqCst);
+        });
+
+        // Reader: every load must observe a complete file (old or new), never
+        // a torn/empty one that silently degrades to defaults.
+        while !done.load(Ordering::SeqCst) {
+            let snapshot = UIState::load(&path);
+            assert_eq!(
+                snapshot.keymap_mode(),
+                "vim",
+                "a load racing a save observed a torn config and fell back to defaults"
+            );
+        }
+        writer.join().unwrap();
     }
 }
