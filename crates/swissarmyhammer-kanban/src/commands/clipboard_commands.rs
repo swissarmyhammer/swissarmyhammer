@@ -27,7 +27,16 @@ use serde_json::Value;
 /// Entity types that have a known copy path (generic via
 /// `EntityContext::read`). Must stay in sync with the entity definitions
 /// under `swissarmyhammer-kanban/builtin/entities/*.yaml`.
-const COPYABLE_ENTITY_TYPES: &[&str] = &[
+///
+/// This is the CANONICAL clipboard-capability set. It is the dispatch-time
+/// `available()` gate here, and it is also the source of truth the
+/// list-time gate is pinned against: the `entity-commands` plugin's
+/// `CLIPBOARD_ENTITY_TYPES` (`builtin/plugins/entity-commands/index.ts`)
+/// declares the same set as each clipboard command's `applies_to`, and the
+/// drift guard `builtin_entity_commands_e2e::assert_clipboard_applies_to`
+/// asserts the TS-surfaced `applies_to` equals THIS constant — so declared
+/// (list) and enforced (dispatch) can never silently diverge.
+pub const COPYABLE_ENTITY_TYPES: &[&str] = &[
     "task",
     "tag",
     "column",

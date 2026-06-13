@@ -39,6 +39,7 @@ use swissarmyhammer_entity::{Entity, EntityContext};
 use swissarmyhammer_entity_mcp::EntityServer;
 use swissarmyhammer_kanban::board::InitBoard;
 use swissarmyhammer_kanban::clipboard::{ClipboardProvider, InMemoryClipboard};
+use swissarmyhammer_kanban::commands::clipboard_commands::COPYABLE_ENTITY_TYPES;
 use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor, OperationProcessor};
 use swissarmyhammer_plugin::{
     CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR,
@@ -711,6 +712,7 @@ fn assert_entity_cut_metadata(cmd: &Value) {
         json!([{ "name": "moniker", "from": "target" }]),
         "entity.cut params must match entity.yaml 1:1"
     );
+    assert_clipboard_applies_to(cmd, "entity.cut");
 }
 
 /// `entity.copy` — entity.yaml: undoable:false, context_menu (group 1, order 1),
@@ -747,6 +749,7 @@ fn assert_entity_copy_metadata(cmd: &Value) {
         json!([{ "name": "moniker", "from": "target" }]),
         "entity.copy params must match entity.yaml 1:1"
     );
+    assert_clipboard_applies_to(cmd, "entity.copy");
 }
 
 /// `entity.paste` — entity.yaml: undoable, context_menu (group 1, order 2),
@@ -787,4 +790,65 @@ fn assert_entity_paste_metadata(cmd: &Value) {
         json!([{ "name": "moniker", "from": "target" }]),
         "entity.paste params must match entity.yaml 1:1"
     );
+    assert_clipboard_applies_to(cmd, "entity.paste");
+}
+
+/// Drift guard: the clipboard trio (`entity.cut` / `entity.copy` /
+/// `entity.paste`) must declare a list-time `applies_to` set that is EQUAL to
+/// the dispatch-time capability set — the canonical `COPYABLE_ENTITY_TYPES`
+/// in `swissarmyhammer-kanban::commands::clipboard_commands`.
+///
+/// The capability lives in two places that cannot import each other:
+///
+///   - TS `CLIPBOARD_ENTITY_TYPES` (`builtin/plugins/entity-commands/index.ts`)
+///     — surfaced here through the real registered metadata as each command's
+///     `applies_to`. This is the LIST-time gate: `list command` reads
+///     `applies_to` and suppresses the command when the focused object's type
+///     is absent from the set.
+///   - Rust `COPYABLE_ENTITY_TYPES` — the DISPATCH-time `available()` gate.
+///
+/// This assertion pins the TS-surfaced `applies_to` against the Rust constant
+/// directly (NOT a third hand-maintained literal), so declared (list) and
+/// enforced (dispatch) can never silently diverge: if Rust drops `actor` from
+/// `COPYABLE_ENTITY_TYPES` while TS keeps listing it, this goes RED rather
+/// than re-introducing a shown-but-unsupported command. View / perspective
+/// are absent from both — they have no clipboard semantics.
+fn assert_clipboard_applies_to(cmd: &Value, id: &str) {
+    // Order-insensitive set comparison: the TS source and the Rust constant
+    // are two independently authored lists; only their MEMBERSHIP must match.
+    let mut declared: Vec<String> = cmd["applies_to"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{id} applies_to must be an array"))
+        .iter()
+        .map(|t| {
+            t.as_str()
+                .unwrap_or_else(|| panic!("{id} applies_to entries must be strings"))
+                .to_string()
+        })
+        .collect();
+    declared.sort();
+
+    let mut enforced: Vec<String> = COPYABLE_ENTITY_TYPES
+        .iter()
+        .map(|t| t.to_string())
+        .collect();
+    enforced.sort();
+
+    assert_eq!(
+        declared, enforced,
+        "{id} list-time applies_to (TS CLIPBOARD_ENTITY_TYPES, surfaced via \
+         list command) must equal the dispatch-time COPYABLE_ENTITY_TYPES \
+         (swissarmyhammer-kanban) — declared and enforced clipboard capability \
+         must not drift"
+    );
+
+    // Anchor: neither list may name a clipboard-less entity type. This holds
+    // independently of the set-equality above, so a future edit that adds
+    // view/perspective to BOTH lists still trips here.
+    for unsupported in ["view", "perspective"] {
+        assert!(
+            !declared.iter().any(|t| t == unsupported),
+            "{id} applies_to must NOT include {unsupported:?} — it has no clipboard semantics"
+        );
+    }
 }

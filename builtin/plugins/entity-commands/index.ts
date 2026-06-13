@@ -52,6 +52,39 @@ interface ParsedMoniker {
 }
 
 /**
+ * Entity types that support clipboard operations (cut / copy / paste).
+ *
+ * This is the DECLARED CAPABILITY for the clipboard trio: the command
+ * surface (`list command`) lists `entity.cut` / `entity.copy` / `entity.paste`
+ * only when the focused object's entity type is one of these. Views and
+ * perspectives are deliberately absent — they have no clipboard semantics, so
+ * the commands never surface there. The fine-grained, per-type dispatch gating
+ * (e.g. cut only deletes task/tag/attachment, paste needs a matching
+ * `PasteMatrix` handler) stays in the Rust `available()` impls in
+ * `swissarmyhammer-kanban::commands::clipboard_commands`; this set is the
+ * coarse list-level capability that keeps the commands off entity types that
+ * support no clipboard op at all.
+ *
+ * Mirrors `COPYABLE_ENTITY_TYPES` in
+ * `crates/swissarmyhammer-kanban/src/commands/clipboard_commands.rs` — the two
+ * lists must stay in lockstep (each entity type here has a copy path there).
+ * That lockstep is ENFORCED, not just documented: the drift guard
+ * `builtin_entity_commands_e2e::assert_clipboard_applies_to` loads this plugin,
+ * reads the surfaced `applies_to`, and asserts set-equality against the Rust
+ * `COPYABLE_ENTITY_TYPES`, so this list and that constant cannot silently
+ * diverge.
+ */
+const CLIPBOARD_ENTITY_TYPES: readonly string[] = [
+  "task",
+  "tag",
+  "column",
+  "board",
+  "actor",
+  "project",
+  "attachment",
+];
+
+/**
  * The dispatch surface for the generic `entity` operation tool.
  *
  * The dispatch Proxy turns a property path into an MCP `tools/call`:
@@ -270,6 +303,7 @@ export default class EntityCommandsPlugin extends Plugin {
         context_menu_order: 0,
         keys: { cua: "Mod+X", vim: "x" },
         menu: { path: ["Edit"], group: 1, order: 0 },
+        applies_to: CLIPBOARD_ENTITY_TYPES,
         params: [{ name: "moniker", from: "target" }],
         available: (rawCtx: unknown) =>
           requireTarget((rawCtx ?? {}) as CommandContext),
@@ -296,6 +330,7 @@ export default class EntityCommandsPlugin extends Plugin {
         context_menu_order: 1,
         keys: { cua: "Mod+C", vim: "y" },
         menu: { path: ["Edit"], group: 1, order: 1 },
+        applies_to: CLIPBOARD_ENTITY_TYPES,
         params: [{ name: "moniker", from: "target" }],
         available: (rawCtx: unknown) =>
           requireTarget((rawCtx ?? {}) as CommandContext),
@@ -325,6 +360,7 @@ export default class EntityCommandsPlugin extends Plugin {
         context_menu_order: 2,
         keys: { cua: "Mod+V", vim: "p" },
         menu: { path: ["Edit"], group: 1, order: 2 },
+        applies_to: CLIPBOARD_ENTITY_TYPES,
         params: [{ name: "moniker", from: "target" }],
         available: (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;

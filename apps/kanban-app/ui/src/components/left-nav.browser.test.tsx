@@ -149,6 +149,44 @@ describe("LeftNav — right-click context menu", () => {
   });
 
   /**
+   * Right-clicking a view must forward the view's focus context (`target` +
+   * `scope_chain`) to the `list command` fetch. This is the load-bearing
+   * contract behind the metadata-driven `applies_to` gate: the backend reads
+   * `ctx` to resolve the focused entity type and suppresses commands whose
+   * declared `applies_to` set excludes it (e.g. the clipboard trio
+   * `entity.cut` / `entity.copy` / `entity.paste`, which never apply to a
+   * `view`). If the frontend failed to send `ctx`, the backend gate could not
+   * fire and clipboard commands would leak back onto views — so this test
+   * pins the wire contract that keeps the gate effective.
+   */
+  it("right-click forwards the view's focus ctx to the list command fetch", async () => {
+    mockRegistry = [{ id: "app.help", name: "Help", context_menu: true }];
+
+    renderLeftNav();
+
+    const buttons = screen.getAllByRole("button");
+    fireEvent.contextMenu(buttons[0]);
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    const listCall = mockInvoke.mock.calls.find(
+      ([cmd, args]) =>
+        cmd === "command_tool_call" &&
+        (args as { op?: string })?.op === "list command",
+    );
+    expect(listCall).toBeDefined();
+    const ctx = (
+      listCall![1] as {
+        params: { ctx?: { target?: string; scope_chain?: string[] } };
+      }
+    ).params.ctx;
+    // The focused entity type the backend gate resolves from is `view` — the
+    // type half of the target / innermost scope-chain moniker.
+    expect(ctx?.target).toBe("view:v1");
+    expect(ctx?.scope_chain).toEqual(expect.arrayContaining(["view:v1"]));
+  });
+
+  /**
    * View switching is a palette-only action — right-clicking a view button
    * must never surface a `Switch to <ViewName>` entry. The backend no longer
    * returns `view.switch:*` commands when `contextMenu: true`, and whatever

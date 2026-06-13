@@ -210,6 +210,11 @@ pub struct CommandMetadata {
     /// Scope expression list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<Vec<String>>,
+    /// Declarative capability: the entity types this command applies to.
+    /// Empty / absent means unconstrained. See
+    /// [`crate::RegisterCommand::applies_to`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applies_to: Option<Vec<String>>,
     /// Keybindings keyed by keymap mode. Each value is a chord: one or more
     /// canonical keystrokes separated by single spaces (e.g. `"x"`,
     /// `"Mod+K"`, `"g g"`, `"g Shift+T"`). See [`crate::RegisterCommand::keys`]
@@ -291,6 +296,7 @@ impl CommandMetadata {
             description: reg.description.clone(),
             category: reg.category.clone(),
             scope: reg.scope.clone(),
+            applies_to: reg.applies_to.clone(),
             keys: reg.keys.clone(),
             menu: reg.menu.clone(),
             context_menu: reg.context_menu,

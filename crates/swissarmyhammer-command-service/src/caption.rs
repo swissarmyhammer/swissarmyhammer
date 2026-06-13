@@ -53,6 +53,21 @@ use crate::types::CommandContext;
 /// Because caption rendering and execute-time target resolution share this
 /// rule, a palette row's caption ("Inspect Task") and what picking it
 /// inspects can never disagree.
+///
+/// # Intentional divergence from the clipboard capability set
+///
+/// This list (the scope-chain entity-context resolver) is deliberately a
+/// SUBSET of the clipboard capability set `COPYABLE_ENTITY_TYPES`
+/// (`swissarmyhammer-kanban::commands::clipboard_commands`), which also
+/// includes `actor` and `project`. The two answer different questions:
+/// this list is "which bare scope-chain leaf monikers carry an inspectable
+/// entity type", while the clipboard set is "which entity types support
+/// cut/copy/paste". `actor` / `project` are clipboard-capable but are reached
+/// only via an explicit context-menu `target` (which wins verbatim and is NOT
+/// filtered by this list), so they never appear as bare scope-chain leaves and
+/// are intentionally omitted here. If `actor` / `project` ever become
+/// palette-focusable (a bare scope-chain leaf), their prefixes must be added
+/// here so the clipboard gate keeps surfacing the trio for them.
 pub const INSPECTABLE_ENTITY_PREFIXES: [&str; 5] =
     ["task:", "tag:", "column:", "board:", "attachment:"];
 
@@ -130,7 +145,15 @@ fn resolve_placeholder(key: &str, ctx: &CommandContext) -> Option<String> {
 /// Monikers are `type:id` (the id may itself contain colons, e.g.
 /// `attachment:/p.png`), so the type is the token before the FIRST colon.
 /// Returns `None` when neither source yields a non-empty type.
-fn focused_entity_type(ctx: &CommandContext) -> Option<&str> {
+///
+/// Public because the `applies_to` capability gate in
+/// [`crate::service::CommandService`]'s `list command` filter resolves the
+/// focused entity type through this SAME path — so a command's caption
+/// (`{{entity.type}}`) and whether it is offered at all are decided by one
+/// rule. A focused `view:`/`perspective:` (neither an inspectable prefix nor
+/// an explicit target type the gate admits) yields `None`, which the gate
+/// reads as "no admitted type in focus" and suppresses the command.
+pub fn focused_entity_type(ctx: &CommandContext) -> Option<&str> {
     ctx.target
         .as_deref()
         .into_iter()

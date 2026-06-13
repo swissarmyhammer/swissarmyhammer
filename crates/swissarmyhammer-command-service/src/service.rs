@@ -786,10 +786,23 @@ impl CommandService {
     /// Return whether `entry` passes every filter that is `Some(_)` in `req`.
     ///
     /// Pulled out so the handler stays small and the filter rules have one
-    /// obvious home. All three filters compose as a logical AND — an entry
-    /// is kept only when every supplied filter matches.
+    /// obvious home. The filters compose as a logical AND — an entry is kept
+    /// only when every supplied filter matches.
+    ///
+    /// The `applies_to` capability gate runs unconditionally (it has no
+    /// matching `req` field): when a registration declares a non-empty
+    /// `applies_to` set, the entry is kept only if the focused object's
+    /// entity type (resolved from `req.ctx` through the SAME path that
+    /// resolves `{{entity.type}}` captions) is a member. A command with no
+    /// `applies_to` is unconstrained and skips the gate entirely. This is
+    /// what keeps the clipboard trio off views/perspectives without any
+    /// hardcoded entity-type branch in the UI.
     fn list_filter_matches(entry: &StackEntry, req: &ListCommand) -> bool {
         let registration = &entry.registration;
+
+        if !Self::applies_to_focus(registration.applies_to.as_deref(), req) {
+            return false;
+        }
 
         if let Some(expected_scope) = req.scope.as_deref() {
             // A command's scope chain is "global" when the field is absent
@@ -817,6 +830,40 @@ impl CommandService {
         }
 
         true
+    }
+
+    /// Decide whether a command with the given `applies_to` capability set
+    /// is offered for the focus described by `req.ctx`.
+    ///
+    /// Rules:
+    /// - `None` or an empty set → unconstrained: always offered (the global
+    ///   default; the gate is a no-op for commands that don't opt in).
+    /// - no focus context at all (`ctx` carries neither a `target` nor a
+    ///   non-empty `scope_chain`) → always offered. This is the discovery
+    ///   call ("what commands exist?"), not a focused surface — capability
+    ///   gating only narrows what a FOCUSED surface offers, never the bare
+    ///   inventory.
+    /// - a focus IS present → offered only when the focused object's entity
+    ///   type is a member of the set. The focused type is resolved through
+    ///   [`crate::caption::focused_entity_type`] — the SAME path that
+    ///   resolves `{{entity.type}}` captions — so a command's label and
+    ///   whether it appears at all are decided by one rule. A focus whose
+    ///   leaf is a non-entity moniker (`view:`/`perspective:`, neither an
+    ///   inspectable-prefix scope moniker nor an explicit target type)
+    ///   resolves to no admitted type and the command is suppressed.
+    fn applies_to_focus(applies_to: Option<&[String]>, req: &ListCommand) -> bool {
+        let Some(types) = applies_to.filter(|t| !t.is_empty()) else {
+            return true;
+        };
+        // No focus context → discovery call; don't narrow the inventory.
+        let has_focus = req.ctx.target.is_some() || !req.ctx.scope_chain.is_empty();
+        if !has_focus {
+            return true;
+        }
+        match crate::caption::focused_entity_type(&req.ctx) {
+            Some(focused) => types.iter().any(|t| t == focused),
+            None => false,
+        }
     }
 
     /// Return the param schema for one registered command.

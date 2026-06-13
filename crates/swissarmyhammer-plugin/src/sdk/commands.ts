@@ -73,6 +73,20 @@ export interface CommandRegistration {
   /** Scope expression list (e.g. `["entity:task"]`). Empty / absent means global. */
   scope?: readonly string[];
   /**
+   * Declarative capability: the entity types this command applies to (e.g.
+   * `["task", "tag", "column", "board", "attachment"]`). Empty / absent means
+   * the command is unconstrained (global).
+   *
+   * When populated, `list command` suppresses the command unless the focused
+   * object's entity type — resolved from the listing surface's scope chain /
+   * target, the SAME path that resolves `{{entity.type}}` captions — is a
+   * member. This is the metadata-driven seam that keeps cross-cutting commands
+   * (e.g. the clipboard trio `entity.cut` / `entity.copy` / `entity.paste`)
+   * off entity types that don't support them (views, perspectives), without
+   * any hardcoded entity-type branch in the UI.
+   */
+  applies_to?: readonly string[];
+  /**
    * Keybindings keyed by keymap mode (e.g. `vim`, `cua`, `emacs`).
    *
    * Each value is a **chord**: one or more canonical keystrokes separated by

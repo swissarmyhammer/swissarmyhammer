@@ -51,6 +51,22 @@ pub struct RegisterCommand {
     /// means the command is global.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<Vec<String>>,
+    /// Declarative capability: the entity types this command applies to
+    /// (e.g. `["task", "tag", "column", "board", "attachment"]`). Empty /
+    /// absent means the command is unconstrained — it applies to every
+    /// focus, the prior global behavior.
+    ///
+    /// When populated, `list command` suppresses the command unless the
+    /// focused object's entity type (resolved from the listing surface's
+    /// `ctx.target` / `ctx.scope_chain`, the SAME path that resolves
+    /// `{{entity.type}}` captions) is a member of this set. This is the
+    /// metadata-driven seam that keeps cross-cutting commands such as the
+    /// clipboard trio (`entity.cut` / `entity.copy` / `entity.paste`) off
+    /// entity types they don't support (views, perspectives) — the
+    /// capability is data on the declaration, interpreted by one filter,
+    /// never a hardcoded entity-type branch in the UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applies_to: Option<Vec<String>>,
     /// Keybindings keyed by keymap mode (e.g. `vim`, `cua`, `emacs`).
     /// Kept as a free-form map so new keymap modes can be added without a
     /// schema change.
@@ -126,6 +142,7 @@ impl Default for RegisterCommand {
             description: None,
             category: None,
             scope: None,
+            applies_to: None,
             keys: None,
             menu: None,
             context_menu: None,
