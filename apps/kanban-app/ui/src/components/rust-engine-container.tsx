@@ -51,6 +51,7 @@ const RefreshEntitiesContext = createContext<RefreshEntitiesFn>(async () => ({
   openBoards: [],
   boardData: null,
   entitiesByType: null,
+  boardError: null,
 }));
 
 /**

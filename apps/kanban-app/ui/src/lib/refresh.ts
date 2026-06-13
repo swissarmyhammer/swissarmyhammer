@@ -1,24 +1,40 @@
 /**
  * Board refresh logic extracted for testability.
  *
- * The key invariant: `list_open_boards` is fetched independently of board
- * data. If `get_board_data` or `list_entities` fails (e.g. newly created
- * board not fully ready), the open boards list still updates. This prevents
- * the board selector from losing previously-open boards when a new board
- * is opened.
+ * Three independence invariants, each defended by its own try/catch so one
+ * failure never cascades into the others:
+ *
+ * 1. `list_open_boards` is fetched independently of board data — if board
+ *    data fails, the open-boards list still updates, so the board selector
+ *    never loses previously-open boards.
+ * 2. `get_board_data` is fetched independently of `list_entities` — a
+ *    degraded entity list (e.g. a missing entity dir) must NOT null the
+ *    board data; the board still renders and only the entity store is empty.
+ * 3. A `get_board_data` FAILURE surfaces as `boardError` (a board-level
+ *    error state), not a silent `null`. A malformed board whose
+ *    `get_board_data` rejects with "entity not found: board/board" would
+ *    otherwise blank the window forever; the error state lets the caller
+ *    fall back to another open board instead of swallowing it.
  */
 
 import { invoke } from "@tauri-apps/api/core";
 import { getBoardData, listOpenBoards } from "@/lib/window-mcp";
 import type { OpenBoard, EntityListResponse } from "@/types/kanban";
 import { entityFromBag, parseBoardData } from "@/types/kanban";
-import type { BoardData, Entity } from "@/types/kanban";
+import type { BoardData, BoardDataResponse, Entity } from "@/types/kanban";
 
 /** Structured result from a board state refresh operation. */
 export interface RefreshResult {
   openBoards: OpenBoard[];
   boardData: BoardData | null;
   entitiesByType: Record<string, Entity[]> | null;
+  /**
+   * Human-readable error when `get_board_data` itself FAILED for the
+   * requested board (distinct from a `null` board with no error, which means
+   * "no board was requested"). The caller surfaces this as a per-board error
+   * state and may fall back to another open board. `null` on success.
+   */
+  boardError: string | null;
 }
 
 /**
@@ -43,39 +59,57 @@ export async function refreshBoards(
     console.error("Failed to list open boards:", error);
   }
 
-  // Fetch board data and entities — may fail for newly created boards.
+  const bp = boardPath ? { boardPath } : {};
+
+  // Fetch board data independently of the entity lists. A `get_board_data`
+  // failure is the malformed-board signal — it must surface as `boardError`
+  // so the window can fall back, not blank silently. Crucially this is NOT
+  // coupled to `list_entities` via a single Promise.all: a degraded entity
+  // list must not null the board data.
+  let bd: BoardDataResponse | null = null;
   let boardData: BoardData | null = null;
-  let entitiesByType: Record<string, Entity[]> | null = null;
+  let boardError: string | null = null;
   try {
-    const bp = boardPath ? { boardPath } : {};
-    const [bd, taskData, actorData, projectData] = await Promise.all([
-      getBoardData(boardPath),
-      invoke<EntityListResponse>("list_entities", {
-        entityType: "task",
-        ...(taskFilter ? { filter: taskFilter } : {}),
-        ...bp,
-      }),
-      invoke<EntityListResponse>("list_entities", {
-        entityType: "actor",
-        ...bp,
-      }),
-      invoke<EntityListResponse>("list_entities", {
-        entityType: "project",
-        ...bp,
-      }),
-    ]);
+    bd = await getBoardData(boardPath);
     boardData = parseBoardData(bd);
-    entitiesByType = {
-      board: [entityFromBag(bd.board)],
-      column: bd.columns.map(entityFromBag),
-      tag: bd.tags.map(entityFromBag),
-      task: taskData.entities.map(entityFromBag),
-      actor: actorData.entities.map(entityFromBag),
-      project: projectData.entities.map(entityFromBag),
-    };
   } catch (error) {
     console.error("Failed to load board data:", error);
+    boardError = error instanceof Error ? error.message : String(error);
   }
 
-  return { openBoards, boardData, entitiesByType };
+  // Fetch the entity lists in parallel, independently of board data. A
+  // failure here leaves the board rendering from its board data with an empty
+  // entity store rather than nulling the whole board.
+  let entitiesByType: Record<string, Entity[]> | null = null;
+  if (bd) {
+    try {
+      const [taskData, actorData, projectData] = await Promise.all([
+        invoke<EntityListResponse>("list_entities", {
+          entityType: "task",
+          ...(taskFilter ? { filter: taskFilter } : {}),
+          ...bp,
+        }),
+        invoke<EntityListResponse>("list_entities", {
+          entityType: "actor",
+          ...bp,
+        }),
+        invoke<EntityListResponse>("list_entities", {
+          entityType: "project",
+          ...bp,
+        }),
+      ]);
+      entitiesByType = {
+        board: [entityFromBag(bd.board)],
+        column: bd.columns.map(entityFromBag),
+        tag: bd.tags.map(entityFromBag),
+        task: taskData.entities.map(entityFromBag),
+        actor: actorData.entities.map(entityFromBag),
+        project: projectData.entities.map(entityFromBag),
+      };
+    } catch (error) {
+      console.error("Failed to load board entities:", error);
+    }
+  }
+
+  return { openBoards, boardData, entitiesByType, boardError };
 }

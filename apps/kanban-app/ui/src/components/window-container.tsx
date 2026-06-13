@@ -53,6 +53,7 @@ import {
   useEngineSetActiveBoardPath,
 } from "@/components/rust-engine-container";
 import type { BoardData, OpenBoard } from "@/types/kanban";
+import type { RefreshResult } from "@/lib/refresh";
 import { useBoardDataSync } from "@/lib/board-data-sync";
 
 // ---------------------------------------------------------------------------
@@ -291,6 +292,30 @@ async function applyFallbackBoardIfNeeded(
   return true;
 }
 
+/**
+ * If `get_board_data` FAILED for `currentPath` (a malformed / half-open board
+ * — the live incident that blanked the window), recover by adopting another
+ * healthy open board instead of rendering a silent `null`. Returns `true` when
+ * a fallback board was adopted and the caller should exit.
+ *
+ * Only fires on a real board-data error: a `null` board with no error means
+ * "no board requested" and is handled by the normal empty-state path.
+ */
+async function recoverFromBoardErrorIfNeeded(
+  deps: WindowBoardDeps,
+  currentPath: string | undefined,
+  result: RefreshResult,
+): Promise<boolean> {
+  if (!result.boardError) return false;
+  const fallback = result.openBoards.find((b) => b.path !== currentPath);
+  if (!fallback) return false;
+  console.warn(
+    `[window-container] board data failed for ${currentPath ?? "(none)"} (${result.boardError}); falling back to ${fallback.path}`,
+  );
+  await adoptBoard(deps, fallback.path, true);
+  return true;
+}
+
 /** Body of the window `refresh` callback — extracted for line-count limits. */
 async function runWindowRefresh(deps: WindowBoardDeps): Promise<void> {
   deps.setLoading(true);
@@ -310,6 +335,14 @@ async function runWindowRefresh(deps: WindowBoardDeps): Promise<void> {
     clearWindowBoardState(deps);
     return;
   }
+
+  // The current board is still in the open list but its data failed to load
+  // (malformed / half-open board). Fall back to a healthy board rather than
+  // blanking the window with a null board.
+  if (await recoverFromBoardErrorIfNeeded(deps, currentPath, result)) {
+    return;
+  }
+
   deps.setBoard(result.boardData);
   deps.setLoading(false);
 }

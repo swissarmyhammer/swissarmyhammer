@@ -147,13 +147,31 @@ impl KanbanContext {
         // vanilla defaults, and recreate the default when the board has
         // zero perspectives. Best-effort — a reconcile failure (e.g.
         // read-only media) must not block opening the board.
-        if let Err(e) = crate::perspective::ensure_default::reconcile_default_perspectives(
-            &mut perspectives,
-            Some(&views),
-        )
-        .await
-        {
-            tracing::warn!(error = %e, "failed to reconcile default perspectives at board open");
+        //
+        // GUARD (Defense 4 — board-open ordering): the reconciler is an
+        // open-time SIDE EFFECT that mints a Default perspective into the
+        // board. It must run ONLY for a board whose `board` entity actually
+        // exists. A stray, half-initialized `.kanban` dir (no `boards/`
+        // board entity) once blanked the whole window: it was opened, the
+        // reconciler minted a Default perspective INTO it, and that malformed
+        // board then failed `get_board_data` forever. Gating on
+        // `is_initialized()` keeps the reconciler from minting state into a
+        // board that has no board entity — for a real board the entity is
+        // present and reconciliation runs exactly as before.
+        if Self::board_entity_exists(&root) {
+            if let Err(e) = crate::perspective::ensure_default::reconcile_default_perspectives(
+                &mut perspectives,
+                Some(&views),
+            )
+            .await
+            {
+                tracing::warn!(error = %e, "failed to reconcile default perspectives at board open");
+            }
+        } else {
+            tracing::warn!(
+                root = %root.display(),
+                "skipping default-perspective reconciliation: board has no board entity (malformed or uninitialized board dir)"
+            );
         }
 
         let persp_cell = OnceCell::new();
@@ -372,10 +390,26 @@ impl KanbanContext {
 
     /// Check if the board is initialized (checks board.yaml or legacy board.json)
     pub fn is_initialized(&self) -> bool {
-        // Check new entity location first, then legacy
-        self.root.join("boards").join("board.yaml").exists()
-            || self.board_path().exists()
-            || self.root.join("board.json").exists()
+        Self::board_entity_exists(&self.root)
+    }
+
+    /// Check whether a `.kanban` root contains a `board` entity.
+    ///
+    /// This is the path-only form of [`is_initialized`](Self::is_initialized):
+    /// it inspects the directory directly without constructing a context, so
+    /// open-time guards (the perspectives reconciler) and app-side open
+    /// validation can both ask "does this dir actually have a board?" cheaply.
+    ///
+    /// A `.kanban` dir that has the ancillary subdirs (perspectives/, views/,
+    /// entities/, …) but NO board entity is the malformed shape that blanked
+    /// the window in the live incident — it returns `false` here.
+    ///
+    /// Checks the entity location (`boards/board.yaml`) first, then the two
+    /// legacy locations (`board.yaml`, `board.json`).
+    pub fn board_entity_exists(root: &Path) -> bool {
+        root.join("boards").join("board.yaml").exists()
+            || root.join("board.yaml").exists()
+            || root.join("board.json").exists()
     }
 
     /// Check if all required directories exist

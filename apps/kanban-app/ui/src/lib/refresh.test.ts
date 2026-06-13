@@ -63,6 +63,70 @@ describe("refreshBoards", () => {
     expect(result.boardData).toBeNull();
   });
 
+  it("surfaces a boardError when get_board_data fails, not a silent null", async () => {
+    // Defense 3: a malformed board whose `get_board_data` rejects (e.g.
+    // "entity not found: board/board") must surface an ERROR STATE for that
+    // board so the window can degrade / fall back — never swallow into a
+    // silent null that blanks the window forever.
+    installLegacy((cmd) => {
+      if (cmd === "list_open_boards") {
+        return Promise.resolve([
+          { path: "/good/.kanban", is_active: false, name: "Good Board" },
+          { path: "/bad/.kanban", is_active: true, name: "Bad Board" },
+        ]);
+      }
+      if (cmd === "get_board_data") {
+        return Promise.reject(new Error("entity not found: board/board"));
+      }
+      if (cmd === "list_entities") {
+        return Promise.resolve({ entities: [], count: 0 });
+      }
+      return Promise.resolve({});
+    });
+
+    const result = await refreshBoards("/bad/.kanban");
+
+    expect(result.boardData).toBeNull();
+    expect(result.boardError).toBeTruthy();
+    expect(result.boardError).toContain("board/board");
+    // The other open boards remain available for the window to fall back to.
+    expect(result.openBoards).toHaveLength(2);
+  });
+
+  it("reports no boardError on a healthy refresh", async () => {
+    installLegacy((cmd) => {
+      if (cmd === "list_open_boards") {
+        return Promise.resolve([
+          { path: "/a/.kanban", is_active: true, name: "Board A" },
+        ]);
+      }
+      if (cmd === "get_board_data") {
+        return Promise.resolve({
+          board: { id: "board", entity_type: "board", name: "Board A" },
+          columns: [],
+          tags: [],
+          summary: {
+            total_tasks: 0,
+            total_actors: 0,
+            ready_tasks: 0,
+            blocked_tasks: 0,
+            done_tasks: 0,
+            percent_complete: 0,
+          },
+        });
+      }
+      if (cmd === "list_entities") {
+        return Promise.resolve({ entities: [], count: 0 });
+      }
+      return Promise.resolve({});
+    });
+
+    const result = await refreshBoards();
+
+    expect(result.boardData).not.toBeNull();
+    expect(result.boardError).toBeNull();
+  });
+
   it("returns all data when everything succeeds", async () => {
     installLegacy((cmd) => {
       if (cmd === "list_open_boards") {
@@ -194,7 +258,12 @@ describe("refreshBoards", () => {
     expect(boardDataCall![1]).toEqual({});
   });
 
-  it("returns open boards even when list_entities fails", async () => {
+  it("keeps board data when only list_entities fails", async () => {
+    // Defense 3 — decoupling: a `list_entities` failure (a degraded entity
+    // list) must NOT take down `get_board_data`. The board still renders from
+    // its board data; only the entity store is left empty. This is the split
+    // that breaks the old single Promise.all where one entity-list rejection
+    // nulled the whole board.
     installLegacy((cmd) => {
       if (cmd === "list_open_boards") {
         return Promise.resolve([
@@ -228,7 +297,9 @@ describe("refreshBoards", () => {
 
     // Open boards should always be populated
     expect(result.openBoards).toHaveLength(2);
-    // Board data should be null because list_entities failed
-    expect(result.boardData).toBeNull();
+    // Board data SURVIVES a list_entities failure — the board still renders.
+    expect(result.boardData).not.toBeNull();
+    // get_board_data itself succeeded, so there is no board-level error.
+    expect(result.boardError).toBeNull();
   });
 });

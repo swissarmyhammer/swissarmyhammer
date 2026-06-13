@@ -109,7 +109,9 @@ function installInvoke(
   legacy: (cmd: string, args?: unknown) => Promise<unknown>,
 ): void {
   mockInvoke.mockImplementation(
-    wrapMcpDispatch(mockInvoke, legacy) as (...args: unknown[]) => Promise<unknown>,
+    wrapMcpDispatch(mockInvoke, legacy) as (
+      ...args: unknown[]
+    ) => Promise<unknown>,
   );
 }
 
@@ -759,6 +761,7 @@ describe("RustEngineContainer", () => {
           },
         ],
       },
+      boardError: null,
     };
     const result2: RefreshResult = {
       openBoards: [],
@@ -773,6 +776,7 @@ describe("RustEngineContainer", () => {
           },
         ],
       },
+      boardError: null,
     };
 
     let resolve1!: (v: RefreshResult) => void;
@@ -852,11 +856,13 @@ describe("RustEngineContainer", () => {
       openBoards: [{ path: "/board", name: "Stale", is_active: true }],
       boardData: null,
       entitiesByType: null,
+      boardError: null,
     };
     const result2: RefreshResult = {
       openBoards: [{ path: "/board", name: "Fresh", is_active: true }],
       boardData: null,
       entitiesByType: null,
+      boardError: null,
     };
 
     let resolve1!: (v: RefreshResult) => void;
@@ -960,7 +966,12 @@ describe("RustEngineContainer", () => {
     expect(screen.getByTestId("busy").textContent).toBe("yes");
 
     await act(async () => {
-      resolveRefresh({ openBoards: [], boardData: null, entitiesByType: null });
+      resolveRefresh({
+        openBoards: [],
+        boardData: null,
+        entitiesByType: null,
+        boardError: null,
+      });
       await p;
     });
 
@@ -1090,7 +1101,12 @@ describe("RustEngineContainer", () => {
     expect(screen.getByRole("progressbar")).toBeTruthy();
 
     await act(async () => {
-      resolveRefresh({ openBoards: [], boardData: null, entitiesByType: null });
+      resolveRefresh({
+        openBoards: [],
+        boardData: null,
+        entitiesByType: null,
+        boardError: null,
+      });
       await p;
     });
 
@@ -1141,13 +1157,23 @@ describe("RustEngineContainer", () => {
 
     // Resolve only one — still busy because the other is in flight.
     await act(async () => {
-      resolvers[0]({ openBoards: [], boardData: null, entitiesByType: null });
+      resolvers[0]({
+        openBoards: [],
+        boardData: null,
+        entitiesByType: null,
+        boardError: null,
+      });
       await p1;
     });
     expect(screen.getByTestId("busy").textContent).toBe("yes");
 
     await act(async () => {
-      resolvers[1]({ openBoards: [], boardData: null, entitiesByType: null });
+      resolvers[1]({
+        openBoards: [],
+        boardData: null,
+        entitiesByType: null,
+        boardError: null,
+      });
       await p2;
     });
     expect(screen.getByTestId("busy").textContent).toBe("no");
