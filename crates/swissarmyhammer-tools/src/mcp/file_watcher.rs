@@ -2,44 +2,11 @@
 
 use async_watcher::{notify::RecursiveMode, AsyncDebouncer, DebouncedEvent};
 use rmcp::RoleServer;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use swissarmyhammer_common::{Pretty, Result, SwissArmyHammerError};
-use swissarmyhammer_prompts::PromptResolver;
+use swissarmyhammer_templating::PromptResolver;
 use tokio::sync::Mutex;
-
-/// Common prompt file extensions
-const PROMPT_EXTENSIONS: &[&str] = &["md", "yaml", "yml", "markdown"];
-
-/// Compound prompt file extensions (checked first due to specificity)
-const COMPOUND_PROMPT_EXTENSIONS: &[&str] =
-    &["md.liquid", "markdown.liquid", "yaml.liquid", "yml.liquid"];
-
-/// Check if a file has a compound extension (more specific check)
-fn has_compound_extension<P: AsRef<Path>>(path: P) -> bool {
-    let path_str = path.as_ref().to_string_lossy().to_lowercase();
-    COMPOUND_PROMPT_EXTENSIONS.iter().any(|&ext| {
-        let extension = format!(".{ext}");
-        path_str.ends_with(&extension)
-    })
-}
-
-/// Check if a file has a prompt extension
-fn is_prompt_file<P: AsRef<Path>>(path: P) -> bool {
-    let path = path.as_ref();
-    if let Some(ext) = path.extension() {
-        let ext_str = ext.to_string_lossy().to_lowercase();
-        PROMPT_EXTENSIONS.contains(&ext_str.as_str())
-    } else {
-        false
-    }
-}
-
-/// Check if a file is any kind of prompt file (simple or compound extension)
-fn is_any_prompt_file<P: AsRef<Path>>(path: P) -> bool {
-    has_compound_extension(&path) || is_prompt_file(path)
-}
 
 /// Callback trait for handling file system events
 pub trait FileWatcherCallback: Send + Sync + 'static {
@@ -258,23 +225,20 @@ impl FileWatcher {
                             Pretty(&events_info)
                         );
 
-                        // Filter for prompt files and collect all relevant paths
+                        // Collect all changed paths in the watched directories.
                         let relevant_paths: Vec<std::path::PathBuf> = events
                             .into_iter()
                             .flat_map(|event| event.event.paths)
-                            .filter(|p| is_any_prompt_file(p))
                             .collect();
 
                         if !relevant_paths.is_empty() {
-                            tracing::info!("📄 Prompt file changed: {}", Pretty(&relevant_paths));
+                            tracing::info!("📄 Watched file changed: {}", Pretty(&relevant_paths));
 
                             // Notify callback about the change
                             if let Err(e) = callback.on_file_changed(relevant_paths).await {
                                 tracing::error!("✗ File watcher callback failed: {}", e);
                                 callback.on_error(format!("Callback failed: {e}")).await;
                             }
-                        } else {
-                            tracing::debug!("🚫 Ignoring non-prompt files in batch");
                         }
                     }
                     Err(errors) => {
@@ -591,60 +555,6 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // Extension-detection helpers
-    // ---------------------------------------------------------------------------
-
-    /// Test that `is_prompt_file` correctly identifies prompt file extensions.
-    #[test]
-    fn test_is_prompt_file_with_prompt_extensions() {
-        assert!(is_prompt_file(std::path::Path::new("prompt.md")));
-        assert!(is_prompt_file(std::path::Path::new("prompt.yaml")));
-        assert!(is_prompt_file(std::path::Path::new("prompt.yml")));
-        assert!(is_prompt_file(std::path::Path::new("prompt.markdown")));
-    }
-
-    /// Test that `is_prompt_file` rejects non-prompt extensions.
-    #[test]
-    fn test_is_prompt_file_with_non_prompt_extensions() {
-        assert!(!is_prompt_file(std::path::Path::new("file.rs")));
-        assert!(!is_prompt_file(std::path::Path::new("file.txt")));
-        assert!(!is_prompt_file(std::path::Path::new("file.json")));
-        assert!(!is_prompt_file(std::path::Path::new("noext")));
-    }
-
-    /// Test that `has_compound_extension` detects `.md.liquid` and similar.
-    #[test]
-    fn test_has_compound_extension_detects_liquid_variants() {
-        assert!(has_compound_extension(std::path::Path::new(
-            "prompt.md.liquid"
-        )));
-        assert!(has_compound_extension(std::path::Path::new(
-            "prompt.yaml.liquid"
-        )));
-        assert!(has_compound_extension(std::path::Path::new(
-            "prompt.yml.liquid"
-        )));
-        assert!(has_compound_extension(std::path::Path::new(
-            "prompt.markdown.liquid"
-        )));
-    }
-
-    /// Test that `has_compound_extension` rejects plain extensions.
-    #[test]
-    fn test_has_compound_extension_rejects_plain_extensions() {
-        assert!(!has_compound_extension(std::path::Path::new("prompt.md")));
-        assert!(!has_compound_extension(std::path::Path::new("file.rs")));
-    }
-
-    /// Test that `is_any_prompt_file` accepts both simple and compound extensions.
-    #[test]
-    fn test_is_any_prompt_file_combines_checks() {
-        assert!(is_any_prompt_file(std::path::Path::new("a.md")));
-        assert!(is_any_prompt_file(std::path::Path::new("a.yaml.liquid")));
-        assert!(!is_any_prompt_file(std::path::Path::new("a.rs")));
-    }
-
-    // ---------------------------------------------------------------------------
     // FileWatcherCallback mock and behaviour tests
     // ---------------------------------------------------------------------------
 
@@ -940,79 +850,6 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // Extension detection edge cases
-    // ---------------------------------------------------------------------------
-
-    /// Test case-insensitive extension matching for prompt files.
-    #[test]
-    fn test_is_prompt_file_case_insensitive() {
-        assert!(is_prompt_file(std::path::Path::new("prompt.MD")));
-        assert!(is_prompt_file(std::path::Path::new("prompt.Yaml")));
-        assert!(is_prompt_file(std::path::Path::new("prompt.YML")));
-        assert!(is_prompt_file(std::path::Path::new("prompt.MARKDOWN")));
-    }
-
-    /// Test case-insensitive compound extension matching.
-    #[test]
-    fn test_has_compound_extension_case_insensitive() {
-        assert!(has_compound_extension(std::path::Path::new(
-            "prompt.MD.Liquid"
-        )));
-        assert!(has_compound_extension(std::path::Path::new(
-            "PROMPT.YAML.LIQUID"
-        )));
-    }
-
-    /// Test that `is_prompt_file` handles paths with directories.
-    #[test]
-    fn test_is_prompt_file_with_directory_path() {
-        assert!(is_prompt_file(std::path::Path::new("/some/dir/prompt.md")));
-        assert!(is_prompt_file(std::path::Path::new(
-            "relative/path/to/file.yaml"
-        )));
-        assert!(!is_prompt_file(std::path::Path::new("/some/dir/file.txt")));
-    }
-
-    /// Test that `has_compound_extension` handles paths with directories.
-    #[test]
-    fn test_has_compound_extension_with_directory_path() {
-        assert!(has_compound_extension(std::path::Path::new(
-            "/some/dir/prompt.md.liquid"
-        )));
-        assert!(!has_compound_extension(std::path::Path::new(
-            "/some/dir/prompt.md"
-        )));
-    }
-
-    /// Test `is_any_prompt_file` with compound extensions takes priority.
-    #[test]
-    fn test_is_any_prompt_file_compound_priority() {
-        // Compound extension files should match (even though .liquid is not a simple prompt ext)
-        assert!(is_any_prompt_file(std::path::Path::new("a.yml.liquid")));
-        assert!(is_any_prompt_file(std::path::Path::new(
-            "a.markdown.liquid"
-        )));
-    }
-
-    /// Test `is_prompt_file` with empty path.
-    #[test]
-    fn test_is_prompt_file_empty_path() {
-        assert!(!is_prompt_file(std::path::Path::new("")));
-    }
-
-    /// Test `has_compound_extension` with empty path.
-    #[test]
-    fn test_has_compound_extension_empty_path() {
-        assert!(!has_compound_extension(std::path::Path::new("")));
-    }
-
-    /// Test `is_any_prompt_file` with a dotfile (no real extension).
-    #[test]
-    fn test_is_any_prompt_file_dotfile() {
-        assert!(!is_any_prompt_file(std::path::Path::new(".hidden")));
-    }
-
-    // ---------------------------------------------------------------------------
     // FileWatcher start_watching with callback
     // ---------------------------------------------------------------------------
 
@@ -1259,27 +1096,5 @@ mod tests {
             "connection refused",
         ));
         assert!(!McpFileWatcher::is_retryable_fs_error(&err));
-    }
-
-    // ---------------------------------------------------------------------------
-    // PROMPT_EXTENSIONS / COMPOUND_PROMPT_EXTENSIONS constant tests
-    // ---------------------------------------------------------------------------
-
-    /// Verify that the expected prompt extensions are all present.
-    #[test]
-    fn test_prompt_extensions_contains_expected() {
-        assert!(PROMPT_EXTENSIONS.contains(&"md"));
-        assert!(PROMPT_EXTENSIONS.contains(&"yaml"));
-        assert!(PROMPT_EXTENSIONS.contains(&"yml"));
-        assert!(PROMPT_EXTENSIONS.contains(&"markdown"));
-    }
-
-    /// Verify that the expected compound extensions are all present.
-    #[test]
-    fn test_compound_prompt_extensions_contains_expected() {
-        assert!(COMPOUND_PROMPT_EXTENSIONS.contains(&"md.liquid"));
-        assert!(COMPOUND_PROMPT_EXTENSIONS.contains(&"markdown.liquid"));
-        assert!(COMPOUND_PROMPT_EXTENSIONS.contains(&"yaml.liquid"));
-        assert!(COMPOUND_PROMPT_EXTENSIONS.contains(&"yml.liquid"));
     }
 }

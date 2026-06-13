@@ -32,8 +32,8 @@ pub mod responses;
 pub mod sessions;
 pub mod slash_commands;
 pub mod terminals;
-#[cfg(test)]
-pub(crate) mod test_utils;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_utils;
 pub mod tool_calls;
 pub mod validation;
 

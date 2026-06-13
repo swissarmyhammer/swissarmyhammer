@@ -9,9 +9,9 @@
 //! install-scope type shared by every tool CLI, and its
 //! `From<InstallTarget> for InitScope` lives with it in that shared crate.
 //!
-//! Other cross-crate type conversions (e.g. `PromptSourceArg <-> PromptSource`)
-//! live in `crate::cli_conversions` so that `cli.rs` does not pull in further
-//! library dependencies.
+//! Cross-crate type conversions (e.g. `SourceArg <-> FileSource`,
+//! `InstallTarget -> InitScope`) live in `crate::cli_conversions` so that
+//! `cli.rs` does not pull in library dependencies.
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::str::FromStr;
@@ -37,11 +37,11 @@ impl FromStr for OutputFormat {
     }
 }
 
-/// CLI wrapper for the library's `PromptSource` enum (which does not derive
-/// `ValueEnum`). Conversions to/from `PromptSource` live in
+/// CLI wrapper for the library's `FileSource` enum (which does not derive
+/// `ValueEnum`). Conversions to/from `FileSource` live in
 /// `crate::cli_conversions`.
 #[derive(ValueEnum, Clone, Debug, PartialEq)]
-pub enum PromptSourceArg {
+pub enum SourceArg {
     Builtin,
     User,
     Local,
@@ -58,35 +58,34 @@ pub use swissarmyhammer_cli_completions::lifecycle::InstallTarget;
 #[derive(Parser, Debug)]
 #[command(name = "swissarmyhammer")]
 #[command(version)]
-#[command(about = "An MCP server for managing prompts as markdown files")]
+#[command(about = "An MCP server that brings skills, workflows, and agents to AI coding tools")]
 #[command(long_about = "
-swissarmyhammer is an MCP (Model Context Protocol) server that manages
-prompts as markdown files. It supports file watching, template substitution,
-and seamless integration with Claude Code.
+swissarmyhammer is an MCP (Model Context Protocol) server that brings skills,
+workflows, and agents to AI coding tools. It supports template substitution
+and seamless integration with Claude Code and other ACP-compatible editors.
 
 Global arguments can be used with any command to control output and behavior:
   --verbose     Show detailed information and debug output
-  --format      Set output format (table, json, yaml) for commands that support it  
+  --format      Set output format (table, json, yaml) for commands that support it
   --debug       Enable debug mode with comprehensive tracing
   --quiet       Suppress all output except errors
   --model       Override model for all use cases (runtime only, doesn't modify config)
 
 Main commands:
   serve         Run as MCP server (default when invoked via stdio)
+  init          Set up sah for all detected AI coding agents (skills + MCP)
   doctor        Diagnose configuration and setup issues
-  prompt        Manage and test prompts with interactive capabilities
-  agent         Manage and interact with specialized agents for specific use cases
-  validate      Validate prompt files for syntax and best practices
+  agent         Manage and interact with the Agent Client Protocol server
+  model         Manage and interact with models
+  validate      Validate configuration files for syntax and best practices
   completion    Generate shell completion scripts
 
 Example usage:
   swissarmyhammer serve                           # Run as MCP server
+  swissarmyhammer init                            # Set up skills + MCP for detected agents
   swissarmyhammer doctor                          # Check configuration
-  swissarmyhammer --verbose prompt list          # List prompts with details
-  swissarmyhammer --format=json prompt list      # List prompts as JSON
-  swissarmyhammer --debug prompt test help       # Test prompt with debug info
-  swissarmyhammer agent list                     # List available agents
-  swissarmyhammer agent use claude-code          # Apply Claude Code agent to project
+  swissarmyhammer model list                      # List available models
+  swissarmyhammer agent acp                       # Start the ACP server
 ")]
 pub struct Cli {
     #[command(subcommand)]
@@ -183,33 +182,6 @@ Examples:
     /// Diagnose configuration and setup issues
     #[command(long_about = include_str!("commands/doctor/description.md"))]
     Doctor {},
-    /// Manage and test prompts
-    #[command(long_about = "
-Manage and test prompts with a clean, simplified interface.
-
-The prompt system provides two main commands:
-• list - Display all available prompts from all sources  
-• test - Test prompts interactively with sample data
-
-Use global arguments to control output:
-  --verbose         Show detailed information
-  --format FORMAT   Output format: table, json, yaml
-  --debug           Enable debug mode
-  --quiet           Suppress output except errors
-
-Examples:
-  sah prompt list                           # List all prompts
-  sah --verbose prompt list                 # Show detailed information
-  sah --format=json prompt list             # Output as JSON
-  sah prompt test code-review               # Interactive testing
-  sah prompt test help --var topic=git      # Test with parameters  
-  sah --debug prompt test plan              # Test with debug output
-")]
-    #[command(trailing_var_arg = true)]
-    Prompt {
-        /// Subcommand and arguments for prompt (handled dynamically)
-        args: Vec<String>,
-    },
     /// Generate shell completion scripts
     #[command(long_about = "
 Generates shell completion scripts for various shells. Supports:
@@ -777,16 +749,16 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // `test_prompt_source_arg_conversions` moved to `crate::cli_conversions::tests`
-    // because it tests conversions to/from `swissarmyhammer::PromptSource`, which
-    // lives with the From impls to keep `cli.rs` self-contained.
+    // `test_source_arg_conversions` moved to `crate::cli_conversions::tests`
+    // because it tests conversions to/from `swissarmyhammer_common::file_loader::FileSource`,
+    // which lives with the From impls to keep `cli.rs` self-contained.
 
     #[test]
-    fn test_prompt_source_arg_equality() {
-        assert_eq!(PromptSourceArg::Builtin, PromptSourceArg::Builtin);
-        assert_ne!(PromptSourceArg::Builtin, PromptSourceArg::User);
-        assert_ne!(PromptSourceArg::User, PromptSourceArg::Local);
-        assert_ne!(PromptSourceArg::Local, PromptSourceArg::Dynamic);
+    fn test_source_arg_equality() {
+        assert_eq!(SourceArg::Builtin, SourceArg::Builtin);
+        assert_ne!(SourceArg::Builtin, SourceArg::User);
+        assert_ne!(SourceArg::User, SourceArg::Local);
+        assert_ne!(SourceArg::Local, SourceArg::Dynamic);
     }
 
     #[test]

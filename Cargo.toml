@@ -14,7 +14,6 @@ members = [
     "crates/swissarmyhammer-git",
     "crates/swissarmyhammer-shell",
     "crates/swissarmyhammer-templating",
-    "crates/swissarmyhammer-prompts",
 
     "crates/swissarmyhammer-agent",
     "crates/swissarmyhammer-mcp-proxy",
@@ -265,6 +264,7 @@ swissarmyhammer-operations = { path = "crates/swissarmyhammer-operations" }
 swissarmyhammer-operations-macros = { path = "crates/swissarmyhammer-operations-macros" }
 
 # Workspace crate cross-references
+acp-conformance = { path = "crates/acp-conformance" }
 agent-client-protocol-extras = { path = "crates/agent-client-protocol-extras" }
 claude-agent = { path = "crates/claude-agent" }
 mirdan = { path = "crates/mirdan" }
@@ -292,7 +292,6 @@ swissarmyhammer-mcp-proxy = { path = "crates/swissarmyhammer-mcp-proxy" }
 swissarmyhammer-merge = { path = "crates/swissarmyhammer-merge" }
 swissarmyhammer-perspectives = { path = "crates/swissarmyhammer-perspectives" }
 swissarmyhammer-project-detection = { path = "crates/swissarmyhammer-project-detection" }
-swissarmyhammer-prompts = { path = "crates/swissarmyhammer-prompts" }
 swissarmyhammer-shell = { path = "crates/swissarmyhammer-shell" }
 swissarmyhammer-skills = { path = "crates/swissarmyhammer-skills" }
 swissarmyhammer-statusline = { path = "crates/swissarmyhammer-statusline" }

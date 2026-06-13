@@ -59,6 +59,12 @@ The board IS the plan. **Never write a markdown plan file** (`PLAN.md`, `DRAFT_P
 
 {% include "_partials/architecture-awareness" %}
 
+### No Phases
+
+Phases are a project management tool, not a planning tool. They encourage batch work and waterfall handoffs. Don't use them. The workflow is continuous: research → task creation → implementation → testing → review → done, with feedback loops between each step.
+
+The dependency graph of tasks encodes the necessary ordering constraints. For example, a "Design auth architecture" task can be a dependency of "Implement POST /api/login", which in turn can be a dependency of "Write login tests". This allows for natural parallelism and iteration without rigid phase boundaries.
+
 ### Plans are kanban tasks — created as you go
 
 Every planned item becomes a kanban task. The board IS the plan; no markdown files. **Create tasks as they crystallize during discussion, not at the end.** If a work item is defined enough to describe in conversation, it's defined enough to be a task. Don't wait to be asked.

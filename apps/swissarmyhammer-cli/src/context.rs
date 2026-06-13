@@ -8,7 +8,7 @@ use swissarmyhammer_common::Result;
 use swissarmyhammer_git::GitOperations;
 
 use crate::cli::OutputFormat;
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 
 /// Helper function to create error mapping closures with context
 fn map_error<E: std::fmt::Display>(
@@ -120,7 +120,7 @@ fn create_table_row(
 pub struct CliContext {
     /// Prompt library for managing prompts
     #[allow(dead_code)]
-    pub prompt_library: Arc<PromptLibrary>,
+    pub prompt_library: Arc<TemplateLibrary>,
 
     /// Git operations (optional - None if not in a git repository)
     #[allow(dead_code)]
@@ -128,6 +128,7 @@ pub struct CliContext {
 
     /// Template context with configuration
     #[builder(setter(into))]
+    #[allow(dead_code)]
     pub template_context: swissarmyhammer_config::TemplateContext,
 
     /// Global output format setting
@@ -144,6 +145,7 @@ pub struct CliContext {
 
     /// Enable debug output
     #[builder(default)]
+    #[allow(dead_code)]
     pub debug: bool,
 
     /// Suppress output except errors
@@ -185,8 +187,8 @@ impl CliContext {
 
     /// Get the prompt library - returns a new library with all prompts loaded
     /// This reloads prompts to ensure we have the latest version
-    pub fn get_prompt_library(&self) -> Result<swissarmyhammer_prompts::PromptLibrary> {
-        let mut library = swissarmyhammer_prompts::PromptLibrary::new();
+    pub fn get_prompt_library(&self) -> Result<swissarmyhammer_templating::TemplateLibrary> {
+        let mut library = swissarmyhammer_templating::TemplateLibrary::new();
         let mut resolver = swissarmyhammer::PromptResolver::new();
 
         resolver
@@ -196,31 +198,8 @@ impl CliContext {
         Ok(library)
     }
 
-    /// Render a prompt with parameters, merging with template context
-    pub fn render_prompt(
-        &self,
-        prompt_name: &str,
-        parameters: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<String> {
-        let library = self.get_prompt_library()?;
-
-        // Create a template context with CLI arguments having highest precedence
-        let mut final_context = self.template_context.clone();
-        for (key, value) in parameters {
-            final_context.set(key.clone(), value.clone());
-        }
-
-        // Render the prompt with the merged context
-        library
-            .render(prompt_name, &final_context)
-            .map_err(map_error(&format!(
-                "Failed to render prompt '{}'",
-                prompt_name
-            )))
-    }
-
     /// Display items using the configured output format
-    pub fn display<T>(&self, items: Vec<T>) -> Result<()>
+    pub fn display<T>(&self, items: &[T]) -> Result<()>
     where
         T: serde::Serialize,
     {
@@ -233,7 +212,7 @@ impl CliContext {
     }
 
     /// Display items as a table
-    fn display_as_table<T>(&self, items: Vec<T>) -> Result<()>
+    fn display_as_table<T>(&self, items: &[T]) -> Result<()>
     where
         T: serde::Serialize,
     {
@@ -243,7 +222,7 @@ impl CliContext {
         }
 
         let json_items =
-            serde_json::to_value(&items).map_err(map_error("Failed to convert to JSON"))?;
+            serde_json::to_value(items).map_err(map_error("Failed to convert to JSON"))?;
 
         let array = json_items.as_array().ok_or_else(|| {
             swissarmyhammer_common::SwissArmyHammerError::Other {
@@ -262,38 +241,25 @@ impl CliContext {
     }
 
     /// Display items as JSON
-    fn display_as_json<T>(&self, items: Vec<T>) -> Result<()>
+    fn display_as_json<T>(&self, items: &[T]) -> Result<()>
     where
         T: serde::Serialize,
     {
-        let json = serde_json::to_string_pretty(&items)
+        let json = serde_json::to_string_pretty(items)
             .map_err(map_error("Failed to serialize to JSON"))?;
         println!("{}", json);
         Ok(())
     }
 
     /// Display items as YAML
-    fn display_as_yaml<T>(&self, items: Vec<T>) -> Result<()>
+    fn display_as_yaml<T>(&self, items: &[T]) -> Result<()>
     where
         T: serde::Serialize,
     {
         let yaml =
-            serde_yaml_ng::to_string(&items).map_err(map_error("Failed to serialize to YAML"))?;
+            serde_yaml_ng::to_string(items).map_err(map_error("Failed to serialize to YAML"))?;
         println!("{}", yaml);
         Ok(())
-    }
-
-    /// Display different types based on verbose flag using display rows enum
-    pub fn display_prompts(
-        &self,
-        rows: crate::commands::prompt::display::DisplayRows,
-    ) -> Result<()> {
-        use crate::commands::prompt::display::DisplayRows;
-
-        match rows {
-            DisplayRows::Standard(items) => self.display(items),
-            DisplayRows::Verbose(items) => self.display(items),
-        }
     }
 }
 
@@ -307,7 +273,7 @@ impl CliContextBuilder {
 
     /// Build the CliContext with async initialization of storage components
     pub async fn build_async(self) -> Result<CliContext> {
-        let mut prompt_library = PromptLibrary::new();
+        let mut prompt_library = TemplateLibrary::new();
 
         // Add default prompt sources
         #[allow(deprecated)]
@@ -344,7 +310,7 @@ impl CliContextBuilder {
             verbose: self.verbose.unwrap_or_default(),
             debug: self.debug.unwrap_or_default(),
             quiet: self.quiet.unwrap_or_default(),
-            test_mode: self.quiet.unwrap_or_default(),
+            test_mode: self.test_mode.unwrap_or_default(),
             matches: Self::require_field(self.matches, "matches")?,
         })
     }
@@ -770,33 +736,6 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial(cwd)]
-    async fn test_cli_context_render_prompt_nonexistent() {
-        // Isolate HOME + CWD — see `test_cli_context_new`.
-        let env = IsolatedTestEnvironment::new().expect("isolated env");
-        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
-
-        let template_context = swissarmyhammer_config::TemplateContext::new();
-        let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
-
-        let ctx = super::CliContext::new(
-            template_context,
-            super::OutputFormat::Table,
-            None,
-            false,
-            false,
-            false,
-            matches,
-        )
-        .await
-        .unwrap();
-
-        let params = std::collections::HashMap::new();
-        let result = ctx.render_prompt("nonexistent-prompt", &params);
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    #[serial_test::serial(cwd)]
     async fn test_cli_context_display_formats() {
         use serde::Serialize;
 
@@ -835,7 +774,7 @@ mod tests {
         ];
 
         // display uses format_option when set
-        let result = ctx.display(items);
+        let result = ctx.display(&items);
         assert!(result.is_ok());
     }
 
@@ -869,7 +808,7 @@ mod tests {
         .unwrap();
 
         let items: Vec<Item> = vec![];
-        let result = ctx.display(items);
+        let result = ctx.display(&items);
         assert!(result.is_ok());
     }
 
@@ -901,7 +840,7 @@ mod tests {
         let items = vec![Item {
             name: "test".into(),
         }];
-        let result = ctx.display(items);
+        let result = ctx.display(&items);
         assert!(result.is_ok());
     }
 
@@ -939,69 +878,7 @@ mod tests {
             name: "test".into(),
             status: "ok".into(),
         }];
-        let result = ctx.display(items);
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    #[serial_test::serial(cwd)]
-    async fn test_cli_context_display_prompts() {
-        use crate::commands::prompt::display::{DisplayRows, PromptRow};
-
-        // Isolate HOME + CWD — see `test_cli_context_new`.
-        let env = IsolatedTestEnvironment::new().expect("isolated env");
-        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
-
-        let template_context = swissarmyhammer_config::TemplateContext::new();
-        let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
-
-        let ctx = super::CliContextBuilder::default()
-            .template_context(template_context)
-            .matches(matches)
-            .format_option(Some(super::OutputFormat::Json))
-            .build_async()
-            .await
-            .unwrap();
-
-        // Test Standard variant
-        let rows = DisplayRows::Standard(vec![PromptRow {
-            name: "test".into(),
-            title: "Test Prompt".into(),
-            source: "builtin".into(),
-        }]);
-        let result = ctx.display_prompts(rows);
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    #[serial_test::serial(cwd)]
-    async fn test_cli_context_display_prompts_verbose() {
-        use crate::commands::prompt::display::{DisplayRows, VerbosePromptRow};
-
-        // Isolate HOME + CWD — see `test_cli_context_new`.
-        let env = IsolatedTestEnvironment::new().expect("isolated env");
-        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
-
-        let template_context = swissarmyhammer_config::TemplateContext::new();
-        let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
-
-        let ctx = super::CliContextBuilder::default()
-            .template_context(template_context)
-            .matches(matches)
-            .format_option(Some(super::OutputFormat::Json))
-            .build_async()
-            .await
-            .unwrap();
-
-        // Test Verbose variant
-        let rows = DisplayRows::Verbose(vec![VerbosePromptRow {
-            name: "test".into(),
-            title: "Test Prompt".into(),
-            description: "A test prompt".into(),
-            source: "builtin".into(),
-            category: "test".into(),
-        }]);
-        let result = ctx.display_prompts(rows);
+        let result = ctx.display(&items);
         assert!(result.is_ok());
     }
 }

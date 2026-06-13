@@ -42,6 +42,12 @@ pub enum SessionSetupError {
     WorkingDirectoryPermissionDenied {
         path: PathBuf,
         required_permissions: Vec<String>,
+        /// The underlying OS error from the permission probe, preserved on
+        /// the error chain so diagnostics can distinguish EACCES from EIO,
+        /// ELOOP, or a directory deleted between checks. `Arc`-wrapped because
+        /// `std::io::Error` is not `Clone` and this enum is.
+        #[source]
+        source: std::sync::Arc<std::io::Error>,
     },
 
     #[error("Working directory path contains invalid characters")]
@@ -269,6 +275,7 @@ impl SessionSetupError {
             Self::WorkingDirectoryPermissionDenied {
                 path,
                 required_permissions,
+                ..
             } => {
                 serde_json::json!({
                     "path": path,
@@ -682,6 +689,7 @@ mod tests {
         let error = SessionSetupError::WorkingDirectoryPermissionDenied {
             path: PathBuf::from("/protected/path"),
             required_permissions: vec!["read".to_string(), "execute".to_string()],
+            source: std::sync::Arc::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
         };
 
         assert_eq!(error.to_json_rpc_code(), -32603);

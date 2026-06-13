@@ -8,6 +8,12 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[features]
+# Export the `test_utils` mock-agent harness (`MockAgent`, `MockAgentAdapter`,
+# `run_with_mock_agent`, …) for downstream crates' tests, so they reuse this
+# harness instead of carrying their own copy of the ACP mock-agent wiring.
+test-support = ["dep:futures"]
+
 [dependencies]
 agent-client-protocol.workspace = true
 agent-client-protocol-extras = { workspace = true }
@@ -19,6 +25,8 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 swissarmyhammer-common = { workspace = true }
+# Only for the `test-support` harness (BoxFuture in the MockAgent trait).
+futures = { workspace = true, optional = true }
 
 [dev-dependencies]
 async-trait.workspace = true

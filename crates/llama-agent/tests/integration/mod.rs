@@ -19,6 +19,8 @@ mod long_conversation_unit;
 mod metal_gpu;
 mod mtp_streaming;
 mod read_file_mcp_server;
+mod real_model_helpers;
+mod session_fork_real_model;
 mod session_state_preservation;
 mod streaming_generation;
 mod tool_call_round_trip;

@@ -49,15 +49,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::{
-    CancelNotification, McpServer, McpServerHttp, NewSessionRequest, PromptRequest, SessionId,
-    SessionModeId, SessionUpdate, SetSessionModeRequest,
+    CancelNotification, McpServer, McpServerHttp, NewSessionRequest, SessionId, SessionModeId,
+    SessionUpdate, SetSessionModeRequest,
 };
 use llama_agent::acp::config::AcpConfig;
 use llama_agent::acp::AcpServer;
 use llama_agent::types::ids::SessionId as LlamaSessionId;
 use llama_agent::types::{
-    AgentAPI, AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
-    SessionConfig,
+    AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig, SessionConfig,
 };
 use llama_agent::{AgentServer, SessionManager};
 use serial_test::serial;
@@ -65,9 +64,10 @@ use tempfile::TempDir;
 use tokio::sync::broadcast::Receiver;
 use tracing::{info, warn};
 
-use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
-
 use crate::integration::read_file_mcp_server::start_read_file_mcp_server;
+use crate::integration::real_model_helpers::{
+    build_real_model_server, real_model_config, text_prompt,
+};
 
 /// Notifications broadcast by the server during a turn.
 type Notification = agent_client_protocol::schema::SessionNotification;
@@ -147,53 +147,11 @@ fn build_unloaded_server(config: AgentConfig) -> (Arc<AcpServer>, Receiver<Notif
     (Arc::new(server), rx)
 }
 
-/// Build a `PromptRequest` carrying a single user text block.
-fn text_prompt(session_id: SessionId, text: &str) -> PromptRequest {
-    PromptRequest::new(
-        session_id,
-        vec![agent_client_protocol::schema::ContentBlock::from(
-            text.to_string(),
-        )],
-    )
-}
-
 // ---------------------------------------------------------------------------
-// Real-model harness (agentic turn loop)
+// Real-model harness (agentic turn loop) — the canonical config, server
+// bootstrap (with the environmental-failure skip heuristic), and text-prompt
+// constructor live in the shared `real_model_helpers` module.
 // ---------------------------------------------------------------------------
-
-/// Build an `AgentConfig` against the canonical Qwen3-0.6B test model. Mirrors
-/// the config used by the sibling real-model tests so the turn loop runs the same
-/// path as production. MCP servers are attached per-session via the
-/// `NewSessionRequest.mcp_servers` list (the ACP path), not the agent-level
-/// config, so this config carries no MCP servers.
-fn real_model_config() -> AgentConfig {
-    AgentConfig {
-        model: ModelConfig {
-            source: ModelSource::HuggingFace {
-                repo: TEST_MODEL_REPO.to_string(),
-                filename: Some(TEST_MODEL_FILE.to_string()),
-                folder: None,
-            },
-            batch_size: 64,
-            use_hf_params: true,
-            retry_config: RetryConfig {
-                max_retries: 2,
-                initial_delay_ms: 100,
-                backoff_multiplier: 1.5,
-                max_delay_ms: 1000,
-            },
-            debug: false,
-            n_seq_max: 1,
-            n_threads: 4,
-            n_threads_batch: 4,
-        },
-        mcp_servers: Vec::new(),
-        session_config: SessionConfig::default(),
-        parallel_execution_config: ParallelConfig::default(),
-        tool_execution_config: Default::default(),
-        queue_config: QueueConfig::default(),
-    }
-}
 
 /// Build a `NewSessionRequest` that attaches the in-process `read_file` MCP
 /// server over HTTP via the ACP `mcpServers` list — the exact path the kanban
@@ -202,37 +160,6 @@ fn new_session_with_mcp(mcp_url: &str) -> NewSessionRequest {
     NewSessionRequest::new(PathBuf::from("/tmp")).mcp_servers(vec![McpServer::Http(
         McpServerHttp::new("read-file-test-server", mcp_url),
     )])
-}
-
-/// Build an `AcpServer` on top of a fully-initialized `AgentServer` (model
-/// loaded), returning the server plus the notification receiver. Returns `None`
-/// when HuggingFace rate-limits or the model fails to load, so CI doesn't flake
-/// on conditions outside the test's control — the same skip idiom the sibling
-/// real-model tests use.
-async fn build_real_model_server(
-    config: AgentConfig,
-) -> Option<(Arc<AcpServer>, Receiver<Notification>)> {
-    let agent = match AgentServer::initialize(config).await {
-        Ok(agent) => agent,
-        Err(e) => {
-            let msg = e.to_string().to_lowercase();
-            if msg.contains("429")
-                || msg.contains("too many requests")
-                || msg.contains("rate limited")
-                || msg.contains("loadingfailed")
-            {
-                warn!("Skipping test: model load / rate-limit failure: {}", e);
-                return None;
-            }
-            panic!("AgentServer initialization failed: {}", e);
-        }
-    };
-
-    let mount = Arc::new(llama_agent::InProcessMount::new(
-        llama_agent::echo::EchoService::new(),
-    ));
-    let (server, rx) = AcpServer::new(Arc::new(agent), AcpConfig::default(), mount);
-    Some((Arc::new(server), rx))
 }
 
 /// Initialize test tracing once; ignore the "already initialized" error.

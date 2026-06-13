@@ -5,30 +5,30 @@
 //! `build.rs` compile `cli.rs` independently via `#[path = "src/cli.rs"]`
 //! to generate documentation, man pages, and shell completions at build time.
 
-use crate::cli::PromptSourceArg;
+use crate::cli::SourceArg;
 
-// Re-export PromptSource from the library so call sites can use
-// `crate::cli_conversions::PromptSource` alongside the conversion impls below.
-pub use swissarmyhammer::PromptSource;
+// Re-export FileSource from the common crate so call sites can use
+// `crate::cli_conversions::FileSource` alongside the conversion impls below.
+pub use swissarmyhammer_common::file_loader::FileSource;
 
-impl From<PromptSourceArg> for PromptSource {
-    fn from(arg: PromptSourceArg) -> Self {
+impl From<SourceArg> for FileSource {
+    fn from(arg: SourceArg) -> Self {
         match arg {
-            PromptSourceArg::Builtin => PromptSource::Builtin,
-            PromptSourceArg::User => PromptSource::User,
-            PromptSourceArg::Local => PromptSource::Local,
-            PromptSourceArg::Dynamic => PromptSource::Dynamic,
+            SourceArg::Builtin => FileSource::Builtin,
+            SourceArg::User => FileSource::User,
+            SourceArg::Local => FileSource::Local,
+            SourceArg::Dynamic => FileSource::Dynamic,
         }
     }
 }
 
-impl From<PromptSource> for PromptSourceArg {
-    fn from(source: PromptSource) -> Self {
+impl From<FileSource> for SourceArg {
+    fn from(source: FileSource) -> Self {
         match source {
-            PromptSource::Builtin => PromptSourceArg::Builtin,
-            PromptSource::User => PromptSourceArg::User,
-            PromptSource::Local => PromptSourceArg::Local,
-            PromptSource::Dynamic => PromptSourceArg::Dynamic,
+            FileSource::Builtin => SourceArg::Builtin,
+            FileSource::User => SourceArg::User,
+            FileSource::Local => SourceArg::Local,
+            FileSource::Dynamic => SourceArg::Dynamic,
         }
     }
 }
@@ -42,41 +42,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_prompt_source_arg_conversions() {
-        // Test From<PromptSourceArg> for PromptSource
+    fn test_source_arg_conversions() {
+        // Test From<SourceArg> for FileSource
         assert!(matches!(
-            PromptSource::from(PromptSourceArg::Builtin),
-            PromptSource::Builtin
+            FileSource::from(SourceArg::Builtin),
+            FileSource::Builtin
         ));
         assert!(matches!(
-            PromptSource::from(PromptSourceArg::User),
-            PromptSource::User
+            FileSource::from(SourceArg::User),
+            FileSource::User
         ));
         assert!(matches!(
-            PromptSource::from(PromptSourceArg::Local),
-            PromptSource::Local
+            FileSource::from(SourceArg::Local),
+            FileSource::Local
         ));
         assert!(matches!(
-            PromptSource::from(PromptSourceArg::Dynamic),
-            PromptSource::Dynamic
+            FileSource::from(SourceArg::Dynamic),
+            FileSource::Dynamic
         ));
 
-        // Test From<PromptSource> for PromptSourceArg
+        // Test From<FileSource> for SourceArg
         assert!(matches!(
-            PromptSourceArg::from(PromptSource::Builtin),
-            PromptSourceArg::Builtin
+            SourceArg::from(FileSource::Builtin),
+            SourceArg::Builtin
+        ));
+        assert!(matches!(SourceArg::from(FileSource::User), SourceArg::User));
+        assert!(matches!(
+            SourceArg::from(FileSource::Local),
+            SourceArg::Local
         ));
         assert!(matches!(
-            PromptSourceArg::from(PromptSource::User),
-            PromptSourceArg::User
-        ));
-        assert!(matches!(
-            PromptSourceArg::from(PromptSource::Local),
-            PromptSourceArg::Local
-        ));
-        assert!(matches!(
-            PromptSourceArg::from(PromptSource::Dynamic),
-            PromptSourceArg::Dynamic
+            SourceArg::from(FileSource::Dynamic),
+            SourceArg::Dynamic
         ));
     }
 }

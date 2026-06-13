@@ -42,11 +42,14 @@ impl CliToolContext {
     pub async fn new_isolated(
         working_dir: &std::path::Path,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        use swissarmyhammer_prompts::PromptLibrary;
+        use swissarmyhammer_templating::TemplateLibrary;
 
-        let mcp_server =
-            McpServer::new_with_work_dir(PromptLibrary::default(), working_dir.to_path_buf(), None)
-                .await?;
+        let mcp_server = McpServer::new_with_work_dir(
+            TemplateLibrary::default(),
+            working_dir.to_path_buf(),
+            None,
+        )
+        .await?;
         mcp_server.initialize().await?;
         let server_arc = Arc::new(mcp_server);
 

@@ -574,7 +574,7 @@ fn test_build_cli_basic_structure() {
     // Verify core subcommands exist
     // Note: rule command is now dynamically generated from rules_check MCP tool when tools are registered
     // This test uses an empty registry, so rule won't appear here
-    let expected_commands = ["serve", "doctor", "prompt", "validate", "model"];
+    let expected_commands = ["serve", "doctor", "validate", "model"];
     assert_commands_exist(&cli, &expected_commands);
 }
 
@@ -1148,20 +1148,6 @@ fn test_build_validate_command() {
     assert_eq!(cmd.get_name(), "validate");
     assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "quiet"));
     assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "format"));
-}
-
-#[test]
-fn test_build_prompt_command() {
-    let cmd = CliBuilder::build_prompt_command();
-    assert_eq!(cmd.get_name(), "prompt");
-    let subcmd_names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
-    assert!(subcmd_names.contains(&"list"));
-    assert!(subcmd_names.contains(&"test"));
-    assert!(subcmd_names.contains(&"render"));
-    assert!(subcmd_names.contains(&"new"));
-    assert!(subcmd_names.contains(&"show"));
-    assert!(subcmd_names.contains(&"edit"));
-    assert!(subcmd_names.contains(&"validate"));
 }
 
 #[test]

@@ -111,7 +111,10 @@ pub struct ReviewReport {
 /// `tally` is the fan-out task outcome from [`run_fleet`]. When any task failed,
 /// a clearly visible warning line is rendered directly under the dated header so
 /// an incomplete run cannot be mistaken for a clean diff, and the tally is
-/// carried through into [`ReviewCounts`].
+/// carried through into [`ReviewCounts`]. When the run attempted zero tasks and
+/// kept no findings — the resolved scope was empty — the report states
+/// "Nothing in scope to review." so an empty scope cannot be mistaken for a
+/// clean review either.
 pub fn synthesize(verified: Vec<VerifiedFinding>, tally: &FleetTally, now: &str) -> ReviewReport {
     let counts_confirmed = verified.iter().filter(|v| v.confirmed).count();
     let counts_refuted = verified.len() - counts_confirmed;
@@ -138,6 +141,12 @@ pub fn synthesize(verified: Vec<VerifiedFinding>, tally: &FleetTally, now: &str)
             "\n> ⚠️ {}/{} review tasks failed — results are INCOMPLETE.",
             tally.failed, tally.attempted
         );
+    }
+
+    // Say so explicitly when the resolved scope was empty (zero fan-out tasks):
+    // a bare findings header would read identically to a genuinely clean review.
+    if tally.attempted == 0 && kept.is_empty() {
+        let _ = writeln!(markdown, "\nNothing in scope to review.");
     }
 
     for (severity, heading) in SECTIONS {
@@ -350,6 +359,11 @@ mod tests {
     use crate::review::scope::{FileWork, ValidatorWork};
     use crate::review::types::RefutingLayer;
 
+    /// The fixture timestamp passed as `now` to every `synthesize` call. Kept
+    /// inline (not interpolated) inside the byte-for-byte snapshot strings so
+    /// those stay readable.
+    const NOW: &str = "2026-04-11 13:08";
+
     /// A confirmed finding builder with the load-bearing fields set.
     fn confirmed(
         file: &str,
@@ -401,7 +415,7 @@ mod tests {
         // No findings (every task degraded to zero) but a non-zero failed tally —
         // the report must visibly flag the incomplete run rather than rendering
         // byte-identically to a clean diff, and surface the tally in its counts.
-        let report = synthesize(vec![], &FleetTally::new(60, 60), "2026-04-11 13:08");
+        let report = synthesize(vec![], &FleetTally::new(60, 60), NOW);
 
         assert_eq!(report.counts.tasks_attempted, 60);
         assert_eq!(report.counts.tasks_failed, 60);
@@ -421,7 +435,7 @@ mod tests {
     fn a_fully_successful_tally_adds_no_failure_flag() {
         // Every task succeeded — no warning line, byte-identical to today's clean
         // report, and a zero failed tally.
-        let report = synthesize(vec![], &FleetTally::new(8, 0), "2026-04-11 13:08");
+        let report = synthesize(vec![], &FleetTally::new(8, 0), NOW);
 
         assert_eq!(report.markdown, "## Review Findings (2026-04-11 13:08)\n");
         assert_eq!(report.counts.tasks_attempted, 8);
@@ -430,7 +444,7 @@ mod tests {
 
     #[test]
     fn renders_dated_header_with_the_input_timestamp_verbatim() {
-        let report = synthesize(vec![], &FleetTally::default(), "2026-04-11 13:08");
+        let report = synthesize(vec![], &FleetTally::default(), NOW);
         assert!(
             report
                 .markdown
@@ -441,10 +455,36 @@ mod tests {
     }
 
     #[test]
-    fn empty_input_renders_only_the_header_and_zero_counts() {
-        let report = synthesize(vec![], &FleetTally::default(), "2026-04-11 13:08");
-        assert_eq!(report.markdown, "## Review Findings (2026-04-11 13:08)\n");
+    fn an_empty_scope_renders_the_nothing_in_scope_marker() {
+        // Zero attempted tasks means the resolved scope was empty — the report
+        // must say so explicitly instead of rendering a bare findings header
+        // that reads identically to a genuinely clean review.
+        let report = synthesize(vec![], &FleetTally::default(), NOW);
+        assert!(
+            report
+                .markdown
+                .starts_with("## Review Findings (2026-04-11 13:08)\n"),
+            "the dated header still renders: {:?}",
+            report.markdown
+        );
+        assert!(
+            report.markdown.contains("Nothing in scope to review"),
+            "an empty scope must be unmistakable: {:?}",
+            report.markdown
+        );
         assert_eq!(report.counts, ReviewCounts::default());
+    }
+
+    #[test]
+    fn an_attempted_clean_run_carries_no_nothing_in_scope_marker() {
+        // Tasks ran and found nothing — that is a clean review, not an empty
+        // scope, so the marker must not appear.
+        let report = synthesize(vec![], &FleetTally::new(8, 0), NOW);
+        assert!(
+            !report.markdown.contains("Nothing in scope"),
+            "a clean attempted run is not an empty scope: {:?}",
+            report.markdown
+        );
     }
 
     #[test]
@@ -463,7 +503,7 @@ mod tests {
             refuted("src/a.rs", 99, "dead-code", "`bar` is never called"),
         ];
 
-        let _report = synthesize(verified, &FleetTally::default(), "2026-04-11 13:08");
+        let _report = synthesize(verified, &FleetTally::default(), NOW);
 
         // The synthesis summary reports the per-severity + per-verdict tallies.
         assert!(logs_contain("review synthesis complete"));
@@ -487,7 +527,7 @@ mod tests {
             refuted("src/a.rs", 99, "dead-code", "`bar` is never called"),
         ];
 
-        let report = synthesize(verified, &FleetTally::default(), "2026-04-11 13:08");
+        let report = synthesize(verified, &FleetTally::default(), NOW);
 
         // The refuted finding does not appear in the rendered markdown.
         assert!(
@@ -520,11 +560,7 @@ mod tests {
             "`foo` is never called",
             Some("Delete it"),
         );
-        let report = synthesize(
-            vec![one.clone(), one],
-            &FleetTally::default(),
-            "2026-04-11 13:08",
-        );
+        let report = synthesize(vec![one.clone(), one], &FleetTally::default(), NOW);
 
         // Collapsed to a single checklist item.
         let occurrences = report.markdown.matches("src/a.rs:42").count();
@@ -560,7 +596,7 @@ mod tests {
             "`foo` is never called",
             Some("Delete it"),
         );
-        let report = synthesize(vec![dup, dead], &FleetTally::default(), "2026-04-11 13:08");
+        let report = synthesize(vec![dup, dead], &FleetTally::default(), NOW);
 
         // Both findings survive — cross-validator findings are never merged.
         assert!(
@@ -606,7 +642,7 @@ mod tests {
                 None,
             ),
         ];
-        let report = synthesize(verified, &FleetTally::default(), "2026-04-11 13:08");
+        let report = synthesize(verified, &FleetTally::default(), NOW);
 
         assert!(
             report.markdown.contains("### Blockers"),
@@ -658,7 +694,7 @@ mod tests {
                 None,
             ),
         ];
-        let report = synthesize(verified, &FleetTally::default(), "2026-04-11 13:08");
+        let report = synthesize(verified, &FleetTally::default(), NOW);
 
         let expected = "\
 ## Review Findings (2026-04-11 13:08)
@@ -707,7 +743,7 @@ mod tests {
                 None,
             ),
         ];
-        let report = synthesize(verified, &FleetTally::default(), "2026-04-11 13:08");
+        let report = synthesize(verified, &FleetTally::default(), NOW);
 
         let a9 = report.markdown.find("src/a.rs:9`").unwrap();
         let a90 = report.markdown.find("src/a.rs:90`").unwrap();

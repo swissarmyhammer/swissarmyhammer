@@ -452,8 +452,11 @@ pub async fn run_doctor(verbose: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "embedding-models")]
     use rusqlite::params;
-    use swissarmyhammer_code_context::{db, serialize_embedding};
+    use swissarmyhammer_code_context::db;
+    #[cfg(feature = "embedding-models")]
+    use swissarmyhammer_code_context::serialize_embedding;
     use tempfile::TempDir;
 
     /// Build a minimal `.code-context/` workspace inside `root` with a freshly
@@ -475,6 +478,10 @@ mod tests {
     /// Insert an embedded chunk row into `ts_chunks` so the canary path has
     /// something to score against. Uses the same encoding [`search_code`]
     /// expects: little-endian f32 blobs via [`serialize_embedding`].
+    ///
+    /// Only the `embedding-models`-gated tests populate the index, so this
+    /// fixture is compiled out with them.
+    #[cfg(feature = "embedding-models")]
     fn insert_embedded_chunk(conn: &Connection, file_path: &str, text: &str, embedding: &[f32]) {
         // First insert into indexed_files so the FK / progress logic is consistent.
         // All NOT NULL columns must be populated; we use stub values since this
@@ -690,12 +697,9 @@ mod tests {
     /// produced.
     ///
     /// Loads a real embedding model to produce the query embedding, so it is
-    /// gated behind the `embedding-models` feature (multi-GB download on a cold
-    /// cache). Skipped by default; run with `--features embedding-models`.
-    #[cfg_attr(
-        not(feature = "embedding-models"),
-        ignore = "requires embedding model; run with --features embedding-models"
-    )]
+    /// compiled in only with the `embedding-models` feature (multi-GB download
+    /// on a cold cache). Run with `--features embedding-models`.
+    #[cfg(feature = "embedding-models")]
     #[tokio::test]
     async fn check_semantic_search_dimension_mismatch_is_not_ok() {
         let tmp = TempDir::new().expect("tempdir");
@@ -737,13 +741,10 @@ mod tests {
     /// machine, the test is skipped — the contract being tested is "no
     /// false-negative Error when dimensions agree".
     ///
-    /// Requires a real embedding model, so it is gated behind the
-    /// `embedding-models` feature (multi-GB download on a cold cache). Skipped
-    /// by default; run with `--features embedding-models`.
-    #[cfg_attr(
-        not(feature = "embedding-models"),
-        ignore = "requires embedding model; run with --features embedding-models"
-    )]
+    /// Requires a real embedding model, so it is compiled in only with the
+    /// `embedding-models` feature (multi-GB download on a cold cache). Run
+    /// with `--features embedding-models`.
+    #[cfg(feature = "embedding-models")]
     #[tokio::test]
     async fn check_semantic_search_with_matching_dimension_is_functional() {
         // Probe the embedder up front so we can size the stored embedding

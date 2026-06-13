@@ -370,25 +370,14 @@ mod tests {
     use serial_test::serial;
 
     /// Run `body` with `XDG_STATE_HOME` pointed at a fresh temp directory,
-    /// restoring the previous value afterwards.
+    /// restoring the previous value afterwards (the guard's `Drop` runs even
+    /// when `body` panics).
     ///
     /// Serialized at the call site with `#[serial]`: this mutates the
     /// process-global `XDG_STATE_HOME` env var.
     fn with_temp_state<R>(body: impl FnOnce() -> R) -> R {
-        let temp = tempfile::tempdir().unwrap();
-        // SAFETY: callers are `#[serial]`, so no other thread reads or writes
-        // the env var concurrently; the previous value is restored below.
-        let previous = std::env::var_os("XDG_STATE_HOME");
-        std::env::set_var("XDG_STATE_HOME", temp.path());
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
-        match previous {
-            Some(value) => std::env::set_var("XDG_STATE_HOME", value),
-            None => std::env::remove_var("XDG_STATE_HOME"),
-        }
-        match result {
-            Ok(value) => value,
-            Err(panic) => std::panic::resume_unwind(panic),
-        }
+        let _state = crate::test_support::StateDirGuard::new();
+        body()
     }
 
     /// Build a record with a fixed cwd and timestamp for the given id.

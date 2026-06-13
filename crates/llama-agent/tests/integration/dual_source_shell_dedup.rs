@@ -32,7 +32,7 @@
 use std::collections::HashMap;
 
 use llama_agent::{AgentToolsMount, InProcessMount, MCPClient, UnifiedMCPClient};
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_tools::mcp::unified_server::{
     start_mcp_server_with_options, McpServerHandle, McpServerMode,
 };
@@ -85,7 +85,7 @@ async fn aggregate_tool_names(clients: &[&dyn MCPClient]) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn llama_dual_source_aggregation_has_shell_exactly_once() {
     // Source (a): the real in-process Agent-tools mount.
-    let sah = McpServer::new(PromptLibrary::default())
+    let sah = McpServer::new(TemplateLibrary::default())
         .await
         .expect("build SAH McpServer");
     let mount = InProcessMount::new(sah.create_agent_tools_server());

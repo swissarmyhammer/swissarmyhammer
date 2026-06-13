@@ -4,7 +4,6 @@
 // as they tested the old file-based abort system which has been migrated to JS state.
 mod agent_command;
 mod binary_aliases;
-mod builtin_validation;
 mod cli_integration;
 mod cli_mcp_integration;
 mod cli_serve_http;
@@ -20,10 +19,7 @@ mod model_commands;
 mod model_list_units;
 mod model_performance_edge_casess;
 mod model_use_case_integration;
-mod prompt_command_integration;
-mod prompt_comprehensive_integrations;
+mod prompt_command_removed;
 mod prompt_context_integrations;
-mod prompt_performance;
-mod prompt_real_integrations;
 mod sah_serve_integration;
 mod sah_serve_tools_validation;

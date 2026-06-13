@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTC7HAF68EAYYV9ZMEB0NGX2
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff680
 project: remove-prompts
 title: Delete builtin/prompts and stop generating builtin_prompts.rs
 ---

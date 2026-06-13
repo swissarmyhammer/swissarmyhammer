@@ -75,7 +75,7 @@ use agent_client_protocol::schema::{
     StopReason, TextContent,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, DynConnectTo, Responder};
-use agent_client_protocol_extras::{trace_notifications, TracingAgent};
+use agent_client_protocol_extras::{trace_notifications, TolerantResponseRouter, TracingAgent};
 use llama_agent::types::AgentAPI;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -465,6 +465,9 @@ fn wrap_claude_into_handle(
     let builder = Agent
         .builder()
         .name("claude-agent")
+        // A nested agent→client request whose awaiter was dropped (abandoned
+        // turn) must fail that turn only, not this connection's dispatch loop.
+        .with_handler(TolerantResponseRouter)
         .on_receive_request(
             {
                 let agent = Arc::clone(&agent);
@@ -523,6 +526,9 @@ fn wrap_llama_into_handle(
     let builder = Agent
         .builder()
         .name("llama-agent")
+        // A nested agent→client request whose awaiter was dropped (abandoned
+        // turn) must fail that turn only, not this connection's dispatch loop.
+        .with_handler(TolerantResponseRouter)
         .on_receive_request(
             {
                 let agent = Arc::clone(&agent);
@@ -1116,10 +1122,10 @@ async fn create_llama_agent(
 /// Returns [`AcpError::InitializationError`] if the underlying SAH
 /// [`McpServer`](swissarmyhammer_tools::McpServer) cannot be constructed.
 pub async fn build_agent_tools_mount() -> AcpResult<Arc<dyn llama_agent::AgentToolsMount>> {
-    use swissarmyhammer_prompts::PromptLibrary;
+    use swissarmyhammer_templating::TemplateLibrary;
     use swissarmyhammer_tools::McpServer;
 
-    let server = McpServer::new(PromptLibrary::default())
+    let server = McpServer::new(TemplateLibrary::default())
         .await
         .map_err(|e| {
             AcpError::InitializationError(format!("failed to build agent-tools server: {e}"))
@@ -1131,53 +1137,144 @@ pub async fn build_agent_tools_mount() -> AcpResult<Arc<dyn llama_agent::AgentTo
     )))
 }
 
+/// Run a shared-server initialization future on the process-lifetime llama
+/// server runtime (see [`llama_server_runtime`]) and await its result.
+///
+/// This is the seam that decouples the shared [`llama_agent::AgentServer`]'s
+/// background tasks from the caller's runtime. `AgentServer::initialize`
+/// spawns long-lived tasks (the request-queue workers, MCP clients) onto the
+/// ambient runtime; callers like the review pipeline run on a throwaway
+/// current-thread runtime that is dropped when the call ends, which would
+/// abort those tasks and leave the cached server permanently failing with
+/// `Queue is shutting down`. Running the initialization here pins everything
+/// it spawns to a runtime that lives as long as the process — exactly as long
+/// as the cache that shares the server.
+async fn init_on_server_runtime<T, F>(init: F) -> AcpResult<T>
+where
+    T: Send + 'static,
+    F: std::future::Future<Output = T> + Send + 'static,
+{
+    llama_server_runtime().spawn(init).await.map_err(|e| {
+        AcpError::InitializationError(format!(
+            "llama agent server initialization task failed: {e}"
+        ))
+    })
+}
+
+/// The process-lifetime runtime that owns every shared llama
+/// [`llama_agent::AgentServer`]'s background tasks.
+///
+/// The shared servers are cached for the whole process ([`LLAMA_AGENT_CACHE`]),
+/// so the tasks they spawn (queue workers, MCP clients) must live on a runtime
+/// with the same lifetime — never on whichever caller happened to initialize
+/// the server first. Multi-thread is required: tasks on a current-thread
+/// runtime only make progress while something `block_on`s it.
+fn llama_server_runtime() -> &'static tokio::runtime::Runtime {
+    static LLAMA_SERVER_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    LLAMA_SERVER_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("llama-agent-server")
+            .enable_all()
+            .build()
+            .expect("failed to build the llama agent server runtime")
+    })
+}
+
+/// Look up a **healthy** cached server for `key`, or (re)build one via `build`
+/// and cache it.
+///
+/// A cached entry whose `is_healthy` check fails — e.g. an `AgentServer`
+/// whose queue workers died — is evicted and rebuilt instead of being handed
+/// out as a corpse forever; this is the self-healing backstop for the shared
+/// llama server cache.
+///
+/// The cache guard is held across the (potentially seconds-long) `build` so a
+/// second concurrent call for the same key waits on the first one's load
+/// instead of racing to load it twice. With typical usage (one or two local
+/// models) this lock is rarely contended.
+///
+/// Generic over the server type so the cache policy is unit-testable without
+/// loading a model.
+async fn get_or_rebuild_cached<S, F, Fut>(
+    cache: &AsyncMutex<HashMap<LlamaAgentKey, Arc<S>>>,
+    key: LlamaAgentKey,
+    is_healthy: impl Fn(&S) -> bool,
+    build: F,
+) -> AcpResult<Arc<S>>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = AcpResult<Arc<S>>>,
+{
+    let mut guard = cache.lock().await;
+    if let Some(existing) = guard.get(&key) {
+        if is_healthy(existing) {
+            tracing::info!(
+                model_source = %key.model_source,
+                "reusing cached llama AgentServer (shared across connections)"
+            );
+            return Ok(existing.clone());
+        }
+        tracing::warn!(
+            model_source = %key.model_source,
+            "cached llama AgentServer is unhealthy (queue closed); evicting and rebuilding"
+        );
+        guard.remove(&key);
+    }
+
+    let built = build().await?;
+    guard.insert(key, built.clone());
+    Ok(built)
+}
+
 /// Look up an already-initialized [`llama_agent::AgentServer`] for this model
 /// config in the process cache, or build and insert one.
 ///
-/// The cache guard is held across the (potentially seconds-long) initial
-/// `AgentServer::initialize` so a second concurrent call for the same model
-/// waits on the first one's load instead of racing to load it twice. With
-/// typical usage (one or two local models) this lock is rarely contended.
+/// The server's background tasks are pinned to the process-lifetime
+/// [`llama_server_runtime`] (via [`init_on_server_runtime`]) so they survive
+/// the caller's runtime, and an unhealthy cached server (dead queue) is
+/// rebuilt instead of reused (via [`get_or_rebuild_cached`]).
 async fn get_or_init_llama_agent_server(
     model_config: llama_agent::types::ModelConfig,
     mcp_servers: Vec<llama_agent::types::MCPServerConfig>,
 ) -> AcpResult<Arc<llama_agent::AgentServer>> {
     let key = LlamaAgentKey::from_model_config(&model_config);
-    let cache = llama_agent_cache();
-    let mut guard = cache.lock().await;
-    if let Some(existing) = guard.get(&key) {
-        tracing::info!(
-            model_source = %key.model_source,
-            "reusing cached llama AgentServer (shared across connections)"
-        );
-        return Ok(existing.clone());
-    }
+    let model_source = key.model_source.clone();
+    get_or_rebuild_cached(
+        llama_agent_cache(),
+        key,
+        llama_agent::AgentServer::is_healthy,
+        move || async move {
+            tracing::info!(
+                model_source = %model_source,
+                "initializing new llama AgentServer (first connection for this model)"
+            );
 
-    tracing::info!(
-        model_source = %key.model_source,
-        "initializing new llama AgentServer (first connection for this model)"
-    );
+            let agent_config = llama_agent::types::AgentConfig {
+                model: model_config,
+                queue_config: llama_agent::types::QueueConfig {
+                    max_queue_size: DEFAULT_MAX_QUEUE_SIZE,
+                    worker_threads: 1,
+                },
+                session_config: llama_agent::types::SessionConfig::default(),
+                mcp_servers,
+                parallel_execution_config: llama_agent::types::ParallelConfig::default(),
+                tool_execution_config: llama_agent::types::ToolExecutionConfig::default(),
+            };
 
-    let agent_config = llama_agent::types::AgentConfig {
-        model: model_config,
-        queue_config: llama_agent::types::QueueConfig {
-            max_queue_size: DEFAULT_MAX_QUEUE_SIZE,
-            worker_threads: 1,
+            let agent_server =
+                init_on_server_runtime(llama_agent::AgentServer::initialize(agent_config))
+                    .await?
+                    .map_err(|e| {
+                        AcpError::InitializationError(format!(
+                            "Failed to initialize Llama agent server: {}",
+                            e
+                        ))
+                    })?;
+            Ok(Arc::new(agent_server))
         },
-        session_config: llama_agent::types::SessionConfig::default(),
-        mcp_servers,
-        parallel_execution_config: llama_agent::types::ParallelConfig::default(),
-        tool_execution_config: llama_agent::types::ToolExecutionConfig::default(),
-    };
-
-    let agent_server = llama_agent::AgentServer::initialize(agent_config)
-        .await
-        .map_err(|e| {
-            AcpError::InitializationError(format!("Failed to initialize Llama agent server: {}", e))
-        })?;
-    let shared = Arc::new(agent_server);
-    guard.insert(key, shared.clone());
-    Ok(shared)
+    )
+    .await
 }
 
 /// Execute a prompt using an ACP agent
@@ -1282,6 +1379,12 @@ async fn run_prompt_connection(
             let connect_result = Client
                 .builder()
                 .name("swissarmyhammer-agent")
+                // An agent response arriving for a request this client already
+                // abandoned (e.g. a timeout dropped its `block_task` future)
+                // must fail that turn only — without this, the dispatch loop
+                // dies with "failed to send response, receiver dropped" and
+                // takes the whole connection with it.
+                .with_handler(TolerantResponseRouter)
                 .connect_with(agent, async move |cx: ConnectionTo<Agent>| {
                     let response = drive_prompt_turn(
                         &cx,
@@ -1637,6 +1740,135 @@ impl agent_client_protocol::ConnectTo<Client> for NoopAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stand-in for `AgentServer` in cache-policy tests: carries a fixed
+    /// health flag plus a generation marker so a rebuild is observable.
+    struct FakeServer {
+        healthy: bool,
+        generation: usize,
+    }
+
+    fn test_key(name: &str) -> LlamaAgentKey {
+        LlamaAgentKey {
+            model_source: format!("test:{name}"),
+            batch_size: 0,
+            use_hf_params: false,
+        }
+    }
+
+    /// A healthy cached server is reused as-is: the builder must NOT run.
+    #[tokio::test]
+    async fn cache_reuses_healthy_server() {
+        let cache = AsyncMutex::new(HashMap::new());
+        let key = test_key("reuse");
+        cache.lock().await.insert(
+            key.clone(),
+            Arc::new(FakeServer {
+                healthy: true,
+                generation: 0,
+            }),
+        );
+
+        let server = get_or_rebuild_cached(
+            &cache,
+            key,
+            |s: &FakeServer| s.healthy,
+            || async { panic!("builder must not run for a healthy cached server") },
+        )
+        .await
+        .expect("healthy cached server must be returned");
+
+        assert_eq!(server.generation, 0, "must hand back the cached instance");
+    }
+
+    /// The self-healing backstop: a cached server whose health check fails
+    /// (in production: an `AgentServer` whose queue workers died) must be
+    /// evicted and rebuilt, and the rebuilt instance must replace it in the
+    /// cache — never hand out the corpse again.
+    #[tokio::test]
+    async fn cache_rebuilds_unhealthy_server() {
+        let cache = AsyncMutex::new(HashMap::new());
+        let key = test_key("rebuild");
+        cache.lock().await.insert(
+            key.clone(),
+            Arc::new(FakeServer {
+                healthy: false,
+                generation: 0,
+            }),
+        );
+
+        let server = get_or_rebuild_cached(
+            &cache,
+            key.clone(),
+            |s: &FakeServer| s.healthy,
+            || async {
+                Ok(Arc::new(FakeServer {
+                    healthy: true,
+                    generation: 1,
+                }))
+            },
+        )
+        .await
+        .expect("an unhealthy cached server must be rebuilt");
+        assert_eq!(server.generation, 1, "must return the rebuilt instance");
+
+        // The rebuilt instance must now be the cached one.
+        let again = get_or_rebuild_cached(
+            &cache,
+            key,
+            |s: &FakeServer| s.healthy,
+            || async { panic!("builder must not run again once the rebuilt server is cached") },
+        )
+        .await
+        .expect("rebuilt server must be served from the cache");
+        assert_eq!(again.generation, 1);
+    }
+
+    /// The root cause of the `Queue is shutting down` cascade: the shared
+    /// server's background tasks were spawned on the caller's throwaway
+    /// runtime, so they died when that runtime was dropped at the end of the
+    /// first review call. Anything spawned during initialization run through
+    /// `init_on_server_runtime` must keep running after the calling runtime
+    /// is gone.
+    #[tokio::test]
+    async fn server_init_tasks_survive_caller_runtime_drop() {
+        let (ping_tx, mut ping_rx) =
+            tokio::sync::mpsc::unbounded_channel::<tokio::sync::oneshot::Sender<()>>();
+
+        // Simulate the per-review current-thread runtime that initializes the
+        // shared server and is then dropped (review_op / execute_prompt shape).
+        let caller = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime");
+            rt.block_on(async move {
+                init_on_server_runtime(async move {
+                    // Like `AgentServer::initialize`: spawn a long-lived
+                    // background task (the queue worker stand-in).
+                    tokio::spawn(async move {
+                        while let Some(reply) = ping_rx.recv().await {
+                            let _ = reply.send(());
+                        }
+                    });
+                })
+                .await
+            })
+            .expect("init must succeed");
+            // `rt` dropped here — the per-review runtime teardown.
+        });
+        caller.join().expect("caller thread must not panic");
+
+        // The background task must still answer after its spawning runtime died.
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        ping_tx
+            .send(reply_tx)
+            .expect("background task must still hold its receiver");
+        tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
+            .await
+            .expect("background task must survive the caller runtime drop")
+            .expect("background task must answer the ping");
+    }
 
     /// Two model configs that differ only in MCP/queue config (which DON'T
     /// affect what gets loaded into RAM) must produce the same cache key —

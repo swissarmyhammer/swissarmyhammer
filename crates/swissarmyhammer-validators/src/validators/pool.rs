@@ -24,9 +24,15 @@
 use std::sync::Arc;
 
 use agent_client_protocol::schema::{
-    ContentBlock, NewSessionRequest, PromptRequest, SessionNotification, TextContent,
+    CancelNotification, ContentBlock, ExtRequest, NewSessionRequest, PromptRequest, SessionId,
+    SessionNotification, TextContent,
 };
-use agent_client_protocol::{Agent, ConnectionTo};
+use agent_client_protocol::{Agent, ClientRequest, ConnectionTo};
+use agent_client_protocol_extras::{
+    SessionForkRequest, SessionForkResponse, SessionPinRequest, SessionPinResponse,
+    SessionStateStatusRequest, SessionStateStatusResponse, MAX_TOKENS_META_KEY,
+    SESSION_FORK_METHOD, SESSION_PIN_METHOD, SESSION_STATE_STATUS_METHOD,
+};
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
@@ -40,15 +46,30 @@ const MAX_REMOTE_WORKERS: usize = 8;
 /// Default per-call cap on generation tokens for a single `submit` prompt.
 pub const DEFAULT_MAX_TOKENS: u64 = 16 * 1024;
 
-/// Defensive ceiling on a single prompt turn (`new_session` → `prompt`).
+/// Idle-progress window for a single prompt turn (`new_session` → `prompt`).
 ///
-/// A correctly wired client answers every nested agent→client request, so a turn
-/// completes in seconds-to-minutes. This generous backstop exists only so a
-/// future wedge (e.g. an unanswered agent request) degrades that one task to an
-/// error — the fleet reports zero findings for it and the review COMPLETES —
-/// instead of hanging the whole review forever. It is tuned far above any
-/// legitimately slow turn so it never false-fires in normal operation.
-const PROMPT_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+/// A turn is abandoned only when NO streaming progress — no `session/update`
+/// notification for the turn's session — has arrived for this long. Total wall
+/// clock is deliberately NOT capped at this value: a legitimate turn on a local
+/// 35B model (big review prompt, agentic loop, one shared GPU serializing
+/// decodes across fleet tasks) routinely needs more than 300s, but while it is
+/// decoding it streams chunks continuously, so it keeps resetting this window.
+/// Only a wedged turn (e.g. a nested agent request the client failed to answer)
+/// goes silent for the whole window, and that degrades to a single-task error —
+/// the fleet reports zero findings for it and the review COMPLETES — instead of
+/// hanging the whole review forever.
+pub const PROMPT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Defensive absolute ceiling on a single prompt turn.
+///
+/// Catches the one pathology the idle window cannot: a turn that keeps emitting
+/// notifications forever without ever completing (e.g. a runaway agentic loop).
+/// It must sit far above local-model reality — a single legitimate local-35B
+/// turn can take well over five minutes of wall clock when one shared GPU
+/// serializes decodes across fleet tasks — so it is set to 45 minutes: long
+/// enough to never false-fire on a slow-but-live turn, short enough that a
+/// runaway turn cannot pin a worker forever.
+pub const PROMPT_TURN_CEILING: std::time::Duration = std::time::Duration::from_secs(45 * 60);
 
 /// Backend-aware policy describing how many workers the pool runs and whether it
 /// adapts that count under load.
@@ -64,6 +85,12 @@ pub struct PoolConfig {
     pub aimd: bool,
     /// Per-call cap on generation tokens attached to every submitted prompt.
     pub max_tokens: u64,
+    /// Abandon a turn after this long with no streaming progress
+    /// (see [`PROMPT_IDLE_TIMEOUT`]).
+    pub idle_timeout: std::time::Duration,
+    /// Defensive absolute cap on a turn's total wall clock
+    /// (see [`PROMPT_TURN_CEILING`]).
+    pub turn_ceiling: std::time::Duration,
 }
 
 impl PoolConfig {
@@ -73,6 +100,8 @@ impl PoolConfig {
             workers: 1,
             aimd: false,
             max_tokens: DEFAULT_MAX_TOKENS,
+            idle_timeout: PROMPT_IDLE_TIMEOUT,
+            turn_ceiling: PROMPT_TURN_CEILING,
         }
     }
 
@@ -82,6 +111,8 @@ impl PoolConfig {
             workers: default_workers.clamp(MIN_WORKERS, MAX_REMOTE_WORKERS),
             aimd: true,
             max_tokens: DEFAULT_MAX_TOKENS,
+            idle_timeout: PROMPT_IDLE_TIMEOUT,
+            turn_ceiling: PROMPT_TURN_CEILING,
         }
     }
 
@@ -98,16 +129,152 @@ impl PoolConfig {
         self.max_tokens = max_tokens;
         self
     }
+
+    /// Override the idle-progress window after which a silent turn is
+    /// abandoned. Exists so tests can exercise abandonment with sub-second
+    /// durations; production constructors use [`PROMPT_IDLE_TIMEOUT`].
+    pub fn with_idle_timeout(mut self, idle_timeout: std::time::Duration) -> Self {
+        self.idle_timeout = idle_timeout;
+        self
+    }
+
+    /// Override the absolute wall-clock ceiling on a turn. Exists so tests can
+    /// exercise ceiling abandonment with sub-second durations; production
+    /// constructors use [`PROMPT_TURN_CEILING`].
+    pub fn with_turn_ceiling(mut self, turn_ceiling: std::time::Duration) -> Self {
+        self.turn_ceiling = turn_ceiling;
+        self
+    }
+}
+
+/// Failure of a single submitted prompt.
+///
+/// The two liveness-abandonment modes are typed variants so callers can tell
+/// "the supervisor abandoned the turn (agent alive, single-task degradation)"
+/// apart from a genuine agent failure without parsing message text.
+#[derive(Debug, thiserror::Error)]
+pub enum PoolError {
+    /// The turn made no streaming progress for [`PoolConfig::idle_timeout`]
+    /// and was abandoned (its session was cancelled).
+    #[error("prompt turn made no streaming progress for {idle_timeout:?} and was abandoned")]
+    TurnIdle {
+        /// The idle-progress window that elapsed without a session update.
+        idle_timeout: std::time::Duration,
+    },
+    /// The turn exceeded [`PoolConfig::turn_ceiling`] of total wall clock and
+    /// was abandoned (its session was cancelled).
+    #[error("prompt turn exceeded the absolute ceiling of {turn_ceiling:?} and was abandoned")]
+    TurnCeiling {
+        /// The absolute wall-clock cap the turn exceeded.
+        turn_ceiling: std::time::Duration,
+    },
+    /// The `session/fork` extension call failed, so the turn's prompt never
+    /// ran. The submitter still holds the payload and can fall back to a
+    /// fresh-session monolithic prompt — a fork failure must never lose a task.
+    #[error("session fork from parent {parent_session_id} failed: {message}")]
+    ForkFailed {
+        /// The parent session the fork was requested from.
+        parent_session_id: String,
+        /// The failure the agent reported (or the transport surfaced).
+        message: String,
+    },
+    /// A quick session-extension request (`session/state_status` /
+    /// `session/pin`) failed. Typed — like [`PoolError::ForkFailed`] — so
+    /// callers can match on "the backend lacks this extension / the call
+    /// failed" without parsing message text.
+    #[error("{method} for session {session_id} failed: {message}")]
+    Extension {
+        /// The extension method that failed (a
+        /// [`agent_client_protocol_extras`] method-name constant).
+        method: &'static str,
+        /// The session the request targeted.
+        session_id: String,
+        /// The failure the agent reported (or the transport surfaced).
+        message: String,
+    },
+    /// The agent connection itself failed the turn.
+    #[error(transparent)]
+    Agent(#[from] claude_agent::AgentError),
 }
 
 /// Result of a single submitted prompt.
-pub type PromptResult = Result<claude_agent::CollectedResponse, claude_agent::AgentError>;
+pub type PromptResult = Result<claude_agent::CollectedResponse, PoolError>;
 
-/// A unit of work on the shared queue: a prompt plus the channel to deliver its
-/// result back to the submitter.
+/// A completed turn delivered with the session it ran on and, when the session
+/// was forked from a primed parent, what the fork attached.
+#[derive(Debug, Clone)]
+pub struct SessionTurn {
+    /// The id of the session the turn ran on (fresh or forked). A typed
+    /// [`SessionId`] so it cannot be silently swapped with prompt text at the
+    /// fork/pin call sites.
+    pub session_id: SessionId,
+    /// The collected streamed response text.
+    pub content: String,
+    /// The agent's reported stop reason.
+    pub stop_reason: agent_client_protocol::schema::StopReason,
+    /// `Some` when the turn ran on a forked session — what the fork attached.
+    pub fork: Option<ForkAttachment>,
+}
+
+/// What a `session/fork` actually attached, per the fork response — lets a
+/// caller tell a warm fork (parent state reused) from a degraded one (history
+/// cloned, cold prefill).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForkAttachment {
+    /// Whether the parent's saved generation state was attached to the fork.
+    pub state_attached: bool,
+    /// Number of prompt tokens the attached state covers (`None` when the
+    /// backend does not track token counts).
+    pub prefix_tokens: Option<u64>,
+}
+
+/// Result of a primed or forked submission: the full [`SessionTurn`].
+pub type SessionTurnResult = Result<SessionTurn, PoolError>;
+
+/// How a queued turn obtains its session.
+enum SessionSource {
+    /// Mint a fresh session via `session/new` (the default path).
+    New,
+    /// Fork from a primed parent via the `session/fork` extension.
+    Fork {
+        /// The session whose conversation and saved state seed the fork.
+        parent_session_id: SessionId,
+    },
+}
+
+/// The channel a job's result is delivered back on, shaped per submission API.
+enum Respond {
+    /// [`AgentPool::submit`]: deliver the collected response only.
+    Collected(oneshot::Sender<PromptResult>),
+    /// [`AgentPool::submit_primed`] / [`AgentPool::submit_forked`]: deliver the
+    /// full turn including its session id and fork attachment.
+    Turn(oneshot::Sender<SessionTurnResult>),
+}
+
+impl Respond {
+    /// Deliver one resolved turn on whichever channel shape the submitter
+    /// asked for. The submitter may have dropped its receiver; that is fine.
+    fn deliver(self, result: SessionTurnResult) {
+        match self {
+            Respond::Collected(tx) => {
+                let _ = tx.send(result.map(|turn| claude_agent::CollectedResponse {
+                    content: turn.content,
+                    stop_reason: turn.stop_reason,
+                }));
+            }
+            Respond::Turn(tx) => {
+                let _ = tx.send(result);
+            }
+        }
+    }
+}
+
+/// A unit of work on the shared queue: a prompt, the session source it runs
+/// on, and the channel to deliver its result back to the submitter.
 struct Job {
     prompt: String,
-    respond_to: oneshot::Sender<PromptResult>,
+    session: SessionSource,
+    respond_to: Respond,
 }
 
 /// Shared bounded pool of agent workers draining a single submission queue.
@@ -124,6 +291,10 @@ pub struct AgentPool {
     worker_count: usize,
     /// Per-call generation token cap attached to every prompt.
     max_tokens: u64,
+    /// The shared agent connection, kept for the quick session-extension
+    /// requests ([`AgentPool::session_state_status`], [`AgentPool::pin_session`])
+    /// that are not generation turns and so bypass the worker queue.
+    agent: ConnectionTo<Agent>,
 }
 
 impl AgentPool {
@@ -144,9 +315,8 @@ impl AgentPool {
             let rx = Arc::clone(&rx);
             let agent = agent.clone();
             let notifier = Arc::clone(&notifier);
-            let max_tokens = config.max_tokens;
             workers.push(tokio::spawn(async move {
-                worker_loop(rx, agent, notifier, max_tokens).await;
+                worker_loop(rx, agent, notifier, config).await;
             }));
         }
 
@@ -155,6 +325,7 @@ impl AgentPool {
             workers,
             worker_count,
             max_tokens: config.max_tokens,
+            agent,
         }
     }
 
@@ -167,21 +338,127 @@ impl AgentPool {
     /// the next free worker (pipelining).
     pub fn submit(&self, prompt: impl Into<String>) -> oneshot::Receiver<PromptResult> {
         let (respond_to, rx) = oneshot::channel();
-        let job = Job {
+        self.enqueue(Job {
             prompt: prompt.into(),
-            respond_to,
-        };
+            session: SessionSource::New,
+            respond_to: Respond::Collected(respond_to),
+        });
+        rx
+    }
+
+    /// Submit a prefix-priming prompt: a normal fresh-session turn whose
+    /// delivered [`SessionTurn`] reports the session id, so the caller can
+    /// confirm the saved state, pin it, and fork batch turns from it.
+    ///
+    /// Queueing, liveness supervision, and the token cap are identical to
+    /// [`AgentPool::submit`].
+    pub fn submit_primed(&self, prompt: impl Into<String>) -> oneshot::Receiver<SessionTurnResult> {
+        let (respond_to, rx) = oneshot::channel();
+        self.enqueue(Job {
+            prompt: prompt.into(),
+            session: SessionSource::New,
+            respond_to: Respond::Turn(respond_to),
+        });
+        rx
+    }
+
+    /// Submit a prompt that runs on a session forked from `parent_session_id`
+    /// (the `session/fork` extension), inheriting the parent's conversation
+    /// and — when the backend supports it — its saved generation state, so the
+    /// prompt decodes strictly forward from the parent's primed prefix.
+    ///
+    /// A failed fork resolves to the typed [`PoolError::ForkFailed`] without
+    /// running any prompt: the submitter still holds the payload and falls
+    /// back to a fresh-session monolithic prompt. A fork that succeeds but
+    /// attaches no parent state is reported via [`SessionTurn::fork`] (the
+    /// turn still ran, just cold).
+    ///
+    /// The parent is a typed [`SessionId`] — distinct from the stringly
+    /// `prompt` — so swapping the two arguments is a compile error rather
+    /// than a runtime `ForkFailed`.
+    pub fn submit_forked(
+        &self,
+        parent_session_id: &SessionId,
+        prompt: impl Into<String>,
+    ) -> oneshot::Receiver<SessionTurnResult> {
+        let (respond_to, rx) = oneshot::channel();
+        self.enqueue(Job {
+            prompt: prompt.into(),
+            session: SessionSource::Fork {
+                parent_session_id: parent_session_id.clone(),
+            },
+            respond_to: Respond::Turn(respond_to),
+        });
+        rx
+    }
+
+    /// Enqueue one job, delivering a shutdown error instead of hanging the
+    /// submitter's future when the pool's workers are all gone.
+    fn enqueue(&self, job: Job) {
         if let Err(returned) = self.tx.send(job) {
-            // The pool's workers are all gone; deliver an error rather than
-            // hanging the submitter's future forever.
-            let _ = returned
+            returned
                 .0
                 .respond_to
-                .send(Err(claude_agent::AgentError::Internal(
+                .deliver(Err(claude_agent::AgentError::Internal(
                     "agent pool is shut down".to_string(),
-                )));
+                )
+                .into()));
         }
-        rx
+    }
+
+    /// Query a session's saved-state status (`session/state_status`) over the
+    /// shared connection — a quick request, not a generation turn, so it
+    /// bypasses the worker queue. Failures are the typed
+    /// [`PoolError::Extension`].
+    pub async fn session_state_status(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<SessionStateStatusResponse, PoolError> {
+        send_extension_request(
+            &self.agent,
+            SESSION_STATE_STATUS_METHOD,
+            &SessionStateStatusRequest {
+                session_id: session_id.to_string(),
+            },
+        )
+        .await
+        .map_err(|message| PoolError::Extension {
+            method: SESSION_STATE_STATUS_METHOD,
+            session_id: session_id.to_string(),
+            message,
+        })
+    }
+
+    /// Pin or unpin a session's saved state (`session/pin`) over the shared
+    /// connection — a quick request, not a generation turn, so it bypasses the
+    /// worker queue. The response reports the *effective* pin state (a backend
+    /// without pinning reports `false`). Failures are the typed
+    /// [`PoolError::Extension`].
+    pub async fn pin_session(
+        &self,
+        session_id: &SessionId,
+        pinned: bool,
+    ) -> Result<SessionPinResponse, PoolError> {
+        send_pin(&self.agent, session_id, pinned).await
+    }
+
+    /// Pin `session_id`'s saved state for a scope: on success the returned
+    /// [`SessionPinGuard`] guarantees the eventual unpin — explicitly via
+    /// [`SessionPinGuard::release`], or from `Drop` when the owning future is
+    /// cancelled mid-flight — so a pinned prefix session can never outlive
+    /// the fan-out that pinned it.
+    pub async fn pin_session_scoped(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<(SessionPinResponse, SessionPinGuard), PoolError> {
+        let response = send_pin(&self.agent, session_id, true).await?;
+        Ok((
+            response,
+            SessionPinGuard {
+                agent: Some(self.agent.clone()),
+                session_id: session_id.clone(),
+            },
+        ))
     }
 
     /// Number of worker tasks draining the queue — the in-flight cap.
@@ -203,6 +480,71 @@ impl Drop for AgentPool {
     }
 }
 
+/// RAII guard for a pinned prefix session: it guarantees the pin is released,
+/// even when the owning future is dropped mid fan-out (review cancelled,
+/// caller timeout), so a pinned entry — exempt from cache eviction — can never
+/// outlive its scope. Created by [`AgentPool::pin_session_scoped`].
+///
+/// The normal path calls [`SessionPinGuard::release`] to unpin inline and
+/// observe the result; `Drop` is the cancellation backstop. `Drop` is
+/// synchronous and the unpin is an async request, so — mirroring llama-agent's
+/// `ActiveRequestGuard` — the drop path spawns the unpin onto the runtime.
+pub struct SessionPinGuard {
+    /// `Some` until the pin is released (explicitly or by `Drop`).
+    agent: Option<ConnectionTo<Agent>>,
+    session_id: SessionId,
+}
+
+impl SessionPinGuard {
+    /// The pinned session's id (the fork parent).
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
+    /// Release the pin now and report the result, disarming the `Drop` unpin.
+    pub async fn release(mut self) -> Result<SessionPinResponse, PoolError> {
+        let agent = self
+            .agent
+            .take()
+            .expect("pin guard releases exactly once by construction");
+        send_pin(&agent, &self.session_id, false).await
+    }
+}
+
+impl Drop for SessionPinGuard {
+    fn drop(&mut self) {
+        let Some(agent) = self.agent.take() else {
+            // Already released explicitly.
+            return;
+        };
+        let session_id = self.session_id.clone();
+        // The guard lives inside pool-driven async code, so a runtime handle
+        // is normally available; without one (a purely synchronous teardown)
+        // the leak is at least logged rather than silent.
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    match send_pin(&agent, &session_id, false).await {
+                        Ok(_) => tracing::debug!(
+                            session = %session_id,
+                            "released prefix session pin on guard drop"
+                        ),
+                        Err(err) => tracing::warn!(
+                            session = %session_id,
+                            error = %err,
+                            "failed to release prefix session pin on guard drop"
+                        ),
+                    }
+                });
+            }
+            Err(_) => tracing::warn!(
+                session = %session_id,
+                "prefix pin guard dropped outside a runtime; pin not released"
+            ),
+        }
+    }
+}
+
 /// Drain the shared queue until it closes, running each job's prompt against the
 /// agent connection and delivering the result back to the submitter.
 ///
@@ -214,7 +556,7 @@ async fn worker_loop(
     rx: Arc<Mutex<mpsc::UnboundedReceiver<Job>>>,
     agent: ConnectionTo<Agent>,
     notifier: Arc<claude_agent::NotificationSender>,
-    max_tokens: u64,
+    config: PoolConfig,
 ) {
     loop {
         let job = {
@@ -226,59 +568,176 @@ async fn worker_loop(
             break;
         };
 
-        let notifications = notifier.sender().subscribe();
-        // Backstop the turn with a generous timeout so a wedged prompt (e.g. a
-        // nested agent request the client failed to answer) degrades this one
-        // task to an error rather than hanging the whole review forever.
-        let result = match tokio::time::timeout(
-            PROMPT_TURN_TIMEOUT,
-            run_prompt(&agent, notifications, job.prompt, max_tokens),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_elapsed) => Err(claude_agent::AgentError::Internal(format!(
-                "prompt turn exceeded {}s and was abandoned",
-                PROMPT_TURN_TIMEOUT.as_secs()
-            ))),
-        };
+        let result =
+            run_turn_with_liveness(&agent, &notifier, job.session, job.prompt, config).await;
         // The submitter may have dropped its receiver; that is fine.
-        let _ = job.respond_to.send(result);
+        job.respond_to.deliver(result);
+    }
+}
+
+/// Supervise one prompt turn with progress-aware liveness.
+///
+/// The turn (`run_prompt`) races against two abandonment conditions instead of
+/// a single wall-clock cap:
+///
+/// - **idle**: no `session/update` notification for the turn's session within
+///   `config.idle_timeout`. Every received update for the session resets the
+///   window, so a slow-but-streaming turn (the local-35B case) is never
+///   abandoned regardless of total duration.
+/// - **ceiling**: `config.turn_ceiling` of total wall clock, the defensive cap
+///   on a turn that streams forever without completing.
+///
+/// On abandonment the in-flight session is actively cancelled (ACP
+/// `session/cancel`) so the agent stops decoding, rather than being detached to
+/// keep generating into a dropped receiver. The session id is learned from
+/// `run_prompt` through a shared slot once `new_session` completes; if the turn
+/// wedged before that there is no session to cancel.
+async fn run_turn_with_liveness(
+    agent: &ConnectionTo<Agent>,
+    notifier: &claude_agent::NotificationSender,
+    session: SessionSource,
+    prompt: String,
+    config: PoolConfig,
+) -> SessionTurnResult {
+    let session_slot: Arc<std::sync::Mutex<Option<SessionId>>> = Arc::default();
+    // Two independent subscriptions: one consumed by `run_prompt`'s content
+    // collector, one watched here for liveness.
+    let mut liveness = notifier.sender().subscribe();
+    let notifications = notifier.sender().subscribe();
+
+    let turn = run_prompt(
+        agent,
+        notifications,
+        session,
+        prompt,
+        config.max_tokens,
+        Arc::clone(&session_slot),
+    );
+    tokio::pin!(turn);
+
+    let started = tokio::time::Instant::now();
+    let ceiling_deadline = started + config.turn_ceiling;
+    let mut last_progress = started;
+    let mut liveness_open = true;
+
+    loop {
+        let abandon_at = (last_progress + config.idle_timeout).min(ceiling_deadline);
+        tokio::select! {
+            result = &mut turn => return result,
+            received = liveness.recv(), if liveness_open => {
+                note_progress(received, &session_slot, &mut last_progress, &mut liveness_open);
+            }
+            _ = tokio::time::sleep_until(abandon_at) => {
+                return Err(abandon_turn(agent, &session_slot, ceiling_deadline, config));
+            }
+        }
+    }
+}
+
+/// Fold one liveness-subscription poll into the supervisor's progress state.
+///
+/// Encapsulates the progress policy:
+/// - a notification for **our** session is progress (updates `last_progress`);
+///   other sessions' traffic is not.
+/// - a `Lagged` receiver counts as progress: the dropped messages may have
+///   included ours, and abandonment is a backstop for a *wedged* turn — a
+///   wedged turn produces no traffic to lag behind.
+/// - a `Closed` channel means no further progress can ever be observed; close
+///   the liveness arm (`liveness_open = false`) and let the turn race the
+///   remaining deadlines.
+fn note_progress(
+    received: Result<SessionNotification, broadcast::error::RecvError>,
+    session_slot: &std::sync::Mutex<Option<SessionId>>,
+    last_progress: &mut tokio::time::Instant,
+    liveness_open: &mut bool,
+) {
+    match received {
+        Ok(notification) => {
+            let is_ours = session_slot
+                .lock()
+                .expect("session slot lock poisoned")
+                .as_ref()
+                .is_some_and(|sid| notification.session_id == *sid);
+            if is_ours {
+                *last_progress = tokio::time::Instant::now();
+            }
+        }
+        Err(broadcast::error::RecvError::Lagged(_)) => {
+            *last_progress = tokio::time::Instant::now();
+        }
+        Err(broadcast::error::RecvError::Closed) => {
+            *liveness_open = false;
+        }
+    }
+}
+
+/// Abandon the in-flight turn: actively cancel its session (ACP
+/// `session/cancel`) so the agent stops decoding, and pick the typed
+/// abandonment reason — [`PoolError::TurnCeiling`] when the absolute ceiling
+/// has passed, [`PoolError::TurnIdle`] otherwise. If the turn wedged before
+/// `new_session` completed there is no session to cancel.
+fn abandon_turn(
+    agent: &ConnectionTo<Agent>,
+    session_slot: &std::sync::Mutex<Option<SessionId>>,
+    ceiling_deadline: tokio::time::Instant,
+    config: PoolConfig,
+) -> PoolError {
+    let session = session_slot
+        .lock()
+        .expect("session slot lock poisoned")
+        .clone();
+    if let Some(session_id) = session {
+        if let Err(e) = agent.send_notification(CancelNotification::new(session_id)) {
+            tracing::warn!("failed to cancel abandoned session: {}", e);
+        }
+    }
+    if tokio::time::Instant::now() >= ceiling_deadline {
+        PoolError::TurnCeiling {
+            turn_ceiling: config.turn_ceiling,
+        }
+    } else {
+        PoolError::TurnIdle {
+            idle_timeout: config.idle_timeout,
+        }
     }
 }
 
 /// Drive a single prompt turn against an ACP 0.12 agent connection.
 ///
-/// Routes the two per-prompt ACP requests (`new_session` → `prompt`) through the
-/// typed [`ConnectionTo<Agent>`] handle, spawning a per-session notification
-/// collector so streaming `session/update` content is captured concurrently with
-/// the prompt. The per-call token cap is attached to the prompt request's `meta`
-/// map under the key `"max_tokens"`.
+/// Routes the per-prompt ACP requests (session establishment → `prompt`)
+/// through the typed [`ConnectionTo<Agent>`] handle, spawning a per-session
+/// notification collector so streaming `session/update` content is captured
+/// concurrently with the prompt. The session is established per the job's
+/// [`SessionSource`]: a fresh `session/new`, or a `session/fork` from a primed
+/// parent (see [`establish_session`]). The per-call token cap is attached to
+/// the prompt request's `meta` map under [`MAX_TOKENS_META_KEY`].
 ///
 /// `initialize` is deliberately NOT here: it is a once-per-connection handshake
 /// the driver performs before any worker runs (see
 /// `review::drive::run_pipeline_in_connection`). Issuing it per prompt raced N
 /// concurrent handshakes over the single shared connection and wedged the real
 /// agent.
+///
+/// `session_slot` is filled with the session's id as soon as it is established,
+/// giving the liveness supervisor a handle for progress attribution and
+/// cancel-on-abandonment.
 async fn run_prompt(
     agent: &ConnectionTo<Agent>,
     notifications: broadcast::Receiver<SessionNotification>,
+    session: SessionSource,
     prompt: String,
     max_tokens: u64,
-) -> PromptResult {
-    // new_session
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-    let session_response = agent
-        .send_request(NewSessionRequest::new(cwd))
-        .block_task()
-        .await
-        .map_err(|e| {
-            claude_agent::AgentError::Internal(format!("Failed to create session: {}", e))
-        })?;
-    let session_id = session_response.session_id;
-    // Captured for the per-reply audit log below: `session_id` is moved into the
-    // `PromptRequest` before the response is collected.
-    let session_label = session_id.to_string();
+    session_slot: Arc<std::sync::Mutex<Option<SessionId>>>,
+) -> SessionTurnResult {
+    let (session_id, fork) = establish_session(agent, session).await?;
+    // Publish the session id to the liveness supervisor
+    // (`run_turn_with_liveness`) so it can attribute streaming progress to this
+    // turn and cancel the session if the turn is abandoned.
+    *session_slot.lock().expect("session slot lock poisoned") = Some(session_id.clone());
+    // Captured for the per-reply audit log and the delivered turn below:
+    // `session_id` is moved into the `PromptRequest` before the response is
+    // collected.
+    let session_label = session_id.clone();
 
     // 3. spawn notification collector before prompt() so streaming content is
     //    captured as it arrives.
@@ -287,7 +746,10 @@ async fn run_prompt(
 
     // 4. prompt, with the per-call token cap attached via `meta`.
     let mut meta = serde_json::Map::new();
-    meta.insert("max_tokens".to_string(), serde_json::json!(max_tokens));
+    meta.insert(
+        MAX_TOKENS_META_KEY.to_string(),
+        serde_json::json!(max_tokens),
+    );
     let prompt_request = PromptRequest::new(
         session_id,
         vec![ContentBlock::Text(TextContent::new(prompt))],
@@ -298,7 +760,7 @@ async fn run_prompt(
         .block_task()
         .await
         .map_err(|e| {
-            claude_agent::AgentError::Internal(format!("Failed to execute prompt: {}", e))
+            claude_agent::AgentError::Internal(format!("failed to execute prompt: {}", e))
         })?;
 
     // 5. drain trailing notifications and assemble the collected response.
@@ -324,10 +786,113 @@ async fn run_prompt(
         content
     );
 
-    Ok(claude_agent::CollectedResponse {
+    Ok(SessionTurn {
+        session_id: session_label,
         content,
         stop_reason: prompt_response.stop_reason,
+        fork,
     })
+}
+
+/// Establish the session a turn runs on, per its [`SessionSource`].
+///
+/// - [`SessionSource::New`] issues `session/new` (today's path).
+/// - [`SessionSource::Fork`] issues the `session/fork` extension against the
+///   parent; the returned [`ForkAttachment`] reports whether the parent's
+///   saved state was attached (and how many prefix tokens it covers) so the
+///   caller can log warm vs degraded forks. Any fork failure maps onto the
+///   typed [`PoolError::ForkFailed`] so the submitter can fall back to a
+///   fresh-session monolithic prompt rather than lose the task.
+async fn establish_session(
+    agent: &ConnectionTo<Agent>,
+    session: SessionSource,
+) -> Result<(SessionId, Option<ForkAttachment>), PoolError> {
+    match session {
+        SessionSource::New => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+            let session_response = agent
+                .send_request(NewSessionRequest::new(cwd))
+                .block_task()
+                .await
+                .map_err(|e| {
+                    claude_agent::AgentError::Internal(format!("failed to create session: {}", e))
+                })?;
+            Ok((session_response.session_id, None))
+        }
+        SessionSource::Fork { parent_session_id } => {
+            let response: SessionForkResponse = send_extension_request(
+                agent,
+                SESSION_FORK_METHOD,
+                &SessionForkRequest {
+                    parent_session_id: parent_session_id.to_string(),
+                },
+            )
+            .await
+            .map_err(|message| PoolError::ForkFailed {
+                parent_session_id: parent_session_id.to_string(),
+                message,
+            })?;
+            let attachment = ForkAttachment {
+                state_attached: response.state_attached,
+                prefix_tokens: response.prefix_tokens,
+            };
+            Ok((SessionId::new(response.session_id), Some(attachment)))
+        }
+    }
+}
+
+/// Pin or unpin `session_id`'s saved state over `agent`, mapping failures onto
+/// the typed [`PoolError::Extension`]. Shared by [`AgentPool::pin_session`]
+/// and the pin guard's release paths.
+async fn send_pin(
+    agent: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    pinned: bool,
+) -> Result<SessionPinResponse, PoolError> {
+    send_extension_request(
+        agent,
+        SESSION_PIN_METHOD,
+        &SessionPinRequest {
+            session_id: session_id.to_string(),
+            pinned,
+        },
+    )
+    .await
+    .map_err(|message| PoolError::Extension {
+        method: SESSION_PIN_METHOD,
+        session_id: session_id.to_string(),
+        message,
+    })
+}
+
+/// Send one session-extension request (`session/fork` / `session/state_status`
+/// / `session/pin`) over the connection and parse its typed response.
+///
+/// The wire method is the canonical bare name prefixed with `_`, which is how
+/// the ACP SDK routes extension methods (`ClientRequest::parse_message` only
+/// dispatches `_`-prefixed methods to `ExtMethodRequest`; the receiver strips
+/// the prefix back off). Failures are returned as the human-readable message
+/// so each caller can wrap them in its own typed error.
+async fn send_extension_request<Request, Response>(
+    agent: &ConnectionTo<Agent>,
+    method: &str,
+    request: &Request,
+) -> Result<Response, String>
+where
+    Request: serde::Serialize,
+    Response: serde::de::DeserializeOwned,
+{
+    let params = serde_json::value::to_raw_value(request)
+        .map_err(|e| format!("failed to serialize {method} params: {e}"))?;
+    let value: serde_json::Value = agent
+        .send_request(ClientRequest::ExtMethodRequest(ExtRequest::new(
+            format!("_{method}"),
+            Arc::from(params),
+        )))
+        .block_task()
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::from_value(value).map_err(|e| format!("malformed {method} response: {e}"))
 }
 
 #[cfg(test)]
@@ -336,191 +901,26 @@ mod tests {
 
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use crate::review::test_support::{
+        new_notifier, with_pool, ForkMode, ScriptedAgent, ScriptedAgentConfig, MOCK_PREFIX_TOKENS,
+    };
+
+    use acp_conformance::test_utils::{numbered_session_response, MockAgent, MockAgentAdapter};
     use agent_client_protocol::schema::{
-        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
-        ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest,
-        LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
-        SessionNotification, SetSessionModeRequest, SetSessionModeResponse,
+        ContentChunk, NewSessionResponse, PromptResponse, SessionUpdate,
     };
     use agent_client_protocol::{Channel, Client, ConnectTo};
     use agent_client_protocol_extras::PlaybackAgent;
     use futures::future::BoxFuture;
     use tempfile::TempDir;
 
-    // ------------------------------------------------------------------
-    // Mock-agent harness (same shape as the retired runner's harness:
-    // MockAgent trait + adapter + in-process client wiring).
-    // ------------------------------------------------------------------
-
-    /// Trait the test mock agents implement so a single [`MockAgentAdapter`] can
-    /// route incoming `ClientRequest` variants onto the right handler.
-    trait MockAgent: Send + Sync {
-        fn initialize<'a>(
-            &'a self,
-            _request: InitializeRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<InitializeResponse>> {
-            Box::pin(async move { Ok(InitializeResponse::new(1.into())) })
-        }
-
-        fn authenticate<'a>(
-            &'a self,
-            _request: AuthenticateRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<AuthenticateResponse>> {
-            Box::pin(async move { Ok(AuthenticateResponse::new()) })
-        }
-
-        fn new_session<'a>(
-            &'a self,
-            _request: NewSessionRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
-            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
-        }
-
-        fn load_session<'a>(
-            &'a self,
-            _request: LoadSessionRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<LoadSessionResponse>> {
-            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
-        }
-
-        fn set_session_mode<'a>(
-            &'a self,
-            _request: SetSessionModeRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<SetSessionModeResponse>> {
-            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
-        }
-
-        fn prompt<'a>(
-            &'a self,
-            _request: PromptRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
-            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
-        }
-
-        fn cancel<'a>(
-            &'a self,
-            _notification: CancelNotification,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<()>> {
-            Box::pin(async move { Ok(()) })
-        }
-
-        fn ext_method<'a>(
-            &'a self,
-            _request: ExtRequest,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<ExtResponse>> {
-            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
-        }
-
-        fn ext_notification<'a>(
-            &'a self,
-            _notification: ExtNotification,
-        ) -> BoxFuture<'a, agent_client_protocol::Result<()>> {
-            Box::pin(async move { Ok(()) })
-        }
-    }
-
-    /// `ConnectTo<Client>` adapter that drives a [`MockAgent`] as an ACP server.
-    struct MockAgentAdapter<M: MockAgent + 'static>(Arc<M>);
-
-    impl<M: MockAgent + 'static> ConnectTo<Client> for MockAgentAdapter<M> {
-        async fn connect_to(
-            self,
-            client: impl ConnectTo<<Client as agent_client_protocol::Role>::Counterpart>,
-        ) -> agent_client_protocol::Result<()> {
-            let mock = Arc::clone(&self.0);
-            let mock_for_notifications = Arc::clone(&self.0);
-
-            agent_client_protocol::Agent
-                .builder()
-                .name("mock-agent")
-                .on_receive_request(
-                    {
-                        let mock = Arc::clone(&mock);
-                        async move |req: agent_client_protocol::ClientRequest, responder, cx| {
-                            dispatch_mock_request(&mock, req, responder, &cx)
-                        }
-                    },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .on_receive_notification(
-                    async move |notif: agent_client_protocol::ClientNotification, _cx| {
-                        dispatch_mock_notification(&mock_for_notifications, notif).await;
-                        Ok(())
-                    },
-                    agent_client_protocol::on_receive_notification!(),
-                )
-                .connect_to(client)
-                .await
-        }
-    }
-
-    /// Demultiplex an incoming `ClientRequest` onto the mock's per-method
-    /// handlers. Each dispatch is offloaded to `cx.spawn` so the SDK event loop
-    /// keeps dispatching new requests while a slow handler is awaiting — without
-    /// the spawn, two concurrent prompts on one connection would serialise.
-    fn dispatch_mock_request<M: MockAgent + 'static>(
-        mock: &Arc<M>,
-        request: agent_client_protocol::ClientRequest,
-        responder: agent_client_protocol::Responder<serde_json::Value>,
-        cx: &ConnectionTo<Client>,
-    ) -> agent_client_protocol::Result<()> {
-        use agent_client_protocol::ClientRequest as Req;
-
-        let mock = Arc::clone(mock);
-        cx.spawn(async move {
-            match request {
-                Req::InitializeRequest(req) => responder
-                    .cast()
-                    .respond_with_result(mock.initialize(req).await),
-                Req::AuthenticateRequest(req) => responder
-                    .cast()
-                    .respond_with_result(mock.authenticate(req).await),
-                Req::NewSessionRequest(req) => responder
-                    .cast()
-                    .respond_with_result(mock.new_session(req).await),
-                Req::LoadSessionRequest(req) => responder
-                    .cast()
-                    .respond_with_result(mock.load_session(req).await),
-                Req::SetSessionModeRequest(req) => responder
-                    .cast()
-                    .respond_with_result(mock.set_session_mode(req).await),
-                Req::PromptRequest(req) => {
-                    responder.cast().respond_with_result(mock.prompt(req).await)
-                }
-                Req::ExtMethodRequest(req) => {
-                    let result = mock.ext_method(req).await.and_then(|ext_response| {
-                        serde_json::from_str::<serde_json::Value>(ext_response.0.get())
-                            .map_err(|_| agent_client_protocol::Error::internal_error())
-                    });
-                    responder.respond_with_result(result)
-                }
-                _ => responder
-                    .cast::<serde_json::Value>()
-                    .respond_with_error(agent_client_protocol::Error::method_not_found()),
-            }
-        })
-    }
-
-    /// Demultiplex an incoming `ClientNotification` onto the mock.
-    async fn dispatch_mock_notification<M: MockAgent + ?Sized>(
-        mock: &Arc<M>,
-        notification: agent_client_protocol::ClientNotification,
-    ) {
-        use agent_client_protocol::ClientNotification as Notif;
-
-        match notification {
-            Notif::CancelNotification(n) => {
-                let _ = mock.cancel(n).await;
-            }
-            Notif::ExtNotification(n) => {
-                let _ = mock.ext_notification(n).await;
-            }
-            _ => {}
-        }
-    }
-
     /// Wire a [`MockAgent`] up to a fresh `Client` and run `body` against the
     /// resulting `ConnectionTo<Agent>` handle.
+    ///
+    /// Pool-specific variant of `acp_conformance::test_utils::run_with_mock_agent`:
+    /// the client side additionally forwards incoming `session/update`
+    /// notifications into `notifier` (see [`run_client_against`]), which is the
+    /// seam the pool's streaming collector and liveness supervisor subscribe to.
     async fn run_with_mock_agent<M, F, Fut, R>(
         mock: Arc<M>,
         notifier: Arc<claude_agent::NotificationSender>,
@@ -600,9 +1000,28 @@ mod tests {
             .expect("client connect_with failed")
     }
 
-    fn new_notifier() -> Arc<claude_agent::NotificationSender> {
-        let (notifier, _) = claude_agent::NotificationSender::new(64);
-        Arc::new(notifier)
+    /// Spawn a task that emits an `agent_message_chunk` notification for
+    /// `session_id` every `every_ms` ms — the shape of a slow turn that is
+    /// actively streaming tokens. Abort the returned handle to stop it.
+    fn spawn_progress_feeder(
+        notifier: Arc<claude_agent::NotificationSender>,
+        session_id: &str,
+        every_ms: u64,
+    ) -> tokio::task::JoinHandle<()> {
+        let session_id = session_id.to_string();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(every_ms)).await;
+                let _ = notifier
+                    .send_update(SessionNotification::new(
+                        agent_client_protocol::schema::SessionId::new(session_id.clone()),
+                        SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                            TextContent::new("chunk"),
+                        ))),
+                    ))
+                    .await;
+            }
+        })
     }
 
     // ------------------------------------------------------------------
@@ -627,12 +1046,7 @@ mod tests {
             &'a self,
             _request: NewSessionRequest,
         ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
-            let n = self.next_session.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                Ok(NewSessionResponse::new(
-                    agent_client_protocol::schema::SessionId::new(format!("pass-sess-{}", n)),
-                ))
-            })
+            numbered_session_response(&self.next_session, "pass-sess")
         }
 
         fn prompt<'a>(
@@ -677,12 +1091,7 @@ mod tests {
             &'a self,
             _request: NewSessionRequest,
         ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
-            let n = self.next_session.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                Ok(NewSessionResponse::new(
-                    agent_client_protocol::schema::SessionId::new(format!("peak-sess-{}", n)),
-                ))
-            })
+            numbered_session_response(&self.next_session, "peak-sess")
         }
 
         fn prompt<'a>(
@@ -723,12 +1132,7 @@ mod tests {
             &'a self,
             _request: NewSessionRequest,
         ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
-            let n = self.next_session.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                Ok(NewSessionResponse::new(
-                    agent_client_protocol::schema::SessionId::new(format!("err-sess-{}", n)),
-                ))
-            })
+            numbered_session_response(&self.next_session, "err-sess")
         }
 
         fn prompt<'a>(
@@ -781,12 +1185,7 @@ mod tests {
             &'a self,
             _request: NewSessionRequest,
         ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
-            let n = self.next_session.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                Ok(NewSessionResponse::new(
-                    agent_client_protocol::schema::SessionId::new(format!("meta-sess-{}", n)),
-                ))
-            })
+            numbered_session_response(&self.next_session, "meta-sess")
         }
 
         fn prompt<'a>(
@@ -796,7 +1195,7 @@ mod tests {
             let max_tokens = request
                 .meta
                 .as_ref()
-                .and_then(|m| m.get("max_tokens"))
+                .and_then(|m| m.get(MAX_TOKENS_META_KEY))
                 .and_then(|v| v.as_u64());
             self.recorded_max_tokens.lock().unwrap().push(max_tokens);
             Box::pin(async move {
@@ -804,6 +1203,70 @@ mod tests {
                     agent_client_protocol::schema::StopReason::EndTurn,
                 ))
             })
+        }
+    }
+
+    /// Stalls (sleeps far longer than any test window) on the first
+    /// `stall_count` prompts and passes afterwards. Records every
+    /// `session/cancel` notification it receives, so tests can prove an
+    /// abandoned turn was actively cancelled rather than detached.
+    struct StallingAgent {
+        next_session: AtomicUsize,
+        remaining_stalls: AtomicUsize,
+        cancelled_sessions: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl StallingAgent {
+        fn new(stall_count: usize) -> Self {
+            Self {
+                next_session: AtomicUsize::new(0),
+                remaining_stalls: AtomicUsize::new(stall_count),
+                cancelled_sessions: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn cancelled(&self) -> Vec<String> {
+            self.cancelled_sessions.lock().unwrap().clone()
+        }
+    }
+
+    impl MockAgent for StallingAgent {
+        fn new_session<'a>(
+            &'a self,
+            _request: NewSessionRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+            numbered_session_response(&self.next_session, "stall-sess")
+        }
+
+        fn prompt<'a>(
+            &'a self,
+            _request: PromptRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
+            let should_stall = self
+                .remaining_stalls
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_ok();
+            Box::pin(async move {
+                if should_stall {
+                    // Far longer than any test's liveness windows; the client
+                    // abandons the turn long before this resolves.
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                }
+                Ok(PromptResponse::new(
+                    agent_client_protocol::schema::StopReason::EndTurn,
+                ))
+            })
+        }
+
+        fn cancel<'a>(
+            &'a self,
+            notification: CancelNotification,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<()>> {
+            self.cancelled_sessions
+                .lock()
+                .unwrap()
+                .push(notification.session_id.to_string());
+            Box::pin(async move { Ok(()) })
         }
     }
 
@@ -1021,6 +1484,140 @@ mod tests {
         .await;
     }
 
+    /// A turn that streams a notification at least every idle-window interval
+    /// is never abandoned, regardless of total duration — the local-35B case:
+    /// slow, but demonstrably alive.
+    #[tokio::test]
+    async fn test_pool_streaming_turn_survives_beyond_idle_window() {
+        // The prompt takes 4x the idle window of total wall clock.
+        let agent = Arc::new(PeakProbeAgent::new(2000));
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+        let notifier_feeder = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let config = PoolConfig::local()
+                .with_idle_timeout(std::time::Duration::from_millis(500))
+                .with_turn_ceiling(std::time::Duration::from_secs(30));
+            let pool = AgentPool::new(conn, notifier_body, config);
+
+            let feeder = spawn_progress_feeder(notifier_feeder, "peak-sess-0", 100);
+            let result = pool.submit("slow but streaming").await.expect("result");
+            feeder.abort();
+
+            assert!(
+                result.is_ok(),
+                "a turn streaming progress every 100ms must never be abandoned even though \
+                 its 2s total exceeds the 500ms idle window: {:?}",
+                result.err(),
+            );
+        })
+        .await;
+    }
+
+    /// A turn with zero streaming progress for the idle window is abandoned and
+    /// degrades to a single-task error; the worker survives to run later jobs
+    /// (the fleet continues).
+    #[tokio::test]
+    async fn test_pool_stalled_turn_abandons_after_idle_window() {
+        let agent = Arc::new(StallingAgent::new(1));
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            // The idle window must exceed claude_agent's fixed 500ms trailing
+            // notification drain (`NOTIFICATION_COLLECTION_DELAY_MS`), or even
+            // an instantly-completing turn would look stalled.
+            let config = PoolConfig::local()
+                .with_idle_timeout(std::time::Duration::from_millis(800))
+                .with_turn_ceiling(std::time::Duration::from_secs(30));
+            let pool = AgentPool::new(conn, notifier_body, config);
+
+            let err = pool
+                .submit("stalled")
+                .await
+                .expect("worker must deliver a result, not hang")
+                .expect_err("a turn with zero progress for the idle window must be abandoned");
+            assert!(
+                matches!(err, PoolError::TurnIdle { .. }),
+                "abandonment must be the typed idle-window variant, got: {err:?}",
+            );
+
+            // The worker must survive the abandonment and run the next job.
+            pool.submit("after abandonment")
+                .await
+                .expect("result")
+                .expect("the fleet must continue after a single-task abandonment");
+        })
+        .await;
+    }
+
+    /// Abandoning a turn actively cancels the in-flight session (ACP
+    /// `session/cancel`) so the agent stops decoding, rather than detaching it.
+    #[tokio::test]
+    async fn test_pool_abandoned_turn_cancels_session() {
+        let agent = Arc::new(StallingAgent::new(1));
+        let agent_probe = Arc::clone(&agent);
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let config = PoolConfig::local()
+                .with_idle_timeout(std::time::Duration::from_millis(800))
+                .with_turn_ceiling(std::time::Duration::from_secs(30));
+            let pool = AgentPool::new(conn, notifier_body, config);
+
+            let result = pool.submit("stalled").await.expect("result");
+            assert!(result.is_err(), "the stalled turn must be abandoned");
+
+            // The cancel is a one-way notification; allow it a moment to land.
+            let mut cancelled = agent_probe.cancelled();
+            for _ in 0..200 {
+                if !cancelled.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                cancelled = agent_probe.cancelled();
+            }
+            assert_eq!(
+                cancelled,
+                vec!["stall-sess-0".to_string()],
+                "abandonment must send session/cancel for the in-flight session",
+            );
+        })
+        .await;
+    }
+
+    /// The defensive absolute ceiling still fires on a turn that streams
+    /// forever without completing (a runaway loop) — progress does not bypass
+    /// the ceiling.
+    #[tokio::test]
+    async fn test_pool_turn_ceiling_abandons_streaming_runaway() {
+        let agent = Arc::new(PeakProbeAgent::new(5000));
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+        let notifier_feeder = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let config = PoolConfig::local()
+                .with_idle_timeout(std::time::Duration::from_secs(10))
+                .with_turn_ceiling(std::time::Duration::from_millis(400));
+            let pool = AgentPool::new(conn, notifier_body, config);
+
+            let feeder = spawn_progress_feeder(notifier_feeder, "peak-sess-0", 50);
+            let result = pool.submit("runaway").await.expect("result");
+            feeder.abort();
+
+            let err =
+                result.expect_err("the ceiling must abandon a never-finishing streaming turn");
+            assert!(
+                matches!(err, PoolError::TurnCeiling { .. }),
+                "abandonment must be the typed ceiling variant, got: {err:?}",
+            );
+        })
+        .await;
+    }
+
     /// The per-call token cap is attached to every submitted prompt's `meta`.
     #[tokio::test]
     async fn test_pool_attaches_max_tokens_cap() {
@@ -1041,6 +1638,220 @@ mod tests {
                 recorded[0],
                 Some(DEFAULT_MAX_TOKENS),
                 "every prompt must carry the per-call max_tokens cap in meta",
+            );
+        })
+        .await;
+    }
+
+    /// A fork-capable shared scripted agent (`crate::review::test_support`) —
+    /// the same mock the fleet tests run, so the pool and the fleet exercise
+    /// one implementation of the session-fork wire contract.
+    fn fork_capable_agent() -> Arc<ScriptedAgent> {
+        ScriptedAgent::with_config(
+            vec![],
+            ScriptedAgentConfig {
+                fork_mode: ForkMode::Supported,
+                ..ScriptedAgentConfig::default()
+            },
+        )
+    }
+
+    /// `submit_primed` runs a normal fresh-session turn but reports the session
+    /// id back, so the caller can confirm/pin and fork from it.
+    #[tokio::test]
+    async fn test_pool_submit_primed_reports_session_id() {
+        let agent = Arc::new(PassingAgent::new());
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let pool = AgentPool::new(conn, notifier_body, PoolConfig::local());
+            let turn = pool
+                .submit_primed("the shared prefix")
+                .await
+                .expect("result")
+                .expect("prime turn should succeed");
+            assert_eq!(turn.session_id, SessionId::new("pass-sess-0"));
+            assert!(turn.fork.is_none(), "a primed turn is not a fork");
+        })
+        .await;
+    }
+
+    /// `submit_forked` forks the parent via the `session/fork` extension, runs
+    /// the prompt on the child session, and reports what the fork attached.
+    #[tokio::test]
+    async fn test_pool_submit_forked_prompts_the_forked_session() {
+        let agent = fork_capable_agent();
+        let agent_probe = Arc::clone(&agent);
+
+        with_pool(agent, PoolConfig::local(), move |pool| async move {
+            // Prime a parent session whose completed turn the fork attaches.
+            let parent = pool
+                .submit_primed("the shared prefix")
+                .await
+                .expect("result")
+                .expect("prime turn should succeed");
+            let turn = pool
+                .submit_forked(&parent.session_id, "payload only")
+                .await
+                .expect("result")
+                .expect("forked turn should succeed");
+            assert_eq!(
+                turn.session_id,
+                SessionId::new("sess-1"),
+                "the fork minted a child session"
+            );
+            assert_eq!(
+                turn.fork,
+                Some(ForkAttachment {
+                    state_attached: true,
+                    prefix_tokens: Some(MOCK_PREFIX_TOKENS),
+                }),
+                "a forked turn reports its full attachment"
+            );
+            assert_eq!(
+                agent_probe.prompted_sessions(),
+                vec!["sess-0".to_string(), "sess-1".to_string()],
+                "the payload prompt must run on the forked session, not a fresh one"
+            );
+        })
+        .await;
+    }
+
+    /// A backend without the fork extension fails a forked submission with the
+    /// typed `ForkFailed` error, so the caller can fall back to a monolithic
+    /// fresh-session prompt instead of losing the task.
+    #[tokio::test]
+    async fn test_pool_submit_forked_without_ext_support_is_fork_failed() {
+        // PassingAgent inherits MockAgent's default ext_method: method_not_found.
+        let agent = Arc::new(PassingAgent::new());
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let pool = AgentPool::new(conn, notifier_body, PoolConfig::local());
+            let err = pool
+                .submit_forked(&SessionId::new("parent-1"), "payload")
+                .await
+                .expect("result")
+                .expect_err("a fork against a fork-less backend must fail");
+            assert!(
+                matches!(err, PoolError::ForkFailed { .. }),
+                "the failure must be the typed fork variant, got: {err:?}"
+            );
+        })
+        .await;
+    }
+
+    /// The pool's direct extension helpers round-trip `session/state_status`
+    /// and `session/pin` over the shared connection (no worker involved).
+    #[tokio::test]
+    async fn test_pool_state_status_and_pin_helpers_round_trip() {
+        let agent = fork_capable_agent();
+        let agent_probe = Arc::clone(&agent);
+
+        with_pool(agent, PoolConfig::local(), move |pool| async move {
+            // A completed turn gives the session saved, pinnable state.
+            let turn = pool
+                .submit_primed("the shared prefix")
+                .await
+                .expect("result")
+                .expect("prime turn should succeed");
+
+            let status = pool
+                .session_state_status(&turn.session_id)
+                .await
+                .expect("state status should round-trip");
+            assert!(status.saved);
+            assert_eq!(status.prompt_tokens, Some(MOCK_PREFIX_TOKENS));
+
+            let pin = pool
+                .pin_session(&turn.session_id, true)
+                .await
+                .expect("pin should round-trip");
+            assert!(pin.pinned);
+            assert_eq!(
+                agent_probe.pin_calls(),
+                vec![(turn.session_id.to_string(), true)]
+            );
+        })
+        .await;
+    }
+
+    /// The quick extension helpers fail with the typed [`PoolError::Extension`]
+    /// variant — like the fork path's `ForkFailed` — so callers can tell "the
+    /// backend lacks this extension" apart without parsing message text.
+    #[tokio::test]
+    async fn test_pool_extension_helper_failure_is_typed() {
+        // The default shared agent implements NO extension methods.
+        let agent = ScriptedAgent::new(vec![]);
+
+        with_pool(agent, PoolConfig::local(), move |pool| async move {
+            let session = SessionId::new("sess-0");
+            let err = pool
+                .session_state_status(&session)
+                .await
+                .expect_err("a backend without the extension must fail the status call");
+            assert!(
+                matches!(
+                    err,
+                    PoolError::Extension {
+                        method: SESSION_STATE_STATUS_METHOD,
+                        ..
+                    }
+                ),
+                "the failure must be the typed extension variant, got: {err:?}"
+            );
+
+            let err = pool
+                .pin_session(&session, true)
+                .await
+                .expect_err("a backend without the extension must fail the pin call");
+            assert!(
+                matches!(
+                    err,
+                    PoolError::Extension {
+                        method: SESSION_PIN_METHOD,
+                        ..
+                    }
+                ),
+                "the failure must be the typed extension variant, got: {err:?}"
+            );
+        })
+        .await;
+    }
+
+    /// `pin_session_scoped` returns a guard whose explicit `release()` unpins
+    /// inline AND disarms the `Drop` backstop: exactly one unpin is issued.
+    #[tokio::test]
+    async fn test_pool_pin_guard_release_unpins_exactly_once() {
+        let agent = fork_capable_agent();
+        let agent_probe = Arc::clone(&agent);
+
+        with_pool(agent, PoolConfig::local(), move |pool| async move {
+            let turn = pool
+                .submit_primed("the shared prefix")
+                .await
+                .expect("result")
+                .expect("prime turn should succeed");
+            let (pin, guard) = pool
+                .pin_session_scoped(&turn.session_id)
+                .await
+                .expect("scoped pin should round-trip");
+            assert!(pin.pinned);
+
+            guard.release().await.expect("release should round-trip");
+
+            // Give a (would-be) spawned drop-unpin time to land, then prove it
+            // never fired: exactly one pin and one unpin.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            assert_eq!(
+                agent_probe.pin_calls(),
+                vec![
+                    (turn.session_id.to_string(), true),
+                    (turn.session_id.to_string(), false),
+                ],
+                "release() must unpin exactly once — the Drop backstop is disarmed"
             );
         })
         .await;

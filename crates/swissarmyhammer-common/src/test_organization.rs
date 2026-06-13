@@ -554,11 +554,13 @@ mod tests {
 
     #[test]
     fn test_timing_completes_within() {
-        let result =
-            TestTiming::assert_completes_within(std::time::Duration::from_millis(100), || {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                42
-            });
+        // Generous budget: under full-suite parallel load the scheduler can
+        // delay a sleeping thread well past a tight margin, and this test only
+        // verifies the in-budget path returns the closure's value.
+        let result = TestTiming::assert_completes_within(std::time::Duration::from_secs(5), || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            42
+        });
         assert_eq!(result, 42);
     }
 

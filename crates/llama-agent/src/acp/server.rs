@@ -10,7 +10,9 @@ use futures::StreamExt;
 use swissarmyhammer_common::Pretty;
 use tokio::sync::{broadcast, RwLock};
 
-use agent_client_protocol_extras::{RawMessageManager, SessionSource, SessionStore};
+use agent_client_protocol_extras::{
+    RawMessageManager, SessionSource, SessionStore, MAX_TOKENS_META_KEY,
+};
 
 use super::config::AcpConfig;
 use super::filesystem::FilesystemOperations;
@@ -28,6 +30,21 @@ use super::translation::ToJsonRpcError;
 /// useful for a session-picker UI.
 const SESSION_LIST_PAGE_SIZE: usize = 50;
 
+/// The ACP (Agent Client Protocol) JSON-RPC server bridging editor clients to
+/// the llama-agent inference engine.
+///
+/// This is the crate's protocol entry point: it implements the agent side of
+/// ACP — initialize/authenticate, the session lifecycle (`session/new`,
+/// `session/load`, `session/resume`, `session/list`, `session/fork`), prompt
+/// turns with streaming `session/update` notifications, and the extension
+/// surface routed through [`ext_method`](Self::ext_method) (filesystem,
+/// terminal, and session-fork methods).
+///
+/// Sessions flow through two layers: a bounded in-memory map of live
+/// [`AcpSessionState`] (the working set, swept by a background eviction task)
+/// over the durable [`SessionStore`] of `SessionRecord`s — eviction is
+/// lossless because [`get_session`](Self::get_session) transparently reloads
+/// a record from the store on the next request.
 pub struct AcpServer {
     /// Underlying llama-agent server
     pub(crate) agent_server: Arc<AgentServer>,
@@ -94,7 +111,7 @@ pub struct AcpServer {
     /// seams fired at `new_session`/`load_session` (SessionStart), `prompt`
     /// entry (UserPromptSubmit), and `prompt` return (Stop). A session with no
     /// `.claude` settings gets an empty hook set and behaves exactly as before.
-    session_hooks: super::hooks::SessionHooks,
+    pub(crate) session_hooks: super::hooks::SessionHooks,
 }
 
 /// Default interval between session-cache eviction sweeps (5 minutes).
@@ -728,7 +745,7 @@ impl AcpServer {
     ///
     /// This is what makes cache eviction lossless: dropping an entry never
     /// loses a session, because the next `get_session` reloads it from disk.
-    async fn get_session(&self, session_id: &AcpSessionId) -> Option<AcpSessionState> {
+    pub(crate) async fn get_session(&self, session_id: &AcpSessionId) -> Option<AcpSessionState> {
         // Cache hit: refresh recency under the write lock so the cleanup task
         // sees the access, and return the refreshed state.
         {
@@ -910,7 +927,7 @@ impl AcpServer {
 
     /// Get a session by llama session ID
     /// Store a session and update bidirectional mapping
-    async fn store_session(&self, session: AcpSessionState) {
+    pub(crate) async fn store_session(&self, session: AcpSessionState) {
         let acp_id = session.session_id.clone();
         let llama_id = session.llama_session_id;
 
@@ -962,7 +979,7 @@ impl AcpServer {
     ///   ULID used both as the transcript directory name and the registry key.
     ///
     /// [`broadcast_notification`]: Self::broadcast_notification
-    fn wire_raw_message_manager(session_id: &AcpSessionId) {
+    pub(crate) fn wire_raw_message_manager(session_id: &AcpSessionId) {
         let session_ulid = session_id.0.to_string();
 
         match RawMessageManager::new(&session_ulid) {
@@ -1418,7 +1435,7 @@ impl AcpServer {
     /// # Parameters
     ///
     /// * `acp_session` - The ACP session whose live state should be persisted.
-    async fn persist_session_record(&self, acp_session: &AcpSessionState) {
+    pub(crate) async fn persist_session_record(&self, acp_session: &AcpSessionState) {
         let llama_session = match self
             .agent_server
             .session_manager()
@@ -1851,6 +1868,43 @@ impl AcpServer {
         ))
     }
 
+    /// Register an existing llama session at the ACP layer and return its ACP
+    /// session id.
+    ///
+    /// Runs the lifecycle steps every newly visible session needs, in order:
+    ///
+    /// 1. store the in-memory [`AcpSessionState`] (with the given client
+    ///    capabilities) in the live session map;
+    /// 2. persist an initial `SessionRecord` so the session is enumerable via
+    ///    `session/list` immediately, before the first prompt turn;
+    /// 3. wire the per-session raw JSON-RPC transcript recorder (the
+    ///    transcript path embeds the session ULID, so this can only happen
+    ///    once the session exists);
+    /// 4. load the session's `.claude` hook config from `cwd` and fire
+    ///    SessionStart hooks with source=startup (a cwd with no `.claude`
+    ///    settings yields an empty hook set — effectively a no-op).
+    ///
+    /// Shared by `session/new` and `session/fork` so both run the identical
+    /// lifecycle.
+    pub(crate) async fn register_session(
+        &self,
+        llama_session_id: LlamaSessionId,
+        client_capabilities: agent_client_protocol::schema::ClientCapabilities,
+        cwd: std::path::PathBuf,
+    ) -> AcpSessionId {
+        let acp_session = AcpSessionState::with_capabilities(llama_session_id, client_capabilities);
+        let session_id = acp_session.session_id.clone();
+
+        self.store_session(acp_session.clone()).await;
+        self.persist_session_record(&acp_session).await;
+        Self::wire_raw_message_manager(&session_id);
+        self.session_hooks
+            .track_session_start(&session_id, SessionSource::Startup, cwd)
+            .await;
+
+        session_id
+    }
+
     pub async fn new_session(
         &self,
         request: agent_client_protocol::schema::NewSessionRequest,
@@ -2051,32 +2105,10 @@ impl AcpServer {
             .clone()
             .unwrap_or_default();
 
-        // Create ACP session state with client capabilities
-        let acp_session = AcpSessionState::with_capabilities(llama_session.id, client_caps);
-        let session_id = acp_session.session_id.clone();
-
-        // Store the session
-        self.store_session(acp_session.clone()).await;
-
-        // Persist an initial SessionRecord so the session is enumerable via
-        // `session/list` immediately, before the first prompt turn.
-        self.persist_session_record(&acp_session).await;
-
-        tracing::info!("Created new ACP session: {}", session_id.0);
-
-        // Wire up the per-session raw JSON-RPC transcript recorder. The
-        // transcript path embeds the session ULID, so the manager can only be
-        // built once the session exists. It is registered in the shared
-        // registry keyed by the session ULID; `broadcast_notification` looks
-        // it up from there to record outgoing frames.
-        Self::wire_raw_message_manager(&session_id);
-
-        // Load the session's `.claude` hook config from its cwd and fire
-        // SessionStart hooks with source=startup. A cwd with no `.claude`
-        // settings yields an empty hook set and this is effectively a no-op.
-        self.session_hooks
-            .track_session_start(&session_id, SessionSource::Startup, session_cwd)
+        let session_id = self
+            .register_session(llama_session.id, client_caps, session_cwd)
             .await;
+        tracing::info!("Created new ACP session: {}", session_id.0);
 
         // Build session mode state if modes are supported
         let modes = if self.config.capabilities.supports_modes {
@@ -3124,6 +3156,99 @@ impl AcpServer {
         );
     }
 
+    /// Validate that the connected client declared the capability gating
+    /// `method`.
+    ///
+    /// Returns the structured `invalid_params` error the extension contract
+    /// expects when the capability was not declared, or when no capabilities
+    /// were ever initialized.
+    async fn require_capability(
+        &self,
+        method: &str,
+        declared: impl FnOnce(&agent_client_protocol::schema::ClientCapabilities) -> bool,
+        undeclared_message: impl Into<String>,
+        uninitialized_message: impl Into<String>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let client_caps = self.client_capabilities.read().await;
+        match &*client_caps {
+            Some(caps) if declared(caps) => {
+                tracing::debug!("{method} capability validated");
+                Ok(())
+            }
+            Some(_) => {
+                tracing::error!("{method} capability not declared by client");
+                Err(super::acp_error::invalid_params(undeclared_message))
+            }
+            None => {
+                tracing::error!("No client capabilities available for {method} validation");
+                Err(super::acp_error::invalid_params(uninitialized_message))
+            }
+        }
+    }
+
+    /// Require `client_capabilities.fs.read_text_file` for `fs/read_text_file`.
+    async fn require_fs_read_capability(&self) -> Result<(), agent_client_protocol::Error> {
+        self.require_capability(
+            "fs/read_text_file",
+            |caps| caps.fs.read_text_file,
+            "File system read capability not declared by client. Set client_capabilities.fs.read_text_file = true during initialization.",
+            "Client capabilities not initialized. Cannot perform file system operations without capability declaration.",
+        )
+        .await
+    }
+
+    /// Require `client_capabilities.fs.write_text_file` for `fs/write_text_file`.
+    async fn require_fs_write_capability(&self) -> Result<(), agent_client_protocol::Error> {
+        self.require_capability(
+            "fs/write_text_file",
+            |caps| caps.fs.write_text_file,
+            "File system write capability not declared by client. Set client_capabilities.fs.write_text_file = true during initialization.",
+            "Client capabilities not initialized. Cannot perform file system operations without capability declaration.",
+        )
+        .await
+    }
+
+    /// Require `client_capabilities.terminal` for the given `terminal/*`
+    /// extension method.
+    async fn require_terminal_capability(
+        &self,
+        method: &str,
+    ) -> Result<(), agent_client_protocol::Error> {
+        self.require_capability(
+            method,
+            |caps| caps.terminal,
+            format!("Terminal capability not declared by client; {method} requires client_capabilities.terminal = true during initialization."),
+            format!("Client capabilities not initialized; cannot perform {method} without capability declaration."),
+        )
+        .await
+    }
+
+    /// Resolve the ACP session an `fs/*` extension call targets, mapping a
+    /// missing session onto the structured `invalid_params` error.
+    async fn fs_session(
+        &self,
+        method: &str,
+        session_id: &AcpSessionId,
+    ) -> Result<AcpSessionState, agent_client_protocol::Error> {
+        self.get_session(session_id).await.ok_or_else(|| {
+            tracing::error!("Session not found for {method}: {}", session_id.0);
+            super::acp_error::invalid_params(format!(
+                "Session not found for {method}: {}",
+                session_id.0
+            ))
+        })
+    }
+
+    /// Route an ACP `ext_method` extension call to its handler.
+    ///
+    /// Dispatches the filesystem (`fs/*`), terminal (`terminal/*`), and
+    /// session-fork (`session/fork`, `session/state_status`, `session/pin` —
+    /// the shared contract in [`agent_client_protocol_extras::session_fork`])
+    /// extension surfaces. Each route validates any gating client capability,
+    /// then runs the shared parse → handle → serialize scaffolding in
+    /// [`dispatch_ext`]. Unknown methods are rejected with `method_not_found`
+    /// (`-32601`), matching claude-agent, so a client probing an unsupported
+    /// extension observes the same failure from either agent.
     pub async fn ext_method(
         &self,
         request: agent_client_protocol::schema::ExtRequest,
@@ -3144,436 +3269,203 @@ impl AcpServer {
         let result: serde_json::Value = match request.method.as_ref() {
             // Filesystem operations
             "fs/read_text_file" => {
-                // Validate client capabilities for filesystem read operations
-                {
-                    let client_caps = self.client_capabilities.read().await;
-                    match &*client_caps {
-                        Some(caps) if caps.fs.read_text_file => {
-                            tracing::debug!("fs.read_text_file capability validated");
-                        }
-                        Some(_) => {
-                            tracing::error!("fs/read_text_file capability not declared by client");
-                            return Err(super::acp_error::invalid_params(
-                                "File system read capability not declared by client. Set client_capabilities.fs.read_text_file = true during initialization.",
-                            ));
-                        }
-                        None => {
-                            tracing::error!(
-                                "No client capabilities available for fs/read_text_file validation"
-                            );
-                            return Err(super::acp_error::invalid_params(
-                                "Client capabilities not initialized. Cannot perform file system operations without capability declaration.",
-                            ));
-                        }
-                    }
-                }
-
-                // Parse request
-                let fs_req: agent_client_protocol::schema::ReadTextFileRequest =
-                    serde_json::from_value(params_value).map_err(|e| {
-                        tracing::error!("Failed to parse fs/read_text_file params: {}", e);
-                        super::acp_error::invalid_params(format!(
-                            "fs/read_text_file parameters do not match the expected schema: {e}"
-                        ))
-                    })?;
-
-                // Get session ID from the request
-                let session_id = &fs_req.session_id;
-                let session = self.get_session(session_id).await.ok_or_else(|| {
-                    tracing::error!("Session not found for fs/read_text_file: {}", session_id.0);
-                    super::acp_error::invalid_params(format!(
-                        "Session not found for fs/read_text_file: {}",
-                        session_id.0
-                    ))
-                })?;
-
-                // Execute operation
-                let response = self
-                    .filesystem_ops
-                    .read_text_file(&session, fs_req)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("fs/read_text_file failed: {}", e);
-                        filesystem_error_to_protocol_error(e)
-                    })?;
-
-                serde_json::to_value(response).map_err(|e| {
-                    tracing::error!("Failed to serialize fs/read_text_file response: {}", e);
-                    super::acp_error::internal_error(format!(
-                        "Failed to serialize fs/read_text_file response: {e}"
-                    ))
-                })?
+                self.require_fs_read_capability().await?;
+                let method = "fs/read_text_file";
+                dispatch_ext(
+                    method,
+                    params_value,
+                    |req: agent_client_protocol::schema::ReadTextFileRequest| async move {
+                        let session = self.fs_session(method, &req.session_id).await?;
+                        self.filesystem_ops
+                            .read_text_file(&session, req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                filesystem_error_to_protocol_error(e)
+                            })
+                    },
+                )
+                .await?
             }
 
             "fs/write_text_file" => {
-                // Validate client capabilities for filesystem write operations
-                {
-                    let client_caps = self.client_capabilities.read().await;
-                    match &*client_caps {
-                        Some(caps) if caps.fs.write_text_file => {
-                            tracing::debug!("fs.write_text_file capability validated");
-                        }
-                        Some(_) => {
-                            tracing::error!("fs/write_text_file capability not declared by client");
-                            return Err(super::acp_error::invalid_params(
-                                "File system write capability not declared by client. Set client_capabilities.fs.write_text_file = true during initialization.",
-                            ));
-                        }
-                        None => {
-                            tracing::error!(
-                                "No client capabilities available for fs/write_text_file validation"
-                            );
-                            return Err(super::acp_error::invalid_params(
-                                "Client capabilities not initialized. Cannot perform file system operations without capability declaration.",
-                            ));
-                        }
-                    }
-                }
-
-                // Parse request
-                let fs_req: agent_client_protocol::schema::WriteTextFileRequest =
-                    serde_json::from_value(params_value).map_err(|e| {
-                        tracing::error!("Failed to parse fs/write_text_file params: {}", e);
-                        super::acp_error::invalid_params(format!(
-                            "fs/write_text_file parameters do not match the expected schema: {e}"
-                        ))
-                    })?;
-
-                // Get session ID from the request
-                let session_id = &fs_req.session_id;
-                let session = self.get_session(session_id).await.ok_or_else(|| {
-                    tracing::error!("Session not found for fs/write_text_file: {}", session_id.0);
-                    super::acp_error::invalid_params(format!(
-                        "Session not found for fs/write_text_file: {}",
-                        session_id.0
-                    ))
-                })?;
-
-                // Execute operation
-                let response = self
-                    .filesystem_ops
-                    .write_text_file(&session, fs_req)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("fs/write_text_file failed: {}", e);
-                        filesystem_error_to_protocol_error(e)
-                    })?;
-
-                serde_json::to_value(response).map_err(|e| {
-                    tracing::error!("Failed to serialize fs/write_text_file response: {}", e);
-                    super::acp_error::internal_error(format!(
-                        "Failed to serialize fs/write_text_file response: {e}"
-                    ))
-                })?
+                self.require_fs_write_capability().await?;
+                let method = "fs/write_text_file";
+                dispatch_ext(
+                    method,
+                    params_value,
+                    |req: agent_client_protocol::schema::WriteTextFileRequest| async move {
+                        let session = self.fs_session(method, &req.session_id).await?;
+                        self.filesystem_ops
+                            .write_text_file(&session, req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                filesystem_error_to_protocol_error(e)
+                            })
+                    },
+                )
+                .await?
             }
 
             // Terminal operations
             "terminal/create" => {
-                // Validate client capabilities for terminal operations
-                {
-                    let client_caps = self.client_capabilities.read().await;
-                    match &*client_caps {
-                        Some(caps) if caps.terminal => {
-                            tracing::debug!("Terminal capability validated");
-                        }
-                        Some(_) => {
-                            tracing::error!("terminal/create capability not declared by client");
-                            return Err(super::acp_error::invalid_params(
-                                "Terminal capability not declared by client; terminal/create requires client_capabilities.terminal = true during initialization.",
-                            ));
-                        }
-                        None => {
-                            tracing::error!(
-                                "No client capabilities available for terminal/create validation"
-                            );
-                            return Err(super::acp_error::invalid_params(
-                                "Client capabilities not initialized; cannot perform terminal/create without capability declaration.",
-                            ));
-                        }
-                    }
-                }
-
-                let term_req: super::terminal::CreateTerminalRequest =
-                    serde_json::from_value(params_value).map_err(|e| {
-                        tracing::error!("Failed to parse terminal/create params: {}", e);
-                        super::acp_error::invalid_params(format!(
-                            "terminal/create parameters do not match the expected schema: {e}"
-                        ))
-                    })?;
-
-                let response = self
-                    .terminal_manager
-                    .write()
-                    .await
-                    .create_terminal(term_req)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("terminal/create failed: {}", e);
-                        Self::convert_error(e)
-                    })?;
-
-                serde_json::to_value(response).map_err(|e| {
-                    tracing::error!("Failed to serialize terminal/create response: {}", e);
-                    super::acp_error::internal_error(format!(
-                        "Failed to serialize terminal/create response: {e}"
-                    ))
-                })?
+                let method = "terminal/create";
+                self.require_terminal_capability(method).await?;
+                dispatch_ext(
+                    method,
+                    params_value,
+                    |req: super::terminal::CreateTerminalRequest| async move {
+                        self.terminal_manager
+                            .write()
+                            .await
+                            .create_terminal(req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                Self::convert_error(e)
+                            })
+                    },
+                )
+                .await?
             }
 
             "terminal/output" => {
-                // Validate client capabilities for terminal operations
-                {
-                    let client_caps = self.client_capabilities.read().await;
-                    match &*client_caps {
-                        Some(caps) if caps.terminal => {
-                            tracing::debug!("Terminal capability validated");
-                        }
-                        Some(_) => {
-                            tracing::error!("terminal/output capability not declared by client");
-                            return Err(super::acp_error::invalid_params(
-                                "Terminal capability not declared by client; terminal/output requires client_capabilities.terminal = true during initialization.",
-                            ));
-                        }
-                        None => {
-                            tracing::error!(
-                                "No client capabilities available for terminal/output validation"
-                            );
-                            return Err(super::acp_error::invalid_params(
-                                "Client capabilities not initialized; cannot perform terminal/output without capability declaration.",
-                            ));
-                        }
-                    }
-                }
-
-                let term_req: super::terminal::TerminalOutputRequest =
-                    serde_json::from_value(params_value).map_err(|e| {
-                        tracing::error!("Failed to parse terminal/output params: {}", e);
-                        super::acp_error::invalid_params(format!(
-                            "terminal/output parameters do not match the expected schema: {e}"
-                        ))
-                    })?;
-
-                let response = self
-                    .terminal_manager
-                    .write()
-                    .await
-                    .get_output(term_req)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("terminal/output failed: {}", e);
-                        Self::convert_error(e)
-                    })?;
-
-                serde_json::to_value(response).map_err(|e| {
-                    tracing::error!("Failed to serialize terminal/output response: {}", e);
-                    super::acp_error::internal_error(format!(
-                        "Failed to serialize terminal/output response: {e}"
-                    ))
-                })?
+                let method = "terminal/output";
+                self.require_terminal_capability(method).await?;
+                dispatch_ext(
+                    method,
+                    params_value,
+                    |req: super::terminal::TerminalOutputRequest| async move {
+                        self.terminal_manager
+                            .write()
+                            .await
+                            .get_output(req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                Self::convert_error(e)
+                            })
+                    },
+                )
+                .await?
             }
 
             "terminal/wait_for_exit" => {
-                // Validate client capabilities for terminal operations
-                {
-                    let client_caps = self.client_capabilities.read().await;
-                    match &*client_caps {
-                        Some(caps) if caps.terminal => {
-                            tracing::debug!("Terminal capability validated");
-                        }
-                        Some(_) => {
-                            tracing::error!(
-                                "terminal/wait_for_exit capability not declared by client"
-                            );
-                            return Err(super::acp_error::invalid_params(
-                                "Terminal capability not declared by client; terminal/wait_for_exit requires client_capabilities.terminal = true during initialization.",
-                            ));
-                        }
-                        None => {
-                            tracing::error!(
-                                "No client capabilities available for terminal/wait_for_exit validation"
-                            );
-                            return Err(super::acp_error::invalid_params(
-                                "Client capabilities not initialized; cannot perform terminal/wait_for_exit without capability declaration.",
-                            ));
-                        }
-                    }
-                }
-
-                let term_req: super::terminal::WaitForExitRequest =
-                    serde_json::from_value(params_value).map_err(|e| {
-                        tracing::error!("Failed to parse terminal/wait_for_exit params: {}", e);
-                        super::acp_error::invalid_params(format!(
-                        "terminal/wait_for_exit parameters do not match the expected schema: {e}"
-                    ))
-                    })?;
-
-                let response = self
-                    .terminal_manager
-                    .write()
-                    .await
-                    .wait_for_exit(term_req)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("terminal/wait_for_exit failed: {}", e);
-                        Self::convert_error(e)
-                    })?;
-
-                serde_json::to_value(response).map_err(|e| {
-                    tracing::error!("Failed to serialize terminal/wait_for_exit response: {}", e);
-                    super::acp_error::internal_error(format!(
-                        "Failed to serialize terminal/wait_for_exit response: {e}"
-                    ))
-                })?
+                let method = "terminal/wait_for_exit";
+                self.require_terminal_capability(method).await?;
+                dispatch_ext(
+                    method,
+                    params_value,
+                    |req: super::terminal::WaitForExitRequest| async move {
+                        self.terminal_manager
+                            .write()
+                            .await
+                            .wait_for_exit(req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                Self::convert_error(e)
+                            })
+                    },
+                )
+                .await?
             }
 
             "terminal/get" => {
-                // Validate client capabilities for terminal operations
-                {
-                    let client_caps = self.client_capabilities.read().await;
-                    match &*client_caps {
-                        Some(caps) if caps.terminal => {
-                            tracing::debug!("Terminal capability validated");
-                        }
-                        Some(_) => {
-                            tracing::error!("terminal/get capability not declared by client");
-                            return Err(super::acp_error::invalid_params(
-                                "Terminal capability not declared by client; terminal/get requires client_capabilities.terminal = true during initialization.",
-                            ));
-                        }
-                        None => {
-                            tracing::error!(
-                                "No client capabilities available for terminal/get validation"
-                            );
-                            return Err(super::acp_error::invalid_params(
-                                "Client capabilities not initialized; cannot perform terminal/get without capability declaration.",
-                            ));
-                        }
-                    }
-                }
-
-                let term_req: super::terminal::GetTerminalRequest =
-                    serde_json::from_value(params_value).map_err(|e| {
-                        tracing::error!("Failed to parse terminal/get params: {}", e);
-                        super::acp_error::invalid_params(format!(
-                            "terminal/get parameters do not match the expected schema: {e}"
-                        ))
-                    })?;
-
-                let response = self
-                    .terminal_manager
-                    .read()
-                    .await
-                    .get_terminal(term_req)
-                    .map_err(|e| {
-                        tracing::error!("terminal/get failed: {}", e);
-                        Self::convert_error(e)
-                    })?;
-
-                serde_json::to_value(response).map_err(|e| {
-                    tracing::error!("Failed to serialize terminal/get response: {}", e);
-                    super::acp_error::internal_error(format!(
-                        "Failed to serialize terminal/get response: {e}"
-                    ))
-                })?
+                let method = "terminal/get";
+                self.require_terminal_capability(method).await?;
+                dispatch_ext(
+                    method,
+                    params_value,
+                    |req: super::terminal::GetTerminalRequest| async move {
+                        self.terminal_manager
+                            .read()
+                            .await
+                            .get_terminal(req)
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                Self::convert_error(e)
+                            })
+                    },
+                )
+                .await?
             }
 
             "terminal/kill" => {
-                // Validate client capabilities for terminal operations
-                {
-                    let client_caps = self.client_capabilities.read().await;
-                    match &*client_caps {
-                        Some(caps) if caps.terminal => {
-                            tracing::debug!("Terminal capability validated");
-                        }
-                        Some(_) => {
-                            tracing::error!("terminal/kill capability not declared by client");
-                            return Err(super::acp_error::invalid_params(
-                                "Terminal capability not declared by client; terminal/kill requires client_capabilities.terminal = true during initialization.",
-                            ));
-                        }
-                        None => {
-                            tracing::error!(
-                                "No client capabilities available for terminal/kill validation"
-                            );
-                            return Err(super::acp_error::invalid_params(
-                                "Client capabilities not initialized; cannot perform terminal/kill without capability declaration.",
-                            ));
-                        }
-                    }
-                }
-
-                let term_req: super::terminal::KillTerminalRequest =
-                    serde_json::from_value(params_value).map_err(|e| {
-                        tracing::error!("Failed to parse terminal/kill params: {}", e);
-                        super::acp_error::invalid_params(format!(
-                            "terminal/kill parameters do not match the expected schema: {e}"
-                        ))
-                    })?;
-
-                let response = self
-                    .terminal_manager
-                    .write()
-                    .await
-                    .kill_terminal(term_req)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("terminal/kill failed: {}", e);
-                        Self::convert_error(e)
-                    })?;
-
-                serde_json::to_value(response).map_err(|e| {
-                    tracing::error!("Failed to serialize terminal/kill response: {}", e);
-                    super::acp_error::internal_error(format!(
-                        "Failed to serialize terminal/kill response: {e}"
-                    ))
-                })?
+                let method = "terminal/kill";
+                self.require_terminal_capability(method).await?;
+                dispatch_ext(
+                    method,
+                    params_value,
+                    |req: super::terminal::KillTerminalRequest| async move {
+                        self.terminal_manager
+                            .write()
+                            .await
+                            .kill_terminal(req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                Self::convert_error(e)
+                            })
+                    },
+                )
+                .await?
             }
 
             "terminal/release" => {
-                // Validate client capabilities for terminal operations
-                {
-                    let client_caps = self.client_capabilities.read().await;
-                    match &*client_caps {
-                        Some(caps) if caps.terminal => {
-                            tracing::debug!("Terminal capability validated");
-                        }
-                        Some(_) => {
-                            tracing::error!("terminal/release capability not declared by client");
-                            return Err(super::acp_error::invalid_params(
-                                "Terminal capability not declared by client; terminal/release requires client_capabilities.terminal = true during initialization.",
-                            ));
-                        }
-                        None => {
-                            tracing::error!(
-                                "No client capabilities available for terminal/release validation"
-                            );
-                            return Err(super::acp_error::invalid_params(
-                                "Client capabilities not initialized; cannot perform terminal/release without capability declaration.",
-                            ));
-                        }
-                    }
-                }
+                let method = "terminal/release";
+                self.require_terminal_capability(method).await?;
+                // The handler returns `()`, which serializes to the null
+                // response a successful release reports.
+                dispatch_ext(
+                    method,
+                    params_value,
+                    |req: super::terminal::ReleaseTerminalRequest| async move {
+                        self.terminal_manager
+                            .write()
+                            .await
+                            .release_terminal(req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                Self::convert_error(e)
+                            })
+                    },
+                )
+                .await?
+            }
 
-                let term_req: super::terminal::ReleaseTerminalRequest =
-                    serde_json::from_value(params_value).map_err(|e| {
-                        tracing::error!("Failed to parse terminal/release params: {}", e);
-                        super::acp_error::invalid_params(format!(
-                            "terminal/release parameters do not match the expected schema: {e}"
-                        ))
-                    })?;
+            // Session forking surface (see `super::session_fork`): fork a new
+            // session from a parent's saved state, query saved-state status,
+            // and pin/unpin against cache eviction. The request/response
+            // shapes are the shared backend-agnostic contract in
+            // `agent_client_protocol_extras::session_fork`.
+            agent_client_protocol_extras::SESSION_FORK_METHOD => {
+                dispatch_ext(
+                    agent_client_protocol_extras::SESSION_FORK_METHOD,
+                    params_value,
+                    |req| self.fork_session(req),
+                )
+                .await?
+            }
 
-                self.terminal_manager
-                    .write()
-                    .await
-                    .release_terminal(term_req)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("terminal/release failed: {}", e);
-                        Self::convert_error(e)
-                    })?;
+            agent_client_protocol_extras::SESSION_STATE_STATUS_METHOD => {
+                dispatch_ext(
+                    agent_client_protocol_extras::SESSION_STATE_STATUS_METHOD,
+                    params_value,
+                    |req| self.session_state_status(req),
+                )
+                .await?
+            }
 
-                // Return null for successful release
-                serde_json::Value::Null
+            agent_client_protocol_extras::SESSION_PIN_METHOD => {
+                dispatch_ext(
+                    agent_client_protocol_extras::SESSION_PIN_METHOD,
+                    params_value,
+                    |req| self.pin_session(req),
+                )
+                .await?
             }
 
             // Unknown method. An extension method the agent does not
@@ -3619,6 +3511,40 @@ impl AcpServer {
         // Extension notifications are ignored for now
         Ok(())
     }
+}
+
+/// Run one `ext_method` route's shared scaffolding: deserialize `params` into
+/// the request type, invoke `handler`, and serialize its response back to
+/// JSON.
+///
+/// Every parse/serialize diagnostic is derived from `method`, so each route
+/// states its method name exactly once and the error messages can never drift
+/// from it. Parse failures map to `invalid_params`, serialize failures to
+/// `internal_error`; the handler's own error is passed through untouched.
+async fn dispatch_ext<Req, Resp, F, Fut>(
+    method: &str,
+    params: serde_json::Value,
+    handler: F,
+) -> Result<serde_json::Value, agent_client_protocol::Error>
+where
+    Req: serde::de::DeserializeOwned,
+    Resp: serde::Serialize,
+    F: FnOnce(Req) -> Fut,
+    Fut: std::future::Future<Output = Result<Resp, agent_client_protocol::Error>>,
+{
+    let request: Req = serde_json::from_value(params).map_err(|e| {
+        tracing::error!("Failed to parse {method} params: {e}");
+        super::acp_error::invalid_params(format!(
+            "{method} parameters do not match the expected schema: {e}"
+        ))
+    })?;
+
+    let response = handler(request).await?;
+
+    serde_json::to_value(response).map_err(|e| {
+        tracing::error!("Failed to serialize {method} response: {e}");
+        super::acp_error::internal_error(format!("Failed to serialize {method} response: {e}"))
+    })
 }
 
 /// Convert FilesystemError to appropriate protocol error
@@ -3883,7 +3809,7 @@ where
 fn extract_request_max_tokens(
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Option<usize> {
-    let value = meta?.get("max_tokens")?;
+    let value = meta?.get(MAX_TOKENS_META_KEY)?;
     let raw = value.as_u64()?;
     if raw == 0 {
         return None;
@@ -3894,6 +3820,7 @@ fn extract_request_max_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::acp::test_utils::StateDirGuard;
     use serial_test::serial;
     use std::time::Duration;
 
@@ -3929,33 +3856,8 @@ mod tests {
     async fn create_test_server_with_mount(
         agent_tools_mount: Arc<dyn crate::mcp::AgentToolsMount>,
     ) -> AcpServer {
-        use crate::types::{
-            AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
-            SessionConfig,
-        };
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-        let test_config = AgentConfig {
-            model: ModelConfig {
-                source: ModelSource::Local {
-                    folder: temp_dir.path().to_path_buf(),
-                    filename: Some("test.gguf".to_string()),
-                },
-                batch_size: 512,
-                n_seq_max: 1,
-                n_threads: 1,
-                n_threads_batch: 1,
-                use_hf_params: false,
-                retry_config: RetryConfig::default(),
-                debug: false,
-            },
-            queue_config: QueueConfig::default(),
-            mcp_servers: Vec::new(),
-            session_config: SessionConfig::default(),
-            parallel_execution_config: ParallelConfig::default(),
-            tool_execution_config: Default::default(),
-        };
+        let test_config =
+            crate::acp::test_utils::test_agent_config(crate::types::SessionConfig::default());
 
         // For testing, we'll create a minimal AgentServer without actually loading a model
         // This is acceptable for ACP protocol tests that don't need actual generation
@@ -4008,33 +3910,8 @@ mod tests {
             agent_client_protocol::schema::SessionId,
             tokio::sync::broadcast::Receiver<agent_client_protocol::schema::SessionNotification>,
         ) {
-            use crate::types::{
-                AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
-                SessionConfig,
-            };
-            use tempfile::TempDir;
-
-            let temp_dir = TempDir::new().unwrap();
-            let test_config = AgentConfig {
-                model: ModelConfig {
-                    source: ModelSource::Local {
-                        folder: temp_dir.path().to_path_buf(),
-                        filename: Some("test.gguf".to_string()),
-                    },
-                    batch_size: 512,
-                    n_seq_max: 1,
-                    n_threads: 1,
-                    n_threads_batch: 1,
-                    use_hf_params: false,
-                    retry_config: RetryConfig::default(),
-                    debug: false,
-                },
-                queue_config: QueueConfig::default(),
-                mcp_servers: Vec::new(),
-                session_config: SessionConfig::default(),
-                parallel_execution_config: ParallelConfig::default(),
-                tool_execution_config: Default::default(),
-            };
+            let test_config =
+                crate::acp::test_utils::test_agent_config(crate::types::SessionConfig::default());
             let model_manager =
                 Arc::new(crate::model::ModelManager::new(test_config.model.clone()).unwrap());
             let request_queue = Arc::new(crate::queue::RequestQueue::new(
@@ -4521,33 +4398,8 @@ mod tests {
     /// capabilities — used to verify that capability gating (e.g. `loadSession`)
     /// actually enforces what the config advertises.
     async fn create_test_server_with_config(config: AcpConfig) -> AcpServer {
-        use crate::types::{
-            AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
-            SessionConfig,
-        };
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-        let test_config = AgentConfig {
-            model: ModelConfig {
-                source: ModelSource::Local {
-                    folder: temp_dir.path().to_path_buf(),
-                    filename: Some("test.gguf".to_string()),
-                },
-                batch_size: 512,
-                n_seq_max: 1,
-                n_threads: 1,
-                n_threads_batch: 1,
-                use_hf_params: false,
-                retry_config: RetryConfig::default(),
-                debug: false,
-            },
-            queue_config: QueueConfig::default(),
-            mcp_servers: Vec::new(),
-            session_config: SessionConfig::default(),
-            parallel_execution_config: ParallelConfig::default(),
-            tool_execution_config: Default::default(),
-        };
+        let test_config =
+            crate::acp::test_utils::test_agent_config(crate::types::SessionConfig::default());
 
         let model_manager =
             Arc::new(crate::model::ModelManager::new(test_config.model.clone()).unwrap());
@@ -4589,33 +4441,8 @@ mod tests {
         cleanup_interval: std::time::Duration,
         max_session_age: std::time::Duration,
     ) -> AcpServer {
-        use crate::types::{
-            AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
-            SessionConfig,
-        };
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-        let test_config = AgentConfig {
-            model: ModelConfig {
-                source: ModelSource::Local {
-                    folder: temp_dir.path().to_path_buf(),
-                    filename: Some("test.gguf".to_string()),
-                },
-                batch_size: 512,
-                n_seq_max: 1,
-                n_threads: 1,
-                n_threads_batch: 1,
-                use_hf_params: false,
-                retry_config: RetryConfig::default(),
-                debug: false,
-            },
-            queue_config: QueueConfig::default(),
-            mcp_servers: Vec::new(),
-            session_config: SessionConfig::default(),
-            parallel_execution_config: ParallelConfig::default(),
-            tool_execution_config: Default::default(),
-        };
+        let test_config =
+            crate::acp::test_utils::test_agent_config(crate::types::SessionConfig::default());
 
         let model_manager =
             Arc::new(crate::model::ModelManager::new(test_config.model.clone()).unwrap());
@@ -4758,47 +4585,6 @@ mod tests {
         let data = error.data.expect("rejection must carry structured data");
         assert_eq!(data["contentType"], "image");
         assert_eq!(data["required"], "promptCapabilities.image");
-    }
-
-    /// RAII guard that points `XDG_STATE_HOME` at a fresh temp directory for
-    /// the lifetime of the guard, restoring the previous value on drop.
-    ///
-    /// `AcpServer::new_session` and `AcpServer::prompt` persist a
-    /// `SessionRecord` to the shared `SessionStore`, which resolves its
-    /// directory under `$XDG_STATE_HOME`. Tests that exercise those paths must
-    /// isolate the state directory so they neither pollute the developer's
-    /// real state tree nor observe records left by other tests. Hold the guard
-    /// for the whole test body; it must be paired with `#[serial]` because the
-    /// `XDG_STATE_HOME` env var is process-global.
-    struct StateDirGuard {
-        _temp: tempfile::TempDir,
-        previous: Option<std::ffi::OsString>,
-    }
-
-    impl StateDirGuard {
-        /// Create a fresh temp directory and point `XDG_STATE_HOME` at it.
-        fn new() -> Self {
-            let temp = tempfile::TempDir::new().unwrap();
-            let previous = std::env::var_os("XDG_STATE_HOME");
-            // SAFETY: callers are `#[serial]`, so no other thread reads or
-            // writes the env var concurrently; the previous value is restored
-            // in `Drop`.
-            std::env::set_var("XDG_STATE_HOME", temp.path());
-            Self {
-                _temp: temp,
-                previous,
-            }
-        }
-    }
-
-    impl Drop for StateDirGuard {
-        fn drop(&mut self) {
-            // SAFETY: see `StateDirGuard::new` — callers are `#[serial]`.
-            match self.previous.take() {
-                Some(value) => std::env::set_var("XDG_STATE_HOME", value),
-                None => std::env::remove_var("XDG_STATE_HOME"),
-            }
-        }
     }
 
     #[tokio::test]
@@ -5180,33 +4966,8 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_capability_advertisement_with_custom_config() {
-        use crate::types::{
-            AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
-            SessionConfig,
-        };
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-        let test_config = AgentConfig {
-            model: ModelConfig {
-                source: ModelSource::Local {
-                    folder: temp_dir.path().to_path_buf(),
-                    filename: Some("test.gguf".to_string()),
-                },
-                batch_size: 512,
-                n_seq_max: 1,
-                n_threads: 1,
-                n_threads_batch: 1,
-                use_hf_params: false,
-                retry_config: RetryConfig::default(),
-                debug: false,
-            },
-            queue_config: QueueConfig::default(),
-            mcp_servers: Vec::new(),
-            session_config: SessionConfig::default(),
-            parallel_execution_config: ParallelConfig::default(),
-            tool_execution_config: Default::default(),
-        };
+        let test_config =
+            crate::acp::test_utils::test_agent_config(crate::types::SessionConfig::default());
 
         let model_manager =
             Arc::new(crate::model::ModelManager::new(test_config.model.clone()).unwrap());
@@ -5777,33 +5538,8 @@ mod tests {
     // directly.
 
     async fn create_test_server_with_modes() -> AcpServer {
-        use crate::types::{
-            AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
-            SessionConfig,
-        };
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-        let test_config = AgentConfig {
-            model: ModelConfig {
-                source: ModelSource::Local {
-                    folder: temp_dir.path().to_path_buf(),
-                    filename: Some("test.gguf".to_string()),
-                },
-                batch_size: 512,
-                n_seq_max: 1,
-                n_threads: 1,
-                n_threads_batch: 1,
-                use_hf_params: false,
-                retry_config: RetryConfig::default(),
-                debug: false,
-            },
-            queue_config: QueueConfig::default(),
-            mcp_servers: Vec::new(),
-            session_config: SessionConfig::default(),
-            parallel_execution_config: ParallelConfig::default(),
-            tool_execution_config: Default::default(),
-        };
+        let test_config =
+            crate::acp::test_utils::test_agent_config(crate::types::SessionConfig::default());
 
         let model_manager =
             Arc::new(crate::model::ModelManager::new(test_config.model.clone()).unwrap());
@@ -6243,7 +5979,7 @@ mod tests {
     #[test]
     fn test_extract_request_max_tokens_positive_integer() {
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!(4096_u64));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(4096_u64));
         assert_eq!(extract_request_max_tokens(Some(&meta)), Some(4096));
     }
 
@@ -6253,7 +5989,7 @@ mod tests {
     #[test]
     fn test_extract_request_max_tokens_zero_treated_as_unset() {
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!(0));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(0));
         assert_eq!(extract_request_max_tokens(Some(&meta)), None);
     }
 
@@ -6263,15 +5999,15 @@ mod tests {
     #[test]
     fn test_extract_request_max_tokens_non_integer_treated_as_unset() {
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!("4096"));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!("4096"));
         assert_eq!(extract_request_max_tokens(Some(&meta)), None);
 
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!(4096.5));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(4096.5));
         assert_eq!(extract_request_max_tokens(Some(&meta)), None);
 
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!(true));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(true));
         assert_eq!(extract_request_max_tokens(Some(&meta)), None);
     }
 
@@ -6282,14 +6018,14 @@ mod tests {
     #[test]
     fn test_extract_request_max_tokens_signed_positive_accepted() {
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!(8192_i64));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(8192_i64));
         assert_eq!(extract_request_max_tokens(Some(&meta)), Some(8192));
     }
 
     #[test]
     fn test_extract_request_max_tokens_negative_treated_as_unset() {
         let mut meta = serde_json::Map::new();
-        meta.insert("max_tokens".to_string(), serde_json::json!(-1_i64));
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(-1_i64));
         assert_eq!(extract_request_max_tokens(Some(&meta)), None);
     }
 

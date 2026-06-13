@@ -114,6 +114,21 @@ pub mod template;
 /// Template engine for processing and rendering templates
 pub mod engine;
 
+/// Template content management, loading, and rendering with partial support
+pub mod prompts;
+
+/// Storage backend trait and implementations for template libraries
+pub mod storage;
+
+/// Hierarchical loading of templates and shared builtin partials
+pub mod resolver;
+
+/// Adapter exposing a template library as Liquid partials
+pub mod partial_adapter;
+
+/// YAML frontmatter parsing for template files
+pub mod frontmatter;
+
 // Re-export core types for convenience
 pub use engine::TemplateEngine;
 pub use error::{Result, TemplatingError};
@@ -127,6 +142,14 @@ pub use security::{
 };
 pub use template::{create_default_parser, create_parser_with_partials, Template};
 pub use variables::{create_well_known_variables, extract_template_variables};
+
+// Re-export template library, loader, and rendering types (the merged render
+// engine and partial library).
+pub use frontmatter::{parse_frontmatter, FrontmatterResult};
+pub use partial_adapter::{new_partial_adapter, PartialAdapter};
+pub use prompts::{Prompt, TemplateLibrary, TemplateLoader};
+pub use resolver::PromptResolver;
+pub use storage::{FileStorage, MemoryStorage, StorageBackend};
 
 // Re-export filter functions for convenience
 pub use filters::{

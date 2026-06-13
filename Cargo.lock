@@ -1225,7 +1225,7 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-kanban",
- "swissarmyhammer-prompts",
+ "swissarmyhammer-templating",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -4422,8 +4422,8 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-kanban",
- "swissarmyhammer-prompts",
  "swissarmyhammer-skills",
+ "swissarmyhammer-templating",
  "swissarmyhammer-tools",
  "tempfile",
  "thiserror 2.0.18",
@@ -4774,7 +4774,6 @@ dependencies = [
  "swissarmyhammer-config",
  "swissarmyhammer-directory",
  "swissarmyhammer-doctor",
- "swissarmyhammer-prompts",
  "swissarmyhammer-skills",
  "swissarmyhammer-templating",
  "tempfile",
@@ -7968,7 +7967,6 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
- "swissarmyhammer-prompts",
  "swissarmyhammer-shell",
  "swissarmyhammer-templating",
  "swissarmyhammer-tools",
@@ -8011,7 +8009,7 @@ dependencies = [
  "swissarmyhammer-code-context",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
- "swissarmyhammer-prompts",
+ "swissarmyhammer-templating",
  "swissarmyhammer-tools",
  "swissarmyhammer-validators",
  "tempfile",
@@ -8098,7 +8096,6 @@ dependencies = [
  "swissarmyhammer-lsp",
  "swissarmyhammer-operations",
  "swissarmyhammer-project-detection",
- "swissarmyhammer-prompts",
  "swissarmyhammer-skills",
  "swissarmyhammer-statusline",
  "swissarmyhammer-templating",
@@ -8214,7 +8211,6 @@ dependencies = [
  "swissarmyhammer-build",
  "swissarmyhammer-common",
  "swissarmyhammer-project-detection",
- "swissarmyhammer-prompts",
  "swissarmyhammer-skills",
  "tempfile",
  "thiserror 2.0.18",
@@ -8465,7 +8461,7 @@ dependencies = [
  "serde",
  "serde_json",
  "swissarmyhammer-common",
- "swissarmyhammer-prompts",
+ "swissarmyhammer-templating",
  "swissarmyhammer-tools",
  "tempfile",
  "test-log",
@@ -8543,39 +8539,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "swissarmyhammer-prompts"
-version = "0.14.0"
-dependencies = [
- "anyhow",
- "chrono",
- "dashmap",
- "dirs",
- "fuzzy-matcher",
- "glob",
- "ignore",
- "include_dir",
- "liquid",
- "lru",
- "markdowndown",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "serial_test",
- "swissarmyhammer-build",
- "swissarmyhammer-common",
- "swissarmyhammer-config",
- "swissarmyhammer-templating",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-test",
- "tracing",
- "ulid",
- "walkdir",
-]
-
-[[package]]
 name = "swissarmyhammer-sem"
 version = "0.14.0"
 dependencies = [
@@ -8587,6 +8550,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "toml 1.1.2+spec-1.1.0",
+ "tracing",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-c",
@@ -8687,10 +8651,13 @@ dependencies = [
  "anyhow",
  "liquid",
  "liquid-core",
+ "markdowndown",
  "regex",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "serial_test",
+ "swissarmyhammer-build",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "tempfile",
@@ -8698,6 +8665,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
+ "walkdir",
 ]
 
 [[package]]
@@ -8754,7 +8722,6 @@ dependencies = [
  "swissarmyhammer-mcp-proxy",
  "swissarmyhammer-operations",
  "swissarmyhammer-project-detection",
- "swissarmyhammer-prompts",
  "swissarmyhammer-sem",
  "swissarmyhammer-shell",
  "swissarmyhammer-skills",
@@ -8838,6 +8805,7 @@ dependencies = [
 name = "swissarmyhammer-validators"
 version = "0.14.0"
 dependencies = [
+ "acp-conformance",
  "agent-client-protocol",
  "agent-client-protocol-extras",
  "claude-agent",

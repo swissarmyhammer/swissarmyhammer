@@ -38,14 +38,22 @@ tracing = { workspace = true }
 # Serialization (for template context)
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
 
 # Time handling for security timeouts
 tokio = { workspace = true }
+
+# File system traversal for directory-based template loading
+walkdir = { workspace = true }
+
+[build-dependencies]
+swissarmyhammer-build = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
 serial_test = { workspace = true }
+markdowndown = { workspace = true }
 
 # NEVER add features or feature flags to this Cargo.toml!
 # SwissArmyHammer provides ALL functionality ALL the time.

@@ -505,7 +505,7 @@ fn planted_duplicate_fixture(repo: &TestRepo) -> AgentFactory {
 #[serial_test::serial(cwd)]
 async fn mcp_server_set_review_factories_runs_review_working_end_to_end() {
     use crate::mcp::server::McpServer;
-    use swissarmyhammer_prompts::PromptLibrary;
+    use swissarmyhammer_templating::TemplateLibrary;
 
     let _home = IsolatedTestEnvironment::new().expect("isolated env");
 
@@ -516,7 +516,7 @@ async fn mcp_server_set_review_factories_runs_review_working_end_to_end() {
     // The production-shaped seam: build the real server (registers the bare
     // review tool), then inject the factories at the wiring layer.
     let server =
-        McpServer::new_with_work_dir(PromptLibrary::default(), repo.path().to_path_buf(), None)
+        McpServer::new_with_work_dir(TemplateLibrary::default(), repo.path().to_path_buf(), None)
             .await
             .expect("server builds");
     server

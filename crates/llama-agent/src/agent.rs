@@ -105,6 +105,10 @@ pub(crate) fn model_identifier_for_strategy(model: &crate::types::ModelConfig) -
 /// each hosting a different tool set. The tool sets are discovered once at
 /// attach time, so the index is built then and reused for every dispatch —
 /// routing never re-issues a `tools/list` round-trip on the hot path.
+///
+/// `Clone` is cheap (the clients are `Arc`s) and is how a forked session
+/// shares its parent's attached backends and routing index.
+#[derive(Clone)]
 pub(crate) struct SessionMcpClients {
     /// All clients attached to the session, in attachment order. The first is
     /// the routing fallback when no client advertises a requested tool.
@@ -334,6 +338,19 @@ impl AgentServer {
 
     pub fn request_queue(&self) -> &RequestQueue {
         &self.request_queue
+    }
+
+    /// Whether this server can still run generation: its request queue is open
+    /// and has live workers.
+    ///
+    /// Returns `false` once the queue is closed — after shutdown, or after the
+    /// worker tasks died (panicked or were aborted, e.g. because the runtime
+    /// that spawned them was dropped). Holders of a long-lived shared
+    /// `AgentServer` (process-wide caches) must check this before reuse and
+    /// rebuild an unhealthy server instead of handing out one whose every
+    /// generation fails with `QueueError::ShuttingDown`.
+    pub fn is_healthy(&self) -> bool {
+        !self.request_queue.is_closed()
     }
 
     /// Execute an MCP tool directly via the MCP client

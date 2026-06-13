@@ -54,10 +54,13 @@ pub mod protocol_translator;
 pub mod request_validation;
 pub mod session;
 pub mod session_errors;
+pub mod session_fork;
 pub mod session_resume;
 pub mod session_validation;
 pub mod size_validator;
 pub mod terminal_manager;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod tool_call_lifecycle_tests;
 pub mod tool_classification;
 pub mod tool_types;
@@ -89,7 +92,12 @@ use typed_builder::TypedBuilder;
 ///
 /// Notifications may flow through multiple forwarding hops, so we need
 /// more time than just the prompt execution itself.
-const NOTIFICATION_COLLECTION_DELAY_MS: u64 = 500;
+///
+/// Public because consumers that supervise a turn's liveness (e.g. the review
+/// pool's idle timeout) must size their windows to exceed this post-response
+/// drain — during it a successfully completed turn is silent, and a smaller
+/// idle window would abandon every successful turn mid-drain.
+pub const NOTIFICATION_COLLECTION_DELAY_MS: u64 = 500;
 
 /// Collected response from executing a prompt via streaming.
 ///

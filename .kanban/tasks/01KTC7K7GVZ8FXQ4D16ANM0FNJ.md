@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTC7JKNV1ZM5F6JFPK1X7E2G
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff980
 project: remove-prompts
 title: Merge prompts render engine into swissarmyhammer-templating (full rename)
 ---
