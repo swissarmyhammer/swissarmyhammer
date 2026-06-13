@@ -815,11 +815,16 @@ mod tests {
     }
 
     impl LateAnsweringAgent {
-        /// The stalled turn: wedge silently (no streaming progress) until the
-        /// pool's idle liveness abandons this turn and cancels the session,
-        /// then answer late — the response receiver is already dropped when
-        /// this reply reaches the client.
-        async fn stall_until_cancelled(&self) -> PromptResponse {
+        /// The stalled turn: stream ONE progress chunk to arm the per-turn idle
+        /// window (the pool no longer arms it at submission — a turn that never
+        /// streams is bounded by the ceiling, not idle), then wedge silently
+        /// until the pool's idle liveness abandons this turn and cancels the
+        /// session, and finally answer late — the response receiver is already
+        /// dropped when this reply reaches the client. This models a real
+        /// started-then-stalled turn (decoded a little, then wedged on an
+        /// unanswered nested request).
+        async fn stall_until_cancelled(&self, session_id: &SessionId) -> PromptResponse {
+            self.stream_reply(session_id, "starting".to_string());
             self.cancelled.notified().await;
             self.late_answered.notify_one();
             PromptResponse::new(StopReason::EndTurn)
@@ -874,7 +879,7 @@ mod tests {
                 let text = prompt_text(&request);
 
                 if text.contains("# Validator: staller") {
-                    return Ok(self.stall_until_cancelled().await);
+                    return Ok(self.stall_until_cancelled(&request.session_id).await);
                 }
 
                 let reply = if text.contains("# Validator: deduplicate") {
