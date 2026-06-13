@@ -174,6 +174,14 @@ use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
+/// Built-in agent name used as the baked-in default for the review scope.
+///
+/// When nothing is configured for `review.model`, the review scope resolves to
+/// this agent (a `claude-code` executor pinned to the Haiku model) rather than
+/// the plain `claude-code` default used by the global scope. This is the single
+/// source of truth for the name — do not scatter the literal.
+pub const REVIEW_DEFAULT_AGENT: &str = "claude-code-haiku";
+
 /// Configurable paths for model config file location.
 ///
 /// Different CLIs (SAH vs AVP) write to different directories and filenames.
@@ -613,6 +621,20 @@ impl ModelConfig {
             }],
             quiet: crate::DEFAULT_QUIET_MODE,
         }
+    }
+
+    /// Create configuration for the baked-in review default ([`REVIEW_DEFAULT_AGENT`]).
+    ///
+    /// Resolves the `claude-code-haiku` built-in agent by name and parses its
+    /// config (a `claude-code` executor with `args: ["--model", "haiku"]`). This
+    /// is the review scope's fallback when no `review.model` is configured.
+    ///
+    /// # Returns
+    /// * `Result<ModelConfig, ModelError>` - The resolved Haiku review config,
+    ///   or an error if the built-in cannot be found or parsed.
+    pub fn claude_code_haiku() -> Result<Self, ModelError> {
+        let agent_info = ModelManager::find_agent_by_name(REVIEW_DEFAULT_AGENT)?;
+        Ok(parse_model_config(&agent_info.content)?)
     }
 
     /// Create configuration for LlamaAgent execution
@@ -1850,23 +1872,51 @@ impl ModelManager {
         Ok(None)
     }
 
+    /// Resolve the effective review-tool model *name*.
+    ///
+    /// Returns the configured `review.model` when set, otherwise the baked-in
+    /// [`REVIEW_DEFAULT_AGENT`] (`claude-code-haiku`). This is the single source
+    /// of truth for *which model the review scope uses*: the `sah model`
+    /// display, the serve-time review factory wiring, and
+    /// [`resolve_review_agent_config`] all resolve through this rule, so they
+    /// cannot disagree about the effective review model.
+    ///
+    /// # Returns
+    /// * `Result<String, ModelError>` - The effective review model name
+    pub fn resolve_review_agent_name(paths: &ModelPaths) -> Result<String, ModelError> {
+        Ok(Self::get_review_agent(paths)?.unwrap_or_else(|| REVIEW_DEFAULT_AGENT.to_string()))
+    }
+
     /// Resolve complete review-tool agent configuration
     ///
-    /// Returns the `ModelConfig` for the review tool with fallback:
-    /// 1. Review-specific model (`review.model`, if set)
-    /// 2. The global default via [`resolve_agent_config`] (top-level `model:`,
-    ///    then the `claude-code` default)
+    /// Resolves the effective review model name via
+    /// [`resolve_review_agent_name`] (configured `review.model`, else the
+    /// baked-in [`REVIEW_DEFAULT_AGENT`]) and parses its config. If that name
+    /// cannot be resolved or parsed, logs a warning and falls back to the
+    /// global default via [`resolve_agent_config`].
+    ///
+    /// Unlike [`resolve_agent_config`], the review scope defaults to
+    /// `claude-code-haiku` (a cheaper/faster Claude) rather than plain
+    /// `claude-code`.
     ///
     /// # Returns
     /// * `Result<ModelConfig, ModelError>` - Resolved review agent configuration
     pub fn resolve_review_agent_config(paths: &ModelPaths) -> Result<ModelConfig, ModelError> {
-        if let Some(name) = Self::get_review_agent(paths)? {
-            let agent_info = Self::find_agent_by_name(&name)?;
-            return Ok(parse_model_config(&agent_info.content)?);
-        }
+        let name = Self::resolve_review_agent_name(paths)?;
 
-        tracing::debug!("No review model configured, falling back to global default");
-        Self::resolve_agent_config(paths)
+        match Self::find_agent_by_name(&name)
+            .and_then(|info| Ok(parse_model_config(&info.content)?))
+        {
+            Ok(config) => Ok(config),
+            Err(e) => {
+                tracing::warn!(
+                    "review model '{}' could not be resolved ({}); falling back to the global default",
+                    name,
+                    e
+                );
+                Self::resolve_agent_config(paths)
+            }
+        }
     }
 
     /// Apply a model configuration to the project
@@ -2931,6 +2981,48 @@ quiet: true"#;
             "Should contain claude-code agent"
         );
         assert!(agent_names.contains(&"qwen"), "Should contain qwen agent");
+    }
+
+    #[test]
+    fn test_builtin_models_contains_claude_code_haiku() {
+        let agents = ModelManager::load_builtin_models().expect("Failed to load builtin models");
+        let claude_haiku = agents
+            .iter()
+            .find(|a| a.name == "claude-code-haiku")
+            .expect("Should contain claude-code-haiku builtin model");
+
+        assert_eq!(claude_haiku.source, ModelConfigSource::Builtin);
+        assert_eq!(
+            claude_haiku.description.as_deref(),
+            Some("Claude Code (Haiku): faster/cheaper Claude, must be installed separately")
+        );
+        assert!(
+            claude_haiku.tags.iter().any(|t| t == "kanban"),
+            "claude-code-haiku should carry the kanban tag"
+        );
+    }
+
+    #[test]
+    fn test_claude_code_haiku_parses_with_model_args() {
+        let agents = ModelManager::load_builtin_models().expect("Failed to load builtin models");
+        let claude_haiku = agents
+            .iter()
+            .find(|a| a.name == "claude-code-haiku")
+            .expect("Should contain claude-code-haiku builtin model");
+
+        let config =
+            parse_model_config(&claude_haiku.content).expect("claude-code-haiku should parse");
+        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
+
+        match config.executor() {
+            ModelExecutorConfig::ClaudeCode(claude_config) => {
+                assert_eq!(
+                    claude_config.args,
+                    vec!["--model".to_string(), "haiku".to_string()]
+                );
+            }
+            _ => panic!("Should be Claude Code config"),
+        }
     }
 
     #[test]
@@ -4078,11 +4170,13 @@ model: qwen
             );
         }
 
-        // resolve_review_agent_config falls back to claude-code when neither a
-        // review model nor a global model is set.
+        // resolve_review_agent_config falls back to the baked-in
+        // claude-code-haiku default when neither a review model nor a global
+        // model is set. This is the review scope's special default; it differs
+        // from the plain `claude-code` default of resolve_agent_config.
         #[test]
         #[serial_test::serial(cwd)]
-        fn test_resolve_review_agent_config_falls_back_to_default() {
+        fn test_resolve_review_agent_config_falls_back_to_haiku_default() {
             let temp_dir = setup_test_env();
             let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
@@ -4090,8 +4184,116 @@ model: qwen
             assert_eq!(
                 config.executor_type(),
                 ModelExecutorType::ClaudeCode,
-                "Should fall back to claude-code when nothing is configured"
+                "Review scope should fall back to a claude-code executor"
             );
+            match config.executor() {
+                ModelExecutorConfig::ClaudeCode(claude_config) => {
+                    assert_eq!(
+                        claude_config.args,
+                        vec!["--model".to_string(), "haiku".to_string()],
+                        "Review scope default must be claude-code-haiku (--model haiku)"
+                    );
+                }
+                _ => panic!("Should be Claude Code config"),
+            }
+        }
+
+        // An explicitly configured review.model overrides the baked-in
+        // claude-code-haiku default: plain claude-code carries no --model haiku.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_resolve_review_agent_config_explicit_overrides_haiku_default() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+            std::fs::write(&config_path, "review:\n  model: claude-code\n").unwrap();
+
+            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah()).unwrap();
+            assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
+            match config.executor() {
+                ModelExecutorConfig::ClaudeCode(claude_config) => {
+                    assert!(
+                        claude_config.args.is_empty(),
+                        "Explicit review.model: claude-code must win (no --model haiku), got {:?}",
+                        claude_config.args
+                    );
+                }
+                _ => panic!("Should be Claude Code config"),
+            }
+        }
+
+        // resolve_review_agent_name is the single source of truth for the
+        // effective review model name: unset -> baked-in REVIEW_DEFAULT_AGENT.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_resolve_review_agent_name_unset_returns_default() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let name = ModelManager::resolve_review_agent_name(&ModelPaths::sah()).unwrap();
+            assert_eq!(
+                name, REVIEW_DEFAULT_AGENT,
+                "unset review.model must resolve to the baked-in default name"
+            );
+        }
+
+        // resolve_review_agent_name returns the configured review.model verbatim
+        // when one is set.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_resolve_review_agent_name_uses_configured() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+            std::fs::write(&config_path, "review:\n  model: claude-code\n").unwrap();
+
+            let name = ModelManager::resolve_review_agent_name(&ModelPaths::sah()).unwrap();
+            assert_eq!(name, "claude-code", "configured review.model must win");
+        }
+
+        // An explicitly configured but unresolvable review.model warns and falls
+        // back to the global default rather than erroring (matching the serve
+        // wiring's behavior — the paths must agree).
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_resolve_review_agent_config_invalid_name_falls_back() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+            std::fs::write(&config_path, "review:\n  model: no-such-model-xyz\n").unwrap();
+
+            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah())
+                .expect("invalid review.model should warn and fall back, not error");
+            assert_eq!(
+                config.executor_type(),
+                ModelExecutorType::ClaudeCode,
+                "fallback should land on the global default (claude-code)"
+            );
+        }
+
+        // The plain default scope (resolve_agent_config, non-review) is still
+        // claude-code with empty args — unchanged by the review-scope default.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_resolve_agent_config_default_scope_is_plain_claude_code() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config = ModelManager::resolve_agent_config(&ModelPaths::sah()).unwrap();
+            assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
+            match config.executor() {
+                ModelExecutorConfig::ClaudeCode(claude_config) => {
+                    assert!(
+                        claude_config.args.is_empty(),
+                        "Default (non-review) scope must stay plain claude-code, got {:?}",
+                        claude_config.args
+                    );
+                }
+                _ => panic!("Should be Claude Code config"),
+            }
         }
 
         // Security validation rejects empty and path-traversal names via

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a080
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffa580
 project: claude-model-select
 title: Add builtin claude-code-haiku model YAML
 ---
@@ -36,4 +36,4 @@ The build-time `BuiltinGenerator` (`crates/swissarmyhammer-config/build.rs`, sou
 - [ ] Run: `cargo test -p swissarmyhammer-config` — all green.
 
 ## Workflow
-- Use `/tdd` — write the failing loader/parse test first, then add the YAML to make it pass.
+- Use `/tdd` — write the failing loader/parse test first, then add the YAML to make it pass. #haiku

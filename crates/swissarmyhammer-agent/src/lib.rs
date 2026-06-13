@@ -361,6 +361,21 @@ pub async fn create_agent(
     create_agent_with_options(config, mcp_config, CreateAgentOptions::default()).await
 }
 
+/// Extract the Claude Code CLI switches (`ClaudeCodeConfig.args`) from a
+/// resolved [`ModelConfig`].
+///
+/// Returns the configured `args` when the selected executor is
+/// [`ModelExecutorConfig::ClaudeCode`], otherwise an empty vector. This is the
+/// single source of truth for the ClaudeCode arg lookup so the production spawn
+/// path and its test cannot drift.
+fn claude_code_args(config: &ModelConfig) -> Vec<String> {
+    if let ModelExecutorConfig::ClaudeCode(cfg) = config.executor() {
+        cfg.args.clone()
+    } else {
+        Vec::new()
+    }
+}
+
 /// Create an ACP agent with additional options
 ///
 /// Like `create_agent` but accepts options for ephemeral mode, etc.
@@ -371,11 +386,19 @@ pub async fn create_agent_with_options(
 ) -> AcpResult<AcpAgentHandle> {
     match config.executor_type() {
         ModelExecutorType::ClaudeCode => {
+            // Thread the YAML-configured CLI switches (`ClaudeCodeConfig.args`)
+            // from the resolved `ModelConfig` into the Claude agent so the spawn
+            // path forwards them to the `claude` process.
+            // TODO: ClaudeCodeConfig.claude_path is not yet consumed by
+            // claude-agent (no sink exists); wire it once claude-agent grows a
+            // custom-binary-path option.
+            let extra_args = claude_code_args(config);
             create_claude_agent(
                 mcp_config,
                 options.ephemeral,
                 options.tools_override.clone(),
                 options.auto_allow_all,
+                extra_args,
             )
             .await
         }
@@ -805,11 +828,15 @@ async fn dispatch_llama_notification(
 }
 
 /// Create a Claude ACP agent
+///
+/// `extra_args` are extra CLI switches (from the resolved `ModelConfig`'s
+/// `ClaudeCodeConfig.args`) carried through onto the spawned `claude` process.
 async fn create_claude_agent(
     mcp_config: Option<McpServerConfig>,
     ephemeral: bool,
     tools_override: Option<String>,
     auto_allow_all: bool,
+    extra_args: Vec<String>,
 ) -> AcpResult<AcpAgentHandle> {
     // Check if Claude CLI is available (claude-agent requires this)
     if which::which("claude").is_err() {
@@ -819,8 +846,13 @@ async fn create_claude_agent(
         ));
     }
 
-    let agent_config =
-        build_claude_agent_config(mcp_config, ephemeral, tools_override, auto_allow_all);
+    let agent_config = build_claude_agent_config(
+        mcp_config,
+        ephemeral,
+        tools_override,
+        auto_allow_all,
+        extra_args,
+    );
 
     // Create the Claude agent
     let (agent, notification_rx) =
@@ -837,9 +869,13 @@ async fn create_claude_agent(
 ///
 /// Pure (no I/O, no process spawn) so the wiring is unit-testable without the
 /// Claude CLI: which tools the permission engine auto-approves, whether the
-/// per-board MCP server is attached, and the ephemeral / tools-override
-/// carry-through. [`create_claude_agent`] calls this and then spawns
+/// per-board MCP server is attached, and the ephemeral / tools-override /
+/// extra-args carry-through. [`create_claude_agent`] calls this and then spawns
 /// `ClaudeAgent::new`.
+///
+/// `extra_args` are the YAML-configured `ClaudeCodeConfig.args` and are set on
+/// `claude.extra_args`, from where the spawn path forwards them to the `claude`
+/// process command line.
 ///
 /// Auto-allow resolution: the app runs the Claude CLI with
 /// `--dangerously-skip-permissions`, making claude-agent's own policy engine
@@ -855,6 +891,7 @@ fn build_claude_agent_config(
     ephemeral: bool,
     tools_override: Option<String>,
     auto_allow_all: bool,
+    extra_args: Vec<String>,
 ) -> claude_agent::AgentConfig {
     let auto_allow_tool_patterns = resolve_auto_allow_patterns(auto_allow_all);
 
@@ -882,6 +919,7 @@ fn build_claude_agent_config(
 
     agent_config.claude.ephemeral = ephemeral;
     agent_config.claude.tools_override = tools_override;
+    agent_config.claude.extra_args = extra_args;
     agent_config
 }
 
@@ -2230,7 +2268,7 @@ mod tests {
     #[test]
     fn test_build_claude_agent_config_threads_auto_allow_all_in_both_branches() {
         // No-MCP branch.
-        let no_mcp = build_claude_agent_config(None, false, None, true);
+        let no_mcp = build_claude_agent_config(None, false, None, true, Vec::new());
         assert_eq!(
             no_mcp.auto_allow_tool_patterns,
             vec!["*".to_string()],
@@ -2243,6 +2281,7 @@ mod tests {
             false,
             None,
             true,
+            Vec::new(),
         );
         assert_eq!(
             with_mcp.auto_allow_tool_patterns,
@@ -2256,7 +2295,7 @@ mod tests {
     /// caller relies on.
     #[test]
     fn test_build_claude_agent_config_default_is_mcp_only_in_both_branches() {
-        let no_mcp = build_claude_agent_config(None, false, None, false);
+        let no_mcp = build_claude_agent_config(None, false, None, false, Vec::new());
         assert_eq!(no_mcp.auto_allow_tool_patterns, vec!["mcp__*".to_string()]);
 
         let with_mcp = build_claude_agent_config(
@@ -2264,6 +2303,7 @@ mod tests {
             false,
             None,
             false,
+            Vec::new(),
         );
         assert_eq!(
             with_mcp.auto_allow_tool_patterns,
@@ -2280,6 +2320,7 @@ mod tests {
             false,
             None,
             false,
+            Vec::new(),
         );
         assert_eq!(with_mcp.mcp_servers.len(), 1);
         match &with_mcp.mcp_servers[0] {
@@ -2290,7 +2331,7 @@ mod tests {
             _ => panic!("expected an HTTP MCP server variant"),
         }
 
-        let no_mcp = build_claude_agent_config(None, false, None, false);
+        let no_mcp = build_claude_agent_config(None, false, None, false, Vec::new());
         assert!(
             no_mcp.mcp_servers.is_empty(),
             "no MCP config must attach no servers"
@@ -2301,13 +2342,70 @@ mod tests {
     /// Claude config in both branches.
     #[test]
     fn test_build_claude_agent_config_threads_ephemeral_and_tools_override() {
-        let custom = build_claude_agent_config(None, true, Some(String::new()), false);
+        let custom = build_claude_agent_config(None, true, Some(String::new()), false, Vec::new());
         assert!(custom.claude.ephemeral);
         assert_eq!(custom.claude.tools_override, Some(String::new()));
 
-        let plain = build_claude_agent_config(None, false, None, false);
+        let plain = build_claude_agent_config(None, false, None, false, Vec::new());
         assert!(!plain.claude.ephemeral);
         assert_eq!(plain.claude.tools_override, None);
+    }
+
+    /// YAML-configured `ClaudeCodeConfig.args` must be carried through onto the
+    /// nested Claude config as `extra_args`, so the spawn path forwards the
+    /// configured CLI switches to the `claude` process.
+    #[test]
+    fn test_build_claude_agent_config_threads_extra_args() {
+        let result = build_claude_agent_config(
+            None,
+            false,
+            None,
+            false,
+            vec!["--model".to_string(), "haiku".to_string()],
+        );
+        assert_eq!(
+            result.claude.extra_args,
+            vec!["--model".to_string(), "haiku".to_string()]
+        );
+    }
+
+    /// Regression guard: empty `args` must yield empty `extra_args`, preserving
+    /// today's behavior for `claude-code` models with no configured switches.
+    #[test]
+    fn test_build_claude_agent_config_empty_extra_args() {
+        let result = build_claude_agent_config(None, false, None, false, Vec::new());
+        assert!(result.claude.extra_args.is_empty());
+    }
+
+    /// The wiring `create_agent_with_options` performs: extract `args` from a
+    /// `ModelConfig`'s `claude-code` executor and thread them through
+    /// `build_claude_agent_config` into `extra_args`. Proves the seam from
+    /// `ModelConfig` to the built `ClaudeConfig` end-to-end (no mocks).
+    #[test]
+    fn test_claude_code_config_args_flow_from_model_config() {
+        use swissarmyhammer_config::model::ClaudeCodeConfig;
+
+        let config = ModelConfig {
+            executors: vec![swissarmyhammer_config::model::ExecutorEntry {
+                platform: None,
+                executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig {
+                    claude_path: None,
+                    args: vec!["--model".to_string(), "haiku".to_string()],
+                }),
+            }],
+            quiet: false,
+        };
+
+        // Exercise the exact production extraction helper so flipping it (e.g.
+        // to `Vec::new()`) breaks this assertion.
+        let extra_args = claude_code_args(&config);
+        assert_eq!(extra_args, vec!["--model".to_string(), "haiku".to_string()]);
+
+        let built = build_claude_agent_config(None, false, None, false, extra_args);
+        assert_eq!(
+            built.claude.extra_args,
+            vec!["--model".to_string(), "haiku".to_string()]
+        );
     }
 
     /// End-to-end behavioral guard for `auto_allow_all == true`: the patterns

@@ -126,6 +126,11 @@ pub struct SpawnConfig {
     /// Ephemeral mode: uses haiku model and no session persistence
     #[builder(default)]
     pub ephemeral: bool,
+    /// Extra CLI switches appended verbatim to the spawned `claude` command.
+    /// Carried from [`crate::config::ClaudeConfig::extra_args`]. If these
+    /// already supply a `--model`, ephemeral mode will not add its own.
+    #[builder(default)]
+    pub extra_args: Vec<String>,
     /// Override for Claude's built-in tools. When set to Some(""), disables all built-in tools.
     /// This is used for validator agents that should only have MCP-provided tools.
     #[builder(default)]
@@ -452,7 +457,8 @@ impl ClaudeProcess {
 
         Self::log_spawn_info(&config, &claude_session_uuid);
 
-        let mut command = Self::build_base_command(&claude_session_uuid, &config.attachment);
+        let mut command =
+            Self::build_base_command(&claude_session_uuid, &config.attachment, &config.extra_args);
         Self::configure_agent_mode(&mut command, &config);
         Self::configure_system_prompt(&mut command, &config);
         Self::configure_ephemeral_mode(&mut command, &config);
@@ -486,6 +492,7 @@ impl ClaudeProcess {
     fn build_base_command(
         claude_session_uuid: &str,
         attachment: &ConversationAttachment,
+        extra_args: &[String],
     ) -> Command {
         let mut command = Command::new("claude");
         command.args(CLAUDE_CLI_ARGS);
@@ -509,7 +516,16 @@ impl ClaudeProcess {
             .env("CLAUDE_ACP", "1")
             // Allow spawning Claude from within a Claude Code session
             .env_remove("CLAUDECODE");
+        // Caller-supplied switches are appended verbatim so they can override
+        // or extend the base contract (e.g. `--model`).
+        command.args(extra_args);
         command
+    }
+
+    /// Whether `extra_args` already supplies a `--model` switch. Ephemeral mode
+    /// consults this so it does not append a second, conflicting `--model`.
+    fn extra_args_have_model(extra_args: &[String]) -> bool {
+        extra_args.iter().any(|a| a == "--model")
     }
 
     /// Configure agent mode if specified.
@@ -544,7 +560,11 @@ impl ClaudeProcess {
     fn configure_ephemeral_mode(command: &mut Command, config: &SpawnConfig) {
         if config.ephemeral {
             tracing::info!("Spawning Claude in ephemeral mode (haiku, no session persistence)");
-            command.arg("--model").arg("haiku");
+            // A caller-supplied `--model` wins; only default to haiku when none
+            // was given, so we never emit two conflicting `--model` flags.
+            if !Self::extra_args_have_model(&config.extra_args) {
+                command.arg("--model").arg("haiku");
+            }
             command.arg("--no-session-persistence");
         }
     }
@@ -1137,8 +1157,11 @@ mod tests {
     /// Claude loads by default.
     #[test]
     fn test_base_command_loads_filesystem_setting_sources() {
-        let command =
-            ClaudeProcess::build_base_command("test-session-uuid", &ConversationAttachment::New);
+        let command = ClaudeProcess::build_base_command(
+            "test-session-uuid",
+            &ConversationAttachment::New,
+            &[],
+        );
         let args = command_args(&command);
 
         let value = arg_value(&args, "--setting-sources").unwrap_or_else(|| {
@@ -1159,8 +1182,11 @@ mod tests {
     /// still pass `--print` and the stream-json input/output format flags.
     #[test]
     fn test_base_command_retains_core_streamjson_args() {
-        let command =
-            ClaudeProcess::build_base_command("test-session-uuid", &ConversationAttachment::New);
+        let command = ClaudeProcess::build_base_command(
+            "test-session-uuid",
+            &ConversationAttachment::New,
+            &[],
+        );
         let args = command_args(&command);
 
         assert!(
@@ -1208,7 +1234,7 @@ mod tests {
                 parent: SessionId::new(),
             },
         ] {
-            let command = ClaudeProcess::build_base_command("test-session-uuid", &attachment);
+            let command = ClaudeProcess::build_base_command("test-session-uuid", &attachment, &[]);
             let args = command_args(&command);
             assert!(
                 !args.iter().any(|a| a == "--no-session-persistence"),
@@ -1250,18 +1276,87 @@ mod tests {
         );
     }
 
+    /// Arbitrary CLI switches supplied via `SpawnConfig.extra_args` must be
+    /// appended verbatim, in order, to the spawned `claude` command.
+    #[test]
+    fn test_base_command_appends_extra_args_in_order() {
+        let command = ClaudeProcess::build_base_command(
+            "the-uuid",
+            &ConversationAttachment::New,
+            &["--model".to_string(), "haiku".to_string()],
+        );
+        let args = command_args(&command);
+        let model_pos = args
+            .iter()
+            .position(|a| a == "--model")
+            .unwrap_or_else(|| panic!("expected --model in args, got: {args:?}"));
+        assert_eq!(
+            args.get(model_pos + 1).map(String::as_str),
+            Some("haiku"),
+            "--model must be immediately followed by haiku, got args: {args:?}"
+        );
+    }
+
+    /// With no extra args and a non-ephemeral attachment, the base command must
+    /// not carry any `--model` flag (regression guard for the empty case).
+    #[test]
+    fn test_base_command_without_extra_args_has_no_model() {
+        let command =
+            ClaudeProcess::build_base_command("the-uuid", &ConversationAttachment::New, &[]);
+        let args = command_args(&command);
+        assert!(
+            !args.iter().any(|a| a == "--model"),
+            "empty extra_args must add no --model flag, got args: {args:?}"
+        );
+    }
+
+    /// When `extra_args` already supplies a `--model`, ephemeral mode must NOT
+    /// append a second one: the assembled command carries exactly one `--model`
+    /// (the caller's), while ephemeral's `--no-session-persistence` still applies.
+    #[test]
+    fn test_ephemeral_mode_does_not_duplicate_caller_model() {
+        let config = SpawnConfig::builder()
+            .session_id(SessionId::new())
+            .acp_session_id(agent_client_protocol::schema::SessionId::new(
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            ))
+            .cwd(std::env::temp_dir())
+            .ephemeral(true)
+            .extra_args(vec!["--model".to_string(), "haiku".to_string()])
+            .build();
+        // Mirror the real assembly: base command (which appends extra_args)
+        // then ephemeral configuration.
+        let mut command = ClaudeProcess::build_base_command(
+            "the-uuid",
+            &ConversationAttachment::New,
+            &config.extra_args,
+        );
+        ClaudeProcess::configure_ephemeral_mode(&mut command, &config);
+        let args = command_args(&command);
+        let model_count = args.iter().filter(|a| *a == "--model").count();
+        assert_eq!(
+            model_count, 1,
+            "exactly one --model expected when caller supplies one, got args: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "--no-session-persistence"),
+            "ephemeral mode must still disable session persistence, got args: {args:?}"
+        );
+    }
+
     /// New sessions attach with `--session-id <uuid>`; resumed sessions with
     /// `--resume <uuid>` (and no `--session-id` / `--fork-session`).
     #[test]
     fn test_base_command_new_and_resume_attachment_args() {
-        let command = ClaudeProcess::build_base_command("the-uuid", &ConversationAttachment::New);
+        let command =
+            ClaudeProcess::build_base_command("the-uuid", &ConversationAttachment::New, &[]);
         let args = command_args(&command);
         assert_eq!(arg_value(&args, "--session-id"), Some("the-uuid"));
         assert!(!args.iter().any(|a| a == "--resume"));
         assert!(!args.iter().any(|a| a == "--fork-session"));
 
         let command =
-            ClaudeProcess::build_base_command("the-uuid", &ConversationAttachment::Resume);
+            ClaudeProcess::build_base_command("the-uuid", &ConversationAttachment::Resume, &[]);
         let args = command_args(&command);
         assert_eq!(arg_value(&args, "--resume"), Some("the-uuid"));
         assert!(!args.iter().any(|a| a == "--session-id"));
@@ -1278,6 +1373,7 @@ mod tests {
         let command = ClaudeProcess::build_base_command(
             "child-uuid",
             &ConversationAttachment::Fork { parent },
+            &[],
         );
         let args = command_args(&command);
         assert_eq!(
