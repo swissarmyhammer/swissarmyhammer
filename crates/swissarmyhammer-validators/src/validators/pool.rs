@@ -49,26 +49,42 @@ pub const DEFAULT_MAX_TOKENS: u64 = 16 * 1024;
 /// Idle-progress window for a single prompt turn (`new_session` → `prompt`).
 ///
 /// A turn is abandoned only when NO streaming progress — no `session/update`
-/// notification for the turn's session — has arrived for this long. Total wall
-/// clock is deliberately NOT capped at this value: a legitimate turn on a local
-/// 35B model (big review prompt, agentic loop, one shared GPU serializing
-/// decodes across fleet tasks) routinely needs more than 300s, but while it is
-/// decoding it streams chunks continuously, so it keeps resetting this window.
-/// Only a wedged turn (e.g. a nested agent request the client failed to answer)
-/// goes silent for the whole window, and that degrades to a single-task error —
-/// the fleet reports zero findings for it and the review COMPLETES — instead of
-/// hanging the whole review forever.
+/// notification for the turn's session — has arrived for this long AFTER the
+/// turn's first progress. The window is not armed until that first progress:
+/// before it, the turn may be waiting in the GPU queue (behind earlier decodes
+/// on the one shared GPU) and is NOT idle, so only the absolute ceiling
+/// ([`PROMPT_TURN_CEILING`]) bounds it. Anchoring the window at submission
+/// instead counted innocent queue-wait as a stall and abandoned forks queued
+/// behind a deep prime+fork batch before they ever decoded.
+///
+/// Total wall clock is deliberately NOT capped at this value: a legitimate turn
+/// on a local 35B model (big review prompt, agentic loop, one shared GPU
+/// serializing decodes across fleet tasks) routinely needs more than 300s, but
+/// while it is decoding it streams chunks continuously, so it keeps resetting
+/// this window. Only a turn that started then went silent (e.g. a nested agent
+/// request the client failed to answer) trips it, and that degrades to a
+/// single-task error — the fleet reports zero findings for it and the review
+/// COMPLETES — instead of hanging the whole review forever.
 pub const PROMPT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Defensive absolute ceiling on a single prompt turn.
 ///
-/// Catches the one pathology the idle window cannot: a turn that keeps emitting
-/// notifications forever without ever completing (e.g. a runaway agentic loop).
-/// It must sit far above local-model reality — a single legitimate local-35B
-/// turn can take well over five minutes of wall clock when one shared GPU
-/// serializes decodes across fleet tasks — so it is set to 45 minutes: long
-/// enough to never false-fire on a slow-but-live turn, short enough that a
-/// runaway turn cannot pin a worker forever.
+/// Catches the two pathologies the idle window cannot:
+/// - a turn that keeps emitting notifications forever without ever completing
+///   (a runaway agentic loop);
+/// - a turn that never streams any progress (wedged before the first token) —
+///   the idle window stays disarmed until first progress, so the ceiling is its
+///   only bound.
+///
+/// It is the bound on a turn's TOTAL wall clock, which now explicitly includes
+/// time spent queued for the GPU before the first decode: with the prime+fork
+/// path a fork can wait behind a deep batch of primes serialized on the one
+/// shared GPU before it streams anything. It must therefore sit far above
+/// local-model reality — a single legitimate local-35B turn can take well over
+/// five minutes of decode, and a queued fork adds the wait ahead of it — so it
+/// is set to 45 minutes: long enough to never false-fire on a slow turn that
+/// waited a while in the queue then decoded, short enough that a runaway or
+/// wedged turn cannot pin a worker forever.
 pub const PROMPT_TURN_CEILING: std::time::Duration = std::time::Duration::from_secs(45 * 60);
 
 /// Backend-aware policy describing how many workers the pool runs and whether it
@@ -583,9 +599,15 @@ async fn worker_loop(
 /// - **idle**: no `session/update` notification for the turn's session within
 ///   `config.idle_timeout`. Every received update for the session resets the
 ///   window, so a slow-but-streaming turn (the local-35B case) is never
-///   abandoned regardless of total duration.
+///   abandoned regardless of total duration. The idle window is **not armed
+///   until the turn's FIRST progress** — a turn waiting in the GPU queue
+///   (behind earlier decodes on the one shared GPU) streams nothing yet is not
+///   idle, so before first progress only the ceiling bounds it. Anchoring the
+///   idle clock at submission instead wrongly abandoned forks queued behind a
+///   deep prime+fork batch on the single GPU.
 /// - **ceiling**: `config.turn_ceiling` of total wall clock, the defensive cap
-///   on a turn that streams forever without completing.
+///   on a turn that streams forever without completing — and the only bound on
+///   a turn still waiting in the queue for the GPU.
 ///
 /// On abandonment the in-flight session is actively cancelled (ACP
 /// `session/cancel`) so the agent stops decoding, rather than being detached to
@@ -617,11 +639,17 @@ async fn run_turn_with_liveness(
 
     let started = tokio::time::Instant::now();
     let ceiling_deadline = started + config.turn_ceiling;
-    let mut last_progress = started;
+    // `None` until the turn's first progress arms the idle window. A turn that
+    // has streamed nothing yet is queued for the GPU, not idle — only the
+    // ceiling bounds it.
+    let mut last_progress: Option<tokio::time::Instant> = None;
     let mut liveness_open = true;
 
     loop {
-        let abandon_at = (last_progress + config.idle_timeout).min(ceiling_deadline);
+        let abandon_at = match last_progress {
+            Some(progress) => (progress + config.idle_timeout).min(ceiling_deadline),
+            None => ceiling_deadline,
+        };
         tokio::select! {
             result = &mut turn => return result,
             received = liveness.recv(), if liveness_open => {
@@ -637,18 +665,21 @@ async fn run_turn_with_liveness(
 /// Fold one liveness-subscription poll into the supervisor's progress state.
 ///
 /// Encapsulates the progress policy:
-/// - a notification for **our** session is progress (updates `last_progress`);
-///   other sessions' traffic is not.
+/// - a notification for **our** session is progress; it arms (on first
+///   progress) and resets `last_progress`. Other sessions' traffic is not.
 /// - a `Lagged` receiver counts as progress: the dropped messages may have
 ///   included ours, and abandonment is a backstop for a *wedged* turn — a
 ///   wedged turn produces no traffic to lag behind.
 /// - a `Closed` channel means no further progress can ever be observed; close
 ///   the liveness arm (`liveness_open = false`) and let the turn race the
 ///   remaining deadlines.
+///
+/// `last_progress` is `None` until the first progress event, which is what
+/// keeps the idle window disarmed while a turn is still queued for the GPU.
 fn note_progress(
     received: Result<SessionNotification, broadcast::error::RecvError>,
     session_slot: &std::sync::Mutex<Option<SessionId>>,
-    last_progress: &mut tokio::time::Instant,
+    last_progress: &mut Option<tokio::time::Instant>,
     liveness_open: &mut bool,
 ) {
     match received {
@@ -659,11 +690,11 @@ fn note_progress(
                 .as_ref()
                 .is_some_and(|sid| notification.session_id == *sid);
             if is_ours {
-                *last_progress = tokio::time::Instant::now();
+                *last_progress = Some(tokio::time::Instant::now());
             }
         }
         Err(broadcast::error::RecvError::Lagged(_)) => {
-            *last_progress = tokio::time::Instant::now();
+            *last_progress = Some(tokio::time::Instant::now());
         }
         Err(broadcast::error::RecvError::Closed) => {
             *liveness_open = false;
@@ -1270,6 +1301,104 @@ mod tests {
         }
     }
 
+    /// Holds every `prompt` behind a shared gate (a [`tokio::sync::Semaphore`])
+    /// so the test controls exactly how many prompts may decode at once — the
+    /// shape of the single-GPU llama backend, where a `prompt` request is sent
+    /// to the agent but blocks behind the GpuLock until earlier decodes finish.
+    /// A gated prompt streams nothing while it waits, then emits one
+    /// `agent_message_chunk` and completes once it acquires a permit.
+    ///
+    /// `new_session` always answers immediately (it is not a generation turn),
+    /// so a gated turn has its session id published to the liveness supervisor
+    /// and is genuinely "queued for the GPU, not idle".
+    struct GatedAgent {
+        next_session: AtomicUsize,
+        gate: Arc<tokio::sync::Semaphore>,
+        notifier: Arc<claude_agent::NotificationSender>,
+        decode_ms: u64,
+        cancelled_sessions: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl GatedAgent {
+        /// `permits` prompts may decode concurrently; the rest queue behind the
+        /// gate. Once a prompt acquires a permit it "decodes" for `decode_ms`
+        /// (holding the permit, so queued prompts keep waiting) before emitting
+        /// its first and only `agent_message_chunk` and completing — modelling a
+        /// non-trivial decode that keeps the GPU busy. `notifier` is the same
+        /// channel the pool's liveness supervisor watches.
+        fn new(
+            permits: usize,
+            decode_ms: u64,
+            notifier: Arc<claude_agent::NotificationSender>,
+        ) -> Self {
+            Self {
+                next_session: AtomicUsize::new(0),
+                gate: Arc::new(tokio::sync::Semaphore::new(permits)),
+                notifier,
+                decode_ms,
+                cancelled_sessions: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn cancelled(&self) -> Vec<String> {
+            self.cancelled_sessions.lock().unwrap().clone()
+        }
+    }
+
+    impl MockAgent for GatedAgent {
+        fn new_session<'a>(
+            &'a self,
+            _request: NewSessionRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+            numbered_session_response(&self.next_session, "gated-sess")
+        }
+
+        fn prompt<'a>(
+            &'a self,
+            request: PromptRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
+            let gate = Arc::clone(&self.gate);
+            let notifier = Arc::clone(&self.notifier);
+            let session_id = request.session_id.clone();
+            let decode_ms = self.decode_ms;
+            Box::pin(async move {
+                // Wait for the GPU (a permit). While waiting, this turn streams
+                // nothing — exactly the queue-wait the idle clock must not count.
+                let _permit = gate
+                    .acquire()
+                    .await
+                    .map_err(|_| agent_client_protocol::Error::internal_error())?;
+                // Hold the GPU for the decode duration (queued prompts keep
+                // waiting), streaming nothing until the end.
+                tokio::time::sleep(std::time::Duration::from_millis(decode_ms)).await;
+                // Now decoding: emit one streaming chunk so the turn shows
+                // progress, then complete.
+                let _ = notifier
+                    .send_update(SessionNotification::new(
+                        session_id,
+                        SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                            TextContent::new("decoded"),
+                        ))),
+                    ))
+                    .await;
+                Ok(PromptResponse::new(
+                    agent_client_protocol::schema::StopReason::EndTurn,
+                ))
+            })
+        }
+
+        fn cancel<'a>(
+            &'a self,
+            notification: CancelNotification,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<()>> {
+            self.cancelled_sessions
+                .lock()
+                .unwrap()
+                .push(notification.session_id.to_string());
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
     fn create_playback_fixture(response_json: &str) -> (TempDir, std::path::PathBuf) {
         let temp = TempDir::new().unwrap();
         let fixture_path = temp.path().join("playback.json");
@@ -1515,32 +1644,77 @@ mod tests {
         .await;
     }
 
-    /// A turn with zero streaming progress for the idle window is abandoned and
-    /// degrades to a single-task error; the worker survives to run later jobs
-    /// (the fleet continues).
+    /// A turn that STARTS streaming (first progress arms the idle window) then
+    /// goes silent for the idle window is abandoned as idle, and degrades to a
+    /// single-task error; the worker survives to run later jobs (the fleet
+    /// continues). A feeder emits a few chunks then stops, modelling a turn that
+    /// decoded a little then wedged (e.g. an unanswered nested agent request).
     #[tokio::test]
-    async fn test_pool_stalled_turn_abandons_after_idle_window() {
+    async fn test_pool_started_then_stalled_turn_abandons_as_idle() {
+        let agent = Arc::new(StallingAgent::new(1));
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+        let notifier_feeder = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            // Idle window short relative to the feeder's burst, but the burst
+            // ends well before the ceiling so the post-progress silence trips
+            // idle, not the ceiling.
+            let config = PoolConfig::local()
+                .with_idle_timeout(std::time::Duration::from_millis(600))
+                .with_turn_ceiling(std::time::Duration::from_secs(30));
+            let pool = AgentPool::new(conn, notifier_body, config);
+
+            // Emit a short burst of progress for the turn's session, then stop —
+            // the turn "started" but then stalls silent for the idle window.
+            let feeder = spawn_progress_feeder(notifier_feeder, "stall-sess-0", 100);
+            let submit = pool.submit("started then stalled");
+            tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+            feeder.abort();
+
+            let err = submit
+                .await
+                .expect("worker must deliver a result, not hang")
+                .expect_err("a turn that stalls after starting must be abandoned");
+            assert!(
+                matches!(err, PoolError::TurnIdle { .. }),
+                "abandonment must be the typed idle-window variant, got: {err:?}",
+            );
+
+            // The worker must survive the abandonment and run the next job.
+            pool.submit("after abandonment")
+                .await
+                .expect("result")
+                .expect("the fleet must continue after a single-task abandonment");
+        })
+        .await;
+    }
+
+    /// A turn that NEVER starts streaming (zero progress, ever) is not treated
+    /// as idle — the idle window is never armed — and is bounded only by the
+    /// absolute ceiling, which abandons it. This is the wedged-before-first-token
+    /// case; a queued-for-the-GPU turn shares the same disarmed-idle behaviour
+    /// but completes when its turn comes (see the gated-queue tests).
+    #[tokio::test]
+    async fn test_pool_never_started_turn_abandons_at_ceiling() {
         let agent = Arc::new(StallingAgent::new(1));
         let notifier = new_notifier();
         let notifier_body = Arc::clone(&notifier);
 
         run_with_mock_agent(agent, notifier, move |conn| async move {
-            // The idle window must exceed claude_agent's fixed 500ms trailing
-            // notification drain (`NOTIFICATION_COLLECTION_DELAY_MS`), or even
-            // an instantly-completing turn would look stalled.
             let config = PoolConfig::local()
-                .with_idle_timeout(std::time::Duration::from_millis(800))
-                .with_turn_ceiling(std::time::Duration::from_secs(30));
+                .with_idle_timeout(std::time::Duration::from_millis(200))
+                .with_turn_ceiling(std::time::Duration::from_millis(700));
             let pool = AgentPool::new(conn, notifier_body, config);
 
             let err = pool
-                .submit("stalled")
+                .submit("never starts")
                 .await
                 .expect("worker must deliver a result, not hang")
-                .expect_err("a turn with zero progress for the idle window must be abandoned");
+                .expect_err("a turn that never streams progress is bounded by the ceiling");
             assert!(
-                matches!(err, PoolError::TurnIdle { .. }),
-                "abandonment must be the typed idle-window variant, got: {err:?}",
+                matches!(err, PoolError::TurnCeiling { .. }),
+                "a never-started turn must be abandoned by the ceiling, not idle, got: {err:?}",
             );
 
             // The worker must survive the abandonment and run the next job.
@@ -1562,9 +1736,12 @@ mod tests {
         let notifier_body = Arc::clone(&notifier);
 
         run_with_mock_agent(agent, notifier, move |conn| async move {
+            // The StallingAgent never streams progress, so the idle window is
+            // never armed; a short ceiling abandons it quickly. Cancel-on-abandon
+            // fires on either abandonment path, which is what this test asserts.
             let config = PoolConfig::local()
-                .with_idle_timeout(std::time::Duration::from_millis(800))
-                .with_turn_ceiling(std::time::Duration::from_secs(30));
+                .with_idle_timeout(std::time::Duration::from_millis(200))
+                .with_turn_ceiling(std::time::Duration::from_millis(700));
             let pool = AgentPool::new(conn, notifier_body, config);
 
             let result = pool.submit("stalled").await.expect("result");
@@ -1613,6 +1790,103 @@ mod tests {
             assert!(
                 matches!(err, PoolError::TurnCeiling { .. }),
                 "abandonment must be the typed ceiling variant, got: {err:?}",
+            );
+        })
+        .await;
+    }
+
+    /// A turn that waits in the GPU queue longer than the idle window before it
+    /// emits its FIRST streaming progress, then decodes normally, must NOT be
+    /// abandoned: a queued turn is not idle. The idle clock only starts at first
+    /// progress. This is the core fix for the qwen prime+fork run, where a fork
+    /// queued behind ~15 primes on the single GPU waited well past 300s before
+    /// decoding and was wrongly abandoned.
+    #[tokio::test]
+    async fn test_pool_queued_turn_not_abandoned_before_first_progress() {
+        // A single GPU permit, held for ~1.5s of decode by the first prompt; the
+        // second prompt queues behind it and so streams nothing for longer than
+        // the idle window before it ever decodes.
+        let notifier = new_notifier();
+        let agent = Arc::new(GatedAgent::new(1, 1500, Arc::clone(&notifier)));
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            // Two workers so both turns are simultaneously inside
+            // `run_turn_with_liveness` (post-new_session, awaiting the gated
+            // prompt) — the second turn is queued for the GPU, not queued in
+            // the pool's mpsc channel. The idle window sits above claude_agent's
+            // fixed 500ms trailing notification drain, below the 1.5s queue wait.
+            let config = PoolConfig::remote(2)
+                .with_idle_timeout(std::time::Duration::from_millis(700))
+                .with_turn_ceiling(std::time::Duration::from_secs(30));
+            let pool = AgentPool::new(conn, notifier_body, config);
+
+            let first = pool.submit("decodes first");
+            // Let the first turn acquire the single permit before the second is
+            // submitted, so the second deterministically queues behind it.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let second = pool.submit("queues for the gpu");
+
+            // The first decodes, releases the permit; the second — which waited
+            // > the 300ms idle window with zero progress — then decodes.
+            let first = first.await.expect("result");
+            let second = second.await.expect("result");
+            assert!(
+                first.is_ok(),
+                "the first (decoding) turn completes: {:?}",
+                first.err()
+            );
+            assert!(
+                second.is_ok(),
+                "a turn that waited in the GPU queue past the idle window before \
+                 its first progress must NOT be abandoned, it completes once it \
+                 decodes: {:?}",
+                second.err()
+            );
+        })
+        .await;
+    }
+
+    /// A queue of N turns where only ONE may decode at a time (a single GPU
+    /// permit): none of the turns waiting their turn-to-run is abandoned while
+    /// pending under the ceiling. The whole batch completes. This is the
+    /// prime+fork serialization shape — many turns deep on one GPU.
+    #[tokio::test]
+    async fn test_pool_gated_queue_completes_without_abandonment() {
+        let notifier = new_notifier();
+        let agent = Arc::new(GatedAgent::new(1, 300, Arc::clone(&notifier)));
+        let agent_probe = Arc::clone(&agent);
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            // Enough workers that every turn sits in `run_turn_with_liveness`
+            // at once, all serialized behind the single GPU permit (300ms decode
+            // each). The later turns wait > 1s in the queue — well past the idle
+            // window (set above the 500ms trailing drain) yet under the ceiling.
+            let config = PoolConfig::remote(8)
+                .with_idle_timeout(std::time::Duration::from_millis(700))
+                .with_turn_ceiling(std::time::Duration::from_secs(30));
+            let pool = AgentPool::new(conn, notifier_body, config);
+
+            let n = 6;
+            let receivers: Vec<_> = (0..n).map(|i| pool.submit(format!("turn {i}"))).collect();
+
+            let mut completed = 0;
+            for rx in receivers {
+                let result = rx.await.expect("worker must deliver a result");
+                assert!(
+                    result.is_ok(),
+                    "no gated-queue turn may be abandoned while waiting its \
+                     turn-to-run under the ceiling: {:?}",
+                    result.err()
+                );
+                completed += 1;
+            }
+            assert_eq!(completed, n, "every gated turn must complete");
+            assert!(
+                agent_probe.cancelled().is_empty(),
+                "no queued turn may be cancelled: {:?}",
+                agent_probe.cancelled()
             );
         })
         .await;
