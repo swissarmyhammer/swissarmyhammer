@@ -171,8 +171,8 @@ impl Default for RegisterCommand {
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct UnregisterCommand {
-    /// The command id to unregister.
-    #[serde(default)]
+    /// The command id to unregister. Required — there is no command to
+    /// unregister without one.
     pub id: String,
 }
 
@@ -188,8 +188,8 @@ pub struct UnregisterCommand {
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ExecuteCommand {
-    /// The command id to execute.
-    #[serde(default)]
+    /// The command id to execute. Required — execution always targets a
+    /// specific registered command.
     pub id: String,
     /// Execution context (scope chain, target, args bag).
     #[serde(default)]
@@ -211,8 +211,8 @@ pub struct ExecuteCommand {
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AvailableCommand {
-    /// The command id to check.
-    #[serde(default)]
+    /// The command id to check. Required — the availability question is
+    /// always about a specific registered command.
     pub id: String,
     /// Execution context (scope chain, target, args bag).
     #[serde(default)]
@@ -262,8 +262,8 @@ pub struct ListCommand {
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SchemaCommand {
-    /// The command id whose schema is requested.
-    #[serde(default)]
+    /// The command id whose schema is requested. Required — the schema
+    /// lookup always targets a specific registered command.
     pub id: String,
 }
 
