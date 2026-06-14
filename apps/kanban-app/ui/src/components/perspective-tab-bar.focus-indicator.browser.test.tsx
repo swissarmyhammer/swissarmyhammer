@@ -569,7 +569,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
   // -------------------------------------------------------------------------
   // 4. Indicator returns after rename commit.
   //
-  // The active perspective is p2. Triggering `ui.entity.startRename`
+  // The active perspective is p2. Triggering `app.entity.startRename`
   // mounts the `<InlineRenameEditor>` inside the `TabButton`, replacing
   // the name text with a CM6 editor that takes DOM focus directly.
   // When the rename commits (Enter), the editor unmounts and the

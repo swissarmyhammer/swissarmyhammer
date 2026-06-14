@@ -3672,8 +3672,10 @@ work with files in a controlled directory.
     #[serial]
     fn test_deploy_tool_creates_store_and_mcp_json() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         // Create a source tool with a real MCP server reference
         let src = work.path().join("src-tool");
@@ -3734,16 +3736,16 @@ work with files in a controlled directory.
             "production",
             "env should be passed through"
         );
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
     #[serial]
     fn test_deploy_and_uninstall_tool() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         // Deploy
         let src = work.path().join("src-tool");
@@ -3776,16 +3778,16 @@ work with files in a controlled directory.
             mcp["mcpServers"]["fs-tool"].is_null(),
             "Server entry should be removed from .mcp.json"
         );
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
     #[serial]
     fn test_deploy_tool_preserves_existing_mcp_servers() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         // Pre-populate .mcp.json with an existing server
         std::fs::write(
@@ -3841,21 +3843,19 @@ work with files in a controlled directory.
             mcp["mcpServers"]["fs-tool"].is_null(),
             "Uninstalled tool should be gone"
         );
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
     #[serial]
     fn test_uninstall_tool_not_found() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         let result = uninstall_tool("nonexistent-tool", None, false);
         assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     // --- plugin: detection, deploy, uninstall ---
@@ -3879,8 +3879,10 @@ work with files in a controlled directory.
     #[serial]
     fn test_deploy_plugin_creates_files() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         let src = work.path().join("src-plugin");
         make_local_plugin(&src, "test-plugin", false);
@@ -3914,16 +3916,16 @@ work with files in a controlled directory.
         )
         .unwrap();
         assert_eq!(json["name"].as_str().unwrap(), "test-plugin");
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
     #[serial]
     fn test_deploy_and_uninstall_plugin() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         let src = work.path().join("src-plugin");
         make_local_plugin(&src, "test-plugin", false);
@@ -3934,16 +3936,16 @@ work with files in a controlled directory.
 
         uninstall_plugin("test-plugin", None, false).unwrap();
         assert!(!deployed.exists(), "Plugin dir should be removed");
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
     #[serial]
     fn test_deploy_plugin_with_bundled_mcp() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         // Create a plugin that bundles an .mcp.json
         let src = work.path().join("src-plugin");
@@ -3974,21 +3976,19 @@ work with files in a controlled directory.
                 .unwrap(),
             "node"
         );
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
     #[serial]
     fn test_uninstall_plugin_not_found() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         let result = uninstall_plugin("nonexistent-plugin", None, false);
         assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     // --- e2e: tool install → lockfile → list → uninstall ---
@@ -3997,8 +3997,10 @@ work with files in a controlled directory.
     #[serial]
     fn test_e2e_tool_install_list_uninstall() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         // 1. Create and deploy a tool using @modelcontextprotocol/server-filesystem
         let src = work.path().join("src-tool");
@@ -4054,16 +4056,16 @@ work with files in a controlled directory.
         lf.save(work.path()).unwrap();
         let lf = Lockfile::load(work.path()).unwrap();
         assert!(lf.packages.is_empty());
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
     #[serial]
     fn test_e2e_plugin_install_list_uninstall() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         // 1. Create and deploy a plugin
         let src = work.path().join("src-plugin");
@@ -4121,8 +4123,6 @@ work with files in a controlled directory.
         lf.save(work.path()).unwrap();
         let lf = Lockfile::load(work.path()).unwrap();
         assert!(lf.packages.is_empty());
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
@@ -4161,8 +4161,10 @@ work with files in a controlled directory.
     #[serial]
     fn test_deploy_validator_creates_files() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         // Create a source validator
         let src = work.path().join("src-val");
@@ -4176,16 +4178,16 @@ work with files in a controlled directory.
         let deployed = work.path().join(".validators/test-val");
         assert!(deployed.join("VALIDATOR.md").exists());
         assert!(deployed.join("rules/no-secrets.md").exists());
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
     #[serial]
     fn test_deploy_and_uninstall_validator() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         // Deploy
         let src = work.path().join("src-val");
@@ -4198,21 +4200,19 @@ work with files in a controlled directory.
         // Uninstall
         uninstall_validator("test-val", false).unwrap();
         assert!(!deployed.exists(), "Validator dir should be removed");
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
     #[serial]
     fn test_uninstall_validator_not_found() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         let result = uninstall_validator("nonexistent", false);
         assert!(matches!(result.unwrap_err(), RegistryError::NotFound(_)));
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     // --- lockfile round-trip for git-installed packages ---
@@ -4368,8 +4368,10 @@ work with files in a controlled directory.
     #[serial]
     fn test_e2e_deploy_local_validator_and_uninstall_by_name() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         // Create and deploy
         let src = work.path().join("src-val");
@@ -4410,8 +4412,6 @@ work with files in a controlled directory.
         lf.save(work.path()).unwrap();
         let lf = Lockfile::load(work.path()).unwrap();
         assert!(lf.get_package("e2e-val").is_none());
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     // --- cross-type coexistence and duplicate install tests ---
@@ -4420,8 +4420,10 @@ work with files in a controlled directory.
     #[serial]
     async fn test_e2e_all_four_types_coexist() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         // 1. Install a skill
         let skill_src = work.path().join("src-skill");
@@ -4539,16 +4541,16 @@ work with files in a controlled directory.
             work.path().join(".skills/test-skill/SKILL.md").exists(),
             "Skill should survive validator uninstall"
         );
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
     #[serial]
     fn test_deploy_tool_twice_overwrites_cleanly() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         // Deploy v1
         let src_v1 = work.path().join("src-v1");
@@ -4584,16 +4586,16 @@ work with files in a controlled directory.
         // Clean uninstall should still work
         uninstall_tool("fs-tool", None, false).unwrap();
         assert!(!store.exists());
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]
     #[serial]
     fn test_deploy_plugin_twice_overwrites_cleanly() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         // Deploy v1
         let src_v1 = work.path().join("src-v1");
@@ -4625,8 +4627,6 @@ work with files in a controlled directory.
         // Uninstall should still work cleanly
         uninstall_plugin("my-plugin", None, false).unwrap();
         assert!(!deployed.exists());
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     // --- end-to-end: clone real repo → deploy validator → lockfile → uninstall ---
@@ -4637,8 +4637,10 @@ work with files in a controlled directory.
         use crate::git_source;
 
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         // Clone anthropics/skills
         let source = git_source::parse_git_source("anthropics/skills", None).unwrap();
@@ -4697,8 +4699,6 @@ work with files in a controlled directory.
         lf.save(work.path()).unwrap();
         let lf = Lockfile::load(work.path()).unwrap();
         assert!(lf.packages.is_empty());
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     // --- metadata-only tool install tests ---
@@ -4707,8 +4707,10 @@ work with files in a controlled directory.
     #[serial]
     async fn test_install_tool_from_mcp_config_registers_server() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         let mcp = crate::registry::types::McpConfig {
             command: "npx".to_string(),
@@ -4763,16 +4765,16 @@ work with files in a controlled directory.
         let pkg = lf.get_package("brave-search").unwrap();
         assert_eq!(pkg.package_type, PackageType::Tool);
         assert_eq!(pkg.version, "1.0.0");
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[tokio::test]
     #[serial]
     async fn test_install_tool_from_tool_md_content() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         let tool_md = r#"---
 name: test-tool
@@ -4828,16 +4830,16 @@ mcp:
         let pkg = lf.get_package("test-tool").unwrap();
         assert_eq!(pkg.package_type, PackageType::Tool);
         assert_eq!(pkg.version, "2.0.0");
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[tokio::test]
     #[serial]
     async fn test_install_tool_from_metadata_rejects_non_tool() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         let version_detail = crate::registry::types::VersionDetail {
             name: "some-skill".to_string(),
@@ -4863,16 +4865,16 @@ mcp:
             "Error should mention not a tool: {}",
             err
         );
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[tokio::test]
     #[serial]
     async fn test_install_tool_from_mcp_config_then_uninstall() {
         let work = tempfile::tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(work.path()).unwrap();
+        // CurrentDirGuard (shared CURRENT_DIR_LOCK) instead of a raw
+        // set_current_dir: serializes against every CWD-mutating test in the
+        // binary, not just the unnamed `#[serial]` group.
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(work.path()).unwrap();
 
         let mcp = crate::registry::types::McpConfig {
             command: "npx".to_string(),
@@ -4917,8 +4919,6 @@ mcp:
             json["mcpServers"]["ephemeral-tool"].is_null(),
             "Server should be removed after uninstall"
         );
-
-        std::env::set_current_dir(old_dir).unwrap();
     }
 
     #[test]

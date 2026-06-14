@@ -378,9 +378,11 @@ definition for `path[0]` (the tool):
 Either way the wire call is a plain `tools/call`; `op` is just an
 argument. The platform never invents a noun/verb wire axis.
 
-`RESERVED` covers SDK-handled names (`on`, `off`, `once`, `subscribe`,
-`unsubscribe`) rather than forwarding them as tool, noun, or verb
-segments.
+A few names are SDK-handled rather than forwarded as tool/noun/verb
+segments: `on`/`subscribe`/`once` are the [event](#events) subscription
+surface, `off`/`unsubscribe` are inert (cancellation is the handle `on`
+returns), and `then` is intercepted so a dispatcher is never mistaken for a
+promise.
 
 ### Parameters are always passed as `{}`
 
@@ -540,9 +542,9 @@ definition.
 
 The server registry has a single global namespace. The first registration
 of a name wins; subsequent attempts fail with `ServerNameTaken`. The
-host reserves the names it registers at startup. Plugins declare what
-they intend to register in the manifest's `provides`, so collisions are
-typically caught at install time.
+host reserves the names it registers at startup. Collisions surface at
+runtime, when `register(name, source)` returns the error — the platform
+has no install-time declaration to check against.
 
 Servers do not have override-anything semantics. They're heavier units
 than commands (multi-tool surfaces, possibly stateful, possibly remote);
@@ -932,6 +934,48 @@ via stdio; both transports speak full MCP JSON-RPC, not the callback
 notification protocol. The callback primitive is purely for plugin →
 host function references, not server → tool dispatch.
 
+## Events
+
+Services declare the events they emit, and a plugin subscribes to them by
+name:
+
+```ts
+const off = this.commands.on("executed", (params) => {
+  // params is typed from the command service's declaration
+});
+off(); // stop receiving — optional; subscriptions also auto-clean on unload
+```
+
+`this.<server>.on(event, callback)` returns an unsubscribe handle. The set of
+events a server emits — and the shape of each callback's `params` — comes from
+what that service declares, the same way operations come from a service's `op`
+definitions. So events show up typed in the generated `.d.ts` (see
+[Codegen](#codegen)), and a misspelled event name is a clear error rather than
+silent silence. `once(event, cb)` is the same but fires at most once;
+`subscribe` is an alias of `on`. Calling the returned handle, or unloading the
+plugin, both tear the subscription down (host stops delivering and the stored
+callback is freed).
+
+A service declares an event in Rust with `#[notification]`, listing it in its
+`operation_tool!` alongside its operations; the decorated struct's fields are
+the callback's `params`, and the struct is also what the service publishes — so
+the declared shape and the delivered shape are one and the same. For example,
+the command service declares an `executed` event
+(`notifications/commands/executed`) and emits it after every successful command,
+so `this.commands.on("executed", …)` fires with `{ id, ctx, result }`.
+
+Internally, subscription reuses the [callback primitive](#callbacks): the
+callback crosses as an opaque id, and the host invokes it whenever the matching
+event is emitted.
+
+### Reactive `available()`
+
+A command's `available(ctx)` must answer synchronously (the palette checks every
+command on open), so an event subscription is how a command reacts to state that
+changes asynchronously: the plugin subscribes to the event that changes the
+precondition, caches a flag, and returns the flag from `available()`. See the
+[Command service](./command-service.md).
+
 ## Codegen
 
 The SDK is generic at runtime; it doesn't know which servers exist or
@@ -1052,37 +1096,69 @@ to runtime errors with clean messages (`UnknownServer`, `UnknownTool`,
 `.d.ts` is missing autocomplete or a spurious red squiggle — never a
 corrupted call.
 
-## Manifest
+## Plugin Identity
 
-```jsonc
-{
-  "id": "weather-plugin",
-  "name": "Weather",
-  "version": "1.0.0",
-  "entry": "src/plugin.ts",
+A plugin is a directory of TypeScript. There is no `plugin.json`, no
+manifest, no separate descriptor file. Everything the host needs to load
+a plugin comes from the directory itself and from properties on the
+plugin's exported `Plugin` subclass:
 
-  // Server names this plugin registers. The server itself declares its
-  // tools via the MCP SDK; we don't repeat them here.
-  "provides": ["weather"]
+| Field         | Where it lives                                          |
+| ------------- | ------------------------------------------------------- |
+| `id`          | The directory name on disk (e.g. `weather/` → `weather`) |
+| Entry module  | `index.ts` or `index.js` at the top of the directory    |
+| `name`        | `readonly name` property on the `Plugin` subclass       |
+| `version`     | `readonly version` property on the `Plugin` subclass    |
+| `description` | `readonly description` property on the `Plugin` subclass |
+
+```ts
+// plugins/weather/index.ts
+import { Plugin } from "@swissarmyhammer/plugin";
+
+export default class WeatherPlugin extends Plugin {
+  readonly name = "Weather";
+  readonly version = "1.0.0";
+  readonly description = "Current conditions and short-range forecast";
+
+  async load() {
+    this.register("weather", { url: "https://weather.example.com/mcp" });
+  }
 }
 ```
 
-`provides` is the set of server names this plugin will register at
-load time. The host validates at install time that names don't collide
-with reserved host servers, and at runtime that `this.register(server, source)`
-doesn't try to register a name not listed in `provides`. The platform
-queries each provided server via `tools/list` after registration to
-discover its tools — that's the only place tool metadata lives.
+The directory name is the plugin's identity across layers — project,
+user, and builtin copies of the same id stack the same way every other
+stacked resource does. `index.ts` and `index.js` are the only entry
+filenames the host looks for; whichever exists wins, `index.ts` first.
+Plugins import their own internal modules by relative path from there;
+no `entry` field tells the host where to start because the convention
+already does.
 
-The plugin's set of *consumed* servers is not declared in the manifest.
-A plugin can call any registered server at runtime. A call fails when
-the named server isn't registered (`UnknownServer`) or the tool isn't
-on that server (`UnknownTool`); the SDK additionally raises
-`UnknownOperation` when a `noun.verb` path is not in the tool's
-operations `_meta`.
+`name`, `version`, and `description` are descriptive metadata for the
+host UI and logs. They are not validated by the platform and not part of
+the wire protocol — a plugin with no overrides inherits the base class
+defaults (`"unnamed plugin"`, `"0.0.0"`, `""`) and still loads.
 
-`provides` expansions trigger a re-approval prompt on upgrade so users
-can see what new servers a plugin will add to the registry.
+### What is intentionally absent
+
+The set of MCP servers a plugin will register is not declared anywhere
+ahead of time:
+
+- **No `provides` list.** The host learns what a plugin registers when
+  it calls `register(name, source)`. Collisions surface there as
+  `ServerNameTaken`; there is no install-time check.
+- **No upgrade-time re-approval prompt.** A plugin that expands its set
+  of registrations on hot reload does so silently — the host has no
+  prior declaration to diff against.
+- **No declared set of *consumed* servers.** A plugin can call any
+  registered server at runtime. A call fails when the named server
+  isn't registered (`UnknownServer`) or the tool isn't on that server
+  (`UnknownTool`); the SDK additionally raises `UnknownOperation` when
+  a `noun.verb` path is not in the tool's operations `_meta`.
+
+The platform queries each registered server via `tools/list` after
+registration to discover its tools — that is the only place tool
+metadata lives.
 
 ## Plugin Discovery
 
@@ -1094,21 +1170,69 @@ user-editable resource in the project.
 
 ### Layout
 
-A plugin is a directory containing the manifest (`plugin.json`), the
-entry TypeScript file (named in the manifest's `entry`), and any local
-modules the plugin imports. Plugin directories live under the
-`plugins/` subdirectory of whichever layer they ship in:
+A plugin is a directory containing `index.ts` (or `index.js`) and any
+local modules the plugin imports. The directory name is the plugin's
+id. Plugin directories live under the `plugins/` subdirectory of
+whichever layer they ship in:
 
 | Layer       | Path                                                 | Source              |
 | ----------- | ---------------------------------------------------- | ------------------- |
 | **builtin** | compiled into the host binary via `include_dir!`     | host build          |
-| **user**    | `$XDG_CONFIG_HOME/sah/plugins/<plugin-id>/`          | user-installed      |
-| **project** | `<git_root>/.sah/plugins/<plugin-id>/`               | repo-checked-in     |
+| **user**    | `$XDG_CONFIG_HOME/kanban/plugins/<plugin-id>/`       | user-installed      |
+| **project** | `<board_dir>/.kanban/plugins/<plugin-id>/`           | repo-checked-in     |
 
-The host loads them with `ManagedDirectory<SwissarmyhammerConfig>` and a
-`VirtualFileSystem` scoped to the `plugins/` subdirectory. The directory
-*name* on disk does not need to match the plugin id; the manifest's
-`id` field is authoritative for identity across layers.
+The directory namespace is the **embedder's**, not a fixed `sah` one. The
+kanban app resolves its layers through `swissarmyhammer_directory::KanbanConfig`
+(`XDG_NAME = "kanban"`, `DIR_NAME = ".kanban"`), so the user layer is
+`~/.config/kanban/plugins/` and the project layer is the `.kanban/plugins/`
+directory of the board's own folder. A different embedder (a future TUI or
+headless host) supplies its own `DirectoryConfig` and so its own namespace —
+the platform hardcodes none.
+
+The host loads each layer with a `VirtualFileSystem` scoped to the `plugins/`
+subdirectory. The directory *name* on disk is authoritative for identity
+across layers — a `weather/` directory in the project layer shadows a
+`weather/` directory in the user layer regardless of what their `Plugin`
+subclasses set for `name`.
+
+### Project layer is per board window
+
+The project layer is **not global** — its root is the board the window is
+showing, so each kanban board window discovers project plugins from *its own*
+`<board_dir>/.kanban/plugins/`. Two windows open on two different boards see
+two different project-layer plugin sets, each stacked over the shared user and
+builtin layers. The builtin and user layers are process-wide; only the project
+layer (and the registrations it produces) is scoped to the board window.
+
+The kanban app is multi-window in a single process: `window.new` builds a new
+`WebviewWindow` in-process, and a window can open, close, or switch the board
+it shows at runtime. Today there is one process-wide `PluginHost` on
+`AppState`, with one global server registry and one global command registry —
+which cannot give each board window its own project-layer plugin set.
+
+**Chosen model: one `PluginHost` per board window.** Each open board window
+owns its own host — its own V8 isolate pool, its own `ServerRegistry`, its own
+command registry and `CommandService` — rooted at the shared builtin and user
+layers plus *that window's board* as the project layer
+(`<board_dir>/.kanban/plugins/`). Full registry isolation falls out for free:
+- a project plugin's commands and servers surface only in their own window,
+  because each window's palette/menus read that window's host;
+- two boards each shipping a `weather` plugin (or each overriding `task.move`)
+  never collide, because they are different registries entirely;
+- closing or switching a board tears down that window's host — isolates,
+  registrations, watcher — without touching any other window.
+
+The builtin bundles are extracted to a shared on-disk cache once at startup;
+each per-window host discovers from that cache and the shared user `plugins/`
+dir, so the *source* is shared even though each host loads its own isolates.
+The cost is N× the V8 per-isolate floor for N open windows — accepted in
+exchange for the simplest isolation model. `AppState` holds a map of
+window → host instead of a single host; command dispatch resolves the host of
+the calling `WebviewWindow`. Each per-window host still wires its command
+backends to its board (the existing `tokio::task_local!` substrate seam is set
+around that host's dispatch), so the data path is unchanged; only the host and
+its registries become per-window. The hot-reload watcher runs per host: the
+shared user `plugins/` dir plus that window's board `.kanban/plugins/`.
 
 ### Precedence
 
@@ -1169,8 +1293,8 @@ fixed at build time). Events are *stack-aware*: the consumer learns
 which layer changed and what name is affected, not which raw file path
 underneath. Debouncing happens inside the watcher (reusing the
 `async-watcher` pipeline `code-context` already uses), so a save that
-touches the manifest and several source files inside `plugins/weather/`
-produces one event per affected name, not one per file.
+touches several source files inside `plugins/weather/` produces one
+event per affected name, not one per file.
 
 The plugin host subscribes at startup and translates `StackedEvent` to
 load/reload/unload decisions based on which layer is currently active
@@ -1185,7 +1309,7 @@ for each plugin id:
 
 The watcher does not interpret the contents of a plugin directory; it
 only reports per-name layer events. The plugin host re-reads the
-manifest and source after each event.
+bundle's `index.ts`/`index.js` and any imported modules after each event.
 
 ### Relationship to the code-context watcher
 
@@ -1224,14 +1348,13 @@ first-class async, ES2024+, web streams.
 
 Plugins are written in TypeScript and ship as `.ts`. The host transpiles
 to JS at module-load time — no build step required of plugin authors.
-Manifest's `entry` points directly at a `.ts` file:
+The host loads `index.ts` (or `index.js`) at the top of the plugin
+directory and follows its imports from there:
 
-```jsonc
-{
-  "name": "Weather",
-  "entry": "src/plugin.ts",
-  "provides": ["weather"]
-}
+```text
+plugins/weather/
+├── index.ts          # default-exports a class extending Plugin
+└── lib/forecast.ts   # imported from index.ts by relative path
 ```
 
 The transpiler is **`deno_ast`** (which wraps `swc_core`), the same
@@ -1344,13 +1467,20 @@ calls `load()`. Total latency on the order of tens of ms.
 **Edge cases:**
 1. **In-flight operations terminate abruptly.** Isolate is killed; calls
    reject with `PluginReloaded`.
-2. **`provides` expansions require re-approval.** Hot reload pauses at
-   load if v2's manifest expands the set of servers the plugin registers;
-   user decides.
+2. **Registration set may change silently.** Nothing declares ahead of
+   time which servers a plugin registers, so a v2 that registers more
+   (or different) servers than v1 just does so when its `load()` runs.
+   Conflicts surface as `ServerNameTaken` from the new registrations.
 3. **Failed v2 load leaves the plugin unloaded.** No fallback to v1; v1
    is already torn down by the time v2 is attempted. Manual retry.
-4. **Crashed plugins do not auto-restart.** Surfaced via notification and
-   settings UI badge; user-initiated reload.
+4. **Crashed plugins do not auto-restart.** The platform records
+   [`ReloadStatus::Crashed { error }`](crate::ReloadStatus::Crashed) and
+   exposes it through `PluginHost::reload_status(plugin_id)`. "No
+   auto-restart" is structural: the watcher only fires on file changes,
+   and a crash is not a file change. Host applications (settings UI, a
+   TUI badge, a notification system) consume the status and surface it
+   to the user, who then triggers a manual reload by touching the bundle
+   on disk or calling `PluginHost::load` directly.
 5. **Plugin state in class fields is lost on reload.** Intended.
 
 **Dev-mode niceties:** the `swissarmyhammer-directory` watcher triggers
@@ -1361,7 +1491,7 @@ connection survives reloads.
 
 Every advertised capability of the plugin platform needs at least one
 integration test that exercises the full pipeline — real V8 isolate,
-real TS transpile, real manifest load, real dispatcher, real
+real TS transpile, real on-disk plugin bundle, real dispatcher, real
 registered server. Fixture-only tests that mock the dispatcher or
 hand-construct the registry prove math, not features; the same
 principle that governs the rest of this workspace
@@ -1411,8 +1541,8 @@ In prose:
 2. The host wraps the real `FilesTool` in an `InProcessServer` and
    registers it under a known name. No mocks.
 3. The test writes a small probe plugin to `<tempdir>/plugins/probe/`
-   — a real `plugin.json` and a real entry `.ts` file. The plugin's
-   `load()` does three things, using only the registered files
+   — a real `index.ts` whose default export extends `Plugin`. The
+   plugin's `load()` does three things, using only the registered files
    server: write a probe file in cwd, read it back, then write the
    readback content into a second probe file. (Reporting through a
    second written file means the test never needs a special host-side
@@ -1426,7 +1556,7 @@ In prose:
    value crossed back through the dispatcher into the isolate. If any
    stage of the pipeline is broken, at least one assertion fails.
 
-This test exercises the whole pipeline — manifest load, TS transpile,
+This test exercises the whole pipeline — bundle discovery, TS transpile,
 isolate creation, server lookup, operation-tool `op` dispatch,
 return-value marshalling — using only platform primitives. No `cwd`
 field on the Plugin base class, no test-only reporter hook, no fakes.

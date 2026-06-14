@@ -1,0 +1,3 @@
+color: 9900cc
+description: Real, checked-in example plugins under crates/swissarmyhammer-plugin/examples/plugins/, each a genuine plugin.json + entry.ts bundle that exercises one plugin-platform capability. Every example is verified by an end-to-end integration test that discovers and loads the COMMITTED bundle through a real V8 isolate — not a temp-dir string literal. The examples double as plugin-author documentation and make the platform's integration testing visible in the repo.
+name: Plugin Example Suite

@@ -35,6 +35,7 @@
 use super::PasteHandler;
 use crate::clipboard::ClipboardPayload;
 use crate::commands::run_op;
+use crate::commands_core::{parse_moniker, CommandContext, CommandError};
 use crate::context::KanbanContext;
 use crate::entity::position::POSITION_COLUMN_FIELD;
 use crate::entity::AddEntity;
@@ -42,7 +43,6 @@ use crate::task::DeleteTask;
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use swissarmyhammer_commands::{parse_moniker, CommandContext, CommandError};
 
 /// Override-bag keys that are reserved for ordinal handling and must be
 /// dropped from the snapshot before forwarding to [`AddEntity`].
@@ -68,7 +68,7 @@ impl PasteHandler for TaskIntoProjectHandler {
         clipboard: &ClipboardPayload,
         target: &str,
         ctx: &CommandContext,
-    ) -> swissarmyhammer_commands::Result<Value> {
+    ) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         // Parse the project id off the target moniker. Anything that is

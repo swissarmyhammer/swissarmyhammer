@@ -187,6 +187,7 @@ import {
 // ---------------------------------------------------------------------------
 
 import App from "@/App";
+import { commandToolCall } from "@/test/mock-command-list";
 import { asSegment } from "@/types/spatial";
 
 // Sneak-code fixture — the Rust kernel is not running in browser mode, so the
@@ -218,6 +219,7 @@ async function bootstrapInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
+  if (cmd === "command_tool_call") return commandToolCall(args);
   // Schema discovery
   if (cmd === "list_entity_types") return listEntityTypesResponse();
   if (cmd === "get_entity_schema") {

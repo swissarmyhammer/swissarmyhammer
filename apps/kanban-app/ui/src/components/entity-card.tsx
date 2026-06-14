@@ -126,11 +126,11 @@ function useCardSections(entityType: string): ResolvedSection[] {
  * scope would create a tab-stop trap with no keyboard activation
  * story — contrast with `InspectButton` below, which IS a leaf
  * because Space/Enter on a focused inspect button dispatches
- * `ui.inspect`.
+ * `app.inspect`.
  *
  * The `onClick={(e) => e.stopPropagation()}` is preserved: it
  * prevents click-bubble to the card body, which would otherwise
- * dispatch `ui.inspect` via the `<Inspectable>` wrapper.
+ * dispatch `app.inspect` via the `<Inspectable>` wrapper.
  */
 function DragHandle({
   dragHandleProps,
@@ -252,7 +252,7 @@ function CardField({
 }
 
 /**
- * Dispatches ui.inspect with an explicit target moniker.
+ * Dispatches app.inspect with an explicit target moniker.
  *
  * The target is passed directly so the backend uses ctx.target rather than
  * walking the scope chain (which comes from FocusedScopeContext and may
@@ -284,7 +284,7 @@ function InspectButton({
   entityId: string;
   moniker: string;
 }) {
-  const dispatch = useDispatchCommand("ui.inspect");
+  const dispatch = useDispatchCommand("app.inspect");
   return (
     <Tooltip>
       <TooltipTrigger asChild>

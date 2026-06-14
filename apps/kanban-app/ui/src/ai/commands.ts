@@ -19,18 +19,34 @@
  * `triggerStartRename` module bus — the established pattern for a
  * window-layer command whose effect lives in a sibling subtree.
  *
+ * This module-bus is the PRECEDENT that the generic webview command bus
+ * (`@/lib/webview-command-bus`) was generalized from: the id-keyed
+ * `registerWebviewCommandHandler` registry copies this module's
+ * ownership-guarded cleanup and test-reset semantics. The AI registry is
+ * intentionally left as-is on its own purpose-keyed map rather than migrated
+ * onto the id-keyed bus — the window-layer `execute` closures call the
+ * `triggerAi*` functions directly, and the registry additionally owns the
+ * turn-status store below, which the generic bus deliberately does not model.
+ *
  * # Turn status — gates `ai.cancel` and feeds the bottom bar
  *
  * The conversation reports its full ACP turn status here via
  * {@link setAiStatus} — `idle`, `streaming`, or `error`. Two consumers read
  * it back:
  *
- * - `ai.cancel` is available only while the conversation is streaming. The
- *   window-layer command builder reads {@link aiStreaming} (derived from the
- *   status) and re-renders via {@link subscribeAiStreaming} so the command's
- *   `available` flag tracks the live conversation. The same flag is mirrored
- *   into the backend `UIState` so `commands_for_scope` keeps the palette
- *   entry hidden when idle.
+ * - `ai.cancel` is available only while the conversation is streaming. That
+ *   gate is owned entirely frontend-side: the window-layer command builder
+ *   (`app-shell.tsx`'s `buildAiCommands`) reads {@link aiStreaming} (derived
+ *   from the status) and re-renders via {@link subscribeAiStreaming}, so the
+ *   command's `available` flag tracks the live conversation — governing both
+ *   the React-scope palette (`collectAvailableCommands`) and the keybinding
+ *   (`resolveCommand` no-ops a blocked command). The registry-driven palette
+ *   entry from the `ai-commands` builtin plugin carries no `available`
+ *   callback (the plugin isolate has no synchronous view of this webview-only
+ *   flag), so it shows as always-available there; the frontend gate is the
+ *   authoritative one. (Historical note: this flag used to be mirrored into
+ *   the backend `UIState.ai_streaming` for a Rust `AiCancelCmd::available()`
+ *   check, but that command was retired in the ai.yaml → plugin migration.)
  * - The app's bottom bar (`ModeIndicator`) reads {@link aiStatus} and
  *   re-renders via {@link subscribeAiStatus} to show `idle` / `streaming` /
  *   `error` next to the keymap mode.

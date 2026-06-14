@@ -27,13 +27,13 @@
 //!   to the "no motion" case (focus stays put), but ops / devs can
 //!   chase the error in logs.
 //!
-//! # Cardinal navigation — geometric pick (keyboard-as-mouse)
+//! # Cardinal navigation — tier-locked geometric pick (keyboard-as-mouse)
 //!
 //! Cardinal nav for [`Direction::Up`], [`Direction::Down`],
-//! [`Direction::Left`], and [`Direction::Right`] is **purely
-//! geometric**. Pressing an arrow key picks the snapshot scope whose
+//! [`Direction::Left`], and [`Direction::Right`] is **geometric within a
+//! navigation tier**. Pressing an arrow key picks the snapshot scope whose
 //! rect minimises the Android beam score (`13 * major² + minor²`)
-//! across ALL scopes in the snapshot that:
+//! across the scopes in the snapshot that:
 //!
 //! 1. Pass the **strict half-plane test** for D — the candidate's
 //!    leading edge in the reverse direction is past the focused entry's
@@ -42,18 +42,27 @@
 //!    on the cross axis (horizontal overlap for `Up`/`Down`, vertical
 //!    overlap for `Left`/`Right`).
 //! 3. Are not the focused entry itself.
+//! 3b. Are **focusable** — a `focusable: false` scope is a structural zone
+//!    (board well, perspective bar, column, panel/view-area wrapper) that
+//!    paints no focus indicator and is never a cardinal target; pathfinding
+//!    skips it and lands on the focusable unit beyond. See
+//!    [`SnapshotScope::focusable`].
+//! 4. Are in the **same navigation tier** as the focused entry — they share
+//!    its *nearest focusable ancestor* (see [`nearest_focusable_ancestor`]).
+//!    This is the single general rule (no per-widget special cases) that
+//!    makes arrow keys glide smoothly item→item and never dive into the
+//!    middle of a card: a card's nearest focusable ancestor is `None` (its
+//!    column and board well are non-focusable zones), and a field's is its
+//!    enclosing card, so a card and a field are never candidates for one
+//!    another. You reach a card's fields only by drilling *in* (Enter); Esc
+//!    drills back *out*. The tier test subsumes the old "skip an ancestor of
+//!    the focused entry" exclusion (an ancestor sits in a shallower tier) and
+//!    still permits cross-*area* moves, because two top-tier units (e.g. a
+//!    composer and a board card) share the `None` tier.
 //!
-//! No structural filtering — `parent_zone` and "has children" are
-//! tie-breakers and observability only.
-//!
-//! ## Tie-break: leaves over containers
-//!
-//! When two candidates have equal beam scores, **leaves win over
-//! containers** (a leaf is a scope no other snapshot entry names as
-//! `parent_zone`; a container is a scope at least one other entry
-//! names as `parent_zone`). This ensures that when the geometric pick
-//! would land equally on a `showFocus=false` container and an inner
-//! leaf, the user sees the focus indicator paint on the leaf.
+//! Within the surviving same-tier candidates the pick is purely geometric;
+//! an exact score tie prefers the leaf over a container (see
+//! [`better_candidate`]).
 //!
 //! ## When the half-plane is empty
 //!
@@ -317,9 +326,40 @@ fn geometric_pick(
         .filter_map(|s| s.parent_zone.clone())
         .collect();
     let from_rect = focused.rect;
+
+    // The focused scope's **navigation tier** is its nearest focusable
+    // ancestor (`None` when it has none — a top-tier unit). Cardinal nav is
+    // tier-locked to it.
+    let focused_tier = nearest_focusable_ancestor(view, &focused.fq);
+
+    // Single geometric pass. A candidate must:
+    //  - not be the focused scope itself;
+    //  - be **focusable** — structural zones (`focusable: false`: board
+    //    well, perspective bar, column, panel/view-area wrappers) paint no
+    //    focus indicator and are never a cardinal target, so a move passes
+    //    straight through them to the focusable unit beyond;
+    //  - be in the **same navigation tier** — share the focused scope's
+    //    nearest focusable ancestor. This is the general, no-special-cases
+    //    rule that keeps arrow keys gliding item→item and never diving into
+    //    a card's inner fields: a field's nearest focusable ancestor is its
+    //    card, a card's is `None` (its column / board well are non-focusable
+    //    zones), so a card and a field never appear as candidates for one
+    //    another. Fields are reached only by drill-in (Enter). The tier test
+    //    subsumes the old "skip an ancestor of the focused scope" rule (an
+    //    ancestor sits in a shallower tier) and still allows cross-area moves
+    //    (two top-tier units, e.g. a composer and a board card, share the
+    //    `None` tier).
+    //  - pass the strict half-plane + in-beam test.
+    // Lowest beam score wins; ties resolve via `better_candidate`.
     let mut best: Option<BestCandidate> = None;
     for cand in view.scopes() {
         if cand.fq == focused.fq {
+            continue;
+        }
+        if !cand.focusable {
+            continue;
+        }
+        if nearest_focusable_ancestor(view, &cand.fq) != focused_tier {
             continue;
         }
         if !in_strict_half_plane(&from_rect, &cand.rect, direction) {
@@ -346,6 +386,38 @@ fn geometric_pick(
     }
 }
 
+/// The nearest **focusable** ancestor of `fq` by walking its `parent_zone`
+/// chain, or `None` when no ancestor is focusable (a top-tier unit).
+///
+/// This is the key to tier-locked cardinal navigation. A scope's "tier" is
+/// the focusable container it lives directly inside of, skipping non-focusable
+/// structural zones (columns, board well, panels). On the board a card's
+/// parent chain is `column → board`, both non-focusable, so a card's nearest
+/// focusable ancestor is `None`; a field's parent is its card (focusable), so
+/// the field's tier is that card. Two scopes navigate to one another only when
+/// their tiers match — cards to cards, a card's fields to that card's fields —
+/// so arrow keys never cross from a card into another card's interior.
+///
+/// Cycle-guarded against torn snapshots whose `parent_zone` edges loop.
+fn nearest_focusable_ancestor(
+    view: &IndexedSnapshot<'_>,
+    fq: &FullyQualifiedMoniker,
+) -> Option<FullyQualifiedMoniker> {
+    let mut seen: HashSet<FullyQualifiedMoniker> = HashSet::new();
+    let mut current = view.get(fq).and_then(|s| s.parent_zone.clone());
+    while let Some(parent) = current {
+        match view.get(&parent) {
+            Some(scope) if scope.focusable => return Some(parent),
+            _ => {}
+        }
+        if !seen.insert(parent.clone()) {
+            break;
+        }
+        current = view.get(&parent).and_then(|s| s.parent_zone.clone());
+    }
+    None
+}
+
 /// Running best candidate inside [`geometric_pick`]: FQM, beam score, and
 /// the has-children flag used for the leaves-over-containers tie-break.
 #[derive(Clone)]
@@ -357,8 +429,16 @@ struct BestCandidate {
 
 /// `true` when `cand` should replace the current best candidate.
 ///
-/// Primary order is the Android beam score: lower is better. When two
-/// candidates have equal scores, the leaf wins over the container.
+/// Primary order is the Android beam score: lower is better. A tie (equal
+/// score) resolves by preferring the **leaf** over a container, so a tie
+/// between a still-present `showFocus=false` wrapper and an inner leaf paints
+/// the indicator on the leaf.
+///
+/// No ancestry tie-break is needed here: candidates are already tier-locked
+/// to the focused scope's nearest focusable ancestor (see [`geometric_pick`]),
+/// and two scopes in the same tier can never be ancestor/descendant of each
+/// other — if one enclosed the other, the inner one's nearest focusable
+/// ancestor would be the outer, putting them in different tiers.
 fn better_candidate(current: &Option<BestCandidate>, cand: &BestCandidate) -> bool {
     match current {
         None => true,
@@ -529,6 +609,16 @@ mod tests {
             rect: r,
             parent_zone: parent_zone.map(FullyQualifiedMoniker::from_string),
             nav_override: HashMap::new(),
+            focusable: true,
+        }
+    }
+
+    /// A non-focusable structural zone (e.g. the board well) — same as
+    /// [`scope`] but with `focusable: false`, so cardinal nav skips it.
+    fn zone(fq: &str, parent_zone: Option<&str>, r: Rect) -> SnapshotScope {
+        SnapshotScope {
+            focusable: false,
+            ..scope(fq, parent_zone, r)
         }
     }
 
@@ -615,27 +705,37 @@ mod tests {
         );
     }
 
-    /// Cross-`parent_zone` candidate wins when geometrically nearer.
+    /// Cardinal nav is **tier-locked** to the focused scope's nearest
+    /// focusable ancestor. Two focusable zones side by side each hold one
+    /// leaf: from the left zone's leaf, Right must NOT dive into the right
+    /// zone's leaf (different tier), even though it is the only thing to the
+    /// right — with no same-tier candidate, focus stays put. The zones
+    /// themselves are top-tier, so Right at the zone tier crosses them.
     #[test]
-    fn cross_parent_zone_candidate_wins_when_geometrically_nearer() {
+    fn cardinal_nav_is_tier_locked_to_nearest_focusable_ancestor() {
         let snap = snapshot(vec![
-            scope("/L/zone-left", None, rect(0.0, 0.0, 100.0, 50.0)),
-            scope("/L/zone-right", None, rect(200.0, 100.0, 100.0, 50.0)),
-            scope("/L/src", Some("/L/zone-left"), rect(80.0, 10.0, 10.0, 10.0)),
+            scope("/L/zoneL", None, rect(0.0, 0.0, 100.0, 50.0)),
+            scope("/L/zoneR", None, rect(200.0, 0.0, 100.0, 50.0)),
             scope(
-                "/L/in-zone-below",
-                Some("/L/zone-left"),
-                rect(80.0, 30.0, 10.0, 10.0),
+                "/L/zoneL/leaf",
+                Some("/L/zoneL"),
+                rect(10.0, 10.0, 20.0, 20.0),
             ),
             scope(
-                "/L/cross-zone-near",
-                Some("/L/zone-right"),
-                rect(205.0, 10.0, 10.0, 10.0),
+                "/L/zoneR/leaf",
+                Some("/L/zoneR"),
+                rect(210.0, 10.0, 20.0, 20.0),
             ),
         ]);
         assert_eq!(
-            pick(&snap, "/L/src", Direction::Right),
-            FullyQualifiedMoniker::from_string("/L/cross-zone-near"),
+            pick(&snap, "/L/zoneL/leaf", Direction::Right),
+            FullyQualifiedMoniker::from_string("/L/zoneL/leaf"),
+            "a leaf must not arrow across into another zone's leaf (cross-tier dive)",
+        );
+        assert_eq!(
+            pick(&snap, "/L/zoneL", Direction::Right),
+            FullyQualifiedMoniker::from_string("/L/zoneR"),
+            "top-tier zones (nearest focusable ancestor = None) navigate to one another",
         );
     }
 
@@ -799,9 +899,14 @@ mod tests {
         );
     }
 
-    /// `parent_zone` cycle does not freeze pathfinding — the
-    /// has-children precomputation reads `parent_zone` only as a
-    /// flat-set membership check.
+    /// `parent_zone` cycle does not freeze pathfinding. The has-children
+    /// precomputation and the `nearest_focusable_ancestor` tier walk both
+    /// read `parent_zone` under a cycle-guard, so a torn `a → b → a` loop
+    /// terminates rather than spinning. `/L/a` and `/L/b` each resolve a
+    /// tier of the *other* (each names the other focusable scope as its
+    /// parent), so neither shares `/L/src`'s top-tier (`None`); with no
+    /// same-tier candidate to the right, the pick stays put. The contract
+    /// under test is **termination**, not the specific target.
     #[test]
     fn parent_zone_cycle_does_not_hang() {
         let snap = snapshot(vec![
@@ -811,7 +916,249 @@ mod tests {
         ]);
         assert_eq!(
             pick(&snap, "/L/src", Direction::Right),
-            FullyQualifiedMoniker::from_string("/L/a"),
+            FullyQualifiedMoniker::from_string("/L/src"),
+            "cycle-guarded tier walk terminates; no same-tier candidate, so focus stays put",
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Board card / nested-field navigation — the user-symptom contract.
+    //
+    // A board column holds two cards; each card is a container whose
+    // children are a title field (filling most of the card) and a small
+    // inspect button. These tests pin that Up/Down between cards lands on
+    // the *card*, never a field inside it, and that once focus is inside a
+    // card, Up/Down walks that card's own fields.
+    //
+    // Layout (single column, x in [0,200]):
+    //   /L/col              zone  y   0..400   (showFocus=false container)
+    //   /L/col/cardTop      card  y  10..190
+    //   /L/col/cardTop/title  field y 20..70  (fills card width)
+    //   /L/col/cardTop/inspect leaf y 20..40 (top-right)
+    //   /L/col/cardBot      card  y 210..390
+    //   /L/col/cardBot/title  field y 220..270
+    //   /L/col/cardBot/inspect leaf y 220..240
+    // -----------------------------------------------------------------
+
+    /// Build the two-card column snapshot described above. The column is a
+    /// non-focusable zone (as in production), so both cards are top-tier and
+    /// share a navigation tier; the title/inspect fields sit a tier deeper.
+    fn two_card_column() -> NavSnapshot {
+        snapshot(vec![
+            zone("/L/col", None, rect(0.0, 0.0, 200.0, 400.0)),
+            scope(
+                "/L/col/cardTop",
+                Some("/L/col"),
+                rect(0.0, 10.0, 200.0, 180.0),
+            ),
+            scope(
+                "/L/col/cardTop/title",
+                Some("/L/col/cardTop"),
+                rect(10.0, 20.0, 150.0, 50.0),
+            ),
+            scope(
+                "/L/col/cardTop/inspect",
+                Some("/L/col/cardTop"),
+                rect(170.0, 20.0, 20.0, 20.0),
+            ),
+            scope(
+                "/L/col/cardBot",
+                Some("/L/col"),
+                rect(0.0, 210.0, 200.0, 180.0),
+            ),
+            scope(
+                "/L/col/cardBot/title",
+                Some("/L/col/cardBot"),
+                rect(10.0, 220.0, 150.0, 50.0),
+            ),
+            scope(
+                "/L/col/cardBot/inspect",
+                Some("/L/col/cardBot"),
+                rect(170.0, 220.0, 20.0, 20.0),
+            ),
+        ])
+    }
+
+    /// Up from the bottom card must land on the TOP CARD — not the top
+    /// card's title field (which sits in the geometric "middle" of the
+    /// card above) and not its inspect button. This is the exact reported
+    /// regression.
+    #[test]
+    fn up_from_card_lands_on_card_above_not_its_fields() {
+        let snap = two_card_column();
+        assert_eq!(
+            pick(&snap, "/L/col/cardBot", Direction::Up),
+            FullyQualifiedMoniker::from_string("/L/col/cardTop"),
+            "Up on a card must focus the card above, never a field inside it",
+        );
+    }
+
+    /// Down from the top card must land on the bottom CARD, symmetric to
+    /// the Up case.
+    #[test]
+    fn down_from_card_lands_on_card_below_not_its_fields() {
+        let snap = two_card_column();
+        assert_eq!(
+            pick(&snap, "/L/col/cardTop", Direction::Down),
+            FullyQualifiedMoniker::from_string("/L/col/cardBot"),
+            "Down on a card must focus the card below, never a field inside it",
+        );
+    }
+
+    /// The reported symptom, field-focused case: with focus on a card's
+    /// title field, Up must NOT land "in the middle of the card above" — i.e.
+    /// it must not jump to the previous card's title/inspect field. Those
+    /// live in a different tier (their nearest focusable ancestor is the
+    /// *other* card), so there is no same-tier candidate above the bottom
+    /// card's title and focus stays put. (To leave the card you press Esc,
+    /// which drills out to the card; then Up moves card→card.)
+    #[test]
+    fn up_from_field_does_not_dive_into_card_above_field() {
+        let snap = two_card_column();
+        assert_eq!(
+            pick(&snap, "/L/col/cardBot/title", Direction::Up),
+            FullyQualifiedMoniker::from_string("/L/col/cardBot/title"),
+            "a field must not arrow into the card-above's field; cross-tier dive is disallowed",
+        );
+    }
+
+    /// Once focus is INSIDE a card (on its title field), Down walks to the
+    /// next field in the SAME card — not to the card itself, and not to a
+    /// field in the other card. Here the inspect button sits just below the
+    /// title within the same card, so Down from the title lands on it.
+    #[test]
+    fn down_within_card_moves_between_that_cards_fields() {
+        // Stack the two fields vertically inside the top card so Down has a
+        // same-card target directly below the title.
+        let snap = snapshot(vec![
+            zone("/L/col", None, rect(0.0, 0.0, 200.0, 400.0)),
+            scope(
+                "/L/col/cardTop",
+                Some("/L/col"),
+                rect(0.0, 10.0, 200.0, 180.0),
+            ),
+            scope(
+                "/L/col/cardTop/title",
+                Some("/L/col/cardTop"),
+                rect(10.0, 20.0, 180.0, 50.0),
+            ),
+            scope(
+                "/L/col/cardTop/body",
+                Some("/L/col/cardTop"),
+                rect(10.0, 90.0, 180.0, 50.0),
+            ),
+            scope(
+                "/L/col/cardBot",
+                Some("/L/col"),
+                rect(0.0, 210.0, 200.0, 180.0),
+            ),
+            scope(
+                "/L/col/cardBot/title",
+                Some("/L/col/cardBot"),
+                rect(10.0, 220.0, 180.0, 50.0),
+            ),
+        ]);
+        assert_eq!(
+            pick(&snap, "/L/col/cardTop/title", Direction::Down),
+            FullyQualifiedMoniker::from_string("/L/col/cardTop/body"),
+            "Down inside a card walks that card's own fields, not the card or another card's fields",
+        );
+    }
+
+    /// Cross-column nav: Right from a card in the left column lands on the
+    /// geometrically-aligned card in the right column. Columns are
+    /// **non-focusable zones** (mirroring production), so both cards are
+    /// top-tier (nearest focusable ancestor = `None`) and share a tier even
+    /// though they sit in different columns; the right card's title field is
+    /// a tier deeper, so the move never dives into it.
+    #[test]
+    fn right_crosses_to_card_in_next_column_not_its_fields() {
+        let snap = snapshot(vec![
+            zone("/L/colL", None, rect(0.0, 0.0, 200.0, 400.0)),
+            scope(
+                "/L/colL/card",
+                Some("/L/colL"),
+                rect(0.0, 10.0, 190.0, 100.0),
+            ),
+            zone("/L/colR", None, rect(210.0, 0.0, 200.0, 400.0)),
+            scope(
+                "/L/colR/card",
+                Some("/L/colR"),
+                rect(210.0, 10.0, 190.0, 100.0),
+            ),
+            scope(
+                "/L/colR/card/title",
+                Some("/L/colR/card"),
+                rect(220.0, 20.0, 150.0, 50.0),
+            ),
+        ]);
+        assert_eq!(
+            pick(&snap, "/L/colL/card", Direction::Right),
+            FullyQualifiedMoniker::from_string("/L/colR/card"),
+            "Right must cross to the next column's card, not dive into its title field",
+        );
+    }
+
+    /// Cardinal nav never lands on a non-focusable structural zone: from a
+    /// focusable top-level leaf (e.g. a nav-bar button), Down passes through
+    /// the `focusable: false` board well below it and lands on the focusable
+    /// card inside — not the invisible zone. Pins the fix for "Down from the
+    /// nav bar focuses the (indicator-less) board well instead of a card".
+    #[test]
+    fn down_skips_non_focusable_zone_and_lands_on_focusable_child() {
+        let snap = snapshot(vec![
+            // Focusable top-level leaf (nav-bar button), above the board.
+            scope("/L/navbtn", None, rect(0.0, 0.0, 40.0, 20.0)),
+            // The board well sits directly below and is the geometrically
+            // closest thing under the button — but it is a structural zone.
+            zone("/L/board", None, rect(0.0, 30.0, 400.0, 400.0)),
+            // A card inside the well, lower down.
+            scope(
+                "/L/board/card",
+                Some("/L/board"),
+                rect(0.0, 40.0, 200.0, 60.0),
+            ),
+        ]);
+        assert_eq!(
+            pick(&snap, "/L/navbtn", Direction::Down),
+            FullyQualifiedMoniker::from_string("/L/board/card"),
+            "Down must skip the non-focusable board well and land on the card inside it",
+        );
+    }
+
+    /// The cross-column regression that motivated option B: from a card in
+    /// the right column, Left must land on the LEFT column's CARD — even
+    /// though that card and its inner inspect-button TIE on beam score (the
+    /// button is at the card's top-right, sharing the card's right edge, so
+    /// the Left-move major/minor match). The ancestry-aware tie-break makes
+    /// the enclosing card win over its own focusable button.
+    #[test]
+    fn left_crosses_to_card_not_its_tied_inner_button() {
+        let snap = snapshot(vec![
+            // Non-focusable column zones (skipped as candidates).
+            zone("/L/colL", None, rect(0.0, 0.0, 100.0, 100.0)),
+            zone("/L/colR", None, rect(120.0, 0.0, 100.0, 100.0)),
+            // Left card + its inspect button, sharing the right edge (x=90)
+            // and vertically aligned with the focused card → equal score.
+            scope("/L/colL/cardL", Some("/L/colL"), rect(0.0, 0.0, 90.0, 40.0)),
+            // cy = 20 and right edge = 90 match cardL exactly → equal beam
+            // score (a true tie, resolved by ancestry, not by geometry).
+            scope(
+                "/L/colL/cardL/inspect",
+                Some("/L/colL/cardL"),
+                rect(70.0, 10.0, 20.0, 20.0),
+            ),
+            // Focused card in the right column.
+            scope(
+                "/L/colR/cardR",
+                Some("/L/colR"),
+                rect(120.0, 0.0, 90.0, 40.0),
+            ),
+        ]);
+        assert_eq!(
+            pick(&snap, "/L/colR/cardR", Direction::Left),
+            FullyQualifiedMoniker::from_string("/L/colL/cardL"),
+            "Left must land on the card, not its score-tied inner inspect button",
         );
     }
 

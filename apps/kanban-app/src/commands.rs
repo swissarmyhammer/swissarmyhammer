@@ -31,10 +31,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_kanban::task_helpers::{
-    enrich_all_task_entities, enrich_task_entity, retain_filtered_tasks, EntitySlugRegistry,
+    enrich_all_task_entities, retain_filtered_tasks, EntitySlugRegistry,
 };
 use swissarmyhammer_kanban::virtual_tags::default_virtual_tag_registry;
-use tauri::menu::{ContextMenu, MenuBuilder};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 
@@ -106,8 +105,8 @@ fn update_window_title(app: &AppHandle, label: &str, board_name: Option<&str>) {
 /// state only exist on the Tauri runtime. The headless `DynamicSources`
 /// builder in `swissarmyhammer_kanban::dynamic_sources` takes the result of
 /// this function as a caller-supplied input; tests fabricate the list.
-fn gather_windows(app: &tauri::AppHandle) -> Vec<swissarmyhammer_commands::WindowInfo> {
-    use swissarmyhammer_commands::WindowInfo;
+fn gather_windows(app: &tauri::AppHandle) -> Vec<swissarmyhammer_common::WindowInfo> {
+    use swissarmyhammer_common::WindowInfo;
     app.webview_windows()
         .iter()
         .filter_map(|(label, w)| {
@@ -150,9 +149,17 @@ async fn resolve_handle(
     }
 }
 
-/// List all currently open boards.
-#[tauri::command]
-pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, String> {
+/// List all currently open boards as the `[{ path, name, is_active }]` array.
+///
+/// Enumerates `AppState::boards` (the open-board set), marking the
+/// most-recently-focused board as active, and resolves each board's display
+/// name. Multi-board management read backing the `window` MCP server's
+/// `list open boards` op — the per-board `entity` server has no home for it, so
+/// the bootstrap wires this into the [`WindowShell`] callback seam alongside the
+/// board-lifecycle writes.
+///
+/// [`WindowShell`]: swissarmyhammer_window_service::WindowShell
+pub(crate) async fn list_open_boards_impl(state: &AppState) -> Result<Value, String> {
     let boards = state.boards.read().await;
     let most_recent = state.ui_state.most_recent_board().map(PathBuf::from);
 
@@ -342,49 +349,6 @@ pub async fn list_entities(
         "entities": json_entities,
         "count": json_entities.len(),
     }))
-}
-
-/// Get a single entity by type and id, returning a raw entity bag.
-///
-/// For tasks, enriches with computed fields: `ready`, `blocked_by`, `blocks`,
-/// and `progress_fraction`. Other entity types are returned as-is.
-#[tauri::command]
-pub async fn get_entity(
-    state: State<'_, AppState>,
-    entity_type: String,
-    id: String,
-    board_path: Option<String>,
-) -> Result<Value, String> {
-    let handle = resolve_handle(&state, board_path).await?;
-    let ectx = handle
-        .ctx
-        .entity_context()
-        .await
-        .map_err(|e| format!("get_entity({}/{}): {}", entity_type, id, e))?;
-    let mut entity = ectx
-        .read(&entity_type, &id)
-        .await
-        .map_err(|e| format!("get_entity({}/{}): {}", entity_type, id, e))?;
-
-    if entity_type == "task" {
-        let all_tasks = ectx
-            .list("task")
-            .await
-            .map_err(|e| format!("get_entity({}/{}): {}", entity_type, id, e))?;
-        let mut columns = ectx
-            .list("column")
-            .await
-            .map_err(|e| format!("get_entity({}/{}): {}", entity_type, id, e))?;
-        columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
-        let terminal_id = columns
-            .last()
-            .map(|c| c.id.to_string())
-            .unwrap_or_else(|| "done".to_string());
-        let registry = default_virtual_tag_registry();
-        enrich_task_entity(&mut entity, &all_tasks, &terminal_id, registry);
-    }
-
-    Ok(entity.to_json())
 }
 
 /// Search entities by display field for mention autocomplete.
@@ -677,12 +641,18 @@ fn build_board_summary(
 /// Columns and tags are returned as `Entity::to_json()` with
 /// computed count fields injected. Tasks are NOT included (use `list_entities`
 /// for that). A summary object provides aggregate counts.
-#[tauri::command]
-pub async fn get_board_data(
-    state: State<'_, AppState>,
+///
+/// Multi-board management read backing the `window` MCP server's `get board
+/// data` op: resolves a board handle across the open set (the given path, or the
+/// active board when `None`). The bootstrap wires this into the [`WindowShell`]
+/// callback seam alongside the board-lifecycle writes.
+///
+/// [`WindowShell`]: swissarmyhammer_window_service::WindowShell
+pub(crate) async fn get_board_data_impl(
+    state: &AppState,
     board_path: Option<String>,
 ) -> Result<Value, String> {
-    let handle = resolve_handle(&state, board_path).await?;
+    let handle = resolve_handle(state, board_path).await?;
     let ectx = handle
         .ctx
         .entity_context()
@@ -996,7 +966,7 @@ pub async fn create_window_impl(
         apply_board_title(&app, state, &label, bp).await;
     }
 
-    // Menu rebuild is handled by the frontend dispatching ui.setFocus
+    // Menu rebuild is handled by the frontend dispatching app.setFocus
     // when the new window mounts — no explicit rebuild needed here.
 
     Ok(json!({
@@ -1049,19 +1019,11 @@ pub async fn get_undo_state(
     }))
 }
 
-// ---------------------------------------------------------------------------
-// log_command — lightweight log entry for commands that execute in the frontend
-// ---------------------------------------------------------------------------
-
-/// Log a command that was executed locally in the frontend.
-///
-/// Commands with a local `execute` handler never reach `dispatch_command`,
-/// so the frontend calls this to ensure every command appears in the
-/// unified Rust log.
-#[tauri::command]
-pub async fn log_command(cmd: String, target: Option<String>) {
-    tracing::info!(cmd = %cmd, target = ?target, "command");
-}
+// `log_command` — REMOVED in Stage 3 of the kanban cut-over.
+// Frontend command-execution telemetry is now sourced from the Command
+// service's `notifications/commands/executed` notification plane, driven
+// by `swissarmyhammer-command-service`'s `ActionSink`. Subscribers listen
+// on the bridge event instead of a fire-and-forget Tauri command.
 
 // ---------------------------------------------------------------------------
 // save_dropped_file — write HTML5 drop bytes to a temp file
@@ -1336,7 +1298,8 @@ pub(crate) async fn dispatch_command_internal(
         rw.board_path,
     )
     .await;
-    let result = execute_registered_command(state, &effective_cmd, &ctx).await?;
+    let result =
+        dispatch_via_service(state, app, &effective_cmd, &ctx, active_handle.as_ref()).await?;
     tracing::info!(cmd = %effective_cmd, undoable, result = %result, "command completed");
 
     // Undo stack push is handled automatically inside EntityContext::write()/delete()
@@ -1355,27 +1318,257 @@ pub(crate) async fn dispatch_command_internal(
     Ok(json!({ "result": result, "undoable": undoable }))
 }
 
-/// Look up `effective_cmd`'s implementation, check availability, and execute
-/// it. Errors unify the "no impl", "not available", and "execute failed"
-/// paths into the `String` return type so the caller can `?` them.
-async fn execute_registered_command(
+/// Sole dispatch path: route the command through the `CommandService`.
+///
+/// The Stage 4 cut-over retired the legacy `command_impls` fallback —
+/// `CommandService` (fed by the 8 builtin command plugins at app
+/// startup) is now the sole source of command dispatch. The path scopes
+/// `CURRENT_STORE_CTX` and `CURRENT_ENTITY_BOARD_SERVICES` around
+/// `CommandService::dispatch` so the in-process `store`/`entity` MCP
+/// surfaces route per-call to the active board's substrate.
+///
+/// Returns a stringified error when no `CommandService` is wired (an
+/// app-bootstrap failure that should never occur in production), when
+/// the command isn't registered, or when the command itself fails. The
+/// previous "fall back to `state.command_impls`" branch is gone.
+async fn dispatch_via_service(
     state: &AppState,
+    app: &AppHandle,
     effective_cmd: &str,
-    ctx: &swissarmyhammer_commands::CommandContext,
+    ctx: &swissarmyhammer_kanban::commands_core::CommandContext,
+    active_handle: Option<&Arc<BoardHandle>>,
 ) -> Result<Value, String> {
-    let cmd_impl = state
-        .command_impls
-        .get(effective_cmd)
-        .ok_or_else(|| format!("No implementation for command: {}", effective_cmd))?;
-    if !cmd_impl.available(ctx) {
-        tracing::warn!(cmd = %effective_cmd, "command not available in current context");
-        return Err(format!("Command not available: {}", effective_cmd));
+    match try_dispatch_via_command_service(state, app, effective_cmd, ctx, active_handle).await {
+        Some(Ok(value)) => Ok(value),
+        Some(Err(err)) => Err(format!("Command failed: {err}")),
+        None => Err(format!(
+            "CommandService unavailable; command `{effective_cmd}` cannot be dispatched"
+        )),
     }
-    tracing::debug!(cmd = %effective_cmd, "executing command");
-    cmd_impl.execute(ctx).await.map_err(|e| {
-        tracing::error!(cmd = %effective_cmd, error = %e, "command execution failed");
-        format!("Command failed: {e}")
-    })
+}
+
+/// Re-establishes the active board's substrate task-locals around a bridge
+/// call serviced on the host's `bridge_runtime`.
+///
+/// A command's `execute` callback runs on the plugin isolate worker thread; the
+/// `this.store`/`this.entity`/`this.views` calls it makes are routed back as
+/// `tools/call` envelopes and serviced on the host's long-lived
+/// `bridge_runtime` — a different tokio task than the one
+/// [`try_dispatch_via_command_service`] scoped. The dispatcher's task-local
+/// scopes do not cross that hop, so without this the substrate servers run
+/// unscoped on the bridge runtime.
+///
+/// Installed on the board's [`PluginHost`](swissarmyhammer_plugin::PluginHost)
+/// via [`set_bridge_call_scope`](swissarmyhammer_plugin::PluginHost::set_bridge_call_scope)
+/// for the duration of the dispatch, this carries the SAME per-board service
+/// bundles the dispatcher scopes and re-applies them — `store` outermost, then
+/// `entity`, then `views` — around the routed call, matching the dispatch-site
+/// nesting so every callback-originated substrate call resolves the calling
+/// board's services.
+struct BoardSubstrateScope {
+    /// The board's store context, when resolved.
+    store_ctx: Option<Arc<swissarmyhammer_store::StoreContext>>,
+    /// The board's entity services bundle, when resolved.
+    entity_services: Option<swissarmyhammer_entity_mcp::server::EntityBoardServices>,
+    /// The board's views (perspectives + views) services bundle, when resolved.
+    views_services: Option<swissarmyhammer_views::ViewsBoardServices>,
+}
+
+impl swissarmyhammer_plugin::BridgeCallScope for BoardSubstrateScope {
+    fn scope(
+        &self,
+        call: swissarmyhammer_plugin::BridgeCallFuture,
+    ) -> swissarmyhammer_plugin::BridgeCallFuture {
+        // Nest the scopes inner-to-outer so the resulting order is
+        // store(entity(views(call))) — identical to the dispatch-site wrapping.
+        let mut fut = call;
+        if let Some(views) = self.views_services.clone() {
+            fut = Box::pin(swissarmyhammer_views::scope_views_board_services(
+                views, fut,
+            ));
+        }
+        if let Some(entity) = self.entity_services.clone() {
+            fut = Box::pin(
+                swissarmyhammer_entity_mcp::server::scope_entity_board_services(entity, fut),
+            );
+        }
+        if let Some(store) = self.store_ctx.clone() {
+            fut = Box::pin(swissarmyhammer_kanban::command_seam::scope_store_context(
+                store, fut,
+            ));
+        }
+        fut
+    }
+}
+
+/// Attempt the new path. Returns `None` when no `CommandService` is wired
+/// (test fixtures / failed bootstrap); the caller falls back unconditionally
+/// in that case.
+async fn try_dispatch_via_command_service(
+    state: &AppState,
+    app: &AppHandle,
+    effective_cmd: &str,
+    ctx: &swissarmyhammer_kanban::commands_core::CommandContext,
+    active_handle: Option<&Arc<BoardHandle>>,
+) -> Option<Result<Value, rmcp::ErrorData>> {
+    // Route to the calling board's OWN CommandService when it has a per-board
+    // platform; fall back to the global platform's service for boardless
+    // dispatch (no active board). This keeps a board's project-plugin command
+    // registrations isolated to that board.
+    //
+    // Capture the SAME platform's host alongside the service: the host owns the
+    // `bridge_runtime` that services callback-originated `this.store`/`this.entity`/
+    // `this.views` calls, so the substrate scope (installed below) must go on
+    // exactly that host. A boardless dispatch has no per-board substrate to
+    // scope, so it carries no host here.
+    let (service, board_host) = match active_handle.and_then(|h| h.platform()) {
+        Some(platform) => {
+            let guard = platform.lock().await;
+            (guard.command_service()?, Some(guard.host().clone()))
+        }
+        None => (state.plugin_platform.lock().await.command_service()?, None),
+    };
+
+    let req = swissarmyhammer_command_service::ExecuteCommand {
+        id: effective_cmd.to_string(),
+        ctx: swissarmyhammer_command_service::CommandContext {
+            scope_chain: ctx.scope_chain.clone(),
+            target: ctx.target.clone(),
+            args: ctx.args.clone(),
+        },
+        force: None,
+    };
+
+    // Build the per-board entity-services bundle. When no board is active
+    // (e.g. command fired before a board is open), drop the entity_ctx-bound
+    // services entirely — the entity tool surface will then return its
+    // "no board scoped" structured error rather than panic.
+    let entity_services = match active_handle {
+        Some(handle) => {
+            let entity_ctx = match handle.ctx.entity_context().await {
+                Ok(ectx) => ectx,
+                Err(e) => {
+                    tracing::warn!(
+                        cmd = %effective_cmd,
+                        error = %e,
+                        "failed to resolve entity_context for new-path dispatch"
+                    );
+                    return Some(Err(rmcp::ErrorData::internal_error(
+                        format!("entity_context unavailable: {e}"),
+                        None,
+                    )));
+                }
+            };
+            Some(swissarmyhammer_entity_mcp::server::EntityBoardServices {
+                entity_ctx,
+                kanban: Some(Arc::clone(&handle.ctx)),
+                // Wire the same TauriClipboardProvider the legacy build_dispatch_context
+                // installs as a ClipboardProviderExt — the entity MCP clipboard ops
+                // (cut/copy/paste) read it via the resolver.
+                clipboard: Some(Arc::new(crate::state::TauriClipboardProvider::new(
+                    app.clone(),
+                ))),
+                ui_state: Some(Arc::clone(&state.ui_state)),
+            })
+        }
+        None => None,
+    };
+
+    let store_ctx = active_handle.map(|h| Arc::clone(&h.store_context));
+
+    // Build the per-board views kernels bundle (perspectives + views). Both are
+    // per-board state; the `views` MCP server resolves the active pair from the
+    // task-local this scopes. A board whose perspective/views contexts can't be
+    // resolved drops the bundle — `views` ops then surface their structured
+    // "no board scoped" error rather than panicking.
+    let views_services = match active_handle {
+        Some(handle) => match handle.ctx.perspective_context_arc().await {
+            Ok(persp) => {
+                handle
+                    .ctx
+                    .views_arc()
+                    .map(|views| swissarmyhammer_views::ViewsBoardServices {
+                        perspectives: persp,
+                        views,
+                    })
+            }
+            Err(e) => {
+                tracing::warn!(
+                    cmd = %effective_cmd,
+                    error = %e,
+                    "failed to resolve perspective_context for views scoping"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
+    // Install the substrate scope on the board's host so callback-originated
+    // `this.store`/`this.entity`/`this.views` calls — serviced on the host's
+    // `bridge_runtime`, a different task than this one — resolve the SAME
+    // per-board services this task scopes. The guard is held across the dispatch
+    // `.await` below and clears the scope on drop. Cloning the bundles is cheap
+    // (each is `Arc`-backed) and leaves the originals for the dispatch-task
+    // scoping that follows.
+    //
+    // Only meaningful with a per-board host AND at least one resolved bundle; a
+    // boardless dispatch leaves the host unscoped, exactly as before.
+    let _bridge_scope_guard = match &board_host {
+        Some(host)
+            if store_ctx.is_some() || entity_services.is_some() || views_services.is_some() =>
+        {
+            Some(host.set_bridge_call_scope(Arc::new(BoardSubstrateScope {
+                store_ctx: store_ctx.clone(),
+                entity_services: entity_services.clone(),
+                views_services: views_services.clone(),
+            })))
+        }
+        _ => None,
+    };
+
+    // Capture `service` by move into the dispatch future so the lock guard
+    // above doesn't need to outlive the await. The `views` task-local is the
+    // innermost scope (boxed so the store/entity match below has one future
+    // type regardless of whether views is scoped).
+    let dispatched = async move {
+        service
+            .dispatch(swissarmyhammer_plugin::CallerId::HostInternal, req)
+            .await
+    };
+    let dispatched: std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Value, rmcp::ErrorData>> + Send>,
+    > = match views_services {
+        Some(vsvc) => Box::pin(swissarmyhammer_views::scope_views_board_services(
+            vsvc, dispatched,
+        )),
+        None => Box::pin(dispatched),
+    };
+
+    // Scope the store + entity task-locals around the dispatch when we have
+    // them; otherwise run dispatch bare and let the resolvers return their
+    // structured "not scoped" errors for ops that need them.
+    let raw = match (store_ctx, entity_services) {
+        (Some(sctx), Some(esvc)) => {
+            swissarmyhammer_kanban::command_seam::scope_store_context(
+                sctx,
+                swissarmyhammer_entity_mcp::server::scope_entity_board_services(esvc, dispatched),
+            )
+            .await
+        }
+        (Some(sctx), None) => {
+            swissarmyhammer_kanban::command_seam::scope_store_context(sctx, dispatched).await
+        }
+        (None, Some(esvc)) => {
+            swissarmyhammer_entity_mcp::server::scope_entity_board_services(esvc, dispatched).await
+        }
+        (None, None) => dispatched.await,
+    };
+
+    // The service wraps successful results as `{ "ok": true, "result": <value> }`.
+    // Unwrap to match the legacy `execute_registered_command` contract
+    // (which returns just the inner result value).
+    Some(raw.map(|v| v.get("result").cloned().unwrap_or(v)))
 }
 
 /// Run every post-execute side-effect — board management, drag events,
@@ -1427,15 +1620,19 @@ async fn build_dispatch_context(
     target: Option<String>,
     effective_board_path: Option<String>,
 ) -> (
-    swissarmyhammer_commands::CommandContext,
+    swissarmyhammer_kanban::commands_core::CommandContext,
     Option<Arc<BoardHandle>>,
 ) {
     let args_map: HashMap<String, Value> = match effective_args {
         Some(Value::Object(map)) => map.into_iter().collect(),
         _ => HashMap::new(),
     };
-    let mut ctx =
-        swissarmyhammer_commands::CommandContext::new(effective_cmd, scope, target, args_map);
+    let mut ctx = swissarmyhammer_kanban::commands_core::CommandContext::new(
+        effective_cmd,
+        scope,
+        target,
+        args_map,
+    );
     ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
 
     let resolved_board_path =
@@ -1487,6 +1684,11 @@ async fn handle_board_switch_result(
             state
                 .ui_state
                 .set_window_board(label, &canonical.display().to_string());
+            // The window was switched IN PLACE (reused, not recreated), so its
+            // notification forwarder is still bound to the OLD board's bridge.
+            // Proactively re-bind it to the new board's bridge — don't rely on
+            // the frontend re-invoking `mcp_subscribe`.
+            rebind_window_forwarder(app, state, label).await;
             let boards = state.boards.read().await;
             if let Some(handle) = boards.get(&canonical) {
                 let name = swissarmyhammer_kanban::board_display_name(&handle.ctx).await;
@@ -1522,7 +1724,7 @@ async fn handle_board_close_result(
         .unwrap_or("main")
         .to_string();
 
-    drop_or_detach_board(state, effective_cmd, path_str, &requesting_label).await;
+    drop_or_detach_board(app, state, effective_cmd, path_str, &requesting_label).await;
     close_or_retitle_window(app, &requesting_label);
     let _ = app.emit("board-changed", ());
 }
@@ -1531,6 +1733,7 @@ async fn handle_board_close_result(
 /// just clear the requesting window's assignment so other windows keep
 /// running.
 async fn drop_or_detach_board(
+    app: &AppHandle,
     state: &AppState,
     effective_cmd: &str,
     path_str: &str,
@@ -1550,8 +1753,17 @@ async fn drop_or_detach_board(
             tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardClose: failed to close board");
         }
         state.ui_state.remove_open_board(path_str);
+        // The requesting window stays open only when it is the last visible
+        // window (see `close_or_retitle_window`); in that case it is now
+        // boardless, so move its forwarder onto the global bridge. When the
+        // window is actually closed, the close handler unbinds it instead, and
+        // this re-bind is a cheap no-op (no forwarder to move).
+        rebind_window_forwarder(app, state, requesting_label).await;
     } else {
         state.ui_state.set_window_board(requesting_label, "");
+        // Other windows keep the board open; this window detached from it, so
+        // re-bind its forwarder onto the global (boardless) bridge.
+        rebind_window_forwarder(app, state, requesting_label).await;
     }
 }
 
@@ -1781,8 +1993,9 @@ async fn perform_cross_board_drag_transfer(
 
     let ok = transfer_result.is_ok();
     // Cross-board writes go through each board's `EntityCache`, which emits
-    // events synchronously. The bridge subscriber for each board already
-    // forwarded them to Tauri — no extra flush needed here.
+    // events synchronously. Each board's notification fan-in already published
+    // them as `notifications/store/changed` on the board's bridge — no extra
+    // flush needed here.
     let _ = (app, tgt, src);
     ok
 }
@@ -1797,7 +2010,7 @@ async fn perform_cross_board_drag_transfer(
 /// `kind` names which slice of UI state changed — one of the seven
 /// `UIStateChange` variants plus the two board result shapes — so the
 /// frontend can skip `setState` for events it doesn't care about (e.g.
-/// every `ui.setFocus` arrow-key fires a `scope_chain` event; the
+/// every `app.setFocus` arrow-key fires a `scope_chain` event; the
 /// frontend owns that slice via `FocusedScopeContext` and ignores the
 /// echo). No UI-specific policy lives here — the backend just tells the
 /// truth about which change it made.
@@ -1805,10 +2018,25 @@ fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Va
     let Some(kind) = ui_state_change_kind(result) else {
         return;
     };
-    let _ = app.emit(
-        "ui-state-changed",
-        serde_json::json!({ "kind": kind, "state": state.ui_state.to_json() }),
-    );
+    let payload = serde_json::json!({ "kind": kind, "state": state.ui_state.to_json() });
+    // Deliver per-window with `emit_to`, NOT the global `app.emit`. In Tauri v2
+    // a global `Emitter::emit` does NOT reach the dynamically-created board
+    // webviews' `listen("ui-state-changed")` subscribers (the same reason the
+    // focus kernel uses `emit_to(window_label, "focus-changed", …)` and the
+    // per-board notification forwarder uses `emit_to`). With a global emit the
+    // backend would pop the inspector stack / close the palette but the webview
+    // never hears it, so the panel stays open — the keystone behind "Esc / the
+    // (x) button don't close the inspector" and "the palette won't open".
+    //
+    // The payload carries the FULL per-window-keyed UIState snapshot plus the
+    // `kind` discriminator, and each window's `UIStateProvider` reads only its
+    // own `windows[<label>]` slice — so emitting the snapshot to every webview
+    // is correct (each window self-selects) and introduces no cross-window
+    // leakage.
+    tracing::debug!(kind, "emitting ui-state-changed to all webviews");
+    for label in app.webview_windows().keys() {
+        let _ = app.emit_to(label.as_str(), "ui-state-changed", &payload);
+    }
 }
 
 /// Classify a command result into a `ui-state-changed` discriminator, or
@@ -1823,24 +2051,43 @@ fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Va
 ///   which are not typed as `UIStateChange` but still mutate what the
 ///   `UIStateProvider` renders.
 fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
+    // Commands dispatched through the CommandService / builtin plugins return
+    // a `CallToolResult`-shaped value: `{ content, structuredContent: { ok,
+    // change } }`, where the typed `UIStateChange` lives at
+    // `structuredContent.change` (and is `null` when the command made no
+    // UI-state change). Some paths return the bare `{ ok, change }` envelope,
+    // and the legacy Rust-impl / test paths return the bare `UIStateChange`
+    // (or a `BoardSwitch` / `BoardClose` side-effect shape) directly. Unwrap in
+    // that order — `structuredContent.change` → `change` → the raw result.
+    //
+    // Looking only at the top-level `change` (the previous behavior) missed the
+    // `structuredContent.change` produced by every plugin/command-service
+    // dispatch, so `ui_state_change_kind` returned `None` and NO
+    // `ui-state-changed` event was emitted — the keystone behind the palette
+    // not opening and the inspector / views not updating.
+    let change_candidate = result
+        .get("structuredContent")
+        .and_then(|sc| sc.get("change"))
+        .or_else(|| result.get("change"))
+        .unwrap_or(result);
     if let Ok(change) =
-        serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone())
+        serde_json::from_value::<swissarmyhammer_ui_state::UIStateChange>(change_candidate.clone())
     {
         return Some(match change {
-            swissarmyhammer_commands::UIStateChange::ScopeChain(_) => "scope_chain",
-            swissarmyhammer_commands::UIStateChange::PaletteOpen(_) => "palette_open",
-            swissarmyhammer_commands::UIStateChange::KeymapMode(_) => "keymap_mode",
-            swissarmyhammer_commands::UIStateChange::InspectorStack(_) => "inspector_stack",
-            swissarmyhammer_commands::UIStateChange::ActiveView(_) => "active_view",
-            swissarmyhammer_commands::UIStateChange::ActivePerspective(_) => "active_perspective",
-            swissarmyhammer_commands::UIStateChange::AppMode(_) => "app_mode",
-            swissarmyhammer_commands::UIStateChange::InspectorWidth { .. } => "inspector_width",
+            swissarmyhammer_ui_state::UIStateChange::ScopeChain(_) => "scope_chain",
+            swissarmyhammer_ui_state::UIStateChange::PaletteOpen(_) => "palette_open",
+            swissarmyhammer_ui_state::UIStateChange::KeymapMode(_) => "keymap_mode",
+            swissarmyhammer_ui_state::UIStateChange::InspectorStack(_) => "inspector_stack",
+            swissarmyhammer_ui_state::UIStateChange::ActiveView(_) => "active_view",
+            swissarmyhammer_ui_state::UIStateChange::ActivePerspective(_) => "active_perspective",
+            swissarmyhammer_ui_state::UIStateChange::AppMode(_) => "app_mode",
+            swissarmyhammer_ui_state::UIStateChange::InspectorWidth { .. } => "inspector_width",
             // `PerspectiveSwitch` is the atomic id+filtered-ids update emitted
             // by `perspective.switch`. We classify it as `perspective_switch`
             // so the frontend can register its own debounce/skip policy
             // independently of the legacy `active_perspective` kind (which
             // covered id-only mutations).
-            swissarmyhammer_commands::UIStateChange::PerspectiveSwitch { .. } => {
+            swissarmyhammer_ui_state::UIStateChange::PerspectiveSwitch { .. } => {
                 "perspective_switch"
             }
         });
@@ -1859,7 +2106,7 @@ fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
 /// changes, and board switch/close.
 async fn maybe_rebuild_menu_after_cmd(app: &AppHandle, effective_cmd: &str, result: &Value) {
     if effective_cmd.starts_with("settings.keymap.")
-        || effective_cmd == "ui.setFocus"
+        || effective_cmd == "app.setFocus"
         || result.get("BoardSwitch").is_some()
         || result.get("BoardClose").is_some()
     {
@@ -1872,11 +2119,12 @@ async fn maybe_rebuild_menu_after_cmd(app: &AppHandle, effective_cmd: &str, resu
 ///
 /// Entity changes no longer need an explicit "flush" step here: writes
 /// flow through `EntityCache::write`, which emits `EntityChanged` events
-/// on its broadcast channel synchronously. The bridge task (started in
-/// `BoardHandle::start_watcher`) already forwarded those to Tauri. The
-/// work that remains is app-level: undo/redo flags depend on the store
-/// context, and window titles reflect the (possibly just-renamed) board
-/// entity.
+/// on its broadcast channel synchronously. The notification fan-in (started
+/// in `BoardHandle::start_notification_fanin`) translates those into
+/// `notifications/store/changed` on the board's bridge, which the per-window
+/// forwarder re-emits to the webview. The work that remains here is
+/// app-level: undo/redo flags depend on the store context, and window titles
+/// reflect the (possibly just-renamed) board entity.
 ///
 /// Runs for undoable commands **and** for `app.undo`/`app.redo`: both
 /// mutate entities on disk but are themselves non-undoable, so they'd
@@ -2063,10 +2311,17 @@ pub async fn list_commands_for_scope(
     // enrichment pass and left every picker (Group By, View, Sort, etc.)
     // with `options: None` — the empty-popover bug tracked in kanban task
     // 01KRGW1DYD0T05PSTEDPT5D076 (iteration 4).
+    // The legacy `state.command_impls` table was retired in Stage 4 — pass an
+    // empty trait-impl map. `commands_for_scope_with_context` falls back to
+    // "available" when no impl is registered for an id, which is the right
+    // behavior now that CommandService owns the availability gate at
+    // dispatch time.
+    let empty_impls: HashMap<String, Arc<dyn swissarmyhammer_kanban::commands_core::Command>> =
+        HashMap::new();
     let result = swissarmyhammer_kanban::scope_commands::commands_for_scope_with_context(
         &scope_chain,
         &registry,
-        &state.command_impls,
+        &empty_impls,
         active_handle.as_ref().map(|h| h.ctx.as_ref()),
         &state.ui_state,
         context_menu == Some(true),
@@ -2105,41 +2360,12 @@ pub struct ContextMenuItem {
     pub separator: bool,
 }
 
-/// Show a native context menu with the given items.
-///
-/// Each item carries its full dispatch info (cmd, target, scope_chain).
-/// When the user selects an item, `handle_menu_event` parses the JSON-encoded
-/// ID and emits a `context-menu-command` event so the frontend routes it
-/// through `useDispatchCommand` for busy tracking and scope resolution.
-#[tauri::command]
-pub async fn show_context_menu(
-    app: AppHandle,
-    window: Window,
-    items: Vec<ContextMenuItem>,
-) -> Result<(), String> {
-    if items.is_empty() {
-        return Ok(());
-    }
-
-    // Encode each item's dispatch info as JSON into the native menu item ID.
-    // When the user selects an item, handle_menu_event parses the JSON and
-    // dispatches directly — no lookup table needed.
-    let mut builder = MenuBuilder::new(&app);
-    for item in &items {
-        if item.separator {
-            builder = builder.separator();
-        } else {
-            let encoded = serde_json::to_string(&item).unwrap_or_default();
-            builder = builder.text(encoded, &item.name);
-        }
-    }
-
-    let menu = builder.build().map_err(|e| e.to_string())?;
-    menu.popup(window)
-        .map_err(|e: tauri::Error| e.to_string())?;
-
-    Ok(())
-}
+// The `show_context_menu` Tauri command was removed in the command cut-over:
+// the native context-menu render now rides the app-wide `window` MCP server
+// (`crates/swissarmyhammer-window-service`, op `show context menu`). The
+// `ContextMenuItem` struct above is retained because `menu::handle_menu_event`
+// still decodes the selected item's JSON-encoded menu id into it to emit the
+// `context-menu-command` event — selection delivery is unchanged.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Spatial-navigation commands.
@@ -2167,66 +2393,28 @@ pub async fn show_context_menu(
 // ─────────────────────────────────────────────────────────────────────────────
 
 use swissarmyhammer_focus::{
-    Direction, FocusChangedEvent, FocusLayer, FullyQualifiedMoniker, LayerName, NavSnapshot, Rect,
-    SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
+    FocusLayer, FullyQualifiedMoniker, LayerName, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
-/// Tauri event name for spatial focus changes — mirrors the listener
-/// registered in `kanban-app/ui/src/lib/spatial-focus-context.tsx`.
-const FOCUS_CHANGED_EVENT: &str = "focus-changed";
+// `FOCUS_CHANGED_EVENT`, `window_label_from`, `with_spatial`, and
+// `emit_focus_changed` were REMOVED in Stage 3 of the kanban cut-over.
+// Focus event emission now flows through the `focus` MCP server's
+// `FocusEventSink` (see `TauriFocusEventSink` in `command_services.rs`),
+// which re-emits `focus-changed` onto the same Tauri event the React
+// `SpatialFocusProvider` always listened on.
 
-/// Derive a [`WindowLabel`] newtype from a Tauri window handle.
-///
-/// `tauri::Window::label()` returns the borrowed string the user-space
-/// constructor mints (`"main"`, `"board-<ulid>"`, `"quick-capture"`, …);
-/// the kernel speaks in newtypes, so we wrap it at the boundary. Every
-/// spatial command funnels through this helper so a stray `String` cannot
-/// leak into the kernel surface.
-fn window_label_from(window: &Window) -> WindowLabel {
-    WindowLabel::from_string(window.label())
-}
-
-/// Acquire both spatial locks in canonical order and run `f` with mutable
-/// access.
-///
-/// Order is `spatial_registry` then `spatial_state` for any command that
-/// holds both at once. Centralizing the order here means every adapter
-/// inherits it for free and cannot accidentally lock-invert.
-async fn with_spatial<R, F>(state: &State<'_, AppState>, f: F) -> R
-where
-    F: FnOnce(&mut SpatialRegistry, &mut SpatialState) -> R,
-{
-    let mut registry = state.spatial_registry.lock().await;
-    let mut spatial_state = state.spatial_state.lock().await;
-    f(&mut registry, &mut spatial_state)
-}
-
-/// Forward a kernel-produced [`FocusChangedEvent`] to the React side.
-///
-/// Emits via the `tauri::Window` so the event reaches every webview the
-/// app has spawned. The frontend's `SpatialFocusProvider` filters its own
-/// claim registry by the `payload.next_key` lookup — windows that don't
-/// own the key receive the event silently and drop it, which matches the
-/// per-window claim-registry semantics described in the React module
-/// docs.
-fn emit_focus_changed(window: &Window, event: &FocusChangedEvent) -> Result<(), String> {
-    window
-        .emit(FOCUS_CHANGED_EVENT, event)
-        .map_err(|e| format!("failed to emit {FOCUS_CHANGED_EVENT}: {e}"))
-}
-
-// ── Pure inner logic, factored out of the Tauri commands so unit tests can
-// drive the same code paths against `&mut SpatialRegistry, &mut SpatialState`
-// without spinning up Tauri. The Tauri commands below are thin wrappers that
-// derive the [`WindowLabel`] from `tauri::Window`, lock the registry/state in
-// canonical order, dispatch to one of these helpers, and emit the resulting
-// `FocusChangedEvent` (when any) on the calling window.
+// ── Pure inner logic, kept here so unit tests can drive the same kernel
+// code path against `&mut SpatialRegistry` without spinning up Tauri.
+// (The Tauri command wrappers that drove it are gone; the helper is
+// retained because the in-file `#[test]` suite below still exercises
+// it.)
 
 /// Push a layer into the registry under the given owning window.
 ///
-/// `window_label` is derived from the calling `tauri::Window` in the
-/// command wrapper; the layer's owning window cannot be supplied by the
-/// React side because Tauri webviews are server-tracked, not client-known.
+/// Retained solely for the in-file `#[test]` fixtures that drove the
+/// removed `spatial_push_layer` Tauri command; the production path now
+/// goes through `swissarmyhammer_focus::FocusServer::handle_push_layer`.
+#[allow(dead_code)]
 fn spatial_push_layer_inner(
     registry: &mut SpatialRegistry,
     fq: FullyQualifiedMoniker,
@@ -2245,338 +2433,450 @@ fn spatial_push_layer_inner(
     });
 }
 
-/// Move focus to the scope at `fq`.
+// `spatial_focus`, `spatial_clear_focus`, `spatial_navigate`,
+// `spatial_focus_lost`, `spatial_push_layer`, `spatial_pop_layer`,
+// `spatial_drill_in`, `spatial_drill_out`, and `generate_jump_codes`
+// were REMOVED in Stage 3 of the kanban cut-over. The React side now
+// reaches the focus kernel through the in-process `focus` MCP server
+// (`swissarmyhammer_focus::FocusServer`) routed via the generic
+// `command_tool_call` Tauri bridge. The kernel's `FocusChangedEvent`
+// stream is re-emitted onto the `focus-changed` Tauri event by the
+// `TauriFocusEventSink` installed in `command_services.rs`, so the
+// React `SpatialFocusProvider` keeps receiving the same Tauri event
+// it always did.
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Generic MCP transport: `command_tool_call` + `mcp_subscribe`.
+//
+// The frontend has no in-process JS MCP client — the host runs the MCP server
+// in Rust. These two handlers are the seam: `command_tool_call` is the request
+// path the webview uses to reach the `command` operation tool exposed on the
+// host's `commands` MCP module, and `mcp_subscribe` is the bootstrap that
+// pumps the host's `NotificationBridge` into Tauri events the frontend
+// `listen(...)`s on (one event per MCP `notifications/*` method name).
+//
+// See `apps/kanban-app/ui/src/lib/mcp-transport.ts` and
+// `apps/kanban-app/ui/src/lib/mcp-notifications.ts` for the frontend ends.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The bridge a window's notification forwarder is currently bound to.
 ///
-/// The kernel records ancestry from the snapshot's `parent_zone` chain —
-/// mid-life `navOverride` and `parent_zone` changes propagate without a
-/// re-register. The registry is consulted only for the focused entry's
-/// owning window, segment, and layer-ancestor chain.
+/// `Some(canonical_board_path)` when the window's board has its own per-board
+/// notification bridge; `None` when the forwarder is on the global host's bridge
+/// (a boardless window, or a board without a per-board platform). Two windows on
+/// the same board carry equal `BindKey`s but remain distinct map entries (keyed
+/// by window label).
+type BindKey = Option<PathBuf>;
+
+/// One window's live notification forwarder: the task pumping a
+/// `NotificationBridge` into per-window Tauri events, plus the bridge it is
+/// bound to so a board switch can detect a stale binding and re-bind.
+struct WindowForwarder {
+    /// Which bridge the `task` is currently forwarding from.
+    bound_to: BindKey,
+    /// Monotonic id identifying THIS forwarder instance for the window, so the
+    /// pump can tell whether it is still the registered one before removing the
+    /// entry on bridge close (a re-bind installs a newer generation).
+    generation: u64,
+    /// The spawned pump; aborted on re-bind or window close.
+    task: tauri::async_runtime::JoinHandle<()>,
+}
+
+/// Monotonic source of [`WindowForwarder::generation`] ids.
+static FORWARDER_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Per-window notification forwarders, keyed by Tauri window label.
 ///
-/// `snapshot` is `None` only during the transient unmount window where
-/// the focused scope's React-side layer registry has already torn down;
-/// the kernel drops the commit silently in that case rather than guess
-/// at scope ancestry without a snapshot.
+/// Replaces the former "already-subscribed" label set: tracking the actual
+/// forwarder (and the board it is bound to) makes `mcp_subscribe` idempotent
+/// per `(label, board)` AND lets a board switch proactively re-bind a window's
+/// forwarder to the NEW board's bridge — the old set could only no-op, so after
+/// an in-place board switch a window stayed bound to its old board's bridge and
+/// silently stopped receiving events. Entries are removed (and their task
+/// aborted) on window close and when a forwarder observes its bridge close.
+static WINDOW_FORWARDERS: std::sync::LazyLock<std::sync::Mutex<HashMap<String, WindowForwarder>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// Generic MCP `tools/call` from the webview onto a host-exposed module.
 ///
-/// Delegates to [`SpatialState::focus`]. Returns
-/// `Some(FocusChangedEvent)` when focus actually moved and `None`
-/// otherwise (no snapshot, window unknown, already focused, or the FQM
-/// is missing from `snapshot.scopes`). We forward only actual
-/// transitions so claim listeners don't see redundant events.
+/// The frontend's `callCommandTool(op, params)` lowers to
+/// `invoke("command_tool_call", { module, tool, op, params })`. We route it as
+/// `host.call(HostInternal, module, tool, { op, ...params })`: each MCP module
+/// (`commands` hosts the `command` tool, `entity` hosts the `entity` tool,
+/// `focus` hosts the `focus` tool, etc.) dispatches on the `op` verb
+/// (`"list command"`, `"get entity"`, `"set focus"`, …). The tool's
+/// structured result is returned verbatim to the webview.
+///
+/// `module` defaults to `tool` when omitted, which matches every server we
+/// expose under a module id identical to its tool name (`entity`, `focus`,
+/// `store`, `ui_state`, `window`, `views`). Only the `commands` module
+/// breaks the convention — its tool is named `command` — so existing
+/// `commands`-bound callers must pass `module: "commands"` explicitly.
+///
+/// Errors from the platform / tool are stringified per this file's convention
+/// (see `dispatch_command`, …).
 #[tauri::command]
-pub async fn spatial_focus(
+pub async fn command_tool_call(
     window: Window,
     state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-    snapshot: Option<NavSnapshot>,
-) -> Result<(), String> {
-    let Some(snapshot) = snapshot else {
-        tracing::debug!(
-            op = "spatial_focus",
-            focused_fq = %fq,
-            "snapshot=None — dropping focus commit (transient unmount race)"
-        );
-        return Ok(());
+    module: Option<String>,
+    tool: String,
+    op: String,
+    params: Option<Value>,
+) -> Result<Value, String> {
+    // Merge `op` into the params object so the operation tool sees the same
+    // `{ op, ...params }` shape an external MCP client would send.
+    let mut input = match params {
+        Some(Value::Object(map)) => map,
+        Some(other) => {
+            return Err(format!(
+                "command_tool_call: `params` must be a JSON object, got {other:?}",
+            ));
+        }
+        None => serde_json::Map::new(),
     };
-    let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_state.focus(registry, &snapshot, fq.clone())
-    })
-    .await;
+    input.insert("op".to_string(), Value::String(op));
 
-    if let Some(event) = event {
-        emit_focus_changed(&window, &event)?;
-    }
-    Ok(())
+    let module = module.unwrap_or_else(|| tool.clone());
+
+    // Route the call to the host owned by the calling window's board (resolved
+    // from the Tauri window label), so a board's project-plugin servers are
+    // only visible to that board's windows. Boardless windows (and boards
+    // without a per-board platform) fall back to the global host, so builtin +
+    // user commands still answer everywhere.
+    let board = state.board_handle_for_window(window.label()).await;
+    let input = Value::Object(input);
+    let result = match board.as_ref().and_then(|h| h.platform()) {
+        Some(per_board) => {
+            per_board
+                .lock()
+                .await
+                .host()
+                .call(
+                    swissarmyhammer_plugin::CallerId::HostInternal,
+                    &module,
+                    &tool,
+                    input,
+                )
+                .await
+        }
+        None => {
+            state
+                .plugin_platform
+                .lock()
+                .await
+                .host()
+                .call(
+                    swissarmyhammer_plugin::CallerId::HostInternal,
+                    &module,
+                    &tool,
+                    input,
+                )
+                .await
+        }
+    };
+    result.map_err(|e| e.to_string()).map(unwrap_tool_result)
 }
 
-/// Clear focus for the calling window.
+/// Unwrap the structured payload from a raw rmcp `CallToolResult` JSON value.
 ///
-/// Explicit-clear counterpart of [`spatial_focus`]. The React side calls this when the user
-/// (or a component-level handler) wants to drop focus altogether — for
-/// example `setFocus(null)` from `entity-focus-context.tsx`. Routing
-/// the clear through the kernel preserves the architectural invariant
-/// from card `01KQD0WK54G0FRD7SZVZASA9ST`: the React entity-focus
-/// store is a pure projection of `focus-changed` events. Without this
-/// command, `setFocus(null)` would have to mutate the React store
-/// synchronously to clear focus, which is exactly the kernel/React
-/// drift the card was filed to eliminate.
+/// `PluginHost::call` returns the full `tools/call` response envelope —
+/// `{ content: [{ type: "text", text: "<json>" }], structuredContent: {...},
+/// isError: bool }`. Every frontend `callMcpTool` consumer
+/// (`window-mcp.ts`, `entity-mcp.ts`, …) expects the *unwrapped* structured
+/// object (`{ ok, board, columns, ... }`), not this envelope. This is the
+/// single seam that bridges the two: prefer `structuredContent`, fall back to
+/// parsing the first text content part as JSON, and finally return the value
+/// unchanged when it is not an envelope at all (so non-tool-call responses
+/// pass through untouched).
 ///
-/// Delegates to [`SpatialState::clear_focus`], which removes the
-/// per-window focus slot and returns a `Some(prev) → None`
-/// [`FocusChangedEvent`] when focus was actually cleared. We forward
-/// the event so the React-side bridge writes the entity-focus store
-/// to `null` and dispatches `ui.setFocus` with an empty scope chain.
-/// When the window had no prior focus, the kernel returns `None` and
-/// no event is emitted (idempotent).
-#[tauri::command]
-pub async fn spatial_clear_focus(window: Window, state: State<'_, AppState>) -> Result<(), String> {
-    let label = window_label_from(&window);
-    let event = with_spatial(&state, |_registry, spatial_state| {
-        spatial_state.clear_focus(&label)
-    })
-    .await;
-
-    if let Some(event) = event {
-        emit_focus_changed(&window, &event)?;
+/// Mirrors the extraction the test helper `command_ids_from_call_result`
+/// performs in `plugins.rs`; both encode the same envelope contract.
+fn unwrap_tool_result(value: Value) -> Value {
+    let Value::Object(map) = &value else {
+        return value;
+    };
+    // Not a CallToolResult envelope — pass through unchanged.
+    if !map.contains_key("content") && !map.contains_key("structuredContent") {
+        return value;
     }
-    Ok(())
+    if let Some(structured) = map.get("structuredContent") {
+        if !structured.is_null() {
+            return structured.clone();
+        }
+    }
+    // Fall back to the first text content part, parsed as JSON.
+    let parsed = map
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|parts| parts.iter().find_map(|p| p.get("text")?.as_str()))
+        .and_then(|text| serde_json::from_str::<Value>(text).ok());
+    parsed.unwrap_or(value)
 }
 
-/// Move focus relative to `focused_fq` in `direction`.
+/// Start (or re-bind) the calling window's `NotificationBridge` → Tauri-event
+/// forwarder.
 ///
-/// Pathfinding runs against the snapshot; the registry is consulted only
-/// for the focused entry's segment / window and the target's commit
-/// metadata. When `snapshot` is `None` (the transient unmount window),
-/// the call drops silently — the React-side layer registry has torn
-/// down and there is no live geometry to navigate over.
+/// Per-window and idempotent PER BOARD: a window's repeat call is a no-op while
+/// it is still bound to its current board's bridge, so the frontend can invoke
+/// this on every webview mount without double-spawning the pump. Distinct windows
+/// each get their own forwarder. The forwarder subscribes to the bridge of the
+/// window's OWN board (resolved from the Tauri window label) and emits ONLY to
+/// that window via [`Emitter::emit_to`], so a board's notifications never leak
+/// into another board's windows. Boardless windows (and boards without a
+/// per-board platform) fall back to the global host's bridge.
 ///
-/// Returns `Ok(())` whether or not focus actually moved — under the
-/// no-silent-dropout contract, the kernel always returns a moniker; if
-/// it equals the focused moniker (semantic "stay put" or torn-state
-/// echo), the inner method short-circuits via the
-/// "already focused → no event" check in `SpatialState::focus` and
-/// nothing is emitted. Same outcome when the resolved moniker doesn't
-/// own any registered scope.
+/// Because the backend proactively re-binds on board switch (see
+/// [`rebind_window_forwarder`]), the frontend does NOT need to re-invoke this on
+/// a switch — but if it does, the per-`(label, board)` idempotency makes the
+/// extra call a harmless no-op rather than a second, duplicate forwarder.
+///
+/// The event name is the MCP notification `method` verbatim
+/// (e.g. `"notifications/store/changed"`, `"notifications/commands/changed"`),
+/// matching the constants in `mcp-notifications.ts` / `mcp-transport.ts`. The
+/// payload is the notification's `params` object — what every `subscribe*`
+/// helper in `mcp-notifications.ts` types as its `event.payload`.
 #[tauri::command]
-pub async fn spatial_navigate(
+pub async fn mcp_subscribe(
     window: Window,
+    app: AppHandle,
     state: State<'_, AppState>,
-    focused_fq: FullyQualifiedMoniker,
-    direction: Direction,
-    snapshot: Option<NavSnapshot>,
 ) -> Result<(), String> {
-    let Some(snapshot) = snapshot else {
-        tracing::debug!(
-            op = "spatial_navigate",
-            focused_fq = %focused_fq,
-            direction = ?direction,
-            "snapshot=None — dropping navigation (transient unmount race)"
-        );
-        return Ok(());
-    };
-    let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_state.navigate(registry, &snapshot, focused_fq.clone(), direction)
-    })
-    .await;
+    bind_window_forwarder(&app, &state, window.label()).await;
+    Ok(())
+}
 
-    if let Some(event) = event {
-        emit_focus_changed(&window, &event)?;
+/// Resolve the bridge `label`'s window is currently bound to: its per-board
+/// host's bridge when the window's board has one, else the global host's bridge.
+///
+/// Returns the `(BindKey, bridge)` pair so the caller can both detect a stale
+/// binding (by comparing `BindKey`s) and subscribe to the live bridge.
+async fn resolve_window_bridge(
+    state: &AppState,
+    label: &str,
+) -> (BindKey, swissarmyhammer_plugin::notify::NotificationBridge) {
+    match state.board_handle_for_window(label).await {
+        Some(handle) => match handle.platform() {
+            Some(per_board) => {
+                let key = state
+                    .ui_state
+                    .window_board(label)
+                    .map(|p| PathBuf::from(&p).canonicalize().unwrap_or(PathBuf::from(p)));
+                let bridge = per_board.lock().await.host().notification_bridge();
+                (key, bridge)
+            }
+            // Board open but no per-board platform → global bridge.
+            None => (
+                None,
+                state
+                    .plugin_platform
+                    .lock()
+                    .await
+                    .host()
+                    .notification_bridge(),
+            ),
+        },
+        // Boardless / unknown window → global bridge.
+        None => (
+            None,
+            state
+                .plugin_platform
+                .lock()
+                .await
+                .host()
+                .notification_bridge(),
+        ),
     }
-    Ok(())
 }
 
-/// React to the focused scope unmounting on the React side.
+/// Ensure `label`'s notification forwarder is bound to its CURRENT board's
+/// bridge, spawning or re-binding as needed.
 ///
-/// Called from the React-side layer registry's deletion path when the
-/// scope being unmounted is the currently focused FQM in this window.
-/// React supplies the lost FQM, its `parent_zone`, owning layer FQM, and
-/// last-known bounding rect alongside a snapshot whose `scopes` set has
-/// already had the lost FQM removed — the kernel's fallback walk reads
-/// from the snapshot only, so no registry mutation around the lost
-/// entry's metadata is required.
-#[tauri::command]
-pub async fn spatial_focus_lost(
-    window: Window,
-    state: State<'_, AppState>,
-    focused_fq: FullyQualifiedMoniker,
-    lost_parent_zone: Option<FullyQualifiedMoniker>,
-    lost_layer_fq: FullyQualifiedMoniker,
-    lost_rect: Rect,
-    snapshot: NavSnapshot,
-) -> Result<(), String> {
-    let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_state.focus_lost(
-            registry,
-            &snapshot,
-            &focused_fq,
-            lost_parent_zone.as_ref(),
-            &lost_layer_fq,
-            lost_rect,
-        )
-    })
-    .await;
+/// Idempotent per `(label, board)`: when an existing forwarder is already bound
+/// to the window's current bridge this is a no-op; when the window has no
+/// forwarder, or one bound to a DIFFERENT board (an in-place board switch), the
+/// stale forwarder (if any) is aborted and a fresh one is spawned on the current
+/// board's bridge. This is the single seam both `mcp_subscribe` and the board
+/// switch / close paths use, so the backend stays correct even if the frontend
+/// never re-subscribes.
+async fn bind_window_forwarder(app: &AppHandle, state: &AppState, label: &str) {
+    // Resolve `(key, bridge)` before taking the install lock, then re-lock below
+    // to insert (last-resolve-wins). This is a benign TOCTOU: binds for one
+    // label are serialized by the board-switch / open path, so two binds for the
+    // same window cannot race here — the resolve and the install observe the same
+    // board assignment.
+    let (key, bridge) = resolve_window_bridge(state, label).await;
 
-    if let Some(event) = event {
-        emit_focus_changed(&window, &event)?;
+    {
+        // Already bound to the right bridge → nothing to do.
+        let forwarders = WINDOW_FORWARDERS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = forwarders.get(label) {
+            if existing.bound_to == key {
+                return;
+            }
+        }
     }
-    Ok(())
+
+    let generation = FORWARDER_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Spawn the forwarder before inserting its map entry. If the bridge is
+    // already closed and the pump hits `RecvError::Closed` before this insert,
+    // its generation-guarded self-evict finds no matching entry and no-ops; the
+    // (dead) entry then lingers only until the next bind/unbind for this label
+    // replaces or removes it. Harmless and self-healing — no leak across binds.
+    let task = spawn_window_forwarder(app.clone(), bridge, label.to_string(), generation);
+
+    // Install the new forwarder, aborting any prior one for this label (a
+    // re-bind, or a lost race with a concurrent bind for the same window).
+    let mut forwarders = WINDOW_FORWARDERS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(prev) = forwarders.insert(
+        label.to_string(),
+        WindowForwarder {
+            bound_to: key,
+            generation,
+            task,
+        },
+    ) {
+        prev.task.abort();
+    }
 }
 
-/// Push a new layer onto the registry.
+/// Re-bind `label`'s notification forwarder after its board assignment changed.
 ///
-/// Layers form a per-window forest: the window root has `parent = None`;
-/// inspector / dialog / palette overlays are stacked under their parent.
-/// `key` is the stable mount identifier; `name` is the layer role
-/// (`"window"`, `"inspector"`, `"dialog"`, `"palette"`); `parent` ties
-/// the layer to its stacking parent (`None` for a window root).
-///
-/// The owning window is taken from the calling `tauri::Window` — every
-/// layer in a forest path back to a root shares the same window label,
-/// and the registry uses that to bound spatial nav and fallback
-/// resolution to a single window.
-#[tauri::command]
-pub async fn spatial_push_layer(
-    window: Window,
-    state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-    segment: SegmentMoniker,
-    name: LayerName,
-    parent: Option<FullyQualifiedMoniker>,
-) -> Result<(), String> {
-    let window_label = window_label_from(&window);
-    with_spatial(&state, |registry, _spatial_state| {
-        spatial_push_layer_inner(registry, fq, segment, name, parent, window_label);
-    })
-    .await;
-    Ok(())
-}
-
-/// Pop a previously-pushed layer and return the focus-restoration target.
-///
-/// Reads the popped layer's `last_focused` slot before removal and
-/// returns it so the caller can issue a follow-up `spatial_focus` to
-/// commit the restoration through the snapshot path. The kernel does
-/// not mutate `focus_by_window` or emit a `focus-changed` event from
-/// this command — focus restoration is a two-step round-trip that
-/// keeps every commit on the snapshot-driven path.
-///
-/// Returns `None` when the layer is unknown or has no recorded
-/// `last_focused`. The React side treats `None` as "leave focus
-/// as-is".
-///
-/// The registry side is a single `remove_layer` call; descendant scope
-/// entries are dropped by the React side beforehand, so no GC pass is
-/// needed here.
-#[tauri::command]
-pub async fn spatial_pop_layer(
-    state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-) -> Result<Option<FullyQualifiedMoniker>, String> {
-    let next_fq = with_spatial(&state, |registry, _spatial_state| {
-        let next_fq = registry.layer(&fq).and_then(|l| l.last_focused.clone());
-        registry.remove_layer(&fq);
-        next_fq
-    })
-    .await;
-    Ok(next_fq)
-}
-
-/// Compute the FQM to focus when the user drills *into* the scope at
-/// `fq`.
-///
-/// Returns the result of [`swissarmyhammer_focus::drill_in`]: the
-/// scope's recorded `last_focused_by_fq` target if it is still in
-/// `snapshot`, else the topmost-then-leftmost child by rect, else
-/// `focused_fq` (semantic no-op).
-///
-/// Pure query — does not mutate focus state and does not emit a
-/// `focus-changed` event; the React side calls `setFocus(moniker)` on
-/// the result. Returns `Ok(focused_fq)` when `snapshot` is `None`
-/// (transient unmount window; the React side has nothing live to drill
-/// into).
-#[tauri::command]
-pub async fn spatial_drill_in(
-    _window: Window,
-    state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-    focused_fq: FullyQualifiedMoniker,
-    snapshot: Option<NavSnapshot>,
-) -> Result<FullyQualifiedMoniker, String> {
-    let Some(snapshot) = snapshot else {
-        tracing::debug!(
-            op = "spatial_drill_in",
-            focused_fq = %focused_fq,
-            target_fq = %fq,
-            "snapshot=None — returning focused_fq (transient unmount race)"
-        );
-        return Ok(focused_fq);
+/// Called from the board switch / close side-effects so a window that switched
+/// boards IN PLACE (the window is reused, not recreated) is moved onto the new
+/// board's bridge proactively — without waiting on the frontend to re-subscribe.
+/// A no-op when the window has no forwarder yet (it will bind on its next
+/// `mcp_subscribe`).
+pub(crate) async fn rebind_window_forwarder(app: &AppHandle, state: &AppState, label: &str) {
+    let has_forwarder = {
+        let forwarders = WINDOW_FORWARDERS.lock().unwrap_or_else(|e| e.into_inner());
+        forwarders.contains_key(label)
     };
-    let next_fq = with_spatial(&state, |registry, _spatial_state| {
-        let view = swissarmyhammer_focus::IndexedSnapshot::new(&snapshot);
-        swissarmyhammer_focus::drill_in(&view, registry, fq, &focused_fq)
-    })
-    .await;
-    Ok(next_fq)
+    if has_forwarder {
+        bind_window_forwarder(app, state, label).await;
+    }
 }
 
-/// Compute the FQM to focus when the user drills *out of* the scope at
-/// `fq`.
+/// Remove and abort `label`'s notification forwarder.
 ///
-/// Returns the result of [`swissarmyhammer_focus::drill_out`]: the
-/// scope's `parent_zone` if it is still in `snapshot`, else
-/// `focused_fq` (the React side compares against `focused_fq` to fall
-/// through to `app.dismiss`).
-#[tauri::command]
-pub async fn spatial_drill_out(
-    _window: Window,
-    state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-    focused_fq: FullyQualifiedMoniker,
-    snapshot: Option<NavSnapshot>,
-) -> Result<FullyQualifiedMoniker, String> {
-    let Some(snapshot) = snapshot else {
-        tracing::debug!(
-            op = "spatial_drill_out",
-            focused_fq = %focused_fq,
-            target_fq = %fq,
-            "snapshot=None — returning focused_fq (transient unmount race)"
-        );
-        return Ok(focused_fq);
+/// Called on window close so a closed (or reused-label) window never keeps a
+/// dangling forwarder and the map never grows unbounded across a session.
+pub(crate) fn unbind_window_forwarder(label: &str) {
+    let removed = {
+        let mut forwarders = WINDOW_FORWARDERS.lock().unwrap_or_else(|e| e.into_inner());
+        forwarders.remove(label)
     };
-    let next_fq = with_spatial(&state, |_registry, _spatial_state| {
-        let view = swissarmyhammer_focus::IndexedSnapshot::new(&snapshot);
-        swissarmyhammer_focus::drill_out(&view, fq, &focused_fq)
-    })
-    .await;
-    Ok(next_fq)
+    if let Some(forwarder) = removed {
+        forwarder.task.abort();
+    }
 }
 
-/// Generate `count` distinct, prefix-free key codes for the Jump-To
-/// overlay (vim-sneak / AceJump-style labels).
+/// Spawn the bridge→Tauri-event pump for one window, returning its task handle.
 ///
-/// Pure pass-through to
-/// [`swissarmyhammer_focus::generate_sneak_codes`] — no state mutation,
-/// no I/O. The frontend calls this once when the overlay opens and uses
-/// the resulting codes to label visible scopes.
-///
-/// # Errors
-///
-/// Returns the stringified
-/// [`swissarmyhammer_focus::SneakError`] when `count` exceeds
-/// the maximum capacity of the alphabet (currently 529 — `23²`). In
-/// practice this means an upstream bug, since the overlay never shows
-/// hundreds of targets.
-#[tauri::command]
-pub fn generate_jump_codes(count: usize) -> Result<Vec<String>, String> {
-    swissarmyhammer_focus::generate_sneak_codes(count).map_err(|e| e.to_string())
+/// The task forwards every notification on `bridge` to `label`'s window under
+/// the notification `method` as the Tauri event name. On `RecvError::Closed`
+/// (the bridge was dropped — its board closed, or app teardown) it removes its
+/// own entry from [`WINDOW_FORWARDERS`] so a stale forwarder never lingers.
+fn spawn_window_forwarder(
+    app: AppHandle,
+    bridge: swissarmyhammer_plugin::notify::NotificationBridge,
+    label: String,
+    generation: u64,
+) -> tauri::async_runtime::JoinHandle<()> {
+    let mut subscription = bridge.subscribe();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match subscription.recv().await {
+                Ok(notification) => {
+                    // Emit only to THIS window under the MCP notification
+                    // `method` so the frontend's
+                    // `listen("notifications/store/changed", …)` (and siblings)
+                    // wire up unchanged, but a board's events stay in its own
+                    // window.
+                    if let Err(e) = app.emit_to(&label, &notification.method, &notification.params)
+                    {
+                        tracing::warn!(
+                            label = %label,
+                            method = %notification.method,
+                            error = %e,
+                            "mcp_subscribe: failed to emit MCP notification as Tauri event"
+                        );
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(
+                        skipped,
+                        "mcp_subscribe: notification forwarder lagged; \
+                         webview may need to resync"
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    // Bridge dropped (board closed or app teardown). Drop our own
+                    // map entry so it doesn't linger — but only if WE are still
+                    // the registered forwarder. A re-bind installs a newer
+                    // generation under the same label; matching on `generation`
+                    // ensures we never evict the forwarder that replaced us.
+                    let mut forwarders =
+                        WINDOW_FORWARDERS.lock().unwrap_or_else(|e| e.into_inner());
+                    if forwarders
+                        .get(&label)
+                        .is_some_and(|existing| existing.generation == generation)
+                    {
+                        forwarders.remove(&label);
+                    }
+                    return;
+                }
+            }
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::generate_jump_codes;
+    // `generate_jump_codes` Tauri command was REMOVED in Stage 3 of the
+    // kanban cut-over (the React side now reaches the focus kernel
+    // through the in-process `focus` MCP server), so the two tests that
+    // round-tripped it via the Tauri command shell were removed here in
+    // Stage 4 as a follow-up clean-up. The underlying generator lives in
+    // `swissarmyhammer_focus::generate_sneak_codes` and is exercised by
+    // its own unit tests in the focus crate.
 
-    /// `generate_jump_codes` round-trips through the same code path the
-    /// Tauri runtime invokes — identical output to the underlying Rust
-    /// impl, errors flattened to `String`.
+    use super::unwrap_tool_result;
+    use serde_json::json;
+
+    /// A `CallToolResult` envelope with `structuredContent` unwraps to that
+    /// structured payload — the shape `getBoardData` / `listOpenBoards` expect.
     #[test]
-    fn generate_jump_codes_matches_rust_impl_for_known_count() {
-        let count = 30usize;
-        let via_command = generate_jump_codes(count).expect("count=30 must succeed");
-        let via_rust = swissarmyhammer_focus::generate_sneak_codes(count)
-            .expect("count=30 must succeed via direct call");
-        assert_eq!(via_command, via_rust);
-        assert_eq!(via_command.len(), count);
+    fn unwrap_tool_result_prefers_structured_content() {
+        let envelope = json!({
+            "content": [{ "type": "text", "text": "{\"ok\":true,\"board\":{\"id\":\"board\"}}" }],
+            "structuredContent": { "ok": true, "board": { "id": "board" } },
+            "isError": false,
+        });
+        let out = unwrap_tool_result(envelope);
+        assert_eq!(out, json!({ "ok": true, "board": { "id": "board" } }));
     }
 
-    /// `generate_jump_codes` flattens [`SneakError`] to a `String`
-    /// preserving the canonical error message.
+    /// When `structuredContent` is absent/null, the first text content part is
+    /// parsed as JSON and returned.
     #[test]
-    fn generate_jump_codes_flattens_too_many_targets_error() {
-        let over = swissarmyhammer_focus::MAX_SNEAK_CODES + 1;
-        let err = generate_jump_codes(over).expect_err("over-capacity must fail");
-        assert!(
-            err.contains("too many jump targets"),
-            "unexpected error message: {err:?}",
-        );
+    fn unwrap_tool_result_falls_back_to_text_content() {
+        let envelope = json!({
+            "content": [{ "type": "text", "text": "{\"ok\":true,\"boards\":[]}" }],
+            "structuredContent": serde_json::Value::Null,
+            "isError": false,
+        });
+        let out = unwrap_tool_result(envelope);
+        assert_eq!(out, json!({ "ok": true, "boards": [] }));
+    }
+
+    /// A value that is not a `CallToolResult` envelope (no `content` /
+    /// `structuredContent`) passes through unchanged — non-tool-call responses
+    /// must not be mangled.
+    #[test]
+    fn unwrap_tool_result_passes_through_non_envelope() {
+        let plain = json!({ "result": "ok", "undoable": true });
+        assert_eq!(unwrap_tool_result(plain.clone()), plain);
     }
 
     /// Verifies that store_name and id are correctly extracted from ChangeEvent
@@ -2886,11 +3186,11 @@ mod tests {
     // These guard the wire-format contract for `ui-state-changed` events:
     // every payload carries a `kind` discriminator so the frontend can skip
     // `setState` for slices it owns (notably `scope_chain`, which echoes
-    // back from every `ui.setFocus` call and would otherwise cascade
+    // back from every `app.setFocus` call and would otherwise cascade
     // re-renders through every `useUIState()` consumer).
 
     use super::ui_state_change_kind;
-    use swissarmyhammer_commands::UIStateChange;
+    use swissarmyhammer_ui_state::UIStateChange;
 
     #[test]
     fn ui_state_change_kind_scope_chain() {
@@ -3001,220 +3301,135 @@ mod tests {
             None
         );
     }
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Spatial-navigation command tests.
-//
-// These exercise the inner functions extracted from each `#[tauri::command]`
-// shell. We can't construct a `tauri::Window` or `State<'_, AppState>` in a
-// unit test without a Tauri runtime — so the inner helpers operate directly
-// on `&mut SpatialRegistry, &mut SpatialState`, which is exactly the
-// signature these tests want.
-// ─────────────────────────────────────────────────────────────────────────────
+    // ── PRODUCTION ENVELOPE SHAPE ──────────────────────────────────
+    //
+    // Commands dispatched through the CommandService / builtin plugins do NOT
+    // return a bare `UIStateChange`; they return the `{ ok, change }` envelope
+    // the `ui_state` MCP ops produce. The bare-enum tests above pass against a
+    // shape production never emits — so they stayed green while pressing `:`
+    // (palette) and clicking inspect (inspector) silently failed to emit a
+    // `ui-state-changed` event. These tests pin the REAL wire shape so the
+    // regression cannot return.
 
-#[cfg(test)]
-mod spatial_command_tests {
-    use super::*;
-    use std::collections::HashMap;
-    use swissarmyhammer_focus::{Pixels, SnapshotScope};
-
-    fn rect_at(x: f64, y: f64, w: f64, h: f64) -> Rect {
-        Rect {
-            x: Pixels::new(x),
-            y: Pixels::new(y),
-            width: Pixels::new(w),
-            height: Pixels::new(h),
-        }
-    }
-
-    /// Push a window-root layer into `registry`, returning the layer FQM
-    /// for use as `snapshot.layer_fq`.
-    fn push_root_layer(
-        registry: &mut SpatialRegistry,
-        window: &str,
-        layer_segment: &str,
-    ) -> FullyQualifiedMoniker {
-        let segment = SegmentMoniker::from_string(layer_segment);
-        let fq = FullyQualifiedMoniker::root(&segment);
-        spatial_push_layer_inner(
-            registry,
-            fq.clone(),
-            segment,
-            LayerName::from_string("window"),
-            None,
-            WindowLabel::from_string(window),
-        );
-        fq
-    }
-
-    /// Build a snapshot scope at the composed FQM `<layer_fq>/<segment>`
-    /// with the given rect.
-    fn snapshot_leaf(
-        layer_fq: &FullyQualifiedMoniker,
-        segment_str: &str,
-        rect: Rect,
-    ) -> (FullyQualifiedMoniker, SnapshotScope) {
-        let segment = SegmentMoniker::from_string(segment_str);
-        let fq = FullyQualifiedMoniker::compose(layer_fq, &segment);
-        (
-            fq.clone(),
-            SnapshotScope {
-                fq,
-                rect,
-                parent_zone: None,
-                nav_override: HashMap::new(),
-            },
-        )
-    }
-
-    /// `spatial_focus` invokes the snapshot-driven focus path and the
-    /// kernel returns a `FocusChangedEvent` carrying the focused window,
-    /// FQM, and segment.
     #[test]
-    fn spatial_focus_emits_focus_changed_event() {
-        let mut registry = SpatialRegistry::new();
-        let mut state = SpatialState::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        let (fq, scope) = snapshot_leaf(&layer, "task:01", rect_at(0.0, 0.0, 10.0, 10.0));
-        let snapshot = NavSnapshot {
-            layer_fq: layer,
-            scopes: vec![scope],
+    fn ui_state_change_kind_envelope_palette_open() {
+        // Exactly what `app.command` / `app.palette.open` return in production
+        // (observed in the OS log): `{ ok, change: { PaletteOpen: true } }`.
+        let value = serde_json::json!({ "ok": true, "change": { "PaletteOpen": true } });
+        assert_eq!(ui_state_change_kind(&value), Some("palette_open"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_envelope_inspector_stack() {
+        // Exactly what `app.inspect` returns in production:
+        // `{ ok, change: { InspectorStack: [...] } }`.
+        let value = serde_json::json!({
+            "ok": true,
+            "change": { "InspectorStack": ["task:01ABC"] },
+        });
+        assert_eq!(ui_state_change_kind(&value), Some("inspector_stack"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_envelope_null_change_is_none() {
+        // A command that made no UI-state change returns `{ ok, change: null }`
+        // (e.g. a second `app.command` while the palette is already open). It
+        // must NOT trigger an emit.
+        let value = serde_json::json!({ "ok": true, "change": serde_json::Value::Null });
+        assert_eq!(ui_state_change_kind(&value), None);
+    }
+
+    #[test]
+    fn ui_state_change_kind_call_tool_result_structured_content_palette_open() {
+        // The FULL `CallToolResult` envelope produced by PluginHost / the
+        // CommandService dispatch path: `{ content, structuredContent: { ok,
+        // change }, isError }`. This is the keystone of the "palette won't
+        // open" fix — before it, `ui_state_change_kind` never looked inside
+        // `structuredContent`, returned `None` for every plugin-command
+        // result, and NO `ui-state-changed` event was ever emitted (the
+        // backend flipped `palette_open` but no webview re-rendered).
+        let value = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "{\"ok\":true,\"change\":{\"PaletteOpen\":true}}",
+            }],
+            "structuredContent": { "ok": true, "change": { "PaletteOpen": true } },
+            "isError": false,
+        });
+        assert_eq!(ui_state_change_kind(&value), Some("palette_open"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_call_tool_result_null_change_is_none() {
+        // The same `CallToolResult` envelope when the command made no
+        // UI-state change (`structuredContent.change: null`) must NOT
+        // trigger an emit — the unwrap must land on the null change, not
+        // fall through and misclassify the envelope itself.
+        let value = serde_json::json!({
+            "content": [{ "type": "text", "text": "{\"ok\":true,\"change\":null}" }],
+            "structuredContent": { "ok": true, "change": serde_json::Value::Null },
+            "isError": false,
+        });
+        assert_eq!(ui_state_change_kind(&value), None);
+    }
+
+    // ── context-menu round-trip parity ────────────────────────────
+    //
+    // Two `ContextMenuItem` structs sit on opposite sides of the JSON menu-id
+    // wire: the window-service one is what the frontend serializes into each
+    // native menu item's id (the *encode* side), and the `commands.rs` one is
+    // what `menu::handle_menu_event` deserializes the selected item's id back
+    // into (the *decode* side). They are coupled only by hand, so this test
+    // pins the encode→decode contract: a fully-populated window-service item
+    // must deserialize into the decoder struct with every field intact. A
+    // rename or serde-attr drift on either side fails here instead of silently
+    // dropping a field at runtime.
+
+    #[test]
+    fn context_menu_item_encode_decode_round_trips_all_fields() {
+        let encoded = swissarmyhammer_window_service::ContextMenuItem {
+            name: "Copy".to_string(),
+            cmd: "entity.copy".to_string(),
+            target: Some("task:01ABC".to_string()),
+            scope_chain: vec!["task:01ABC".to_string(), "board:main".to_string()],
+            separator: false,
         };
 
-        let event = state
-            .focus(&mut registry, &snapshot, fq.clone())
-            .expect("focus emits an event for a snapshot scope");
+        // Encode side: exactly what the shell writes into the native menu id.
+        let wire = serde_json::to_string(&encoded).expect("encode side serializes");
 
-        assert_eq!(event.window_label, WindowLabel::from_string("main"));
-        assert_eq!(event.prev_fq, None);
-        assert_eq!(event.next_fq, Some(fq));
-        assert_eq!(
-            event.next_segment,
-            Some(SegmentMoniker::from_string("task:01"))
-        );
+        // Decode side: exactly what `handle_menu_event` reads back.
+        let decoded: super::ContextMenuItem =
+            serde_json::from_str(&wire).expect("decoder must accept the encoder's JSON");
+
+        assert_eq!(decoded.name, encoded.name);
+        assert_eq!(decoded.cmd, encoded.cmd);
+        assert_eq!(decoded.target, encoded.target);
+        assert_eq!(decoded.scope_chain, encoded.scope_chain);
+        assert_eq!(decoded.separator, encoded.separator);
     }
 
-    /// `spatial_navigate` lands on the snapshot-determined target and
-    /// emits the matching `FocusChangedEvent`.
     #[test]
-    fn spatial_navigate_with_snapshot_resolves_target() {
-        let mut registry = SpatialRegistry::new();
-        let mut state = SpatialState::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-
-        let (top, top_scope) = snapshot_leaf(&layer, "task:top", rect_at(0.0, 0.0, 10.0, 10.0));
-        let (bottom, bottom_scope) =
-            snapshot_leaf(&layer, "task:bottom", rect_at(0.0, 20.0, 10.0, 10.0));
-
-        let snapshot = NavSnapshot {
-            layer_fq: layer,
-            scopes: vec![top_scope, bottom_scope],
+    fn context_menu_item_separator_round_trips() {
+        // Separators carry empty dispatch fields; the `#[serde(default)]`
+        // attributes on both sides must let the sparse separator JSON the
+        // frontend emits decode without error.
+        let encoded = swissarmyhammer_window_service::ContextMenuItem {
+            name: String::new(),
+            cmd: String::new(),
+            target: None,
+            scope_chain: Vec::new(),
+            separator: true,
         };
 
-        state
-            .focus(&mut registry, &snapshot, top.clone())
-            .expect("focus top");
+        let wire = serde_json::to_string(&encoded).expect("encode side serializes");
+        let decoded: super::ContextMenuItem =
+            serde_json::from_str(&wire).expect("decoder must accept a separator item");
 
-        let event = state
-            .navigate(&mut registry, &snapshot, top, Direction::Down)
-            .expect("Down resolves to bottom");
-
-        assert_eq!(event.next_fq, Some(bottom));
-    }
-
-    /// `spatial_push_layer_inner` derives `window_label` from the calling
-    /// command and stores the layer under that label so `root_for_window`
-    /// can find it.
-    #[test]
-    fn spatial_push_layer_associates_window_label() {
-        let mut registry = SpatialRegistry::new();
-        let segment = SegmentMoniker::from_string("L1");
-        let fq = FullyQualifiedMoniker::root(&segment);
-        spatial_push_layer_inner(
-            &mut registry,
-            fq.clone(),
-            segment,
-            LayerName::from_string("window"),
-            None,
-            WindowLabel::from_string("board-abc"),
-        );
-
-        let root = registry
-            .root_for_window(&WindowLabel::from_string("board-abc"))
-            .expect("root layer registered for the window");
-        assert_eq!(root.fq, fq);
-        assert_eq!(root.window_label, WindowLabel::from_string("board-abc"));
-    }
-
-    /// `spatial_pop_layer` removes the layer from the registry.
-    #[test]
-    fn spatial_pop_layer_removes_layer() {
-        let mut registry = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        assert!(registry.layer(&layer).is_some());
-
-        registry.remove_layer(&layer);
-        assert!(registry.layer(&layer).is_none());
-    }
-
-    /// When `fq` is missing from `snapshot.scopes`, `focus` drops the
-    /// commit and returns `None`.
-    #[test]
-    fn focus_drops_when_fq_missing_from_snapshot() {
-        let mut registry = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        let leaf = FullyQualifiedMoniker::compose(&layer, &SegmentMoniker::from_string("leaf:01"));
-
-        let empty_snapshot = NavSnapshot {
-            layer_fq: layer,
-            scopes: vec![],
-        };
-
-        let mut state = SpatialState::new();
-        let event = state.focus(&mut registry, &empty_snapshot, leaf);
-        assert!(
-            event.is_none(),
-            "focus must drop when target is absent from snapshot"
-        );
-    }
-
-    /// `focus` populates `last_focused_by_fq` for every ancestor in the
-    /// snapshot's `parent_zone` chain.
-    #[test]
-    fn focus_records_last_focused_for_ancestor_zones() {
-        let mut registry = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        let zone = FullyQualifiedMoniker::compose(&layer, &SegmentMoniker::from_string("zone:01"));
-        let leaf = FullyQualifiedMoniker::compose(&zone, &SegmentMoniker::from_string("leaf:01"));
-
-        let snapshot = NavSnapshot {
-            layer_fq: layer,
-            scopes: vec![
-                SnapshotScope {
-                    fq: zone.clone(),
-                    rect: rect_at(0.0, 0.0, 100.0, 100.0),
-                    parent_zone: None,
-                    nav_override: HashMap::new(),
-                },
-                SnapshotScope {
-                    fq: leaf.clone(),
-                    rect: rect_at(10.0, 10.0, 10.0, 10.0),
-                    parent_zone: Some(zone.clone()),
-                    nav_override: HashMap::new(),
-                },
-            ],
-        };
-
-        let mut state = SpatialState::new();
-        state
-            .focus(&mut registry, &snapshot, leaf.clone())
-            .expect("focus emits");
-
-        assert_eq!(
-            registry.last_focused_by_fq.get(&zone),
-            Some(&leaf),
-            "ancestor zone records the focused descendant",
-        );
+        assert!(decoded.separator);
+        assert!(decoded.cmd.is_empty());
+        assert!(decoded.target.is_none());
+        assert!(decoded.scope_chain.is_empty());
     }
 }

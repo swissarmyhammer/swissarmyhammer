@@ -111,6 +111,11 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import "@/components/fields/registrations";
 import { EntityInspector } from "./entity-inspector";
 import { AppShell } from "./app-shell";
+import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -204,6 +209,17 @@ async function defaultInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
+  // The field-edit commands are DEFINED by the `app-shell-commands` builtin plugin
+  // (`field.edit` / `field.editEnter`, scope ["ui:field"]) — their Enter /
+  // `i` keys reach the keymap layer only through the `useCommandList` seam,
+  // so answer `list command` with the shared mock registry. Non-list
+  // `command_tool_call` ops fall through to the branches below.
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "list_entity_types") return ["task", "tag"];
   if (cmd === "get_entity_schema") {
     const entityType = (args as { entityType?: string })?.entityType;
@@ -365,30 +381,38 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
  * Collect every `spatial_focus` invocation. Under the production
  * pathway (`SpatialFocusProvider` mounted), `FocusActions.setFocus(fq)`
  * routes through `spatial.focus(fq)` → `invoke("spatial_focus", { fq })`
- * rather than dispatching a `ui.setFocus` command. The kernel echoes
+ * rather than dispatching a `app.setFocus` command. The kernel echoes
  * a `focus-changed` event the bridge mirrors into the entity-focus
  * store. Tests that observe a drill / setFocus fanout assert on this
- * IPC, not on a `dispatch_command(ui.setFocus, ...)` call.
+ * IPC, not on a `dispatch_command(app.setFocus, ...)` call.
  */
 function spatialFocusCalls(): Array<{ fq?: string }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { fq?: string });
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq?: string };
+      return args;
+    });
 }
 
-/** Filter `dispatch_command` calls down to those for `ui.inspect`. */
+/** Filter `dispatch_command` calls down to those for `app.inspect`. */
 function inspectDispatches(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "dispatch_command")
     .map((c) => c[1] as Record<string, unknown>)
-    .filter((p) => p.cmd === "ui.inspect");
+    .filter((p) => p.cmd === "app.inspect");
 }
 
 /** Filter `spatial_drill_in` calls. */
 function drillInCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_drill_in")
-    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
+      return args;
+    });
 }
 
 /**
@@ -467,7 +491,12 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     listeners.clear();
     monikerToKey.clear();
     currentFocusKey.key = null;
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
   });
 
   afterEach(() => {
@@ -509,7 +538,12 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     await flushSetup();
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
@@ -595,7 +629,12 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     await flushSetup();
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "ArrowRight", code: "ArrowRight" });
@@ -607,9 +646,14 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // `spatial_navigate(focusedKey, "right")` for the bug pill's key.
     const navCalls = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_navigate")
-      .map(
-        (c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string },
-      );
+      .map((c) => {
+        const outer = c[1] as Record<string, unknown>;
+        const args = (outer?.params ?? outer) as {
+          focusedFq: FullyQualifiedMoniker;
+          direction: string;
+        };
+        return args;
+      });
     expect(navCalls.length).toBe(1);
     expect(navCalls[0].focusedFq).toBe(bugPill!.fq);
     expect(navCalls[0].direction).toBe("right");
@@ -666,10 +710,12 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // Stub the kernel: drill-out on the bug pill returns the field
     // zone's moniker.
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
-      if (cmd === "spatial_drill_out") return "field:task:T1.tags";
-      return defaultInvokeImpl(cmd, args);
-    });
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, async (cmd: string, args?: unknown) => {
+        if (cmd === "spatial_drill_out") return "field:task:T1.tags";
+        return defaultInvokeImpl(cmd, args);
+      }) as (cmd: string, args?: unknown) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
@@ -681,7 +727,11 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // pill's key.
     const drillOutCalls = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_drill_out")
-      .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+      .map((c) => {
+        const outer = c[1] as Record<string, unknown>;
+        const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
+        return args;
+      });
     expect(drillOutCalls.length).toBe(1);
     expect(drillOutCalls[0].fq).toBe(bugPill!.fq);
 
@@ -774,7 +824,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
   // `onEdit`) and `display: "text"` (no pills).
   // `spatial_drill_in(idKey)` returns null. The field.edit closure
   // falls through to `onEdit?.()` which is undefined → silently
-  // returns. No editor mounts; no `ui.inspect` dispatch fires.
+  // returns. No editor mounts; no `app.inspect` dispatch fires.
   // -------------------------------------------------------------------------
 
   it("enter_on_non_editable_field_with_no_pills_is_noop", async () => {
@@ -796,7 +846,12 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     await flushSetup();
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
@@ -812,7 +867,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // No inspect dispatch fires.
     expect(
       inspectDispatches().length,
-      "Enter on a non-editable field must NOT dispatch ui.inspect",
+      "Enter on a non-editable field must NOT dispatch app.inspect",
     ).toBe(0);
 
     unmount();
@@ -880,11 +935,11 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
       ).toBe("true");
     });
 
-    // `ui.inspect` must NOT fire — Enter is for drill-in/edit, not
+    // `app.inspect` must NOT fire — Enter is for drill-in/edit, not
     // for inspecting.
     expect(
       inspectDispatches().length,
-      "Enter on an empty pill field must NOT dispatch ui.inspect",
+      "Enter on an empty pill field must NOT dispatch app.inspect",
     ).toBe(0);
 
     unmount();

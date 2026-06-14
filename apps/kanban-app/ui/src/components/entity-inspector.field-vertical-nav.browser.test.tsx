@@ -6,15 +6,19 @@
  * inspector panel is a `<FocusScope>` containing a stack of field zones.
  * Beam-search "down" from one field zone must pick the next field zone
  * by rect; "up" must pick the previous one. The kernel-side beam search
- * is covered by Rust unit tests; this file pins the React-side wiring:
+ * is covered by Rust unit tests; this file pins the React-side wiring.
+ *
+ * Cardinal nav executes host-side in the `nav-commands` builtin plugin —
+ * the webview's whole contract is routing the command id to the backend
+ * (`invoke("dispatch_command", { cmd: "nav.up" | "nav.down" })`) with no
+ * client-side kernel `navigate focus` IPC:
  *
  *   1. With a field zone focused, ArrowDown dispatches
- *      `spatial_navigate(fieldKey, "down")`.
- *   2. Symmetric for ArrowUp.
- *   3. After scrolling the inspector body, the same dispatch fires
- *      with the same field key — the rects-on-scroll fix from
- *      `01KQ9XBAG5P9W3JREQYNGAYM8Y` keeps the kernel's view of the
- *      world current.
+ *      `dispatch_command` with `cmd: "nav.down"`.
+ *   2. Symmetric for ArrowUp (`cmd: "nav.up"`).
+ *   3. After scrolling the inspector body, the same dispatch fires —
+ *      the host resolves the move from its own registry, so no rect
+ *      sync leaves the webview on scroll.
  *   4. When the kernel resolves the navigation to a new moniker, the
  *      entity-focus bridge mirrors it into the moniker store and the
  *      `<FocusScope>` for the next field flips its `data-focused`
@@ -91,6 +95,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // ---------------------------------------------------------------------------
 
 import "@/components/fields/registrations";
+import { commandToolCall, navDispatchCmds } from "@/test/mock-command-list";
 import { EntityInspector } from "./entity-inspector";
 import { AppShell } from "./app-shell";
 import { SchemaProvider } from "@/lib/schema-context";
@@ -185,12 +190,15 @@ const SCHEMAS: Record<string, unknown> = {
 
 /**
  * Default invoke responses for the mount-time IPCs the providers fire.
- * Tests override `spatial_navigate` and `spatial_update_rect` per case.
  */
 async function defaultInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
+  // The global keybinding layer (arrows → `nav.*`) is sourced from the
+  // metadata-driven Command registry via `useCommandList`, fetched
+  // through the `command_tool_call` bridge's `list command` op.
+  if (cmd === "command_tool_call") return commandToolCall(args);
   if (cmd === "list_entity_types") return ["task", "tag"];
   if (cmd === "get_entity_schema") {
     const entityType = (args as { entityType?: string })?.entityType;
@@ -241,16 +249,24 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/** Filter `spatial_navigate` calls. */
-function spatialNavigateCalls(): Array<{
-  focusedFq: FullyQualifiedMoniker;
-  direction: string;
-}> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_navigate")
-    .map(
-      (c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string },
-    );
+/**
+ * Filter client-side kernel `navigate focus` IPCs (legacy
+ * `spatial_navigate` and the MCP `focus`/`navigate focus` shape).
+ *
+ * Cardinal nav executes host-side in the `nav-commands` builtin plugin,
+ * so the webview must dispatch the command id only — these tests assert
+ * this list stays EMPTY after an arrow keydown.
+ */
+function spatialNavigateCalls(): Array<ReadonlyArray<unknown>> {
+  return mockInvoke.mock.calls.filter(
+    (c) =>
+      c[0] === "spatial_navigate" ||
+      (c[0] === "command_tool_call" &&
+        (c[1] as { tool?: string; op?: string } | undefined)?.tool ===
+          "focus" &&
+        (c[1] as { tool?: string; op?: string } | undefined)?.op ===
+          "navigate focus"),
+  );
 }
 
 /** Filter `spatial_update_rect` calls. */
@@ -371,8 +387,9 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     expect(titleZone, "title field zone must register").toBeTruthy();
     expect(tagsZone, "tags field zone must register").toBeTruthy();
 
-    // Seed focus on the first (title) field zone so `nav.down`'s
-    // execute closure sees `focusedKey() === titleKey`.
+    // Seed focus on the first (title) field zone — the keydown layer
+    // resolves arrow keys only while spatial focus is live, and the
+    // host-side `nav.down` resolves the move's origin from this focus.
     await fireFocusChanged({
       next_fq: titleZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.title"),
@@ -388,27 +405,16 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     });
     await flushSetup();
 
-    // The global `nav.down` command's closure dispatches
-    // `spatial_navigate(focusedKey, "down")`. The kernel resolves the
-    // beam search and (in production) emits `focus-changed` for the
-    // next zone — that side is covered by Rust tests. Here we pin
-    // the React side: the first IPC fires with the focused key and
-    // direction "down".
-    //
-    // The default mock-invoke does not simulate a kernel response, so
-    // the React-side scroll-on-edge fall-through (see
-    // `lib/scroll-on-edge.ts`) treats the dispatch as stay-put and
-    // re-dispatches once after the scroller's `overflow-y: auto` is
-    // detected with travel left. Both calls carry the same payload —
-    // we pin the first call's contents and accept the retry as part
-    // of the new contract.
-    const navCalls = spatialNavigateCalls();
+    // The arrow key routes the global `nav.down` command id to the
+    // backend — the kernel navigate executes host-side in the
+    // `nav-commands` builtin plugin (it resolves the move's origin from
+    // its own focus slot), so no client-side `navigate focus` IPC (and
+    // no focused fq) leaves the webview.
     expect(
-      navCalls.length,
-      "ArrowDown on a focused field zone must dispatch spatial_navigate at least once",
-    ).toBeGreaterThanOrEqual(1);
-    expect(navCalls[0].focusedFq).toBe(titleZone!.fq);
-    expect(navCalls[0].direction).toBe("down");
+      navDispatchCmds(mockInvoke),
+      "ArrowDown on a focused field zone must dispatch nav.down to the backend",
+    ).toEqual(["nav.down"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
 
     // Now simulate the kernel's response — the next field zone is the
     // tags row. Emit focus-changed for that key/moniker; the entity-
@@ -467,10 +473,13 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     });
     await flushSetup();
 
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls.length).toBe(1);
-    expect(navCalls[0].focusedFq).toBe(bodyZone!.fq);
-    expect(navCalls[0].direction).toBe("up");
+    // ArrowUp routes `nav.up` to the backend — host-driven, no
+    // client-side `navigate focus` IPC leaves the webview.
+    expect(
+      navDispatchCmds(mockInvoke),
+      "ArrowUp on a focused field zone must dispatch nav.up to the backend",
+    ).toEqual(["nav.up"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
 
     // Simulate the kernel's response — beam-up resolves to the tags
     // zone (the one above body in document order).
@@ -489,14 +498,13 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
   });
 
   // -------------------------------------------------------------------------
-  // #3: After scrolling the inspector body, ArrowDown still picks the
-  // correct sibling — the snapshot path reads each scope's rect fresh
-  // from the DOM at decision time, so the dispatched snapshot reflects
-  // the post-scroll geometry.
+  // #3: After scrolling the inspector body, ArrowDown still routes the
+  // same `nav.down` command id to the backend — the host resolves the
+  // move from its own registry, so neither the scroll nor the keydown
+  // produces any client-side rect-sync or `navigate focus` IPC.
   //
   // Strategy: dispatch a scroll event on the inspector body, then fire
-  // ArrowDown and assert the `spatial_navigate` IPC carries a snapshot
-  // whose rects match the post-scroll DOM.
+  // ArrowDown and assert the `dispatch_command nav.down` routing.
   // -------------------------------------------------------------------------
 
   it("down_after_scroll_picks_next_field_in_content_order", async () => {
@@ -517,10 +525,9 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     });
     await flushSetup();
 
-    // Scroll the inspector-body wrapper. The snapshot built at
-    // ArrowDown time reads each registered scope's
-    // `getBoundingClientRect()` lazily, so the post-scroll DOM is the
-    // source of truth — no IPC fires from the scroll itself.
+    // Scroll the inspector-body wrapper. Nav executes host-side, so
+    // the scroll itself must produce no IPC — in particular no
+    // continuous rect sync (`spatial_update_rect`) leaves the webview.
     const scroller = container.querySelector(
       '[data-testid="scroller"]',
     ) as HTMLElement | null;
@@ -541,9 +548,8 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     // sync was removed once snapshots became the rect source of truth.
     expect(spatialUpdateRectCalls().length).toBe(0);
 
-    // Press ArrowDown — the dispatch carries the focused field's FQM
-    // plus a fresh snapshot, so the kernel can run beam search over the
-    // up-to-date rects.
+    // Press ArrowDown — the webview routes the `nav.down` command id to
+    // the backend; the host runs beam search over its own registry.
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
     await act(async () => {
@@ -552,16 +558,14 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     });
     await flushSetup();
 
-    // First IPC carries the focused key + "down" direction. The
-    // scroll-on-edge fall-through in `lib/scroll-on-edge.ts` may
-    // re-dispatch after detecting that the scroller still has travel
-    // left (the default mock does not simulate a kernel response, so
-    // the React side reads stay-put). Both calls carry the same
-    // payload; we pin the first.
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls.length).toBeGreaterThanOrEqual(1);
-    expect(navCalls[0].focusedFq).toBe(titleZone!.fq);
-    expect(navCalls[0].direction).toBe("down");
+    // Post-scroll the routing contract is unchanged: one
+    // `dispatch_command nav.down` and no client-side `navigate focus`
+    // IPC leaves the webview.
+    expect(
+      navDispatchCmds(mockInvoke),
+      "ArrowDown after scrolling must still dispatch nav.down to the backend",
+    ).toEqual(["nav.down"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
 
     unmount();
   });
@@ -612,14 +616,13 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     });
     await flushSetup();
 
-    // First IPC carries the tags key + "down". The scroll-on-edge
-    // fall-through may re-dispatch when the scroller still has
-    // travel left; both calls carry the same payload — we pin the
-    // first.
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls.length).toBeGreaterThanOrEqual(1);
-    expect(navCalls[0].focusedFq).toBe(tagsZone!.fq);
-    expect(navCalls[0].direction).toBe("down");
+    // ArrowDown routes `nav.down` to the backend — host-driven, no
+    // client-side `navigate focus` IPC leaves the webview.
+    expect(
+      navDispatchCmds(mockInvoke),
+      "ArrowDown on the last visible field must dispatch nav.down to the backend",
+    ).toEqual(["nav.down"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
 
     // Spy on body zone's `scrollIntoView` (jsdom / chromium-test
     // implementations differ — install a stub so we can observe it).

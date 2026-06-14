@@ -111,7 +111,12 @@ import { UndoProvider } from "@/lib/undo-context";
 import {
   setupSpatialHarness,
   type DefaultInvokeImpl,
+  type SpatialHarness,
 } from "@/test/spatial-shadow-registry";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
 import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -223,8 +228,20 @@ async function flushSetup() {
 /**
  * Fallback for the non-spatial Tauri commands the `AppShell` provider stack
  * hits on mount — `get_ui_state` and `get_undo_state`.
+ *
+ * Also answers `list command` with the shared mock registry: the form's
+ * `<Pressable>` leaves (Submit / Decline / Cancel / Done, checkboxes)
+ * activate through the plugin-defined `pressable.activate` /
+ * `pressable.activateSpace` commands (scope `["ui:pressable"]`), whose keys
+ * reach the keymap layer only through the `useCommandList` seam.
  */
-const appShellInvokeImpl: DefaultInvokeImpl = (cmd) => {
+const appShellInvokeImpl: DefaultInvokeImpl = (cmd, args) => {
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "get_ui_state") {
     return {
       palette_open: false,
@@ -403,8 +420,21 @@ function findRegisterRecord(segment: string): Record<string, unknown> | null {
 /** Count the `spatial_focus` calls recorded so far (drill-out assertions
  * slice from this baseline to ignore earlier focus seeds). */
 function focusCallCount(): number {
-  return mockInvoke.mock.calls.filter((c) => c[0] === "spatial_focus").length;
+  return mockInvoke.mock.calls.filter(
+    (c) =>
+      c[0] === "spatial_focus" ||
+      (c[0] === "command_tool_call" &&
+        (c[1] as any)?.tool === "focus" &&
+        (c[1] as any)?.op === "set focus"),
+  ).length;
 }
+
+/**
+ * The spatial harness installed by the suite's `beforeEach` — shared so
+ * `drillInto` and the per-test focus seeds can commit focus through the
+ * production `set focus` wire shape (`commitFocus`).
+ */
+let spatialHarness: SpatialHarness;
 
 /**
  * Seed spatial focus on a field leaf and press a real Enter through the
@@ -417,7 +447,7 @@ function focusCallCount(): number {
  */
 async function drillInto(fq: FullyQualifiedMoniker): Promise<void> {
   await act(async () => {
-    await mockInvoke("spatial_focus", { fq });
+    await spatialHarness.commitFocus(fq);
   });
   await flushSetup();
   await act(async () => {
@@ -435,9 +465,11 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
   beforeEach(() => {
     // Install the shadow navigator (records `spatial_register_scope` calls and
     // routes `spatial_focus` / `spatial_navigate`). The tests read the captured
-    // registrations via `findRegisterRecord` and drive focus via `mockInvoke`,
-    // so the returned harness handle is not needed here.
-    setupSpatialHarness({ defaultInvokeImpl: appShellInvokeImpl });
+    // registrations via `findRegisterRecord` and drive focus through the
+    // harness's `commitFocus` (the production `set focus` wire shape).
+    spatialHarness = setupSpatialHarness({
+      defaultInvokeImpl: appShellInvokeImpl,
+    });
   });
 
   afterEach(() => {
@@ -611,6 +643,54 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Field A → field B focus handoff in a SINGLE render: spatially focusing
+  // field A installs its drill-in closure in the bus slot; handing spatial
+  // focus to field B must swap the slot to B's closure (the bus's
+  // ownership-guarded cleanup), so Enter drills into B's input — never A's.
+  // The per-kind table above proves disjointness per fresh render only; this
+  // pins that A's stale closure cannot linger after the handoff.
+  // -------------------------------------------------------------------------
+
+  it("Enter after a field A → field B focus handoff drills into B's input, not A's", async () => {
+    const harness = mockConnect();
+    const { unmount } = await renderPrimedPanel(harness);
+
+    await act(async () => {
+      void harness.elicitation()(allKindsFormRequest());
+    });
+    await flushSetup();
+
+    const leafA = findRegisterRecord("ui:ai-panel.elicitation.field:summary");
+    const leafB = findRegisterRecord("ui:ai-panel.elicitation.field:amount");
+    expect(leafA, "field A (summary) leaf must register").toBeTruthy();
+    expect(leafB, "field B (amount) leaf must register").toBeTruthy();
+
+    const inputA = screen.getByLabelText(/summary/i);
+    const inputB = screen.getByLabelText(/amount/i);
+
+    // Focus field A's leaf so its drill-in handler occupies the bus slot…
+    await act(async () => {
+      await spatialHarness.commitFocus(leafA!.fq as FullyQualifiedMoniker);
+    });
+    await flushSetup();
+
+    // …then hand spatial focus to field B and press Enter (drillInto commits
+    // focus on B before the keystroke — the explicit A → B handoff).
+    await drillInto(leafB!.fq as FullyQualifiedMoniker);
+
+    expect(
+      document.activeElement,
+      "after the A → B handoff, Enter must drill into B's input",
+    ).toBe(inputB);
+    expect(
+      document.activeElement,
+      "A's input must not retain (or steal) DOM focus after the handoff",
+    ).not.toBe(inputA);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
   // Drill-in for the select: Enter on the focused select leaf runs the
   // Pressable's activation, whose `onPress` hands DOM focus to the Radix
   // trigger so its listbox keyboard interaction takes over.
@@ -718,7 +798,7 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
     // Seed spatial focus on the Submit leaf, then press a real Enter through
     // the keybinding pipeline.
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: submitFq });
+      await spatialHarness.commitFocus(submitFq);
     });
     await flushSetup();
     await act(async () => {
@@ -763,7 +843,7 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
     // through the keybinding pipeline so the per-scope drill-in command hands
     // DOM focus to the input, and type into it.
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: summaryFq });
+      await spatialHarness.commitFocus(summaryFq);
     });
     await flushSetup();
     await act(async () => {
@@ -787,7 +867,11 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
     // Forget every focus call made up to here so the assertion below only sees
     // the drill-out's `spatial_focus`.
     const focusCallsBefore = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_focus",
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
     ).length;
 
     // Drill OUT: Escape on the focused input. The field's `useFieldDrillOut`
@@ -807,7 +891,13 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
 
     // (2) Spatial focus was claimed for the field leaf via `spatial_focus`.
     const drillOutFocus = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_focus")
+      .filter(
+        (c) =>
+          c[0] === "spatial_focus" ||
+          (c[0] === "command_tool_call" &&
+            (c[1] as any)?.tool === "focus" &&
+            (c[1] as any)?.op === "set focus"),
+      )
       .slice(focusCallsBefore);
     expect(
       drillOutFocus.some(
@@ -889,7 +979,13 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
 
       // (2) Spatial focus was reclaimed for the field leaf via `spatial_focus`.
       const drillOutFocus = mockInvoke.mock.calls
-        .filter((c) => c[0] === "spatial_focus")
+        .filter(
+          (c) =>
+            c[0] === "spatial_focus" ||
+            (c[0] === "command_tool_call" &&
+              (c[1] as any)?.tool === "focus" &&
+              (c[1] as any)?.op === "set focus"),
+        )
         .slice(focusCallsBefore);
       expect(
         drillOutFocus.some(
@@ -923,7 +1019,7 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
     const declineFq = decline!.fq as FullyQualifiedMoniker;
 
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: declineFq });
+      await spatialHarness.commitFocus(declineFq);
     });
     await flushSetup();
     await act(async () => {
@@ -956,7 +1052,7 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
     const cancelFq = cancel!.fq as FullyQualifiedMoniker;
 
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: cancelFq });
+      await spatialHarness.commitFocus(cancelFq);
     });
     await flushSetup();
     await act(async () => {
@@ -1000,7 +1096,7 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
 
     const doneFq = done!.fq as FullyQualifiedMoniker;
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: doneFq });
+      await spatialHarness.commitFocus(doneFq);
     });
     await flushSetup();
     await act(async () => {
@@ -1035,7 +1131,7 @@ describe("AiPanel — elicitation form spatial-nav focus scopes", () => {
     const cancelFq = cancel!.fq as FullyQualifiedMoniker;
 
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: cancelFq });
+      await spatialHarness.commitFocus(cancelFq);
     });
     await flushSetup();
     await act(async () => {

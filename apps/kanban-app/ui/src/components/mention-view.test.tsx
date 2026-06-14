@@ -34,6 +34,17 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
 
+// The right-click context menu reads commands from the Command registry via
+// `useCommandList`; drive it through `mockRegistry`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: mockRegistry,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),
   warn: vi.fn(),
@@ -97,13 +108,14 @@ interface ResolvedCommand {
  * `list_commands_for_scope` is called, and resolve for everything else.
  */
 function mockListCommands(commands: ResolvedCommand[]) {
-  mockInvoke.mockImplementation(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (cmd: string, _args?: any): Promise<unknown> => {
-      if (cmd === "list_commands_for_scope") return Promise.resolve(commands);
-      return Promise.resolve(undefined);
-    },
-  );
+  // Publish as `entity:tag`-scoped context-menu rows so they match a chain
+  // carrying a `tag:<id>` moniker.
+  mockRegistry = commands.map((c) => ({
+    id: c.id,
+    name: c.name,
+    context_menu: c.context_menu,
+    scope: ["entity:tag"],
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +206,7 @@ describe("MentionView — single mode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockInvoke.mockResolvedValue(undefined);
+    mockRegistry = [];
     setupFixtures();
   });
 
@@ -287,6 +300,7 @@ describe("MentionView — list mode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockInvoke.mockResolvedValue(undefined);
+    mockRegistry = [];
     setupFixtures();
   });
 
@@ -401,6 +415,7 @@ describe("MentionView — extraCommands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockInvoke.mockResolvedValue(undefined);
+    mockRegistry = [];
     setupFixtures();
   });
 
@@ -449,11 +464,14 @@ describe("MentionView — extraCommands", () => {
 
     await waitFor(() => {
       const call = mockInvoke.mock.calls.find(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(call).toBeTruthy();
-      const items = (call![1] as { items: { cmd: string; name: string }[] })
-        .items;
+      const items = (
+        call![1] as { params: { items: { cmd: string; name: string }[] } }
+      ).params.items;
       expect(items.find((i) => i.cmd === "task.untag")).toBeTruthy();
     });
   });

@@ -2,9 +2,22 @@
  * Keybinding layer for the Tauri kanban app.
  *
  * Maps keyboard events to command IDs based on the active keymap mode
- * (vim / cua / emacs). Supports modifier combos, vim-style multi-key
- * sequences with a 500ms timeout, and skips events originating from
- * CodeMirror 6 editors.
+ * (vim / cua / emacs). Supports modifier combos, multi-key chords with a
+ * 500ms-per-step timeout, and skips events originating from CodeMirror 6
+ * editors.
+ *
+ * # Chord schema (Card J)
+ *
+ * A binding-table key is a **chord**: one or more canonical keystrokes (as
+ * produced by `normalizeKeyEvent`) separated by single spaces. A single
+ * keystroke (`"x"`, `"Mod+K"`, `"Space"`) is a chord of length 1 — the
+ * classic single-key binding; a multi-step key (`"g g"`, `"g Shift+T"`) is
+ * a vim-style sequence. Canonical keystrokes never contain a literal space
+ * (the spacebar is the symbolic `"Space"` token), so the separator is
+ * unambiguous. Chords ride on plugin command `keys` metadata and reach the
+ * handler through the same `extractKeymapBindings` / `extractChainBindings`
+ * tables as single keys — the command service validates the grammar at
+ * registration time (`swissarmyhammer-command-service::is_valid_chord`).
  */
 
 /* ---------- types ---------- */
@@ -12,11 +25,8 @@
 /** The three supported editor keymap modes. */
 export type KeymapMode = "cua" | "vim" | "emacs";
 
-/** A flat mapping from canonical key strings to command IDs. */
+/** A flat mapping from canonical chord strings to command IDs. */
 export type BindingTable = Record<string, string>;
-
-/** Multi-key sequence entry: first key prefix maps to second-key -> command. */
-type SequenceTable = Record<string, Record<string, string>>;
 
 /* ---------- binding tables ---------- */
 
@@ -26,45 +36,49 @@ type SequenceTable = Record<string, Record<string, string>>;
  */
 export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
   vim: {
-    ":": "app.command",
+    // The palette opener is the unified `app.palette.open` (folded from the
+    // old `ui.palette.open`). Its vim `:` binding rides on the plugin
+    // `CommandDef` metadata (resolved by `extractKeymapBindings`), so no static
+    // `:` entry is needed here — it would only duplicate the dynamic binding.
+    // `Mod+Shift+P` is NOT carried in the command's `keys` (which are Mod+K /
+    // `:`), so it stays a static binding, now pointing at the unified id.
     "/": "app.search",
     "Mod+f": "app.search",
-    "Mod+Shift+P": "app.palette",
+    "Mod+Shift+P": "app.palette.open",
     u: "app.undo",
     "Mod+r": "app.redo",
     Enter: "nav.drillIn",
     Escape: "nav.drillOut",
     "Mod+w": "file.closeBoard",
     // `s` opens the Jump-To overlay (AceJump-style scope picker). Free
-    // in vim because the existing chord prefixes are `g`, `d`, `z`
-    // (see `SEQUENCE_TABLES.vim`) — `s` collides with neither a chord
-    // root nor any other single-key vim binding above.
+    // in vim because the existing chord prefixes are `g` and `d` (the
+    // plugin-declared chords `g g` / `g t` / `g Shift+T` / `d d`) — `s`
+    // collides with neither a chord root nor any other single-key vim
+    // binding above.
     s: "nav.jump",
-    // Space → `entity.inspect`. Same shadow / root-fallback contract
-    // described on the cua entry below — the per-`<Inspectable>` scope
-    // command shadows when an inspectable entity is in the focused
-    // chain, the root-scope command in `app-shell.tsx` catches the
-    // rest. There is no current vim leader-key registered in
-    // `SEQUENCE_TABLES.vim` (which uses `g`, `d`, `z`), so claiming
-    // Space here is safe; if a future vim leader is wired up, this
-    // entry will need to move along with the per-Inspectable and
-    // root-scope `keys: { vim: "Space" }` bindings.
+    // Space → `entity.inspect`. Same contract described on the cua
+    // entry below — the plugin-owned global command (Card G) resolves
+    // the focused entity server-side from the dispatched scope chain.
+    // No vim chord in the plugin catalogue uses a `Space` prefix (the
+    // chord roots are `g` and `d`), so claiming Space here is safe; if
+    // a future vim leader is wired up, this entry will need to move
+    // along with the plugin's `keys: { vim: "Space" }` binding.
     Space: "entity.inspect",
-    // AI panel — window-layer commands registered in `app-shell.tsx`'s
-    // global scope. Their `keys` blocks also ride on the `CommandDef`s,
-    // so `extractScopeBindings` resolves them when the global scope is in
-    // the focused chain; these `BINDING_TABLES` entries cover the
-    // no-focus case (body focus) where the scope walk yields nothing.
-    // `ai.cancel` is availability-gated — its `CommandDef.available`
-    // flips to `false` when the conversation is idle, so the dispatch is
-    // a no-op off-stream even though the key is bound.
+    // AI panel — commands DEFINED by the `ai-commands` builtin plugin
+    // (whose registry `keys` carry these same canonical strings — the
+    // `ai-plugin-commands-mirror.spatial.node.test.ts` guard pins the
+    // parity) and EXECUTED through the webview command bus handlers
+    // `app-shell.tsx` registers (Card I). `ai.cancel` is
+    // availability-gated at dispatch time — its bus handler reads
+    // `aiStreaming()` and no-ops off-stream even though the key is
+    // bound.
     "Mod+j": "ai.toggle",
     "Mod+i": "ai.focus",
     "Mod+Shift+J": "ai.newChat",
     "Mod+.": "ai.cancel",
   },
   cua: {
-    "Mod+Shift+P": "app.palette",
+    "Mod+Shift+P": "app.palette.open",
     "Mod+f": "app.search",
     "Mod+g": "nav.jump",
     "Mod+z": "app.undo",
@@ -73,9 +87,10 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     Escape: "nav.drillOut",
     "Mod+w": "file.closeBoard",
     // Tab / Shift+Tab cycle to the next / previous spatial sibling.
-    // `nav.right` / `nav.left` are global commands defined in
-    // `app-shell.tsx`'s `NAV_COMMAND_SPEC`; their execute closures
-    // dispatch `spatial_navigate(focusedKey, "right" | "left")`. The
+    // `nav.right` / `nav.left` are catalogue commands defined in the
+    // `nav-commands` builtin plugin (`builtin/plugins/nav-commands/index.ts`);
+    // their executes route to the focus kernel's `navigate focus` op
+    // host-driven ("right" | "left"). The
     // Rust kernel's cascade (iter 0: same-kind siblings, iter 1:
     // escalate to parent zone) picks the next focusable. Inside an
     // inspector the vertical layout means iter 0 finds no horizontal
@@ -86,16 +101,15 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     // to claim Tab / Shift+Tab inside the inspector.)
     Tab: "nav.right",
     "Shift+Tab": "nav.left",
-    // Space → `entity.inspect`. The per-`<Inspectable>` scope command
-    // shadows this entry when an inspectable is in the focused chain
-    // (its `keys[mode]: "Space"` reaches `extractScopeBindings` first
-    // and the inner-scope-wins walk picks it). When the focused chain
-    // has no Inspectable — at app open, on focused chrome (perspective
-    // tabs, filter editors), after the inspector closes off any
-    // entity — this entry routes Space through the root-scope
-    // `entity.inspect` registered in `app-shell.tsx`. The root
-    // command's execute closure no-ops on null / non-inspectable
-    // focus, but the binding-resolution path still calls
+    // Space → `entity.inspect` — the plugin-owned global inspect
+    // command (Card G, `builtin/plugins/app-shell-commands/commands/ui.ts`). The
+    // dispatch carries the focused scope chain to the backend, where
+    // the plugin resolves the INNERMOST inspectable-entity moniker
+    // (or no-ops on chrome / no focus). A scope-gated claim of Space
+    // in the focused chain (e.g. a focused `<Pressable>`'s
+    // `pressable.activateSpace` at its `ui:pressable` marker) still
+    // shadows this entry via `extractChainBindings` (scope beats
+    // global). The binding-resolution path always calls
     // `preventDefault()` so Space never falls through to the
     // browser's page-scroll default. All three keymaps (vim / cua /
     // emacs) claim Space the same way — the parity is enforced by
@@ -109,7 +123,7 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     "Mod+.": "ai.cancel",
   },
   emacs: {
-    "Mod+Shift+P": "app.palette",
+    "Mod+Shift+P": "app.palette.open",
     "Mod+g": "nav.jump",
     Enter: "nav.drillIn",
     Escape: "nav.drillOut",
@@ -137,20 +151,6 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     "Mod+Shift+J": "ai.newChat",
     "Mod+.": "ai.cancel",
   },
-};
-
-/**
- * Multi-key sequence tables per mode. Only vim uses these currently.
- * Keyed by first key, then second key, value is command ID.
- */
-const SEQUENCE_TABLES: Record<KeymapMode, SequenceTable> = {
-  vim: {
-    g: { g: "nav.first", t: "perspective.next", "Shift+T": "perspective.prev" },
-    d: { d: "entity.archive" },
-    z: { o: "task.toggleCollapse" },
-  },
-  cua: {},
-  emacs: {},
 };
 
 /* ---------- normalizeKeyEvent ---------- */
@@ -307,37 +307,9 @@ export function normalizeKeyEvent(e: KeyboardEvent): string | null {
 
 /* ---------- createKeyHandler ---------- */
 
-/** Timeout for vim multi-key sequence buffer in milliseconds. */
+/** Per-step timeout for the pending chord buffer in milliseconds. */
 const SEQUENCE_TIMEOUT_MS = 500;
 
-/**
- * Create a keydown event handler that looks up bindings for the given
- * keymap mode and executes commands via the provided callback.
- *
- * The handler:
- * - Skips events originating inside `.cm-editor` (CM6 handles its own keys).
- * - Supports single-key and modifier-key bindings from BINDING_TABLES.
- * - Supports multi-key sequences (e.g. vim "gg", "dd", "zo") with a
- *   500ms timeout on the pending buffer.
- * - Calls `preventDefault()` and `stopPropagation()` on matched events.
- *
- * @param mode - The active keymap mode ("vim", "cua", or "emacs").
- * @param executeCommand - Callback to run a command by ID, typically from
- *        `useDispatchCommand()` in the command scope.
- * @returns A function suitable for `addEventListener("keydown", ...)`.
- */
-/**
- * Create a keydown event handler that resolves keybindings and executes commands.
- *
- * Bindings come from two sources, checked in order (scope wins over global):
- * 1. **Scope bindings** — dynamic, from the focused scope's commands' `keys` property.
- *    Provided via `getScopeBindings()` callback so the handler always sees the current scope.
- * 2. **Global bindings** — static, from `BINDING_TABLES` for the active keymap mode.
- *
- * @param mode - The active keymap mode ("vim", "cua", or "emacs").
- * @param executeCommand - Callback to run a command by ID.
- * @param getScopeBindings - Returns key→commandId bindings from the focused scope.
- */
 /**
  * Check if a key event targets an editable context that should not trigger
  * global keybindings (inputs, textareas, CM6 editors, contenteditable).
@@ -362,6 +334,20 @@ function isEditableTarget(
 }
 
 /**
+ * Decide whether `candidate` is a STRICT prefix of some chord in the table —
+ * i.e. whether a longer binding starts with `candidate` plus a step
+ * separator. Chord steps never contain a space, so prefix detection is a
+ * plain string-prefix test against `"<candidate> "`.
+ */
+function isChordPrefix(bindings: BindingTable, candidate: string): boolean {
+  const prefix = `${candidate} `;
+  for (const key in bindings) {
+    if (key.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+/**
  * Create the key event handler for the active keymap mode.
  *
  * Bindings come from two sources, checked in order (scope wins over global):
@@ -369,18 +355,52 @@ function isEditableTarget(
  *    Provided via `getScopeBindings()` callback so the handler always sees the current scope.
  * 2. **Global bindings** — static, from `BINDING_TABLES` for the active keymap mode.
  *
+ * # Chord resolution
+ *
+ * Table keys are chords (see the module docs): canonical keystrokes joined
+ * by single spaces. The handler keeps a pending buffer of the chord steps
+ * consumed so far; each keydown extends the candidate (`"g"` → `"g g"`) and
+ * resolves it against the merged table:
+ *
+ * - **Prefix** — the candidate strictly prefixes a longer chord: buffer it
+ *   and restart the 500ms step timer. The buffered key is NOT
+ *   `preventDefault()`ed (matching the pre-chord sequence behavior) and is
+ *   swallowed if the timer expires. Chord authors beware: because the
+ *   buffered keystroke keeps its browser default, a chord rooted at a
+ *   default-bearing key (Space scrolls, Tab moves focus) would leak that
+ *   default while buffered — and registration validation cannot catch it.
+ *   Root chords only at default-free keys (the shipped roots are `g` and
+ *   `d`).
+ * - **Exact match** — fire the command, `preventDefault()` +
+ *   `stopPropagation()`, clear the buffer.
+ * - **Miss** — abandon the buffered prefix and re-resolve the terminating
+ *   key on its own (so `g` then `u` still fires `u`'s single-key binding).
+ *
+ * # Prefix-conflict precedence
+ *
+ * The prefix check runs BEFORE the exact-match check, so a key that is both
+ * a single-key binding and a chord prefix (`"g"` alongside `"g g"`) defers
+ * to the chord — the single-key binding on the prefix key is unreachable
+ * while any chord claims that prefix. This preserves the retired
+ * SEQUENCE_TABLES-first behavior and keeps resolution deterministic
+ * regardless of the registry's iteration order (the conflict is settled by
+ * the table contents, never by which entry was extracted first).
+ *
  * @param mode - The active keymap mode ("vim", "cua", or "emacs").
  * @param executeCommand - Callback to run a command by ID.
  * @param getScopeBindings - Returns key→commandId bindings from the focused scope.
+ * @param globalBindings - The global binding table (defaults to the static
+ *        `BINDING_TABLES[mode]`; production passes the registry-sourced
+ *        table from `extractKeymapBindings`).
+ * @returns A function suitable for `addEventListener("keydown", ...)`.
  */
 export function createKeyHandler(
   mode: KeymapMode,
   executeCommand: (id: string) => Promise<boolean>,
   getScopeBindings?: () => BindingTable,
+  globalBindings: BindingTable = BINDING_TABLES[mode],
 ): (e: KeyboardEvent) => void {
-  const globalBindings = BINDING_TABLES[mode];
-  const sequences = SEQUENCE_TABLES[mode];
-
+  /** Chord steps consumed so far, joined by the step separator. */
   let pending: string | null = null;
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -402,62 +422,190 @@ export function createKeyHandler(
 
     const bindings = { ...globalBindings, ...(getScopeBindings?.() ?? {}) };
 
-    // Multi-key sequence handling
-    if (pending !== null) {
-      const secondMap = sequences[pending];
-      if (secondMap && normalized in secondMap) {
-        clearPending();
+    /**
+     * Resolve one candidate chord against the merged table. Returns true
+     * when the candidate was consumed (buffered as a prefix or fired as an
+     * exact match), false on a miss.
+     */
+    const resolve = (candidate: string): boolean => {
+      // Prefix beats exact match — see the precedence note above.
+      if (isChordPrefix(bindings, candidate)) {
+        pending = candidate;
+        pendingTimer = setTimeout(clearPending, SEQUENCE_TIMEOUT_MS);
+        return true;
+      }
+      if (candidate in bindings) {
         e.preventDefault();
         e.stopPropagation();
-        executeCommand(secondMap[normalized]);
-        return;
+        executeCommand(bindings[candidate]);
+        return true;
       }
-      clearPending();
-    }
-    if (normalized in sequences) {
-      pending = normalized;
-      pendingTimer = setTimeout(clearPending, SEQUENCE_TIMEOUT_MS);
+      return false;
+    };
+
+    const prior = pending;
+    clearPending();
+
+    // Extend a pending chord first; on a miss fall through to re-resolving
+    // the terminating key on its own (fresh prefix or single-key binding).
+    if (prior !== null && resolve(`${prior} ${normalized}`)) {
       return;
     }
-
-    // Single-key binding lookup
-    if (normalized in bindings) {
-      e.preventDefault();
-      e.stopPropagation();
-      executeCommand(bindings[normalized]);
-    }
+    resolve(normalized);
   };
 }
 
 /**
- * Extract key bindings from a command scope chain for a given keymap mode.
+ * A node in the focused command-scope chain, as the binding extractors see
+ * it: the component-registered `CommandDef`s at this scope, the scope's
+ * moniker (absent on anonymous `CommandScopeProvider`s), and the link to the
+ * enclosing scope. Structurally satisfied by `command-scope`'s
+ * `CommandScope`.
+ */
+export interface BindingScope {
+  commands: Map<string, { id: string; keys?: Record<string, string> }>;
+  moniker?: string;
+  parent: unknown;
+}
+
+/** Registry command shape the extractors read: id + per-keymap keys + the
+ * optional scope-expression list (empty/absent = global). */
+export interface RegistryKeyCommand {
+  id: string;
+  keys?: Record<string, string>;
+  scope?: readonly string[];
+}
+
+/**
+ * Build the `key → commandId` binding table for the focused scope chain by a
+ * single DEPTH-INTERLEAVED inner-first walk over BOTH binding sources:
  *
- * Walks the scope chain and collects `keys[mode]` from every command,
- * producing a flat key→commandId binding table. Inner (deeper) scopes
- * shadow outer scopes for the same key.
+ *   1. **Component-registered `CommandDef`s** — the `commands` map each chain
+ *      scope carries (inspector close, pill untag, Inspectable Space, root
+ *      `ai.*`, …).
+ *   2. **Scope-gated registry commands** — plugin-defined commands whose
+ *      `scope` expression LITERALLY equals this chain scope's moniker (the
+ *      `grid-commands` plugin's `ui:grid`, Card C; the `app-shell-commands` plugin's
+ *      `ui:field` / `ui:pressable` markers, Card D). Their behaviors live on
+ *      the webview command bus, registered by the matching component, so a
+ *      literal-moniker match implies the handler is live.
  *
- * @param scope - The scope to start from (typically the focused scope).
+ * At each chain scope the component defs are read FIRST (inner knowledge
+ * beats catalogue metadata at the same depth), then the registry commands
+ * matched at that scope; first key wins overall, so an inner scope's binding
+ * — from either source — shadows every outer claim of the same key. This is
+ * what keeps Space on a focused `<Pressable>` activating the pressable (its
+ * `ui:pressable` marker sits just above the leaf) rather than firing the
+ * GLOBAL `entity.inspect` binding (scope beats global), while an inner
+ * pill's own Enter def still beats the `ui:field`-matched `field.edit`
+ * further out.
+ *
+ * # Literal match only — no entity-typed expansion
+ *
+ * The registry match is STRICT EQUALITY between a scope expression and the
+ * chain scope's moniker. Entity-typed scope expressions (`entity:task`,
+ * `entity:tag`, …) intentionally never match here, even though a `task:...`
+ * moniker admits them in the context-menu's `scopeMatches`: those commands'
+ * keys are component-registered (e.g. `task.untag` on a tag pill's scope),
+ * and lighting them up from registry metadata alone would bind keys for
+ * behaviors the focused component never wired.
+ *
+ * @param registryCommands - The active command list (from `useCommandList`).
+ * @param mode - The keymap mode to extract bindings for.
+ * @param scope - The focused scope (innermost), or null when nothing is
+ *   focused.
+ * @returns A flat BindingTable mapping canonical key strings to command IDs.
+ */
+export function extractChainBindings(
+  registryCommands: readonly RegistryKeyCommand[],
+  mode: KeymapMode,
+  scope: BindingScope | null,
+): BindingTable {
+  // Group the scope-gated registry commands by scope expression once, so the
+  // chain walk does a map lookup per scope instead of rescanning the list.
+  const byScopeExpr = new Map<string, RegistryKeyCommand[]>();
+  for (const cmd of registryCommands) {
+    // Global commands own the global table (extractKeymapBindings) — only
+    // scope-gated commands contribute here.
+    if (cmd.scope === undefined || cmd.scope.length === 0) continue;
+    for (const expr of cmd.scope) {
+      const bucket = byScopeExpr.get(expr);
+      if (bucket) bucket.push(cmd);
+      else byScopeExpr.set(expr, [cmd]);
+    }
+  }
+
+  const result: BindingTable = {};
+  const claim = (cmd: { id: string; keys?: Record<string, string> }) => {
+    const key = cmd.keys?.[mode];
+    if (key && !(key in result)) {
+      // Inner scopes win — only set if not already claimed.
+      result[key] = cmd.id;
+    }
+  };
+
+  let current = scope;
+  while (current !== null) {
+    // Component defs first: inner knowledge beats catalogue metadata at the
+    // same depth.
+    for (const [, cmd] of current.commands) claim(cmd);
+    // Then registry commands literally gated to this scope's moniker.
+    if (current.moniker !== undefined) {
+      for (const cmd of byScopeExpr.get(current.moniker) ?? []) claim(cmd);
+    }
+    current = current.parent as BindingScope | null;
+  }
+  return result;
+}
+
+/**
+ * Build a flat `key → commandId` binding table for a keymap mode from the
+ * metadata-driven command registry.
+ *
+ * This is the registry-sourced replacement for the static `BINDING_TABLES`
+ * global layer: every GLOBAL command in the active `list command` result that
+ * declares a `keys[mode]` contributes one binding. The result is fed to
+ * {@link createKeyHandler} as its `globalBindings`, so when the registry
+ * changes or the keymap switches (itself a `settings.keymap.*` command) the
+ * caller rebuilds the table and re-creates the handler — no command-id list
+ * is hardcoded in the hotkey path.
+ *
+ * Scope-gated commands (a non-empty `scope` list, e.g.
+ * `app.entity.startRename`'s `["entity:perspective"]`) contribute NO global
+ * binding: their keys apply only when a matching scope is in the focused
+ * chain, via {@link extractChainBindings}. This is load-bearing for
+ * determinism — `list command` returns commands in UNSPECIFIED order (the
+ * service registry is a hash map and each per-board plugin runtime owns its
+ * own instance), so letting a scoped command compete with a global one for
+ * the same key (Enter: `app.entity.startRename` vs `nav.drillIn`) made key
+ * ownership a per-board coin toss. That was the "drill-in works in two
+ * windows, silently dead in the third (different board)" bug — card
+ * `01KTQ6QZNB3VN4MAND7VPASM21`.
+ *
+ * First-id-wins is retained for any residual same-key collision between two
+ * GLOBAL commands so a single fetch stays self-consistent.
+ *
+ * @param commands - The active command list (from `useCommandList`).
  * @param mode - The keymap mode to extract bindings for.
  * @returns A flat BindingTable mapping canonical key strings to command IDs.
  */
-export function extractScopeBindings(
-  scope: {
-    commands: Map<string, { id: string; keys?: Record<string, string> }>;
-    parent: unknown;
-  } | null,
+export function extractKeymapBindings(
+  commands: readonly {
+    id: string;
+    keys?: Record<string, string>;
+    scope?: readonly string[];
+  }[],
   mode: KeymapMode,
 ): BindingTable {
   const result: BindingTable = {};
-  let current = scope;
-  while (current !== null) {
-    for (const [, cmd] of current.commands) {
-      const key = cmd.keys?.[mode];
-      if (key && !(key in result)) {
-        // Inner scopes win — only set if not already claimed
-        result[key] = cmd.id;
-      }
+  for (const cmd of commands) {
+    // Scope-gated commands never claim a global key — empty/absent scope
+    // means global (mirroring the service's `list_filter_matches`).
+    if (cmd.scope !== undefined && cmd.scope.length > 0) continue;
+    const key = cmd.keys?.[mode];
+    if (key && !(key in result)) {
+      result[key] = cmd.id;
     }
-    current = current.parent as typeof scope;
   }
   return result;
 }

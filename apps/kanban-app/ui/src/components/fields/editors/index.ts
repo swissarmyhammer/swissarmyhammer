@@ -47,3 +47,17 @@ export { AttachmentEditor } from "./attachment-editor";
 export function resolveEditor(field: FieldDef): string {
   return field.editor ?? "none";
 }
+
+/**
+ * Whether a field is editable, driven by its YAML metadata.
+ *
+ * A field with no declared editor (`editor: "none"` or absent — the shape
+ * used by computed/read-only fields like `status_date` and `virtual_tags`)
+ * is display-only: it must never enter edit mode and must never be blanked
+ * by a missing editor. This is the single source of truth for editability —
+ * `<Field>` gates `onEdit`/`editing` on it, and layout containers (e.g. the
+ * inspector) consult it for edit-arming decisions.
+ */
+export function isFieldEditable(field: FieldDef): boolean {
+  return resolveEditor(field) !== "none";
+}

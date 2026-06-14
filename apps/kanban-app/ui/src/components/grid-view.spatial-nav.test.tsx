@@ -124,6 +124,10 @@ vi.mock("@/components/perspective-container", () => ({
 // ---------------------------------------------------------------------------
 
 import { GridView } from "./grid-view";
+import {
+  hasWebviewCommandHandler,
+  resetWebviewCommandBusForTest,
+} from "@/lib/webview-command-bus";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -251,8 +255,18 @@ function unregisterScopeCalls(): Array<Record<string, unknown>> {
 /** Collect every `spatial_focus` call payload. */
 function spatialFocusCalls(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as Record<string, unknown>);
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as Record<string, unknown>;
+      return args;
+    });
 }
 
 /**
@@ -308,10 +322,63 @@ describe("GridView (spatial-nav)", () => {
     mockListen.mockClear();
     listeners.clear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
+    resetWebviewCommandBusForTest();
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // 0. Webview command bus registration (Card C)
+  //
+  // The eleven `grid.*` commands are DEFINED by the `grid-commands` builtin
+  // plugin; the grid view's only role is BEHAVIOR — it registers a live
+  // webview-bus handler per id on mount and the ownership-guarded cleanup
+  // clears every slot on unmount (a stale closure must never linger after
+  // the grid view goes away, or a palette dispatch would mutate a dead grid).
+  // -------------------------------------------------------------------------
+
+  const GRID_COMMAND_IDS = [
+    "grid.moveToRowStart",
+    "grid.moveToRowEnd",
+    "grid.firstCell",
+    "grid.lastCell",
+    "grid.edit",
+    "grid.editEnter",
+    "grid.exitEdit",
+    "grid.toggleVisual",
+    "grid.deleteRow",
+    "grid.newBelow",
+    "grid.newAbove",
+  ];
+
+  it("registers a webview-bus handler for all 11 grid.* ids on mount and clears them on unmount", async () => {
+    const entities = { task: threeTasks() };
+
+    let result!: ReturnType<typeof render>;
+    await act(async () => {
+      result = render(<GridHarness entities={entities} />);
+    });
+    await flushSetup();
+
+    for (const id of GRID_COMMAND_IDS) {
+      expect(
+        hasWebviewCommandHandler(id),
+        `${id} must have a registered webview-bus handler after mount`,
+      ).toBe(true);
+    }
+
+    await act(async () => {
+      result.unmount();
+    });
+
+    for (const id of GRID_COMMAND_IDS) {
+      expect(
+        hasWebviewCommandHandler(id),
+        `${id}'s webview-bus handler must be cleared on unmount`,
+      ).toBe(false);
+    }
   });
 
   // -------------------------------------------------------------------------

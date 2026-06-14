@@ -38,11 +38,25 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
+// `spatial-focus-context.tsx` statically imports `getCurrentWindow` from
+// `@tauri-apps/api/window` (its window-label guard). The real window module
+// pulls `SERIALIZE_TO_IPC_FN` from `core` at load time, which the minimal
+// core mock above does not provide — so mock the window module too, the
+// same way `spatial-focus-context.responders.test.tsx` does.
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
+}));
+
 import {
   SpatialFocusProvider,
   useFocusClaim,
   useSpatialFocusActions,
 } from "./spatial-focus-context";
+import {
+  getWebviewCommandHandler,
+  hasWebviewCommandHandler,
+  resetWebviewCommandBusForTest,
+} from "./webview-command-bus";
 import { LayerScopeRegistry } from "./layer-scope-registry-context";
 import type {
   FocusChangedPayload,
@@ -85,6 +99,7 @@ beforeEach(() => {
   mockInvoke.mockClear();
   listenHandlers = {};
   listenUnsubscribers = {};
+  resetWebviewCommandBusForTest();
 });
 
 /* ---- Tests ---- */
@@ -121,7 +136,7 @@ describe("SpatialFocusProvider", () => {
     unmount();
   });
 
-  it("invokes spatial_focus with the branded FullyQualifiedMoniker on focus()", async () => {
+  it("invokes the focus server's set focus op with the branded FullyQualifiedMoniker on focus()", async () => {
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
     });
@@ -132,12 +147,56 @@ describe("SpatialFocusProvider", () => {
       await result.current.focus(key);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith(
-      "spatial_focus",
-      expect.objectContaining({ fq: key }),
-    );
+    // Focus calls route through the generic MCP transport
+    // (`command_tool_call` against the `focus` tool) — the legacy
+    // `spatial_focus` Tauri command is gone.
+    expect(mockInvoke).toHaveBeenCalledWith("command_tool_call", {
+      module: "focus",
+      tool: "focus",
+      op: "set focus",
+      params: { fq: key, snapshot: undefined, window: "main" },
+    });
 
     unmount();
+  });
+
+  it("registers the single nav.focus webview-bus handler that drives the focus server (Card G)", async () => {
+    // `nav.focus` is DEFINED once, in the `nav-commands` builtin plugin.
+    // The provider owns the webview's only execution leg: a bus handler
+    // running the snapshot-bearing `actions.focus(fq)` commit. No
+    // `CommandDef` for the id exists anywhere client-side (pinned by
+    // `inspect-and-focus-commands.plugin-owned.node.test.ts`).
+    expect(hasWebviewCommandHandler("nav.focus")).toBe(false);
+
+    const { unmount } = render(
+      <SpatialFocusProvider>{null}</SpatialFocusProvider>,
+    );
+    await flushListenSetup();
+
+    expect(
+      hasWebviewCommandHandler("nav.focus"),
+      "mounting the provider must register the nav.focus bus handler",
+    ).toBe(true);
+
+    // Invoking the handler with args.fq must still drive the focus
+    // server's `set focus` op — the spatial_focus commit path.
+    const key: FullyQualifiedMoniker = asFq("/window/bus-claim");
+    await act(async () => {
+      await getWebviewCommandHandler("nav.focus")!({ args: { fq: key } });
+      await Promise.resolve();
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("command_tool_call", {
+      module: "focus",
+      tool: "focus",
+      op: "set focus",
+      params: { fq: key, snapshot: undefined, window: "main" },
+    });
+
+    unmount();
+    expect(
+      hasWebviewCommandHandler("nav.focus"),
+      "unmount must clear the bus handler (ownership-guarded cleanup)",
+    ).toBe(false);
   });
 
   it("does not expose registerScope / unregisterScope / updateRect actions", async () => {
@@ -304,16 +363,26 @@ describe("SpatialFocusProvider", () => {
     // No layer registry has been registered for this FQM, so the
     // snapshot field is `undefined` — the kernel falls back to the
     // registry path.
-    expect(mockInvoke).toHaveBeenCalledWith("spatial_navigate", {
-      focusedFq: key,
-      direction: "right",
-      snapshot: undefined,
+    // After Stage 3, focus calls route through the generic MCP
+    // transport — the focus server's `navigate focus` op renames
+    // `focusedFq` → `focused_fq` on the wire.
+    expect(mockInvoke).toHaveBeenCalledWith("command_tool_call", {
+      module: "focus",
+      tool: "focus",
+      op: "navigate focus",
+      params: {
+        focused_fq: key,
+        focusedFq: key,
+        direction: "right",
+        snapshot: undefined,
+        window: "main",
+      },
     });
 
     unmount();
   });
 
-  it("invokes spatial_navigate with a populated snapshot when the focused FQ is in a registered layer registry", async () => {
+  it("invokes the navigate focus op with a populated snapshot when the focused FQ is in a registered layer registry", async () => {
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
     });
@@ -326,10 +395,30 @@ describe("SpatialFocusProvider", () => {
 
     const focusedNode = document.createElement("div");
     focusedNode.getBoundingClientRect = () =>
-      ({ x: 10, y: 20, width: 30, height: 40, top: 20, right: 40, bottom: 60, left: 10, toJSON: () => "" }) as DOMRect;
+      ({
+        x: 10,
+        y: 20,
+        width: 30,
+        height: 40,
+        top: 20,
+        right: 40,
+        bottom: 60,
+        left: 10,
+        toJSON: () => "",
+      }) as DOMRect;
     const siblingNode = document.createElement("div");
     siblingNode.getBoundingClientRect = () =>
-      ({ x: 100, y: 20, width: 30, height: 40, top: 20, right: 130, bottom: 60, left: 100, toJSON: () => "" }) as DOMRect;
+      ({
+        x: 100,
+        y: 20,
+        width: 30,
+        height: 40,
+        top: 20,
+        right: 130,
+        bottom: 60,
+        left: 100,
+        toJSON: () => "",
+      }) as DOMRect;
 
     const registry = new LayerScopeRegistry(layerFq);
     registry.add(focused, {
@@ -353,25 +442,35 @@ describe("SpatialFocusProvider", () => {
       await result.current.navigate(focused, "right");
     });
 
+    // Routed through the generic MCP transport — the focus server's
+    // `navigate focus` op renames `focusedFq` → `focused_fq` on the wire
+    // (both fields are sent during the transition).
     expect(mockInvoke).toHaveBeenCalledWith(
-      "spatial_navigate",
+      "command_tool_call",
       expect.objectContaining({
-        focusedFq: focused,
-        direction: "right",
-        snapshot: expect.objectContaining({
-          layer_fq: layerFq,
-          scopes: expect.arrayContaining([
-            expect.objectContaining({
-              fq: focused,
-              parent_zone: zone,
-              nav_override: {},
-            }),
-            expect.objectContaining({
-              fq: sibling,
-              parent_zone: zone,
-              nav_override: {},
-            }),
-          ]),
+        module: "focus",
+        tool: "focus",
+        op: "navigate focus",
+        params: expect.objectContaining({
+          focused_fq: focused,
+          focusedFq: focused,
+          direction: "right",
+          window: "main",
+          snapshot: expect.objectContaining({
+            layer_fq: layerFq,
+            scopes: expect.arrayContaining([
+              expect.objectContaining({
+                fq: focused,
+                parent_zone: zone,
+                nav_override: {},
+              }),
+              expect.objectContaining({
+                fq: sibling,
+                parent_zone: zone,
+                nav_override: {},
+              }),
+            ]),
+          }),
         }),
       }),
     );
@@ -380,7 +479,7 @@ describe("SpatialFocusProvider", () => {
     unmount();
   });
 
-  it("invokes spatial_focus with a populated snapshot when the target FQ is in a registered layer registry", async () => {
+  it("invokes the set focus op with a populated snapshot when the target FQ is in a registered layer registry", async () => {
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
     });
@@ -392,7 +491,17 @@ describe("SpatialFocusProvider", () => {
 
     const targetNode = document.createElement("div");
     targetNode.getBoundingClientRect = () =>
-      ({ x: 10, y: 20, width: 30, height: 40, top: 20, right: 40, bottom: 60, left: 10, toJSON: () => "" }) as DOMRect;
+      ({
+        x: 10,
+        y: 20,
+        width: 30,
+        height: 40,
+        top: 20,
+        right: 40,
+        bottom: 60,
+        left: 10,
+        toJSON: () => "",
+      }) as DOMRect;
 
     const registry = new LayerScopeRegistry(layerFq);
     registry.add(target, {
@@ -410,17 +519,23 @@ describe("SpatialFocusProvider", () => {
     });
 
     expect(mockInvoke).toHaveBeenCalledWith(
-      "spatial_focus",
+      "command_tool_call",
       expect.objectContaining({
-        fq: target,
-        snapshot: expect.objectContaining({
-          layer_fq: layerFq,
-          scopes: expect.arrayContaining([
-            expect.objectContaining({
-              fq: target,
-              parent_zone: zone,
-            }),
-          ]),
+        module: "focus",
+        tool: "focus",
+        op: "set focus",
+        params: expect.objectContaining({
+          fq: target,
+          window: "main",
+          snapshot: expect.objectContaining({
+            layer_fq: layerFq,
+            scopes: expect.arrayContaining([
+              expect.objectContaining({
+                fq: target,
+                parent_zone: zone,
+              }),
+            ]),
+          }),
         }),
       }),
     );
@@ -441,9 +556,11 @@ describe("SpatialFocusProvider", () => {
       await result.current.focus(target);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("spatial_focus", {
-      fq: target,
-      snapshot: undefined,
+    expect(mockInvoke).toHaveBeenCalledWith("command_tool_call", {
+      module: "focus",
+      tool: "focus",
+      op: "set focus",
+      params: { fq: target, snapshot: undefined, window: "main" },
     });
 
     unmount();
@@ -463,7 +580,17 @@ describe("SpatialFocusProvider", () => {
     // builds a populated snapshot for the restored FQ.
     const restoredNode = document.createElement("div");
     restoredNode.getBoundingClientRect = () =>
-      ({ x: 0, y: 0, width: 10, height: 10, top: 0, right: 10, bottom: 10, left: 0, toJSON: () => "" }) as DOMRect;
+      ({
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        top: 0,
+        right: 10,
+        bottom: 10,
+        left: 0,
+        toJSON: () => "",
+      }) as DOMRect;
     const registry = new LayerScopeRegistry(layerFq);
     registry.add(restored, {
       ref: { current: restoredNode },
@@ -477,7 +604,15 @@ describe("SpatialFocusProvider", () => {
     // The kernel returns the layer's `last_focused`; mock that.
     mockInvoke.mockImplementation(async (...args: unknown[]) => {
       const cmd = args[0] as string;
-      if (cmd === "spatial_pop_layer") return restored;
+      const bag = (args[1] ?? {}) as Record<string, unknown>;
+      if (
+        cmd === "command_tool_call" &&
+        bag.tool === "focus" &&
+        bag.op === "pop layer"
+      ) {
+        // The focus server wraps `pop layer`'s return in `{ok, next_fq}`.
+        return { ok: true, next_fq: restored };
+      }
       return undefined;
     });
 
@@ -485,32 +620,47 @@ describe("SpatialFocusProvider", () => {
       await result.current.popLayer(popped);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("spatial_pop_layer", { fq: popped });
+    expect(mockInvoke).toHaveBeenCalledWith("command_tool_call", {
+      module: "focus",
+      tool: "focus",
+      op: "pop layer",
+      params: { fq: popped },
+    });
     expect(mockInvoke).toHaveBeenCalledWith(
-      "spatial_focus",
+      "command_tool_call",
       expect.objectContaining({
-        fq: restored,
-        snapshot: expect.objectContaining({
-          layer_fq: layerFq,
-          scopes: expect.arrayContaining([
-            expect.objectContaining({ fq: restored }),
-          ]),
+        tool: "focus",
+        op: "set focus",
+        params: expect.objectContaining({
+          fq: restored,
+          snapshot: expect.objectContaining({
+            layer_fq: layerFq,
+            scopes: expect.arrayContaining([
+              expect.objectContaining({ fq: restored }),
+            ]),
+          }),
         }),
       }),
     );
 
-    // Pin call order: spatial_pop_layer must precede spatial_focus.
+    // Pin call order: pop layer must precede set focus.
     const popIdx = mockInvoke.mock.calls.findIndex(
-      ([cmd]) => cmd === "spatial_pop_layer",
+      ([cmd, bag]) =>
+        cmd === "command_tool_call" &&
+        (bag as Record<string, unknown>).tool === "focus" &&
+        (bag as Record<string, unknown>).op === "pop layer",
     );
     const focusIdx = mockInvoke.mock.calls.findIndex(
-      ([cmd]) => cmd === "spatial_focus",
+      ([cmd, bag]) =>
+        cmd === "command_tool_call" &&
+        (bag as Record<string, unknown>).tool === "focus" &&
+        (bag as Record<string, unknown>).op === "set focus",
     );
     expect(popIdx).toBeGreaterThanOrEqual(0);
     expect(focusIdx).toBeGreaterThanOrEqual(0);
-    expect(
-      mockInvoke.mock.invocationCallOrder[popIdx],
-    ).toBeLessThan(mockInvoke.mock.invocationCallOrder[focusIdx]);
+    expect(mockInvoke.mock.invocationCallOrder[popIdx]).toBeLessThan(
+      mockInvoke.mock.invocationCallOrder[focusIdx],
+    );
 
     dispose();
     unmount();
@@ -526,7 +676,14 @@ describe("SpatialFocusProvider", () => {
 
     mockInvoke.mockImplementation(async (...args: unknown[]) => {
       const cmd = args[0] as string;
-      if (cmd === "spatial_pop_layer") return null;
+      const bag = (args[1] ?? {}) as Record<string, unknown>;
+      if (
+        cmd === "command_tool_call" &&
+        bag.tool === "focus" &&
+        bag.op === "pop layer"
+      ) {
+        return { ok: true, next_fq: null };
+      }
       return undefined;
     });
 
@@ -534,9 +691,17 @@ describe("SpatialFocusProvider", () => {
       await result.current.popLayer(popped);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("spatial_pop_layer", { fq: popped });
+    expect(mockInvoke).toHaveBeenCalledWith("command_tool_call", {
+      module: "focus",
+      tool: "focus",
+      op: "pop layer",
+      params: { fq: popped },
+    });
     const focusCalls = mockInvoke.mock.calls.filter(
-      ([cmd]) => cmd === "spatial_focus",
+      ([cmd, bag]) =>
+        cmd === "command_tool_call" &&
+        (bag as Record<string, unknown>).tool === "focus" &&
+        (bag as Record<string, unknown>).op === "set focus",
     );
     expect(focusCalls).toHaveLength(0);
 
@@ -594,9 +759,12 @@ describe("useFocusClaim listener identity", () => {
 /* ---- drillIn / drillOut / focusedKey ---- */
 
 describe("drillIn", () => {
-  it("invokes spatial_drill_in with the focused (key, moniker) pair and returns the moniker", async () => {
+  it("invokes drill_in with the focused (key, moniker) pair and returns the moniker", async () => {
     const targetMoniker: FullyQualifiedMoniker = asFq("ui:target");
-    mockInvoke.mockImplementationOnce(() => Promise.resolve(targetMoniker));
+    // The MCP focus server wraps the response in `{ok, next_fq}`.
+    mockInvoke.mockImplementationOnce(() =>
+      Promise.resolve({ ok: true, next_fq: targetMoniker }),
+    );
 
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
@@ -610,9 +778,17 @@ describe("drillIn", () => {
       returned = await result.current.drillIn(key, focusedFq);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("spatial_drill_in", {
-      fq: key,
-      focusedFq,
+    expect(mockInvoke).toHaveBeenCalledWith("command_tool_call", {
+      module: "focus",
+      tool: "focus",
+      op: "drill_in layer",
+      params: {
+        fq: key,
+        focused_fq: focusedFq,
+        focusedFq,
+        snapshot: undefined,
+        window: "main",
+      },
     });
     expect(returned).toBe(targetMoniker);
 
@@ -625,7 +801,9 @@ describe("drillIn", () => {
     // nothing to descend into. The React layer just passes that
     // through verbatim.
     const focusedFq: FullyQualifiedMoniker = asFq("ui:leaf");
-    mockInvoke.mockImplementationOnce(() => Promise.resolve(focusedFq));
+    mockInvoke.mockImplementationOnce(() =>
+      Promise.resolve({ ok: true, next_fq: focusedFq }),
+    );
 
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
@@ -644,9 +822,11 @@ describe("drillIn", () => {
 });
 
 describe("drillOut", () => {
-  it("invokes spatial_drill_out with the focused (key, moniker) pair and returns the parent moniker", async () => {
+  it("invokes drill_out with the focused (key, moniker) pair and returns the parent moniker", async () => {
     const parentMoniker: FullyQualifiedMoniker = asFq("ui:parent-zone");
-    mockInvoke.mockImplementationOnce(() => Promise.resolve(parentMoniker));
+    mockInvoke.mockImplementationOnce(() =>
+      Promise.resolve({ ok: true, next_fq: parentMoniker }),
+    );
 
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
@@ -660,9 +840,17 @@ describe("drillOut", () => {
       returned = await result.current.drillOut(key, focusedFq);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("spatial_drill_out", {
-      fq: key,
-      focusedFq,
+    expect(mockInvoke).toHaveBeenCalledWith("command_tool_call", {
+      module: "focus",
+      tool: "focus",
+      op: "drill_out layer",
+      params: {
+        fq: key,
+        focused_fq: focusedFq,
+        focusedFq,
+        snapshot: undefined,
+        window: "main",
+      },
     });
     expect(returned).toBe(parentMoniker);
 
@@ -675,7 +863,9 @@ describe("drillOut", () => {
     // The React caller compares the result against the focused moniker
     // and dispatches `app.dismiss` on equality.
     const focusedFq: FullyQualifiedMoniker = asFq("ui:root-leaf");
-    mockInvoke.mockImplementationOnce(() => Promise.resolve(focusedFq));
+    mockInvoke.mockImplementationOnce(() =>
+      Promise.resolve({ ok: true, next_fq: focusedFq }),
+    );
 
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,

@@ -1,0 +1,1 @@
+{"id":"01KST708S03CXA3BA7FY8TMVN0","timestamp":"2026-05-29T15:52:46.624774Z","op":"create","item_id":"01KST708S0HMNGK83EH1ANF9Q9","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: '008672'\n+tag_name: testing\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: '008672'\n-tag_name: testing\n","transaction_id":null}

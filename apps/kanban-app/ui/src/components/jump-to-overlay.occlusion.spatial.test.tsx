@@ -166,6 +166,7 @@ import {
 // ---------------------------------------------------------------------------
 
 import App from "@/App";
+import { commandToolCall } from "@/test/mock-command-list";
 import { asSegment } from "@/types/spatial";
 
 // Sneak-code fixture — the Rust kernel is not running in browser mode, so the
@@ -197,6 +198,7 @@ async function bootstrapInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
+  if (cmd === "command_tool_call") return commandToolCall(args);
   if (cmd === "list_entity_types") return listEntityTypesResponse();
   if (cmd === "get_entity_schema") {
     const a = (args ?? {}) as Record<string, unknown>;
@@ -563,11 +565,21 @@ describe("Jump-To overlay — occlusion / viewport filtering", () => {
 
     readOpenPanelRect();
 
+    // Jump pills land on every focusable scope — only structural zones
+    // (board well, columns: `data-focusable` absent) are excluded,
+    // mirroring the overlay's focusable filter. Within the board-scope
+    // family (task/column/board segments) the focusable hosts are the
+    // cards, so this test stays an OCCLUSION test (visible-vs-hidden)
+    // over the jump-eligible scopes.
+    const isJumpEligible = (h: HTMLElement): boolean =>
+      h.dataset.focusable !== undefined;
     const { visible } = partitionBoardScopes();
-    const expectedVisibleFqs = new Set(visible.map((h) => h.dataset.moniker!));
+    const expectedVisibleFqs = new Set(
+      visible.filter(isJumpEligible).map((h) => h.dataset.moniker!),
+    );
     expect(
       expectedVisibleFqs.size,
-      "at least one board scope must be visible",
+      "at least one focusable board card must be visible",
     ).toBeGreaterThan(0);
 
     const overlay = await openJumpTo(harness);
@@ -622,17 +634,24 @@ describe("Jump-To overlay — occlusion / viewport filtering", () => {
 
     readOpenPanelRect();
 
-    // The panel's own focus scopes that are visible on top of everything.
+    // The panel's own focusable scopes that are visible on top of
+    // everything. Jump pills land on every focusable scope, so restrict to
+    // panel scopes that are focusable (`data-focusable`) — the panel's
+    // structural zones (`ui:ai-panel`, transcript wrapper) are excluded,
+    // mirroring the overlay's focusable filter.
+    const isJumpEligible = (h: HTMLElement): boolean =>
+      h.dataset.focusable !== undefined;
     const visiblePanelFqs = new Set(
       Array.from(document.querySelectorAll<HTMLElement>("[data-segment]"))
         .filter((h) => (h.dataset.segment ?? "").startsWith("ui:ai-panel"))
+        .filter(isJumpEligible)
         .filter((h) => hostAnchorVisible(h))
         .map((h) => h.dataset.moniker!),
     );
 
     expect(
       visiblePanelFqs.size,
-      "the open panel must register at least one visible scope",
+      "the open panel must register at least one visible focusable scope",
     ).toBeGreaterThan(0);
 
     const overlay = await openJumpTo(harness);

@@ -14,7 +14,7 @@
 /// partial-merge-by-id semantics in `CommandsRegistry::merge_yaml_value`.
 ///
 /// Mirrors the contributor list used by the app layer's
-/// `swissarmyhammer_commands::compose_registry!` invocation
+/// `crate::commands_core::compose_registry!` invocation
 /// (`swissarmyhammer_commands` then this crate), so production and tests
 /// exercise the same composition path. The macro can't be used directly
 /// here because it expects a `::`-separated identifier path and this
@@ -22,7 +22,7 @@
 /// isn't an identifier).
 pub fn composed_builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
     let mut sources: Vec<(&'static str, &'static str)> = Vec::new();
-    sources.extend(swissarmyhammer_commands::builtin_yaml_sources());
+    sources.extend(crate::commands_core::builtin_yaml_sources());
     sources.extend(crate::builtin_yaml_sources());
     sources
 }

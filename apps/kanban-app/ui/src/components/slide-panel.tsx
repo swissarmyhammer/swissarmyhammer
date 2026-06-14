@@ -1,6 +1,22 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { X } from "lucide-react";
 import { useDispatchCommand } from "@/lib/command-scope";
+import { Pressable } from "@/components/pressable";
+import { asSegment, type SegmentMoniker } from "@/types/spatial";
+
+/**
+ * Fallback spatial-nav moniker for the (x) close leaf when the caller
+ * does not provide one. Callers that can render several panels at once
+ * (the inspector stack) MUST pass a unique `closeMoniker` per panel so
+ * the leaves register distinct FQMs.
+ */
+const DEFAULT_CLOSE_MONIKER = asSegment("ui:inspector.close");
 
 /**
  * Default panel width applied when no `width` prop is passed.
@@ -64,11 +80,20 @@ interface SlidePanelProps {
   onResize?: (nextWidth: number) => void;
   /**
    * Called once on `mouseup` after a drag with the final clamped width.
-   * Callers dispatch the persistence command (`ui.inspector.set_width`)
+   * Callers dispatch the persistence command (`app.inspector.set_width`)
    * here — mirrors the column-resize / window-geometry pattern of
    * "transient state in React, only the final value round-trips".
    */
   onResizeEnd?: (finalWidth: number) => void;
+  /**
+   * Relative spatial-nav moniker for the (x) close button's `<Pressable>`
+   * leaf. The close button is an actionable icon button, so it registers
+   * in the enclosing focus layer — keyboard reachable (jump / arrows),
+   * Enter/Space activate the close dispatch. Callers that stack several
+   * panels (the inspector) must pass a per-panel unique value, e.g.
+   * `inspector.close:task:T1`. Defaults to `ui:inspector.close`.
+   */
+  closeMoniker?: SegmentMoniker;
 }
 
 /**
@@ -93,9 +118,10 @@ export function SlidePanel({
   width = DEFAULT_PANEL_WIDTH,
   onResize,
   onResizeEnd,
+  closeMoniker = DEFAULT_CLOSE_MONIKER,
 }: SlidePanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const dispatchClose = useDispatchCommand("ui.inspector.close");
+  const dispatchClose = useDispatchCommand("app.inspector.close");
 
   // Drag state lives in a ref because mousemove handlers need to read
   // the start coordinates without triggering a render cascade. The
@@ -241,14 +267,21 @@ export function SlidePanel({
         />
       </div>
       <div className="flex items-center justify-end px-3 pt-3">
-        <button
-          onClick={() => {
+        {/* The (x) close is an actionable icon button, so it goes through
+            the canonical `<Pressable>` primitive: a focusable leaf in the
+            enclosing focus layer (jump pills land on it, arrows reach it)
+            with Enter/Space activating the same close dispatch as a
+            pointer click. */}
+        <Pressable
+          moniker={closeMoniker}
+          ariaLabel="Close panel"
+          onPress={() => {
             dispatchClose().catch(console.error);
           }}
           className="shrink-0 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         >
           <X className="h-4 w-4" />
-        </button>
+        </Pressable>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-5">{children}</div>
     </div>

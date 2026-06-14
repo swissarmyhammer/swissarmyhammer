@@ -19,15 +19,24 @@ use super::paste_handlers::{register_paste_handlers, PasteMatrix};
 use super::run_op;
 use crate::attachment::{match_attachment_index, DeleteAttachment};
 use crate::clipboard::{self, ClipboardProviderExt};
+use crate::commands_core::{parse_moniker, Command, CommandContext, CommandError};
 use crate::context::KanbanContext;
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_commands::{parse_moniker, Command, CommandContext, CommandError};
 
 /// Entity types that have a known copy path (generic via
 /// `EntityContext::read`). Must stay in sync with the entity definitions
 /// under `swissarmyhammer-kanban/builtin/entities/*.yaml`.
-const COPYABLE_ENTITY_TYPES: &[&str] = &[
+///
+/// This is the CANONICAL clipboard-capability set. It is the dispatch-time
+/// `available()` gate here, and it is also the source of truth the
+/// list-time gate is pinned against: the `entity-commands` plugin's
+/// `OPERABLE_ENTITY_TYPES` (`builtin/plugins/entity-commands/index.ts`)
+/// declares the same set as each clipboard command's `applies_to`, and the
+/// drift guard `builtin_entity_commands_e2e::assert_clipboard_applies_to`
+/// asserts the TS-surfaced `applies_to` equals THIS constant — so declared
+/// (list) and enforced (dispatch) can never silently diverge.
+pub const COPYABLE_ENTITY_TYPES: &[&str] = &[
     "task",
     "tag",
     "column",
@@ -62,7 +71,7 @@ async fn write_to_clipboard(
     ctx: &CommandContext,
     clipboard_json: &str,
     entity_type: &str,
-) -> swissarmyhammer_commands::Result<()> {
+) -> crate::commands_core::Result<()> {
     if let Ok(clipboard) = ctx.require_extension::<ClipboardProviderExt>() {
         clipboard
             .0
@@ -91,7 +100,7 @@ async fn snapshot_entity_to_clipboard(
     entity_type: &str,
     entity_id: &str,
     mode: &str,
-) -> swissarmyhammer_commands::Result<String> {
+) -> crate::commands_core::Result<String> {
     let ectx = kanban
         .entity_context()
         .await
@@ -126,7 +135,7 @@ async fn snapshot_entity_to_clipboard(
 async fn stage_cut_attachment(
     source_path: &str,
     _clipboard_json: &str,
-) -> swissarmyhammer_commands::Result<String> {
+) -> crate::commands_core::Result<String> {
     let basename = std::path::Path::new(source_path)
         .file_name()
         .and_then(|s| s.to_str())
@@ -156,7 +165,7 @@ async fn stage_cut_attachment(
 fn rewrite_attachment_entity_id(
     clipboard_json: &str,
     new_entity_id: &str,
-) -> swissarmyhammer_commands::Result<String> {
+) -> crate::commands_core::Result<String> {
     let mut payload = clipboard::deserialize_from_clipboard(clipboard_json).ok_or_else(|| {
         CommandError::ExecutionFailed(
             "internal: cut snapshot is not a swissarmyhammer payload".into(),
@@ -191,7 +200,7 @@ async fn snapshot_attachment_to_clipboard(
     ctx: &CommandContext,
     attachment_path: &str,
     mode: &str,
-) -> swissarmyhammer_commands::Result<String> {
+) -> crate::commands_core::Result<String> {
     let task_id = ctx
         .resolve_entity_id("task")
         .ok_or_else(|| CommandError::MissingScope("task".into()))?;
@@ -241,7 +250,7 @@ impl Command for CopyEntityCmd {
         target_is_copyable(ctx.target.as_deref())
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let moniker = ctx
@@ -315,7 +324,7 @@ impl Command for CutEntityCmd {
         }
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let moniker = ctx
@@ -448,7 +457,7 @@ impl Command for PasteEntityCmd {
         self.matrix.find(&clipboard_type, target_type).is_some()
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let moniker = ctx
             .target
             .as_deref()
@@ -498,7 +507,7 @@ mod tests {
     use crate::Execute;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::UIState;
+    use swissarmyhammer_ui_state::UIState;
 
     async fn setup() -> (
         tempfile::TempDir,

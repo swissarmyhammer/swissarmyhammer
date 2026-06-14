@@ -1,0 +1,1 @@
+{"id":"01KV32F7NS51EZDVN6RGZSMQ4W","timestamp":"2026-06-14T12:42:25.849008Z","op":"create","item_id":"01KV32F7NPJMH4KMAT8P7782DG","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: e4e669\n+tag_name: command-service\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: e4e669\n-tag_name: command-service\n","transaction_id":null}

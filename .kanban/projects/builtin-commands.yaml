@@ -1,0 +1,3 @@
+color: 9900cc
+description: Tier 2. The 62 builtin commands as 7 TypeScript plugins (task/kanban-misc/file/perspective/entity/ui/app-shell) + the locked catalog/baseline (tests/baseline/plugins.yaml + drift test) + frontend command dispatch (useDispatchCommand routing through the Command service, palette/hotkey/context-menu/tab-button wiring via list command). 'What we actually do.' Depends on the command-service engine + command-backends.
+name: Builtin Commands (the commands)

@@ -186,7 +186,7 @@ describe("PerspectiveTabBar delete-undo flow", () => {
     listenCallbacks = {};
   });
 
-  it("re-renders the deleted tab after a post-undo entity-field-changed event", async () => {
+  it("re-renders the deleted tab after a post-undo store/changed notification", async () => {
     // --- Step 1: seed two perspectives and render the tab bar. ---
     //
     // Both perspectives are `view: "board"` so they match the active view
@@ -226,8 +226,14 @@ describe("PerspectiveTabBar delete-undo flow", () => {
     });
 
     await act(async () => {
-      listenCallbacks["entity-removed"]?.({
-        payload: { entity_type: "perspective", id: pid },
+      listenCallbacks["notifications/store/changed"]?.({
+        payload: {
+          store: "perspective",
+          item: pid,
+          op: "removed",
+          txn: null,
+          origin: "user",
+        },
       });
       await new Promise((r) => setTimeout(r, 0));
     });
@@ -263,13 +269,15 @@ describe("PerspectiveTabBar delete-undo flow", () => {
     ).length;
 
     await act(async () => {
-      listenCallbacks["entity-field-changed"]?.({
+      listenCallbacks["notifications/store/changed"]?.({
         payload: {
-          entity_type: "perspective",
-          id: pid,
-          // Empty changes — exact shape the bridge emits after
-          // reload_from_disk with changed_fields=[].
-          changes: [],
+          store: "perspective",
+          item: pid,
+          op: "updated",
+          txn: null,
+          origin: "undo",
+          // No `changes` — reload-item shape the fan-in emits for a
+          // PerspectiveChanged after reload_from_disk.
         },
       });
       await new Promise((r) => setTimeout(r, 0));

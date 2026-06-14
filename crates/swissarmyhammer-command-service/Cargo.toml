@@ -1,0 +1,84 @@
+[package]
+name = "swissarmyhammer-command-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Command service operations and registration payload types for SwissArmyHammer"
+
+[dependencies]
+async-trait = { workspace = true }
+rmcp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+swissarmyhammer-operations = { workspace = true }
+swissarmyhammer-operations-macros = { workspace = true }
+swissarmyhammer-plugin = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serde_yaml_ng = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+# The change-propagation e2e (`undo_redo_notifies_dependents_e2e`) boots the
+# real entity/views/perspectives stack over one shared `StoreContext`, wires
+# `swissarmyhammer-kanban`'s notification fan-in adapters into the bridge, and
+# drives undo/redo through the kanban reconcile. These are dev-only edges:
+# `swissarmyhammer-kanban` depends on `swissarmyhammer-plugin` (which this
+# crate also depends on) as a normal dependency; the reverse dev edge here is
+# the same normal-dep + dev-dep shape Cargo permits (mirroring the existing
+# `swissarmyhammer-tools` dev-dep below).
+swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
+swissarmyhammer-views = { workspace = true }
+swissarmyhammer-perspectives = { workspace = true }
+# The `builtin_kanban_misc_e2e` integration test exposes the REAL in-process
+# `window` operation tool (over a recording spy `WindowShell`) so the ported
+# `attachment.open` / `attachment.reveal` commands route through the same
+# `WindowService` the kanban app uses. Dev-only edge, same shape as the others.
+swissarmyhammer-window-service = { workspace = true }
+swissarmyhammer-kanban = { workspace = true }
+# The `builtin_entity_commands_e2e` integration test exposes the REAL in-process
+# generic `entity` operation tool to a `PluginHost`. CRUD round-trips use the
+# bare `EntityServer::new`; the clipboard copy→paste round-trip needs the
+# clipboard-wired `EntityServer::with_clipboard` (over a `KanbanContext` board
+# substrate + `InMemoryClipboard` + `UIState`). Dev-only edge, same shape as
+# the other reverse dev edges in this section.
+swissarmyhammer-entity-mcp = { workspace = true }
+swissarmyhammer-ui-state = { workspace = true }
+swissarmyhammer-fields = { workspace = true }
+swissarmyhammer-store = { workspace = true }
+# The `builtin_app_shell_commands_e2e` integration test exposes the REAL
+# in-process `app` / `ui_state` / `store` / `window` / `focus` operation tools
+# to a `PluginHost` (the `app` tool over a recording spy `AppShell`, `ui_state`
+# over a temp-file `UIState`, `store` over the board's one shared
+# `StoreContext`, `window` over a recording spy `WindowShell`, and `focus` as a
+# `swissarmyhammer_focus::FocusServer` over a real `SpatialRegistry` /
+# `SpatialState`) so the 33 ported app commands route through the same servers
+# the kanban app uses. Dev-only edges, same shape as the other reverse dev
+# edges in this section.
+swissarmyhammer-focus = { workspace = true }
+swissarmyhammer-app-service = { workspace = true }
+
+# Used by the `builtin_task_commands_e2e` integration test to expose the REAL
+# in-process `kanban` operation tool to a `PluginHost` exactly as the kanban
+# app's production wiring does (`apps/kanban-app/src/plugins.rs`). The
+# `task-commands` builtin plugin's `execute` callbacks route to this server.
+# `swissarmyhammer-tools` depends on `swissarmyhammer-plugin` (which this crate
+# also depends on) as a normal dependency; the reverse edge here is dev-only,
+# so the pair forms a normal-dep + dev-dep cycle Cargo permits.
+swissarmyhammer-tools = { workspace = true }
+# Supplies `KanbanConfig` for `host.discover_and_load_all::<KanbanConfig>()` —
+# the builtin-layer discovery pass that loads the `task-commands` bundle.
+swissarmyhammer-directory = { workspace = true }
+# Supplies the empty `TemplateLibrary`/`ModelConfig` and `GitOperations` the
+# `ToolContext` for the in-process `kanban` tool requires.
+swissarmyhammer-config = { workspace = true }
+swissarmyhammer-git = { workspace = true }
+
+[lints]
+workspace = true

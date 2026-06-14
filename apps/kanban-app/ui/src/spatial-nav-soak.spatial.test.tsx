@@ -239,11 +239,48 @@ function setFocused(fq: FullyQualifiedMoniker, segment: SegmentMoniker) {
   });
 }
 
+/**
+ * Focus-server op verb → legacy `spatial_*` command name. The production
+ * wire wraps every focus op in a `command_tool_call` envelope
+ * (`focus-mcp.ts` via `mcp-transport.ts`); the queries below are written
+ * against the legacy names, so recorded envelopes are translated back.
+ */
+const FOCUS_OP_TO_LEGACY_CMD: Record<string, string> = {
+  "set focus": "spatial_focus",
+  "clear focus": "spatial_clear_focus",
+  "navigate focus": "spatial_navigate",
+  "lose focus": "spatial_focus_lost",
+  "push layer": "spatial_push_layer",
+  "pop layer": "spatial_pop_layer",
+};
+
+/**
+ * Resolve one recorded invoke call to its legacy `(cmd, args)` shape:
+ * `command_tool_call` envelopes for the focus tool are unwrapped to the
+ * legacy command name + `params` bag; everything else passes through.
+ */
+function legacyCall(call: unknown[]): {
+  cmd: string;
+  args: Record<string, unknown>;
+} {
+  const [c, rawArgs] = call as [string, Record<string, unknown> | undefined];
+  if (c === "command_tool_call" && rawArgs?.tool === "focus") {
+    const mapped = FOCUS_OP_TO_LEGACY_CMD[rawArgs.op as string];
+    if (mapped) {
+      return {
+        cmd: mapped,
+        args: (rawArgs.params ?? {}) as Record<string, unknown>,
+      };
+    }
+  }
+  return { cmd: c, args: (rawArgs ?? {}) as Record<string, unknown> };
+}
+
 /** Pull the most recent invoke call for `cmd` and return its args. */
 function lastCall(cmd: string): Record<string, unknown> | null {
   for (let i = mockInvoke.mock.calls.length - 1; i >= 0; i--) {
-    const [c, args] = mockInvoke.mock.calls[i];
-    if (c === cmd) return (args ?? {}) as Record<string, unknown>;
+    const t = legacyCall(mockInvoke.mock.calls[i]);
+    if (t.cmd === cmd) return t.args;
   }
   return null;
 }
@@ -251,8 +288,9 @@ function lastCall(cmd: string): Record<string, unknown> | null {
 /** Pull every invoke call for `cmd` and return the args list in order. */
 function allCalls(cmd: string): Record<string, unknown>[] {
   return mockInvoke.mock.calls
-    .filter(([c]) => c === cmd)
-    .map(([, args]) => (args ?? {}) as Record<string, unknown>);
+    .map(legacyCall)
+    .filter((t) => t.cmd === cmd)
+    .map((t) => t.args);
 }
 
 /** Assert the snapshot field on an IPC arg bag is a populated NavSnapshot. */
@@ -303,8 +341,11 @@ describe("spatial-nav soak: arrow nav from every column position", () => {
         const cardFq = composeFq(colFq, cardSeg);
         registry.add(
           cardFq,
-          makeEntry(colFq, cardSeg, rect(colIdx * 200 + 10, rowIdx * 100 + 40, 160, 80))
-            .entry,
+          makeEntry(
+            colFq,
+            cardSeg,
+            rect(colIdx * 200 + 10, rowIdx * 100 + 40, 160, 80),
+          ).entry,
         );
         cards.push({ fq: cardFq, segment: cardSeg });
       }
@@ -337,10 +378,7 @@ describe("spatial-nav soak: click focus on every scope kind", () => {
     // Column header at the top of a column zone.
     const colSeg = asSegment("col:1");
     const colFq = composeFq(layerFq, colSeg);
-    registry.add(
-      colFq,
-      makeEntry(null, colSeg, rect(0, 0, 200, 600)).entry,
-    );
+    registry.add(colFq, makeEntry(null, colSeg, rect(0, 0, 200, 600)).entry);
     const headerSeg = asSegment("header");
     const headerFq = composeFq(colFq, headerSeg);
     registry.add(
@@ -428,10 +466,7 @@ describe("spatial-nav soak: inspector layer round-trip", () => {
     await flushSetup();
 
     const windowLayerFq = fqRoot(asSegment("window"));
-    const inspectorLayerFq = composeFq(
-      windowLayerFq,
-      asSegment("inspector"),
-    );
+    const inspectorLayerFq = composeFq(windowLayerFq, asSegment("inspector"));
     const windowRegistry = windowRegistryRef.current!;
     const inspectorRegistry = inspectorRegistryRef.current!;
     const actions = actionsRef.current!;
@@ -454,10 +489,12 @@ describe("spatial-nav soak: inspector layer round-trip", () => {
 
     // The kernel resolves `popLayer` to the next FQM to focus — the
     // window-layer card — and the React adapter follows that with a
-    // `spatial_focus` carrying a snapshot built from the layer that
-    // contains the next_fq.
+    // `set focus` carrying a snapshot built from the layer that
+    // contains the next_fq. The wire is the focus server's `pop layer`
+    // op, whose result envelope is `{ ok, next_fq }`.
     mockInvoke.mockImplementation(async (...args: unknown[]) => {
-      if (args[0] === "spatial_pop_layer") return cardFq;
+      const t = legacyCall(args as unknown[]);
+      if (t.cmd === "spatial_pop_layer") return { ok: true, next_fq: cardFq };
       return undefined;
     });
 
@@ -553,11 +590,14 @@ describe("spatial-nav soak: modal dialog round-trip", () => {
     }
 
     // Cancel dismisses the modal — the kernel returns the trigger
-    // button as the next focused FQM and the React adapter dispatches
-    // a follow-up spatial_focus carrying the window-layer snapshot.
+    // button as the next focused FQM (in the `pop layer` op's
+    // `{ ok, next_fq }` envelope) and the React adapter dispatches a
+    // follow-up `set focus` carrying the window-layer snapshot.
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(async (...args: unknown[]) => {
-      if (args[0] === "spatial_pop_layer") return triggerFq;
+      const t = legacyCall(args as unknown[]);
+      if (t.cmd === "spatial_pop_layer")
+        return { ok: true, next_fq: triggerFq };
       return undefined;
     });
 

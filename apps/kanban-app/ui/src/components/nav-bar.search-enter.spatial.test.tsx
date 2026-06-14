@@ -14,10 +14,14 @@
  *
  * Mirrors `nav-bar.inspect-enter.spatial.test.tsx` exactly except for
  * the moniker (`ui:navbar.search` instead of `ui:navbar.inspect`) and
- * the dispatched command (`app.search` instead of `ui.inspect`).
+ * the dispatched command (`app.search` instead of `app.inspect`).
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
 import { render, fireEvent, act } from "@testing-library/react";
 import type { BoardData, OpenBoard } from "@/types/kanban";
 
@@ -33,6 +37,18 @@ const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
+  // The pressable activation commands are DEFINED by the `app-shell-commands`
+  // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
+  // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
+  // layer only through the `useCommandList` seam, so answer `list command`
+  // with the shared mock registry. Non-list `command_tool_call` ops fall
+  // through to the branches below.
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "get_ui_state")
     return Promise.resolve({
       palette_open: false,

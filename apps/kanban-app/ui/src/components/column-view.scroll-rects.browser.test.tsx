@@ -264,8 +264,12 @@ function taskMonikerToKey(): Map<string, FullyQualifiedMoniker> {
 /** Pull every `spatial_focus` call argument, in order. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
+      return args;
+    })
 }
 
 /**
@@ -333,7 +337,10 @@ function renderColumn(column: Entity, tasks: Entity[]) {
                           overflowX: "hidden",
                         }}
                       >
-                        <FocusScope moniker={asSegment("ui:board")}>
+                        {/* Non-focusable, matching production board-view.tsx:
+                            the board well is a structural zone so cards are
+                            top-tier and a click on a card focuses the card. */}
+                        <FocusScope moniker={asSegment("ui:board")} showFocus={false}>
                           <ColumnView column={column} tasks={tasks} />
                         </FocusScope>
                       </div>

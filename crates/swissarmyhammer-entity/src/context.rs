@@ -124,6 +124,17 @@ impl EntityContext {
         let _ = self.store_context.set(ctx);
     }
 
+    /// Return the `Arc<StoreContext>` previously installed via
+    /// [`set_store_context`], if any.
+    ///
+    /// Exposed so substrate-guard tests can verify via `Arc::ptr_eq` that the
+    /// entity context shares the single app-wide `StoreContext`. Production
+    /// code paths reach the context through the setter side and do not need
+    /// to read it back.
+    pub fn store_context(&self) -> Option<Arc<StoreContext>> {
+        self.store_context.get().cloned()
+    }
+
     /// Attach a validation engine. Enables field validation on write.
     pub fn with_validation(mut self, engine: Arc<ValidationEngine>) -> Self {
         self.validation = Some(engine);
@@ -656,6 +667,29 @@ impl EntityContext {
     /// [`UndoCmd`]: crate::UndoCmd
     /// [`RedoCmd`]: crate::RedoCmd
     pub async fn sync_entity_cache_from_disk(&self, entity_type: &str, id: &str) {
+        self.sync_entity_cache_from_disk_with(
+            entity_type,
+            id,
+            swissarmyhammer_store::EventProvenance::user(),
+        )
+        .await
+    }
+
+    /// Like [`sync_entity_cache_from_disk`](Self::sync_entity_cache_from_disk)
+    /// but stamps the supplied provenance (`txn` + `origin`) onto the
+    /// reconcile-emitted `EntityChanged`/`EntityDeleted` event.
+    ///
+    /// The post-undo/redo reconcile passes `origin: "undo"`/`"redo"` (plus
+    /// the reversed command's transaction id) so downstream subscribers can
+    /// attribute the change. The byte transition — and therefore which event
+    /// fires — is derived from the post-rewrite on-disk state, identical to
+    /// the plain wrapper; only the provenance differs.
+    pub async fn sync_entity_cache_from_disk_with(
+        &self,
+        entity_type: &str,
+        id: &str,
+        prov: swissarmyhammer_store::EventProvenance,
+    ) {
         let Some(cache) = self.attached_cache() else {
             return;
         };
@@ -672,7 +706,7 @@ impl EntityContext {
             // are non-fatal: `refresh_from_disk` only fails if the file
             // cannot be parsed, which means the cache is the better of
             // two bad options. Log and continue.
-            if let Err(e) = cache.refresh_from_disk(entity_type, id).await {
+            if let Err(e) = cache.refresh_from_disk_with(entity_type, id, prov).await {
                 tracing::warn!(
                     entity_type = entity_type,
                     id = id,
@@ -684,7 +718,7 @@ impl EntityContext {
             // File absent — the undo/redo either trashed it or moved it
             // to `.archive/`. Drop the cache entry so `read`/`list`
             // surface the deletion immediately.
-            cache.evict(entity_type, id).await;
+            cache.evict_with(entity_type, id, prov).await;
         }
     }
 

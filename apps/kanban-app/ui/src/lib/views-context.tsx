@@ -7,9 +7,9 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { subscribeStoreChanged } from "@/lib/mcp-notifications";
 import { useDispatchCommand } from "@/lib/command-scope";
 import type { ViewDef } from "@/types/kanban";
 import { useUIState } from "./ui-state-context";
@@ -65,24 +65,28 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
     };
   }, [refresh]);
 
-  // Re-fetch views when view entities change (file watcher or commands).
-  // The "view" check is an entity-type filter, not a field name — this context
-  // only cares about view entities, so we ignore events for tasks, tags, etc.
+  // Re-fetch views when view entities change (file watcher or commands), and
+  // on structural board changes (a board switch reloads its view set). The
+  // input source is the MCP `notifications/store/changed` plane: the `store`
+  // check is the store-name filter — this context only cares about the "view"
+  // store and structural board/column changes, ignoring tasks, tags, etc.
   useEffect(() => {
-    const unlisteners = [
-      listen<{ entity_type: string }>("entity-field-changed", (event) => {
-        if (event.payload.entity_type === "view") refresh();
-      }),
-      listen<{ entity_type: string }>("entity-created", (event) => {
-        if (event.payload.entity_type === "view") refresh();
-      }),
-      listen<{ entity_type: string }>("entity-removed", (event) => {
-        if (event.payload.entity_type === "view") refresh();
-      }),
-      listen("board-changed", () => refresh()),
-    ];
+    let disposed = false;
+    const unsubPromise = subscribeStoreChanged((batch) => {
+      if (
+        batch.some(
+          (n) =>
+            n.store === "view" || n.store === "board" || n.store === "column",
+        )
+      ) {
+        refresh();
+      }
+    });
     return () => {
-      for (const p of unlisteners) p.then((fn) => fn());
+      disposed = true;
+      unsubPromise.then((unsub) => {
+        if (disposed) unsub();
+      });
     };
   }, [refresh]);
 

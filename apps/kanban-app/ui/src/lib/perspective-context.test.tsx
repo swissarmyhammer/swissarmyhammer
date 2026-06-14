@@ -12,8 +12,19 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
 }));
 
+// Array-of-callbacks per event — a single last-writer-wins slot is a flake
+// factory: React 18 StrictMode double-mounts the provider's subscription
+// effect, and the two lazy `listen` registrations resolve in scheduler-
+// dependent order, so a single slot sometimes holds the DISPOSED first
+// subscription's callback (whose batcher drops events) instead of the live
+// one. Storing every callback and firing them all (`fireStoreChanged`)
+// makes delivery order-independent — disposed batchers ignore their event,
+// the live one refetches.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let listenCallbacks: Record<string, (event: { payload: any }) => void> = {};
+let listenCallbacks: Record<
+  string,
+  Array<(event: { payload: any }) => void>
+> = {};
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(
     (
@@ -21,11 +32,19 @@ vi.mock("@tauri-apps/api/event", () => ({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       cb: (e: { payload: any }) => void,
     ) => {
-      listenCallbacks[event] = cb;
+      (listenCallbacks[event] ??= []).push(cb);
       return Promise.resolve(() => {});
     },
   ),
 }));
+
+/** Fire a `store/changed` event to EVERY registered listener. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function fireStoreChanged(event: { payload: any }) {
+  for (const cb of listenCallbacks["notifications/store/changed"] ?? []) {
+    cb(event);
+  }
+}
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
@@ -62,13 +81,18 @@ vi.mock("./ui-state-context", () => ({
   useUIState: () => mockUIState,
 }));
 
+// Mock views so tests can swap the active view (mirrors the mockUIState
+// pattern above). Defaults to a single board view; individual tests mutate
+// `mockViews` to simulate sibling views of the same kind.
+let mockViews = {
+  views: [{ id: "board-1", name: "Board", kind: "board" }],
+  activeView: { id: "board-1", name: "Board", kind: "board" },
+  setActiveViewId: vi.fn(),
+  refresh: vi.fn(() => Promise.resolve()),
+};
+
 vi.mock("./views-context", () => ({
-  useViews: () => ({
-    views: [{ id: "board-1", name: "Board", kind: "board" }],
-    activeView: { id: "board-1", name: "Board", kind: "board" },
-    setActiveViewId: vi.fn(),
-    refresh: vi.fn(() => Promise.resolve()),
-  }),
+  useViews: () => mockViews,
 }));
 
 import { PerspectiveProvider, usePerspectives } from "./perspective-context";
@@ -109,6 +133,12 @@ describe("PerspectiveProvider", () => {
       clipboard_entity_type: null,
       windows: {},
       recent_boards: [],
+    };
+    mockViews = {
+      views: [{ id: "board-1", name: "Board", kind: "board" }],
+      activeView: { id: "board-1", name: "Board", kind: "board" },
+      setActiveViewId: vi.fn(),
+      refresh: vi.fn(() => Promise.resolve()),
     };
     // Default: perspective.list returns empty (wrapped in dispatch envelope)
     mockInvoke.mockResolvedValue({
@@ -263,6 +293,20 @@ describe("PerspectiveProvider", () => {
     await act(async () => {});
     expect(result.current.perspectives).toHaveLength(2);
 
+    // `subscribeStoreChanged` does a lazy `import("@tauri-apps/api/event")`
+    // followed by a `.then(listen)`. Under the full-suite scheduler this
+    // chain can need multiple microtask + setTimeout hops to resolve, so
+    // wait until the listener has actually been registered before firing
+    // the event — otherwise the optional-chain on the callback silently
+    // swallows the dispatch and the refetch never happens.
+    await act(async () => {
+      for (let i = 0; i < 50; i++) {
+        if (listenCallbacks["notifications/store/changed"]?.length) break;
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    });
+    expect(listenCallbacks["notifications/store/changed"]?.length).toBeTruthy();
+
     // Next `perspective.list` call returns p1 with an updated name —
     // simulating a field edit that was just written to disk.
     const updated = [
@@ -274,33 +318,37 @@ describe("PerspectiveProvider", () => {
       undoable: false,
     });
 
-    const initialInvokeCount = mockInvoke.mock.calls.length;
-
-    await act(async () => {
-      listenCallbacks["entity-field-changed"]?.({
-        payload: {
-          entity_type: "perspective",
-          id: "p1",
-        },
-      });
-      await new Promise((r) => setTimeout(r, 0));
-    });
-
-    // The listener triggered a refetch, so `perspective.list` was invoked
-    // once more than before the event.
-    const listCallsAfter = mockInvoke.mock.calls.filter(
-      (call) =>
-        call[0] === "dispatch_command" &&
-        (call[1] as { cmd: string })?.cmd === "perspective.list",
-    ).length;
-    const listCallsBefore = mockInvoke.mock.calls
-      .slice(0, initialInvokeCount)
-      .filter(
+    const countListCalls = () =>
+      mockInvoke.mock.calls.filter(
         (call) =>
           call[0] === "dispatch_command" &&
           (call[1] as { cmd: string })?.cmd === "perspective.list",
       ).length;
-    expect(listCallsAfter).toBe(listCallsBefore + 1);
+    const listCallsBefore = countListCalls();
+
+    await act(async () => {
+      fireStoreChanged({
+        payload: {
+          store: "perspective",
+          item: "p1",
+          op: "updated",
+          txn: null,
+          origin: "user",
+        },
+      });
+      // The refetch chain (batch flush → refresh → lazy transport import →
+      // invoke) can need multiple timer hops under the full-suite
+      // scheduler — poll, mirroring the listener-registration wait above,
+      // instead of assuming one hop suffices.
+      for (let i = 0; i < 50; i++) {
+        if (countListCalls() > listCallsBefore) break;
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    });
+
+    // The listener triggered a refetch, so `perspective.list` was invoked
+    // once more than before the event.
+    expect(countListCalls()).toBe(listCallsBefore + 1);
 
     // And the fresh state is reflected in the hook's perspectives.
     expect(result.current.perspectives.find((p) => p.id === "p1")?.name).toBe(
@@ -317,7 +365,7 @@ describe("PerspectiveProvider", () => {
     ).toBe("#bug");
   });
 
-  it("refreshes on entity-created event for perspective type", async () => {
+  it("refreshes on a store/changed created notification for perspective store", async () => {
     mockInvoke.mockResolvedValue({
       result: { perspectives: [], count: 0 },
       undoable: false,
@@ -332,8 +380,14 @@ describe("PerspectiveProvider", () => {
     });
 
     await act(async () => {
-      listenCallbacks["entity-created"]?.({
-        payload: { entity_type: "perspective", id: "p2" },
+      fireStoreChanged({
+        payload: {
+          store: "perspective",
+          item: "p2",
+          op: "created",
+          txn: null,
+          origin: "user",
+        },
       });
       await new Promise((r) => setTimeout(r, 0));
     });
@@ -342,7 +396,7 @@ describe("PerspectiveProvider", () => {
     expect(result.current.perspectives[0].name).toBe("Brand New");
   });
 
-  it("refreshes on entity-removed event for perspective type", async () => {
+  it("refreshes on a store/changed removed notification for perspective store", async () => {
     const ps = [
       makePerspective("p1", "First"),
       makePerspective("p2", "Second"),
@@ -363,8 +417,14 @@ describe("PerspectiveProvider", () => {
     });
 
     await act(async () => {
-      listenCallbacks["entity-removed"]?.({
-        payload: { entity_type: "perspective", id: "p2" },
+      fireStoreChanged({
+        payload: {
+          store: "perspective",
+          item: "p2",
+          op: "removed",
+          txn: null,
+          origin: "user",
+        },
       });
       await new Promise((r) => setTimeout(r, 0));
     });
@@ -372,7 +432,7 @@ describe("PerspectiveProvider", () => {
     expect(result.current.perspectives).toHaveLength(1);
   });
 
-  it("ignores entity events for non-perspective types", async () => {
+  it("ignores store/changed notifications for non-perspective stores", async () => {
     mockInvoke.mockResolvedValue({
       result: { perspectives: [], count: 0 },
       undoable: false,
@@ -386,17 +446,24 @@ describe("PerspectiveProvider", () => {
     const callCountBefore = mockInvoke.mock.calls.length;
 
     await act(async () => {
-      listenCallbacks["entity-field-changed"]?.({
-        payload: { entity_type: "task", id: "t1" },
+      fireStoreChanged({
+        payload: {
+          store: "task",
+          item: "t1",
+          op: "updated",
+          changes: [{ field: "title", value: "x" }],
+          txn: null,
+          origin: "user",
+        },
       });
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    // No additional invoke calls for non-perspective events
+    // No additional invoke calls for non-perspective stores
     expect(mockInvoke.mock.calls.length).toBe(callCountBefore);
   });
 
-  it("refreshes on board-changed event", async () => {
+  it("refreshes on a structural board store/changed notification", async () => {
     mockInvoke.mockResolvedValue({
       result: { perspectives: [], count: 0 },
       undoable: false,
@@ -414,7 +481,16 @@ describe("PerspectiveProvider", () => {
     });
 
     await act(async () => {
-      listenCallbacks["board-changed"]?.({ payload: undefined });
+      fireStoreChanged({
+        payload: {
+          store: "board",
+          item: "b1",
+          op: "updated",
+          changes: [{ field: "name", value: "x" }],
+          txn: null,
+          origin: "user",
+        },
+      });
       await new Promise((r) => setTimeout(r, 0));
     });
 
@@ -613,6 +689,156 @@ describe("PerspectiveProvider", () => {
   });
 
   // -----------------------------------------------------------------------
+  // useAutoCreateDefaultPerspective: guard mirrors the tab bar predicate
+  // -----------------------------------------------------------------------
+  //
+  // The tab bar filters perspectives view_id-first (`perspective-tab-bar.tsx`:
+  // a pinned perspective renders only on its pinned view; a legacy
+  // `view_id`-less perspective renders on every view of matching kind). The
+  // auto-create guard must use the SAME predicate: a view whose tab bar would
+  // render empty must trigger the `perspective.save { if_absent }` ensure,
+  // even when same-kind perspectives exist pinned to OTHER views. Owner
+  // directive: "we should never have 0 perspectives [showing]".
+
+  /** Collect every `perspective.save` dispatch recorded by the mock. */
+  function perspectiveSaveCalls() {
+    return mockInvoke.mock.calls.filter(
+      (call) =>
+        call[0] === "dispatch_command" &&
+        (call[1] as { cmd?: string })?.cmd === "perspective.save",
+    );
+  }
+
+  it("auto-creates a Default when every same-kind perspective is pinned to a different view (tab bar would be empty)", async () => {
+    // One perspective of the SAME kind exists, but it is pinned (view_id)
+    // to a sibling view — the tab bar for the active view renders empty.
+    const ps = [
+      { ...makePerspective("pA", "Default"), view_id: "board-other" },
+    ];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const calls = perspectiveSaveCalls();
+    expect(calls.length).toBe(1);
+    expect(calls[0][1]).toMatchObject({
+      cmd: "perspective.save",
+      args: { name: "Default", view: "board", if_absent: true },
+    });
+  });
+
+  it("does NOT auto-create when a perspective is pinned to the active view", async () => {
+    const ps = [{ ...makePerspective("pA", "Default"), view_id: "board-1" }];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(perspectiveSaveCalls().length).toBe(0);
+  });
+
+  it("does NOT auto-create when a legacy kind-shared perspective matches the view kind", async () => {
+    // Legacy `view_id`-less perspectives render on every view of matching
+    // kind — the bar is not empty, so no ensure dispatch.
+    const ps = [makePerspective("pA", "Default")];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(perspectiveSaveCalls().length).toBe(0);
+  });
+
+  it("auto-creates again when switching to a same-kind sibling view whose tab bar is empty", async () => {
+    // The re-fire guard is keyed per view instance, not per kind: board-1
+    // has a pinned Default (no dispatch), then the user switches to the
+    // same-kind sibling board-2 whose bar is empty — the ensure must fire.
+    const ps = [{ ...makePerspective("pA", "Default"), view_id: "board-1" }];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    const { rerender } = renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(perspectiveSaveCalls().length).toBe(0);
+
+    mockViews = {
+      ...mockViews,
+      views: [
+        { id: "board-1", name: "Board", kind: "board" },
+        { id: "board-2", name: "Board Two", kind: "board" },
+      ],
+      activeView: { id: "board-2", name: "Board Two", kind: "board" },
+    };
+    rerender();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const calls = perspectiveSaveCalls();
+    expect(calls.length).toBe(1);
+    expect(calls[0][1]).toMatchObject({
+      cmd: "perspective.save",
+      args: { name: "Default", view: "board", if_absent: true },
+    });
+  });
+
+  it("auto-creates again on an empty same-kind sibling view after firing on an empty view (re-fire ref keyed per view instance)", async () => {
+    // Regression guard for the re-fire KEYING itself (not the visibility
+    // predicate): the ensure FIRES on the empty board-1 — recording the ref
+    // key — then switching to the equally empty same-kind sibling board-2
+    // must fire a SECOND ensure. If the ref were keyed per kind instead of
+    // per view instance, the first fire would record the kind key and
+    // permanently block the sibling, leaving its tab bar empty.
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
+
+    const { rerender } = renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // The empty board-1 fires the ensure, setting the ref key.
+    expect(perspectiveSaveCalls().length).toBe(1);
+
+    mockViews = {
+      ...mockViews,
+      views: [
+        { id: "board-1", name: "Board", kind: "board" },
+        { id: "board-2", name: "Board Two", kind: "board" },
+      ],
+      activeView: { id: "board-2", name: "Board Two", kind: "board" },
+    };
+    rerender();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // board-2's bar is also empty — a second ensure must fire.
+    expect(perspectiveSaveCalls().length).toBe(2);
+  });
+
+  // -----------------------------------------------------------------------
   // Post-undo refresh behavior
   // -----------------------------------------------------------------------
   //
@@ -628,7 +854,7 @@ describe("PerspectiveProvider", () => {
   // show the reverted group/filter/sort. These tests pin that behavior so
   // any future optimization of the field-delta fast path doesn't
   // accidentally drop the undo refresh.
-  it("refetches perspective.list on entity-field-changed without fields (post-undo shape)", async () => {
+  it("refetches perspective.list on a reload-item store/changed (post-undo shape)", async () => {
     // Start with a grouped perspective — simulates the state immediately
     // after `perspective.group` succeeded but before the user invokes Undo.
     const before = [
@@ -653,15 +879,18 @@ describe("PerspectiveProvider", () => {
       undoable: false,
     });
 
-    // Fire the entity-field-changed event with no `fields` key — the exact
-    // shape the bridge emits after reload_from_disk with changed_fields=[].
-    // The listener must detect the missing fields and trigger a refresh().
+    // Fire the reload-item store/changed for the perspective store — the wire
+    // shape omits `changes` (perspectives re-fetch from canonical YAML). The
+    // subscriber must treat it as a refetch signal.
     await act(async () => {
-      listenCallbacks["entity-field-changed"]?.({
+      fireStoreChanged({
         payload: {
-          entity_type: "perspective",
-          id: "p1",
-          // no fields / no changes — simulating the post-undo wire shape
+          store: "perspective",
+          item: "p1",
+          op: "updated",
+          txn: null,
+          origin: "undo",
+          // no `changes` — reload-item semantics
         },
       });
       await new Promise((r) => setTimeout(r, 0));
@@ -673,7 +902,7 @@ describe("PerspectiveProvider", () => {
     ).toBeUndefined();
   });
 
-  it("refetches on entity-removed (post-undo-of-create shape)", async () => {
+  it("refetches on a store/changed removed (post-undo-of-create shape)", async () => {
     // Start with one perspective — simulates "just created".
     const before = [makePerspective("p1", "Ephemeral")];
     mockInvoke.mockResolvedValue({
@@ -693,8 +922,14 @@ describe("PerspectiveProvider", () => {
     });
 
     await act(async () => {
-      listenCallbacks["entity-removed"]?.({
-        payload: { entity_type: "perspective", id: "p1" },
+      fireStoreChanged({
+        payload: {
+          store: "perspective",
+          item: "p1",
+          op: "removed",
+          txn: null,
+          origin: "undo",
+        },
       });
       await new Promise((r) => setTimeout(r, 0));
     });
@@ -708,7 +943,7 @@ describe("PerspectiveProvider", () => {
   //
   // `useDispatchCommand` memoizes its returned callback with `effectiveScope =
   // focusedScope ?? treeScope` in its dep array. Every grid keystroke fires
-  // `ui.setFocus`, which rotates `FocusedScopeContext` and therefore the
+  // `app.setFocus`, which rotates `FocusedScopeContext` and therefore the
   // `dispatch` identity. If `PerspectiveProvider`'s hooks close over
   // `dispatch` in `useCallback`/`useEffect` deps, a new `dispatch` identity
   // triggers a full `perspective.list` refetch — and churns the companion
@@ -735,7 +970,7 @@ describe("PerspectiveProvider", () => {
   /**
    * Module-scoped setter captured during render so individual tests can
    * toggle the focused scope value from outside React. Matches how
-   * EntityFocusProvider flips `FocusedScopeContext` on every `ui.setFocus`.
+   * EntityFocusProvider flips `FocusedScopeContext` on every `app.setFocus`.
    */
   let setFocusedScopeExternal: ((next: CommandScope | null) => void) | null =
     null;
@@ -784,7 +1019,7 @@ describe("PerspectiveProvider", () => {
     expect(listCallsBefore).toBe(1);
 
     // Simulate a sequence of focus changes — exactly what arrow-key navigation
-    // produces in production: each `ui.setFocus` rotates FocusedScopeContext.
+    // produces in production: each `app.setFocus` rotates FocusedScopeContext.
     await act(async () => {
       setFocusedScopeExternal?.(makeFocusedScope("task:t1"));
       await new Promise((r) => setTimeout(r, 0));

@@ -3,7 +3,7 @@
  * entity-aware focus point most call sites use.
  *
  * `<FocusScope>` is a **pure spatial primitive**. It does NOT know about
- * inspectable entities and does NOT dispatch `ui.inspect`. Inspector
+ * inspectable entities and does NOT dispatch `app.inspect`. Inspector
  * dispatch lives in `<Inspectable>` — see `inspectable.tsx`.
  *
  * # Path-monikers identity model
@@ -258,6 +258,7 @@ export function FocusScope({
             navOverride={navOverride}
             showFocus={showFocus}
             isDirectFocus={isDirectFocus}
+            isFocused={isFocused}
             handleEvents={handleEvents}
             parentZone={parentZone}
             ref={externalRef}
@@ -285,6 +286,17 @@ interface SpatialFocusScopeBodyProps extends Omit<
   navOverride?: FocusOverrides;
   showFocus: boolean;
   isDirectFocus: boolean;
+  /**
+   * Persistent focus truth from the entity-focus store
+   * (`useOptionalIsDirectFocus(fq)`), ungated by `showFocus`. Unlike the
+   * transient `useFocusClaim` `useState` (which resets to `false` on every
+   * remount and is only updated by kernel `focus-changed` *transitions*),
+   * this is recomputed from the store snapshot on every mount — so a scope
+   * that remounts while it is the focused FQM (virtualizer recycle, board
+   * data re-render) still reports focused. Unioned with the claim below so
+   * the visible indicator survives remount instead of silently dropping.
+   */
+  isFocused: boolean;
   handleEvents: boolean;
   /**
    * FQM of the enclosing `<FocusScope>` — read in the OUTER component
@@ -310,6 +322,7 @@ function SpatialFocusScopeBody({
   navOverride,
   showFocus,
   isDirectFocus,
+  isFocused,
   handleEvents,
   parentZone,
   children,
@@ -342,6 +355,27 @@ function SpatialFocusScopeBody({
   const [focused, setFocused] = useState(false);
   useFocusClaim(fq, setFocused);
 
+  // The visible focus signal is the UNION of two sources, because each
+  // covers a gap the other has:
+  //
+  //   - `focused` (transient `useFocusClaim` `useState`): updated only on
+  //     kernel `focus-changed` *transitions*. It is the sole signal in
+  //     test harnesses that mount `<FocusScope>` without an
+  //     `<EntityFocusProvider>`. But it resets to `false` on every remount
+  //     and is never re-derived, so a scope that remounts while focused
+  //     (virtualizer recycle, board data re-render) loses its indicator.
+  //
+  //   - `isFocused` (persistent entity-focus store): recomputed from the
+  //     store snapshot on every mount, so it survives remount — but is
+  //     `false` in the no-provider test harnesses.
+  //
+  // Unioning them means the indicator is visible whenever the kernel
+  // considers this FQM focused, regardless of how many times the board
+  // virtualizer has recycled this scope since the last `focus-changed`.
+  // This is the fix for "clicking a board card / toolbar shows no focus
+  // while the inspector (which never virtualizes) does."
+  const effectiveFocused = focused || isFocused;
+
   // Register this scope with the per-layer registry provided by
   // `<FocusLayer>`. Snapshots built from this registry read rects fresh
   // from the DOM at decision time. `navOverride` is a dep because the
@@ -372,12 +406,13 @@ function SpatialFocusScopeBody({
       parentZone,
       navOverride,
       segment,
+      showFocus,
       lastKnownRect: initialRect,
     });
     return () => {
       layerRegistry.delete(fq);
     };
-  }, [layerRegistry, fq, segment, parentZone, navOverride]);
+  }, [layerRegistry, fq, segment, parentZone, navOverride, showFocus]);
 
   // Capture `lastKnownRect` synchronously just before unmount. React
   // clears bound `ref` callbacks during the commit phase before
@@ -481,13 +516,14 @@ function SpatialFocusScopeBody({
         ref={setRef}
         data-moniker={fq}
         data-segment={segment}
-        data-focused={focused || undefined}
+        data-focusable={showFocus || undefined}
+        data-focused={effectiveFocused || undefined}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
         {...restWithoutClassName}
         className={mergedClassName}
       >
-        {showFocus && <FocusIndicator focused={focused} />}
+        {showFocus && <FocusIndicator focused={effectiveFocused} />}
         {debugEnabled && (
           <FocusDebugOverlay kind="scope" label={segment} hostRef={ref} />
         )}

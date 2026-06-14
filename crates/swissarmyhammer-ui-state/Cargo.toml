@@ -1,0 +1,24 @@
+[package]
+name = "swissarmyhammer-ui-state"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "UIState struct and the in-process MCP server (ui_state) that exposes its mutations"
+
+[dependencies]
+rmcp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+swissarmyhammer-operations = { workspace = true }
+swissarmyhammer-operations-macros = { workspace = true }
+swissarmyhammer-plugin = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }

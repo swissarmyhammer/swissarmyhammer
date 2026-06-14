@@ -132,7 +132,7 @@ describe("useUIState", () => {
 
   // ─── Discriminator-aware listener tests ──────────────────────────────
   //
-  // These guard the per-keystroke render-storm fix: `ui.setFocus` returns
+  // These guard the per-keystroke render-storm fix: `app.setFocus` returns
   // `UIStateChange::ScopeChain(...)` on every arrow key, which the backend
   // emits as `{ kind: "scope_chain", ... }`. The `UIStateProvider` must
   // ignore that kind so `useUIState()` stays reference-stable — otherwise

@@ -1,7 +1,7 @@
 //! Integration tests for `SpatialState::navigate`.
 //!
 //! Each test stands up a registry layer + snapshot and asserts that
-//! `state.navigate(...)` lands on the expected target (or short-circuits
+//! `state.navigate(..., None)` lands on the expected target (or short-circuits
 //! to `None` for stay-put / torn-state outcomes).
 
 use std::collections::HashMap;
@@ -43,6 +43,7 @@ fn snap(fq_str: &str, parent_zone: Option<&str>, r: Rect) -> SnapshotScope {
         rect: r,
         parent_zone: parent_zone.map(fq),
         nav_override: HashMap::new(),
+        focusable: true,
     }
 }
 
@@ -62,10 +63,10 @@ fn nav_to(
     reg.push_layer(make_layer());
     let mut state = SpatialState::new();
     state
-        .focus(&mut reg, snapshot, from.clone())
+        .focus(&mut reg, snapshot, from.clone(), None)
         .expect("focus seed");
     state
-        .navigate(&mut reg, snapshot, from, direction)
+        .navigate(&mut reg, snapshot, from, direction, None)
         .and_then(|e| e.next_fq)
 }
 

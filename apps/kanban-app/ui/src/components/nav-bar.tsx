@@ -64,7 +64,7 @@ export function NavBar() {
   const openBoards = useOpenBoards();
   const activeBoardPath = useActiveBoardPath();
   const onSwitchBoard = useHandleSwitchBoard();
-  const dispatchInspect = useDispatchCommand("ui.inspect");
+  const dispatchInspect = useDispatchCommand("app.inspect");
   const dispatchSearch = useDispatchCommand("app.search");
   const { getFieldDef } = useSchema();
   const percentFieldDef = getFieldDef("board", "percent_complete");

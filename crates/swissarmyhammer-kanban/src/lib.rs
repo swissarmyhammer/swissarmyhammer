@@ -62,6 +62,7 @@
 
 pub mod auto_color;
 pub mod clipboard;
+pub mod command_seam;
 mod context;
 pub mod cross_board;
 pub mod defaults;
@@ -69,6 +70,7 @@ pub mod derive_handlers;
 pub mod dispatch;
 pub mod dynamic_sources;
 mod error;
+pub mod notify_fanin;
 pub mod parse;
 mod processor;
 pub mod tag_parser;
@@ -81,6 +83,15 @@ pub mod perspective;
 // Domain command trait implementations
 pub mod commands;
 
+// Generic Command trait, registry, and dispatch context — inlined into
+// this crate during the Stage 4 cut-over after the standalone
+// `swissarmyhammer-commands` crate was deleted. The CommandService
+// (registered from the 8 builtin command plugins at app startup) is now
+// the sole source of command metadata; the YAML-driven `CommandsRegistry`
+// only survives as a snapshot the app populates from
+// `CommandService::list_command`.
+pub mod commands_core;
+
 // Command modules
 pub mod actor;
 pub mod attachment;
@@ -91,6 +102,7 @@ pub mod focus;
 pub mod project;
 pub mod schema;
 pub mod scope_commands;
+pub mod substrate;
 pub mod tag;
 pub mod task;
 pub mod virtual_tags;
@@ -106,52 +118,25 @@ pub use derive_handlers::kanban_derive_registry;
 pub use dynamic_sources::board_display_name;
 pub use error::{KanbanError, Result};
 pub use processor::KanbanOperationProcessor;
+pub use substrate::wire_store_substrate;
 
 // Re-export entity types for dynamic entity access
 pub use swissarmyhammer_entity::changelog::{ChangeEntry, FieldChange};
 pub use swissarmyhammer_entity::Entity;
 pub use swissarmyhammer_entity::EntityContext;
 
-/// Builtin command YAML files embedded at compile time, kanban-specific.
+/// Returns the kanban-specific builtin command YAML sources embedded at
+/// compile time.
 ///
-/// The `swissarmyhammer-commands` crate is consumer-agnostic and only ships
-/// generic commands (`app`, `settings`, `entity`, `ui`, `drag`). Kanban-specific
-/// commands (`task`, `column`, `tag`, `attachment`, `perspective`, `file`) live
-/// under `swissarmyhammer-kanban/builtin/commands/` and are contributed to the
-/// composed command registry via [`builtin_yaml_sources`]. The app layer
-/// (kanban-app, kanban-cli, etc.) decides which contributors to compose and
-/// in what order via `swissarmyhammer_commands::compose_registry!` — later
-/// sources override earlier by id with partial merge.
-static BUILTIN_COMMANDS: include_dir::Dir =
-    include_dir::include_dir!("$CARGO_MANIFEST_DIR/builtin/commands");
-
-/// Returns the kanban-specific builtin command YAML sources embedded at compile time.
-///
-/// Enumerates every `*.yaml` file directly under `builtin/commands/` via
-/// `include_dir!` — adding a new kanban-specific command file requires no Rust
-/// changes. The source name is the file stem (e.g. `task.yaml` → `"task"`).
-///
-/// The loader enforces a flat layout: only files whose parent path is the
-/// root of the embedded directory are returned. `include_dir!` walks
-/// recursively, but keys here are basenames only, so a nested
-/// `commands/sub/foo.yaml` would silently shadow `commands/foo.yaml` on
-/// `HashMap` insert downstream. Filtering to the root prevents that
-/// class of bug at the loader.
-///
-/// This is this crate's contribution function — every contributor crate
-/// exposes the same shape so the app layer can compose them with
-/// [`swissarmyhammer_commands::compose_registry!`].
+/// Always empty as of the Stage 4 cut-over: the 7 kanban YAMLs under
+/// `builtin/commands/` were deleted because `CommandService` (the new
+/// sole dispatch path, fed by the 8 builtin command plugins at app
+/// startup) is the source of every command's metadata. The function is
+/// retained so legacy callers — and the `compose_yaml_sources!` macro —
+/// continue to compile while the `CommandsRegistry` is repopulated from
+/// the `list command` MCP op at app startup.
 pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
-    BUILTIN_COMMANDS
-        .files()
-        .filter(|file| file.path().extension().and_then(|e| e.to_str()) == Some("yaml"))
-        .filter(|file| file.path().parent() == Some(std::path::Path::new("")))
-        .filter_map(|file| {
-            let name = file.path().file_stem()?.to_str()?;
-            let content = file.contents_utf8()?;
-            Some((name, content))
-        })
-        .collect()
+    Vec::new()
 }
 
 /// File name for the UIState YAML config, used under every consumer's
@@ -179,7 +164,7 @@ pub(crate) fn ui_state_xdg_config_path(app_subdir: &str) -> std::path::PathBuf {
         })
 }
 
-/// Load a [`swissarmyhammer_commands::UIState`] from the per-consumer
+/// Load a [`swissarmyhammer_ui_state::UIState`] from the per-consumer
 /// XDG config file, or return defaults if the file is missing or
 /// malformed.
 ///
@@ -195,10 +180,10 @@ pub(crate) fn ui_state_xdg_config_path(app_subdir: &str) -> std::path::PathBuf {
 /// the others. Subsequent mutations auto-save to the resolved path
 /// just as with [`UIState::load`].
 ///
-/// [`UIState`]: swissarmyhammer_commands::UIState
-/// [`UIState::load`]: swissarmyhammer_commands::UIState::load
-pub fn default_ui_state(app_subdir: &str) -> swissarmyhammer_commands::UIState {
-    swissarmyhammer_commands::UIState::load(ui_state_xdg_config_path(app_subdir))
+/// [`UIState`]: swissarmyhammer_ui_state::UIState
+/// [`UIState::load`]: swissarmyhammer_ui_state::UIState::load
+pub fn default_ui_state(app_subdir: &str) -> swissarmyhammer_ui_state::UIState {
+    swissarmyhammer_ui_state::UIState::load(ui_state_xdg_config_path(app_subdir))
 }
 
 // Re-export commonly used types
@@ -221,34 +206,14 @@ pub mod test_support;
 mod builtin_commands_tests {
     use super::builtin_yaml_sources;
 
-    /// With no YAML files in `builtin/commands/`, the function returns an
-    /// empty vec. This sanity-checks the `include_dir!` + flat-layout filter
-    /// before any kanban-specific YAML has been moved in.
-    ///
-    /// Once YAML files land under `swissarmyhammer-kanban/builtin/commands/`,
-    /// this test will need to be updated — the richer contents-coverage test
-    /// lives in `tests/builtin_commands.rs`.
+    /// Stage 4 of the kanban cut-over deleted the 7 builtin command YAMLs
+    /// under `swissarmyhammer-kanban/builtin/commands/` because
+    /// `CommandService` (fed by the 8 builtin command plugins at app
+    /// startup) is now the sole source of command metadata. This test
+    /// pins that decision so a future regression cannot silently re-embed
+    /// YAML sources here and reintroduce the two-source confusion.
     #[test]
-    fn builtin_yaml_sources_has_kanban_specific_files() {
-        let sources = builtin_yaml_sources();
-        // The kanban-specific YAML files live here — the original six plus
-        // `view`, `ai` (the AI panel command scope), and `board` (the
-        // `update.board` dispatch-layer wrapper).
-        let names: Vec<&str> = sources.iter().map(|(n, _)| *n).collect();
-        for expected in [
-            "task",
-            "column",
-            "tag",
-            "attachment",
-            "perspective",
-            "file",
-            "ai",
-            "board",
-        ] {
-            assert!(
-                names.contains(&expected),
-                "kanban builtin commands missing `{expected}.yaml`: {names:?}",
-            );
-        }
+    fn builtin_yaml_sources_is_empty_after_cutover() {
+        assert!(builtin_yaml_sources().is_empty());
     }
 }

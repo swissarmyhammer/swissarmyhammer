@@ -62,6 +62,7 @@ pub mod file_watcher;
 pub mod host;
 pub mod notify_types;
 pub mod plan_notifications;
+pub mod plugin_bridge;
 pub mod progress;
 pub mod responses;
 pub mod server;

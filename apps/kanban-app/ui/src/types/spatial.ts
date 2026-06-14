@@ -306,6 +306,15 @@ export interface SnapshotScope {
   readonly parent_zone: FullyQualifiedMoniker | null;
   /** Per-direction overrides; `{}` means "no overrides". */
   readonly nav_override: FocusOverrides;
+  /**
+   * Whether this scope is a real focus *target* (mirrors `<FocusScope
+   * showFocus>`). `false` marks a structural zone (board well, perspective
+   * bar) that the kernel skips as a cardinal-nav candidate so a move lands
+   * on the focusable child beneath rather than the indicator-less zone.
+   * Mirrors `SnapshotScope::focusable` on the Rust side (serde-defaults to
+   * `true` there, so omitting it is back-compatible).
+   */
+  readonly focusable: boolean;
 }
 
 /**

@@ -4,17 +4,70 @@
 //! [`ErasedStore`] instances. It dispatches undo/redo to the correct store
 //! and aggregates change events from all stores.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use tokio::sync::RwLock;
+use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, RwLock};
+use tokio::task;
 use tracing;
 
+use crate::changelog::ChangelogEntry;
 use crate::erased::ErasedStore;
 use crate::error::{Result, StoreError};
 use crate::event::ChangeEvent;
 use crate::id::{StoredItemId, UndoEntryId};
+use crate::provenance::EventProvenance;
 use crate::stack::UndoStack;
+
+/// The ambient state pinned to a tokio task while a transaction is open.
+///
+/// Carries both the undo-group `id` that every `push` from this task stamps
+/// onto its undo entries AND the `origin` classification that forward
+/// data-change events emitted on this task should report. Holding the origin
+/// here — rather than just the id — is what lets a forward entity write read
+/// back the command's full provenance (`txn` + `origin`) at emit time,
+/// closing the correlation gap where forward writes hardcoded
+/// `origin: "user"`.
+#[derive(Debug, Clone)]
+struct AmbientTxn {
+    /// The undo-group id shared by every entry pushed under this transaction.
+    id: UndoEntryId,
+    /// The actor classification for changes made under this transaction
+    /// (`"user"`, `"agent:<id>"`, …). `None` means "no explicit origin was
+    /// set" — `current_provenance` then falls back to `"user"`, preserving
+    /// the legacy behavior for callers (the `store` MCP `BeginTransaction`
+    /// verb) that open a transaction without naming a caller.
+    origin: Option<String>,
+}
+
+/// Key used to scope ambient transaction state by tokio task.
+///
+/// Wraps `Option<task::Id>` so non-tokio callers (sync code, or a test
+/// not running inside `tokio::test`) share a single fallback slot
+/// rather than panicking. Inside an async task the variant carries the
+/// real task id, and concurrent tasks get distinct keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum AmbientKey {
+    Task(task::Id),
+    NoTask,
+}
+
+impl AmbientKey {
+    /// Construct the key for the calling site.
+    ///
+    /// Uses `tokio::task::try_id()` so a non-async caller falls back to
+    /// the [`AmbientKey::NoTask`] variant instead of panicking. Inside
+    /// `#[tokio::test]` and any spawned task this returns
+    /// [`AmbientKey::Task`] with the real task id.
+    fn current() -> Self {
+        match task::try_id() {
+            Some(id) => AmbientKey::Task(id),
+            None => AmbientKey::NoTask,
+        }
+    }
+}
 
 /// The concrete target an undo or redo touched.
 ///
@@ -51,45 +104,128 @@ pub struct UndoOutcome {
     pub items: Vec<(String, StoredItemId)>,
 }
 
+/// Default capacity for the undo-stack-state broadcast channel.
+///
+/// Stack-state events fire once per stack mutation (`push`/`undo`/`redo`),
+/// which is human-paced, so a small buffer comfortably absorbs a burst of a
+/// multi-write command's pushes without lapping a momentarily-behind UI
+/// subscriber. A subscriber that still falls behind observes `Lagged` and
+/// resyncs by reading `can_undo`/`can_redo` directly — it never blocks the
+/// producer.
+const STACK_STATE_CHANNEL_CAPACITY: usize = 64;
+
+/// A snapshot of the undo-stack's control state.
+///
+/// Carries everything a UI needs to render the Undo/Redo controls: whether
+/// each action is currently possible and the human-readable label of the
+/// entry at the top of each stack. Broadcast on every stack mutation
+/// (`push`, `undo`, `redo`) so the controls stay in sync without polling.
+///
+/// This is the one event the data-change path genuinely cannot carry: it is
+/// control state, not item data, and a plain `push` after an undo flips
+/// `can_redo` to false (the redo tail is discarded) with no item event at all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StackState {
+    /// Whether there is at least one entry that can be undone.
+    pub can_undo: bool,
+    /// Whether there is at least one entry that can be redone.
+    pub can_redo: bool,
+    /// Label of the entry that would be undone next, if any.
+    pub undo_label: Option<String>,
+    /// Label of the entry that would be redone next, if any.
+    pub redo_label: Option<String>,
+}
+
 /// Central coordinator for multiple file-backed stores.
 ///
 /// Manages a shared undo/redo stack and dispatches operations to the
 /// correct store based on changelog entry ownership.
+///
+/// # Substrate invariant
+///
+/// **There is exactly one `Arc<StoreContext>` per app, and therefore one
+/// `undo_stack.yaml` per board.** Every [`TrackedStore`](crate::TrackedStore)
+/// (entity-type stores, the perspective store, the view store, …) must
+/// register into the *same* `StoreContext` via `Arc::clone` of the one the
+/// app constructed at board-open time. Sharing the `Arc` is how undo/redo
+/// reverts across heterogeneous stores on a single LIFO stack.
+///
+/// Never construct a second `StoreContext` for the same board — that would
+/// fork the undo stack: writes to one set of stores would land on one
+/// stack, writes to the other on a second stack, and an `undo` would
+/// silently revert only the half the caller happened to dispatch to.
+///
+/// In the kanban app this invariant is set up in `BoardHandle::open_with`
+/// (`apps/kanban-app/src/state.rs`) and pinned by the substrate guard test
+/// at `apps/kanban-app/tests/substrate_guard.rs`, which `Arc::ptr_eq`-
+/// compares the context each subsystem holds against the one the board
+/// owns. If anything splits the substrate, that test fails loudly.
 pub struct StoreContext {
     stack: RwLock<UndoStack>,
     stores: RwLock<Vec<Arc<dyn ErasedStore>>>,
     root: PathBuf,
-    /// Active undo-group correlator. While set, every `push` stamps the
-    /// new entry with this group id so a later `undo()` unwinds the whole
-    /// run atomically. Set/cleared by [`begin_undo_group`] / [`end_undo_group`].
-    current_group: tokio::sync::Mutex<Option<UndoEntryId>>,
+    /// Per-task ambient transaction slots.
+    ///
+    /// Each entry maps a tokio task id to the active `UndoEntryId` that
+    /// every `push` from that task should stamp onto its undo-stack
+    /// entries. Different tokio tasks running concurrent transactions
+    /// each have their own slot, so they cannot interfere — the
+    /// kanban-app's command pipeline pins its transaction to the task
+    /// that opened it.
+    ///
+    /// The slot is set by [`begin_undo_group`] / [`with_transaction`]
+    /// and cleared by the returned guard or `with_transaction`'s
+    /// scope-end. When no slot exists for the current task, `push`
+    /// records the entry without a group id (the legacy per-write
+    /// behavior).
+    ///
+    /// `Mutex` is the right primitive here — every mutation is short
+    /// and synchronous (HashMap insert / remove); we never hold the
+    /// lock across an `.await`.
+    ///
+    /// Each slot now carries an [`AmbientTxn`] (id + origin) rather than a
+    /// bare id, so a forward write running on the transaction's task can
+    /// recover the command's full provenance via
+    /// [`current_provenance`](Self::current_provenance).
+    ambient_txn: Mutex<HashMap<AmbientKey, AmbientTxn>>,
+    /// Broadcast channel for undo-stack-state snapshots.
+    ///
+    /// A [`StackState`] is published here after every stack mutation
+    /// (`push`/`undo`/`redo`), so a UI subscriber can keep the Undo/Redo
+    /// controls in sync. This is the one event the store may emit directly:
+    /// it owns the [`UndoStack`] and the event carries no foreign types, so
+    /// the in-layer broadcast preserves the layering (no `-entity`/`-views`
+    /// dependency, no item-event emission from here).
+    stack_state_tx: broadcast::Sender<StackState>,
 }
 
 /// RAII guard that ends the active undo group when dropped.
 ///
 /// Returned by [`StoreContext::begin_undo_group`]. Dropping the guard
-/// clears the context's active group state so subsequent writes are
-/// pushed as independent undo entries again.
+/// clears the per-task ambient transaction id so subsequent writes
+/// from that task are pushed as independent undo entries again.
 pub struct UndoGroupGuard<'a> {
     ctx: &'a StoreContext,
+    /// The ambient-slot key this guard ends. Captured at
+    /// `begin_undo_group` time so a guard dropped from a different task
+    /// still clears the slot it actually set.
+    owner: Option<AmbientKey>,
 }
 
 impl<'a> UndoGroupGuard<'a> {
     /// Explicitly end the group. Equivalent to dropping the guard.
-    pub async fn end(self) {
-        self.ctx.end_undo_group().await;
+    pub async fn end(mut self) {
+        if let Some(id) = self.owner.take() {
+            self.ctx.clear_ambient_for(id);
+        }
         std::mem::forget(self);
     }
 }
 
 impl<'a> Drop for UndoGroupGuard<'a> {
     fn drop(&mut self) {
-        // Best-effort sync clear when the guard is dropped without an
-        // explicit `.end().await`. The mutex contention here is bounded
-        // — only the command that opened the group holds it — so a
-        // blocking lock attempt is safe.
-        if let Ok(mut g) = self.ctx.current_group.try_lock() {
-            *g = None;
+        if let Some(id) = self.owner.take() {
+            self.ctx.clear_ambient_for(id);
         }
     }
 }
@@ -107,37 +243,211 @@ impl StoreContext {
                 UndoStack::default()
             }
         };
+        let (stack_state_tx, _) = broadcast::channel(STACK_STATE_CHANNEL_CAPACITY);
         Self {
             stack: RwLock::new(stack),
             stores: RwLock::new(Vec::new()),
             root,
-            current_group: tokio::sync::Mutex::new(None),
+            ambient_txn: Mutex::new(HashMap::new()),
+            stack_state_tx,
         }
     }
 
-    /// Begin a multi-write undo group.
+    /// Subscribe to undo-stack-state snapshots.
     ///
-    /// Every `push` call between this and the returned guard going out
-    /// of scope (or `.end()` being called) is stamped with a shared
-    /// `group_id`. A single `undo()` then reverses every entry in the
-    /// group as one step.
+    /// Returns a receiver that yields a [`StackState`] after every stack
+    /// mutation (`push`/`undo`/`redo`). The wiring layer normalizes these
+    /// into `notifications/store/undo_changed` for MCP clients; tests
+    /// subscribe directly. Missed events surface as `RecvError::Lagged`; the
+    /// caller resyncs by reading the latest snapshot.
+    pub fn subscribe_stack_state(&self) -> broadcast::Receiver<StackState> {
+        self.stack_state_tx.subscribe()
+    }
+
+    /// Snapshot the current stack state and broadcast it.
     ///
-    /// Calling this while a group is already open returns a guard that
-    /// reuses the current group id — nested calls do not create
-    /// sub-groups.
+    /// Reads `can_undo`/`can_redo` and peeks the labels of the entries at the
+    /// top of each side of the pointer, then publishes a [`StackState`].
+    /// Called after every mutation of the stack. A send error (no
+    /// subscribers) is ignored — the steady state before any UI subscribes.
+    ///
+    /// Takes the already-held write lock guard so the snapshot reflects the
+    /// exact post-mutation state without a second lock acquisition or a
+    /// TOCTOU window against a concurrent mutation.
+    fn broadcast_stack_state(&self, stack: &UndoStack) {
+        let state = StackState {
+            can_undo: stack.can_undo(),
+            can_redo: stack.can_redo(),
+            undo_label: stack.undo_target().map(|e| e.label.clone()),
+            redo_label: stack.redo_target().map(|e| e.label.clone()),
+        };
+        let _ = self.stack_state_tx.send(state);
+    }
+
+    /// Begin a multi-write undo group bound to the current tokio task.
+    ///
+    /// Every `push` call from this task — between this point and the
+    /// returned guard going out of scope (or `.end()` being called) —
+    /// is stamped with a shared `group_id`. A single `undo()` then
+    /// reverses every entry in the group as one step.
+    ///
+    /// Calling this while a group is already open on the same task
+    /// returns a guard that reuses the current group id; the prior
+    /// (outer) guard remains responsible for clearing the slot, so
+    /// nested calls do not create sub-groups.
+    ///
+    /// Different tokio tasks each get their own ambient slot, so two
+    /// transactions opened concurrently from different tasks do not
+    /// interfere — each task's `push` reads only its own task's slot.
     pub async fn begin_undo_group(&self) -> UndoGroupGuard<'_> {
-        let mut g = self.current_group.lock().await;
-        if g.is_none() {
-            *g = Some(UndoEntryId::new());
+        let key = AmbientKey::current();
+        let mut slots = self.ambient_txn.lock().expect("ambient_txn poisoned");
+        let already_open = slots.contains_key(&key);
+        if !already_open {
+            slots.insert(
+                key,
+                AmbientTxn {
+                    id: UndoEntryId::new(),
+                    origin: None,
+                },
+            );
         }
-        UndoGroupGuard { ctx: self }
+        UndoGroupGuard {
+            ctx: self,
+            // Only the outer call owns clearing the slot; nested calls
+            // leave `owner` as `None` so their guard drop is a no-op.
+            owner: if already_open { None } else { Some(key) },
+        }
     }
 
-    /// Clear the active undo group. Called by [`UndoGroupGuard::end`]
-    /// and the guard's `Drop` impl; rarely needed directly.
+    /// Begin a transaction and return the freshly allocated group id.
+    ///
+    /// This is the public entry point used by the `store` MCP server's
+    /// `BeginTransaction` verb. The ambient slot for the current task
+    /// is set to the returned id, so every subsequent `push` from this
+    /// task (until [`end_transaction`] or task exit) is stamped with
+    /// it. Like [`begin_undo_group`], the slot is per-task — concurrent
+    /// transactions opened from different tokio tasks do not interfere.
+    ///
+    /// Unlike [`begin_undo_group`], this does not return an RAII guard
+    /// — the caller is responsible for invoking [`end_transaction`]
+    /// with the returned id when the transaction is finished. This
+    /// shape mirrors the MCP wire protocol, where `BeginTransaction`
+    /// and `EndTransaction` are two separate calls.
+    ///
+    /// Calling this while a group is already open on the same task
+    /// returns the existing id and does not allocate a new one, so
+    /// nested calls do not create sub-groups.
+    pub fn begin_transaction(&self) -> UndoEntryId {
+        self.begin_transaction_with_origin(None)
+    }
+
+    /// Like [`begin_transaction`], but also records the `origin` that forward
+    /// data-change events emitted on this task should report.
+    ///
+    /// This is the entry point the command service's transaction seam uses:
+    /// it opens the ambient transaction *and* stamps the caller-derived
+    /// origin (`"user"`, `"agent:<id>"`, …) so a forward entity write made by
+    /// the command's callback — running on this same tokio task — reads back
+    /// the full provenance (`txn` + `origin`) via
+    /// [`current_provenance`](Self::current_provenance) at emit time, instead
+    /// of hardcoding `origin: "user"`.
+    ///
+    /// `origin: None` is equivalent to [`begin_transaction`] — the slot
+    /// records no explicit origin and `current_provenance` falls back to
+    /// `"user"`. As with [`begin_transaction`], calling this while a
+    /// transaction is already open on the same task returns the existing id
+    /// and leaves the already-recorded origin untouched (no sub-grouping, no
+    /// origin clobber).
+    pub fn begin_transaction_with_origin(&self, origin: Option<String>) -> UndoEntryId {
+        let key = AmbientKey::current();
+        let mut slots = self.ambient_txn.lock().expect("ambient_txn poisoned");
+        slots
+            .entry(key)
+            .or_insert_with(|| AmbientTxn {
+                id: UndoEntryId::new(),
+                origin,
+            })
+            .id
+    }
+
+    /// End the transaction with the given id on the current task.
+    ///
+    /// Clears the ambient slot only when the id matches the slot's
+    /// current value — guarding against a stale end on a recycled
+    /// task id or a confused caller. The MCP `EndTransaction` verb
+    /// dispatches here; legacy `begin_undo_group` users do not need
+    /// this method because their guard handles cleanup.
+    pub fn end_transaction(&self, id: UndoEntryId) {
+        let key = AmbientKey::current();
+        let mut slots = self.ambient_txn.lock().expect("ambient_txn poisoned");
+        if matches!(slots.get(&key), Some(current) if current.id == id) {
+            slots.remove(&key);
+        }
+    }
+
+    /// Clear the active undo group for the current task.
+    ///
+    /// Kept for backwards compatibility with callers that used to pair
+    /// [`begin_undo_group`] with an explicit `end_undo_group()`.
+    /// Equivalent to dropping the guard returned by `begin_undo_group`.
     pub async fn end_undo_group(&self) {
-        let mut g = self.current_group.lock().await;
-        *g = None;
+        self.clear_ambient_for(AmbientKey::current());
+    }
+
+    /// Drop the ambient slot for a specific key.
+    ///
+    /// Internal helper used by both [`end_undo_group`] and
+    /// [`UndoGroupGuard::Drop`].
+    fn clear_ambient_for(&self, key: AmbientKey) {
+        if let Ok(mut slots) = self.ambient_txn.lock() {
+            slots.remove(&key);
+        }
+    }
+
+    /// Return the active ambient transaction id for the current task,
+    /// if any. Exposed primarily for tests that need to probe the slot;
+    /// production code reads it through [`push`].
+    pub fn current_transaction(&self) -> Option<UndoEntryId> {
+        let key = AmbientKey::current();
+        self.ambient_txn
+            .lock()
+            .expect("ambient_txn poisoned")
+            .get(&key)
+            .map(|t| t.id)
+    }
+
+    /// Return the provenance a forward data-change event made on the current
+    /// task should carry.
+    ///
+    /// When a transaction is open on this task (via
+    /// [`begin_transaction_with_origin`](Self::begin_transaction_with_origin)
+    /// — the command service's seam — or [`begin_transaction`] /
+    /// [`begin_undo_group`]), the returned [`EventProvenance`] carries that
+    /// transaction's id as `txn` and its recorded `origin` (falling back to
+    /// `"user"` when none was set). When **no** transaction is open (a direct
+    /// API write, a test, or an agent write outside a command), it returns
+    /// [`EventProvenance::user`] — `txn: None`, `origin: "user"` — preserving
+    /// the pre-existing forward-write behavior.
+    ///
+    /// This is the read side of the forward-edit correlation fix: the entity
+    /// cache calls it at emit time so a command's N forward writes all carry
+    /// the command's `txn`, matching its `commands/executed` event. The
+    /// per-task ambient slot is why this works without threading the
+    /// provenance through every call: the command handler opens the
+    /// transaction and `.await`s its callback inline on the same task, so the
+    /// callback's writes — and the cache emits they trigger — observe the
+    /// slot the handler set.
+    pub fn current_provenance(&self) -> EventProvenance {
+        let key = AmbientKey::current();
+        let slots = self.ambient_txn.lock().expect("ambient_txn poisoned");
+        match slots.get(&key) {
+            Some(txn) => EventProvenance::new(
+                Some(txn.id.to_string()),
+                txn.origin.clone().unwrap_or_else(|| "user".to_string()),
+            ),
+            None => EventProvenance::user(),
+        }
     }
 
     /// Register a store with this context.
@@ -150,16 +460,22 @@ impl StoreContext {
     /// The `item_id` records which item's per-item changelog contains this
     /// entry, so that undo/redo can look it up without scanning all files.
     ///
-    /// If a group is currently open via [`begin_undo_group`], the entry is
-    /// stamped with the active `group_id` so it will be undone/redone
-    /// together with its siblings.
+    /// If a transaction is currently open on the calling tokio task via
+    /// [`begin_undo_group`] or [`begin_transaction`], the entry is stamped
+    /// with that group id so it will be undone/redone together with its
+    /// siblings.
     pub async fn push(&self, id: UndoEntryId, label: String, item_id: StoredItemId) {
-        let group_id = *self.current_group.lock().await;
+        let group_id = self.current_transaction();
         let mut stack = self.stack.write().await;
         stack.push_with_group(id, label, item_id, group_id);
         if let Err(e) = stack.save(&self.root.join("undo_stack.yaml")) {
             tracing::warn!(error = %e, "failed to save undo stack");
         }
+        // A push truncates the redo tail (UndoStack::push discards entries at
+        // or after the pointer), so `can_redo` flips to false here with no
+        // undo/redo call — a plain edit after an undo. Broadcasting on push is
+        // what keeps the Redo control from staying wrongly enabled.
+        self.broadcast_stack_state(&stack);
     }
 
     /// Undo the most recent operation.
@@ -217,6 +533,7 @@ impl StoreContext {
         if let Err(e) = stack.save(&self.root.join("undo_stack.yaml")) {
             tracing::warn!(error = %e, "failed to save undo stack");
         }
+        self.broadcast_stack_state(&stack);
 
         // `items` is non-empty here — `group_undo_range` returned `Some`.
         let (store_name, item_id) = items.last().cloned().expect("at least one entry processed");
@@ -278,6 +595,7 @@ impl StoreContext {
         if let Err(e) = stack.save(&self.root.join("undo_stack.yaml")) {
             tracing::warn!(error = %e, "failed to save undo stack");
         }
+        self.broadcast_stack_state(&stack);
 
         let (store_name, item_id) = items.last().cloned().expect("at least one entry processed");
         Ok(UndoOutcome {
@@ -340,6 +658,63 @@ impl StoreContext {
             }
         }
         None
+    }
+
+    /// Find a registered store by its human-readable name.
+    ///
+    /// Returns `None` when no registered store reports the given name from
+    /// [`ErasedStore::store_name`]. Used by the `store` MCP server's
+    /// store-scoped verbs (`History`, `GetItem`) to dispatch by name.
+    pub async fn store_by_name(&self, name: &str) -> Option<Arc<dyn ErasedStore>> {
+        let stores = self.stores.read().await;
+        stores
+            .iter()
+            .find(|s| s.store_name() == name)
+            .map(Arc::clone)
+    }
+
+    /// Return the names of every registered store.
+    ///
+    /// Used by the `store` MCP server's `ListStores` verb to expose the
+    /// set of stores that can be addressed by name. The order matches
+    /// the order of `register` calls.
+    pub async fn store_names(&self) -> Vec<String> {
+        let stores = self.stores.read().await;
+        stores.iter().map(|s| s.store_name().to_string()).collect()
+    }
+
+    /// Read the current serialized bytes for an item in the named store.
+    ///
+    /// Returns `Err(StoreError::NotFound)` when no store reports the
+    /// given name. Returns `Ok(None)` when the store exists but the item
+    /// does not (never written, or trashed / archived).
+    pub async fn get_item_bytes(
+        &self,
+        store_name: &str,
+        item_id: &StoredItemId,
+    ) -> Result<Option<String>> {
+        let store = self
+            .store_by_name(store_name)
+            .await
+            .ok_or_else(|| StoreError::NotFound(format!("unknown store: {store_name}")))?;
+        store.get_item_bytes(item_id).await
+    }
+
+    /// Read every changelog entry for an item in the named store.
+    ///
+    /// Returns `Err(StoreError::NotFound)` when no store reports the
+    /// given name. Returns an empty `Vec` when the store exists but the
+    /// item has never been written.
+    pub async fn read_changelog(
+        &self,
+        store_name: &str,
+        item_id: &StoredItemId,
+    ) -> Result<Vec<ChangelogEntry>> {
+        let store = self
+            .store_by_name(store_name)
+            .await
+            .ok_or_else(|| StoreError::NotFound(format!("unknown store: {store_name}")))?;
+        store.read_changelog(item_id).await
     }
 }
 
@@ -612,6 +987,47 @@ mod tests {
 
         assert_eq!(gadget_event.event_name(), "item-created");
         assert_eq!(gadget_event.payload()["id"], "gadget1");
+    }
+
+    #[tokio::test]
+    async fn current_provenance_defaults_to_user_when_no_txn() {
+        let dir = TempDir::new().unwrap();
+        let ctx = StoreContext::new(dir.path().to_path_buf());
+
+        let prov = ctx.current_provenance();
+        assert_eq!(prov, EventProvenance::user());
+        assert!(prov.txn.is_none());
+        assert_eq!(prov.origin, "user");
+    }
+
+    #[tokio::test]
+    async fn current_provenance_carries_open_txn_and_origin() {
+        let dir = TempDir::new().unwrap();
+        let ctx = StoreContext::new(dir.path().to_path_buf());
+
+        let id = ctx.begin_transaction_with_origin(Some("agent:plugin-x".to_string()));
+
+        let prov = ctx.current_provenance();
+        assert_eq!(prov.txn.as_deref(), Some(id.to_string().as_str()));
+        assert_eq!(prov.origin, "agent:plugin-x");
+
+        // Closing the txn restores the user/None default.
+        ctx.end_transaction(id);
+        assert_eq!(ctx.current_provenance(), EventProvenance::user());
+    }
+
+    #[tokio::test]
+    async fn current_provenance_origin_defaults_to_user_when_unset() {
+        let dir = TempDir::new().unwrap();
+        let ctx = StoreContext::new(dir.path().to_path_buf());
+
+        // `begin_transaction` (no origin) still carries the txn but reports
+        // origin "user" — the legacy `BeginTransaction` verb shape.
+        let id = ctx.begin_transaction();
+        let prov = ctx.current_provenance();
+        assert_eq!(prov.txn.as_deref(), Some(id.to_string().as_str()));
+        assert_eq!(prov.origin, "user");
+        ctx.end_transaction(id);
     }
 
     #[tokio::test]

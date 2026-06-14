@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render as rtlRender, fireEvent, act } from "@testing-library/react";
+import type { ReactElement } from "react";
 
 // ---------------------------------------------------------------------------
 // Tauri API mocks — must come before importing the component under test.
@@ -10,14 +11,54 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
+  emit: vi.fn(() => Promise.resolve()),
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-vi.mock("@/lib/command-scope", () => ({
-  useDispatchCommand: () => vi.fn(() => Promise.resolve()),
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
 }));
 
+// Stub only the dispatcher; keep the real CommandScopeContext /
+// EMPTY_COMMANDS exports that `<FocusScope>` (mounted by the close
+// button's `<Pressable>`) imports from the same module. The strict mock
+// enumerates the ids the tree legitimately requests — the panel's own
+// close dispatch and `<FocusScope>`'s focus-claim — so a retired or
+// typo'd command id throws instead of silently no-opping.
+vi.mock("@/lib/command-scope", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/command-scope")>();
+  const { strictUseDispatchCommand } =
+    await import("@/test/strict-dispatch-mock");
+  return {
+    ...actual,
+    useDispatchCommand: strictUseDispatchCommand({
+      "app.inspector.close": () => Promise.resolve(),
+      "nav.focus": () => Promise.resolve(),
+    }),
+  };
+});
+
 import { SlidePanel } from "./slide-panel";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
+
+/**
+ * Render `ui` inside the spatial provider stack the panel's close
+ * `<Pressable>` leaf requires (`<FocusScope>` composes its FQM from the
+ * enclosing `<FocusLayer>`'s context). Mirrors the production shape:
+ * the inspector renders panels inside a focus layer.
+ */
+function render(ui: ReactElement) {
+  return rtlRender(
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>{ui}</FocusLayer>
+    </SpatialFocusProvider>,
+  );
+}
 
 /**
  * Force `window.innerWidth` to a known value so the upper-bound clamp
@@ -160,7 +201,7 @@ describe("SlidePanel resize bounds", () => {
     // A mousedown → mouseup with zero intervening mousemove (or movement
     // that never crosses a clamp boundary) is a tap, not a drag. It must
     // NOT fire `onResizeEnd`, because doing so would dispatch
-    // `ui.inspector.set_width { width: 420 }` and flip the persisted
+    // `app.inspector.set_width { width: 420 }` and flip the persisted
     // `inspector_width` from `None` to `Some(420)` for a no-op
     // interaction. Regression guard for the 2026-05-09 review finding.
     const onResize = vi.fn();

@@ -327,9 +327,9 @@ mod tests {
             .update_tool_call_report(&session_id, &tool_call_id, |report| {
                 report.update_status(ToolCallStatus::InProgress);
                 report.add_content(crate::tool_types::ToolCallContent::Content {
-                    content: agent_client_protocol::schema::ContentBlock::Text(
+                    content: Box::new(agent_client_protocol::schema::ContentBlock::Text(
                         agent_client_protocol::schema::TextContent::new("Processing file..."),
-                    ),
+                    )),
                 });
                 report.add_location(crate::tool_types::ToolCallLocation {
                     path: "/test/file.txt".to_string(),

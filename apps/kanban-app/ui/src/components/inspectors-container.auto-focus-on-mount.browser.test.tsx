@@ -103,7 +103,7 @@ import {
 /** Collect every `spatial_focus` invocation, in order. */
 function spatialFocusCalls(): FullyQualifiedMoniker[] {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
+    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
     .map((c) => (c[1] as { fq: FullyQualifiedMoniker }).fq);
 }
 

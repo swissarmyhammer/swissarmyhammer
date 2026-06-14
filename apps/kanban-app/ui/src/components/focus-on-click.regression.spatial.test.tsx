@@ -469,8 +469,12 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 /** Collect every `spatial_focus` call's args, in order. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
+      return args;
+    })
 }
 
 /**
@@ -712,7 +716,7 @@ function renderColumnInBoard(column: Entity, tasks: Entity[]) {
           <EntityFocusProvider>
             <FieldUpdateProvider>
               <UIStateProvider>
-                <FocusScope moniker={asSegment("ui:board")}>
+                <FocusScope moniker={asSegment("ui:board")} showFocus={false}>
                   <ColumnView column={column} tasks={tasks} />
                 </FocusScope>
               </UIStateProvider>
@@ -1233,7 +1237,7 @@ describe("focus-on-click regression suite (every component class)", () => {
   // Column body — clicking on whitespace inside the column, NOT a card.
   // -------------------------------------------------------------------------
   describe("column body", () => {
-    it("clicking column whitespace focuses the column zone and renders the indicator", async () => {
+    it("clicking column whitespace focuses the column zone but mounts no indicator (structural zone)", async () => {
       const column = makeColumn(COLUMN_ID_A);
       const tasks = [
         makeTask(TASK_ID_A, COLUMN_ID_A),
@@ -1242,10 +1246,13 @@ describe("focus-on-click regression suite (every component class)", () => {
       const { container, unmount } = renderColumnInBoard(column, tasks);
       await flushSetup();
 
-      // The column body is the registered `<FocusScope>` host; clicking
-      // it directly lands the event on the zone's outer div.
+      // Under the cards-are-the-nav-unit model the column is a non-focusable
+      // structural zone (`showFocus={false}`): clicking its whitespace still
+      // flips data-focused (clickFocusFq falls back to the column when it has
+      // no focusable ancestor) but mounts no visible indicator. Its cards own
+      // the focus signal.
       const moniker = `column:${COLUMN_ID_A}`;
-      await assertClickProducesIndicator({
+      await assertClickProducesZoneFocusWithoutIndicator({
         container,
         moniker,
         parentMonikers: ["ui:board"],

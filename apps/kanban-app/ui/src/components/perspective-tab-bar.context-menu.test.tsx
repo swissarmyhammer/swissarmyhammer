@@ -8,18 +8,25 @@ import { TooltipProvider } from "@/components/ui/tooltip";
  * These live in a separate file from `perspective-tab-bar.test.tsx` because
  * that file mocks `@/lib/context-menu` wholesale — which would short-circuit
  * the exact contract we're verifying here (the real `useContextMenu` reads
- * `CommandScopeContext` and propagates the chain into `list_commands_for_scope`
- * + `show_context_menu`).
+ * `CommandScopeContext` and propagates the chain into the `window` server's
+ * `show context menu` op).
  *
  * Pairs with `swissarmyhammer-kanban/tests/perspective_context_menu_integration.rs`
  * on the backend side — together they cover the full right-click →
  * scope-chain → resolver loop.
  */
 
+import { answerListCommand } from "@/test/mock-command-list";
+
+// `useContextMenu` fetches the Command registry at right-click time
+// (`list command` via `command_tool_call`); drive it through `mockRegistry`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+
 // Mock Tauri APIs before importing any modules that use them.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn<(...args: any[]) => Promise<unknown>>(() =>
-  Promise.resolve(null),
+const mockInvoke = vi.fn<(...args: any[]) => Promise<unknown>>(
+  (cmd, args) =>
+    answerListCommand(cmd, args, mockRegistry) ?? Promise.resolve(null),
 );
 vi.mock("@tauri-apps/api/core", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -129,8 +136,8 @@ import { FocusLayer } from "./focus-layer";
 import { asSegment } from "@/types/spatial";
 
 /**
- * Drive the mocked `invoke` so `list_commands_for_scope` returns a fixed
- * set of commands — enough to trigger the `show_context_menu` call path.
+ * Publish a fixed set of context-menu commands through the registry — enough
+ * to trigger the `show context menu` call path.
  */
 function mockResolvedCommands(
   commands: Array<{
@@ -141,28 +148,45 @@ function mockResolvedCommands(
     available: boolean;
   }>,
 ) {
-  mockInvoke.mockImplementation((cmd: string, _args?: unknown) => {
-    if (cmd === "list_commands_for_scope") return Promise.resolve(commands);
-    return Promise.resolve(undefined);
-  });
+  // Publish through the registry. `perspective.*` commands are scoped to
+  // `entity:perspective` so they match a chain carrying a `perspective:<id>`
+  // moniker (the scope-expression → moniker rule in `useContextMenu`).
+  mockRegistry = commands.map((c) => ({
+    id: c.id,
+    name: c.name,
+    context_menu: c.context_menu,
+    scope: ["entity:perspective"],
+  }));
 }
 
-/** Extract the scope chain that was passed to `list_commands_for_scope`. */
+/**
+ * The captured right-click scope chain. With the registry-driven context menu
+ * the chain is written into the `show context menu` items' `scope_chain`, so
+ * read it from the first non-separator item.
+ */
 function capturedListScope(): string[] | undefined {
-  const listCall = mockInvoke.mock.calls.find(
-    (c) => c[0] === "list_commands_for_scope",
-  );
-  return (listCall?.[1] as { scopeChain?: string[] } | undefined)?.scopeChain;
+  const scopes = capturedItemScopes();
+  return scopes[0];
 }
 
-/** Extract the scope chain(s) that were written into `show_context_menu` items. */
+/**
+ * Extract the scope chain(s) written into the `show context menu` items.
+ *
+ * The hook now reaches the `window` MCP server via
+ * `callMcpTool("window", "show context menu", { items })`, which lowers onto
+ * `invoke("command_tool_call", { module, tool, op, params })`. The items
+ * therefore ride in that bridge call's `params.items`.
+ */
 function capturedItemScopes(): string[][] {
   const showCall = mockInvoke.mock.calls.find(
-    (c) => c[0] === "show_context_menu",
+    (c) =>
+      c[0] === "command_tool_call" &&
+      (c[1] as { tool?: string })?.tool === "window" &&
+      (c[1] as { op?: string })?.op === "show context menu",
   );
   const items =
     (
-      showCall?.[1] as
+      (showCall?.[1] as { params?: unknown } | undefined)?.params as
         | {
             items?: Array<{ scope_chain: string[]; separator: boolean }>;
           }
@@ -208,7 +232,7 @@ describe("PerspectiveTabBar right-click scope chain", () => {
     };
   });
 
-  it("includes the tab's perspective moniker in the scope chain passed to list_commands_for_scope", async () => {
+  it("includes the tab's perspective moniker in the scope chain written into the context menu items", async () => {
     mockResolvedCommands([
       {
         id: "perspective.clearFilter",
@@ -426,7 +450,10 @@ describe("PerspectivesContainer view-body scope", () => {
       ...mockPerspectivesValue,
       activePerspective: null,
     };
-    mockResolvedCommands([]);
+    // A global (unscoped) command so the menu still renders and we can
+    // inspect the captured chain. The registry-driven context menu only
+    // calls `show context menu` when at least one command matches.
+    mockRegistry = [{ id: "app.help", name: "Help", context_menu: true }];
 
     renderWithBodyChild();
 

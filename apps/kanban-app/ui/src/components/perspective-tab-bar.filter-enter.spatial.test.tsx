@@ -28,7 +28,7 @@
  *      leaf with `pressable.activate` Enter/Space CommandDefs.
  *   3. Driving `focus-changed` to that leaf populates the focused-scope
  *      chain.
- *   4. `KeybindingHandler` resolves Enter through `extractScopeBindings`,
+ *   4. `KeybindingHandler` resolves Enter through `extractChainBindings`,
  *      dispatches `pressable.activate` → `onPress` runs → the adapter
  *      dispatches `nav.focus` (frontend execute) → `actions.focus(fq)`
  *      → `spatial_focus` IPC.
@@ -44,6 +44,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+  UI_SURFACE_PLUGIN_COMMANDS,
+} from "@/test/mock-command-list";
 import { render, fireEvent, act } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
@@ -55,6 +60,18 @@ const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
+  // The pressable activation commands are DEFINED by the `app-shell-commands`
+  // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
+  // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
+  // layer only through the `useCommandList` seam, so answer `list command`
+  // with the shared mock registry. Non-list `command_tool_call` ops fall
+  // through to the branches below.
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "get_ui_state")
     return Promise.resolve({
       palette_open: false,
@@ -161,6 +178,15 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // assert here.
 // ---------------------------------------------------------------------------
 
+// Hoisted spy on the mocked CM6 editor's imperative `focus()` — the
+// `filter_editor.drillIn` bus handler's whole effect is calling it, so the
+// drill-in test below observes the handler ran through the live editor
+// handle (`vi.hoisted` because the `vi.mock` factory is hoisted above
+// module-level `const`s).
+const { filterEditorFocusSpy } = vi.hoisted(() => ({
+  filterEditorFocusSpy: vi.fn(),
+}));
+
 vi.mock("@/components/filter-editor", async () => {
   const React = await import("react");
   type FilterEditorHandle = {
@@ -175,7 +201,7 @@ vi.mock("@/components/filter-editor", async () => {
     React.useImperativeHandle(
       ref,
       () => ({
-        focus() {},
+        focus: filterEditorFocusSpy,
         setValue() {},
         getValue() {
           return "";
@@ -226,6 +252,31 @@ vi.mock("@/lib/views-context", () => ({
 
 vi.mock("@/lib/context-menu", () => ({
   useContextMenu: () => vi.fn(),
+}));
+
+// `<RegistryTabButtons>` sources perspective-scoped tab-button commands from
+// the Command registry via `useCommandList`. Return `perspective.filter.focus`
+// (scoped `entity:perspective`) so its `<CommandButton>` mounts in the active
+// tab and registers its spatial-nav leaf. The `UI_SURFACE_PLUGIN_COMMANDS`
+// mirror rides along so the keymap layer (which reads the same registry)
+// binds Enter → `pressable.activate` on the focused `<CommandButton>` leaf —
+// the entries carry no `tab_button`, so the bar renders no extra buttons.
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: [
+      {
+        id: "perspective.filter.focus",
+        name: "Focus Filter",
+        scope: ["entity:perspective"],
+        tab_button: { icon: "filter" },
+        params: [{ name: "perspective_id", from: "scope_chain" }],
+        keys: {},
+      },
+      ...UI_SURFACE_PLUGIN_COMMANDS,
+    ],
+    loading: false,
+    refresh: vi.fn(),
+  }),
 }));
 
 vi.mock("@/lib/entity-store-context", () => ({
@@ -365,7 +416,11 @@ describe("PerspectiveTabBar filter button — Enter claims focus on the filter e
     // isolate Enter's contribution from any startup focus traffic.
     const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
     const spatialFocusBefore = mockInvoke.mock.calls.filter(
-      (c: unknown[]) => c[0] === "spatial_focus",
+      (c: unknown[]) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as Record<string, unknown>)?.tool === "focus" &&
+          (c[1] as Record<string, unknown>)?.op === "set focus"),
     ).length;
 
     await act(async () => {
@@ -375,7 +430,11 @@ describe("PerspectiveTabBar filter button — Enter claims focus on the filter e
     });
 
     const spatialFocusAfter = mockInvoke.mock.calls.filter(
-      (c: unknown[]) => c[0] === "spatial_focus",
+      (c: unknown[]) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as Record<string, unknown>)?.tool === "focus" &&
+          (c[1] as Record<string, unknown>)?.op === "set focus"),
     );
     expect(
       spatialFocusAfter.length - spatialFocusBefore,
@@ -389,7 +448,13 @@ describe("PerspectiveTabBar filter button — Enter claims focus on the filter e
     // regression that pointed `nav.focus` at the wrong scope (e.g. the
     // button leaf itself) is caught here.
     const lastSpatialCall = spatialFocusAfter[spatialFocusAfter.length - 1];
-    const fq = (lastSpatialCall[1] as { fq?: string })?.fq ?? "";
+    // The MCP transport wraps the op args in a `command_tool_call`
+    // envelope (`{ module, tool, op, params }`); unwrap `params` to reach
+    // the `fq` (legacy-shaped calls carry the bag directly).
+    const outer = lastSpatialCall[1] as
+      | { fq?: string; params?: { fq?: string } }
+      | undefined;
+    const fq = (outer?.params ?? outer)?.fq ?? "";
     expect(
       fq.endsWith("filter_editor:p1"),
       `spatial_focus.fq must end with filter_editor:p1 (got ${fq})`,
@@ -407,5 +472,67 @@ describe("PerspectiveTabBar filter button — Enter claims focus on the filter e
       filterFocusBackend,
       "Enter must not dispatch the deleted perspective.filter.focus backend command",
     ).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Card E — the `filter_editor.drillIn` DEFINITION lives in the `app-shell-commands`
+  // builtin plugin (scope `["ui:filter_editor"]`, the constant marker
+  // `FilterFormulaBarFocusable` mounts above its dynamic
+  // `filter_editor:{id}` `<FocusScope>`); the component registers only the
+  // live BEHAVIOR on the webview command bus while spatial focus is within
+  // the formula-bar scope. Enter on the focused scope must resolve the id via
+  // the registry chain walk and run the bus handler, which drills DOM focus
+  // into the CM6 editor via the imperative `FilterEditorHandle.focus()`.
+  // -------------------------------------------------------------------------
+
+  it("Enter on the focused filter_editor:p1 scope runs the plugin-defined filter_editor.drillIn and focuses the CM6 editor", async () => {
+    await renderTabBar();
+    await flushSetup();
+
+    // The formula bar registers its per-perspective spatial scope.
+    const scope = registerScopeArgs().find(
+      (a) => a.segment === "filter_editor:p1",
+    );
+    expect(
+      scope,
+      "filter_editor:p1 must register as a FocusScope for the formula bar",
+    ).toBeDefined();
+
+    // Drive a focus-changed event onto the formula-bar scope so the
+    // entity-focus bridge populates the focused chain AND the focus-gated
+    // bus registration (`useFocusedWebviewCommandHandlers`) installs the
+    // live drill-in handler.
+    const cb = listenCallbacks["focus-changed"];
+    expect(cb).toBeTruthy();
+    await act(async () => {
+      cb({
+        payload: {
+          window_label: "main",
+          prev_fq: null,
+          next_fq: scope!.fq,
+          next_segment: "filter_editor:p1",
+        },
+      });
+      currentFocusKey.key = scope!.fq as string;
+      await Promise.resolve();
+    });
+    await flushSetup();
+
+    expect(
+      filterEditorFocusSpy,
+      "precondition: the CM6 editor must not be focused before Enter",
+    ).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      filterEditorFocusSpy,
+      "Enter on the focused formula bar must run the filter_editor.drillIn " +
+        "webview-bus handler, which focuses the live CM6 editor instance",
+    ).toHaveBeenCalled();
   });
 });

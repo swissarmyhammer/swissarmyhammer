@@ -25,12 +25,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::json;
-use swissarmyhammer_commands::{compose_registry, UIState, WindowInfo};
+use swissarmyhammer_common::WindowInfo;
+use swissarmyhammer_kanban::compose_registry;
 use swissarmyhammer_kanban::dynamic_sources::{build_dynamic_sources, DynamicSourcesInputs};
 use swissarmyhammer_kanban::scope_commands::{commands_for_scope, DynamicSources};
 use swissarmyhammer_kanban::{
     board::InitBoard, dispatch::execute_operation, parse::parse_input, Execute, KanbanContext,
 };
+use swissarmyhammer_ui_state::UIState;
 use tempfile::TempDir;
 
 /// Open a fresh board under a temp dir and return the context and its
@@ -213,8 +215,9 @@ async fn build_dynamic_sources_assembles_views_boards_perspectives_headless() {
     // Now pipe through `commands_for_scope` and verify the headless
     // DynamicSources drives the same dynamic-command emission the GUI
     // path exercises.
-    let registry = compose_registry![swissarmyhammer_commands, swissarmyhammer_kanban];
-    let impls: HashMap<String, Arc<dyn swissarmyhammer_commands::Command>> = HashMap::new();
+    let registry = compose_registry![swissarmyhammer_kanban];
+    let impls: HashMap<String, Arc<dyn swissarmyhammer_kanban::commands_core::Command>> =
+        HashMap::new();
     let ui_arc = Arc::new(ui);
     let scope = vec![
         format!("view:{}", BUILTIN_BOARD_VIEW_ID),
@@ -375,8 +378,9 @@ async fn build_dynamic_sources_emits_every_open_board_and_window() {
 
     // Pipe through `commands_for_scope` and verify both `board.switch:*` and
     // both `window.focus:*` commands are emitted.
-    let registry = compose_registry![swissarmyhammer_commands, swissarmyhammer_kanban];
-    let impls: HashMap<String, Arc<dyn swissarmyhammer_commands::Command>> = HashMap::new();
+    let registry = compose_registry![swissarmyhammer_kanban];
+    let impls: HashMap<String, Arc<dyn swissarmyhammer_kanban::commands_core::Command>> =
+        HashMap::new();
     let ui_arc = Arc::new(ui);
     let scope = vec![
         format!("view:{}", BUILTIN_BOARD_VIEW_ID),

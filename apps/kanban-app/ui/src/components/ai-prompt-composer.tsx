@@ -42,14 +42,18 @@
  * nested inside the other.
  *
  * Drill-in actually moving the cursor in is NOT automatic: a bare
- * `<FocusScope>` only registers the scope as a nav target. The composer
- * scope is given a per-scope `ui.ai-panel.composer.drillIn` `CommandDef`
- * (keyed to Enter for every keymap) whose `execute` calls
+ * `<FocusScope>` only registers the scope as a nav target. The
+ * `app.ai-panel.composer.drillIn` command DEFINITION (id / name / keys /
+ * scope) lives in the `app-shell-commands` builtin plugin (Card E), scope-gated to
+ * the composer scope's own constant `ui:ai-panel.composer` moniker — the
+ * keymap layer's chain walk claims Enter for it (shadowing the global
+ * `nav.drillIn: Enter`) while the composer scope is in the focused chain.
+ * This component registers only the live BEHAVIOR on the webview command
+ * bus (`useFocusedWebviewCommandHandlers`): the handler calls
  * `editorRef.current?.focus()` — the shared `TextEditor` primitive's
- * `TextEditorHandle.focus()`. That command shadows the global
- * `nav.drillIn: Enter` for the composer scope and is what drives the CM6
- * editing cursor in. This mirrors `FilterFormulaBarFocusable`'s
- * `filter_editor.drillIn` command in `perspective-tab-bar.tsx`.
+ * `TextEditorHandle.focus()` — which drives the CM6 editing cursor in.
+ * This mirrors `FilterFormulaBarFocusable`'s `filter_editor.drillIn`
+ * wiring in `perspective-tab-bar.tsx`.
  *
  * # Submit / stop policy
  *
@@ -138,7 +142,8 @@ import {
   AiPanelPressable,
 } from "@/components/ai-panel-focus";
 import { useOptionalFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
-import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
+import { useFocusedWebviewCommandHandlers } from "@/lib/use-focused-webview-command-handlers";
 import { useUIState } from "@/lib/ui-state-context";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import {
@@ -564,6 +569,24 @@ export function AiPromptComposer({
   const submitRef = useRef<(() => void) | null>(handleSubmit);
   submitRef.current = handleSubmit;
 
+  // Card E: the live drill-in BEHAVIOR — focus the CM6 prompt — registers on
+  // the webview command bus while spatial focus is within the composer scope
+  // (a spatial leaf, so containment degenerates to direct focus), matching
+  // the keymap's gate on the scope's own `ui:ai-panel.composer` moniker.
+  // Pure presentation: the handler touches only the live editor handle.
+  const drillInHandlers = useMemo(
+    () => ({
+      "app.ai-panel.composer.drillIn": () => {
+        editorRef.current?.focus();
+      },
+    }),
+    [],
+  );
+  useFocusedWebviewCommandHandlers(
+    asSegment("ui:ai-panel.composer"),
+    drillInHandlers,
+  );
+
   // Base CM6 extensions: the Enter-submit keymap, plus a read-only toggle and
   // the accessible-name attribute on the content DOM. The content DOM keeps
   // `aria-label="Message the AI agent"` so `ai.focus` and the panel tests can
@@ -585,30 +608,6 @@ export function AiPromptComposer({
     [disabled, commandExtensions],
   );
 
-  // Per-scope drill-in command for the CM6 body's `ui:ai-panel.composer`
-  // scope. A bare `<FocusScope>` only *registers* the scope as a nav
-  // target — landing on it and pressing Enter does not move the editing
-  // cursor into the editor. This `CommandDef` (keyed to Enter for every
-  // keymap) shadows the global `nav.drillIn: Enter` for the composer
-  // scope and calls `editorRef.current?.focus()`, the shared
-  // `TextEditor` primitive's `TextEditorHandle.focus()` (which drives
-  // the underlying CM6 `view.focus()`). This is the exact pattern
-  // `FilterFormulaBarFocusable` uses for the filter formula bar's
-  // `filter_editor.drillIn` command (see `perspective-tab-bar.tsx`).
-  const drillInCommands = useMemo<readonly CommandDef[]>(
-    () => [
-      {
-        id: "ui.ai-panel.composer.drillIn",
-        name: "Edit Prompt",
-        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
-        execute: () => {
-          editorRef.current?.focus();
-        },
-      },
-    ],
-    [],
-  );
-
   return (
     // The single bordered container — the AI Elements `PromptInput` shell.
     // It is the only border around the input; `ComposerArea` no longer adds
@@ -625,11 +624,13 @@ export function AiPromptComposer({
       {/* Only the CM6 editor body is a focus scope — `ui:ai-panel.composer`
           under the panel zone. Landing on it and drilling in (Enter)
           focuses the CM6 prompt, exactly like the filter formula bar's
-          `filter_editor:${id}` scope. The `drillInCommands` array carries
-          the per-scope `ui.ai-panel.composer.drillIn` `CommandDef` keyed
-          to Enter — that command is what actually drives the editing
-          cursor into the CM6 editor on drill-in (a bare scope only
-          registers the nav target). The footer toolbar — with the model
+          `filter_editor:${id}` scope. The `app.ai-panel.composer.drillIn`
+          command DEFINITION lives in the `app-shell-commands` builtin plugin
+          (Card E), scope-gated to this scope's own constant moniker; the
+          component registers only the live BEHAVIOR — focus the CM6
+          editor — on the webview command bus while spatial focus is
+          within this scope (see the `useFocusedWebviewCommandHandlers`
+          call above). The footer toolbar — with the model
           picker's own `ui:ai-panel.model-selector` leaf — stays OUTSIDE
           this scope, so the two are independent spatial-nav siblings.
           `<FocusScope>` deliberately does NOT steal a click that lands
@@ -643,7 +644,6 @@ export function AiPromptComposer({
           staying content-height. */}
       <AiPanelFocusScope
         moniker={asSegment("ui:ai-panel.composer")}
-        commands={drillInCommands}
         className="min-h-24 flex-1 overflow-auto px-2 py-1.5 [&_.cm-editor]:h-full [&_.cm-scroller]:h-full"
       >
         {/* `ComposerEditorDrillOutWiring` sits INSIDE the composer scope so

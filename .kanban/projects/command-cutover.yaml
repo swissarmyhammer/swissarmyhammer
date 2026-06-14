@@ -1,0 +1,3 @@
+color: b60205
+description: Tier 3 terminal milestone. Migrate the frontend off Tauri invoke() to the window/app MCP servers (delete the window/application Tauri handlers; keep mcp_call/mcp_subscribe transport), then delete swissarmyhammer-commands + all 12 command YAML files + the YAML loader. The big-bang gate; the full-baseline e2e (all 62 commands through the Command service) is the acceptance. Depends on builtin-commands + command-events.
+name: Command Cut-over (terminal)

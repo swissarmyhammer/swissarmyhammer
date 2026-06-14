@@ -109,6 +109,10 @@ import {
   type SpatialHarness,
 } from "@/test/spatial-shadow-registry";
 import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
+import {
   asSegment,
   composeFq,
   fqRoot,
@@ -232,10 +236,15 @@ async function renderPanel(script: SessionScript = {}) {
         <FocusLayer name={asSegment("window")}>
           <EntityFocusProvider>
             {/* Sibling stand-in for the view area — a peer of the panel
-                zone under the same window layer. */}
+                zone under the same window layer. Focusable, because it
+                stands in for the focusable board content (a card) that a
+                cross-zone cardinal move lands on: under the geometric
+                kernel a move never stops on a `showFocus={false}` zone, so
+                the placeholder must be a real target to represent the
+                landing. */}
             <FocusScope
               moniker={asSegment("ui:view-area")}
-              showFocus={false}
+              showFocus
               style={{ flex: "1 1 0%", height: "100%" }}
             >
               <div style={{ height: "100%" }}>view area</div>
@@ -272,8 +281,20 @@ function findRegisterRecord(segment: string): Record<string, unknown> | null {
  * stack hits on mount — `get_ui_state` (drives the keymap mode the
  * `KeybindingHandler` resolves against) and `get_undo_state`. Every
  * spatial command is handled by the shadow navigator before this runs.
+ *
+ * Also answers `list command` with the shared mock registry: the panel's
+ * `<Pressable>` leaves activate through the plugin-defined
+ * `pressable.activate` / `pressable.activateSpace` commands (scope
+ * `["ui:pressable"]`), whose keys reach the keymap layer only through the
+ * `useCommandList` seam.
  */
-const appShellInvokeImpl: DefaultInvokeImpl = (cmd) => {
+const appShellInvokeImpl: DefaultInvokeImpl = (cmd, args) => {
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "get_ui_state") {
     return {
       palette_open: false,
@@ -297,7 +318,7 @@ const appShellInvokeImpl: DefaultInvokeImpl = (cmd) => {
  * keystroke into a command dispatch — that is `<AppShell>`'s
  * `<KeybindingHandler>`, which attaches a `keydown` listener on
  * `document` and resolves the focused scope's `commands` via
- * `extractScopeBindings`. Mounting it here lets the test drive a real
+ * `extractChainBindings`. Mounting it here lets the test drive a real
  * Enter keystroke and observe the composer scope's `drillIn` command
  * run — the path the user reported as broken.
  */
@@ -499,7 +520,7 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     // the same "land on the scope, drill into the CM6 editor" flow the
     // filter formula bar uses.
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: composerFq });
+      await harness.commitFocus(composerFq);
     });
     await flushSetup();
 
@@ -543,13 +564,17 @@ describe("AiPanel — spatial-nav focus scopes", () => {
   // spatial focus, pressing Enter must move DOM focus into the CM6 prompt.
   //
   // A bare `<FocusScope>` only *registers* the composer as a nav target —
-  // landing on it and pressing Enter does NOT focus the editor. The fix
-  // gives the composer scope a per-scope `ui.ai-panel.composer.drillIn`
-  // `CommandDef` (keyed to Enter) whose `execute` calls the shared
-  // `TextEditorHandle.focus()`. This test drives a real Enter keystroke
-  // through `<AppShell>`'s `<KeybindingHandler>` and asserts the CM6
-  // prompt — NOT the model picker — receives DOM focus, mirroring the
-  // filter formula bar's `filter_editor.drillIn` contract.
+  // landing on it and pressing Enter does NOT focus the editor. The
+  // `app.ai-panel.composer.drillIn` command DEFINITION (keyed to Enter,
+  // scope-gated to the composer scope's own `ui:ai-panel.composer`
+  // moniker) lives in the `app-shell-commands` builtin plugin (Card E); the
+  // composer registers the live behavior — the shared
+  // `TextEditorHandle.focus()` — on the webview command bus while the
+  // scope is focused. This test drives a real Enter keystroke through
+  // `<AppShell>`'s `<KeybindingHandler>` and asserts the CM6 prompt — NOT
+  // the model picker — receives DOM focus, mirroring the filter formula
+  // bar's `filter_editor.drillIn` contract, and that the dispatch is
+  // bus-handled (it never reaches the Command service backend).
   // -------------------------------------------------------------------------
 
   it("Enter on the focused composer leaf drives DOM focus into the CM6 prompt", async () => {
@@ -570,7 +595,10 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     const prompt = composerNode!.querySelector(
       "[role='textbox'][aria-label='Message the AI agent']",
     ) as HTMLElement | null;
-    expect(prompt, "the CM6 prompt must be inside the composer leaf").not.toBeNull();
+    expect(
+      prompt,
+      "the CM6 prompt must be inside the composer leaf",
+    ).not.toBeNull();
 
     // Move the cursor OFF the CM6 prompt first so the drill-in has a
     // visible effect to assert — focus the document body.
@@ -585,15 +613,16 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     // Seed the spatial focus onto the composer leaf. The shadow
     // navigator echoes a `focus-changed` event whose `next_segment` the
     // entity-focus bridge mirrors into the store — that is the chain
-    // `extractScopeBindings` walks on the next keydown.
+    // `extractChainBindings` walks on the next keydown.
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: composerFq });
+      await harness.commitFocus(composerFq);
     });
     await flushSetup();
 
-    // Press Enter. `<KeybindingHandler>` resolves it against the focused
-    // composer scope's `commands` — the `ui.ai-panel.composer.drillIn`
-    // `CommandDef` shadows the global `nav.drillIn` and calls
+    // Press Enter. `<KeybindingHandler>` resolves it via the registry chain
+    // walk — the plugin-defined `app.ai-panel.composer.drillIn` (scope
+    // `["ui:ai-panel.composer"]`) shadows the global `nav.drillIn` — and
+    // the dispatch runs the composer's webview-bus handler, which calls
     // `editorRef.current?.focus()`.
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
@@ -605,6 +634,23 @@ describe("AiPanel — spatial-nav focus scopes", () => {
       document.activeElement,
       "Enter on the focused composer leaf must land DOM focus on the CM6 prompt",
     ).toBe(prompt);
+
+    // Bus-handled, not backend-dispatched: the drill-in is pure
+    // presentation, so the id must never reach the Command service's
+    // `execute command` verb (lowered onto the `dispatch_command` Tauri
+    // command). A regression that drops the bus registration would fall
+    // through to the plugin's inert host execute via this backend channel
+    // and leave the editor unfocused.
+    const backendExecutes = mockInvoke.mock.calls.filter(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as { cmd?: string } | undefined)?.cmd ===
+          "app.ai-panel.composer.drillIn",
+    );
+    expect(
+      backendExecutes,
+      "app.ai-panel.composer.drillIn must be handled on the webview bus, never dispatched to the backend",
+    ).toHaveLength(0);
 
     unmount();
   });
@@ -656,9 +702,10 @@ describe("AiPanel — spatial-nav focus scopes", () => {
   // Jump-to: jumping into the panel lands directly on the composer.
   //
   // The jump-to overlay enumerates every focusable scope and dispatches
-  // `spatial_focus(fq)` for the chosen one. This case proves the composer
-  // leaf is a jump target: dispatching `spatial_focus` against its FQM
-  // moves focus there and the React tree flips `data-focused`.
+  // `nav.focus({ args: { fq } })` for the chosen one, whose execute calls
+  // `actions.focus(fq)` — a `set focus` commit against the kernel. This
+  // case proves the composer leaf is a jump target: committing focus to
+  // its FQM moves focus there and the React tree flips `data-focused`.
   // -------------------------------------------------------------------------
 
   it("jump-to lands directly on the composer leaf", async () => {
@@ -669,9 +716,10 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     expect(composer).toBeTruthy();
     const composerFq = composer!.fq as FullyQualifiedMoniker;
 
-    // The jump-to overlay's terminal action is `spatial_focus(targetFq)`.
+    // The jump-to overlay's terminal action is a `set focus` commit
+    // against the chosen FQM (via `nav.focus` → `actions.focus`).
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: composerFq });
+      await harness.commitFocus(composerFq);
     });
     await flushSetup();
 
@@ -700,7 +748,7 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     const selectorFq = selector!.fq as FullyQualifiedMoniker;
 
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: selectorFq });
+      await harness.commitFocus(selectorFq);
     });
     await flushSetup();
 
@@ -745,7 +793,10 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     const selectorNode = container.querySelector(
       "[data-segment='ui:ai-panel.model-selector']",
     ) as HTMLElement | null;
-    expect(selectorNode, "model-selector leaf must be in the DOM").not.toBeNull();
+    expect(
+      selectorNode,
+      "model-selector leaf must be in the DOM",
+    ).not.toBeNull();
     const trigger = selectorNode!.querySelector(
       "button[role='combobox']",
     ) as HTMLElement | null;
@@ -766,7 +817,7 @@ describe("AiPanel — spatial-nav focus scopes", () => {
 
     // Seed spatial focus onto the model-selector leaf.
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: selectorFq });
+      await harness.commitFocus(selectorFq);
     });
     await flushSetup();
 
@@ -818,7 +869,10 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     const prompt = composerNode!.querySelector(
       "[role='textbox'][aria-label='Message the AI agent']",
     ) as HTMLElement | null;
-    expect(prompt, "the CM6 prompt must be inside the composer leaf").not.toBeNull();
+    expect(
+      prompt,
+      "the CM6 prompt must be inside the composer leaf",
+    ).not.toBeNull();
 
     // Drill DOM focus into the CM6 prompt — the trapped state Escape escapes.
     await act(async () => {
@@ -1044,9 +1098,7 @@ describe("AiPanel — spatial-nav focus scopes", () => {
 
     // Jump-to lands on it.
     await act(async () => {
-      await mockInvoke("spatial_focus", {
-        fq: copyRecord!.fq as FullyQualifiedMoniker,
-      });
+      await harness.commitFocus(copyRecord!.fq as FullyQualifiedMoniker);
     });
     await flushSetup();
 

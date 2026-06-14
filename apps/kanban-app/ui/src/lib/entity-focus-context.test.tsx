@@ -12,9 +12,14 @@ import {
   useFocusedScope,
   useIsDirectFocus,
   useIsFocused,
+  useOptionalIsFocusWithin,
 } from "./entity-focus-context";
 import { SpatialFocusProvider } from "./spatial-focus-context";
 import { type CommandScope } from "./command-scope";
+import {
+  hasWebviewCommandHandler,
+  resetWebviewCommandBusForTest,
+} from "./webview-command-bus";
 import {
   asSegment,
   asFq,
@@ -89,6 +94,41 @@ describe("useEntityFocus", () => {
     expect(() => {
       renderHook(() => useEntityFocus());
     }).toThrow("useEntityFocus must be used within an EntityFocusProvider");
+  });
+});
+
+describe("nav.focus single-sourcing (Card G)", () => {
+  it("EntityFocusProvider registers NO nav.focus execution leg of its own", () => {
+    // `nav.focus` is DEFINED once in the `nav-commands` plugin; the
+    // webview's only execution leg is the bus handler
+    // `<SpatialFocusProvider>` registers (the snapshot-bearing
+    // `actions.focus(fq)` commit). The entity provider used to register
+    // a shadowing scope `CommandDef` — that duplication is gone, so a
+    // tree mounting only `<EntityFocusProvider>` contributes nothing to
+    // the bus (and no client-side `CommandDef` exists anywhere, pinned
+    // by `inspect-and-focus-commands.plugin-owned.node.test.ts`).
+    resetWebviewCommandBusForTest();
+    const { unmount } = render(
+      <EntityFocusProvider>{null}</EntityFocusProvider>,
+    );
+    expect(hasWebviewCommandHandler("nav.focus")).toBe(false);
+    unmount();
+  });
+
+  it("mounting the production pair (Spatial > Entity) yields exactly the spatial provider's bus handler", () => {
+    resetWebviewCommandBusForTest();
+    const { unmount } = render(
+      <SpatialFocusProvider>
+        <EntityFocusProvider>{null}</EntityFocusProvider>
+      </SpatialFocusProvider>,
+    );
+    expect(
+      hasWebviewCommandHandler("nav.focus"),
+      "the spatial provider owns the single nav.focus bus handler",
+    ).toBe(true);
+    unmount();
+    expect(hasWebviewCommandHandler("nav.focus")).toBe(false);
+    resetWebviewCommandBusForTest();
   });
 });
 
@@ -288,7 +328,7 @@ describe("window moniker in scope chain", () => {
     expect(invoke).toHaveBeenCalledWith(
       "dispatch_command",
       expect.objectContaining({
-        cmd: "ui.setFocus",
+        cmd: "app.setFocus",
         args: { scope_chain: ["task:abc", "column:col1", "window:main"] },
       }),
     );
@@ -614,6 +654,121 @@ describe("useIsDirectFocus", () => {
 });
 
 // ---------------------------------------------------------------------------
+// useOptionalIsFocusWithin — subtree containment subscription
+// ---------------------------------------------------------------------------
+
+describe("useOptionalIsFocusWithin", () => {
+  /**
+   * Render N probes, each subscribed to its own subtree root via
+   * useOptionalIsFocusWithin, with per-probe render counts so the tests
+   * can assert both containment results and wake selectivity.
+   */
+  function renderWithinProbes(roots: string[]) {
+    const counts: Record<string, number> = Object.fromEntries(
+      roots.map((m) => [m, 0]),
+    );
+
+    function Probe({ root }: { root: string }) {
+      counts[root] += 1;
+      const within = useOptionalIsFocusWithin(root);
+      return <span data-testid={`probe-${root}`}>{within ? "yes" : "no"}</span>;
+    }
+
+    let actions: ReturnType<typeof useFocusActions> | null = null;
+    function ActionsProbe() {
+      actions = useFocusActions();
+      return null;
+    }
+
+    const utils = render(
+      <EntityFocusProvider>
+        <ActionsProbe />
+        {roots.map((m) => (
+          <Probe key={m} root={m} />
+        ))}
+      </EntityFocusProvider>,
+    );
+
+    return { utils, counts, getActions: () => actions! };
+  }
+
+  it("is true for direct focus, descendant focus, and false outside the subtree", () => {
+    const { getActions, utils } = renderWithinProbes(["/window/field"]);
+    const probe = () => utils.getByTestId("probe-/window/field").textContent;
+
+    expect(probe()).toBe("no");
+
+    act(() => {
+      getActions().setFocus(asFq("/window/field"));
+    });
+    expect(probe(), "direct focus is within").toBe("yes");
+
+    act(() => {
+      getActions().setFocus(asFq("/window/field/tag:t1"));
+    });
+    expect(probe(), "descendant focus is within").toBe("yes");
+
+    act(() => {
+      getActions().setFocus(asFq("/window/other"));
+    });
+    expect(probe(), "focus outside the subtree is not within").toBe("no");
+  });
+
+  it("does not treat a sibling sharing a string prefix as contained", () => {
+    const { getActions, utils } = renderWithinProbes(["/window/field:tag"]);
+
+    act(() => {
+      getActions().setFocus(asFq("/window/field:tags/pill:p1"));
+    });
+    // "/window/field:tags/…" is NOT inside "/window/field:tag" — the
+    // containment boundary is the path separator, not raw startsWith.
+    expect(utils.getByTestId("probe-/window/field:tag").textContent).toBe("no");
+  });
+
+  it("wakes only subtree roots on the focus path, and not on moves within the subtree", () => {
+    const { counts, getActions, utils } = renderWithinProbes(["/w/a", "/w/b"]);
+    const base = { ...counts };
+
+    act(() => {
+      getActions().setFocus(asFq("/w/a/x"));
+    });
+    // a's containment flipped → re-rendered; b is untouched.
+    expect(counts["/w/a"]).toBe(base["/w/a"] + 1);
+    expect(counts["/w/b"]).toBe(base["/w/b"]);
+    expect(utils.getByTestId("probe-/w/a").textContent).toBe("yes");
+
+    act(() => {
+      getActions().setFocus(asFq("/w/a/y"));
+    });
+    // Move WITHIN a's subtree: containment unchanged → no re-render.
+    expect(counts["/w/a"]).toBe(base["/w/a"] + 1);
+    expect(counts["/w/b"]).toBe(base["/w/b"]);
+
+    act(() => {
+      getActions().setFocus(asFq("/w/b"));
+    });
+    // a flipped false, b flipped true.
+    expect(counts["/w/a"]).toBe(base["/w/a"] + 2);
+    expect(counts["/w/b"]).toBe(base["/w/b"] + 1);
+    expect(utils.getByTestId("probe-/w/a").textContent).toBe("no");
+    expect(utils.getByTestId("probe-/w/b").textContent).toBe("yes");
+  });
+
+  it("returns false permanently outside an EntityFocusProvider", () => {
+    const { result } = renderHook(() => useOptionalIsFocusWithin("/w/a"));
+    expect(result.current).toBe(false);
+  });
+
+  it("returns false for the empty-string degenerate key even while focus is set", () => {
+    const { getActions, utils } = renderWithinProbes([""]);
+    act(() => {
+      getActions().setFocus(asFq("/window/anything"));
+    });
+    expect(utils.getByTestId("probe-").textContent).toBe("no");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // useEntityFocus — compat shim still re-renders on focus
 // ---------------------------------------------------------------------------
 
@@ -677,7 +832,7 @@ describe("useEntityFocus (compat shim)", () => {
 // `EntityFocusProvider` is responsible for mirroring `payload.next_segment`
 // into its own moniker-keyed `FocusStore` so downstream consumers — most
 // importantly the `focusedMonikerRef` API and the `useFocusedScope`
-// chain that drives `extractScopeBindings` — stay in sync without each
+// chain that drives `extractChainBindings` — stay in sync without each
 // click handler having to double-write entity-focus and spatial-focus.
 //
 // The bridge subscribes to `SpatialFocusActions.subscribeFocusChanged`

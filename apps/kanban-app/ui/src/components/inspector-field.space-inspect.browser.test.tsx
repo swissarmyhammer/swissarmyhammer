@@ -1,7 +1,7 @@
 /**
  * Browser-mode test pinning the bug fix: pressing Space on a focused
- * inspector field zone dispatches `ui.inspect` with `target =
- * field:<type>:<id>.<name>`.
+ * inspector field zone dispatches the inspect with the field-led scope
+ * chain — regardless of which layer the field is rendered in.
  *
  * Before card 01KQ9XJ4XGKVW24EZSQCA6K3E2, Space ownership lived on
  * `board.inspect` registered at the BoardView's `<CommandScopeProvider>`.
@@ -9,17 +9,21 @@
  * descendant), so a focused field zone's scope chain never reached the
  * board scope — Space did nothing on a focused field.
  *
- * After the fix, every `<Inspectable>` wrapper contributes its own
- * scope-level `entity.inspect` `CommandDef` keyed to Space. Because
- * `<Field>` (`fields/field.tsx`) wraps its `<FocusScope>` in
- * `<Inspectable moniker={field:<type>:<id>.<name>}>`, every field row
- * carries the binding regardless of which layer it is rendered in.
+ * After Card G the Space owner is the SINGLE plugin-owned `entity.inspect`
+ * (`builtin/plugins/app-shell-commands/commands/ui.ts`): a global binding whose dispatch
+ * carries the focused scope chain to the backend, where the plugin resolves
+ * the innermost inspectable-ENTITY moniker. A focused field zone leads its
+ * own chain, so the dispatch fires regardless of layer; server-side the
+ * `field:{type}:{id}.{name}` projection moniker is skipped and the
+ * CONTAINING entity wins (kanban card 01KTY6XTJQFCG9ENKTAMC6N3JV) — the
+ * webview's job here is only the dispatch shape, which is what this test
+ * pins.
  *
  * The test below mounts a real `<EntityInspector>`, simulates the
  * spatial kernel emitting a `focus-changed` event for the title field,
  * fires `keydown { key: " " }` at the document, and asserts exactly one
- * `dispatch_command` IPC fires for `ui.inspect` with the field moniker
- * carried as `target`.
+ * `dispatch_command` IPC fires for `entity.inspect` whose scope chain is
+ * led by the field moniker (and zero webview-side `app.inspect`).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -106,6 +110,7 @@ import { UndoProvider } from "@/lib/undo-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
+import { commandToolCall } from "@/test/mock-command-list";
 import {
   asSegment,
   type FocusChangedPayload,
@@ -155,6 +160,11 @@ async function defaultInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
+  // The global keybinding table is registry-driven: `useCommandList`
+  // fetches `list command` through `command_tool_call`, and Space resolves
+  // from the plugin-owned `entity.inspect`'s `keys` (Card G). The shared
+  // mock registry synthesizes that global set from `BINDING_TABLES`.
+  if (cmd === "command_tool_call") return commandToolCall(args);
   if (cmd === "list_entity_types") return ["task"];
   if (cmd === "get_entity_schema") {
     const entityType = (args as { entityType?: string })?.entityType;
@@ -203,12 +213,25 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/** Filter `dispatch_command` calls down to those for `ui.inspect`. */
+/** Filter `dispatch_command` calls down to those for `app.inspect`. */
 function inspectDispatches(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "dispatch_command")
     .map((c) => c[1] as Record<string, unknown>)
-    .filter((p) => p.cmd === "ui.inspect");
+    .filter((p) => p.cmd === "app.inspect");
+}
+
+/**
+ * Filter `dispatch_command` calls down to those for the plugin-owned
+ * `entity.inspect` (Card G). Space routes this id to the BACKEND with the
+ * focused scope chain; the plugin resolves the field moniker server-side
+ * from the chain's leaf-first head.
+ */
+function entityInspectDispatches(): Array<Record<string, unknown>> {
+  return mockInvoke.mock.calls
+    .filter((c) => c[0] === "dispatch_command")
+    .map((c) => c[1] as Record<string, unknown>)
+    .filter((p) => p.cmd === "entity.inspect");
 }
 
 /**
@@ -279,7 +302,7 @@ function renderInspector(entity: Entity = makeTask({ title: "Hello" })) {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("Inspector field — Space → ui.inspect", () => {
+describe("Inspector field — Space → app.inspect", () => {
   beforeEach(() => {
     mockInvoke.mockClear();
     mockListen.mockClear();
@@ -312,7 +335,7 @@ describe("Inspector field — Space → ui.inspect", () => {
     // Drive a focus-changed event from the kernel. This mirrors the
     // production flow when the user clicks (or arrow-keys to) the
     // field row — `useFocusClaim` flips, `useFocusedScope` updates,
-    // and `extractScopeBindings` will see the new chain on the next
+    // and `extractChainBindings` will see the new chain on the next
     // keydown.
     await fireFocusChanged({
       next_fq: titleZone!.fq as FullyQualifiedMoniker,
@@ -322,24 +345,28 @@ describe("Inspector field — Space → ui.inspect", () => {
 
     mockInvoke.mockClear();
 
-    // Press Space — the global keymap handler reads the focused
-    // scope's bindings, finds the per-Inspectable `entity.inspect`
-    // command (its `keys.cua: "Space"`), runs the `execute` closure,
-    // which dispatches `ui.inspect` against the field moniker.
+    // Press Space — the GLOBAL `entity.inspect` binding (plugin-owned,
+    // Card G) resolves and routes ONE dispatch to the backend with the
+    // focused scope chain; the plugin resolves the field's moniker
+    // server-side from the chain's leaf-first head.
     await act(async () => {
       fireEvent.keyDown(document, { key: " ", code: "Space" });
     });
     await flushSetup();
 
-    const dispatches = inspectDispatches();
+    const dispatches = entityInspectDispatches();
     expect(
       dispatches.length,
-      "Space on a focused inspector field zone must dispatch ui.inspect exactly once",
+      "Space on a focused inspector field zone must dispatch entity.inspect exactly once",
     ).toBe(1);
     expect(
-      dispatches[0].target,
-      "ui.inspect from the focused field zone must carry that field's moniker as target",
+      (dispatches[0].scopeChain as string[] | undefined)?.[0],
+      "the dispatched chain's head must be the focused field's moniker",
     ).toBe("field:task:T1.title");
+    expect(
+      inspectDispatches().length,
+      "Space must not synthesize a webview-side app.inspect — the backend owns the inspect",
+    ).toBe(0);
 
     unmount();
   });

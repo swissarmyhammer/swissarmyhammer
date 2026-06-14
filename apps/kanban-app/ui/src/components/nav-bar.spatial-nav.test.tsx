@@ -116,7 +116,7 @@ vi.mock("@/lib/command-scope", async (importOriginal) => {
       // falls through to the real `useDispatchCommand` so the
       // command-scope chain resolves it through the registered
       // `nav.focus` execute closure.
-      if (cmd === "ui.inspect") return mockDispatchInspect;
+      if (cmd === "app.inspect") return mockDispatchInspect;
       if (cmd === "app.search") return mockDispatchSearch;
       return actual.useDispatchCommand(cmd as string);
     },
@@ -249,8 +249,18 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 /** Collect every `spatial_focus` call's args, in order. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
+      return args;
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -589,7 +599,7 @@ describe("NavBar — browser spatial behaviour", () => {
   // semantics, not in place of them.
   // -------------------------------------------------------------------------
 
-  it("clicking the inspect leaf still dispatches the ui.inspect command", async () => {
+  it("clicking the inspect leaf still dispatches the app.inspect command", async () => {
     const { container, unmount } = renderNavBar();
     await flushSetup();
 

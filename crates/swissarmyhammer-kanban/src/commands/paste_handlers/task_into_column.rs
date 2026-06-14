@@ -20,13 +20,13 @@
 use super::PasteHandler;
 use crate::clipboard::ClipboardPayload;
 use crate::commands::run_op;
+use crate::commands_core::{parse_moniker, CommandContext, CommandError};
 use crate::context::KanbanContext;
 use crate::entity::AddEntity;
 use crate::task::DeleteTask;
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use swissarmyhammer_commands::{parse_moniker, CommandContext, CommandError};
 
 /// Reserved positional override keys that must be re-derived per paste.
 ///
@@ -59,7 +59,7 @@ impl PasteHandler for TaskIntoColumnHandler {
         clipboard: &ClipboardPayload,
         target: &str,
         ctx: &CommandContext,
-    ) -> swissarmyhammer_commands::Result<Value> {
+    ) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         // Parse the column id off the target moniker. Anything that

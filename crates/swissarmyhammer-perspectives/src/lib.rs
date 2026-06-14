@@ -12,6 +12,7 @@
 //! - **TrackedStore**: Implements `TrackedStore` for undo/redo via `swissarmyhammer-store`
 
 pub mod context;
+pub mod default_scope;
 pub mod error;
 pub mod events;
 pub mod options_resolvers;

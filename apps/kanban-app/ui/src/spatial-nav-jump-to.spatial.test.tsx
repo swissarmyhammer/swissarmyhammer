@@ -178,6 +178,7 @@ import {
 // ---------------------------------------------------------------------------
 
 import App from "@/App";
+import { commandToolCall } from "@/test/mock-command-list";
 import { JumpToOverlay } from "@/components/jump-to-overlay";
 import { FocusLayer } from "@/components/focus-layer";
 import { FocusScope } from "@/components/focus-scope";
@@ -259,6 +260,14 @@ function lookupSneakCodes(count: number): string[] {
 let currentKeymapMode: "vim" | "cua" | "emacs" = "cua";
 
 /**
+ * Per-test inspector stack advertised by `get_ui_state`. Reset to `[]`
+ * in `beforeEach`; set to e.g. `["task:T1"]` by tests that need the
+ * inspector panel open from boot (the InspectorsContainer derives its
+ * panel stack reactively from this UIState field).
+ */
+let currentInspectorStack: string[] = [];
+
+/**
  * Build the bootstrap-invoke handler. The returned function answers every
  * Tauri command the production tree fires on mount, plus
  * `generate_jump_codes` for the Jump-To overlay's sneak code generator.
@@ -270,6 +279,7 @@ async function bootstrapInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
+  if (cmd === "command_tool_call") return commandToolCall(args);
   // Schema discovery
   if (cmd === "list_entity_types") return listEntityTypesResponse();
   if (cmd === "get_entity_schema") {
@@ -284,10 +294,17 @@ async function bootstrapInvokeImpl(
   }
   if (cmd === "list_open_boards") return listOpenBoardsResponse();
   if (cmd === "list_views") return listViewsResponse();
-  // UI state — override `keymap_mode` per test.
+  // UI state — override `keymap_mode` / `inspector_stack` per test.
   if (cmd === "get_ui_state") {
     const base = getUIStateResponse();
-    return { ...base, keymap_mode: currentKeymapMode };
+    return {
+      ...base,
+      keymap_mode: currentKeymapMode,
+      windows: {
+        ...base.windows,
+        main: { ...base.windows.main, inspector_stack: currentInspectorStack },
+      },
+    };
   }
   if (cmd === "get_undo_state") return getUndoStateResponse();
   // Command dispatch
@@ -299,8 +316,8 @@ async function bootstrapInvokeImpl(
     if (a.cmd === "perspective.save") return { result: null, undoable: false };
     if (a.cmd === "perspective.rename") return { result: null, undoable: true };
     if (a.cmd === "view.set") return { result: null, undoable: false };
-    if (a.cmd === "ui.inspect") return { result: null, undoable: false };
-    if (a.cmd === "ui.setFocus") return { result: null, undoable: false };
+    if (a.cmd === "app.inspect") return { result: null, undoable: false };
+    if (a.cmd === "app.setFocus") return { result: null, undoable: false };
     if (a.cmd === "file.switchBoard") return { result: null, undoable: false };
     return { result: null, undoable: false };
   }
@@ -355,6 +372,9 @@ const TEST_LAYOUT_CSS = `
   .max-w-\\[48em\\] { max-width: 48em; }
   .shrink-0 { flex-shrink: 0; }
   .h-12 { height: 3rem; }
+  .fixed { position: fixed; }
+  .top-0 { top: 0; }
+  .h-full { height: 100%; }
 `;
 
 /** Inject the layout substitute stylesheet exactly once per document. */
@@ -471,6 +491,12 @@ function countVisibleScopes(): number {
   );
   let count = 0;
   for (const h of hosts) {
+    // Jump pills land on every **focusable** scope (`data-focusable`) —
+    // including focusable leaves nested inside another focusable scope
+    // (a card's fields and its (i) inspect button). Only structural zones
+    // (`data-focusable` absent — columns, the board well) are excluded,
+    // mirroring the overlay's focusable filter.
+    if (h.dataset.focusable === undefined) continue;
     const r = h.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) continue;
     const hit = document.elementFromPoint(r.left + 4, r.top + 4);
@@ -488,6 +514,7 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
 
   beforeEach(() => {
     currentKeymapMode = "cua";
+    currentInspectorStack = [];
     harness = setupSpatialHarness({ defaultInvokeImpl: bootstrapInvokeImpl });
   });
 
@@ -610,7 +637,13 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
     });
 
     const focusCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_focus")
+      .filter(
+        (c) =>
+          c[0] === "spatial_focus" ||
+          (c[0] === "command_tool_call" &&
+            (c[1] as any)?.tool === "focus" &&
+            (c[1] as any)?.op === "set focus"),
+      )
       .map((c) => (c[1] as { fq: FullyQualifiedMoniker }).fq);
     expect(
       focusCalls,
@@ -662,7 +695,13 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
     // restores prior focus, which fires `spatial_focus(priorFq)` —
     // that's expected and explicitly NOT a "new" focus change.)
     const focusCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_focus")
+      .filter(
+        (c) =>
+          c[0] === "spatial_focus" ||
+          (c[0] === "command_tool_call" &&
+            (c[1] as any)?.tool === "focus" &&
+            (c[1] as any)?.op === "set focus"),
+      )
       .map((c) => (c[1] as { fq: FullyQualifiedMoniker }).fq);
     for (const fq of focusCalls) {
       // Prior-focus restore is permitted; pill targets are not.
@@ -735,7 +774,13 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
     // No pill-target focus dispatch happened (prior-focus restore is
     // permitted as part of the dismiss path).
     const focusCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_focus")
+      .filter(
+        (c) =>
+          c[0] === "spatial_focus" ||
+          (c[0] === "command_tool_call" &&
+            (c[1] as any)?.tool === "focus" &&
+            (c[1] as any)?.op === "set focus"),
+      )
       .map((c) => (c[1] as { fq: FullyQualifiedMoniker }).fq);
     for (const fq of focusCalls) {
       if (fq === priorFq) continue;
@@ -865,7 +910,11 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
       "overlay must remain mounted after a single prefix letter",
     ).not.toBeNull();
     const firstLetterFocusCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_focus",
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
     );
     expect(
       firstLetterFocusCalls.length,
@@ -882,7 +931,13 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
       await new Promise((r) => setTimeout(r, 10));
     });
     const focusCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_focus")
+      .filter(
+        (c) =>
+          c[0] === "spatial_focus" ||
+          (c[0] === "command_tool_call" &&
+            (c[1] as any)?.tool === "focus" &&
+            (c[1] as any)?.op === "set focus"),
+      )
       .map((c) => (c[1] as { fq: FullyQualifiedMoniker }).fq);
     expect(
       focusCalls,
@@ -962,7 +1017,13 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
     // of which are part of the overlay's own bookkeeping — only a
     // landing on a non-overlay scope would constitute a leaked nav.
     const focusCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_focus")
+      .filter(
+        (c) =>
+          c[0] === "spatial_focus" ||
+          (c[0] === "command_tool_call" &&
+            (c[1] as any)?.tool === "focus" &&
+            (c[1] as any)?.op === "set focus"),
+      )
       .map((c) => (c[1] as { fq: FullyQualifiedMoniker }).fq);
     for (const fq of focusCalls) {
       expect(
@@ -977,6 +1038,129 @@ describe("End-to-end spatial test for Jump-To overlay — full <App/>", () => {
       document.querySelector('[data-testid="jump-to-overlay"]'),
       "overlay must remain mounted while a globally-bound non-alphabet key is pressed",
     ).not.toBeNull();
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Case 8 — the card's (i) inspect button is a jump target.
+  //
+  // Regression coverage for `01KTCQF7J3YZ1SAY0W96WWA35X`: the (i) inspect
+  // button on each card registers as a focusable `<Pressable>` leaf
+  // (`card.inspect:<id>`) nested under the card's own focusable scope.
+  // Jump enumerates every visible focusable scope in the topmost layer —
+  // nested focusable leaves included — so the button must receive a pill.
+  // (The tier filter introduced by fa2225c33 wrongly dropped every
+  // focusable scope that has a focusable ancestor, which silently removed
+  // the card buttons from the jump-target set.)
+  // -------------------------------------------------------------------------
+
+  it("jump pills land on the card (i) inspect button (focusable leaf nested in the card)", async () => {
+    currentKeymapMode = "vim";
+    const { unmount } = renderApp();
+    await flushAppMount();
+
+    await seedCardFocus(harness, "task:T1");
+
+    fireEvent.keyDown(document.body, { key: "s" });
+    await waitForJumpOverlay();
+
+    const fqs = jumpPills().map((p) => p.dataset.jumpFq ?? "");
+    expect(
+      fqs.some((fq) => fq.endsWith("/card.inspect:T1")),
+      `a pill must target the T1 card's (i) inspect leaf; got: ${JSON.stringify(fqs)}`,
+    ).toBe(true);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Case 9 — the inspector's (x) close button is a jump target.
+  //
+  // With an inspector panel open, the inspector layer is topmost, so jump
+  // enumerates inspector-layer scopes. The panel's (x) close button is an
+  // actionable icon button and must register as a focusable `<Pressable>`
+  // leaf (`inspector.close:<type>:<id>`) so a pill lands on it — and so
+  // jump can commit focus there with Enter/Space activating the close.
+  // -------------------------------------------------------------------------
+
+  it("jump pills land on the inspector (x) close button when an inspector is open", async () => {
+    currentKeymapMode = "vim";
+    currentInspectorStack = ["task:T1"];
+    const { unmount } = renderApp();
+    await flushAppMount();
+
+    fireEvent.keyDown(document.body, { key: "s" });
+    await waitForJumpOverlay();
+
+    const fqs = jumpPills().map((p) => p.dataset.jumpFq ?? "");
+    expect(
+      fqs.some((fq) => fq.endsWith("/inspector.close:task:T1")),
+      `a pill must target the inspector close leaf; got: ${JSON.stringify(fqs)}`,
+    ).toBe(true);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Case 10 — fewer codes than targets must not crash the matcher.
+  //
+  // When the sneak generator returns fewer codes than the enumerated
+  // target count (e.g. a test stub or a degraded kernel response), the
+  // overlay must pair only the targets that received a code. The
+  // historical bug: unpaired targets carried `code: undefined`, and the
+  // first keystroke crashed in the prefix matcher
+  // (`codes.some((c) => c.startsWith(next))` → "startsWith of undefined").
+  // -------------------------------------------------------------------------
+
+  it("pairs only targets that received a code when the generator returns fewer codes than targets", async () => {
+    currentKeymapMode = "vim";
+    const TRUNCATED_CODE_COUNT = 3;
+    // Re-install the harness with a wrapper that truncates the code list
+    // the fixture would normally return in full.
+    harness = setupSpatialHarness({
+      defaultInvokeImpl: async (cmd: string, args?: unknown) => {
+        const result = await bootstrapInvokeImpl(cmd, args);
+        if (cmd === "generate_jump_codes") {
+          return (result as string[]).slice(0, TRUNCATED_CODE_COUNT);
+        }
+        return result;
+      },
+    });
+
+    const { unmount } = renderApp();
+    await flushAppMount();
+
+    await seedCardFocus(harness, "task:T1");
+
+    fireEvent.keyDown(document.body, { key: "s" });
+    const overlay = await waitForJumpOverlay();
+
+    // Only the targets that received a code render pills — never a pill
+    // with an undefined code.
+    const pills = jumpPills();
+    expect(
+      pills.length,
+      "pill count must equal the number of codes the generator returned",
+    ).toBe(TRUNCATED_CODE_COUNT);
+    for (const p of pills) {
+      expect(p.dataset.jumpCode, "every pill carries a real code").toMatch(
+        /^[a-z]+$/,
+      );
+    }
+
+    // Typing a letter that matches nothing must take the graceful
+    // flash-dismiss path — not crash in the prefix matcher.
+    await act(async () => {
+      fireEvent.keyDown(overlay, { key: "i" });
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    expect(
+      document.querySelector('[data-testid="jump-to-overlay"]'),
+      "overlay must dismiss gracefully after a non-matching letter",
+    ).toBeNull();
 
     unmount();
   });
