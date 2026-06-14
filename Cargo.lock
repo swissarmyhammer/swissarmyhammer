@@ -1234,6 +1234,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
+ "tracing-test",
  "typed-builder",
  "ulid",
  "url",
@@ -8007,6 +8008,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "serial_test",
  "swissarmyhammer-code-context",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
@@ -8020,6 +8022,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "tracing-test",
  "which",
 ]
 
@@ -8106,6 +8109,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "tracing-test",
  "walkdir",
  "which",
 ]

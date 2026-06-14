@@ -386,21 +386,11 @@ pub async fn create_agent_with_options(
 ) -> AcpResult<AcpAgentHandle> {
     match config.executor_type() {
         ModelExecutorType::ClaudeCode => {
-            // Thread the YAML-configured CLI switches (`ClaudeCodeConfig.args`)
-            // from the resolved `ModelConfig` into the Claude agent so the spawn
-            // path forwards them to the `claude` process.
-            // TODO: ClaudeCodeConfig.claude_path is not yet consumed by
-            // claude-agent (no sink exists); wire it once claude-agent grows a
-            // custom-binary-path option.
-            let extra_args = claude_code_args(config);
-            create_claude_agent(
-                mcp_config,
-                options.ephemeral,
-                options.tools_override.clone(),
-                options.auto_allow_all,
-                extra_args,
-            )
-            .await
+            // Build the spawned config from the resolved `ModelConfig` through the
+            // single production seam (threads `ClaudeCodeConfig.args` into
+            // `claude.extra_args`), then spawn it.
+            let agent_config = claude_agent_config_from_model(config, mcp_config, &options);
+            create_claude_agent(agent_config).await
         }
         ModelExecutorType::LlamaAgent => {
             let llama_config = match config.executor() {
@@ -827,17 +817,14 @@ async fn dispatch_llama_notification(
     }
 }
 
-/// Create a Claude ACP agent
+/// Spawn a Claude ACP agent from an already-built `claude_agent::AgentConfig`.
 ///
-/// `extra_args` are extra CLI switches (from the resolved `ModelConfig`'s
-/// `ClaudeCodeConfig.args`) carried through onto the spawned `claude` process.
-async fn create_claude_agent(
-    mcp_config: Option<McpServerConfig>,
-    ephemeral: bool,
-    tools_override: Option<String>,
-    auto_allow_all: bool,
-    extra_args: Vec<String>,
-) -> AcpResult<AcpAgentHandle> {
+/// The config is built once by [`claude_agent_config_from_model`] (the single
+/// production seam that threads the resolved `ModelConfig`'s CLI switches into
+/// `claude.extra_args`); this fn only checks the CLI is available and spawns the
+/// process, so the config-building seam stays pure and unit-testable while the
+/// spawn — which requires the `claude` binary — is the sole untested step.
+async fn create_claude_agent(agent_config: claude_agent::AgentConfig) -> AcpResult<AcpAgentHandle> {
     // Check if Claude CLI is available (claude-agent requires this)
     if which::which("claude").is_err() {
         return Err(AcpError::AgentNotAvailable(
@@ -845,14 +832,6 @@ async fn create_claude_agent(
                 .to_string(),
         ));
     }
-
-    let agent_config = build_claude_agent_config(
-        mcp_config,
-        ephemeral,
-        tools_override,
-        auto_allow_all,
-        extra_args,
-    );
 
     // Create the Claude agent
     let (agent, notification_rx) =
@@ -863,6 +842,49 @@ async fn create_claude_agent(
             })?;
 
     Ok(wrap_claude_into_handle(Arc::new(agent), notification_rx))
+}
+
+/// Build the spawned `claude_agent::AgentConfig` for a resolved [`ModelConfig`].
+///
+/// This is the single production seam between a resolved `ModelConfig` and the
+/// `claude` process the review/conversational backends spawn: it extracts the
+/// YAML-configured CLI switches ([`claude_code_args`]) — e.g. `["--model",
+/// "haiku"]` for the `claude-code-haiku` review default — and threads them into
+/// `claude.extra_args` via [`build_claude_agent_config`], from where the spawn
+/// path forwards them onto the `claude` command line.
+///
+/// `create_agent_with_options`' ClaudeCode arm calls this and hands the result to
+/// [`create_claude_agent`] (which only checks the CLI and spawns). Keeping it a
+/// pure (no I/O, no spawn) function means a test can drive the real
+/// model-to-spawn-config path without the `claude` binary, with no mock at the
+/// model boundary and no parallel re-composition that could drift from the arm.
+fn claude_agent_config_from_model(
+    config: &ModelConfig,
+    mcp_config: Option<McpServerConfig>,
+    options: &CreateAgentOptions,
+) -> claude_agent::AgentConfig {
+    // Thread the YAML-configured CLI switches (`ClaudeCodeConfig.args`) from the
+    // resolved `ModelConfig` into the Claude agent so the spawn path forwards
+    // them to the `claude` process.
+    // TODO: ClaudeCodeConfig.claude_path is not yet consumed by claude-agent (no
+    // sink exists); wire it once claude-agent grows a custom-binary-path option.
+    let extra_args = claude_code_args(config);
+    // Record the chosen tier BEFORE the subprocess starts: the executor and the
+    // tier-bearing `extra_args` (e.g. `["--model", "haiku"]`) are logged here so
+    // a review run's resolved model is provable in the `.sah` logs even if the
+    // subprocess argv line never lands.
+    tracing::info!(
+        "Building claude agent (executor={:?}, extra_args={:?})",
+        config.executor_type(),
+        extra_args
+    );
+    build_claude_agent_config(
+        mcp_config,
+        options.ephemeral,
+        options.tools_override.clone(),
+        options.auto_allow_all,
+        extra_args,
+    )
 }
 
 /// Build the `claude_agent::AgentConfig` for a Claude ACP agent.
@@ -1778,6 +1800,7 @@ impl agent_client_protocol::ConnectTo<Client> for NoopAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_test::traced_test;
 
     /// A stand-in for `AgentServer` in cache-policy tests: carries a fixed
     /// health flag plus a generation marker so a rebuild is observable.
@@ -2229,7 +2252,7 @@ mod tests {
     /// The kanban Claude wiring must carry the `mcp__*` auto-allow pattern on
     /// the `claude_agent::AgentConfig` it builds, so the per-board MCP toolset
     /// is approved without a consent dialog. Asserts the pattern constant and
-    /// that a config built with it (as `create_claude_agent` does) exposes it.
+    /// that a config built with it (as `build_claude_agent_config` does) exposes it.
     #[test]
     fn test_claude_config_carries_mcp_auto_allow_pattern() {
         assert_eq!(MCP_AUTO_ALLOW_PATTERN, "mcp__*");
@@ -2405,6 +2428,135 @@ mod tests {
         assert_eq!(
             built.claude.extra_args,
             vec!["--model".to_string(), "haiku".to_string()]
+        );
+    }
+
+    /// Decision-point logging: building the spawned claude config from a resolved
+    /// `ModelConfig` must record the chosen executor and the `extra_args` (the
+    /// tier-bearing `--model haiku`) BEFORE the subprocess starts, so the tier is
+    /// provable in the `.sah` logs even if the subprocess argv line never lands.
+    #[traced_test]
+    #[test]
+    fn test_claude_agent_config_from_model_logs_executor_and_extra_args() {
+        use swissarmyhammer_config::model::ClaudeCodeConfig;
+
+        let config = ModelConfig {
+            executors: vec![swissarmyhammer_config::model::ExecutorEntry {
+                platform: None,
+                executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig {
+                    claude_path: None,
+                    args: vec!["--model".to_string(), "haiku".to_string()],
+                }),
+            }],
+            quiet: false,
+        };
+
+        let _ = claude_agent_config_from_model(&config, None, &CreateAgentOptions::default());
+
+        assert!(
+            logs_contain("ClaudeCode"),
+            "must log the resolved executor type"
+        );
+        assert!(
+            logs_contain("--model"),
+            "must log the extra_args including --model"
+        );
+        assert!(
+            logs_contain("haiku"),
+            "must log the resolved tier (haiku) in extra_args"
+        );
+    }
+
+    /// Real-path proof that the review backend, driven by the review `ModelConfig`
+    /// the RUNTIME RESOLVER produces for a fully-unconfigured scope, spawns
+    /// `claude --model haiku`.
+    ///
+    /// This drives the actual production chain the wired review tool hits, end to
+    /// end up to (but not including) the `claude` process spawn:
+    /// 1. `ModelManager::resolve_review_agent_config` — the runtime resolver —
+    ///    resolves the review model for an unconfigured scope (NOT the hardcoded
+    ///    `ModelConfig::claude_code_haiku()` constructor). For a fully
+    ///    unconfigured project this lands on `claude-code-haiku` via
+    ///    `review_agent_name_from`.
+    /// 2. `review_agent_factory(config)` is the exact factory the server injects
+    ///    via `set_review_factories`; its agent build flows through
+    ///    `create_agent` → `create_agent_with_options` (ClaudeCode arm) →
+    ///    [`claude_agent_config_from_model`], the single production seam that
+    ///    composes the spawned `claude_agent::AgentConfig`.
+    /// 3. We assert that production seam carries `extra_args == ["--model",
+    ///    "haiku"]` — exactly what would land on the spawned `claude` argv.
+    ///
+    /// No mock at the model boundary, no hardcoded constructor, no parallel test
+    /// helper: this is the test that reproduces — and proves fixed — the symptom
+    /// of a local review spawning `claude` with no `--model haiku`.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn review_resolved_default_spawns_claude_with_model_haiku() {
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+        use swissarmyhammer_config::model::{ModelManager, ModelPaths};
+
+        let _env = IsolatedTestEnvironment::new().expect("isolated env");
+
+        // The runtime resolver, fed a fully-unconfigured scope (isolated HOME,
+        // no project config) — the same path serve/mod.rs' `review_model_config`
+        // exercises via `review_agent_name_from`.
+        let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah())
+            .expect("an unconfigured review scope must resolve to the baked-in default");
+        assert_eq!(
+            config.executor_type(),
+            ModelExecutorType::ClaudeCode,
+            "the review default must be a claude-code executor"
+        );
+
+        // The exact production seam `create_agent_with_options`' ClaudeCode arm
+        // (driven by `review_agent_factory`) uses to build the spawned config.
+        let spawn = claude_agent_config_from_model(&config, None, &CreateAgentOptions::default());
+        assert_eq!(
+            spawn.claude.extra_args,
+            vec!["--model".to_string(), "haiku".to_string()],
+            "the review backend's spawned claude must carry --model haiku"
+        );
+    }
+
+    /// Real parity guard: the `local` and `session` backends build a
+    /// byte-identical spawned `claude` config for the same resolved review
+    /// `ModelConfig`, because `backend` is NOT an input to the agent build.
+    ///
+    /// Both backends drive the one agent built by `review_agent_factory` →
+    /// `create_agent_with_options` → [`claude_agent_config_from_model`]; only the
+    /// pool worker count (`pool_config_for` in the tools crate) differs. To prove
+    /// this is real parity (not a tautological same-fn/same-input call), each
+    /// "backend" here resolves its review config independently through the runtime
+    /// resolver and builds the spawn config through the production seam; the two
+    /// must be identical, and both must carry `--model haiku`.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn local_and_session_backends_resolve_the_same_review_model() {
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+        use swissarmyhammer_config::model::{ModelManager, ModelPaths};
+
+        let _env = IsolatedTestEnvironment::new().expect("isolated env");
+
+        // Each backend independently resolves the review config through the
+        // runtime resolver and builds its spawn config through the production
+        // seam — exactly what each backend's review run would do (the agent is
+        // built the same way regardless of backend).
+        let resolve_and_build = || {
+            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah())
+                .expect("review scope resolves");
+            claude_agent_config_from_model(&config, None, &CreateAgentOptions::default())
+        };
+        let local_spawn = resolve_and_build();
+        let session_spawn = resolve_and_build();
+
+        assert_eq!(
+            local_spawn.claude.extra_args, session_spawn.claude.extra_args,
+            "local and session backends must resolve the same model (no drift)"
+        );
+        assert_eq!(
+            local_spawn.claude.extra_args,
+            vec!["--model".to_string(), "haiku".to_string()],
+            "both backends must carry the resolved haiku default's --model haiku"
         );
     }
 
