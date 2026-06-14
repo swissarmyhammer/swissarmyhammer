@@ -1,0 +1,9 @@
+---
+description: "Claude Code (Haiku): faster/cheaper Claude, must be installed separately"
+tags: [kanban]
+---
+quiet: false
+executor:
+  type: claude-code
+  config:
+    args: ["--model", "haiku"]

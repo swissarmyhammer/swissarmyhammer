@@ -1,10 +1,10 @@
-use swissarmyhammer::{Prompt, PromptLibrary};
+use swissarmyhammer::{Prompt, TemplateLibrary};
 use swissarmyhammer_config::TemplateContext;
 
 #[test]
 fn test_partials_with_liquid_extension() {
     // Create a library and add a partial
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
 
     // Add the partial prompt (override the builtin principals partial)
     let partial = Prompt::new(
@@ -39,7 +39,7 @@ fn test_partials_with_liquid_extension() {
 #[test]
 fn test_partials_without_extension() {
     // Create a library and add a partial
-    let mut library = PromptLibrary::new();
+    let mut library = TemplateLibrary::new();
 
     // Add the partial prompt (without extension)
     let partial = Prompt::new(

@@ -70,7 +70,10 @@ pub use parser::{
     check_manifest_frontmatter, parse_rule, parse_ruleset_directory, parse_ruleset_manifest,
     parse_validator,
 };
-pub use pool::{AgentPool, PoolConfig, PoolError, PromptResult, DEFAULT_MAX_TOKENS};
+pub use pool::{
+    AgentPool, ForkAttachment, PoolConfig, PoolError, PromptResult, SessionPinGuard, SessionTurn,
+    SessionTurnResult, DEFAULT_MAX_TOKENS,
+};
 pub use types::{
     compile_glob_patterns, matches_any_pattern, ExecutedRuleSet, ExecutedValidator, MatchContext,
     Rule, RuleFrontmatter, RuleResult, RuleSet, RuleSetManifest, RuleSetMetadata, Severity,
@@ -82,7 +85,7 @@ pub use types::{
 ///
 /// This is a type alias for the generic [`LibraryPartialAdapter`] specialized
 /// for [`ValidatorLoader`]. This follows the same unified pattern as
-/// [`swissarmyhammer_prompts::PromptPartialAdapter`].
+/// [`swissarmyhammer_templating::PartialAdapter`].
 ///
 /// The underlying loader implements [`swissarmyhammer_templating::partials::TemplateContentProvider`],
 /// enabling validators to participate in the unified partial system.

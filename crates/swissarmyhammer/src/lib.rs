@@ -13,11 +13,11 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use swissarmyhammer::PromptLibrary;
+//! use swissarmyhammer::TemplateLibrary;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a new prompt library
-//! let mut library = PromptLibrary::new();
+//! let mut library = TemplateLibrary::new();
 //!
 //! // Add prompts from a directory
 //! if std::path::Path::new("./.prompts").exists() {
@@ -46,17 +46,11 @@ pub use fs_utils::{FilePermissions, FileSystem, FileSystemUtils};
 /// Plan command utilities
 pub mod plan_utils;
 
-/// Prompt filtering functionality
-pub use swissarmyhammer_prompts::PromptFilter;
+/// Advanced template loading and resolution
+pub use swissarmyhammer_templating::PromptResolver;
 
-/// Advanced prompt loading and resolution
-pub use swissarmyhammer_prompts::PromptResolver;
-
-/// Backward compatibility alias for FileSource
-pub use swissarmyhammer_common::file_loader::FileSource as PromptSource;
-
-/// Core prompt management types and functionality
-pub use swissarmyhammer_prompts::{Prompt, PromptLibrary, PromptLoader};
+/// Core template management types and functionality
+pub use swissarmyhammer_templating::{Prompt, TemplateLibrary, TemplateLoader};
 
 /// Template engine and rendering functionality (re-exported from swissarmyhammer-templating)
 pub use swissarmyhammer_templating::{Template, TemplateEngine};

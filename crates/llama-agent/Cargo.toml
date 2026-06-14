@@ -8,8 +8,10 @@ homepage.workspace = true
 description = "Local LLM agent using llama.cpp"
 
 [dependencies]
-# Fixture support
-agent-client-protocol-extras = { workspace = true }
+# Fixture support. `test-support` exports the canonical `StateDirGuard`,
+# re-exported by `acp::test_utils` (compiled into non-test builds so
+# integration tests and acp-conformance can import it).
+agent-client-protocol-extras = { workspace = true, features = ["test-support"] }
 
 # Core inference
 llama-cpp-2 = { workspace = true }
@@ -69,6 +71,11 @@ llama-common = { workspace = true }
 # Same crate the leader-election flock uses; kernel-released on process death.
 fs2 = { workspace = true }
 
+# Total-RAM detection so the session-state KV cache byte budget scales with the
+# machine instead of a fixed 2 GiB — a high-RAM box holds every validator
+# prefix + fork, closing the prime→pin eviction race.
+sysinfo = { workspace = true }
+
 # JSON Schema validation
 jsonschema = { workspace = true }
 md5 = { workspace = true }
@@ -89,7 +96,7 @@ swissarmyhammer-kanban = { workspace = true }
 swissarmyhammer-agents = { workspace = true }
 
 # Prompt library for Liquid template rendering
-swissarmyhammer-prompts = { workspace = true }
+swissarmyhammer-templating = { workspace = true }
 
 # Template context for Liquid rendering
 swissarmyhammer-config = { workspace = true }
@@ -98,6 +105,10 @@ swissarmyhammer-config = { workspace = true }
 swissarmyhammer-skills = { workspace = true }
 
 chrono = { workspace = true }
+
+# Used by `acp::test_utils` (compiled in non-test builds so integration
+# tests can import it) for the shared model-free test-config helpers.
+tempfile = { workspace = true }
 
 # Unix signal handling for graceful shutdown
 [target.'cfg(unix)'.dependencies]

@@ -6,17 +6,16 @@ use crate::mcp::host::Host;
 use rmcp::model::*;
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
-use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use swissarmyhammer_common::utils::find_git_repository_root_from;
-use swissarmyhammer_common::{is_prompt_visible, Result, SwissArmyHammerError};
+use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use swissarmyhammer_config::model::{parse_model_config, ModelManager};
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_git::GitOperations;
-use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
+use swissarmyhammer_templating::{PromptResolver, TemplateLibrary};
 
 use tokio::sync::{Mutex, RwLock};
 
@@ -74,7 +73,7 @@ const INITIAL_BACKOFF_MS: u64 = 100;
 /// MCP server for all SwissArmyHammer functionality.
 #[derive(Clone)]
 pub struct McpServer {
-    library: Arc<RwLock<PromptLibrary>>,
+    library: Arc<RwLock<TemplateLibrary>>,
 
     file_watcher: Arc<Mutex<FileWatcher>>,
     /// Handle to the in-flight background file-watch startup task, if any.
@@ -214,9 +213,6 @@ where
 /// Create ServerCapabilities for MCP protocol
 fn create_server_capabilities() -> ServerCapabilities {
     let mut caps = ServerCapabilities::default();
-    caps.prompts = Some(PromptsCapability {
-        list_changed: Some(true),
-    });
     caps.tools = Some(ToolsCapability {
         list_changed: Some(true),
     });
@@ -243,7 +239,7 @@ impl McpServer {
     ///
     /// # Errors
     ///
-    pub async fn new(library: PromptLibrary) -> Result<Self> {
+    pub async fn new(library: TemplateLibrary) -> Result<Self> {
         let work_dir = std::env::current_dir().unwrap_or_else(|_| {
             // Fallback to a temporary directory if current directory is not accessible
             std::env::temp_dir()
@@ -266,7 +262,7 @@ impl McpServer {
     /// # Errors
     ///
     pub async fn new_with_work_dir(
-        library: PromptLibrary,
+        library: TemplateLibrary,
         work_dir: PathBuf,
         model_override: Option<String>,
     ) -> Result<Self> {
@@ -638,7 +634,7 @@ impl McpServer {
         working_dir: Option<PathBuf>,
         skill_library: Arc<RwLock<SkillLibrary>>,
         agent_library: Arc<RwLock<AgentLibrary>>,
-        prompt_library: Arc<RwLock<PromptLibrary>>,
+        prompt_library: Arc<RwLock<TemplateLibrary>>,
     ) -> (Arc<RwLock<ToolRegistry>>, Arc<ToolContext>) {
         let mut tool_registry = ToolRegistry::new();
         Self::register_all_tools(
@@ -672,7 +668,7 @@ impl McpServer {
         tool_registry: &mut ToolRegistry,
         skill_library: Arc<RwLock<SkillLibrary>>,
         agent_library: Arc<RwLock<AgentLibrary>>,
-        prompt_library: Arc<RwLock<PromptLibrary>>,
+        prompt_library: Arc<RwLock<TemplateLibrary>>,
     ) {
         register_git_tools(tool_registry);
         register_kanban_tools(tool_registry);
@@ -701,8 +697,8 @@ impl McpServer {
     ///
     /// # Returns
     ///
-    /// * `&Arc<RwLock<PromptLibrary>>` - Reference to the wrapped prompt library
-    pub fn library(&self) -> &Arc<RwLock<PromptLibrary>> {
+    /// * `&Arc<RwLock<TemplateLibrary>>` - Reference to the wrapped prompt library
+    pub fn library(&self) -> &Arc<RwLock<TemplateLibrary>> {
         &self.library
     }
 
@@ -971,30 +967,6 @@ impl McpServer {
         Ok(())
     }
 
-    /// List all available prompts, excluding hidden prompts and partial templates.
-    ///
-    /// Hidden prompts and partial templates are filtered out as they are meant
-    /// for internal use and should not be exposed via the MCP interface.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<Vec<String>>` - List of prompt names or an error
-    pub async fn list_prompts(&self) -> Result<Vec<String>> {
-        let library = self.library.read().await;
-        let prompts = library.list().map_err(|e| SwissArmyHammerError::Other {
-            message: e.to_string(),
-        })?;
-        Ok(prompts
-            .iter()
-            .filter(|p| {
-                let meta = serde_json::to_value(&p.metadata).ok();
-                is_prompt_visible(&p.name, p.description.as_deref(), meta.as_ref())
-                    && !p.is_partial_template()
-            })
-            .map(|p| p.name.clone())
-            .collect())
-    }
-
     /// List all available tools from the tool registry.
     ///
     /// # Returns
@@ -1143,91 +1115,6 @@ impl McpServer {
         );
     }
 
-    /// Get a specific prompt by name, with optional template argument rendering.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The name of the prompt to retrieve
-    /// * `arguments` - Optional template arguments for rendering
-    ///
-    /// # Returns
-    ///
-    /// * `Result<String>` - The rendered prompt content or an error
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the prompt is not found, is a partial template,
-    /// or if template rendering fails.
-    pub async fn get_prompt(
-        &self,
-        name: &str,
-        arguments: Option<&HashMap<String, String>>,
-    ) -> Result<String> {
-        let library = self.library.read().await;
-        let prompt = library.get(name).map_err(|e| SwissArmyHammerError::Other {
-            message: e.to_string(),
-        })?;
-
-        // Check if this prompt is visible (not hidden or a partial)
-        let meta = serde_json::to_value(&prompt.metadata).ok();
-        if !is_prompt_visible(&prompt.name, prompt.description.as_deref(), meta.as_ref())
-            || prompt.is_partial_template()
-        {
-            return Err(SwissArmyHammerError::Other {
-                message: format!(
-                    "Cannot access hidden prompt '{name}' via MCP. Hidden prompts are for internal use only."
-                ),
-            });
-        }
-
-        // Handle arguments if provided
-        let content = if let Some(args) = arguments {
-            {
-                let template_context = TemplateContext::with_template_vars(
-                    args.iter()
-                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                        .collect(),
-                )
-                .map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Failed to create template context: {e}"),
-                })?;
-                library.render(name, &template_context).map_err(|e| {
-                    SwissArmyHammerError::Other {
-                        message: e.to_string(),
-                    }
-                })?
-            }
-        } else {
-            prompt.template.clone()
-        };
-
-        Ok(content)
-    }
-
-    /// Convert serde_json::Map to HashMap<String, String> for template rendering.
-    ///
-    /// This helper method converts MCP tool arguments from JSON format to
-    /// the string format expected by the template engine.
-    ///
-    /// # Arguments
-    ///
-    /// * `args` - The JSON map of arguments from MCP
-    ///
-    /// # Returns
-    ///
-    /// * `HashMap<String, String>` - The converted arguments
-    fn json_map_to_string_map(args: &serde_json::Map<String, Value>) -> HashMap<String, String> {
-        let mut template_args = HashMap::new();
-        for (key, value) in args {
-            let value_str = match value {
-                Value::String(s) => s.clone(),
-                v => v.to_string(),
-            };
-            template_args.insert(key.clone(), value_str);
-        }
-        template_args
-    }
-
     /// Compute a content signature for a set of prompts.
     ///
     /// This creates a deterministic snapshot of prompt content by serializing
@@ -1243,7 +1130,7 @@ impl McpServer {
     /// A BTreeMap where keys are prompt names and values are JSON representations
     /// of the prompt content (excluding source_path)
     fn compute_prompt_signature(
-        prompts: &[swissarmyhammer_prompts::Prompt],
+        prompts: &[swissarmyhammer_templating::Prompt],
     ) -> BTreeMap<String, String> {
         let mut signature = BTreeMap::new();
         for prompt in prompts {
@@ -1325,7 +1212,7 @@ impl McpServer {
         let before_signature = Self::compute_prompt_signature(&before_prompts);
 
         // Clear existing prompts and reload
-        *library = PromptLibrary::new();
+        *library = TemplateLibrary::new();
         resolver
             .load_all_prompts(&mut library)
             .map_err(|e| SwissArmyHammerError::Other {
@@ -1468,74 +1355,6 @@ impl McpServer {
         tokio::spawn(async move {
             *task_slot.lock().await = Some(handle);
         });
-    }
-
-    /// Validate that a prompt can be accessed via MCP.
-    ///
-    /// # Arguments
-    ///
-    /// * `prompt` - The prompt to validate
-    /// * `name` - The name of the prompt for error messages
-    ///
-    /// # Returns
-    ///
-    /// * `Result<(), McpError>` - Ok if prompt is accessible, error if it's a partial template
-    fn validate_prompt_access(
-        prompt: &swissarmyhammer_prompts::Prompt,
-        name: &str,
-    ) -> std::result::Result<(), McpError> {
-        let meta = serde_json::to_value(&prompt.metadata).ok();
-        if !is_prompt_visible(&prompt.name, prompt.description.as_deref(), meta.as_ref())
-            || prompt.is_partial_template()
-        {
-            return Err(McpError::invalid_request(
-                format!(
-                    "Cannot access hidden prompt '{}' via MCP. Hidden prompts are for internal use only.",
-                    name
-                ),
-                None,
-            ));
-        }
-        Ok(())
-    }
-
-    /// Render a prompt with the provided arguments.
-    ///
-    /// # Arguments
-    ///
-    /// * `library` - The prompt library containing the template
-    /// * `name` - The name of the prompt to render
-    /// * `prompt` - The prompt object
-    /// * `arguments` - Optional arguments for template rendering
-    ///
-    /// # Returns
-    ///
-    /// * `Result<String, McpError>` - The rendered content or an error
-    fn render_prompt_with_args(
-        library: &PromptLibrary,
-        name: &str,
-        prompt: &swissarmyhammer_prompts::Prompt,
-        arguments: &Option<serde_json::Map<String, Value>>,
-    ) -> std::result::Result<String, McpError> {
-        if let Some(args) = arguments {
-            let template_args = Self::json_map_to_string_map(args);
-
-            let template_context = TemplateContext::with_template_vars(
-                template_args
-                    .iter()
-                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                    .collect(),
-            )
-            .map_err(|e| {
-                McpError::internal_error(format!("Failed to create template context: {}", e), None)
-            })?;
-
-            library.render(name, &template_context).map_err(|e| {
-                McpError::internal_error(format!("Template rendering error: {e}"), None)
-            })
-        } else {
-            Ok(prompt.template.clone())
-        }
     }
 
     /// Prepare tool context with peer for elicitation support.
@@ -1972,88 +1791,6 @@ impl ServerHandler for McpServer {
             .with_instructions(build_instructions_with_health(self.work_dir.as_deref())))
     }
 
-    async fn list_prompts(
-        &self,
-        _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
-    ) -> std::result::Result<ListPromptsResult, McpError> {
-        let library = self.library.read().await;
-        match library.list() {
-            Ok(prompts) => {
-                let prompt_list: Vec<Prompt> = prompts
-                    .iter()
-                    .filter(|p| {
-                        let meta = serde_json::to_value(&p.metadata).ok();
-                        is_prompt_visible(&p.name, p.description.as_deref(), meta.as_ref())
-                            && !p.is_partial_template()
-                    })
-                    .map(|p| {
-                        // Convert SwissArmyHammer prompt parameters to MCP PromptArguments
-                        let arguments = if p.parameters.is_empty() {
-                            None
-                        } else {
-                            Some(
-                                p.parameters
-                                    .iter()
-                                    .map(|param| {
-                                        PromptArgument::new(param.name.clone())
-                                            .with_description(param.description.clone())
-                                            .with_required(param.required)
-                                    })
-                                    .collect(),
-                            )
-                        };
-
-                        Prompt::new(p.name.clone(), p.description.clone(), arguments)
-                            .with_title(p.name.clone())
-                    })
-                    .collect();
-
-                Ok(ListPromptsResult {
-                    prompts: prompt_list,
-                    next_cursor: None,
-                    meta: None,
-                })
-            }
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
-    }
-
-    async fn get_prompt(
-        &self,
-        request: GetPromptRequestParams,
-        _context: RequestContext<RoleServer>,
-    ) -> std::result::Result<GetPromptResult, McpError> {
-        let library = self.library.read().await;
-        let prompt = match library.get(&request.name) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!("Prompt '{}' not found: {}", request.name, e);
-                return Err(McpError::invalid_request(
-                    format!(
-                        "Prompt '{}' is not available. It may have been deleted or renamed.",
-                        request.name
-                    ),
-                    None,
-                ));
-            }
-        };
-
-        Self::validate_prompt_access(&prompt, &request.name)?;
-
-        let content =
-            Self::render_prompt_with_args(&library, &request.name, &prompt, &request.arguments)?;
-
-        let mut result = GetPromptResult::new(vec![PromptMessage::new(
-            PromptMessageRole::User,
-            PromptMessageContent::text(content),
-        )]);
-        if let Some(desc) = prompt.description.clone() {
-            result = result.with_description(desc);
-        }
-        Ok(result)
-    }
-
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -2292,7 +2029,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_validator_server_has_only_validator_tools() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
 
         // Full server should have many tools
         let full_tools = server.tool_registry.read().await;
@@ -2357,7 +2094,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_validator_context_registry_is_isolated() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
         let validator = server.create_validator_server();
 
         // The validator's tool_context should have its own filtered registry
@@ -2410,7 +2147,7 @@ mod tests {
     async fn test_validator_server_serves_exactly_the_profile() {
         use std::collections::BTreeSet;
 
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
         let validator = server.create_validator_server();
 
         let registry = validator.tool_registry.read().await;
@@ -2451,10 +2188,13 @@ mod tests {
         let test_file = tmp.path().join("test.txt");
         std::fs::write(&test_file, "hello world").unwrap();
 
-        let server =
-            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
-                .await
-                .unwrap();
+        let server = McpServer::new_with_work_dir(
+            TemplateLibrary::default(),
+            tmp.path().to_path_buf(),
+            None,
+        )
+        .await
+        .unwrap();
 
         let validator = server.create_validator_server();
 
@@ -2598,10 +2338,13 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_new_with_work_dir_creates_server() {
         let tmp = tempfile::tempdir().unwrap();
-        let server =
-            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
-                .await
-                .unwrap();
+        let server = McpServer::new_with_work_dir(
+            TemplateLibrary::default(),
+            tmp.path().to_path_buf(),
+            None,
+        )
+        .await
+        .unwrap();
 
         // The server should store the working directory
         assert_eq!(server.work_dir, Some(tmp.path().to_path_buf()));
@@ -2611,10 +2354,13 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_new_with_work_dir_registers_agent_tools() {
         let tmp = tempfile::tempdir().unwrap();
-        let server =
-            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
-                .await
-                .unwrap();
+        let server = McpServer::new_with_work_dir(
+            TemplateLibrary::default(),
+            tmp.path().to_path_buf(),
+            None,
+        )
+        .await
+        .unwrap();
 
         // The full tool union is always registered — agent capabilities
         // (files, web, skill, agent) are present regardless of host. Per-client
@@ -2637,7 +2383,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_set_server_port() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
 
         // Initially, port should be None
         let port = server.tool_context.mcp_server_port.read().await;
@@ -2654,7 +2400,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_set_server_port_updates_existing() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
 
         server.set_server_port(8080).await;
         server.set_server_port(9090).await;
@@ -2669,76 +2415,21 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial(cwd)]
-    async fn test_initialize_loads_prompts() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+    async fn test_initialize_loads_prompts_into_library() {
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
 
-        // Initialize should succeed without errors
+        // Initialize should succeed without errors and populate the library
+        // (including partials) so skill/agent rendering has its templates.
         server.initialize().await.unwrap();
 
-        // After initialization, prompts should be loaded from builtin sources
-        let prompts = server.list_prompts().await.unwrap();
-        // There should be at least some builtin prompts
+        // Assert directly on the effect that is unique to initialize(): the
+        // library holds builtin prompts and partials immediately afterwards,
+        // before any reload. This exercises the initialize() load path itself
+        // rather than re-proving what the reload_prompts() tests already cover.
+        let library = server.library.read().await;
         assert!(
-            !prompts.is_empty(),
-            "After initialize(), the server should have loaded prompts"
-        );
-    }
-
-    // ---------------------------------------------------------------
-    // list_prompts() tests
-    // ---------------------------------------------------------------
-
-    #[tokio::test]
-    #[serial_test::serial(cwd)]
-    async fn test_list_prompts_filters_hidden() {
-        use swissarmyhammer_prompts::Prompt;
-
-        let mut library = PromptLibrary::new();
-        // Add a visible prompt
-        library
-            .add(Prompt::new("visible-prompt", "Hello world"))
-            .unwrap();
-        // Add a hidden prompt (metadata hidden: true)
-        let mut hidden = Prompt::new("hidden-prompt", "Secret stuff");
-        hidden
-            .metadata
-            .insert("hidden".to_string(), serde_json::Value::Bool(true));
-        library.add(hidden).unwrap();
-
-        let server = McpServer::new(library).await.unwrap();
-        let prompts = server.list_prompts().await.unwrap();
-
-        assert!(
-            prompts.contains(&"visible-prompt".to_string()),
-            "Visible prompt should appear in list"
-        );
-        assert!(
-            !prompts.contains(&"hidden-prompt".to_string()),
-            "Hidden prompt should not appear in list"
-        );
-    }
-
-    #[tokio::test]
-    #[serial_test::serial(cwd)]
-    async fn test_list_prompts_filters_partials() {
-        use swissarmyhammer_prompts::Prompt;
-
-        let mut library = PromptLibrary::new();
-        library.add(Prompt::new("normal", "Hello world")).unwrap();
-        library
-            .add(Prompt::new(
-                "partial",
-                "{% partial %}\nSome partial content",
-            ))
-            .unwrap();
-
-        let server = McpServer::new(library).await.unwrap();
-        let prompts = server.list_prompts().await.unwrap();
-
-        assert!(prompts.contains(&"normal".to_string()));
-        assert!(
-            !prompts.contains(&"partial".to_string()),
-            "Partial templates should not appear in list"
+            !library.list().unwrap().is_empty(),
+            "After initialize(), the library should hold builtin prompts and partials"
         );
     }
 
@@ -2749,7 +2440,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_list_tools_returns_registered_tools() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
         let tools = server.list_tools().await;
 
         // Should have multiple tools registered
@@ -2782,7 +2473,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_execute_tool_unknown_tool_returns_error() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
 
         let result = server
             .execute_tool("nonexistent_tool", serde_json::json!({}))
@@ -2801,7 +2492,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_execute_tool_with_non_object_args() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
 
         // Passing a non-object (e.g. string) should use an empty map, not crash
         let result = server
@@ -2817,7 +2508,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_execute_tool_has_tool_check() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
 
         // "shell" is a non-agent tool, always available
         assert!(server.has_tool("shell").await, "shell tool should exist");
@@ -2828,107 +2519,13 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // get_prompt() tests
-    // ---------------------------------------------------------------
-
-    #[tokio::test]
-    #[serial_test::serial(cwd)]
-    async fn test_get_prompt_basic() {
-        use swissarmyhammer_prompts::Prompt;
-
-        let mut library = PromptLibrary::new();
-        library
-            .add(Prompt::new("test-prompt", "Hello from test"))
-            .unwrap();
-
-        let server = McpServer::new(library).await.unwrap();
-        let content = server.get_prompt("test-prompt", None).await.unwrap();
-
-        assert_eq!(content, "Hello from test");
-    }
-
-    #[tokio::test]
-    #[serial_test::serial(cwd)]
-    async fn test_get_prompt_with_template_args() {
-        use swissarmyhammer_prompts::Prompt;
-
-        let mut library = PromptLibrary::new();
-        library
-            .add(Prompt::new("greet", "Hello {{ name }}!"))
-            .unwrap();
-
-        let server = McpServer::new(library).await.unwrap();
-        let mut args = HashMap::new();
-        args.insert("name".to_string(), "World".to_string());
-        let content = server.get_prompt("greet", Some(&args)).await.unwrap();
-
-        assert_eq!(content, "Hello World!");
-    }
-
-    #[tokio::test]
-    #[serial_test::serial(cwd)]
-    async fn test_get_prompt_not_found() {
-        let library = PromptLibrary::new();
-        let server = McpServer::new(library).await.unwrap();
-
-        let result = server.get_prompt("nonexistent", None).await;
-        assert!(result.is_err(), "Should return error for missing prompt");
-    }
-
-    #[tokio::test]
-    #[serial_test::serial(cwd)]
-    async fn test_get_prompt_hidden_prompt_rejected() {
-        use swissarmyhammer_prompts::Prompt;
-
-        let mut library = PromptLibrary::new();
-        let mut hidden = Prompt::new("secret-prompt", "Secret content");
-        hidden
-            .metadata
-            .insert("hidden".to_string(), serde_json::Value::Bool(true));
-        library.add(hidden).unwrap();
-
-        let server = McpServer::new(library).await.unwrap();
-        let result = server.get_prompt("secret-prompt", None).await;
-
-        assert!(
-            result.is_err(),
-            "Hidden prompts should not be accessible via get_prompt"
-        );
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("hidden") || err_msg.contains("Hidden"),
-            "Error should mention hidden: {}",
-            err_msg
-        );
-    }
-
-    #[tokio::test]
-    #[serial_test::serial(cwd)]
-    async fn test_get_prompt_partial_rejected() {
-        use swissarmyhammer_prompts::Prompt;
-
-        let mut library = PromptLibrary::new();
-        library
-            .add(Prompt::new("my-partial", "{% partial %}\nPartial content"))
-            .unwrap();
-
-        let server = McpServer::new(library).await.unwrap();
-        let result = server.get_prompt("my-partial", None).await;
-
-        assert!(
-            result.is_err(),
-            "Partial templates should not be accessible via get_prompt"
-        );
-    }
-
-    // ---------------------------------------------------------------
     // reload_prompts() tests
     // ---------------------------------------------------------------
 
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_reload_prompts_succeeds() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
         // Initialize first to load prompts
         server.initialize().await.unwrap();
 
@@ -2944,7 +2541,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_reload_prompts_detects_no_change() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
         server.initialize().await.unwrap();
 
         // Reloading without changes should return false (no content change)
@@ -2963,10 +2560,13 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_create_validator_server_shares_work_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let server =
-            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
-                .await
-                .unwrap();
+        let server = McpServer::new_with_work_dir(
+            TemplateLibrary::default(),
+            tmp.path().to_path_buf(),
+            None,
+        )
+        .await
+        .unwrap();
 
         let validator = server.create_validator_server();
 
@@ -2983,10 +2583,13 @@ mod tests {
         let test_file = tmp.path().join("hello.txt");
         std::fs::write(&test_file, "hi").unwrap();
 
-        let server =
-            McpServer::new_with_work_dir(PromptLibrary::default(), tmp.path().to_path_buf(), None)
-                .await
-                .unwrap();
+        let server = McpServer::new_with_work_dir(
+            TemplateLibrary::default(),
+            tmp.path().to_path_buf(),
+            None,
+        )
+        .await
+        .unwrap();
 
         let validator = server.create_validator_server();
 
@@ -3023,7 +2626,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_stop_file_watching_is_safe_without_start() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
 
         // Stopping file watching without starting should not panic
         server.stop_file_watching().await;
@@ -3053,7 +2656,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_stop_file_watching_returns_promptly_during_inflight_registration() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
 
         // Kick off a real off-lock registration in the background and register
         // its handle exactly like `spawn_background_file_watcher` does, so the
@@ -3096,7 +2699,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_stop_file_watching_suppresses_late_store() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
 
         // Shutdown first.
         server.stop_file_watching().await;
@@ -3145,7 +2748,7 @@ mod tests {
             .unwrap();
 
         runtime.block_on(async {
-            let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+            let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
 
             // Mirror `spawn_background_file_watcher`: kick off the off-runtime
             // registration on a background task and register its handle so the
@@ -3282,13 +2885,11 @@ mod tests {
     #[test]
     fn test_create_server_capabilities() {
         let caps = create_server_capabilities();
-        assert!(caps.prompts.is_some(), "Should have prompts capability");
-        assert!(caps.tools.is_some(), "Should have tools capability");
-        assert_eq!(
-            caps.prompts.as_ref().unwrap().list_changed,
-            Some(true),
-            "Prompts should support list_changed"
+        assert!(
+            caps.prompts.is_none(),
+            "Server must not advertise the prompts capability — the MCP prompt protocol surface was removed"
         );
+        assert!(caps.tools.is_some(), "Should have tools capability");
         assert_eq!(
             caps.tools.as_ref().unwrap().list_changed,
             Some(true),
@@ -3303,37 +2904,12 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // json_map_to_string_map() tests
-    // ---------------------------------------------------------------
-
-    #[test]
-    fn test_json_map_to_string_map_strings() {
-        let mut map = serde_json::Map::new();
-        map.insert(
-            "key".to_string(),
-            serde_json::Value::String("value".to_string()),
-        );
-        let result = McpServer::json_map_to_string_map(&map);
-        assert_eq!(result.get("key").unwrap(), "value");
-    }
-
-    #[test]
-    fn test_json_map_to_string_map_non_strings() {
-        let mut map = serde_json::Map::new();
-        map.insert("num".to_string(), serde_json::json!(42));
-        map.insert("bool".to_string(), serde_json::json!(true));
-        let result = McpServer::json_map_to_string_map(&map);
-        assert_eq!(result.get("num").unwrap(), "42");
-        assert_eq!(result.get("bool").unwrap(), "true");
-    }
-
-    // ---------------------------------------------------------------
     // compute_prompt_signature() tests
     // ---------------------------------------------------------------
 
     #[test]
     fn test_compute_prompt_signature_deterministic() {
-        use swissarmyhammer_prompts::Prompt;
+        use swissarmyhammer_templating::Prompt;
         let prompts = vec![Prompt::new("a", "Hello"), Prompt::new("b", "World")];
         let sig1 = McpServer::compute_prompt_signature(&prompts);
         let sig2 = McpServer::compute_prompt_signature(&prompts);
@@ -3342,7 +2918,7 @@ mod tests {
 
     #[test]
     fn test_compute_prompt_signature_detects_changes() {
-        use swissarmyhammer_prompts::Prompt;
+        use swissarmyhammer_templating::Prompt;
         let prompts_v1 = vec![Prompt::new("a", "Hello")];
         let prompts_v2 = vec![Prompt::new("a", "Hello updated")];
         let sig1 = McpServer::compute_prompt_signature(&prompts_v1);
@@ -3360,7 +2936,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_get_tool_registry_shares_reference() {
-        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
         let registry = server.get_tool_registry();
         let tools = registry.read().await;
         assert!(!tools.is_empty(), "Registry should have tools");

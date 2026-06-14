@@ -11,15 +11,14 @@
 //! The tests are structured to match the expected flow once implementation is complete.
 
 mod acp_tests {
+    use llama_agent::acp::test_utils::test_cwd;
     use llama_agent::acp::AcpServer;
-    use llama_agent::types::{ModelConfig, ModelSource};
     use llama_agent::AgentServer;
     use serial_test::serial;
     use std::sync::Arc;
-    use tempfile::TempDir;
 
     async fn create_test_server() -> Result<Arc<AcpServer>, Box<dyn std::error::Error>> {
-        use llama_agent::types::{ParallelConfig, QueueConfig, RetryConfig, SessionConfig};
+        use llama_agent::types::SessionConfig;
 
         // Initialize tracing for test visibility
         let _ = tracing_subscriber::fmt()
@@ -27,30 +26,9 @@ mod acp_tests {
             .with_max_level(tracing::Level::DEBUG)
             .try_init();
 
-        // Create a temporary directory for the test model
-        let temp_dir = TempDir::new()?;
-
-        // Create minimal agent config for testing
-        let agent_config = llama_agent::types::AgentConfig {
-            model: ModelConfig {
-                source: ModelSource::Local {
-                    folder: temp_dir.path().to_path_buf(),
-                    filename: Some("test.gguf".to_string()),
-                },
-                batch_size: 512,
-                n_seq_max: 1,
-                n_threads: 1,
-                n_threads_batch: 1,
-                use_hf_params: false,
-                retry_config: RetryConfig::default(),
-                debug: false,
-            },
-            queue_config: QueueConfig::default(),
-            mcp_servers: Vec::new(),
-            session_config: SessionConfig::default(),
-            parallel_execution_config: ParallelConfig::default(),
-            tool_execution_config: Default::default(),
-        };
+        // Minimal model-free agent config from the shared test helper.
+        let agent_config =
+            llama_agent::acp::test_utils::test_agent_config(SessionConfig::default());
 
         // Create all the components needed for AgentServer
         let model_manager = Arc::new(
@@ -119,8 +97,7 @@ mod acp_tests {
             .expect("Initialize failed");
 
         // Test new_session
-        let session_request =
-            agent_client_protocol::schema::NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
+        let session_request = agent_client_protocol::schema::NewSessionRequest::new(test_cwd());
         let _session_response = server
             .new_session(session_request)
             .await
@@ -228,14 +205,12 @@ mod acp_tests {
     #[tokio::test]
     #[serial]
     async fn test_load_session_nonexistent() {
-        use std::path::PathBuf;
-
         let server = create_test_server().await.expect("Failed to create server");
 
         // Try to load a nonexistent session
         let load_request = agent_client_protocol::schema::LoadSessionRequest::new(
             agent_client_protocol::schema::SessionId::new("01HZZZZZZZZZZZZZZZZZZZZZZ"),
-            PathBuf::from("/tmp"),
+            test_cwd(),
         );
 
         let result = server.load_session(load_request).await;
@@ -253,14 +228,12 @@ mod acp_tests {
     #[tokio::test]
     #[serial]
     async fn test_load_session_invalid_id_format() {
-        use std::path::PathBuf;
-
         let server = create_test_server().await.expect("Failed to create server");
 
         // Try to load with an invalid session ID format
         let load_request = agent_client_protocol::schema::LoadSessionRequest::new(
             agent_client_protocol::schema::SessionId::new("not-a-valid-ulid"),
-            PathBuf::from("/tmp"),
+            test_cwd(),
         );
 
         let result = server.load_session(load_request).await;
@@ -919,61 +892,14 @@ mod session_resume_tests {
         SessionUpdate, TextContent,
     };
     use agent_client_protocol_extras::{SessionRecord, SessionStore};
-    use llama_agent::acp::config::AcpConfig;
+
+    use llama_agent::acp::test_utils::{test_cwd, StateDirGuard};
     use llama_agent::acp::AcpServer;
     use llama_agent::types::ids::SessionId as LlamaSessionId;
-    use llama_agent::types::{
-        AgentConfig, MessageRole, ModelConfig, ModelSource, ParallelConfig, QueueConfig,
-        RetryConfig, SessionConfig,
-    };
-    use llama_agent::AgentServer;
+    use llama_agent::types::{MessageRole, SessionConfig};
+
     use serial_test::serial;
-    use std::path::PathBuf;
     use std::sync::Arc;
-    use tempfile::TempDir;
-
-    /// RAII guard returned by [`with_temp_state`]: points `XDG_STATE_HOME` at a
-    /// fresh temp directory and, on drop, restores the env var to whatever it
-    /// was before (removing it if it was unset).
-    struct TempState {
-        /// The temp directory backing the isolated state tree; dropped last.
-        _temp: TempDir,
-        /// The `XDG_STATE_HOME` value captured before the override, restored on
-        /// drop. `None` means the variable was unset.
-        previous: Option<std::ffi::OsString>,
-    }
-
-    impl Drop for TempState {
-        fn drop(&mut self) {
-            // SAFETY: callers are `#[serial]`, so no other thread reads or
-            // writes the env var concurrently.
-            match self.previous.take() {
-                Some(value) => std::env::set_var("XDG_STATE_HOME", value),
-                None => std::env::remove_var("XDG_STATE_HOME"),
-            }
-        }
-    }
-
-    /// Point `XDG_STATE_HOME` at a fresh temp directory so the shared
-    /// `SessionStore` resolves into isolated, disposable state.
-    ///
-    /// Returns a [`TempState`] RAII guard: the caller must bind it (e.g.
-    /// `let _state = with_temp_state();`) so the temp directory stays alive for
-    /// the test and the prior `XDG_STATE_HOME` value is restored on drop.
-    ///
-    /// Serialized at the call site with `#[serial]`: this mutates the
-    /// process-global `XDG_STATE_HOME` env var.
-    fn with_temp_state() -> TempState {
-        let temp = TempDir::new().expect("temp dir for XDG_STATE_HOME");
-        let previous = std::env::var_os("XDG_STATE_HOME");
-        // SAFETY: callers are `#[serial]`, so no other thread reads or writes
-        // the env var concurrently; the previous value is restored on drop.
-        std::env::set_var("XDG_STATE_HOME", temp.path());
-        TempState {
-            _temp: temp,
-            previous,
-        }
-    }
 
     /// Build an `AcpServer` for resume/load tests without loading a model.
     ///
@@ -983,62 +909,13 @@ mod session_resume_tests {
         Arc<AcpServer>,
         tokio::sync::broadcast::Receiver<agent_client_protocol::schema::SessionNotification>,
     ) {
-        let temp_dir = TempDir::new().expect("temp dir for model folder");
-        let agent_config = AgentConfig {
-            model: ModelConfig {
-                source: ModelSource::Local {
-                    folder: temp_dir.path().to_path_buf(),
-                    filename: Some("test.gguf".to_string()),
-                },
-                batch_size: 512,
-                n_seq_max: 1,
-                n_threads: 1,
-                n_threads_batch: 1,
-                use_hf_params: false,
-                retry_config: RetryConfig::default(),
-                debug: false,
-            },
-            queue_config: QueueConfig::default(),
-            mcp_servers: Vec::new(),
-            session_config: SessionConfig::default(),
-            parallel_execution_config: ParallelConfig::default(),
-            tool_execution_config: Default::default(),
-        };
+        let agent_config =
+            llama_agent::acp::test_utils::test_agent_config(SessionConfig::default());
 
-        let model_manager = Arc::new(
-            llama_agent::model::ModelManager::new(agent_config.model.clone())
-                .expect("model manager"),
-        );
-        let request_queue = Arc::new(llama_agent::queue::RequestQueue::new(
-            model_manager.clone(),
-            agent_config.queue_config.clone(),
-            agent_config.session_config.clone(),
-        ));
-        let session_manager = Arc::new(llama_agent::session::SessionManager::new(
-            agent_config.session_config.clone(),
-        ));
-        let mcp_client: Arc<dyn llama_agent::mcp::MCPClient> =
-            Arc::new(llama_agent::mcp::NoOpMCPClient::new());
-        let chat_template = Arc::new(llama_agent::chat_template::ChatTemplateEngine::new());
-        let dependency_analyzer =
-            Arc::new(llama_agent::dependency_analysis::DependencyAnalyzer::new(
-                agent_config.parallel_execution_config.clone(),
-            ));
-
-        let agent_server = Arc::new(AgentServer::new(
-            model_manager,
-            request_queue,
-            session_manager,
-            mcp_client,
-            chat_template,
-            dependency_analyzer,
-            agent_config,
-        ));
-
-        let mount = Arc::new(llama_agent::InProcessMount::new(
-            llama_agent::echo::EchoService::new(),
-        ));
-        let (server, rx) = AcpServer::new(agent_server, AcpConfig::default(), mount);
+        let (server, rx) =
+            llama_agent::acp::test_utils::create_acp_server_without_model(agent_config)
+                .await
+                .expect("model-free ACP server");
         (Arc::new(server), rx)
     }
 
@@ -1046,7 +923,7 @@ mod session_resume_tests {
     /// fresh llama ULID id, and return that id as a string.
     fn persist_record_with_exchange() -> String {
         let id = LlamaSessionId::new().to_string();
-        let mut record = SessionRecord::new(&id, PathBuf::from("/tmp"), "2026-05-18T12:00:00Z");
+        let mut record = SessionRecord::new(&id, test_cwd(), "2026-05-18T12:00:00Z");
         record.updates = vec![
             SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
                 TextContent::new("remember the number is 42".to_string()),
@@ -1066,14 +943,14 @@ mod session_resume_tests {
     #[tokio::test]
     #[serial]
     async fn resume_restores_session_without_replay() {
-        let _state = with_temp_state();
+        let _state = StateDirGuard::new();
         let (server, mut rx) = build_server().await;
         let id = persist_record_with_exchange();
 
         let response = server
             .resume_session(ResumeSessionRequest::new(
                 SessionId::new(id.clone()),
-                PathBuf::from("/tmp"),
+                test_cwd(),
             ))
             .await
             .expect("resume should succeed for a persisted record");
@@ -1108,15 +985,12 @@ mod session_resume_tests {
     #[tokio::test]
     #[serial]
     async fn resume_missing_record_errors() {
-        let _state = with_temp_state();
+        let _state = StateDirGuard::new();
         let (server, _rx) = build_server().await;
 
         let id = LlamaSessionId::new().to_string();
         let result = server
-            .resume_session(ResumeSessionRequest::new(
-                SessionId::new(id),
-                PathBuf::from("/tmp"),
-            ))
+            .resume_session(ResumeSessionRequest::new(SessionId::new(id), test_cwd()))
             .await;
 
         assert!(
@@ -1130,14 +1004,14 @@ mod session_resume_tests {
     #[tokio::test]
     #[serial]
     async fn load_restores_and_replays_history() {
-        let _state = with_temp_state();
+        let _state = StateDirGuard::new();
         let (server, mut rx) = build_server().await;
         let id = persist_record_with_exchange();
 
         server
             .load_session(LoadSessionRequest::new(
                 SessionId::new(id.clone()),
-                PathBuf::from("/tmp"),
+                test_cwd(),
             ))
             .await
             .expect("load should succeed for a persisted record");
@@ -1199,15 +1073,12 @@ mod session_resume_tests {
     #[tokio::test]
     #[serial]
     async fn load_missing_record_errors() {
-        let _state = with_temp_state();
+        let _state = StateDirGuard::new();
         let (server, _rx) = build_server().await;
 
         let id = LlamaSessionId::new().to_string();
         let result = server
-            .load_session(LoadSessionRequest::new(
-                SessionId::new(id),
-                PathBuf::from("/tmp"),
-            ))
+            .load_session(LoadSessionRequest::new(SessionId::new(id), test_cwd()))
             .await;
 
         assert!(
@@ -1221,7 +1092,7 @@ mod session_resume_tests {
     #[tokio::test]
     #[serial]
     async fn initialize_advertises_resume_capability() {
-        let _state = with_temp_state();
+        let _state = StateDirGuard::new();
         let (server, _rx) = build_server().await;
 
         let response = server
@@ -1251,11 +1122,11 @@ mod session_resume_tests {
             NewSessionRequest, SessionModeId, SetSessionModeRequest,
         };
 
-        let _state = with_temp_state();
+        let _state = StateDirGuard::new();
         let (server, mut rx) = build_server().await;
 
         let session = server
-            .new_session(NewSessionRequest::new(PathBuf::from("/tmp")))
+            .new_session(NewSessionRequest::new(test_cwd()))
             .await
             .expect("new_session");
 
@@ -1295,11 +1166,11 @@ mod session_resume_tests {
     async fn cancel_emits_final_status_update() {
         use agent_client_protocol::schema::{CancelNotification, NewSessionRequest};
 
-        let _state = with_temp_state();
+        let _state = StateDirGuard::new();
         let (server, mut rx) = build_server().await;
 
         let session = server
-            .new_session(NewSessionRequest::new(PathBuf::from("/tmp")))
+            .new_session(NewSessionRequest::new(test_cwd()))
             .await
             .expect("new_session");
 

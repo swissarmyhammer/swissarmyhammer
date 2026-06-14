@@ -46,7 +46,7 @@ use std::time::Duration;
 
 use swissarmyhammer_directory::SwissarmyhammerConfig;
 use swissarmyhammer_plugin::PluginHost;
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_tools::mcp::McpServer;
 
 /// A generous upper bound on any single host or server interaction.
@@ -74,7 +74,7 @@ const PROBE_PAYLOAD: &str = "e2e payload routed through the real files tool";
 /// the unified `files` tool, an agent tool — which is what makes the real
 /// [`FilesTool`] reachable for exposure.
 async fn build_mcp_server(work_dir: &Path) -> McpServer {
-    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None)
+    McpServer::new_with_work_dir(TemplateLibrary::new(), work_dir.to_path_buf(), None)
         .await
         .expect("MCP server bootstrap should succeed")
 }

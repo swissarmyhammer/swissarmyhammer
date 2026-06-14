@@ -75,11 +75,10 @@ swissarmyhammer-tools = { workspace = true }
 # Supplies `KanbanConfig` for `host.discover_and_load_all::<KanbanConfig>()` —
 # the builtin-layer discovery pass that loads the `task-commands` bundle.
 swissarmyhammer-directory = { workspace = true }
-# Supplies the empty `PromptLibrary`/`ModelConfig` and `GitOperations` the
+# Supplies the empty `TemplateLibrary`/`ModelConfig` and `GitOperations` the
 # `ToolContext` for the in-process `kanban` tool requires.
 swissarmyhammer-config = { workspace = true }
 swissarmyhammer-git = { workspace = true }
-swissarmyhammer-prompts = { workspace = true }
 
 [lints]
 workspace = true

@@ -372,16 +372,18 @@ mod tests {
 
     use acp_conformance::test_utils::{numbered_session_response, MockAgent, MockAgentAdapter};
     use agent_client_protocol::schema::{
-        CancelNotification, ContentBlock, ContentChunk, InitializeResponse, NewSessionRequest,
-        NewSessionResponse, PromptRequest, PromptResponse, SessionId, SessionNotification,
-        SessionUpdate, StopReason, TextContent,
+        CancelNotification, ContentBlock, ContentChunk, NewSessionRequest, NewSessionResponse,
+        PromptRequest, PromptResponse, SessionId, SessionNotification, SessionUpdate, StopReason,
+        TextContent,
     };
-    use agent_client_protocol::{ConnectTo, ConnectionTo, Role};
     use futures::future::BoxFuture;
     use tokio::sync::Notify;
 
     use crate::review::scope::Scope;
-    use crate::review::test_support::{loader_with, ruleset, seeded_dup_repo};
+    use crate::review::test_support::{
+        findings_json as shared_findings_json, loader_with, prompt_text, ruleset, seeded_dup_repo,
+        verdict_json, ScriptedAdapter, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
+    };
     use crate::validators::Severity;
 
     /// How long a wedged pipeline may run before a test fails instead of
@@ -413,309 +415,65 @@ mod tests {
     /// window so the streaming turn never looks stalled.
     const KEEP_ALIVE_INTERVAL: Duration = Duration::from_millis(ABANDON_IDLE_WINDOW_MS / 16);
 
-    // ---- scripted ACP agent (substring → response) -----------------------
+    // ---- scripted ACP agent (shared harness) ------------------------------
     //
-    // The scripted agent emits its streamed reply onto a `broadcast::Sender`
-    // exactly the way a real backend (Claude/Llama) does: the backend publishes
-    // every `session/update` onto its broadcast channel, and the driver consumes
-    // a `resubscribe()` of that channel as `notification_rx`. The test passes
-    // `notify_tx.subscribe()` as `notification_rx`, so the driver collects from
-    // the same authoritative stream production does.
-    //
-    // When `bridge_to_connection` is set, the agent ALSO re-emits the same
-    // notification over the live connection (`cx.send_notification`), reproducing
-    // the real-handle shape where `wrap_claude_into_handle`'s
-    // `forward_session_notifications` bridges the backend broadcast onto the
-    // connection. The driver must NOT collect that re-emission a second time;
-    // these tests pin that single-path invariant.
+    // The scripted ACP agent lives in `crate::review::test_support`. Drive
+    // tests run it shaped like a real backend (Claude/Llama): the agent
+    // publishes every `session/update` onto its backend broadcast channel
+    // (`notify_tx`), and the driver consumes a `subscribe()` of that channel as
+    // `notification_rx` — the same authoritative stream production collects
+    // from. With `bridge_to_connection`, the agent ALSO re-emits each reply
+    // over the live connection, reproducing the real-handle shape whose second
+    // copy the driver must NOT collect (the single-path invariant these tests
+    // pin). `demand_permission` and `read_file` add the mid-turn agent→client
+    // round-trips a real `claude` agent performs.
 
-    struct ScriptedAgent {
-        next_session: AtomicUsize,
-        script: Vec<(String, String)>,
-        /// Backend broadcast the agent streams its reply onto — the same channel
-        /// the driver's `notification_rx` is a `subscribe()` of.
+    /// A scripted agent streaming onto the backend broadcast `notify_tx`,
+    /// optionally bridged onto the live connection too.
+    fn broadcast_agent(
+        script: Vec<(String, ScriptedReply)>,
         notify_tx: broadcast::Sender<SessionNotification>,
-        /// Whether to additionally re-emit each reply over the live connection,
-        /// reproducing a real handle's broadcast→connection bridge.
         bridge_to_connection: bool,
-        /// Whether the `prompt` handler issues a mid-turn `session/request_permission`
-        /// request back to the client and blocks on its response before returning
-        /// `end_turn` — exactly as a real `claude` agent does for tool consent. This
-        /// reproduces the agent↔client deadlock: a client that registers no
-        /// `on_receive_request` handler never answers, so the prompt never returns.
-        demand_permission: bool,
-    }
-
-    impl ScriptedAgent {
-        fn new(
-            script: Vec<(String, String)>,
-            notify_tx: broadcast::Sender<SessionNotification>,
-            bridge_to_connection: bool,
-        ) -> Arc<Self> {
-            Arc::new(Self {
-                next_session: AtomicUsize::new(0),
-                script,
-                notify_tx,
+    ) -> Arc<ScriptedAgent> {
+        ScriptedAgent::with_config(
+            script,
+            ScriptedAgentConfig {
+                broadcast: Some(notify_tx),
                 bridge_to_connection,
-                demand_permission: false,
-            })
-        }
-
-        /// Like [`ScriptedAgent::new`] but the `prompt` handler issues a mid-turn
-        /// `session/request_permission` round-trip to the client and only returns
-        /// `end_turn` once the client answers (see [`demand_permission`]).
-        fn new_demanding(
-            script: Vec<(String, String)>,
-            notify_tx: broadcast::Sender<SessionNotification>,
-        ) -> Arc<Self> {
-            Arc::new(Self {
-                next_session: AtomicUsize::new(0),
-                script,
-                notify_tx,
-                bridge_to_connection: false,
-                demand_permission: true,
-            })
-        }
-
-        fn response_for(&self, prompt: &str) -> String {
-            for (needle, response) in &self.script {
-                if prompt.contains(needle) {
-                    return response.clone();
-                }
-            }
-            "[]".to_string()
-        }
-    }
-
-    struct ScriptedAdapter(Arc<ScriptedAgent>);
-
-    impl ConnectTo<Client> for ScriptedAdapter {
-        async fn connect_to(
-            self,
-            client: impl ConnectTo<<Client as Role>::Counterpart>,
-        ) -> agent_client_protocol::Result<()> {
-            let mock = Arc::clone(&self.0);
-            agent_client_protocol::Agent
-                .builder()
-                .name("scripted-agent")
-                .on_receive_request(
-                    {
-                        let mock = Arc::clone(&mock);
-                        async move |req: agent_client_protocol::ClientRequest, responder, cx| {
-                            dispatch(&mock, req, responder, &cx)
-                        }
-                    },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .on_receive_notification(
-                    async move |_n: agent_client_protocol::ClientNotification, _cx| Ok(()),
-                    agent_client_protocol::on_receive_notification!(),
-                )
-                .connect_to(client)
-                .await
-        }
-    }
-
-    /// A scripted agent whose `prompt` issues an `fs/read_text_file` request to
-    /// the client for `read_path` and records the content the client returns
-    /// (`observed_content`) before streaming its reply. Used to prove the client's
-    /// read handler serves real on-disk content under `repo_path`.
-    struct FsReadingAgent {
-        next_session: AtomicUsize,
-        script: Vec<(String, String)>,
-        notify_tx: broadcast::Sender<SessionNotification>,
-        read_path: std::path::PathBuf,
-        observed_content: Arc<std::sync::Mutex<Option<String>>>,
-    }
-
-    impl FsReadingAgent {
-        fn response_for(&self, prompt: &str) -> String {
-            for (needle, response) in &self.script {
-                if prompt.contains(needle) {
-                    return response.clone();
-                }
-            }
-            "[]".to_string()
-        }
-    }
-
-    struct FsReadingAdapter(Arc<FsReadingAgent>);
-
-    impl ConnectTo<Client> for FsReadingAdapter {
-        async fn connect_to(
-            self,
-            client: impl ConnectTo<<Client as Role>::Counterpart>,
-        ) -> agent_client_protocol::Result<()> {
-            let mock = Arc::clone(&self.0);
-            agent_client_protocol::Agent
-                .builder()
-                .name("fs-reading-agent")
-                .on_receive_request(
-                    {
-                        let mock = Arc::clone(&mock);
-                        async move |req: agent_client_protocol::ClientRequest, responder, cx| {
-                            dispatch_fs_reading(&mock, req, responder, &cx)
-                        }
-                    },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .on_receive_notification(
-                    async move |_n: agent_client_protocol::ClientNotification, _cx| Ok(()),
-                    agent_client_protocol::on_receive_notification!(),
-                )
-                .connect_to(client)
-                .await
-        }
-    }
-
-    fn dispatch_fs_reading(
-        mock: &Arc<FsReadingAgent>,
-        request: agent_client_protocol::ClientRequest,
-        responder: agent_client_protocol::Responder<serde_json::Value>,
-        cx: &ConnectionTo<Client>,
-    ) -> agent_client_protocol::Result<()> {
-        use agent_client_protocol::ClientRequest as Req;
-
-        let mock = Arc::clone(mock);
-        let cx = cx.clone();
-        cx.clone().spawn(async move {
-            match request {
-                Req::InitializeRequest(_) => responder
-                    .cast()
-                    .respond_with_result(Ok(InitializeResponse::new(1.into()))),
-                Req::NewSessionRequest(_req) => responder.cast().respond_with_result(
-                    numbered_session_response(&mock.next_session, "sess").await,
-                ),
-                Req::PromptRequest(req) => {
-                    use agent_client_protocol::schema::ReadTextFileRequest;
-                    let read_request =
-                        ReadTextFileRequest::new(req.session_id.clone(), mock.read_path.clone());
-                    if let Ok(resp) = cx.send_request(read_request).block_task().await {
-                        *mock.observed_content.lock().unwrap() = Some(resp.content);
-                    }
-
-                    let prompt = prompt_text(&req);
-                    let text = mock.response_for(&prompt);
-                    let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(
-                        ContentBlock::Text(TextContent::new(text)),
-                    ));
-                    let notif = SessionNotification::new(req.session_id.clone(), update);
-                    let _ = mock.notify_tx.send(notif);
-                    responder.cast().respond_with_result(Ok(PromptResponse::new(
-                        agent_client_protocol::schema::StopReason::EndTurn,
-                    )))
-                }
-                _ => responder
-                    .cast::<serde_json::Value>()
-                    .respond_with_error(agent_client_protocol::Error::method_not_found()),
-            }
-        })
-    }
-
-    fn dispatch(
-        mock: &Arc<ScriptedAgent>,
-        request: agent_client_protocol::ClientRequest,
-        responder: agent_client_protocol::Responder<serde_json::Value>,
-        cx: &ConnectionTo<Client>,
-    ) -> agent_client_protocol::Result<()> {
-        use agent_client_protocol::ClientRequest as Req;
-
-        let mock = Arc::clone(mock);
-        let cx = cx.clone();
-        cx.clone().spawn(async move {
-            match request {
-                Req::InitializeRequest(_) => responder
-                    .cast()
-                    .respond_with_result(Ok(InitializeResponse::new(1.into()))),
-                Req::NewSessionRequest(_req) => responder.cast().respond_with_result(
-                    numbered_session_response(&mock.next_session, "sess").await,
-                ),
-                Req::PromptRequest(req) => {
-                    // Mid-turn, a real claude agent asks the client for tool
-                    // consent via `session/request_permission` and blocks on the
-                    // answer before finishing the turn. Model that here: send the
-                    // request to the client and `.block_task().await` it. If the
-                    // client registers no `on_receive_request` handler, this never
-                    // returns and the whole prompt deadlocks — the production hang.
-                    if mock.demand_permission {
-                        use agent_client_protocol::schema::{
-                            RequestPermissionRequest, ToolCallUpdate, ToolCallUpdateFields,
-                        };
-                        let tool_call_update = ToolCallUpdate::new(
-                            agent_client_protocol::schema::ToolCallId::new("tool-read"),
-                            ToolCallUpdateFields::new(),
-                        );
-                        let permission_request = RequestPermissionRequest::new(
-                            req.session_id.clone(),
-                            tool_call_update,
-                            vec![],
-                        );
-                        if cx
-                            .send_request(permission_request)
-                            .block_task()
-                            .await
-                            .is_err()
-                        {
-                            return responder.cast::<serde_json::Value>().respond_with_error(
-                                agent_client_protocol::Error::internal_error(),
-                            );
-                        }
-                    }
-
-                    let prompt = prompt_text(&req);
-                    let text = mock.response_for(&prompt);
-                    let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(
-                        ContentBlock::Text(TextContent::new(text)),
-                    ));
-                    let notif = SessionNotification::new(req.session_id.clone(), update);
-                    // Publish onto the backend broadcast — the driver's
-                    // `notification_rx` is a `subscribe()` of this channel, so this
-                    // is the authoritative stream the pool collects from.
-                    let _ = mock.notify_tx.send(notif.clone());
-                    // Optionally also re-emit over the connection, mirroring the
-                    // real handle's broadcast→connection bridge. The driver must
-                    // ignore this second copy.
-                    if mock.bridge_to_connection {
-                        let _ = cx.send_notification(notif);
-                    }
-                    responder.cast().respond_with_result(Ok(PromptResponse::new(
-                        agent_client_protocol::schema::StopReason::EndTurn,
-                    )))
-                }
-                _ => responder
-                    .cast::<serde_json::Value>()
-                    .respond_with_error(agent_client_protocol::Error::method_not_found()),
-            }
-        })
-    }
-
-    fn prompt_text(req: &PromptRequest) -> String {
-        req.prompt
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text(t) => Some(t.text.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("")
-    }
-
-    /// A findings array as an agent emits it, fenced in prose. The verify pass
-    /// re-prompts the same agent; the verify prompt mentions the validator and
-    /// the claim, so the same scripted response (a confirming verdict) is keyed
-    /// off the claim text.
-    fn findings_json(file: &str, severity: &str, claim: &str) -> String {
-        format!(
-            "```json\n[{{\"file\":\"{file}\",\"line\":1,\"validator\":\"agent-tagged\",\
-             \"rule\":\"r\",\"severity\":\"{severity}\",\"claim\":\"{claim}\",\
-             \"evidence\":\"per `duplicates`: 0.99\",\"suggestion\":\"extract a helper\"}}]\n```"
+                ..ScriptedAgentConfig::default()
+            },
         )
+    }
+
+    /// The fan-out → verify script every drive scenario shares: the fan-out
+    /// prompt names the validator, the verify prompt names the claim.
+    fn dedup_script() -> Vec<(String, ScriptedReply)> {
+        vec![
+            (
+                "# Validator: deduplicate".to_string(),
+                ScriptedReply::Text(findings_json(
+                    "src/lib.rs",
+                    "blocker",
+                    "compute duplicates old_compute",
+                )),
+            ),
+            (
+                "compute duplicates old_compute".to_string(),
+                ScriptedReply::Text(confirm_json()),
+            ),
+        ]
+    }
+
+    /// A findings array keyed the way drive's scenarios need it: rule `r`,
+    /// line 1 (the report assertions check `src/lib.rs:1`).
+    fn findings_json(file: &str, severity: &str, claim: &str) -> String {
+        shared_findings_json(file, 1, "r", severity, claim)
     }
 
     /// A confirming verify verdict (the verify stage asks the agent to confirm
     /// or refute; `confirmed:true` keeps the finding).
     fn confirm_json() -> String {
-        "```json\n{\"confirmed\": true, \"reason\": \"the duplicate is real\"}\n```".to_string()
+        verdict_json(true, "the duplicate is real")
     }
 
     // ---- the test: drive `review working` end to end ---------------------
@@ -736,17 +494,7 @@ mod tests {
         // re-emission must NOT be collected a second time. Under the old dual-path
         // driver every reply was concatenated twice.
         let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
-        let agent = ScriptedAgent::new(
-            vec![
-                (
-                    "# Validator: deduplicate".to_string(),
-                    findings_json("src/lib.rs", "blocker", "compute duplicates old_compute"),
-                ),
-                ("compute duplicates old_compute".to_string(), confirm_json()),
-            ],
-            notify_tx,
-            true,
-        );
+        let agent = broadcast_agent(dedup_script(), notify_tx, true);
 
         let dyn_agent = DynConnectTo::new(ScriptedAdapter(agent));
 
@@ -817,15 +565,13 @@ mod tests {
         // Every prompt this agent serves blocks on a `session/request_permission`
         // round-trip to the client first — both the fan-out prompt and the verify
         // prompt.
-        let agent = ScriptedAgent::new_demanding(
-            vec![
-                (
-                    "# Validator: deduplicate".to_string(),
-                    findings_json("src/lib.rs", "blocker", "compute duplicates old_compute"),
-                ),
-                ("compute duplicates old_compute".to_string(), confirm_json()),
-            ],
-            notify_tx,
+        let agent = ScriptedAgent::with_config(
+            dedup_script(),
+            ScriptedAgentConfig {
+                broadcast: Some(notify_tx),
+                demand_permission: true,
+                ..ScriptedAgentConfig::default()
+            },
         );
 
         let dyn_agent = DynConnectTo::new(ScriptedAdapter(agent));
@@ -873,22 +619,17 @@ mod tests {
 
         let read_path = repo.path().join("src/lib.rs");
         let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
-        let observed = Arc::new(std::sync::Mutex::new(Option::<String>::None));
-        let agent = Arc::new(FsReadingAgent {
-            next_session: AtomicUsize::new(0),
-            script: vec![
-                (
-                    "# Validator: deduplicate".to_string(),
-                    findings_json("src/lib.rs", "blocker", "compute duplicates old_compute"),
-                ),
-                ("compute duplicates old_compute".to_string(), confirm_json()),
-            ],
-            notify_tx,
-            read_path: read_path.clone(),
-            observed_content: Arc::clone(&observed),
-        });
+        let agent = ScriptedAgent::with_config(
+            dedup_script(),
+            ScriptedAgentConfig {
+                broadcast: Some(notify_tx),
+                read_file: Some(read_path.clone()),
+                ..ScriptedAgentConfig::default()
+            },
+        );
+        let agent_probe = Arc::clone(&agent);
 
-        let dyn_agent = DynConnectTo::new(FsReadingAdapter(agent));
+        let dyn_agent = DynConnectTo::new(ScriptedAdapter(agent));
 
         let report = tokio::time::timeout(
             PIPELINE_TIMEOUT,
@@ -909,10 +650,8 @@ mod tests {
         .expect("the review must serve fs/read_text_file without hanging");
 
         let _report = report.expect("pipeline should produce a report");
-        let content = observed
-            .lock()
-            .unwrap()
-            .clone()
+        let content = agent_probe
+            .observed_read()
             .expect("the agent must have received a read response");
         assert!(
             content.contains("pub fn compute"),
@@ -1076,11 +815,16 @@ mod tests {
     }
 
     impl LateAnsweringAgent {
-        /// The stalled turn: wedge silently (no streaming progress) until the
-        /// pool's idle liveness abandons this turn and cancels the session,
-        /// then answer late — the response receiver is already dropped when
-        /// this reply reaches the client.
-        async fn stall_until_cancelled(&self) -> PromptResponse {
+        /// The stalled turn: stream ONE progress chunk to arm the per-turn idle
+        /// window (the pool no longer arms it at submission — a turn that never
+        /// streams is bounded by the ceiling, not idle), then wedge silently
+        /// until the pool's idle liveness abandons this turn and cancels the
+        /// session, and finally answer late — the response receiver is already
+        /// dropped when this reply reaches the client. This models a real
+        /// started-then-stalled turn (decoded a little, then wedged on an
+        /// unanswered nested request).
+        async fn stall_until_cancelled(&self, session_id: &SessionId) -> PromptResponse {
+            self.stream_reply(session_id, "starting".to_string());
             self.cancelled.notified().await;
             self.late_answered.notify_one();
             PromptResponse::new(StopReason::EndTurn)
@@ -1135,7 +879,7 @@ mod tests {
                 let text = prompt_text(&request);
 
                 if text.contains("# Validator: staller") {
-                    return Ok(self.stall_until_cancelled().await);
+                    return Ok(self.stall_until_cancelled(&request.session_id).await);
                 }
 
                 let reply = if text.contains("# Validator: deduplicate") {

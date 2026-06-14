@@ -17,7 +17,7 @@ use swissarmyhammer_agents::{
     Operation, SearchAgent, UseAgent,
 };
 use swissarmyhammer_config::TemplateContext;
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use tokio::sync::RwLock;
 
 // Static operation instances for metadata access
@@ -45,14 +45,14 @@ pub struct AgentMcpTool {
     /// Shared agent library
     library: Arc<RwLock<AgentLibrary>>,
     /// Prompt library for rendering agent templates with partials
-    prompt_library: Arc<RwLock<PromptLibrary>>,
+    prompt_library: Arc<RwLock<TemplateLibrary>>,
 }
 
 impl AgentMcpTool {
     /// Create a new AgentMcpTool with a pre-loaded agent library and prompt library for rendering
     pub fn new(
         library: Arc<RwLock<AgentLibrary>>,
-        prompt_library: Arc<RwLock<PromptLibrary>>,
+        prompt_library: Arc<RwLock<TemplateLibrary>>,
     ) -> Self {
         let description = build_description(&library);
         let description: &'static str = Box::leak(description.into_boxed_str());
@@ -241,7 +241,7 @@ impl AgentMcpTool {
 pub fn register_agent_tools(
     registry: &mut ToolRegistry,
     library: Arc<RwLock<AgentLibrary>>,
-    prompt_library: Arc<RwLock<PromptLibrary>>,
+    prompt_library: Arc<RwLock<TemplateLibrary>>,
 ) {
     registry.register(AgentMcpTool::new(library, prompt_library));
 }
@@ -250,8 +250,8 @@ pub fn register_agent_tools(
 mod tests {
     use super::*;
 
-    fn default_prompt_library() -> Arc<RwLock<PromptLibrary>> {
-        Arc::new(RwLock::new(PromptLibrary::default()))
+    fn default_prompt_library() -> Arc<RwLock<TemplateLibrary>> {
+        Arc::new(RwLock::new(TemplateLibrary::default()))
     }
 
     #[tokio::test]

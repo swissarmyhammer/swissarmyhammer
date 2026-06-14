@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTC7GT2DQ84KH443BRC75SHJ
-position_column: todo
-position_ordinal: '8780'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff580
 project: remove-prompts
 title: Drop prompts from README, mdbook, and man pages
 ---

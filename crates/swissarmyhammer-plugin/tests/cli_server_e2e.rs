@@ -47,7 +47,7 @@ use std::time::Duration;
 
 use swissarmyhammer_directory::SwissarmyhammerConfig;
 use swissarmyhammer_plugin::PluginHost;
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_tools::mcp::McpServer;
 
 /// A generous upper bound on any single host or subprocess interaction.
@@ -72,7 +72,7 @@ const ECHO_PAYLOAD: &str = "e2e payload routed through the CLI stdio transport";
 /// monorepo. The bootstrap registers the unified `files` tool, which is
 /// reachable for exposure as the test's observation channel.
 async fn build_mcp_server(work_dir: &Path) -> McpServer {
-    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None)
+    McpServer::new_with_work_dir(TemplateLibrary::new(), work_dir.to_path_buf(), None)
         .await
         .expect("MCP server bootstrap should succeed")
 }

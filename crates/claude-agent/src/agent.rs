@@ -496,7 +496,7 @@ impl ClaudeAgent {
         let mut agent_library = swissarmyhammer_agents::AgentLibrary::new();
         agent_library.load_defaults();
 
-        let prompt_library = swissarmyhammer_prompts::PromptLibrary::new();
+        let prompt_library = swissarmyhammer_templating::TemplateLibrary::new();
         let mut template_context = swissarmyhammer_config::TemplateContext::new();
         template_context.set("version".to_string(), serde_json::json!(crate::VERSION));
 
@@ -521,7 +521,7 @@ impl ClaudeAgent {
     /// degrades to "literal text" rather than dropping the mode entirely.
     fn resolve_agent_system_prompt(
         agent: &swissarmyhammer_agents::Agent,
-        prompt_library: &swissarmyhammer_prompts::PromptLibrary,
+        prompt_library: &swissarmyhammer_templating::TemplateLibrary,
         template_context: &swissarmyhammer_config::TemplateContext,
     ) -> String {
         match prompt_library.render_text(&agent.instructions, template_context) {
@@ -723,15 +723,41 @@ impl ClaudeAgent {
         &self,
         session_id: &SessionId,
     ) -> Result<crate::session::Session, agent_client_protocol::Error> {
+        self.resolve_session_with(session_id.0.as_ref(), || {
+            Self::session_not_found_error(session_id)
+        })
+    }
+
+    /// Resolve `session_id` to a live session, parameterized by the
+    /// "not found" error the caller's contract requires.
+    ///
+    /// This is the single lookup-and-error-mapping path behind
+    /// [`resolve_session`](Self::resolve_session) and the session-fork
+    /// extension resolvers (see [`crate::session_fork`]). A clean miss — a
+    /// non-ULID id this agent never minted (per the opaque-id convention) or
+    /// a ULID with no live session — maps onto `not_found()`, whose kind is
+    /// the caller's permanent fallback signal. A session-store FAILURE (lock
+    /// poisoning) is a retryable `-32603` internal error instead:
+    /// misreporting it as not-found would make the client abandon a session
+    /// that is actually alive.
+    pub(crate) fn resolve_session_with(
+        &self,
+        session_id: &str,
+        not_found: impl Fn() -> agent_client_protocol::Error,
+    ) -> Result<crate::session::Session, agent_client_protocol::Error> {
         // An id this agent did not mint (non-ULID) cannot key any live
         // session; treat that exactly like a ULID lookup miss.
-        let internal_id = crate::session::SessionId::parse(session_id.0.as_ref())
-            .map_err(|_| Self::session_not_found_error(session_id))?;
+        let internal_id = crate::session::SessionId::parse(session_id).map_err(|_| not_found())?;
 
         self.session_manager
             .get_session(&internal_id)
-            .map_err(|_| agent_client_protocol::Error::internal_error())?
-            .ok_or_else(|| Self::session_not_found_error(session_id))
+            .map_err(|e| {
+                tracing::error!("Session store failed while resolving session {session_id}: {e}");
+                crate::acp_error::internal_error(format!(
+                    "session store failed while resolving session {session_id}: {e}"
+                ))
+            })?
+            .ok_or_else(not_found)
     }
 
     /// Build the uniform "session not found" error returned by every
@@ -740,12 +766,10 @@ impl ClaudeAgent {
     /// One code (`invalid_params`, -32602) and one shape, regardless of whether
     /// the miss was a non-ULID string or a ULID with no live session.
     pub(crate) fn session_not_found_error(session_id: &SessionId) -> agent_client_protocol::Error {
-        tracing::warn!("Session not found: {}", session_id);
-        crate::acp_error::invalid_params(format!("Session not found: {session_id}")).data(
-            serde_json::json!({
-                "sessionId": session_id,
-                "error": "session_not_found",
-            }),
+        crate::acp_error::session_error(
+            session_id.0.as_ref(),
+            "session_not_found",
+            format!("Session not found: {session_id}"),
         )
     }
 
@@ -1482,6 +1506,7 @@ impl ClaudeAgent {
             .system_prompt(system_prompt)
             .ephemeral(self.config.claude.ephemeral)
             .tools_override(self.config.claude.tools_override.clone())
+            .extra_args(self.config.claude.extra_args.clone())
             .build()
     }
 
@@ -1789,6 +1814,7 @@ impl ClaudeAgent {
             .system_prompt(system_prompt)
             .ephemeral(self.config.claude.ephemeral)
             .tools_override(self.config.claude.tools_override.clone())
+            .extra_args(self.config.claude.extra_args.clone())
             .build()
     }
 
@@ -2324,8 +2350,10 @@ impl ClaudeAgent {
     /// user message *and* at least one agent response.
     ///
     /// This is the shared trigger condition for session-title generation (see
-    /// the contract in [`agent_client_protocol_extras::session_title`]).
-    fn has_first_exchange(session: &crate::session::Session) -> bool {
+    /// the contract in [`agent_client_protocol_extras::session_title`]) and
+    /// for the fork extension's "has the session completed a turn" gate (see
+    /// [`crate::session_fork`]).
+    pub(crate) fn has_first_exchange(session: &crate::session::Session) -> bool {
         let has_user = session
             .context
             .iter()
@@ -3179,12 +3207,9 @@ mod session_record_tests {
     #[tokio::test]
     #[serial]
     async fn persist_session_record_writes_loadable_record() {
-        // Isolate the `SessionStore` state tree.
-        let state = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("XDG_STATE_HOME");
-        // SAFETY: `#[serial]` serializes against the other `XDG_STATE_HOME`
-        // mutator in this binary; no other claude-agent test touches it.
-        std::env::set_var("XDG_STATE_HOME", state.path());
+        // Isolate the `SessionStore` state tree. `#[serial]` serializes
+        // against the other `XDG_STATE_HOME` mutators in this binary.
+        let _state = crate::test_support::StateDirGuard::new();
 
         // Use a dedicated temp directory as the session cwd rather than
         // `current_dir()`: the working-directory validator briefly mutates the
@@ -3218,12 +3243,6 @@ mod session_record_tests {
             "persistence is a pure projection — the title is set only by \
              title generation, not by persisting"
         );
-
-        match previous {
-            Some(value) => std::env::set_var("XDG_STATE_HOME", value),
-            None => std::env::remove_var("XDG_STATE_HOME"),
-        }
-        drop(state);
     }
 
     /// `persist_session_record` for an unknown session is a no-op: it logs and
@@ -3231,11 +3250,9 @@ mod session_record_tests {
     #[tokio::test]
     #[serial]
     async fn persist_session_record_missing_session_is_noop() {
-        let state = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("XDG_STATE_HOME");
-        // SAFETY: `#[serial]` serializes against the other `XDG_STATE_HOME`
-        // mutator in this binary; no other claude-agent test touches it.
-        std::env::set_var("XDG_STATE_HOME", state.path());
+        // `#[serial]` serializes against the other `XDG_STATE_HOME` mutators
+        // in this binary.
+        let _state = crate::test_support::StateDirGuard::new();
 
         let (agent, _rx) = ClaudeAgent::new(AgentConfig::default()).await.unwrap();
         let unknown = InternalSessionId::new();
@@ -3243,16 +3260,15 @@ mod session_record_tests {
         // Must not panic for a session that was never created.
         agent.persist_session_record(&unknown);
 
-        let page = SessionStore::new().list(None, None, 10).unwrap();
+        // Any page size large enough to surface a stray record in an
+        // expected-empty store.
+        const LIST_PAGE_LIMIT: usize = 10;
+        let page = SessionStore::new()
+            .list(None, None, LIST_PAGE_LIMIT)
+            .unwrap();
         assert!(
             page.sessions.is_empty(),
             "no record should be written for an unknown session"
         );
-
-        match previous {
-            Some(value) => std::env::set_var("XDG_STATE_HOME", value),
-            None => std::env::remove_var("XDG_STATE_HOME"),
-        }
-        drop(state);
     }
 }

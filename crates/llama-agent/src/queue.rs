@@ -38,14 +38,27 @@ use ulid::Ulid;
 /// pay double-prefill cost for zero speedup. Some draft contexts are large
 /// (Q8 KV at full ctx) so this is bounded by the same byte budget as the
 /// target state.
+/// The state blobs are `Arc<[u8]>` so a forked session can alias its parent's
+/// snapshot with NO byte copy (see [`SessionStateStore::fork`]) — the byte
+/// budget counts a shared blob once, and handing a snapshot to a worker is an
+/// `Arc` clone instead of a multi-hundred-MB `Vec` copy.
+///
+/// `pinned` entries are skipped by budget-driven eviction
+/// ([`SessionStateStore::evict`]) so a prefix session a review fleet is
+/// actively forking from cannot be dropped mid-flight. Lifecycle-driven
+/// [`SessionStateStore::remove`] (the session is known to be gone) still
+/// reclaims pinned entries.
 struct CachedSession {
-    state_bytes: Vec<u8>,
+    state_bytes: Arc<[u8]>,
     prompt_tokens: Option<Vec<i32>>,
-    draft_state_bytes: Option<Vec<u8>>,
+    draft_state_bytes: Option<Arc<[u8]>>,
+    pinned: bool,
 }
 
 impl CachedSession {
-    /// Combined byte footprint used by the LRU byte budget.
+    /// Combined byte footprint of this entry's blobs (shared or not). The
+    /// store-wide budget uses [`SessionStateStore::cur_bytes`], which counts
+    /// each shared blob once.
     fn byte_size(&self) -> usize {
         self.state_bytes.len() + self.draft_state_bytes.as_ref().map_or(0, |b| b.len())
     }
@@ -54,8 +67,52 @@ impl CachedSession {
 /// Cloned-out snapshot of a cached session — target state bytes, prompt
 /// fingerprint tokens, and optional draft state bytes. Returned by
 /// [`SessionStateStore::get`] so callers can drop the lock before the
-/// comparatively slow `set_state_data`/`state_seq_set_data`.
-type CachedStateSnapshot = (Vec<u8>, Option<Vec<i32>>, Option<Vec<u8>>);
+/// comparatively slow `set_state_data`/`state_seq_set_data`. The byte blobs
+/// are cheap `Arc` clones.
+type CachedStateSnapshot = (Arc<[u8]>, Option<Vec<i32>>, Option<Arc<[u8]>>);
+
+/// Observable status of one session's cached state, for the
+/// `session/state_status` extension ("never fork blind"): a client confirms a
+/// snapshot exists — and carries a prompt fingerprint — before forking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionStateStatus {
+    /// Number of prompt tokens the snapshot covers, when the snapshot carries
+    /// a fingerprint (`None` for the batch path's unfingerprinted snapshots,
+    /// which cannot seed a strict-prefix fork).
+    pub prompt_tokens: Option<usize>,
+    /// Byte size of the snapshot (target + draft blobs).
+    pub state_bytes: usize,
+    /// Whether the entry is pinned against budget eviction.
+    pub pinned: bool,
+}
+
+/// Outcome of a successful session-state fork: what the child inherited.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionStateForkInfo {
+    /// Number of prompt tokens the aliased snapshot covers — the strict
+    /// prefix the fork's first decode resumes after.
+    pub prefix_tokens: usize,
+    /// Byte size of the aliased snapshot (shared with the parent, counted
+    /// once by the budget).
+    pub state_bytes: usize,
+}
+
+/// Why a session-state fork could not attach the parent's snapshot. The two
+/// cases are deliberately distinguishable so a client can tell "no such
+/// parent state" from "state exists but cannot seed a strict-prefix restore"
+/// and react accordingly (re-prime vs plain new session).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SessionStateForkError {
+    /// No cached snapshot exists for the parent session.
+    #[error("no cached state for parent session {0}")]
+    ParentStateNotFound(String),
+    /// A snapshot exists but carries no prompt-token fingerprint (a batch-path
+    /// save), so a strict-prefix restore cannot be verified against it.
+    #[error(
+        "cached state for parent session {0} has no prompt fingerprint and cannot seed a fork"
+    )]
+    ParentStateUnusable(String),
+}
 
 /// LRU, byte-bounded in-memory store of per-session llama.cpp context state for
 /// efficient multi-turn conversations (restore without disk I/O).
@@ -73,7 +130,13 @@ struct SessionStateStore {
     lru: VecDeque<String>,
     max_entries: usize,
     max_bytes: usize,
-    cur_bytes: usize,
+    /// Count of budget-driven evictions ([`evict`](Self::evict)) since
+    /// construction. Each increment is also emitted as a `warn!` so a
+    /// pin-failure cluster is diagnosable from the log; the counter is the
+    /// deterministic in-process observable the tests assert on (a `warn!`
+    /// reaches whichever tracing subscriber is installed, which is racy to
+    /// capture under a concurrent test harness, but the count is not).
+    evictions: u64,
 }
 
 impl SessionStateStore {
@@ -83,8 +146,31 @@ impl SessionStateStore {
             lru: VecDeque::new(),
             max_entries: max_entries.max(1),
             max_bytes,
-            cur_bytes: 0,
+            evictions: 0,
         }
+    }
+
+    /// Total bytes held by the store, counting each shared blob ONCE.
+    ///
+    /// Forked entries alias their parent's `Arc<[u8]>` blobs, so summing
+    /// per-entry sizes would charge the same hundreds-of-MB snapshot once per
+    /// fork and evict aggressively for memory that is not actually used.
+    /// Deduplication is by blob data pointer; the entry count is small (cores/2
+    /// plus live forks), so the quadratic scan is negligible next to the
+    /// multi-hundred-MB `memcpy`s this store brackets.
+    fn cur_bytes(&self) -> usize {
+        let mut seen: Vec<*const u8> = Vec::with_capacity(self.entries.len() * 2);
+        let mut total = 0;
+        for entry in self.entries.values() {
+            for blob in std::iter::once(&entry.state_bytes).chain(entry.draft_state_bytes.iter()) {
+                let ptr = blob.as_ptr();
+                if !seen.contains(&ptr) {
+                    seen.push(ptr);
+                    total += blob.len();
+                }
+            }
+        }
+        total
     }
 
     fn contains(&self, id: &str) -> bool {
@@ -187,6 +273,12 @@ impl SessionStateStore {
 
     /// Insert/replace a session's cached state, then evict LRU entries until
     /// within BOTH the entry-count and total-byte budgets.
+    ///
+    /// Replacing an existing entry preserves its pinned flag — a pin applies
+    /// to the session id until explicitly unpinned, across re-saves. A forked
+    /// child's first own save lands here too, replacing its parent-aliased
+    /// entry with fresh bytes (copy-on-write at save time) without touching
+    /// the parent's entry.
     fn insert(
         &mut self,
         id: String,
@@ -194,18 +286,52 @@ impl SessionStateStore {
         prompt_tokens: Option<Vec<i32>>,
         draft_state_bytes: Option<Vec<u8>>,
     ) {
-        let new_bytes = state_bytes.len() + draft_state_bytes.as_ref().map_or(0, |b| b.len());
-        if let Some(old) = self.entries.insert(
+        self.insert_inner(id, state_bytes, prompt_tokens, draft_state_bytes, false);
+    }
+
+    /// Insert/replace a session's cached state ATOMICALLY PINNED: the entry is
+    /// born pinned, so it is never an eviction candidate from the moment its
+    /// bytes land. This closes the prime→pin race — under the two-step
+    /// "save then pin" protocol a freshly-saved (still unpinned) prefix could
+    /// be evicted by another session's concurrent save before its pin landed,
+    /// and the pin would then fail with `failed to pin primed prefix state`.
+    /// Pinning at save time removes that window entirely.
+    ///
+    /// A test-only one-blob convenience wrapper over the born-pinned
+    /// [`insert_inner`](Self::insert_inner)`(.., pin_on_save = true)` path that
+    /// production now also takes: the streaming prompt-boundary save passes the
+    /// caller's pin-on-save intent (threaded from a review fan-out's prime turn
+    /// over ACP `_meta`) through to `insert_inner`, so the race is closed
+    /// structurally — born pinned at save time — not only by the RAM-scaled
+    /// byte budget ([`default_max_cache_bytes`]) plus the
+    /// [`MIN_SESSION_CACHE_ENTRIES`] floor. The store-level race tests use this
+    /// wrapper to validate the born-pinned invariant directly.
+    #[cfg(test)]
+    fn insert_pinned(&mut self, id: String, state_bytes: Vec<u8>, prompt_tokens: Option<Vec<i32>>) {
+        self.insert_inner(id, state_bytes, prompt_tokens, None, true);
+    }
+
+    /// Shared insert body. `pin_on_save` forces the new entry pinned; otherwise
+    /// the entry inherits any existing pin for this id (a pin applies to the
+    /// session id across re-saves).
+    fn insert_inner(
+        &mut self,
+        id: String,
+        state_bytes: Vec<u8>,
+        prompt_tokens: Option<Vec<i32>>,
+        draft_state_bytes: Option<Vec<u8>>,
+        pin_on_save: bool,
+    ) {
+        let pinned = pin_on_save || self.entries.get(&id).is_some_and(|e| e.pinned);
+        self.entries.insert(
             id.clone(),
             CachedSession {
-                state_bytes,
+                state_bytes: Arc::from(state_bytes),
                 prompt_tokens,
-                draft_state_bytes,
+                draft_state_bytes: draft_state_bytes.map(Arc::from),
+                pinned,
             },
-        ) {
-            self.cur_bytes = self.cur_bytes.saturating_sub(old.byte_size());
-        }
-        self.cur_bytes += new_bytes;
+        );
         if self.lru.iter().any(|k| k == &id) {
             self.touch(&id);
         } else {
@@ -214,23 +340,122 @@ impl SessionStateStore {
         self.evict();
     }
 
-    /// Drop least-recently-used entries until under both budgets, always keeping
-    /// at least the most-recently-used entry.
+    /// Alias the parent's cached snapshot under `child_id` with no byte copy:
+    /// the child entry shares the parent's `Arc<[u8]>` blobs and is registered
+    /// with the parent's prompt-token fingerprint, so the child's first prompt
+    /// (which strictly extends the parent's) matches its own entry with
+    /// `lcp == donor length` — a zero-rollback restore.
+    ///
+    /// The child starts unpinned; pin it separately if it must survive
+    /// pressure. The parent entry is left untouched.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionStateForkError::ParentStateNotFound`] when the parent has no
+    /// cached snapshot, [`SessionStateForkError::ParentStateUnusable`] when
+    /// the snapshot has no prompt fingerprint (a batch-path save) and so
+    /// cannot seed a verified strict-prefix restore.
+    fn fork(
+        &mut self,
+        parent_id: &str,
+        child_id: String,
+    ) -> Result<SessionStateForkInfo, SessionStateForkError> {
+        let parent = self
+            .entries
+            .get(parent_id)
+            .ok_or_else(|| SessionStateForkError::ParentStateNotFound(parent_id.to_string()))?;
+        let Some(tokens) = parent.prompt_tokens.as_ref() else {
+            return Err(SessionStateForkError::ParentStateUnusable(
+                parent_id.to_string(),
+            ));
+        };
+        let info = SessionStateForkInfo {
+            prefix_tokens: tokens.len(),
+            state_bytes: parent.byte_size(),
+        };
+        let child = CachedSession {
+            state_bytes: parent.state_bytes.clone(),
+            prompt_tokens: parent.prompt_tokens.clone(),
+            draft_state_bytes: parent.draft_state_bytes.clone(),
+            pinned: false,
+        };
+        self.entries.insert(child_id.clone(), child);
+        if self.lru.iter().any(|k| k == &child_id) {
+            self.touch(&child_id);
+        } else {
+            self.lru.push_back(child_id);
+        }
+        self.evict();
+        Ok(info)
+    }
+
+    /// Report a session's cached-state status, or `None` when no snapshot is
+    /// cached. A pure query: does not touch the LRU order.
+    fn status(&self, id: &str) -> Option<SessionStateStatus> {
+        self.entries.get(id).map(|entry| SessionStateStatus {
+            prompt_tokens: entry.prompt_tokens.as_ref().map(|t| t.len()),
+            state_bytes: entry.byte_size(),
+            pinned: entry.pinned,
+        })
+    }
+
+    /// Pin (or unpin) a session's cached entry against budget eviction.
+    /// Returns whether an entry existed to update.
+    fn set_pinned(&mut self, id: &str, pinned: bool) -> bool {
+        match self.entries.get_mut(id) {
+            Some(entry) => {
+                entry.pinned = pinned;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Drop least-recently-used UNPINNED entries until under both budgets.
+    ///
+    /// The most-recently-used entry (the active session's fresh save) is never
+    /// a victim, and pinned entries are skipped — so when everything else is
+    /// pinned the loop terminates over budget rather than deadlocking or
+    /// evicting the active entry. Pinned bytes still count against the budget.
     fn evict(&mut self) {
-        while self.lru.len() > 1
-            && (self.entries.len() > self.max_entries || self.cur_bytes > self.max_bytes)
-        {
-            let Some(victim) = self.lru.pop_front() else {
+        while self.entries.len() > self.max_entries || self.cur_bytes() > self.max_bytes {
+            let victim = self
+                .lru
+                .iter()
+                .take(self.lru.len().saturating_sub(1))
+                .find(|id| !self.entries.get(id.as_str()).is_some_and(|e| e.pinned))
+                .cloned();
+            let Some(victim) = victim else {
                 break;
             };
-            if let Some(c) = self.entries.remove(&victim) {
-                self.cur_bytes = self.cur_bytes.saturating_sub(c.byte_size());
-            }
+            // Eviction is the only way a not-yet-pinned prefix can vanish out
+            // from under an imminent pin. It used to be silent — `grep evict`
+            // on the log returned nothing — so a pin-failure cluster was
+            // undiagnosable. Warn with the pressure that forced this drop so a
+            // future cluster can be traced to budget rather than a logic bug.
+            warn!(
+                evicted_session = %victim,
+                cur_bytes = self.cur_bytes(),
+                max_bytes = self.max_bytes,
+                entries = self.entries.len(),
+                max_entries = self.max_entries,
+                "session-state cache eviction under budget pressure (an unpinned entry was dropped)"
+            );
+            self.evictions += 1;
+            self.remove(&victim);
         }
     }
 
     fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Number of budget-driven evictions since construction. Each eviction
+    /// also emits a `warn!`; this counter is the deterministic observable the
+    /// tests assert on.
+    #[cfg(test)]
+    fn eviction_count(&self) -> u64 {
+        self.evictions
     }
 
     /// Reclaim a single session's cached state, returning whether an entry was
@@ -242,10 +467,9 @@ impl SessionStateStore {
     /// forces it out, which with only one or two live sessions never happens, so
     /// the worker eventually runs out of KV slots (`NoKvCacheSlot`).
     fn remove(&mut self, id: &str) -> bool {
-        let Some(cached) = self.entries.remove(id) else {
+        if self.entries.remove(id).is_none() {
             return false;
-        };
-        self.cur_bytes = self.cur_bytes.saturating_sub(cached.byte_size());
+        }
         if let Some(pos) = self.lru.iter().position(|k| k == id) {
             self.lru.remove(pos);
         }
@@ -256,7 +480,6 @@ impl SessionStateStore {
     fn clear(&mut self) {
         self.entries.clear();
         self.lru.clear();
-        self.cur_bytes = 0;
     }
 }
 
@@ -272,26 +495,91 @@ struct PrefixMatch {
     /// caller's session id when we share a prefix across sessions.
     source_session_id: String,
     /// Full target-context state bytes for `set_state_data`.
-    state_bytes: Vec<u8>,
+    state_bytes: Arc<[u8]>,
     /// Per-seq draft KV bytes for MTP, when the donor turn used MTP.
-    draft_state_bytes: Option<Vec<u8>>,
+    draft_state_bytes: Option<Arc<[u8]>>,
     /// Number of leading tokens that matched the new prompt.
     lcp: usize,
 }
 
-/// Default entry ceiling for the session-state cache: cpu cores / 2 (min 1),
-/// preserving the previous count-based limit.
-fn default_max_cache_entries() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| (n.get() / 2).max(1))
-        .unwrap_or(4)
+/// Floor for the session-state cache entry ceiling: enough slots to hold a
+/// full review fleet's concurrently-primed prefixes (plus a margin for their
+/// forks) so the entry-COUNT budget never count-evicts a not-yet-pinned
+/// prefix before its pin lands. A review fans out ~15 validators; 64 covers
+/// that fleet and its in-flight forks comfortably.
+///
+/// Memory is bounded by the RAM-scaled BYTE budget
+/// ([`default_max_cache_bytes`]), so a generous entry floor does not risk
+/// unbounded memory — it only stops the count budget from being the binding
+/// constraint that reintroduces the prime→pin eviction race.
+const MIN_SESSION_CACHE_ENTRIES: usize = 64;
+
+/// How the entry ceiling scales with core count, expressed as
+/// `numerator / denominator` (cores / 2 → one cache slot per two cores).
+/// A scaling pair (mirroring [`SESSION_CACHE_RAM_FRACTION_NUM`]/`_DEN` for the
+/// byte budget) rather than a bare `/ 2` literal so the cores→entries ratio is
+/// self-documenting and consistent with the byte-budget fraction.
+const SESSION_CACHE_ENTRIES_PER_CORE_NUM: usize = 1;
+const SESSION_CACHE_ENTRIES_PER_CORE_DEN: usize = 2;
+
+/// Entry ceiling for the session-state cache given a core count:
+/// `max(MIN_SESSION_CACHE_ENTRIES, cores × NUM / DEN)`. Pure (takes the core
+/// count) so it is unit-testable independent of the test machine's parallelism.
+fn cache_entry_ceiling_for_cores(cores: usize) -> usize {
+    (cores * SESSION_CACHE_ENTRIES_PER_CORE_NUM / SESSION_CACHE_ENTRIES_PER_CORE_DEN)
+        .max(MIN_SESSION_CACHE_ENTRIES)
 }
 
-/// Total-byte ceiling for the session-state cache. Each entry is a full llama
-/// context-state copy, so this bounds worst-case memory regardless of entry
-/// count. 2 GiB is a generous ceiling for in-memory KV state on a workstation;
-/// tune via [`SessionStateStore::new`] if a deployment needs more or less.
-const MAX_SESSION_CACHE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+/// Default entry ceiling for the session-state cache: at least a full
+/// validator fleet ([`MIN_SESSION_CACHE_ENTRIES`]), scaling with
+/// [`SESSION_CACHE_ENTRIES_PER_CORE_NUM`]/`_DEN` (cores / 2) on larger machines.
+fn default_max_cache_entries() -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8);
+    cache_entry_ceiling_for_cores(cores)
+}
+
+/// Floor for the session-state cache byte budget: 2 GiB, the previous
+/// hardcoded ceiling. The budget never drops below this even on a small or
+/// memory-unreadable machine — a sub-2 GiB budget would evict prefixes
+/// aggressively and reintroduce the prime→pin eviction race.
+const MIN_SESSION_CACHE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// Fraction of total system RAM the session-state cache may use, expressed as
+/// `numerator / denominator` (0.25). Each cached entry is a full llama
+/// context-state copy (hundreds of MB on large models), and a review fleet
+/// primes ~15 validator prefixes plus their forks concurrently; a quarter of a
+/// high-RAM box holds them all, so a pin requested for a just-saved prefix is
+/// not defeated by another validator's concurrent save evicting it under a
+/// too-small fixed budget.
+const SESSION_CACHE_RAM_FRACTION_NUM: u64 = 1;
+const SESSION_CACHE_RAM_FRACTION_DEN: u64 = 4;
+
+/// Compute the cache byte budget from a machine's total memory:
+/// `max(MIN_SESSION_CACHE_BYTES, total × fraction)`.
+///
+/// Pure (takes total bytes as an argument) so it is unit-testable without a
+/// live `sysinfo` probe. A `total_memory` of 0 (sysinfo unavailable) yields
+/// the floor.
+fn cache_byte_budget_for_total_memory(total_memory: u64) -> usize {
+    let scaled = total_memory / SESSION_CACHE_RAM_FRACTION_DEN * SESSION_CACHE_RAM_FRACTION_NUM;
+    (scaled as usize).max(MIN_SESSION_CACHE_BYTES)
+}
+
+/// Total-byte ceiling for the session-state cache, scaled to detected system
+/// RAM ([`cache_byte_budget_for_total_memory`]). Each entry is a full llama
+/// context-state copy, so this bounds worst-case memory; scaling with RAM
+/// (rather than a fixed 2 GiB) lets a high-RAM machine hold every validator
+/// prefix + fork so no prime's pin loses the eviction race.
+fn default_max_cache_bytes() -> usize {
+    let total = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing()
+            .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
+    )
+    .total_memory();
+    cache_byte_budget_for_total_memory(total)
+}
 
 /// Detect whether a loaded model has an MTP / NextN head by sniffing the
 /// GGUF metadata for an `*.nextn_predict_layers` entry.
@@ -936,7 +1224,7 @@ impl RequestQueue {
         let chat_template = Arc::new(ChatTemplateEngine::with_model_strategy(&model_identifier));
         let session_state_cache: SessionStateCache = Arc::new(Mutex::new(SessionStateStore::new(
             default_max_cache_entries(),
-            MAX_SESSION_CACHE_BYTES,
+            default_max_cache_bytes(),
         )));
 
         let executor: Arc<dyn QueueExecutor> = Arc::new(ModelManagerExecutor::new(
@@ -1025,6 +1313,7 @@ impl RequestQueue {
                 top_p: None,
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             },
             session: session.clone(),
             response_sender,
@@ -1057,7 +1346,7 @@ impl RequestQueue {
         let chat_template = Arc::new(ChatTemplateEngine::new());
         let session_state_cache: SessionStateCache = Arc::new(Mutex::new(SessionStateStore::new(
             default_max_cache_entries(),
-            MAX_SESSION_CACHE_BYTES,
+            default_max_cache_bytes(),
         )));
         let session_config = crate::types::SessionConfig::default();
 
@@ -1326,6 +1615,70 @@ impl RequestQueue {
             .lock()
             .unwrap()
             .remove(&session_id.to_string())
+    }
+
+    /// Alias the parent session's cached context state under the child id with
+    /// no byte copy (the blobs are shared `Arc`s and counted once by the byte
+    /// budget). The child entry carries the parent's prompt-token fingerprint,
+    /// so the child's first prompt — a strict extension of the parent's —
+    /// restores the full donor state and decodes strictly forward with zero KV
+    /// rollback.
+    ///
+    /// # Errors
+    ///
+    /// Distinguishable per [`SessionStateForkError`]: the parent has no cached
+    /// snapshot, or its snapshot has no prompt fingerprint to verify a
+    /// strict-prefix restore against.
+    pub fn fork_session_state(
+        &self,
+        parent_id: &crate::types::SessionId,
+        child_id: &crate::types::SessionId,
+    ) -> Result<SessionStateForkInfo, SessionStateForkError> {
+        self.session_state_cache
+            .lock()
+            .unwrap()
+            .fork(&parent_id.to_string(), child_id.to_string())
+    }
+
+    /// Report whether a session's context state is cached — and forkable —
+    /// plus its size and pin state. `None` when no snapshot is cached.
+    pub fn session_state_status(
+        &self,
+        session_id: &crate::types::SessionId,
+    ) -> Option<SessionStateStatus> {
+        self.session_state_cache
+            .lock()
+            .unwrap()
+            .status(&session_id.to_string())
+    }
+
+    /// Pin (or unpin) a session's cached context state against budget
+    /// eviction, returning whether a cached entry existed to update. Pinned
+    /// bytes still count against the budget; lifecycle eviction
+    /// ([`evict_session_state`](Self::evict_session_state)) still reclaims
+    /// pinned entries because the caller knows the session is gone.
+    pub fn pin_session_state(&self, session_id: &crate::types::SessionId, pinned: bool) -> bool {
+        self.session_state_cache
+            .lock()
+            .unwrap()
+            .set_pinned(&session_id.to_string(), pinned)
+    }
+
+    /// Seed a session's cached state directly — test-only hook so handler
+    /// tests can fabricate a "primed" parent without running a model.
+    #[cfg(test)]
+    pub(crate) fn seed_session_state_for_test(
+        &self,
+        session_id: &crate::types::SessionId,
+        state_bytes: Vec<u8>,
+        prompt_tokens: Option<Vec<i32>>,
+    ) {
+        self.session_state_cache.lock().unwrap().insert(
+            session_id.to_string(),
+            state_bytes,
+            prompt_tokens,
+            None,
+        );
     }
 
     /// Convenience shortcut for `self.metrics.get_stats()` — returns a
@@ -1697,6 +2050,37 @@ impl RequestQueue {
         }
     }
 
+    /// Copy the llama.cpp context's serialized state into a freshly sized,
+    /// truncated `Vec<u8>`. Returns `None` (and warns) on the 0-bytes-written
+    /// failure case so callers uniformly skip caching an unusable snapshot.
+    ///
+    /// This is the single owner of the `unsafe copy_state_data` snapshot
+    /// sequence (`get_state_size` → zeroed buffer → `copy_state_data` →
+    /// 0-write guard → `truncate`). Both save paths
+    /// (`save_session_state` on the batch path and `save_prompt_boundary_state`
+    /// on the streaming path) call through here, so a future fix to the unsafe
+    /// snapshot handling lives in exactly one place.
+    fn snapshot_ctx_state(
+        worker_id: usize,
+        request_id: &str,
+        ctx: &LlamaContext<'_>,
+    ) -> Option<Vec<u8>> {
+        let state_size = ctx.get_state_size();
+        let mut state_bytes = vec![0u8; state_size];
+        let bytes_written = unsafe { ctx.copy_state_data(state_bytes.as_mut_ptr()) };
+
+        if bytes_written == 0 {
+            warn!(
+                "Worker {} failed to copy state data (wrote 0 bytes) for request {}",
+                worker_id, request_id
+            );
+            return None;
+        }
+
+        state_bytes.truncate(bytes_written);
+        Some(state_bytes)
+    }
+
     /// Snapshot the target context's state at the prompt boundary into the
     /// session cache.
     ///
@@ -1723,6 +2107,7 @@ impl RequestQueue {
         draft_ctx: Option<&LlamaContext<'_>>,
         session_state_cache: &SessionStateCache,
         prompt_tokens: &[i32],
+        pin_on_save: bool,
     ) {
         if prompt_tokens.is_empty() {
             warn!(
@@ -1732,18 +2117,10 @@ impl RequestQueue {
             return;
         }
 
-        let state_size = ctx.get_state_size();
-        let mut state_bytes = vec![0u8; state_size];
-        let bytes_written = unsafe { ctx.copy_state_data(state_bytes.as_mut_ptr()) };
-
-        if bytes_written == 0 {
-            warn!(
-                "Worker {} failed to snapshot prompt-boundary state (wrote 0 bytes) for request {}",
-                worker_id, request_id
-            );
+        let Some(state_bytes) = Self::snapshot_ctx_state(worker_id, request_id, ctx) else {
             return;
-        }
-        state_bytes.truncate(bytes_written);
+        };
+        let bytes_written = state_bytes.len();
 
         // Snapshot the MTP draft's per-seq KV when this turn ran with MTP.
         // The draft mirrors the target up to the prompt boundary at this
@@ -1753,20 +2130,27 @@ impl RequestQueue {
         let draft_bytes_len = draft_state_bytes.as_ref().map_or(0, |b| b.len());
 
         let mut cache = session_state_cache.lock().unwrap();
-        cache.insert(
+        // `pin_on_save` makes the entry born pinned — never an unpinned eviction
+        // candidate from the moment its bytes land — so a concurrent session's
+        // save cannot evict a primed prefix before a separate post-turn pin
+        // would land (the prime→pin race). A `false` save inherits any existing
+        // pin for the id, exactly as `insert` does.
+        cache.insert_inner(
             session.id.to_string(),
             state_bytes,
             Some(prompt_tokens.to_vec()),
             draft_state_bytes,
+            pin_on_save,
         );
         info!(
-            "Worker {} cached {} bytes of target + {} bytes of draft state at prompt boundary for session {} ({} messages, {} prompt tokens)",
+            "Worker {} cached {} bytes of target + {} bytes of draft state at prompt boundary for session {} ({} messages, {} prompt tokens, pin_on_save={})",
             worker_id,
             bytes_written,
             draft_bytes_len,
             session.id,
             session.messages.len(),
-            prompt_tokens.len()
+            prompt_tokens.len(),
+            pin_on_save
         );
     }
 
@@ -1774,45 +2158,49 @@ impl RequestQueue {
     /// turn can resume without reprocessing prior messages. The store evicts
     /// LRU entries to stay within its entry-count and byte budgets.
     ///
+    /// This is the BATCH path's post-generation save. It is a deliberately
+    /// separate saver from `save_prompt_boundary_state` (the streaming path's
+    /// pre-generation save), not a duplicate: the two differ in *when* they run
+    /// and in their insert semantics, not in the snapshot mechanics (which they
+    /// now share via `snapshot_ctx_state`).
+    ///   - Timing: batch saves the FULL post-generation state at end of turn;
+    ///     streaming saves the prompt-boundary state BEFORE any token is
+    ///     sampled (so the next turn's LCP rollback is ~0). A batch turn never
+    ///     reaches a streaming prompt boundary, so it cannot use that path.
+    ///   - Insert semantics: this calls `insert` (always unpinned — the batch
+    ///     path has no pin-on-save intent), whereas the streaming saver calls
+    ///     `insert_inner(.., pin_on_save)` to support the born-pinned prime
+    ///     turn. There is no production batch path that needs a born-pinned
+    ///     save, so collapsing them would only add an unused parameter.
+    ///
     /// `prompt_tokens` is the tokenization of the prompt these state bytes were
-    /// produced from. The streaming path passes `Some(..)` so the next turn can
-    /// verify the cache is still a valid prefix (longest-common-prefix) before
-    /// reusing it; the batch path passes `None` (it gates reuse differently).
+    /// produced from. The batch path passes `None` (it gates reuse via its own
+    /// message bookkeeping, not the streaming path's longest-common-prefix
+    /// check).
     ///
     /// `draft_state_bytes` is the MTP draft context's per-seq KV snapshot (via
-    /// `state_seq_get_data(0)`). Passed `Some(..)` by the streaming MTP path
-    /// only — the next turn restores both target and draft together so the
-    /// speculative head keeps its prefix context across turns. `None` everywhere
-    /// else (batch turns and streaming turns that didn't use MTP).
+    /// `state_seq_get_data(0)`). The batch path passes `None` — it does not run
+    /// MTP, so there is no draft context to snapshot.
     fn save_session_state(
         worker_id: usize,
         request_id: &str,
         session: &Session,
-        ctx: &mut LlamaContext<'_>,
+        ctx: &LlamaContext<'_>,
         session_state_cache: &SessionStateCache,
         prompt_tokens: Option<Vec<i32>>,
         draft_state_bytes: Option<Vec<u8>>,
     ) {
-        let state_size = ctx.get_state_size();
         info!(
             "Worker {} saving session state to memory: {} bytes for {} messages",
             worker_id,
-            state_size,
+            ctx.get_state_size(),
             session.messages.len()
         );
 
-        let mut state_bytes = vec![0u8; state_size];
-        let bytes_written = unsafe { ctx.copy_state_data(state_bytes.as_mut_ptr()) };
-
-        if bytes_written == 0 {
-            warn!(
-                "Worker {} failed to copy state data (wrote 0 bytes) for request {}",
-                worker_id, request_id
-            );
+        let Some(state_bytes) = Self::snapshot_ctx_state(worker_id, request_id, ctx) else {
             return;
-        }
-
-        state_bytes.truncate(bytes_written);
+        };
+        let bytes_written = state_bytes.len();
 
         let draft_bytes_len = draft_state_bytes.as_ref().map_or(0, |b| b.len());
         let mut cache = session_state_cache.lock().unwrap();
@@ -1830,6 +2218,55 @@ impl RequestQueue {
             session.id,
             session.messages.len()
         );
+    }
+
+    /// Run the standard (non-MTP) streaming generation arm: stream tokens and,
+    /// at the prompt boundary, save the target-only context state (no draft).
+    ///
+    /// Owns the single definition of the standard arm's prompt-boundary save
+    /// closure so the three call sites in [`Self::process_streaming_request_sync`]
+    /// (non-MTP, draft-not-ready fallback, draft-create-error fallback) cannot
+    /// drift in how they thread `pin_on_save` or build the snapshot.
+    #[allow(clippy::too_many_arguments)]
+    fn run_standard_stream(
+        worker_id: usize,
+        request_id: &str,
+        session: &Session,
+        model: &LlamaModel,
+        ctx: &mut LlamaContext<'_>,
+        prompt: &str,
+        request: &GenerationRequest,
+        stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, QueueError>>,
+        cancellation_token: &CancellationToken,
+        model_manager: &ModelManager,
+        template_token_count: Option<usize>,
+        session_state_cache: &SessionStateCache,
+        prompt_tokens_for_save: &[i32],
+        pin_on_save: bool,
+    ) -> Result<(), QueueError> {
+        GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+            model,
+            ctx,
+            prompt,
+            request,
+            stream_sender,
+            cancellation_token,
+            model_manager.get_batch_size(),
+            template_token_count,
+            |target_at_boundary| {
+                Self::save_prompt_boundary_state(
+                    worker_id,
+                    request_id,
+                    session,
+                    target_at_boundary,
+                    None,
+                    session_state_cache,
+                    prompt_tokens_for_save,
+                    pin_on_save,
+                );
+            },
+        )
+        .map_err(|e| crate::types::QueueError::WorkerError(format!("Generation failed: {e}")))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1895,6 +2332,12 @@ impl RequestQueue {
             .map(|toks| toks.into_iter().map(|t| t.0).collect())
             .unwrap_or_default();
 
+        // Whether THIS turn's prompt-boundary save should be born pinned. A
+        // review fan-out's prime turn sets it (over ACP `_meta`) so the cached
+        // prefix is pinned atomically at save time, closing the prime→pin
+        // eviction race structurally. Ordinary turns save unpinned.
+        let pin_on_save = request.pin_on_save;
+
         // Auto-detect MTP: when the loaded model carries the NextN/MTP head,
         // run the draft-mtp speculative loop with a second MTP-context on the
         // same model (target=this ctx + draft=ctx_type::Mtp). Same KV-reuse on
@@ -1954,6 +2397,7 @@ impl RequestQueue {
                                     Some(draft_at_boundary),
                                     session_state_cache,
                                     &prompt_tokens_for_save,
+                                    pin_on_save,
                                 );
                             },
                         )
@@ -1966,30 +2410,22 @@ impl RequestQueue {
                         // Draft restore/trim failed — fall back to standard
                         // streaming for this turn. Drops the stale draft_ctx
                         // (and its now-cleared KV) so next turn starts fresh.
-                        GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+                        Self::run_standard_stream(
+                            worker_id,
+                            &request_id,
+                            session,
                             model,
                             &mut ctx,
                             &prompt,
                             request,
                             &stream_sender,
                             cancellation_token,
-                            model_manager.get_batch_size(),
+                            model_manager,
                             template_token_count,
-                            |target_at_boundary| {
-                                Self::save_prompt_boundary_state(
-                                    worker_id,
-                                    &request_id,
-                                    session,
-                                    target_at_boundary,
-                                    None,
-                                    session_state_cache,
-                                    &prompt_tokens_for_save,
-                                );
-                            },
+                            session_state_cache,
+                            &prompt_tokens_for_save,
+                            pin_on_save,
                         )
-                        .map_err(|e| {
-                            crate::types::QueueError::WorkerError(format!("Generation failed: {e}"))
-                        })
                     }
                 }
                 Err(e) => {
@@ -1997,55 +2433,41 @@ impl RequestQueue {
                         "Worker {} failed to create MTP draft context ({}); falling back to standard streaming",
                         worker_id, e
                     );
-                    GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+                    Self::run_standard_stream(
+                        worker_id,
+                        &request_id,
+                        session,
                         model,
                         &mut ctx,
                         &prompt,
                         request,
                         &stream_sender,
                         cancellation_token,
-                        model_manager.get_batch_size(),
+                        model_manager,
                         template_token_count,
-                        |target_at_boundary| {
-                            Self::save_prompt_boundary_state(
-                                worker_id,
-                                &request_id,
-                                session,
-                                target_at_boundary,
-                                None,
-                                session_state_cache,
-                                &prompt_tokens_for_save,
-                            );
-                        },
+                        session_state_cache,
+                        &prompt_tokens_for_save,
+                        pin_on_save,
                     )
-                    .map_err(|e| {
-                        crate::types::QueueError::WorkerError(format!("Generation failed: {e}"))
-                    })
                 }
             }
         } else {
-            GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+            Self::run_standard_stream(
+                worker_id,
+                &request_id,
+                session,
                 model,
                 &mut ctx,
                 &prompt,
                 request,
                 &stream_sender,
                 cancellation_token,
-                model_manager.get_batch_size(),
+                model_manager,
                 template_token_count,
-                |target_at_boundary| {
-                    Self::save_prompt_boundary_state(
-                        worker_id,
-                        &request_id,
-                        session,
-                        target_at_boundary,
-                        None,
-                        session_state_cache,
-                        &prompt_tokens_for_save,
-                    );
-                },
+                session_state_cache,
+                &prompt_tokens_for_save,
+                pin_on_save,
             )
-            .map_err(|e| crate::types::QueueError::WorkerError(format!("Generation failed: {e}")))
         };
 
         // No post-generation save: the prompt-boundary hook above already
@@ -2287,7 +2709,7 @@ impl RequestQueue {
         worker_id: usize,
         session: &Session,
         draft_ctx: &mut LlamaContext<'_>,
-        cached_bytes: Option<Vec<u8>>,
+        cached_bytes: Option<Arc<[u8]>>,
         template_offset: Option<usize>,
     ) -> bool {
         // No target reuse this turn → caller will cold-prefill the draft on
@@ -2365,7 +2787,7 @@ struct StreamingKvPrep {
     template_offset: Option<usize>,
     /// Per-seq draft-context bytes from the prior turn, when MTP was used.
     /// `None` when the prior turn didn't use MTP or no state was cached.
-    draft_state_bytes: Option<Vec<u8>>,
+    draft_state_bytes: Option<Arc<[u8]>>,
 }
 
 /// Decide the streaming resume offset from the longest-common-prefix length
@@ -2541,6 +2963,19 @@ mod tests {
     use std::time::SystemTime;
     use tempfile::TempDir;
 
+    /// Build a synthetic state blob of `len` bytes, all set to `byte` —
+    /// shared by the session-state store unit-test submodules.
+    fn state(byte: u8, len: usize) -> Vec<u8> {
+        vec![byte; len]
+    }
+
+    /// Worker-drain poll budget for tests in this module that wait for the live
+    /// queue to return to size 0 after a turn. Named so the CI-timing budget is
+    /// retuned in one place (mirroring `worker_lifecycle_tests::POLL_ATTEMPTS`).
+    const DRAIN_POLL_ATTEMPTS: usize = 50;
+    /// Sleep between drain-poll attempts. See [`DRAIN_POLL_ATTEMPTS`].
+    const DRAIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
     fn create_test_model_config() -> ModelConfig {
         ModelConfig {
             source: ModelSource::Local {
@@ -2664,6 +3099,7 @@ mod tests {
             top_p: Some(0.9),
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let result = queue.submit_request(request, &session).await;
@@ -2685,6 +3121,7 @@ mod tests {
             top_p: Some(0.9),
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let result = queue.submit_request(request, &session).await;
@@ -2713,6 +3150,7 @@ mod tests {
             top_p: Some(0.9),
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let mut receiver = queue
@@ -2759,6 +3197,7 @@ mod tests {
             top_p: None,
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         // First streaming turn: drain it fully so the worker finishes and the
@@ -2774,11 +3213,11 @@ mod tests {
 
         // Give the worker a moment to record completion metrics after the stream
         // sender is dropped.
-        for _ in 0..50 {
+        for _ in 0..DRAIN_POLL_ATTEMPTS {
             if queue.get_queue_size() == 0 {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            tokio::time::sleep(DRAIN_POLL_INTERVAL).await;
         }
         assert_eq!(
             queue.get_queue_size(),
@@ -2826,6 +3265,7 @@ mod tests {
             top_p: Some(0.9),
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let mut receiver = queue
@@ -2886,6 +3326,7 @@ mod tests {
             top_p: Some(0.9),
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let result = queue.submit_request(request, &session).await;
@@ -2913,6 +3354,7 @@ mod tests {
                 top_p: Some(0.9),
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             },
             session,
             response_sender: sender,
@@ -2982,6 +3424,7 @@ mod tests {
                 top_p: Some(0.9),
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             };
 
             let result = queue.submit_request(request, &session).await;
@@ -3033,6 +3476,7 @@ mod tests {
                 top_p: Some(0.9),
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             };
 
             let result = queue.submit_request(request, &session).await;
@@ -3082,6 +3526,7 @@ mod tests {
                 top_p: Some(0.9),
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             };
 
             let result = queue.submit_request(request, &session).await;
@@ -3129,6 +3574,7 @@ mod tests {
                 top_p: Some(0.9),
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             };
 
             let stream_result = queue.submit_streaming_request(request, &session).await;
@@ -3193,6 +3639,7 @@ mod tests {
                     top_p: Some(0.9),
                     stop_tokens: Vec::new(),
                     stopping_config: None,
+                    pin_on_save: false,
                 };
 
                 let result = queue.submit_request(request, &session).await;
@@ -3503,6 +3950,7 @@ mod tests {
                 top_p: None,
                 stop_tokens: Vec::new(),
                 stopping_config: None,
+                pin_on_save: false,
             }
         }
 
@@ -4481,10 +4929,6 @@ mod tests {
     mod free_fn_unit_tests {
         use super::*;
 
-        fn state(byte: u8, len: usize) -> Vec<u8> {
-            vec![byte; len]
-        }
-
         #[test]
         fn store_evicts_lru_first_keeping_the_active_session() {
             // entry budget of 2; insert A, B, touch A (now MRU), insert C.
@@ -4511,7 +4955,7 @@ mod tests {
             store.insert("C".into(), state(3, 10), None, None);
 
             assert_eq!(store.len(), 2, "byte budget caps total entries at 2");
-            assert!(store.cur_bytes <= 25, "total bytes stay within budget");
+            assert!(store.cur_bytes() <= 25, "total bytes stay within budget");
             assert!(!store.contains("A"), "LRU evicted under byte pressure");
             assert!(store.contains("B") && store.contains("C"));
         }
@@ -4533,13 +4977,14 @@ mod tests {
             let mut store = SessionStateStore::new(4, usize::MAX);
             store.insert("A".into(), state(1, 10), None, None);
             store.insert("B".into(), state(2, 20), None, None);
-            assert_eq!(store.cur_bytes, 30);
+            assert_eq!(store.cur_bytes(), 30);
 
             assert!(store.remove("A"), "removing a present session reports true");
             assert!(!store.contains("A"), "removed session is gone");
             assert!(store.contains("B"), "other sessions are untouched");
             assert_eq!(
-                store.cur_bytes, 20,
+                store.cur_bytes(),
+                20,
                 "only the removed session's bytes are freed"
             );
             assert_eq!(store.len(), 1);
@@ -4554,7 +4999,7 @@ mod tests {
             store.insert("only".into(), state(1, 10), None, None);
             assert!(store.remove("only"));
             assert_eq!(store.len(), 0, "remove is not subject to keep-at-least-one");
-            assert_eq!(store.cur_bytes, 0, "byte accounting returns to zero");
+            assert_eq!(store.cur_bytes(), 0, "byte accounting returns to zero");
         }
 
         #[test]
@@ -4565,7 +5010,7 @@ mod tests {
                 !store.remove("missing"),
                 "removing an absent session is false"
             );
-            assert_eq!(store.cur_bytes, 10, "byte accounting unchanged");
+            assert_eq!(store.cur_bytes(), 10, "byte accounting unchanged");
             assert!(store.contains("A"));
         }
 
@@ -4575,7 +5020,7 @@ mod tests {
             store.insert("A".into(), state(1, 10), None, None);
             store.insert("A".into(), state(1, 30), None, None); // replace, larger
             assert_eq!(store.len(), 1, "replacing an id does not add an entry");
-            assert_eq!(store.cur_bytes, 30, "byte accounting follows replacement");
+            assert_eq!(store.cur_bytes(), 30, "byte accounting follows replacement");
         }
 
         #[test]
@@ -4588,9 +5033,9 @@ mod tests {
                 Some(state(8, 4)),
             );
             let (bytes, toks, draft) = store.get("A").expect("present");
-            assert_eq!(bytes, vec![7, 7, 7]);
+            assert_eq!(&bytes[..], &[7, 7, 7]);
             assert_eq!(toks, Some(vec![10, 20, 30]));
-            assert_eq!(draft, Some(vec![8, 8, 8, 8]));
+            assert_eq!(draft.as_deref(), Some(&[8, 8, 8, 8][..]));
             assert_eq!(store.get("missing"), None);
         }
 
@@ -4739,5 +5184,377 @@ mod tests {
         // generation begins, so cancellation or disconnect mid-generation
         // never affects the cache (the saved state is the prompt state,
         // which is valid regardless of whether generation completed).
+    }
+
+    /// Unit tests for session-state forking, pinning, and status — the store
+    /// machinery behind the `session/fork` / `session/state_status` /
+    /// `session/pin` ACP extension methods.
+    mod session_state_fork_tests {
+        use super::*;
+
+        /// Forking aliases the parent's state under the child id, registered
+        /// with the parent's prompt-token fingerprint — so the child's first
+        /// prompt (a strict extension of the parent's) matches its OWN entry
+        /// with `lcp == donor length`: the trim offset equals the saved KV end
+        /// and the restore needs zero rollback.
+        #[test]
+        fn fork_aliases_parent_state_with_parent_fingerprint() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert("parent".into(), state(1, 100), Some(vec![10, 20, 30]), None);
+
+            let info = store
+                .fork("parent", "child".to_string())
+                .expect("fork of a saved parent must succeed");
+            assert_eq!(info.prefix_tokens, 3, "fork reports the donor token count");
+            assert_eq!(info.state_bytes, 100, "fork reports the donor byte size");
+
+            // The child's first rendered prompt strictly extends the parent's
+            // saved prompt tokens.
+            let m = store
+                .find_best_prefix_match("child", &[10, 20, 30, 40, 50])
+                .expect("child's aliased entry must be a donor");
+            assert_eq!(m.source_session_id, "child", "child reuses its OWN entry");
+            assert_eq!(m.lcp, 3, "lcp covers the full parent fingerprint");
+            assert_eq!(
+                streaming_reuse_decision(m.lcp, 5),
+                Some(3),
+                "strict-prefix fork resumes at exactly the donor length"
+            );
+        }
+
+        /// Shared blobs are counted once against the byte budget, no matter
+        /// how many forks alias them; a child's own later save adds its own
+        /// (new) bytes.
+        #[test]
+        fn fork_shares_blob_bytes_counted_once() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert(
+                "parent".into(),
+                state(1, 100),
+                Some(vec![1]),
+                Some(state(2, 50)),
+            );
+            assert_eq!(store.cur_bytes(), 150);
+
+            store.fork("parent", "c1".to_string()).expect("fork c1");
+            store.fork("parent", "c2".to_string()).expect("fork c2");
+            assert_eq!(
+                store.cur_bytes(),
+                150,
+                "aliased forks add zero bytes — shared blobs count once"
+            );
+
+            // Copy-on-write at save time: c1's own end-of-turn save replaces
+            // its alias with fresh bytes, which DO count.
+            store.insert("c1".into(), state(3, 70), Some(vec![1, 2]), None);
+            assert_eq!(store.cur_bytes(), 220);
+        }
+
+        /// A forked child's own save must not mutate the parent's entry.
+        #[test]
+        fn forked_child_save_leaves_parent_untouched() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert("parent".into(), state(1, 100), Some(vec![10, 20, 30]), None);
+            store.fork("parent", "child".to_string()).expect("fork");
+
+            store.insert(
+                "child".into(),
+                state(9, 40),
+                Some(vec![10, 20, 30, 40]),
+                None,
+            );
+
+            let parent = store.status("parent").expect("parent entry still present");
+            assert_eq!(parent.prompt_tokens, Some(3));
+            assert_eq!(parent.state_bytes, 100);
+            let (bytes, _, _) = store.get("parent").expect("parent bytes intact");
+            assert_eq!(&bytes[..], &state(1, 100)[..]);
+        }
+
+        /// Fork failures are distinguishable: unknown parent vs a parent whose
+        /// snapshot has no prompt fingerprint (not strict-prefix restorable).
+        #[test]
+        fn fork_failures_are_distinguishable() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            assert!(matches!(
+                store.fork("missing", "child".to_string()),
+                Err(SessionStateForkError::ParentStateNotFound(_))
+            ));
+
+            store.insert("batch-only".into(), state(1, 10), None, None);
+            assert!(matches!(
+                store.fork("batch-only", "child".to_string()),
+                Err(SessionStateForkError::ParentStateUnusable(_))
+            ));
+        }
+
+        /// `status` reports saved/pinned/token-count truthfully, and `None`
+        /// for sessions with no snapshot.
+        #[test]
+        fn status_reports_saved_pinned_and_token_count() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            assert!(store.status("missing").is_none());
+
+            store.insert("a".into(), state(1, 25), Some(vec![10, 20]), None);
+            let status = store.status("a").expect("saved entry has a status");
+            assert_eq!(status.prompt_tokens, Some(2));
+            assert_eq!(status.state_bytes, 25);
+            assert!(!status.pinned);
+
+            assert!(store.set_pinned("a", true));
+            assert!(store.status("a").unwrap().pinned);
+            assert!(store.set_pinned("a", false));
+            assert!(!store.status("a").unwrap().pinned);
+
+            assert!(
+                !store.set_pinned("missing", true),
+                "pin of absent id is false"
+            );
+        }
+
+        /// Pinned entries survive cache pressure that evicts unpinned ones.
+        #[test]
+        fn pinned_entry_survives_eviction_pressure() {
+            let mut store = SessionStateStore::new(2, usize::MAX);
+            store.insert("pinned".into(), state(1, 10), Some(vec![1]), None);
+            assert!(store.set_pinned("pinned", true));
+
+            // Two more inserts exceed the entry budget of 2 — eviction must
+            // take the unpinned LRU victim, never the pinned entry.
+            store.insert("b".into(), state(2, 10), None, None);
+            store.insert("c".into(), state(3, 10), None, None);
+
+            assert!(store.contains("pinned"), "pinned entry survives pressure");
+            assert!(store.contains("c"), "newest entry survives");
+            assert!(!store.contains("b"), "unpinned LRU entry is the victim");
+        }
+
+        /// Unpinning re-exposes the entry to eviction on the next pressure.
+        #[test]
+        fn unpinned_entry_is_evicted_after_unpin() {
+            let mut store = SessionStateStore::new(2, usize::MAX);
+            store.insert("a".into(), state(1, 10), Some(vec![1]), None);
+            assert!(store.set_pinned("a", true));
+            store.insert("b".into(), state(2, 10), None, None);
+            store.insert("c".into(), state(3, 10), None, None);
+            assert!(store.contains("a"));
+
+            assert!(store.set_pinned("a", false));
+            store.insert("d".into(), state(4, 10), None, None);
+            assert!(!store.contains("a"), "unpinned LRU entry is evicted");
+        }
+
+        /// Pinned bytes still count against the budget, and eviction
+        /// terminates (keeping the most-recently-used entry) even when every
+        /// candidate is pinned — the cache can go over budget but never
+        /// deadlocks or evicts the active insert.
+        #[test]
+        fn eviction_terminates_when_everything_is_pinned() {
+            let mut store = SessionStateStore::new(8, 25);
+            store.insert("a".into(), state(1, 20), Some(vec![1]), None);
+            assert!(store.set_pinned("a", true));
+
+            // Over the byte budget: "a" is pinned and "b" is the MRU insert,
+            // so nothing is evictable and the loop must terminate over budget.
+            store.insert("b".into(), state(2, 20), Some(vec![2]), None);
+            assert!(store.contains("a"), "pinned entry kept despite pressure");
+            assert!(store.contains("b"), "active (MRU) insert is never evicted");
+
+            assert!(store.set_pinned("b", true));
+            store.insert("c".into(), state(3, 20), Some(vec![3]), None);
+            assert!(store.contains("a"), "pinned entry kept despite pressure");
+            assert!(store.contains("b"), "pinned entry kept despite pressure");
+            assert!(store.contains("c"), "active (MRU) insert is never evicted");
+        }
+
+        /// Lifecycle `remove` (session ended) reclaims even pinned entries —
+        /// the caller knows the session is gone, which trumps the pin.
+        #[test]
+        fn lifecycle_remove_reclaims_pinned_entries() {
+            let mut store = SessionStateStore::new(8, usize::MAX);
+            store.insert("a".into(), state(1, 10), Some(vec![1]), None);
+            assert!(store.set_pinned("a", true));
+            assert!(store.remove("a"));
+            assert!(!store.contains("a"));
+            assert_eq!(store.cur_bytes(), 0);
+        }
+
+        /// (c) The RAM-scaled budget helper returns `max(2GiB, total × fraction)`:
+        /// a generous fraction of a large machine's RAM, but never below the
+        /// 2 GiB floor on a small one. This is what the cache must be built with
+        /// so a high-RAM box holds every validator prefix + fork.
+        #[test]
+        fn cache_byte_budget_is_ram_scaled_floored_at_2gib() {
+            const FLOOR: usize = 2 * 1024 * 1024 * 1024;
+            const FRACTION_NUM: u64 = 1;
+            const FRACTION_DEN: u64 = 4; // 0.25
+
+            // A 128 GiB machine: 0.25 × 128 GiB = 32 GiB, well above the floor.
+            let big = 128u64 * 1024 * 1024 * 1024;
+            assert_eq!(
+                cache_byte_budget_for_total_memory(big),
+                (big / FRACTION_DEN * FRACTION_NUM) as usize,
+                "high-RAM budget is a fraction of total memory"
+            );
+
+            // A 4 GiB machine: 0.25 × 4 GiB = 1 GiB < floor → floored at 2 GiB.
+            let small = 4u64 * 1024 * 1024 * 1024;
+            assert_eq!(
+                cache_byte_budget_for_total_memory(small),
+                FLOOR,
+                "low-RAM budget is floored at 2 GiB"
+            );
+
+            // A machine that reports 0 total memory (sysinfo unavailable) still
+            // gets the floor, never a 0-byte budget that would evict everything.
+            assert_eq!(cache_byte_budget_for_total_memory(0), FLOOR);
+        }
+
+        /// (a, count axis) The entry-COUNT budget — not just bytes — drove the
+        /// race: a review fleet primes ~15 validator prefixes concurrently, but
+        /// the old `cores / 2` ceiling (4-8 on a typical box) count-evicted the
+        /// earliest, not-yet-pinned prefixes before their pins landed,
+        /// regardless of how much RAM the byte budget allowed. The entry
+        /// ceiling must comfortably hold a full fleet on a low-core machine so
+        /// count eviction is never the binding constraint for it.
+        #[test]
+        fn entry_ceiling_holds_a_full_validator_fleet_on_a_low_core_box() {
+            const FLEET: usize = 15;
+            // A 4-core machine: the old `cores / 2 = 2` ceiling would
+            // count-evict 13 of a 15-validator fleet's prefixes before their
+            // pins landed. The floor must hold the whole fleet.
+            assert!(
+                cache_entry_ceiling_for_cores(4) >= FLEET,
+                "the entry ceiling on a 4-core box ({}) must hold a {FLEET}-validator \
+                 fleet so count eviction does not drop a not-yet-pinned prefix",
+                cache_entry_ceiling_for_cores(4)
+            );
+            // A high-core machine still scales above the floor (cores / 2).
+            assert!(
+                cache_entry_ceiling_for_cores(128) >= 64,
+                "a high-core box scales the entry ceiling above the fleet floor"
+            );
+        }
+
+        /// (a) The eviction-race: ~15 validators prime concurrently, the single
+        /// GPU serializes them, so each prime's `save → evict()` runs in turn.
+        /// With a post-save pin and a budget the saves exceed, an earlier
+        /// validator's not-yet-pinned entry is the LRU victim of a later
+        /// validator's save — its pin then fails. Born-pinned saves
+        /// (`insert_pinned`) make every entry an eviction non-candidate from the
+        /// moment its bytes land, so no concurrent save can defeat the pin.
+        #[test]
+        fn pin_on_save_survives_concurrent_eviction_race() {
+            // Budget holds only ~3 of the 15 entries: post-save pinning loses
+            // the race badly here, which is exactly the production failure.
+            let n = 15usize;
+            let entry_bytes = 100usize;
+            let budget = 3 * entry_bytes;
+            let mut store = SessionStateStore::new(n + 5, budget);
+
+            for i in 0..n {
+                let id = format!("validator-{i}");
+                // Born pinned: the save and the pin are one atomic step, so the
+                // entry is never an unpinned eviction candidate.
+                store.insert_pinned(
+                    id.clone(),
+                    state(i as u8, entry_bytes),
+                    Some(vec![i as i32]),
+                );
+            }
+
+            // Every primed prefix is still resident and pinned — no pin was
+            // defeated by another validator's save.
+            for i in 0..n {
+                let id = format!("validator-{i}");
+                let status = store
+                    .status(&id)
+                    .unwrap_or_else(|| panic!("{id} must still be cached"));
+                assert!(status.pinned, "{id} must be pinned");
+            }
+        }
+
+        /// (a, RED-guard) Post-save pinning under the same pressure DOES lose
+        /// the race: this documents the bug the atomic pin-on-save closes. The
+        /// LRU early entries are evicted by later saves before their pin lands,
+        /// so `set_pinned` returns false for them.
+        #[test]
+        fn post_save_pin_loses_the_race_without_pin_on_save() {
+            let n = 15usize;
+            let entry_bytes = 100usize;
+            let budget = 3 * entry_bytes;
+            let mut store = SessionStateStore::new(n + 5, budget);
+
+            // All saves first (the GPU-serialized prime turns), then all pins —
+            // the production prime→status→pin protocol's window.
+            for i in 0..n {
+                store.insert(
+                    format!("validator-{i}"),
+                    state(i as u8, entry_bytes),
+                    Some(vec![i as i32]),
+                    None,
+                );
+            }
+            let pinned_ok = (0..n)
+                .filter(|i| store.set_pinned(&format!("validator-{i}"), true))
+                .count();
+            assert!(
+                pinned_ok < n,
+                "post-save pinning must lose the race for at least one early entry \
+                 (got {pinned_ok}/{n} pinned) — this is the bug pin-on-save fixes"
+            );
+        }
+
+        /// (b) A pinned entry is never evicted even when a single later save
+        /// would itself exceed the whole byte budget.
+        #[test]
+        fn pinned_entry_survives_a_single_oversized_save() {
+            let mut store = SessionStateStore::new(8, 50);
+            store.insert_pinned("prefix".into(), state(1, 40), Some(vec![1]));
+            assert!(store.status("prefix").unwrap().pinned);
+
+            // One save bigger than the entire budget. It cannot evict the pinned
+            // prefix; the cache simply goes over budget (and warns).
+            store.insert("huge".into(), state(2, 200), Some(vec![2]), None);
+
+            assert!(
+                store.contains("prefix"),
+                "pinned prefix survives an oversized save"
+            );
+            assert!(store.contains("huge"), "the active (MRU) save is kept");
+        }
+
+        /// (d) Eviction while the cache is at/over budget emits an observable
+        /// warn carrying the bytes/budget/entry-count pressure, so a future
+        /// pin-failure cluster is diagnosable from the log (today eviction is
+        /// silent).
+        #[test]
+        fn eviction_near_budget_is_observable() {
+            // The eviction `warn!` is emitted alongside `evictions`; the
+            // counter is the deterministic in-process observable (a `warn!`
+            // only reaches whichever tracing subscriber is installed, which is
+            // racy to capture under the concurrent test harness).
+            let mut store = SessionStateStore::new(100, 25);
+            store.insert("a".into(), state(1, 10), None, None);
+            store.insert("b".into(), state(2, 10), None, None);
+            assert_eq!(
+                store.eviction_count(),
+                0,
+                "two 10-byte entries fit a 25-byte budget — no eviction yet"
+            );
+
+            // This third 10-byte save pushes total to 30 > 25 and evicts the
+            // LRU under budget pressure, which is observed (and warned).
+            store.insert("c".into(), state(3, 10), None, None);
+            assert_eq!(
+                store.eviction_count(),
+                1,
+                "an eviction under budget pressure must be observable"
+            );
+            assert!(
+                !store.contains("a"),
+                "the LRU entry was the eviction victim"
+            );
+        }
     }
 }

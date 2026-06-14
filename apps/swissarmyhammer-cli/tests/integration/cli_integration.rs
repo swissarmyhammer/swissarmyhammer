@@ -6,126 +6,71 @@ use tempfile::TempDir;
 
 use crate::in_process_test_utils::run_sah_command_in_process;
 
-/// Test that the new prompt subcommand structure works correctly
-#[tokio::test]
-async fn test_prompt_subcommand_list() -> Result<()> {
-    let result = run_sah_command_in_process(&["prompt", "list"]).await?;
-
-    if result.exit_code != 0 {
-        eprintln!("STDERR: {}", result.stderr);
-        eprintln!("STDOUT: {}", result.stdout);
-    }
-    assert_eq!(result.exit_code, 0, "prompt list command should succeed");
-    Ok(())
-}
-
-/// Test prompt test functionality with a simple prompt
-#[tokio::test]
-async fn test_prompt_subcommand_test() -> Result<()> {
-    // Test with non-existent prompt should fail gracefully
-    let result = run_sah_command_in_process(&["prompt", "test", "non_existent_prompt"]).await?;
-
-    assert!(
-        result.exit_code != 0,
-        "testing non-existent prompt should fail"
-    );
-    assert_eq!(result.exit_code, 1, "should return exit code 1");
-
-    // Verify error message is present
-    assert!(
-        result.stderr.contains("Error:") || result.stderr.contains("not found"),
-        "should show meaningful error message"
-    );
-
-    Ok(())
-}
-
-/// Test help output for prompt subcommands
-#[tokio::test]
-async fn test_prompt_help() -> Result<()> {
-    let _guard = IsolatedTestEnvironment::new()?;
-
-    let result = run_sah_command_in_process(&["prompt", "--help"]).await?;
-
-    assert_eq!(result.exit_code, 0, "prompt help should succeed");
-
-    assert!(
-        result.stdout.contains("prompt") || result.stdout.contains("Commands"),
-        "help output should be relevant"
-    );
-
-    Ok(())
-}
-
 // Note: end-to-end `sah completion <shell>` verification lives in
 // `tests/completion.rs` and exercises the compiled binary via
 // `swissarmyhammer_cli_completions::test_helpers::assert_compiled_binary_completion_works`.
 // Keeping the rendering contract in one place — the shared helper — avoids
 // duplicating the per-shell assertions across every CLI crate.
 
-/// Test that verbose flag works
+/// Test that the global --verbose flag is accepted and the command still runs
+/// to a successful completion.
 #[tokio::test]
 async fn test_verbose_flag() -> Result<()> {
-    let result = run_sah_command_in_process(&["--verbose", "prompt", "list"]).await?;
+    let _guard = IsolatedTestEnvironment::new()?;
+    let result = run_sah_command_in_process(&["--verbose", "validate"]).await?;
 
-    assert!(
-        result.exit_code >= 0,
-        "verbose flag should not break commands"
+    assert_eq!(
+        result.exit_code, 0,
+        "validate with --verbose should succeed in a clean environment; stdout: '{}', stderr: '{}'",
+        result.stdout, result.stderr
     );
 
     Ok(())
 }
 
-/// Test that quiet flag works
+/// Test that the global --quiet flag is accepted and the command still runs to
+/// a successful completion.
 #[tokio::test]
 async fn test_quiet_flag() -> Result<()> {
-    let result = run_sah_command_in_process(&["--quiet", "prompt", "list"]).await?;
+    let _guard = IsolatedTestEnvironment::new()?;
+    let result = run_sah_command_in_process(&["--quiet", "validate"]).await?;
 
-    assert!(
-        result.exit_code >= 0,
-        "quiet flag should not break commands"
+    assert_eq!(
+        result.exit_code, 0,
+        "validate with --quiet should succeed in a clean environment; stdout: '{}', stderr: '{}'",
+        result.stdout, result.stderr
     );
 
     Ok(())
 }
 
-/// Test prompt list with different formats
-#[tokio::test]
-async fn test_prompt_list_formats() -> Result<()> {
-    let formats = vec!["json", "yaml", "table"];
-
-    for format in formats {
-        let result = run_sah_command_in_process(&["prompt", "list", "--format", format]).await?;
-
-        assert!(
-            result.exit_code >= 0,
-            "prompt list --format {format} should complete"
-        );
-    }
-
-    Ok(())
-}
-
-/// Test concurrent command execution
+/// Test concurrent command execution: each of several concurrent `validate`
+/// runs must succeed in a clean, isolated environment.
 #[tokio::test]
 async fn test_concurrent_commands() -> Result<()> {
     use tokio::task::JoinSet;
+
+    let _guard = IsolatedTestEnvironment::new()?;
 
     let mut tasks = JoinSet::new();
 
     for i in 0..3 {
         tasks.spawn(async move {
-            let result = run_sah_command_in_process(&["prompt", "list"])
+            let result = run_sah_command_in_process(&["validate"])
                 .await
                 .expect("Failed to run command");
 
-            (i, result.exit_code == 0)
+            (i, result.exit_code, result.stdout, result.stderr)
         });
     }
 
     while let Some(result) = tasks.join_next().await {
-        let (i, success) = result?;
-        assert!(success, "Concurrent command {i} should succeed");
+        let (i, exit_code, stdout, stderr) = result?;
+        assert_eq!(
+            exit_code, 0,
+            "concurrent validate command {i} should succeed in a clean environment; \
+             stdout: '{stdout}', stderr: '{stderr}'"
+        );
     }
 
     Ok(())

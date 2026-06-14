@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use serde_json::json;
 use swissarmyhammer_plugin::{CallerId, PluginHost};
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_tools::mcp::McpServer;
 
 /// A generous upper bound on any single host interaction.
@@ -47,7 +47,7 @@ fn write_plugin(dir: &std::path::Path, body: &str) {
 /// The bootstrap registers the full in-process tool set — including the unified
 /// `files` tool, which is an agent tool.
 async fn build_mcp_server(work_dir: &std::path::Path) -> McpServer {
-    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None)
+    McpServer::new_with_work_dir(TemplateLibrary::new(), work_dir.to_path_buf(), None)
         .await
         .expect("MCP server bootstrap should succeed")
 }

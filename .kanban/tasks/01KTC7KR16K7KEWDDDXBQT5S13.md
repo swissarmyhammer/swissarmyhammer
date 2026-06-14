@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KTC7JKNV1ZM5F6JFPK1X7E2G
-position_column: todo
-position_ordinal: '8680'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff880
 project: remove-prompts
 title: Remove prompt integration tests, fixtures, and library re-exports
 ---

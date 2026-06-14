@@ -126,19 +126,44 @@ pub struct SpawnConfig {
     /// Ephemeral mode: uses haiku model and no session persistence
     #[builder(default)]
     pub ephemeral: bool,
+    /// Extra CLI switches appended verbatim to the spawned `claude` command.
+    /// Carried from [`crate::config::ClaudeConfig::extra_args`]. If these
+    /// already supply a `--model`, ephemeral mode will not add its own.
+    #[builder(default)]
+    pub extra_args: Vec<String>,
     /// Override for Claude's built-in tools. When set to Some(""), disables all built-in tools.
     /// This is used for validator agents that should only have MCP-provided tools.
     #[builder(default)]
     pub tools_override: Option<String>,
-    /// Resume mode: when `true`, the process is spawned with `--resume <uuid>`
-    /// instead of `--session-id <uuid>`, picking up the claude CLI's own
-    /// transcript for the deterministic session UUID rather than starting a
-    /// fresh conversation. The UUID used is always
-    /// [`SessionId::to_uuid_string`](crate::session::SessionId::to_uuid_string)
-    /// of [`session_id`](Self::session_id), so a session can be resumed with no
-    /// stored CLI-uuid mapping.
+    /// How the spawned process attaches to a conversation: a fresh start
+    /// (the default), a resume of this session's own transcript, or a fork
+    /// of a parent session's transcript. See [`ConversationAttachment`].
     #[builder(default)]
-    pub resume: bool,
+    pub attachment: ConversationAttachment,
+}
+
+/// How a spawned claude CLI process attaches to a conversation.
+///
+/// Carried on [`SpawnConfig::attachment`]; each variant maps to one CLI flag
+/// combination in [`ClaudeProcess::build_base_command`]. The session's own
+/// CLI UUID is always
+/// [`SessionId::to_uuid_string`](crate::session::SessionId::to_uuid_string)
+/// of [`SpawnConfig::session_id`] — a deterministic mapping, so resume and
+/// fork need no stored CLI-uuid map.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ConversationAttachment {
+    /// `--session-id <uuid>`: begin a fresh conversation keyed by the uuid.
+    #[default]
+    New,
+    /// `--resume <uuid>`: reattach to the CLI's own transcript for the uuid.
+    Resume,
+    /// `--resume <parent-uuid> --fork-session --session-id <uuid>`: seed a new
+    /// conversation under the uuid from the parent's persisted transcript.
+    Fork {
+        /// The parent session whose persisted transcript seeds the fork; its
+        /// CLI UUID is the same deterministic `to_uuid_string` mapping.
+        parent: SessionId,
+    },
 }
 
 /// Claude CLI command-line arguments for stream-json communication
@@ -160,9 +185,12 @@ const CLAUDE_CLI_ARGS: &[&str] = &[
     "--setting-sources",
     "user,project,local",
     "--include-partial-messages", // Emit partial messages for immediate streaming
-    "--no-session-persistence",   // Disable built-in session persistence (we manage it ourselves)
-    // NOTE: This causes Claude to send a duplicate final combined message and empty terminator
-    // We filter these out in the streaming loop (skip large chunks and empty chunks)
+    // NOTE: the CLI's own session persistence stays ON for durable sessions.
+    // `--resume <uuid>` (session/resume, session/load) and `--resume <uuid>
+    // --fork-session` (session/fork) reattach to the CLI's persisted
+    // transcript, which only exists when the original process persisted it.
+    // Ephemeral sessions opt out via `--no-session-persistence` in
+    // `configure_ephemeral_mode`.
     "--replay-user-messages", // Re-emit user messages for transcript recording
 ];
 
@@ -299,9 +327,10 @@ impl ClaudeProcessManager {
     /// Spawn (or re-spawn) a claude process for a session in resume mode.
     ///
     /// This is the resume counterpart of [`spawn_process`](Self::spawn_process):
-    /// it forces `config.resume = true` so the claude CLI is started with
-    /// `--resume <uuid>`, reattaching to its own transcript for the session's
-    /// deterministic UUID rather than starting a fresh conversation.
+    /// it forces `config.attachment = ConversationAttachment::Resume` so the
+    /// claude CLI is started with `--resume <uuid>`, reattaching to its own
+    /// transcript for the session's deterministic UUID rather than starting a
+    /// fresh conversation.
     ///
     /// Unlike `spawn_for_session`, an already-running process for the session
     /// is **not** a no-op: it is terminated first so the new process resumes
@@ -317,7 +346,7 @@ impl ClaudeProcessManager {
         &self,
         mut config: SpawnConfig,
     ) -> Result<Arc<Mutex<ClaudeProcess>>> {
-        config.resume = true;
+        config.attachment = ConversationAttachment::Resume;
         let session_id = config.session_id;
 
         // Drop any live process so the resumed one replaces it. A missing
@@ -403,10 +432,13 @@ impl ClaudeProcess {
     /// The claude CLI session UUID is always
     /// [`SessionId::to_uuid_string`](crate::session::SessionId::to_uuid_string)
     /// of the session id — a deterministic, 1:1 mapping from the session ULID.
-    /// A new session is spawned with `--session-id <uuid>`; a resumed session
-    /// (`config.resume == true`) is spawned with `--resume <uuid>`. Because the
-    /// UUID is derived, not random, a session can be resumed across process
-    /// restarts with no stored CLI-uuid mapping.
+    /// The CLI flags attaching the process to a conversation are selected by
+    /// `config.attachment` (see [`ConversationAttachment`]): a new session is
+    /// spawned with `--session-id <uuid>`, a resumed session with
+    /// `--resume <uuid>`, and a forked session with `--resume <parent-uuid>
+    /// --fork-session --session-id <uuid>`. Because the UUID is derived, not
+    /// random, a session can be resumed or forked across process restarts
+    /// with no stored CLI-uuid mapping.
     ///
     /// # Arguments
     /// * `config` - Spawn configuration containing session_id, cwd, agent_mode, system_prompt, etc.
@@ -425,7 +457,8 @@ impl ClaudeProcess {
 
         Self::log_spawn_info(&config, &claude_session_uuid);
 
-        let mut command = Self::build_base_command(&claude_session_uuid, config.resume);
+        let mut command =
+            Self::build_base_command(&claude_session_uuid, &config.attachment, &config.extra_args);
         Self::configure_agent_mode(&mut command, &config);
         Self::configure_system_prompt(&mut command, &config);
         Self::configure_ephemeral_mode(&mut command, &config);
@@ -440,34 +473,59 @@ impl ClaudeProcess {
     /// Log spawn configuration info.
     fn log_spawn_info(config: &SpawnConfig, claude_session_uuid: &str) {
         tracing::info!(
-            "ClaudeProcess::spawn for session {} with Claude UUID {}, {} MCP servers, ephemeral={}, resume={}",
+            "ClaudeProcess::spawn for session {} with Claude UUID {}, {} MCP servers, ephemeral={}, attachment={:?}",
             config.session_id,
             claude_session_uuid,
             config.mcp_servers.len(),
             config.ephemeral,
-            config.resume
+            config.attachment
         );
     }
 
     /// Build the base command with required args.
     ///
-    /// When `resume` is `true` the process is started with `--resume <uuid>`
-    /// so the claude CLI reattaches to its own transcript for that UUID;
-    /// otherwise it is started with `--session-id <uuid>` to begin a fresh
-    /// conversation keyed by that UUID.
-    fn build_base_command(claude_session_uuid: &str, resume: bool) -> Command {
+    /// The `attachment` selects how the process attaches to a conversation
+    /// (see [`ConversationAttachment`]): a fresh conversation keyed by
+    /// `--session-id <uuid>`, a reattach via `--resume <uuid>`, or a fork via
+    /// `--resume <parent-uuid> --fork-session --session-id <uuid>` that clones
+    /// the parent's persisted transcript onto this session's own UUID.
+    fn build_base_command(
+        claude_session_uuid: &str,
+        attachment: &ConversationAttachment,
+        extra_args: &[String],
+    ) -> Command {
         let mut command = Command::new("claude");
         command.args(CLAUDE_CLI_ARGS);
-        if resume {
-            command.arg("--resume").arg(claude_session_uuid);
-        } else {
-            command.arg("--session-id").arg(claude_session_uuid);
+        match attachment {
+            ConversationAttachment::New => {
+                command.arg("--session-id").arg(claude_session_uuid);
+            }
+            ConversationAttachment::Resume => {
+                command.arg("--resume").arg(claude_session_uuid);
+            }
+            ConversationAttachment::Fork { parent } => {
+                command
+                    .arg("--resume")
+                    .arg(parent.to_uuid_string())
+                    .arg("--fork-session")
+                    .arg("--session-id")
+                    .arg(claude_session_uuid);
+            }
         }
         command
             .env("CLAUDE_ACP", "1")
             // Allow spawning Claude from within a Claude Code session
             .env_remove("CLAUDECODE");
+        // Caller-supplied switches are appended verbatim so they can override
+        // or extend the base contract (e.g. `--model`).
+        command.args(extra_args);
         command
+    }
+
+    /// Whether `extra_args` already supplies a `--model` switch. Ephemeral mode
+    /// consults this so it does not append a second, conflicting `--model`.
+    fn extra_args_have_model(extra_args: &[String]) -> bool {
+        extra_args.iter().any(|a| a == "--model")
     }
 
     /// Configure agent mode if specified.
@@ -490,10 +548,24 @@ impl ClaudeProcess {
     }
 
     /// Configure ephemeral mode settings.
+    ///
+    /// Ephemeral sessions run on haiku and opt out of the CLI's own transcript
+    /// persistence — they are throwaway, never resumed or forked. Durable
+    /// sessions keep CLI persistence ON, because `--resume` and `--resume
+    /// --fork-session` reattach to the CLI's persisted transcript.
+    ///
+    /// NOTE: `--no-session-persistence` causes Claude to send a duplicate
+    /// final combined message and an empty terminator; the streaming loop
+    /// filters these out (skip large chunks and empty chunks).
     fn configure_ephemeral_mode(command: &mut Command, config: &SpawnConfig) {
         if config.ephemeral {
             tracing::info!("Spawning Claude in ephemeral mode (haiku, no session persistence)");
-            command.arg("--model").arg("haiku");
+            // A caller-supplied `--model` wins; only default to haiku when none
+            // was given, so we never emit two conflicting `--model` flags.
+            if !Self::extra_args_have_model(&config.extra_args) {
+                command.arg("--model").arg("haiku");
+            }
+            command.arg("--no-session-persistence");
         }
     }
 
@@ -725,6 +797,15 @@ impl ClaudeProcess {
             line
         );
         Ok(Some(line))
+    }
+
+    /// The process's exit status, if it has already exited.
+    ///
+    /// `try_wait` caches the status once the child has been reaped, so this
+    /// can be called after [`is_alive`](Self::is_alive) returned `false` to
+    /// recover the exit code for diagnostics.
+    pub fn exit_status(&mut self) -> Option<std::process::ExitStatus> {
+        self.child.try_wait().ok().flatten()
     }
 
     /// Check if the process is still alive
@@ -1076,20 +1157,16 @@ mod tests {
     /// Claude loads by default.
     #[test]
     fn test_base_command_loads_filesystem_setting_sources() {
-        let command = ClaudeProcess::build_base_command("test-session-uuid", false);
-        let args: Vec<String> = command
-            .as_std()
-            .get_args()
-            .map(|s| s.to_string_lossy().to_string())
-            .collect();
+        let command = ClaudeProcess::build_base_command(
+            "test-session-uuid",
+            &ConversationAttachment::New,
+            &[],
+        );
+        let args = command_args(&command);
 
-        let pos = args
-            .iter()
-            .position(|a| a == "--setting-sources")
-            .unwrap_or_else(|| panic!("Expected --setting-sources flag, got args: {args:?}"));
-        let value = args
-            .get(pos + 1)
-            .expect("--setting-sources must be followed by a value");
+        let value = arg_value(&args, "--setting-sources").unwrap_or_else(|| {
+            panic!("Expected --setting-sources with a value, got args: {args:?}")
+        });
         assert!(
             value.split(',').any(|s| s == "project"),
             "--setting-sources value must include 'project', got: {value:?}"
@@ -1105,36 +1182,224 @@ mod tests {
     /// still pass `--print` and the stream-json input/output format flags.
     #[test]
     fn test_base_command_retains_core_streamjson_args() {
-        let command = ClaudeProcess::build_base_command("test-session-uuid", false);
-        let args: Vec<String> = command
-            .as_std()
-            .get_args()
-            .map(|s| s.to_string_lossy().to_string())
-            .collect();
+        let command = ClaudeProcess::build_base_command(
+            "test-session-uuid",
+            &ConversationAttachment::New,
+            &[],
+        );
+        let args = command_args(&command);
 
         assert!(
             args.iter().any(|a| a == "--print"),
             "missing --print, got args: {args:?}"
         );
-
-        let in_pos = args
-            .iter()
-            .position(|a| a == "--input-format")
-            .expect("missing --input-format");
         assert_eq!(
-            args.get(in_pos + 1).map(String::as_str),
+            arg_value(&args, "--input-format"),
             Some("stream-json"),
             "--input-format must be followed by stream-json, got args: {args:?}"
         );
-
-        let out_pos = args
-            .iter()
-            .position(|a| a == "--output-format")
-            .expect("missing --output-format");
         assert_eq!(
-            args.get(out_pos + 1).map(String::as_str),
+            arg_value(&args, "--output-format"),
             Some("stream-json"),
             "--output-format must be followed by stream-json, got args: {args:?}"
         );
+    }
+
+    /// Collect a command's arguments as owned strings for assertions.
+    fn command_args(command: &Command) -> Vec<String> {
+        command
+            .as_std()
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect()
+    }
+
+    /// The value following `flag`, if the flag is present at all.
+    fn arg_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        let pos = args.iter().position(|a| a == flag)?;
+        args.get(pos + 1).map(String::as_str)
+    }
+
+    /// `--no-session-persistence` must NOT be part of the always-on base args:
+    /// durable sessions rely on the claude CLI persisting its own transcript so
+    /// that `--resume` (session/resume, session/load) and `--resume
+    /// --fork-session` (session/fork) can reattach to it later. A CLI that
+    /// never persisted the conversation has nothing to resume or fork from.
+    #[test]
+    fn test_base_command_keeps_cli_session_persistence() {
+        for attachment in [
+            ConversationAttachment::New,
+            ConversationAttachment::Resume,
+            ConversationAttachment::Fork {
+                parent: SessionId::new(),
+            },
+        ] {
+            let command = ClaudeProcess::build_base_command("test-session-uuid", &attachment, &[]);
+            let args = command_args(&command);
+            assert!(
+                !args.iter().any(|a| a == "--no-session-persistence"),
+                "--no-session-persistence must not be in the base args (it breaks \
+                 resume and fork), got args: {args:?}"
+            );
+        }
+    }
+
+    /// Ephemeral sessions are throwaway: they run on haiku and opt out of the
+    /// CLI's transcript persistence (`--no-session-persistence`). Durable
+    /// sessions get neither flag.
+    #[test]
+    fn test_ephemeral_mode_disables_cli_session_persistence() {
+        let ephemeral_config = SpawnConfig::builder()
+            .session_id(SessionId::new())
+            .acp_session_id(agent_client_protocol::schema::SessionId::new(
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            ))
+            .cwd(std::env::temp_dir())
+            .ephemeral(true)
+            .build();
+        let mut command = Command::new("claude");
+        ClaudeProcess::configure_ephemeral_mode(&mut command, &ephemeral_config);
+        let args = command_args(&command);
+        assert_eq!(arg_value(&args, "--model"), Some("haiku"));
+        assert!(
+            args.iter().any(|a| a == "--no-session-persistence"),
+            "ephemeral mode must disable CLI session persistence, got args: {args:?}"
+        );
+
+        let durable_config = spawn_config_with_servers(Vec::new());
+        let mut command = Command::new("claude");
+        ClaudeProcess::configure_ephemeral_mode(&mut command, &durable_config);
+        let args = command_args(&command);
+        assert!(
+            args.is_empty(),
+            "non-ephemeral mode must add no flags, got args: {args:?}"
+        );
+    }
+
+    /// Arbitrary CLI switches supplied via `SpawnConfig.extra_args` must be
+    /// appended verbatim, in order, to the spawned `claude` command.
+    #[test]
+    fn test_base_command_appends_extra_args_in_order() {
+        let command = ClaudeProcess::build_base_command(
+            "the-uuid",
+            &ConversationAttachment::New,
+            &["--model".to_string(), "haiku".to_string()],
+        );
+        let args = command_args(&command);
+        let model_pos = args
+            .iter()
+            .position(|a| a == "--model")
+            .unwrap_or_else(|| panic!("expected --model in args, got: {args:?}"));
+        assert_eq!(
+            args.get(model_pos + 1).map(String::as_str),
+            Some("haiku"),
+            "--model must be immediately followed by haiku, got args: {args:?}"
+        );
+    }
+
+    /// With no extra args and a non-ephemeral attachment, the base command must
+    /// not carry any `--model` flag (regression guard for the empty case).
+    #[test]
+    fn test_base_command_without_extra_args_has_no_model() {
+        let command =
+            ClaudeProcess::build_base_command("the-uuid", &ConversationAttachment::New, &[]);
+        let args = command_args(&command);
+        assert!(
+            !args.iter().any(|a| a == "--model"),
+            "empty extra_args must add no --model flag, got args: {args:?}"
+        );
+    }
+
+    /// When `extra_args` already supplies a `--model`, ephemeral mode must NOT
+    /// append a second one: the assembled command carries exactly one `--model`
+    /// (the caller's), while ephemeral's `--no-session-persistence` still applies.
+    #[test]
+    fn test_ephemeral_mode_does_not_duplicate_caller_model() {
+        let config = SpawnConfig::builder()
+            .session_id(SessionId::new())
+            .acp_session_id(agent_client_protocol::schema::SessionId::new(
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            ))
+            .cwd(std::env::temp_dir())
+            .ephemeral(true)
+            .extra_args(vec!["--model".to_string(), "haiku".to_string()])
+            .build();
+        // Mirror the real assembly: base command (which appends extra_args)
+        // then ephemeral configuration.
+        let mut command = ClaudeProcess::build_base_command(
+            "the-uuid",
+            &ConversationAttachment::New,
+            &config.extra_args,
+        );
+        ClaudeProcess::configure_ephemeral_mode(&mut command, &config);
+        let args = command_args(&command);
+        let model_count = args.iter().filter(|a| *a == "--model").count();
+        assert_eq!(
+            model_count, 1,
+            "exactly one --model expected when caller supplies one, got args: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "--no-session-persistence"),
+            "ephemeral mode must still disable session persistence, got args: {args:?}"
+        );
+    }
+
+    /// New sessions attach with `--session-id <uuid>`; resumed sessions with
+    /// `--resume <uuid>` (and no `--session-id` / `--fork-session`).
+    #[test]
+    fn test_base_command_new_and_resume_attachment_args() {
+        let command =
+            ClaudeProcess::build_base_command("the-uuid", &ConversationAttachment::New, &[]);
+        let args = command_args(&command);
+        assert_eq!(arg_value(&args, "--session-id"), Some("the-uuid"));
+        assert!(!args.iter().any(|a| a == "--resume"));
+        assert!(!args.iter().any(|a| a == "--fork-session"));
+
+        let command =
+            ClaudeProcess::build_base_command("the-uuid", &ConversationAttachment::Resume, &[]);
+        let args = command_args(&command);
+        assert_eq!(arg_value(&args, "--resume"), Some("the-uuid"));
+        assert!(!args.iter().any(|a| a == "--session-id"));
+        assert!(!args.iter().any(|a| a == "--fork-session"));
+    }
+
+    /// Forked sessions spawn with `--resume <parent-uuid> --fork-session
+    /// --session-id <child-uuid>`: the CLI clones the parent's conversation
+    /// onto the child's own deterministic UUID, so the child can itself be
+    /// resumed (and forked) later with no stored uuid mapping.
+    #[test]
+    fn test_base_command_fork_attachment_args() {
+        let parent = SessionId::new();
+        let command = ClaudeProcess::build_base_command(
+            "child-uuid",
+            &ConversationAttachment::Fork { parent },
+            &[],
+        );
+        let args = command_args(&command);
+        assert_eq!(
+            arg_value(&args, "--resume"),
+            Some(parent.to_uuid_string().as_str())
+        );
+        assert!(
+            args.iter().any(|a| a == "--fork-session"),
+            "fork must pass --fork-session, got args: {args:?}"
+        );
+        assert_eq!(arg_value(&args, "--session-id"), Some("child-uuid"));
+    }
+
+    /// A `SpawnConfig` built without an explicit attachment begins a fresh
+    /// conversation — the three attachment modes are one enum field, so an
+    /// ambiguous resume+fork combination is unrepresentable by construction.
+    #[test]
+    fn test_spawn_config_default_attachment_is_new() {
+        let config = SpawnConfig::builder()
+            .session_id(SessionId::new())
+            .acp_session_id(agent_client_protocol::schema::SessionId::new(
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            ))
+            .cwd(std::env::temp_dir())
+            .build();
+
+        assert_eq!(config.attachment, ConversationAttachment::New);
     }
 }

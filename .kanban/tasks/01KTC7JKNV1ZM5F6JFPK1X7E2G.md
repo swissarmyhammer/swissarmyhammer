@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KTC7HVY5VZZWBW7S7W7FBQFY
 - 01KTC7GT2DQ84KH443BRC75SHJ
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffff780
 project: remove-prompts
 title: Strip prompt-only types from the rendering crate, keep the engine
 ---

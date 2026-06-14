@@ -16,7 +16,7 @@ claude-agent = { workspace = true }
 llama-agent = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-config = { workspace = true }
-swissarmyhammer-prompts = { workspace = true }
+swissarmyhammer-templating = { workspace = true }
 swissarmyhammer-tools = { workspace = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "time"] }

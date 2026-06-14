@@ -69,29 +69,6 @@ fn log_subprocess_failure(
     eprintln!("DEBUG SUBPROCESS: stdout={}", stdout);
 }
 
-/// Format prompt test output string
-fn format_prompt_output(
-    prompt_name: &str,
-    vars: &std::collections::HashMap<String, String>,
-) -> String {
-    match prompt_name {
-        "override-test" => {
-            let message = vars.get("message").map(|s| s.as_str()).unwrap_or("");
-            format!("Message: {}", message)
-        }
-        "empty-test" => {
-            let content = vars.get("content").map(|s| s.as_str()).unwrap_or("");
-            let author = vars.get("author").map(|s| s.as_str()).unwrap_or("");
-            let version = vars.get("version").map(|s| s.as_str()).unwrap_or("");
-            format!(
-                "Content: {}\nAuthor: {}\nVersion: {}",
-                content, author, version
-            )
-        }
-        _ => format!("Testing prompt: {}", prompt_name),
-    }
-}
-
 /// Helper function to get the sah binary path
 fn get_sah_binary_path() -> String {
     if let Ok(path) = std::env::var("CARGO_BIN_EXE_sah") {
@@ -108,27 +85,6 @@ fn get_sah_binary_path() -> String {
         "{}/target/debug/sah",
         env!("CARGO_MANIFEST_DIR").replace("/apps/swissarmyhammer-cli", "")
     )
-}
-
-/// Helper function to parse --var arguments into a HashMap
-fn parse_var_args(
-    args: &[String],
-    start_index: usize,
-) -> std::collections::HashMap<String, String> {
-    let mut vars = std::collections::HashMap::new();
-    let mut i = start_index;
-    while i < args.len() {
-        if args[i] == "--var" && i + 1 < args.len() {
-            let var_arg = &args[i + 1];
-            if let Some((key, value)) = var_arg.split_once('=') {
-                vars.insert(key.to_string(), value.to_string());
-            }
-            i += 2;
-        } else {
-            i += 1;
-        }
-    }
-    vars
 }
 
 /// Execute any CLI command with explicit working directory
@@ -191,50 +147,14 @@ async fn execute_in_process(cli: Cli, args_with_program: &[String]) -> Result<Ca
     })
 }
 
-/// Check if command is a prompt command
-fn is_prompt_command(args: &[&str]) -> bool {
-    !args.is_empty() && args[0] == "prompt"
-}
-
-/// Determine working directory based on command type
-fn determine_working_dir(args: &[&str], default_dir: &std::path::Path) -> std::path::PathBuf {
-    if is_prompt_command(args) {
-        let repo_root = env!("CARGO_MANIFEST_DIR")
-            .replace("/apps/swissarmyhammer-cli", "")
-            .to_string();
-        std::path::PathBuf::from(repo_root)
-    } else {
-        default_dir.to_path_buf()
-    }
-}
-
-/// Configure environment for prompt commands
-fn configure_prompt_environment(cmd: &mut tokio::process::Command) {
-    if let Ok(home) = std::env::var("HOME") {
-        cmd.env("HOME", home);
-    }
-    if let Ok(user) = std::env::var("USER") {
-        cmd.env("USER", user);
-    }
-    cmd.env("RUST_LOG", "error");
-}
-
 /// Prepare subprocess command with proper working directory and environment
 fn prepare_subprocess_command(
     binary_path: &str,
     args: &[&str],
     working_dir: &std::path::Path,
 ) -> tokio::process::Command {
-    let actual_working_dir = determine_working_dir(args, working_dir);
-
     let mut cmd = tokio::process::Command::new(binary_path);
-    cmd.args(args)
-        .current_dir(actual_working_dir)
-        .kill_on_drop(true);
-
-    if is_prompt_command(args) {
-        configure_prompt_environment(&mut cmd);
-    }
+    cmd.args(args).current_dir(working_dir).kill_on_drop(true);
 
     cmd
 }
@@ -339,7 +259,6 @@ fn can_run_in_process(cli: &Cli) -> bool {
         cli.command,
         Some(Commands::Validate { .. })
             | Some(Commands::Completion { .. })
-            | Some(Commands::Prompt { .. })
             | Some(Commands::Agent { .. })
             | None
     )
@@ -423,93 +342,6 @@ async fn handle_validate_command(
     }
 }
 
-/// Execute prompt list and return result
-fn execute_prompt_list() -> Result<(String, String, i32), String> {
-    use swissarmyhammer_cli::exit_codes::EXIT_SUCCESS;
-
-    let output =
-        "Available prompts:\n  help - General help prompt\n  code-review - Code review prompt";
-    Ok((output.to_string(), String::new(), EXIT_SUCCESS))
-}
-
-/// Process prompt test with validation
-fn process_prompt_test_vars(
-    args: &[String],
-) -> Result<(String, std::collections::HashMap<String, String>), String> {
-    if args.len() < 2 {
-        return Err("Error: Missing prompt name for test command".to_string());
-    }
-
-    let prompt_name = &args[1];
-    if prompt_name == "non_existent_prompt" {
-        return Err(format!("Error: Prompt '{}' not found", prompt_name));
-    }
-
-    let vars = parse_var_args(args, 2);
-    Ok((prompt_name.clone(), vars))
-}
-
-/// Execute prompt test and return result
-fn execute_prompt_test(args: &[String]) -> Result<(String, String, i32), String> {
-    use swissarmyhammer_cli::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
-
-    let (prompt_name, vars) = match process_prompt_test_vars(args) {
-        Ok(result) => result,
-        Err(error_msg) => {
-            let exit_code = if error_msg.contains("not found") {
-                1
-            } else {
-                EXIT_ERROR
-            };
-            return Ok((String::new(), error_msg, exit_code));
-        }
-    };
-
-    let output = format_prompt_output(&prompt_name, &vars);
-    Ok((output, String::new(), EXIT_SUCCESS))
-}
-
-/// Handle prompt command execution
-fn handle_prompt_command(
-    args: Vec<String>,
-    stdout_buffer: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
-    stderr_buffer: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
-) -> (String, String, i32) {
-    use std::io::Write;
-    use swissarmyhammer_cli::exit_codes::EXIT_ERROR;
-
-    let result = if args.is_empty() || args[0] == "list" {
-        execute_prompt_list()
-    } else if args[0] == "test" {
-        execute_prompt_test(&args)
-    } else {
-        Ok((
-            String::new(),
-            format!("Error: Unknown prompt subcommand: {}", args[0]),
-            EXIT_ERROR,
-        ))
-    };
-
-    match result {
-        Ok((stdout, stderr, exit_code)) => {
-            if !stdout.is_empty() {
-                if let Ok(mut buf) = stdout_buffer.lock() {
-                    let _ = write!(buf, "{}", stdout);
-                }
-            }
-            if !stderr.is_empty() {
-                if let Ok(mut buf) = stderr_buffer.lock() {
-                    let _ = write!(buf, "{}", stderr);
-                }
-            }
-            let stdout_str = String::from_utf8_lossy(&stdout_buffer.lock().unwrap()).to_string();
-            let stderr_str = String::from_utf8_lossy(&stderr_buffer.lock().unwrap()).to_string();
-            (stdout_str, stderr_str, exit_code)
-        }
-        Err(e) => (String::new(), e, EXIT_ERROR),
-    }
-}
-
 /// Handle completion command execution
 fn handle_completion_command(shell: clap_complete::Shell) -> (String, String, i32) {
     use clap::CommandFactory;
@@ -531,11 +363,7 @@ async fn execute_cli_command_with_capture(
     cli: Cli,
     _args: &[String],
 ) -> Result<(String, String, i32)> {
-    use std::sync::{Arc, Mutex};
     use swissarmyhammer_cli::exit_codes::EXIT_SUCCESS;
-
-    let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
-    let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
 
     let (stdout, stderr, exit_code) = match cli.command {
         Some(Commands::Validate {
@@ -543,10 +371,6 @@ async fn execute_cli_command_with_capture(
             format,
             validate_tools,
         }) => handle_validate_command(quiet, format, validate_tools).await,
-
-        Some(Commands::Prompt { args }) => {
-            handle_prompt_command(args, &stdout_buffer, &stderr_buffer)
-        }
 
         Some(Commands::Completion { shell }) => handle_completion_command(shell),
 

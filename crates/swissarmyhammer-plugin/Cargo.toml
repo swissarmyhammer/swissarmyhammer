@@ -67,9 +67,9 @@ tempfile = { workspace = true }
 # dev-dependency is never compiled into the library itself.
 swissarmyhammer-tools = { workspace = true }
 
-# Supplies the empty `PromptLibrary` the `files_dispatch_e2e` test hands to the
+# Supplies the empty `TemplateLibrary` the `files_dispatch_e2e` test hands to the
 # MCP server bootstrap when building the real tool registry.
-swissarmyhammer-prompts = { workspace = true }
+swissarmyhammer-templating = { workspace = true }
 
 # Used by the `kanban_tasks_e2e` integration test's `support::expose_kanban_module`
 # helper to build a `ToolContext` for the in-process `kanban` operation tool:

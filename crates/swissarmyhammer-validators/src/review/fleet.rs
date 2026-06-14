@@ -22,6 +22,35 @@
 //! errors or times out yields zero findings for its batch — logged, never a
 //! panic — so one bad task never aborts the rest.
 //!
+//! # Primed prefix sessions + forks
+//!
+//! The first two prompt sections (change purpose + validator instructions) are
+//! identical across every one of a validator's batches, and on a local model
+//! they dominate the prompt (~15k tokens). So instead of re-decoding them per
+//! task, each validator's fan-out runs as:
+//!
+//! 1. **Prime** — one session is prompted with [`render_validator_prefix`]
+//!    (the shared sections, ending with an explicit "reply OK, files arrive
+//!    next" handoff). The completed turn leaves the agent's saved state exactly
+//!    at the boundary every batch continues from.
+//! 2. **Confirm + pin** — the `session/state_status` extension confirms the
+//!    state is actually saved ("never fork blind"), and `session/pin` protects
+//!    it from cache eviction for the fan-out's duration.
+//! 3. **Fork per batch** — each batch turn runs on a `session/fork` of the
+//!    primed session and sends ONLY [`render_file_payload`], decoding strictly
+//!    forward from the shared prefix. Warm reuse (and the reused token count)
+//!    is logged per task.
+//! 4. **Unpin** — the prefix pin is released once every batch has resolved.
+//!    The pin is held by a [`SessionPinGuard`], so a fan-out future dropped
+//!    mid-collect (cancelled review, caller timeout) still releases it.
+//!
+//! Any failure — the prime turn, the state confirmation, the pin, or an
+//! individual fork — degrades that scope to today's monolithic prompt
+//! ([`render_fleet_prompt`], one fresh session carrying everything) with a
+//! logged warning: degraded but correct, never a lost task. The flow is
+//! backend-agnostic; the extension contract lives in
+//! [`agent_client_protocol_extras::session_fork`].
+//!
 //! # The prompt payload
 //!
 //! [`render_fleet_prompt`] assembles exactly the payload the task specifies,
@@ -37,12 +66,19 @@
 //!    rendered as evidence blocks.
 //!
 //! Excluded by design: other validators' rules and any file outside the batch.
+//! The split renders ([`render_validator_prefix`] = sections 1–2 + handoff,
+//! [`render_file_payload`] = section 3) compose byte-identically into the
+//! monolithic prompt, so the warm and degraded paths never drift.
 
 use std::fmt::Write as _;
 
 use crate::review::scope::{FileWork, ValidatorWork, WorkList};
 use crate::review::types::{parse_findings, Finding};
-use crate::validators::{AgentPool, RuleSet, Severity, ValidatorLoader};
+use crate::validators::{
+    AgentPool, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult, Severity,
+    ValidatorLoader,
+};
+use agent_client_protocol_extras::SessionStateStatusResponse;
 
 /// Default number of files packed into a single fan-out task.
 ///
@@ -121,17 +157,12 @@ pub async fn run_fleet(
 ) -> FleetOutcome {
     let batch_size = config.effective_batch_size();
 
-    // Build every (validator, batch) task and submit it. Submission is
-    // non-blocking; the pool owns the concurrency. We keep the validator name
-    // and the batch's file paths alongside each receiver so a parse failure can
-    // be attributed and tagged.
-    struct Pending {
-        validator: String,
-        files: Vec<String>,
-        rx: tokio::sync::oneshot::Receiver<crate::validators::PromptResult>,
-    }
-
-    let mut pending: Vec<Pending> = Vec::new();
+    // One run per validator: prime its shared prefix once, then fork a payload
+    // turn per batch (see `run_validator_fleet`). The runs are driven
+    // concurrently so one validator's prime never serializes another
+    // validator's batches; the pool still owns the only real concurrency
+    // control (its worker count).
+    let mut runs = Vec::new();
     for validator in &work.validators {
         let Some(ruleset) = loader.get_ruleset(&validator.validator_name) else {
             tracing::warn!(
@@ -153,41 +184,355 @@ pub async fn run_fleet(
             rules = ?rule_names,
             "fleet fan-out: batching files into agent tasks"
         );
-        for batch in validator.files.chunks(batch_size) {
-            let prompt = render_fleet_prompt(&work.change_purpose, validator, ruleset, batch);
-            let files: Vec<String> = batch.iter().map(|f| f.path.clone()).collect();
-            tracing::debug!(
-                validator = %validator.validator_name,
-                files = ?files,
-                rules = ?rule_names,
-                "fleet fan-out: submitting validator×files×rules task"
-            );
-            pending.push(Pending {
-                validator: validator.validator_name.clone(),
-                files,
-                rx: pool.submit(prompt),
-            });
-        }
+        runs.push(run_validator_fleet(
+            &work.change_purpose,
+            validator,
+            ruleset,
+            pool,
+            batch_size,
+        ));
     }
 
-    // Collect every task. The pool drains them in parallel up to its worker
-    // count; we await them in submission order, which is fine because each
-    // receiver resolves independently. The attempted count is the number of
-    // tasks submitted; each task that degrades to zero findings on failure also
-    // bumps the failed count so the report can flag an incomplete run.
+    let mut outcome = FleetOutcome::default();
+    for run in futures::future::join_all(runs).await {
+        outcome.findings.extend(run.findings);
+        outcome.attempted += run.attempted;
+        outcome.failed += run.failed;
+    }
+    outcome
+}
+
+/// One validator's slice of the [`FleetOutcome`] tally.
+struct ValidatorRun {
+    findings: Vec<Finding>,
+    attempted: usize,
+    failed: usize,
+}
+
+/// How one batch task was submitted: a payload-only prompt on a fork of the
+/// validator's primed prefix session (the warm path), or the full monolithic
+/// prompt on a fresh session (the degraded path).
+enum Submitted {
+    Forked(tokio::sync::oneshot::Receiver<SessionTurnResult>),
+    Monolithic(tokio::sync::oneshot::Receiver<crate::validators::PromptResult>),
+}
+
+/// Fan one validator's files out: prime the shared prefix session once, fork a
+/// payload-only turn per batch, collect, and unpin.
+///
+/// When priming (or its saved-state confirmation/pin) fails, every batch runs
+/// as today's monolithic fresh-session prompt instead — degraded but correct.
+/// A batch whose fork fails falls back to a monolithic prompt individually.
+/// The prefix session's pin is released after every batch task has resolved,
+/// including failures — and, because the prime returns a [`SessionPinGuard`],
+/// even when this future is dropped mid-collect — so the pinned entry never
+/// outlives the fan-out.
+async fn run_validator_fleet(
+    change_purpose: &str,
+    validator: &ValidatorWork,
+    ruleset: &RuleSet,
+    pool: &AgentPool,
+    batch_size: usize,
+) -> ValidatorRun {
+    let name = validator.validator_name.as_str();
+
+    // Prime the shared prefix once; `None` → degraded to monolithic prompts.
+    let prefix_session = prime_validator_prefix(change_purpose, validator, ruleset, pool).await;
+
+    struct Pending<'w> {
+        files: Vec<String>,
+        batch: &'w [FileWork],
+        rx: Submitted,
+    }
+
+    let mut pending: Vec<Pending<'_>> = Vec::new();
+    for batch in validator.files.chunks(batch_size) {
+        let files: Vec<String> = batch.iter().map(|f| f.path.clone()).collect();
+        tracing::debug!(
+            validator = %name,
+            files = ?files,
+            warm = prefix_session.is_some(),
+            "fleet fan-out: submitting validator×files task"
+        );
+        let rx = match &prefix_session {
+            Some(guard) => Submitted::Forked(
+                pool.submit_forked(guard.session_id(), render_file_payload(batch)),
+            ),
+            None => Submitted::Monolithic(pool.submit(render_fleet_prompt(
+                change_purpose,
+                validator,
+                ruleset,
+                batch,
+            ))),
+        };
+        pending.push(Pending { files, batch, rx });
+    }
+
+    // Collect every batch task in submission order; each receiver resolves
+    // independently while the pool drains in parallel up to its worker count.
     let attempted = pending.len();
     let mut findings: Vec<Finding> = Vec::new();
     let mut failed = 0usize;
     for task in pending {
-        match collect_task(task.rx.await, &task.validator, &task.files) {
+        let collected = match task.rx {
+            Submitted::Monolithic(rx) => collect_task(rx.await, name, &task.files),
+            Submitted::Forked(rx) => {
+                collect_forked_task(
+                    rx.await,
+                    change_purpose,
+                    validator,
+                    ruleset,
+                    task.batch,
+                    &task.files,
+                    pool,
+                )
+                .await
+            }
+        };
+        match collected {
             Ok(parsed) => findings.extend(parsed),
             Err(()) => failed += 1,
         }
     }
-    FleetOutcome {
+
+    // Release the prefix pin now that every batch task has resolved (success
+    // or failure), so the pinned entry never outlives this validator's fan-out.
+    if let Some(guard) = prefix_session {
+        unpin_prefix_session(guard, name).await;
+    }
+
+    ValidatorRun {
         findings,
         attempted,
         failed,
+    }
+}
+
+/// Prime one validator's shared prompt prefix in a dedicated session, confirm
+/// the agent saved restorable state for it ("never fork blind"), and acquire
+/// the scoped pin guard that governs the fan-out's pin lifecycle.
+///
+/// The prime turn is submitted with a born-pinned save intent
+/// ([`AgentPool::submit_primed`] carries `pin_on_save` in `_meta`), so the
+/// prefix is pinned **atomically at save time** — never an unpinned eviction
+/// candidate, so a concurrent session's save cannot evict it before the fan-out
+/// forks from it. That is the structural close of the prime→pin eviction race.
+///
+/// The post-turn [`AgentPool::pin_session_scoped`] is therefore no longer the
+/// load-bearing pin: it is an **idempotent re-pin / confirm** that (a) verifies
+/// the state is still resident and (b) returns the [`SessionPinGuard`] whose
+/// `release()`/`Drop` performs the matching unpin when the validator's batches
+/// complete (or the fan-out future is dropped mid-flight). There is one pin
+/// protocol — born-pinned at save, unpinned by the guard — not two competing
+/// ones. A backend without a KV cache (claude) born-pins as a no-op and reports
+/// `pinned: false`; forking still works, consistent with the pin=no-op
+/// contract.
+///
+/// Returns the guard for the primed session (carrying its id, the fork parent),
+/// or `None` when any step failed — the caller degrades to monolithic prompts
+/// (correct, just cold), never a lost task.
+async fn prime_validator_prefix(
+    change_purpose: &str,
+    validator: &ValidatorWork,
+    ruleset: &RuleSet,
+    pool: &AgentPool,
+) -> Option<SessionPinGuard> {
+    let name = validator.validator_name.as_str();
+    let prefix = render_validator_prefix(change_purpose, validator, ruleset);
+    let turn = submit_prime(pool, name, prefix).await?;
+    let status = confirm_saved_state(pool, name, &turn).await?;
+    pin_prefix(pool, name, &turn, &status).await
+}
+
+/// Submit the born-pinned prime turn for a validator's shared prefix.
+/// `None` (and a warn) on either a turn failure or a dropped result —
+/// the caller degrades to monolithic prompts.
+async fn submit_prime(pool: &AgentPool, name: &str, prefix: String) -> Option<SessionTurn> {
+    match pool.submit_primed(prefix).await {
+        Ok(Ok(turn)) => Some(turn),
+        Ok(Err(err)) => {
+            tracing::warn!(
+                validator = %name,
+                error = %err,
+                "prefix prime turn failed; falling back to monolithic prompts"
+            );
+            None
+        }
+        Err(_) => {
+            tracing::warn!(
+                validator = %name,
+                "prefix prime result was dropped; falling back to monolithic prompts"
+            );
+            None
+        }
+    }
+}
+
+/// Confirm the prime actually saved restorable state ("never fork blind").
+/// `saved` is the contract's gate; a backend that tracks token counts must also
+/// report a non-empty prefix. Backends without token counts (`prompt_tokens:
+/// None`, e.g. the claude CLI) are still forkable per the contract. `None` (and
+/// a warn) when the status check fails or the state is not restorable.
+async fn confirm_saved_state(
+    pool: &AgentPool,
+    name: &str,
+    turn: &SessionTurn,
+) -> Option<SessionStateStatusResponse> {
+    let status = match pool.session_state_status(&turn.session_id).await {
+        Ok(status) => status,
+        Err(err) => {
+            tracing::warn!(
+                validator = %name,
+                session = %turn.session_id,
+                error = %err,
+                "prefix state-status check failed; falling back to monolithic prompts"
+            );
+            return None;
+        }
+    };
+    if !status.saved || status.prompt_tokens.is_some_and(|tokens| tokens == 0) {
+        tracing::warn!(
+            validator = %name,
+            session = %turn.session_id,
+            saved = status.saved,
+            prompt_tokens = ?status.prompt_tokens,
+            "primed prefix session has no restorable state; falling back to monolithic prompts"
+        );
+        return None;
+    }
+    Some(status)
+}
+
+/// Acquire the scoped pin guard that governs the fan-out's pin lifecycle.
+///
+/// The prefix was already born pinned by the prime turn (the `_meta`
+/// pin-on-save intent). This scoped call is therefore an idempotent
+/// re-pin/confirm — it re-asserts the pin (a no-op when the state is already
+/// born pinned) and, crucially, returns the guard that owns the matching unpin
+/// for the fan-out's lifetime. A backend without pinning reports an effective
+/// `pinned: false` and forking still works; only a pin ERROR (the state
+/// vanished) degrades to monolithic prompts.
+async fn pin_prefix(
+    pool: &AgentPool,
+    name: &str,
+    turn: &SessionTurn,
+    status: &SessionStateStatusResponse,
+) -> Option<SessionPinGuard> {
+    match pool.pin_session_scoped(&turn.session_id).await {
+        Ok((pin, guard)) => {
+            tracing::info!(
+                validator = %name,
+                session = %turn.session_id,
+                prefix_tokens = ?status.prompt_tokens,
+                born_pinned = status.pinned,
+                pinned = pin.pinned,
+                "primed validator prefix session (born pinned at save; pin confirmed)"
+            );
+            Some(guard)
+        }
+        Err(err) => {
+            tracing::warn!(
+                validator = %name,
+                session = %turn.session_id,
+                error = %err,
+                "failed to pin primed prefix state; falling back to monolithic prompts"
+            );
+            None
+        }
+    }
+}
+
+/// Release a primed prefix session's pin once its validator's batches have all
+/// resolved, so the pinned cache entry does not outlive the fan-out. A failed
+/// unpin is logged, never fatal — the entry falls back to normal eviction.
+/// (Cancellation is covered separately: a fan-out future dropped before
+/// reaching this point releases the pin from the guard's `Drop`.)
+async fn unpin_prefix_session(guard: SessionPinGuard, validator: &str) {
+    let session = guard.session_id().to_string();
+    match guard.release().await {
+        Ok(_) => tracing::debug!(
+            validator = %validator,
+            session = %session,
+            "unpinned validator prefix session"
+        ),
+        Err(err) => tracing::warn!(
+            validator = %validator,
+            session = %session,
+            error = %err,
+            "failed to unpin validator prefix session"
+        ),
+    }
+}
+
+/// Resolve one forked batch task's delivered result into tagged findings.
+///
+/// A delivered turn is parsed exactly like the monolithic path, after logging
+/// whether the fork was warm (parent state attached — with the reused token
+/// count, so a run's prefill savings are measurable from the log) or degraded
+/// (history cloned, cold prefill). A turn whose FORK failed falls back to the
+/// monolithic fresh-session prompt for the batch — degraded but correct, never
+/// a lost task. Any other failure degrades to zero findings like
+/// [`collect_task`].
+async fn collect_forked_task(
+    delivered: Result<SessionTurnResult, tokio::sync::oneshot::error::RecvError>,
+    change_purpose: &str,
+    validator: &ValidatorWork,
+    ruleset: &RuleSet,
+    batch: &[FileWork],
+    files: &[String],
+    pool: &AgentPool,
+) -> Result<Vec<Finding>, ()> {
+    let name = validator.validator_name.as_str();
+    match delivered {
+        Ok(Ok(turn)) => {
+            match turn.fork {
+                Some(fork) if fork.state_attached => tracing::info!(
+                    validator = %name,
+                    files = ?files,
+                    session = %turn.session_id,
+                    reused_tokens = ?fork.prefix_tokens,
+                    "fleet task ran on a warm fork of the primed prefix session"
+                ),
+                _ => tracing::warn!(
+                    validator = %name,
+                    files = ?files,
+                    session = %turn.session_id,
+                    "fleet task fork was degraded (no parent state attached); proceeding cold"
+                ),
+            }
+            parse_task_response(&turn.content, name, files)
+        }
+        Ok(Err(PoolError::ForkFailed {
+            parent_session_id,
+            message,
+        })) => {
+            tracing::warn!(
+                validator = %name,
+                files = ?files,
+                parent = %parent_session_id,
+                error = %message,
+                "fleet task fork failed; falling back to a monolithic fresh-session prompt"
+            );
+            let prompt = render_fleet_prompt(change_purpose, validator, ruleset, batch);
+            collect_task(pool.submit(prompt).await, name, files)
+        }
+        Ok(Err(err)) => {
+            tracing::warn!(
+                validator = %name,
+                files = ?files,
+                error = %err,
+                "fleet task failed; yielding zero findings for this batch"
+            );
+            Err(())
+        }
+        Err(_) => {
+            tracing::warn!(
+                validator = %name,
+                files = ?files,
+                "fleet task result was dropped before delivery; yielding zero findings"
+            );
+            Err(())
+        }
     }
 }
 
@@ -225,7 +570,18 @@ fn collect_task(
         }
     };
 
-    match parse_findings(&response.content) {
+    parse_task_response(&response.content, validator, files)
+}
+
+/// Parse one task's response text into validator-tagged findings, degrading an
+/// unparseable response to a logged failure — shared by the monolithic and
+/// forked collection paths so both parse identically.
+fn parse_task_response(
+    content: &str,
+    validator: &str,
+    files: &[String],
+) -> Result<Vec<Finding>, ()> {
+    match parse_findings(content) {
         Ok(parsed) => Ok(tag_findings(parsed, validator)),
         Err(err) => {
             tracing::warn!(
@@ -253,13 +609,19 @@ fn batch_count(file_count: usize, batch_size: usize) -> usize {
     file_count.div_ceil(batch_size.max(1))
 }
 
-/// Render the fan-out prompt for one `(validator, batch-of-files)` task.
+/// Render the fan-out prompt for one `(validator, batch-of-files)` task — the
+/// monolithic fallback shape (one fresh session, everything in one prompt).
 ///
 /// The payload is assembled directly from the structured stage-1 data — there is
 /// no template engine. The three sections are, in order: the change purpose, the
 /// validator's instructions (mandate + rule bodies + severity default + the
 /// output contract), and one self-contained block per file in the batch (path +
 /// semantic diff + bounded source slice + probe evidence).
+///
+/// The warm path splits the same bytes across two turns instead:
+/// [`render_validator_prefix`] (the first two sections, primed once per
+/// validator) and [`render_file_payload`] (the third, sent on each fork). This
+/// function composes from the identical pieces, so the two paths never drift.
 ///
 /// `validator` is the work-list entry (its name and the file work); `ruleset` is
 /// the same validator's loaded [`RuleSet`], the authoritative source of the
@@ -270,22 +632,63 @@ pub fn render_fleet_prompt(
     ruleset: &RuleSet,
     files: &[FileWork],
 ) -> String {
+    let mut out = render_shared_sections(change_purpose, validator, ruleset);
+    out.push_str(&render_file_payload(files));
+    out
+}
+
+/// The sentence the prime turn ends with: an explicit completed-turn handoff so
+/// the parent session's end-of-turn KV snapshot lands exactly at the boundary
+/// every fork's payload prompt continues from.
+///
+/// Crate-visible so the scripted test agent (`review::test_support`) recognizes
+/// prime turns by this exact constant rather than a re-typed fragment — the
+/// handoff wording changes in exactly one place.
+pub(crate) const PRIME_HANDOFF: &str =
+    "Reply with exactly OK. The files to review arrive in the next message.\n";
+
+/// Render the shared per-validator prompt prefix the prime turn decodes once:
+/// the change purpose + the validator's instructions (mandate, rule bodies,
+/// severity default, output contract), ending with [`PRIME_HANDOFF`].
+///
+/// The render is a pure function of its inputs — byte-stable across calls — so
+/// every batch fork of the primed session shares the exact prefix bytes the
+/// parent decoded, and the fork's first decode reuses the full saved state.
+pub fn render_validator_prefix(
+    change_purpose: &str,
+    validator: &ValidatorWork,
+    ruleset: &RuleSet,
+) -> String {
+    let mut out = render_shared_sections(change_purpose, validator, ruleset);
+    out.push_str(PRIME_HANDOFF);
+    out
+}
+
+/// Render the per-batch payload a forked session is prompted with: ONLY the
+/// file blocks (path + semantic diff + bounded source slice + probe evidence).
+/// The rules and contract are already in the fork's inherited prefix.
+pub fn render_file_payload(files: &[FileWork]) -> String {
     let mut out = String::new();
-
-    // 1. Change purpose.
-    out.push_str("# Change purpose\n\n");
-    out.push_str(change_purpose.trim());
-    out.push_str("\n\n");
-
-    // 2. Validator instructions.
-    render_validator_instructions(&mut out, validator, ruleset);
-
-    // 3. The file(s) under review.
     out.push_str("# Files under review\n\n");
     for file in files {
         render_file_block(&mut out, file);
     }
+    out
+}
 
+/// Render the sections every prompt shape shares: the change purpose followed by
+/// the validator's instructions. Both the monolithic prompt and the primed
+/// prefix are built on these exact bytes.
+fn render_shared_sections(
+    change_purpose: &str,
+    validator: &ValidatorWork,
+    ruleset: &RuleSet,
+) -> String {
+    let mut out = String::new();
+    out.push_str("# Change purpose\n\n");
+    out.push_str(change_purpose.trim());
+    out.push_str("\n\n");
+    render_validator_instructions(&mut out, validator, ruleset);
     out
 }
 
@@ -430,24 +833,20 @@ mod tests {
     use super::*;
 
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
-
-    use agent_client_protocol::schema::{
-        ContentBlock, ContentChunk, InitializeResponse, NewSessionResponse, PromptRequest,
-        PromptResponse, SessionNotification, SessionUpdate, TextContent,
-    };
-    use agent_client_protocol::{Channel, Client, ConnectTo, ConnectionTo, Role};
+    use std::sync::Arc;
 
     use swissarmyhammer_sem::model::change::{ChangeType, SemanticChange};
 
     use crate::review::probes::{ProbeKind, ProbeResult, ProbeRow};
     use crate::review::scope::WorkList;
-    use crate::review::test_support::new_notifier;
+    use crate::review::test_support::{
+        findings_json, with_pool, ForkMode, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
+        MOCK_PREFIX_TOKENS,
+    };
     use crate::validators::types::{
         Rule, RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch,
     };
-    use crate::validators::{AgentPool, PoolConfig, ValidatorLoader, ValidatorSource};
+    use crate::validators::{PoolConfig, ValidatorLoader, ValidatorSource};
 
     // ---- fixtures --------------------------------------------------------
 
@@ -543,189 +942,35 @@ mod tests {
         }
     }
 
-    // ---- scripted mock agent harness -------------------------------------
+    // ---- scripted mock agent (shared harness) ------------------------------
     //
-    // A minimal ACP agent that maps each incoming prompt onto a scripted
-    // response by substring match, delivering the response text as a streamed
-    // `agent_message_chunk` (the shape the production agents emit and the pool's
-    // collector reads). One script entry can be set to error, proving a failing
-    // task degrades to zero findings without deadlocking the rest.
+    // The scripted ACP agent lives in `crate::review::test_support` — one
+    // implementation shared with verify.rs, drive.rs, and the pool tests.
+    // Fleet tests run it with the fork extension `Supported` unless a test
+    // selects a degraded `ForkMode` explicitly.
 
-    struct ScriptedAgent {
-        next_session: AtomicUsize,
-        /// (prompt-substring, Some(response) | None=error), matched in order.
-        script: Vec<(String, Option<String>)>,
-        /// Prompts seen, for assertions about what was submitted.
-        seen: Mutex<Vec<String>>,
+    /// A fork-capable scripted agent — the default fleet backend under test.
+    fn forking_agent(script: Vec<(String, ScriptedReply)>) -> Arc<ScriptedAgent> {
+        ScriptedAgent::with_config(
+            script,
+            ScriptedAgentConfig {
+                fork_mode: ForkMode::Supported,
+                ..ScriptedAgentConfig::default()
+            },
+        )
     }
 
-    impl ScriptedAgent {
-        fn new(script: Vec<(String, Option<String>)>) -> Arc<Self> {
-            Arc::new(Self {
-                next_session: AtomicUsize::new(0),
-                script,
-                seen: Mutex::new(Vec::new()),
-            })
-        }
-
-        fn seen_prompts(&self) -> Vec<String> {
-            self.seen.lock().unwrap().clone()
-        }
-
-        fn response_for(&self, prompt: &str) -> Option<String> {
-            for (needle, response) in &self.script {
-                if prompt.contains(needle) {
-                    return response.clone();
-                }
-            }
-            // No script entry → empty findings array.
-            Some("[]".to_string())
-        }
-
-        fn is_error(&self, prompt: &str) -> bool {
-            self.script
-                .iter()
-                .find(|(needle, _)| prompt.contains(needle))
-                .map(|(_, response)| response.is_none())
-                .unwrap_or(false)
-        }
-    }
-
-    /// Adapter wiring a [`ScriptedAgent`] as an ACP server over a channel.
-    struct ScriptedAdapter(Arc<ScriptedAgent>);
-
-    impl ConnectTo<Client> for ScriptedAdapter {
-        async fn connect_to(
-            self,
-            client: impl ConnectTo<<Client as Role>::Counterpart>,
-        ) -> agent_client_protocol::Result<()> {
-            let mock = Arc::clone(&self.0);
-            agent_client_protocol::Agent
-                .builder()
-                .name("scripted-agent")
-                .on_receive_request(
-                    {
-                        let mock = Arc::clone(&mock);
-                        async move |req: agent_client_protocol::ClientRequest, responder, cx| {
-                            dispatch(&mock, req, responder, &cx)
-                        }
-                    },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .on_receive_notification(
-                    async move |_n: agent_client_protocol::ClientNotification, _cx| Ok(()),
-                    agent_client_protocol::on_receive_notification!(),
-                )
-                .connect_to(client)
-                .await
-        }
-    }
-
-    fn dispatch(
-        mock: &Arc<ScriptedAgent>,
-        request: agent_client_protocol::ClientRequest,
-        responder: agent_client_protocol::Responder<serde_json::Value>,
-        cx: &ConnectionTo<Client>,
-    ) -> agent_client_protocol::Result<()> {
-        use agent_client_protocol::ClientRequest as Req;
-
-        let mock = Arc::clone(mock);
-        let cx = cx.clone();
-        cx.clone().spawn(async move {
-            match request {
-                Req::InitializeRequest(_) => responder
-                    .cast()
-                    .respond_with_result(Ok(InitializeResponse::new(1.into()))),
-                Req::NewSessionRequest(_req) => {
-                    let n = mock.next_session.fetch_add(1, Ordering::SeqCst);
-                    let id = agent_client_protocol::schema::SessionId::new(format!("sess-{n}"));
-                    responder
-                        .cast()
-                        .respond_with_result(Ok(NewSessionResponse::new(id)))
-                }
-                Req::PromptRequest(req) => {
-                    let prompt = prompt_text(&req);
-                    mock.seen.lock().unwrap().push(prompt.clone());
-                    if mock.is_error(&prompt) {
-                        return responder
-                            .cast::<PromptResponse>()
-                            .respond_with_error(agent_client_protocol::Error::internal_error());
-                    }
-                    if let Some(text) = mock.response_for(&prompt) {
-                        // Stream the scripted content as an assistant chunk.
-                        let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(
-                            ContentBlock::Text(TextContent::new(text)),
-                        ));
-                        let notif = SessionNotification::new(req.session_id.clone(), update);
-                        let _ = cx.send_notification(notif);
-                    }
-                    responder.cast().respond_with_result(Ok(PromptResponse::new(
-                        agent_client_protocol::schema::StopReason::EndTurn,
-                    )))
-                }
-                _ => responder
-                    .cast::<serde_json::Value>()
-                    .respond_with_error(agent_client_protocol::Error::method_not_found()),
-            }
-        })
-    }
-
-    fn prompt_text(req: &PromptRequest) -> String {
-        req.prompt
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text(t) => Some(t.text.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("")
-    }
-
-    /// Run `body` against a pool backed by the scripted agent.
-    async fn with_pool<F, Fut, R>(agent: Arc<ScriptedAgent>, config: PoolConfig, body: F) -> R
-    where
-        F: FnOnce(AgentPool) -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = R> + Send + 'static,
-        R: Send + 'static,
-    {
-        let notifier = new_notifier();
-        let notifier_body = Arc::clone(&notifier);
-        let (channel_a, channel_b) = Channel::duplex();
-
-        let agent_task = tokio::spawn(async move {
-            let _ = ScriptedAdapter(agent).connect_to(channel_a).await;
-        });
-
-        let notifier_for_handler = Arc::clone(&notifier);
-        let result = Client
-            .builder()
-            .name("fleet-test-client")
-            .on_receive_notification(
-                async move |notif: SessionNotification, _cx| {
-                    let _ = notifier_for_handler.send_update(notif).await;
-                    Ok(())
-                },
-                agent_client_protocol::on_receive_notification!(),
-            )
-            .connect_with(channel_b, async move |conn: ConnectionTo<_>| {
-                let pool = AgentPool::new(conn, notifier_body, config);
-                Ok(body(pool).await)
-            })
-            .await
-            .expect("client connect_with failed");
-
-        agent_task.abort();
-        let _ = agent_task.await;
-        result
-    }
-
-    /// A findings array as an agent would emit it, fenced in prose.
-    fn findings_json(file: &str, rule: &str, claim: &str) -> String {
-        format!(
-            "Here are my findings:\n\n```json\n[{{\"file\":\"{file}\",\"line\":42,\
-             \"validator\":\"ignored-by-agent\",\"rule\":\"{rule}\",\"severity\":\"warning\",\
-             \"claim\":\"{claim}\",\"evidence\":\"per `duplicates`: 0.94\",\
-             \"suggestion\":\"extract a helper\"}}]\n```\n"
+    /// A degraded fork-capable scripted agent in the given [`ForkMode`].
+    fn agent_with_fork_mode(
+        script: Vec<(String, ScriptedReply)>,
+        fork_mode: ForkMode,
+    ) -> Arc<ScriptedAgent> {
+        ScriptedAgent::with_config(
+            script,
+            ScriptedAgentConfig {
+                fork_mode,
+                ..ScriptedAgentConfig::default()
+            },
         )
     }
 
@@ -807,6 +1052,62 @@ mod tests {
     }
 
     #[test]
+    fn prefix_and_payload_split_is_byte_stable_and_composes_the_monolithic_prompt() {
+        let rs = ruleset(
+            "deduplicate",
+            "DEDUP_MANDATE: never copy-paste logic.",
+            &[("no-copy-paste", "RULE_BODY: extract shared helpers.")],
+        );
+        let vw = validator_work(
+            "deduplicate",
+            vec![file_work("src/a.rs", "alpha", "src/x.rs")],
+        );
+
+        // Byte-stable: two renders of the same inputs are identical, so every
+        // fork shares the exact prefix the prime turn decoded.
+        let prefix = render_validator_prefix("purpose", &vw, &rs);
+        assert_eq!(
+            prefix,
+            render_validator_prefix("purpose", &vw, &rs),
+            "the prefix render must be byte-stable across calls"
+        );
+        let payload = render_file_payload(&vw.files);
+        assert_eq!(payload, render_file_payload(&vw.files));
+
+        // The prefix carries the shared sections and ends with the prime
+        // handoff — a completed turn whose KV lands where continuations begin.
+        assert!(prefix.contains("DEDUP_MANDATE"), "{prefix}");
+        assert!(prefix.contains("RULE_BODY"), "{prefix}");
+        assert!(prefix.contains("## Output contract"), "{prefix}");
+        assert!(
+            prefix.ends_with(PRIME_HANDOFF),
+            "the prefix must end with the prime handoff: {prefix}"
+        );
+        assert!(
+            !prefix.contains("# Files under review"),
+            "the prefix must not carry any file payload: {prefix}"
+        );
+
+        // The payload carries ONLY the file blocks — no rules, no contract.
+        assert!(payload.starts_with("# Files under review"), "{payload}");
+        assert!(payload.contains("## File: src/a.rs"), "{payload}");
+        assert!(!payload.contains("## Mandate"), "{payload}");
+        assert!(!payload.contains("## Output contract"), "{payload}");
+
+        // The monolithic fallback prompt is exactly the shared sections (the
+        // prefix minus the handoff) followed by the payload.
+        let monolithic = render_fleet_prompt("purpose", &vw, &rs, &vw.files);
+        let shared = prefix
+            .strip_suffix(PRIME_HANDOFF)
+            .expect("prefix ends with the handoff");
+        assert_eq!(
+            monolithic,
+            format!("{shared}{payload}"),
+            "monolithic prompt must compose from the same shared sections + payload"
+        );
+    }
+
+    #[test]
     fn severity_default_maps_to_finding_vocabulary() {
         assert_eq!(severity_default(Severity::Error), "blocker");
         assert_eq!(severity_default(Severity::Warn), "warning");
@@ -857,19 +1158,20 @@ mod tests {
 
         // Script: a finding for val-a on src/a.rs, a finding for val-b on
         // src/b.rs, empty for the rest (matched by validator + file in prompt).
-        let agent = ScriptedAgent::new(vec![
+        let agent = forking_agent(vec![
             (
                 "# Validator: val-a".to_string() + "\n\n## Mandate",
-                Some(findings_json("src/a.rs", "ra", "dup in a")),
+                ScriptedReply::Text(findings_json("src/a.rs", 42, "ra", "warning", "dup in a")),
             ),
             (
                 "# Validator: val-b".to_string() + "\n\n## Mandate",
-                Some(findings_json("src/b.rs", "rb", "dup in b")),
+                ScriptedReply::Text(findings_json("src/b.rs", 42, "rb", "warning", "dup in b")),
             ),
         ]);
         let agent_probe = Arc::clone(&agent);
 
-        // batch_size=1 → file-grain: 2 validators × 2 files = 4 tasks.
+        // batch_size=1 → file-grain: 2 validators × 2 files = 4 tasks (plus one
+        // prefix prime per validator).
         let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
             run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 })
                 .await
@@ -877,11 +1179,17 @@ mod tests {
         })
         .await;
 
+        let seen = agent_probe.seen_prompts();
+        let payloads = seen
+            .iter()
+            .filter(|p| p.starts_with("# Files under review"))
+            .count();
         assert_eq!(
-            agent_probe.seen_prompts().len(),
-            4,
-            "2 validators × 2 files at batch_size 1 = 4 tasks"
+            payloads, 4,
+            "2 validators × 2 files at batch_size 1 = 4 payload tasks: {seen:#?}"
         );
+        let primes = seen.iter().filter(|p| p.contains(PRIME_HANDOFF)).count();
+        assert_eq!(primes, 2, "one prefix prime per validator: {seen:#?}");
 
         // Every finding is tagged with its validator (overriding the agent's
         // self-reported `ignored-by-agent`), and the rule tag survives.
@@ -917,7 +1225,7 @@ mod tests {
             validators: vec![validator_work("val", files)],
         };
 
-        let agent = ScriptedAgent::new(vec![]);
+        let agent = forking_agent(vec![]);
         let agent_probe = Arc::clone(&agent);
 
         // batch_size=4 → 10 files collapse into ceil(10/4) = 3 tasks.
@@ -926,15 +1234,19 @@ mod tests {
         })
         .await;
 
+        let seen = agent_probe.seen_prompts();
+        let payloads: Vec<&String> = seen
+            .iter()
+            .filter(|p| p.starts_with("# Files under review"))
+            .collect();
         assert_eq!(
-            agent_probe.seen_prompts().len(),
+            payloads.len(),
             3,
-            "10 small files at batch_size 4 collapse into 3 tasks, not 10"
+            "10 small files at batch_size 4 collapse into 3 tasks, not 10: {seen:#?}"
         );
         // Each batched task carries multiple files (the grain stays the file:
         // each is its own block, the batch just packs them).
-        let first = &agent_probe.seen_prompts()[0];
-        let file_blocks = first.matches("## File: ").count();
+        let file_blocks = payloads[0].matches("## File: ").count();
         assert_eq!(file_blocks, 4, "the first batch packs 4 file blocks");
     }
 
@@ -952,7 +1264,7 @@ mod tests {
             validators: vec![validator_work("val", files)],
         };
 
-        let agent = ScriptedAgent::new(vec![]);
+        let agent = forking_agent(vec![]);
         let _findings = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
             run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 2 }).await
         })
@@ -986,7 +1298,7 @@ mod tests {
             validators: vec![validator_work("deduplicate", files)],
         };
 
-        let agent = ScriptedAgent::new(vec![]);
+        let agent = forking_agent(vec![]);
         let _findings = with_pool(agent, PoolConfig::remote(1), move |pool| async move {
             run_fleet(&work, &loader, &pool, FleetConfig::default()).await
         })
@@ -996,6 +1308,410 @@ mod tests {
         // structured field (the exact bracketed list only this log emits — the
         // rendered prompt spells rules as `### Rule: ...` prose, not this shape).
         assert!(logs_contain("rules=[\"no-copy-paste\", \"prefer-reuse\"]"));
+    }
+
+    // ---- primed-prefix + fork orchestration tests -------------------------
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn prefix_is_primed_once_per_validator_and_batches_fork_payload_only() {
+        let rs = ruleset(
+            "val",
+            "MANDATE_MARKER mandate",
+            &[("r", "RULE_MARKER body")],
+        );
+        let loader = loader_with(vec![rs]);
+
+        let files: Vec<FileWork> = (0..4)
+            .map(|i| file_work(&format!("src/f{i}.rs"), &format!("sym{i}"), "src/x.rs"))
+            .collect();
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work("val", files)],
+        };
+
+        // The scripted response is keyed on a file in the FIRST batch; the fork
+        // inherits the prefix, so the script context is prefix + payload.
+        let agent = forking_agent(vec![(
+            "## File: src/f0.rs".to_string(),
+            ScriptedReply::Text(findings_json(
+                "src/f0.rs",
+                42,
+                "r",
+                "warning",
+                "warm finding",
+            )),
+        )]);
+        let agent_probe = Arc::clone(&agent);
+
+        // 4 files at batch_size 2 → 1 prime + 2 forked payload tasks.
+        let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
+            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 2 }).await
+        })
+        .await;
+
+        let seen = agent_probe.seen_prompts();
+        let primes: Vec<&String> = seen.iter().filter(|p| p.contains(PRIME_HANDOFF)).collect();
+        assert_eq!(
+            primes.len(),
+            1,
+            "the shared prefix is primed exactly once per validator: {seen:#?}"
+        );
+        assert!(
+            primes[0].contains("MANDATE_MARKER") && primes[0].contains("RULE_MARKER"),
+            "the prime carries the validator's rules: {}",
+            primes[0]
+        );
+
+        let payloads: Vec<&String> = seen
+            .iter()
+            .filter(|p| p.starts_with("# Files under review"))
+            .collect();
+        assert_eq!(
+            payloads.len(),
+            2,
+            "each batch forks the primed session and sends ONLY the payload: {seen:#?}"
+        );
+        assert!(
+            payloads
+                .iter()
+                .all(|p| !p.contains("MANDATE_MARKER") && !p.contains("RULE_MARKER")),
+            "payload prompts must not re-send the rules: {payloads:#?}"
+        );
+        assert_eq!(agent_probe.fork_count(), 2, "one fork per batch");
+
+        assert_eq!(outcome.attempted, 2);
+        assert_eq!(outcome.failed, 0);
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert_eq!(outcome.findings[0].claim, "warm finding");
+        assert_eq!(outcome.findings[0].validator, "val");
+
+        // The prefix state was pinned for the fan-out and unpinned at the end.
+        assert_eq!(
+            agent_probe.pin_calls(),
+            vec![("sess-0".to_string(), true), ("sess-0".to_string(), false)],
+            "pin for the fan-out, unpin when the validator's batches complete"
+        );
+
+        // Observability: each fork task logs the warm reuse and token count.
+        assert!(logs_contain("fleet task ran on a warm fork"));
+        assert!(logs_contain(&format!(
+            "reused_tokens=Some({MOCK_PREFIX_TOKENS})"
+        )));
+        assert!(logs_contain("primed validator prefix session"));
+    }
+
+    /// The primed prefix is born pinned through the PRODUCTION prime path:
+    /// `prime_validator_prefix` → `submit_primed` → the prompt's `_meta`
+    /// pin-on-save intent → the agent saving its prefix pinned atomically at
+    /// turn completion — BEFORE any separate `session/pin` confirm runs. This is
+    /// the end-to-end (scripted agent, no real model) assertion for the
+    /// structural close of the prime→pin eviction race: the prefix is never an
+    /// unpinned eviction candidate, independent of any post-turn pin.
+    #[tokio::test]
+    async fn primed_prefix_is_born_pinned_through_the_production_path() {
+        let rs = ruleset("val", "mandate", &[("r", "body")]);
+        let loader = loader_with(vec![rs]);
+        let files: Vec<FileWork> = (0..2)
+            .map(|i| file_work(&format!("src/f{i}.rs"), &format!("sym{i}"), "src/x.rs"))
+            .collect();
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work("val", files)],
+        };
+
+        let agent = forking_agent(vec![]);
+        let agent_probe = Arc::clone(&agent);
+
+        with_pool(agent, PoolConfig::remote(2), move |pool| async move {
+            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 2 }).await
+        })
+        .await;
+
+        // The prefix session the validator primed (`sess-0`) was born pinned by
+        // the prime turn's `_meta` intent — recorded at turn completion, before
+        // the post-turn `session/pin` confirm. Forked batch sessions are NOT
+        // born pinned (they save their own cold state unpinned).
+        assert_eq!(
+            agent_probe.born_pinned_sessions(),
+            vec!["sess-0".to_string()],
+            "the primed prefix must be born pinned through the production prime path, \
+             and only the prefix (not the forked batch sessions)"
+        );
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn fork_failure_falls_back_to_monolithic_without_losing_tasks() {
+        let rs = ruleset("val", "mandate", &[("r", "body")]);
+        let loader = loader_with(vec![rs]);
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work(
+                "val",
+                vec![
+                    file_work("src/a.rs", "alpha", "src/x.rs"),
+                    file_work("src/b.rs", "beta", "src/y.rs"),
+                ],
+            )],
+        };
+
+        // Every `session/fork` is rejected; the batch tasks must fall back to
+        // fresh-session monolithic prompts and still deliver their findings.
+        let agent = agent_with_fork_mode(
+            vec![(
+                "## File: src/a.rs".to_string(),
+                ScriptedReply::Text(findings_json(
+                    "src/a.rs",
+                    42,
+                    "r",
+                    "warning",
+                    "found despite fork failure",
+                )),
+            )],
+            ForkMode::RejectFork,
+        );
+        let agent_probe = Arc::clone(&agent);
+
+        let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
+            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+        })
+        .await;
+
+        assert_eq!(outcome.attempted, 2);
+        assert_eq!(outcome.failed, 0, "a failed fork is never a lost task");
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].claim, "found despite fork failure");
+
+        // The fallback prompts are the full monolithic shape (rules + files).
+        let seen = agent_probe.seen_prompts();
+        let monolithic = seen
+            .iter()
+            .filter(|p| p.contains("## Mandate") && p.contains("# Files under review"))
+            .count();
+        assert_eq!(
+            monolithic, 2,
+            "each batch fell back to a monolithic prompt: {seen:#?}"
+        );
+        assert!(logs_contain("falling back to a monolithic"));
+
+        // The prime succeeded, so it was pinned and is still unpinned at the end.
+        assert_eq!(
+            agent_probe.pin_calls(),
+            vec![("sess-0".to_string(), true), ("sess-0".to_string(), false)],
+        );
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn unsupported_fork_extension_degrades_to_monolithic_prompts() {
+        let rs = ruleset("val", "mandate", &[("r", "body")]);
+        let loader = loader_with(vec![rs]);
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work(
+                "val",
+                vec![
+                    file_work("src/a.rs", "alpha", "src/x.rs"),
+                    file_work("src/b.rs", "beta", "src/y.rs"),
+                ],
+            )],
+        };
+
+        // The backend implements NO extension methods: the prime turn runs but
+        // its state can never be confirmed, so the whole validator degrades to
+        // monolithic prompts — never a lost task.
+        let agent = agent_with_fork_mode(
+            vec![(
+                "## File: src/b.rs".to_string(),
+                ScriptedReply::Text(findings_json(
+                    "src/b.rs",
+                    42,
+                    "r",
+                    "warning",
+                    "found without forks",
+                )),
+            )],
+            ForkMode::Unsupported,
+        );
+        let agent_probe = Arc::clone(&agent);
+
+        let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
+            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+        })
+        .await;
+
+        assert_eq!(outcome.attempted, 2);
+        assert_eq!(outcome.failed, 0);
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].claim, "found without forks");
+
+        let seen = agent_probe.seen_prompts();
+        let monolithic = seen
+            .iter()
+            .filter(|p| p.contains("## Mandate") && p.contains("# Files under review"))
+            .count();
+        assert_eq!(monolithic, 2, "{seen:#?}");
+        assert_eq!(
+            agent_probe.fork_count(),
+            0,
+            "no forks on an unsupported backend"
+        );
+        assert!(
+            agent_probe.pin_calls().is_empty(),
+            "nothing is pinned when state confirmation fails"
+        );
+        assert!(logs_contain("falling back to monolithic prompts"));
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn degraded_fork_runs_cold_but_still_parses_findings() {
+        let rs = ruleset("val", "mandate", &[("r", "body")]);
+        let loader = loader_with(vec![rs]);
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work(
+                "val",
+                vec![file_work("src/a.rs", "alpha", "src/x.rs")],
+            )],
+        };
+
+        // Forks succeed but attach no parent state — the task proceeds on the
+        // forked session (history is intact, just cold) and is logged.
+        let agent = agent_with_fork_mode(
+            vec![(
+                "## File: src/a.rs".to_string(),
+                ScriptedReply::Text(findings_json(
+                    "src/a.rs",
+                    42,
+                    "r",
+                    "warning",
+                    "cold but correct",
+                )),
+            )],
+            ForkMode::DegradedAttach,
+        );
+
+        let outcome = with_pool(agent, PoolConfig::local(), move |pool| async move {
+            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+        })
+        .await;
+
+        assert_eq!(outcome.attempted, 1);
+        assert_eq!(outcome.failed, 0);
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].claim, "cold but correct");
+        assert!(logs_contain("fleet task fork was degraded"));
+    }
+
+    #[tokio::test]
+    async fn prefix_session_is_unpinned_even_when_a_batch_task_errors() {
+        let rs = ruleset("val", "mandate", &[("r", "body")]);
+        let loader = loader_with(vec![rs]);
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work(
+                "val",
+                vec![
+                    file_work("src/good.rs", "good", "src/x.rs"),
+                    file_work("src/bad.rs", "bad", "src/y.rs"),
+                ],
+            )],
+        };
+
+        // One forked batch task errors; the unpin must still happen.
+        let agent = forking_agent(vec![(
+            "## File: src/bad.rs".to_string(),
+            ScriptedReply::Error,
+        )]);
+        let agent_probe = Arc::clone(&agent);
+
+        let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
+            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+        })
+        .await;
+
+        assert_eq!(outcome.attempted, 2);
+        assert_eq!(outcome.failed, 1, "the erroring fork task is a failed task");
+        assert_eq!(
+            agent_probe.pin_calls(),
+            vec![("sess-0".to_string(), true), ("sess-0".to_string(), false)],
+            "the prefix pin is released even when a batch task errors"
+        );
+    }
+
+    /// Poll `condition` every [`POLL_INTERVAL`] until it holds, panicking after
+    /// [`POLL_TIMEOUT`]. The retry count is derived from the two so the wait
+    /// budget is expressed once, not as a product of two coupled literals.
+    async fn wait_for(what: &str, condition: impl Fn() -> bool) {
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+        const POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+        let attempts = POLL_TIMEOUT.as_millis() / POLL_INTERVAL.as_millis();
+        for _ in 0..attempts {
+            if condition() {
+                return;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    /// Cancellation-safety regression: a fan-out future dropped mid-collect
+    /// (review cancelled, caller timeout) must STILL release the prefix pin —
+    /// a pinned session is exempt from cache eviction, so a leaked pin
+    /// outlives the review until process restart.
+    #[tokio::test]
+    async fn prefix_pin_is_released_when_the_fanout_future_is_dropped_mid_collect() {
+        let rs = ruleset("val", "mandate", &[("r", "body")]);
+        let loader = loader_with(vec![rs]);
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work(
+                "val",
+                vec![file_work("src/a.rs", "alpha", "src/x.rs")],
+            )],
+        };
+
+        // The payload turn wedges forever, holding the fan-out mid-collect.
+        let agent = forking_agent(vec![(
+            "# Files under review".to_string(),
+            ScriptedReply::Stall,
+        )]);
+        let agent_probe = Arc::clone(&agent);
+
+        with_pool(agent, PoolConfig::remote(2), move |pool| async move {
+            let fanout = tokio::spawn(async move {
+                run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+            });
+
+            // Wait until the prefix is pinned and the wedged payload fork is
+            // in flight — the fan-out is now mid-collect.
+            wait_for("the prefix pin and the wedged payload fork", || {
+                agent_probe
+                    .pin_calls()
+                    .contains(&("sess-0".to_string(), true))
+                    && agent_probe
+                        .seen_prompts()
+                        .iter()
+                        .any(|p| p.starts_with("# Files under review"))
+            })
+            .await;
+
+            // Cancel the review: drop the fan-out future mid-collect.
+            fanout.abort();
+            let _ = fanout.await;
+
+            // The pin must still be released — the cancelled fan-out cannot
+            // leak the pinned prefix session.
+            wait_for("the cancelled fan-out to release the prefix pin", || {
+                agent_probe
+                    .pin_calls()
+                    .contains(&("sess-0".to_string(), false))
+            })
+            .await;
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -1016,11 +1732,17 @@ mod tests {
 
         // The task whose prompt mentions src/bad.rs errors; the good one returns
         // a finding.
-        let agent = ScriptedAgent::new(vec![
-            ("## File: src/bad.rs".to_string(), None),
+        let agent = forking_agent(vec![
+            ("## File: src/bad.rs".to_string(), ScriptedReply::Error),
             (
                 "## File: src/good.rs".to_string(),
-                Some(findings_json("src/good.rs", "r", "real issue")),
+                ScriptedReply::Text(findings_json(
+                    "src/good.rs",
+                    42,
+                    "r",
+                    "warning",
+                    "real issue",
+                )),
             ),
         ]);
 
@@ -1063,7 +1785,7 @@ mod tests {
         };
 
         // Every (validator, file) task errors.
-        let agent = ScriptedAgent::new(vec![("## File:".to_string(), None)]);
+        let agent = forking_agent(vec![("## File:".to_string(), ScriptedReply::Error)]);
 
         let outcome = with_pool(agent, PoolConfig::remote(3), move |pool| async move {
             run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
@@ -1090,7 +1812,7 @@ mod tests {
             )],
         };
 
-        let agent = ScriptedAgent::new(vec![]);
+        let agent = forking_agent(vec![]);
         let agent_probe = Arc::clone(&agent);
 
         let outcome = with_pool(agent, PoolConfig::remote(1), move |pool| async move {

@@ -138,6 +138,14 @@ jobs:
       - name: Linting
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+  docs:
+    name: Docs Guard
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard against removed prompts feature in docs
+        run: ./scripts/docs_no_prompts_guard.sh
+
   examples:
     name: Run all examples
     runs-on: self-hosted

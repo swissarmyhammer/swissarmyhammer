@@ -33,7 +33,6 @@ swissarmyhammer-common = { workspace = true }
 swissarmyhammer-shell = { workspace = true }
 swissarmyhammer-templating = { workspace = true }
 
-swissarmyhammer-prompts = { workspace = true }
 
 # Template engine (legacy - being phased out)
 liquid = { workspace = true }

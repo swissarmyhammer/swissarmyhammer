@@ -263,6 +263,7 @@ pub mod permissions;
 pub mod plan;
 pub mod server;
 pub mod session;
+pub mod session_fork;
 pub mod session_record;
 pub mod session_resume;
 pub mod terminal;

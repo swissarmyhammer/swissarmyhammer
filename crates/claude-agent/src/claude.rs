@@ -68,6 +68,28 @@ struct StreamState {
     chunks_sent: u32,
 }
 
+/// Why attaching a parent's transcript to a forked child process failed.
+///
+/// Mirrors the Err-vs-clean-miss discipline of the session-store lookups:
+/// [`Rejected`](Self::Rejected) is the CLI's clean "the parent's transcript
+/// cannot seed a fork" answer — a permanent condition of the parent's state —
+/// while [`Spawn`](Self::Spawn) is an environment failure (claude binary
+/// missing, spawn I/O) that says nothing about the parent and is retryable
+/// once the environment is fixed. Callers map the two onto different wire
+/// errors and must never conflate them.
+#[derive(Debug)]
+pub enum ForkAttachError {
+    /// The CLI process started but exited immediately: it has no transcript
+    /// for the parent's UUID, or it predates `--fork-session`. The detail
+    /// carries the exit status and stderr.
+    Rejected {
+        /// Human-readable diagnostic (exit status plus drained stderr).
+        detail: String,
+    },
+    /// The forked process could not be launched at all.
+    Spawn(crate::error::AgentError),
+}
+
 /// Claude client wrapper with session management
 pub struct ClaudeClient {
     process_manager: Arc<ClaudeProcessManager>,
@@ -146,57 +168,139 @@ impl ClaudeClient {
     ///
     /// Returns an error if the claude CLI cannot be spawned, or if the spawned
     /// process exits immediately — the symptom of the CLI having no transcript
-    /// for the session's UUID. The error message carries the CLI's stderr.
+    /// for the session's UUID. The error message carries the CLI's exit status
+    /// and stderr.
     pub async fn resume_process(&self, config: SpawnConfig) -> Result<()> {
         let session_id = config.session_id;
         tracing::info!("Resuming Claude process for session {}", session_id);
 
         let process = self.process_manager.resume_process(config).await?;
-        Self::verify_resume_started(&process, &session_id).await
+        if let Some(detail) = Self::early_exit_detail(&process).await {
+            return Err(crate::error::AgentError::Process(format!(
+                "Claude CLI could not resume session {}: its transcript for this \
+                 session is unavailable or has been removed ({})",
+                session_id, detail
+            )));
+        }
+        tracing::debug!(
+            "Resumed Claude process is running for session {}",
+            session_id
+        );
+        Ok(())
     }
 
-    /// Confirm a `--resume` process actually started rather than exiting
-    /// immediately because the CLI had no transcript for the UUID.
+    /// Spawn the claude CLI for a NEW session forked from `parent`'s
+    /// persisted transcript.
+    ///
+    /// The process is started with `--resume <parent-uuid> --fork-session
+    /// --session-id <child-uuid>`
+    /// ([`ConversationAttachment::Fork`](crate::claude_process::ConversationAttachment::Fork),
+    /// set on `config` here so the caller cannot construct a fork spawn
+    /// without a parent), so the CLI clones the parent's conversation onto
+    /// the child session's own deterministic UUID and the child can itself
+    /// be resumed or forked later. Like
+    /// [`resume_process`](Self::resume_process), no init-trigger message is
+    /// sent — that would inject a spurious turn into the forked conversation.
+    ///
+    /// # Arguments
+    ///
+    /// * `parent` - The parent session whose transcript seeds the fork.
+    /// * `config` - Spawn configuration for the child session; its
+    ///   `attachment` is overwritten with the fork attachment.
+    ///
+    /// # Errors
+    ///
+    /// Mirrors the session-store lookups' Err-vs-clean-miss discipline:
+    ///
+    /// - [`ForkAttachError::Rejected`] when the CLI process started but
+    ///   exited immediately — its clean "the parent's transcript cannot seed
+    ///   a fork" answer (transcript missing, or the CLI predates
+    ///   `--fork-session`), carrying the exit status and stderr. The dead
+    ///   process is removed from the process manager.
+    /// - [`ForkAttachError::Spawn`] when the process could not be launched at
+    ///   all (claude binary missing, spawn I/O) — an environment failure that
+    ///   says nothing about the parent's state.
+    pub async fn fork_process(
+        &self,
+        parent: crate::session::SessionId,
+        mut config: SpawnConfig,
+    ) -> std::result::Result<(), ForkAttachError> {
+        let session_id = config.session_id;
+        config.attachment = crate::claude_process::ConversationAttachment::Fork { parent };
+        tracing::info!(
+            "Forking Claude process for session {} from parent {}",
+            session_id,
+            parent
+        );
+
+        let process = self
+            .process_manager
+            .spawn_process(config)
+            .await
+            .map_err(ForkAttachError::Spawn)?;
+        if let Some(detail) = Self::early_exit_detail(&process).await {
+            // Drop the dead process from the manager so the failed fork
+            // leaves nothing registered under the child session id.
+            drop(process);
+            if let Err(e) = self.process_manager.terminate_session(&session_id).await {
+                tracing::warn!(
+                    "Failed to clean up dead forked process for session {}: {}",
+                    session_id,
+                    e
+                );
+            }
+            return Err(ForkAttachError::Rejected {
+                detail: format!(
+                    "Claude CLI could not fork session {session_id} from parent {parent}: \
+                     the parent's transcript is unavailable or the CLI does not support \
+                     --fork-session ({detail})"
+                ),
+            });
+        }
+        tracing::debug!(
+            "Forked Claude process is running for session {}",
+            session_id
+        );
+        Ok(())
+    }
+
+    /// Detect a transcript-attaching process (`--resume`, with or without
+    /// `--fork-session`) that exited immediately, returning a diagnostic
+    /// detail combining its exit status and stderr.
     ///
     /// The claude CLI exits with an error when `--resume` is given a UUID it
     /// has no transcript for. The spawn itself still succeeds (the binary is
     /// found), so the only signal is the process dying right away. This waits
-    /// briefly, checks liveness, and on early exit drains stderr into a clear
-    /// error.
-    async fn verify_resume_started(
-        process: &Arc<Mutex<ClaudeProcess>>,
-        session_id: &SessionId,
-    ) -> Result<()> {
+    /// briefly, checks liveness, and on early exit captures the exit status
+    /// and drains stderr so the caller can build a clear error — a CLI that
+    /// wrote nothing to stderr still reports its exit status. Returns `None`
+    /// when the process is alive and healthy.
+    async fn early_exit_detail(process: &Arc<Mutex<ClaudeProcess>>) -> Option<String> {
         // Give the CLI a moment to either load the transcript or bail out.
         tokio::time::sleep(std::time::Duration::from_millis(RESUME_LIVENESS_CHECK_MS)).await;
 
         let mut proc = process.lock().await;
         if proc.is_alive().await {
-            tracing::debug!(
-                "Resumed Claude process is running for session {}",
-                session_id
-            );
-            return Ok(());
+            return None;
         }
 
-        // The process is gone — collect whatever the CLI wrote to stderr so the
-        // caller can tell the client the transcript is unavailable.
+        // The process is gone — combine its exit status with whatever it
+        // wrote to stderr so the caller can tell the client what went wrong.
+        let status = proc
+            .exit_status()
+            .map(|status| status.to_string())
+            .unwrap_or_else(|| "unknown exit status".to_string());
         let mut stderr = String::new();
         while let Ok(Some(line)) = proc.read_stderr_line().await {
             stderr.push_str(&line);
             stderr.push('\n');
         }
-        let detail = stderr.trim();
-        Err(crate::error::AgentError::Process(format!(
-            "Claude CLI could not resume session {}: its transcript for this \
-             session is unavailable or has been removed{}",
-            session_id,
-            if detail.is_empty() {
-                String::new()
-            } else {
-                format!(" ({detail})")
-            }
-        )))
+        let stderr = stderr.trim();
+        Some(if stderr.is_empty() {
+            status
+        } else {
+            format!("{status}: {stderr}")
+        })
     }
 
     /// Spawn Claude process and consume init message during session creation

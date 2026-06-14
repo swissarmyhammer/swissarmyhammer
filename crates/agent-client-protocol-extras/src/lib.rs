@@ -36,6 +36,9 @@
 //! - [`raw_messages`] — the shared per-session [`RawMessageManager`] that
 //!   records raw JSON-RPC frames to `<acp-session-dir>/raw.jsonl`, plus the
 //!   [`acp_session_dir`] helper resolving the per-session state directory.
+//! - [`session_fork`] — the backend-agnostic extension contract for forking a
+//!   session from a parent's saved state (`session/fork`,
+//!   `session/state_status`, `session/pin`).
 //! - [`session_store`] — the agent-neutral session-persistence layer
 //!   ([`SessionRecord`], [`SessionStore`], [`ResumeStrategy`]) backing ACP
 //!   `session/list`, `session/load`, and `session/resume`.
@@ -53,9 +56,12 @@ pub mod hookable_agent;
 pub mod playback;
 pub mod raw_messages;
 pub mod recording;
+pub mod session_fork;
 pub mod session_store;
 pub mod session_title;
 pub mod test_mcp_server;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod tolerant_routing;
 pub mod tracing_agent;
 
@@ -85,6 +91,40 @@ pub use test_mcp_server::{start_test_mcp_server_with_capture, TestMcpServer};
 // surface of the recording module, so future reviewers shouldn't go hunting
 // for a phantom `RecordedEvent`.
 pub use recording::{RecordedCall, RecordedSession, RecordingAgent, RecordingFlushHandle};
+pub use session_fork::{
+    SessionForkRequest, SessionForkResponse, SessionPinRequest, SessionPinResponse,
+    SessionStateStatusRequest, SessionStateStatusResponse, FORK_PARENT_NOT_FOUND,
+    FORK_PARENT_STATE_UNAVAILABLE, SESSION_FORK_METHOD, SESSION_PIN_METHOD,
+    SESSION_STATE_NOT_FOUND, SESSION_STATE_STATUS_METHOD,
+};
+
+/// `PromptRequest` `_meta` key carrying the caller-supplied per-turn
+/// generation-token cap.
+///
+/// The ACP `PromptRequest` schema has no first-class `max_tokens` field, so
+/// the cap rides the protocol's extensibility `_meta` map under this key. It
+/// is a cross-crate wire contract — the validators pool produces it, the
+/// claude and llama agents honor it — so the key is named here, alongside the
+/// session-extension method names, and changes in exactly one place.
+pub const MAX_TOKENS_META_KEY: &str = "max_tokens";
+
+/// `PromptRequest` `_meta` key carrying a "pin the saved state on this turn"
+/// intent.
+///
+/// A prime turn for a review fan-out wants its just-saved prefix to be pinned
+/// against cache eviction *atomically at save time* — born pinned — so a
+/// concurrent session's save can never evict the not-yet-pinned prefix before a
+/// separate post-turn `session/pin` lands (the prime→pin eviction race). Like
+/// [`MAX_TOKENS_META_KEY`], the ACP `PromptRequest` schema has no first-class
+/// field for this, so the intent rides the protocol's extensibility `_meta` map
+/// under this key. It is a cross-crate wire contract — the validators pool
+/// produces it on the prime turn, the llama agent honors it by saving the
+/// prefix born pinned, and an agent without a KV cache (claude) ignores it,
+/// consistent with its existing pin=no-op contract. The value is a boolean
+/// (`true` to pin on save); absent or non-`true` means the default unpinned
+/// save.
+pub const PIN_ON_SAVE_META_KEY: &str = "pin_on_save";
+
 pub use session_store::{
     ResumeStrategy, SessionListPage, SessionRecord, SessionStore, SessionStoreError,
 };

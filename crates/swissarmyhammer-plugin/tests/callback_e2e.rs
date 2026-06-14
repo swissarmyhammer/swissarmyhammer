@@ -71,7 +71,7 @@ use swissarmyhammer_plugin::{
     CallerId, HostDispatcher, McpServer as PluginMcpServer, PluginLifecycle, PluginRuntime,
     RuntimeConfig,
 };
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_tools::mcp::McpServer;
 
 /// A generous upper bound on any single runtime or host interaction.
@@ -314,7 +314,7 @@ impl HostDispatcher for CallbackHostBridge {
 /// the operation tool this test routes the callback's effect through — so it is
 /// reachable for exposure.
 async fn build_mcp_server(work_dir: &Path) -> McpServer {
-    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None)
+    McpServer::new_with_work_dir(TemplateLibrary::new(), work_dir.to_path_buf(), None)
         .await
         .expect("MCP server bootstrap should succeed")
 }

@@ -2,7 +2,7 @@
 
 SwissArmyHammer is an integrated software development lifecycle (SDLC) platform for AI-powered coding agents. It combines **skills**, **agents**, **tools**, and **validators** into a single system that turns your AI coding assistant into a complete development team.
 
-Instead of a loose collection of scripts and prompts, SwissArmyHammer provides a structured composition of capabilities — each with a clear role — that work together to plan, implement, test, review, and ship code.
+Instead of a loose collection of scripts and one-off instructions, SwissArmyHammer provides a structured composition of capabilities — each with a clear role — that work together to plan, implement, test, review, and ship code.
 
 ## Three CLIs, One System
 

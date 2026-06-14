@@ -105,6 +105,10 @@ pub(crate) fn model_identifier_for_strategy(model: &crate::types::ModelConfig) -
 /// each hosting a different tool set. The tool sets are discovered once at
 /// attach time, so the index is built then and reused for every dispatch —
 /// routing never re-issues a `tools/list` round-trip on the hot path.
+///
+/// `Clone` is cheap (the clients are `Arc`s) and is how a forked session
+/// shares its parent's attached backends and routing index.
+#[derive(Clone)]
 pub(crate) struct SessionMcpClients {
     /// All clients attached to the session, in attachment order. The first is
     /// the routing fallback when no client advertises a requested tool.
@@ -1042,6 +1046,7 @@ impl AgentAPI for AgentServer {
                 top_p: request.top_p,
                 stop_tokens: request.stop_tokens.clone(),
                 stopping_config: request.stopping_config.clone(),
+                pin_on_save: request.pin_on_save,
             };
 
             // Submit to request queue
@@ -1259,6 +1264,7 @@ impl AgentAPI for AgentServer {
             top_p: request.top_p,
             stop_tokens: request.stop_tokens,
             stopping_config: request.stopping_config,
+            pin_on_save: request.pin_on_save,
         };
 
         // Submit to request queue for streaming
@@ -1816,6 +1822,7 @@ impl AgentServer {
             top_p: None,
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let generation_response = self.generate(generation_request).await?;
@@ -1973,6 +1980,7 @@ impl AgentServer {
                             top_p: None,
                             stop_tokens: Vec::new(),
                             stopping_config: None,
+                            pin_on_save: false,
                         };
 
                         let batch_size = model_manager.get_batch_size();
@@ -2164,6 +2172,7 @@ impl AgentServer {
                     top_p: None,
                     stop_tokens: Vec::new(),
                     stopping_config: None,
+                    pin_on_save: false,
                 };
 
                 let batch_size = model_manager.get_batch_size();
@@ -2290,6 +2299,7 @@ impl AgentServer {
             top_p: None,
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
         self.request_queue
             .submit_request(request, &session)

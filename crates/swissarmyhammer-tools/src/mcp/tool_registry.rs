@@ -234,7 +234,7 @@ use swissarmyhammer_common::health::Doctorable;
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use swissarmyhammer_config::model::ModelConfig;
 use swissarmyhammer_git::GitOperations;
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use tokio::sync::{Mutex, RwLock};
 
 /// Context shared by all tools during execution
@@ -380,7 +380,7 @@ pub struct ToolContext {
     /// (e.g., `{% include "_partials/project-types/rust" %}`). This enables
     /// tools like `detect projects` to render project-type guidelines through
     /// the same pipeline used by skills and agents.
-    pub prompt_library: Option<Arc<RwLock<PromptLibrary>>>,
+    pub prompt_library: Option<Arc<RwLock<TemplateLibrary>>>,
 
     /// Optional MCP progress token for tool calls that report progress.
     ///
@@ -447,7 +447,7 @@ impl ToolContext {
     /// # Returns
     ///
     /// A new `ToolContext` with the prompt library set
-    pub fn with_prompt_library(mut self, library: Arc<RwLock<PromptLibrary>>) -> Self {
+    pub fn with_prompt_library(mut self, library: Arc<RwLock<TemplateLibrary>>) -> Self {
         self.prompt_library = Some(library);
         self
     }
@@ -2911,7 +2911,7 @@ mod tests {
 
     #[test]
     fn test_tool_context_with_prompt_library() {
-        use swissarmyhammer_prompts::PromptLibrary;
+        use swissarmyhammer_templating::TemplateLibrary;
         use tokio::sync::RwLock;
 
         let tool_handlers = Arc::new(ToolHandlers::new());
@@ -2920,7 +2920,7 @@ mod tests {
         let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
         assert!(ctx.prompt_library.is_none());
 
-        let library = Arc::new(RwLock::new(PromptLibrary::new()));
+        let library = Arc::new(RwLock::new(TemplateLibrary::new()));
         let ctx = ctx.with_prompt_library(library);
         assert!(ctx.prompt_library.is_some());
     }

@@ -18,6 +18,10 @@
 
 use crate::agent::ClaudeAgent;
 use crate::agent_file_operations::{ReadTextFileParams, WriteTextFileParams};
+use agent_client_protocol_extras::{
+    SESSION_FORK_METHOD, SESSION_PIN_METHOD, SESSION_STATE_STATUS_METHOD,
+};
+
 use agent_client_protocol::schema::{
     AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
     ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
@@ -26,6 +30,30 @@ use agent_client_protocol::schema::{
     SetSessionModeResponse,
 };
 use std::sync::Arc;
+
+// Wire method names for the agent-defined `fs/*`, `terminal/*`, and editor
+// extension methods, in the same style as the `session/*` fork constants in
+// `agent_client_protocol_extras::session_fork`. Each name is defined exactly
+// once and shared by the `ext_method` dispatch arms and the handlers'
+// capability checks and param-parse diagnostics, so renaming a wire method is
+// a single edit.
+
+/// Wire name of the `fs/read_text_file` extension method.
+const FS_READ_TEXT_FILE_METHOD: &str = "fs/read_text_file";
+/// Wire name of the `fs/write_text_file` extension method.
+const FS_WRITE_TEXT_FILE_METHOD: &str = "fs/write_text_file";
+/// Wire name of the `terminal/output` extension method.
+const TERMINAL_OUTPUT_METHOD: &str = "terminal/output";
+/// Wire name of the `terminal/release` extension method.
+const TERMINAL_RELEASE_METHOD: &str = "terminal/release";
+/// Wire name of the `terminal/wait_for_exit` extension method.
+const TERMINAL_WAIT_FOR_EXIT_METHOD: &str = "terminal/wait_for_exit";
+/// Wire name of the `terminal/kill` extension method.
+const TERMINAL_KILL_METHOD: &str = "terminal/kill";
+/// Wire name of the `terminal/create` extension method.
+const TERMINAL_CREATE_METHOD: &str = "terminal/create";
+/// Wire name of the `editor/update_buffers` extension method.
+const EDITOR_UPDATE_BUFFERS_METHOD: &str = "editor/update_buffers";
 
 // ACP protocol entry-points used by the SDK 0.11 builder/handler layer.
 // Each method matches a JSON-RPC request handler registered on
@@ -474,8 +502,11 @@ impl ClaudeAgent {
     /// Handle extension method requests.
     ///
     /// Extension methods are JSON-RPC methods outside the core ACP request
-    /// set. Claude Agent dispatches the `fs/*`, `terminal/*`, and
-    /// `editor/update_buffers` extensions to dedicated handlers.
+    /// set. Claude Agent dispatches the `fs/*`, `terminal/*`,
+    /// `editor/update_buffers`, and session-fork (`session/fork`,
+    /// `session/state_status`, `session/pin` — the shared contract in
+    /// [`agent_client_protocol_extras::session_fork`]) extensions to
+    /// dedicated handlers.
     ///
     /// ## Unknown methods
     ///
@@ -493,14 +524,17 @@ impl ClaudeAgent {
 
         let method_str: &str = request.method.as_ref();
         match method_str {
-            "fs/read_text_file" => self.handle_ext_read_text_file(&request).await,
-            "fs/write_text_file" => self.handle_ext_write_text_file(&request).await,
-            "terminal/output" => self.handle_ext_terminal_output(&request).await,
-            "terminal/release" => self.handle_ext_terminal_release(&request).await,
-            "terminal/wait_for_exit" => self.handle_ext_terminal_wait_for_exit(&request).await,
-            "terminal/kill" => self.handle_ext_terminal_kill(&request).await,
-            "terminal/create" => self.handle_ext_terminal_create(&request).await,
-            "editor/update_buffers" => self.handle_ext_editor_update_buffers(&request).await,
+            FS_READ_TEXT_FILE_METHOD => self.handle_ext_read_text_file(&request).await,
+            FS_WRITE_TEXT_FILE_METHOD => self.handle_ext_write_text_file(&request).await,
+            TERMINAL_OUTPUT_METHOD => self.handle_ext_terminal_output(&request).await,
+            TERMINAL_RELEASE_METHOD => self.handle_ext_terminal_release(&request).await,
+            TERMINAL_WAIT_FOR_EXIT_METHOD => self.handle_ext_terminal_wait_for_exit(&request).await,
+            TERMINAL_KILL_METHOD => self.handle_ext_terminal_kill(&request).await,
+            TERMINAL_CREATE_METHOD => self.handle_ext_terminal_create(&request).await,
+            EDITOR_UPDATE_BUFFERS_METHOD => self.handle_ext_editor_update_buffers(&request).await,
+            SESSION_FORK_METHOD => self.handle_ext_session_fork(&request).await,
+            SESSION_STATE_STATUS_METHOD => self.handle_ext_session_state_status(&request).await,
+            SESSION_PIN_METHOD => self.handle_ext_session_pin(&request).await,
             _ => self.handle_ext_unknown(&request),
         }
     }
@@ -531,7 +565,8 @@ impl ClaudeAgent {
         request: &ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
         self.validate_fs_read_capability().await?;
-        let params: ReadTextFileParams = self.parse_ext_params(request, "fs/read_text_file")?;
+        let params: ReadTextFileParams =
+            self.parse_ext_params(request, FS_READ_TEXT_FILE_METHOD)?;
         let response = self.handle_read_text_file(params).await?;
         self.to_ext_response(response)
     }
@@ -542,7 +577,8 @@ impl ClaudeAgent {
         request: &ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
         self.validate_fs_write_capability().await?;
-        let params: WriteTextFileParams = self.parse_ext_params(request, "fs/write_text_file")?;
+        let params: WriteTextFileParams =
+            self.parse_ext_params(request, FS_WRITE_TEXT_FILE_METHOD)?;
         let response = self.handle_write_text_file(params).await?;
         self.to_ext_response(response)
     }
@@ -552,10 +588,10 @@ impl ClaudeAgent {
         &self,
         request: &ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
-        self.validate_ext_terminal_capability("terminal/output")
+        self.validate_ext_terminal_capability(TERMINAL_OUTPUT_METHOD)
             .await?;
         let params: crate::terminal_manager::TerminalOutputParams =
-            self.parse_ext_params(request, "terminal/output")?;
+            self.parse_ext_params(request, TERMINAL_OUTPUT_METHOD)?;
         let response = self.handle_terminal_output(params).await?;
         self.to_ext_response(response)
     }
@@ -565,10 +601,10 @@ impl ClaudeAgent {
         &self,
         request: &ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
-        self.validate_ext_terminal_capability("terminal/release")
+        self.validate_ext_terminal_capability(TERMINAL_RELEASE_METHOD)
             .await?;
         let params: crate::terminal_manager::TerminalReleaseParams =
-            self.parse_ext_params(request, "terminal/release")?;
+            self.parse_ext_params(request, TERMINAL_RELEASE_METHOD)?;
         let response = self.handle_terminal_release(params).await?;
         self.to_ext_response(response)
     }
@@ -578,10 +614,10 @@ impl ClaudeAgent {
         &self,
         request: &ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
-        self.validate_ext_terminal_capability("terminal/wait_for_exit")
+        self.validate_ext_terminal_capability(TERMINAL_WAIT_FOR_EXIT_METHOD)
             .await?;
         let params: crate::terminal_manager::TerminalOutputParams =
-            self.parse_ext_params(request, "terminal/wait_for_exit")?;
+            self.parse_ext_params(request, TERMINAL_WAIT_FOR_EXIT_METHOD)?;
         let response = self.handle_terminal_wait_for_exit(params).await?;
         self.to_ext_response(response)
     }
@@ -591,10 +627,10 @@ impl ClaudeAgent {
         &self,
         request: &ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
-        self.validate_ext_terminal_capability("terminal/kill")
+        self.validate_ext_terminal_capability(TERMINAL_KILL_METHOD)
             .await?;
         let params: crate::terminal_manager::TerminalOutputParams =
-            self.parse_ext_params(request, "terminal/kill")?;
+            self.parse_ext_params(request, TERMINAL_KILL_METHOD)?;
         self.handle_terminal_kill(params).await?;
         self.to_ext_response(serde_json::Value::Null)
     }
@@ -604,10 +640,10 @@ impl ClaudeAgent {
         &self,
         request: &ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
-        self.validate_ext_terminal_capability("terminal/create")
+        self.validate_ext_terminal_capability(TERMINAL_CREATE_METHOD)
             .await?;
         let params: crate::terminal_manager::TerminalCreateParams =
-            self.parse_ext_params(request, "terminal/create")?;
+            self.parse_ext_params(request, TERMINAL_CREATE_METHOD)?;
         let response = self.handle_terminal_create(params).await?;
         self.to_ext_response(response)
     }
@@ -619,7 +655,7 @@ impl ClaudeAgent {
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
         self.validate_editor_capability().await?;
         let response: crate::editor_state::EditorBufferResponse =
-            self.parse_ext_params(request, "editor/update_buffers")?;
+            self.parse_ext_params(request, EDITOR_UPDATE_BUFFERS_METHOD)?;
         tracing::info!(
             "Updating editor buffers cache with {} buffers",
             response.buffers.len()
@@ -628,6 +664,43 @@ impl ClaudeAgent {
             .update_buffers_from_response(response)
             .await;
         self.to_ext_response(serde_json::Value::Null)
+    }
+
+    /// Handle the `session/fork` extension method (see
+    /// [`crate::session_fork`]). No capability gate: the fork surface is an
+    /// agent-defined extension, matching llama-agent.
+    async fn handle_ext_session_fork(
+        &self,
+        request: &ExtRequest,
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        let params: agent_client_protocol_extras::SessionForkRequest =
+            self.parse_ext_params(request, SESSION_FORK_METHOD)?;
+        let response = self.fork_session(params).await?;
+        self.to_ext_response(response)
+    }
+
+    /// Handle the `session/state_status` extension method (see
+    /// [`crate::session_fork`]).
+    async fn handle_ext_session_state_status(
+        &self,
+        request: &ExtRequest,
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        let params: agent_client_protocol_extras::SessionStateStatusRequest =
+            self.parse_ext_params(request, SESSION_STATE_STATUS_METHOD)?;
+        let response = self.session_state_status(params).await?;
+        self.to_ext_response(response)
+    }
+
+    /// Handle the `session/pin` extension method (see
+    /// [`crate::session_fork`]).
+    async fn handle_ext_session_pin(
+        &self,
+        request: &ExtRequest,
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
+        let params: agent_client_protocol_extras::SessionPinRequest =
+            self.parse_ext_params(request, SESSION_PIN_METHOD)?;
+        let response = self.pin_session(params).await?;
+        self.to_ext_response(response)
     }
 
     /// Handle an unknown extension method.

@@ -67,7 +67,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use swissarmyhammer_directory::SwissarmyhammerConfig;
 use swissarmyhammer_plugin::PluginHost;
-use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_tools::mcp::McpServer;
 use tokio::net::TcpListener;
 
@@ -235,7 +235,7 @@ async fn start_endpoint() -> Endpoint {
 /// monorepo. The bootstrap registers the unified `files` tool, which is
 /// reachable for exposure as the test's observation channel.
 async fn build_mcp_server(work_dir: &Path) -> McpServer {
-    McpServer::new_with_work_dir(PromptLibrary::new(), work_dir.to_path_buf(), None)
+    McpServer::new_with_work_dir(TemplateLibrary::new(), work_dir.to_path_buf(), None)
         .await
         .expect("MCP server bootstrap should succeed")
 }

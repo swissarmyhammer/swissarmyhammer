@@ -3,7 +3,7 @@
 use crate::context::CliContext;
 use colored::Colorize;
 use comfy_table::Cell;
-use swissarmyhammer_config::model::{ModelManager, ModelPaths};
+use swissarmyhammer_config::model::{ModelManager, ModelPaths, REVIEW_DEFAULT_AGENT};
 
 /// A single scope row in the `sah model show` table: (scope, model name, source).
 type ModelRow = (String, String, String);
@@ -13,12 +13,18 @@ type ModelRow = (String, String, String);
 /// Produces one row per scope:
 /// - `default`: the global default model (top-level `model:`), or
 ///   `claude-code (default)` when unset.
-/// - `review`: the review-tool override (`review.model`), or
-///   `(uses default)` when no review-specific model is configured.
+/// - `review`: the review-tool override (`review.model`), or the baked-in
+///   default `claude-code-haiku (default)` when no review-specific model is
+///   configured — matching what the review tooling actually runs.
 ///
 /// Each row is `(scope, model_name, source)`. The source column reflects where
 /// the named model was discovered (builtin/project/user), `default` for the
 /// unconfigured fallbacks, or `error` when the config could not be read.
+///
+/// The review row resolves the same effective default
+/// ([`REVIEW_DEFAULT_AGENT`]) used by `resolve_review_agent_config` and the
+/// serve-time review factory wiring, so the displayed model never disagrees
+/// with the one the review scope executes.
 fn build_model_rows(paths: &ModelPaths) -> Vec<ModelRow> {
     let default_row = match ModelManager::get_agent(paths) {
         Ok(Some(name)) => {
@@ -43,8 +49,11 @@ fn build_model_rows(paths: &ModelPaths) -> Vec<ModelRow> {
             ("review".to_string(), name, source)
         }
         Ok(None) => (
+            // No `review.model` configured: the review scope falls back to the
+            // baked-in REVIEW_DEFAULT_AGENT. Display the effective model so the
+            // table agrees with what the review tooling actually runs.
             "review".to_string(),
-            "(uses default)".to_string(),
+            format!("{REVIEW_DEFAULT_AGENT} (default)"),
             "default".to_string(),
         ),
         Err(_) => (
@@ -98,10 +107,40 @@ mod tests {
         assert_eq!(rows.len(), 2, "should render a default and a review row");
         assert_eq!(rows[0].0, "default");
         assert_eq!(rows[1].0, "review");
-        // Unset review must show a default indicator, not blank.
+        // Unset review must show the *effective* baked-in default model
+        // (claude-code-haiku), matching what the review tooling actually runs —
+        // not a vague "(uses default)" that disagrees with execution.
         assert_eq!(
-            rows[1].1, "(uses default)",
-            "unset review should indicate it falls back to the default"
+            rows[1].1,
+            format!("{REVIEW_DEFAULT_AGENT} (default)"),
+            "unset review should display the baked-in claude-code-haiku default"
+        );
+        assert_eq!(rows[1].2, "default");
+    }
+
+    /// Regression guard for the bug where `sah model` showed `review: (uses
+    /// default)` while the review tooling actually resolved `claude-code-haiku`.
+    /// The displayed review model MUST contain whatever
+    /// `resolve_review_agent_name` resolves, so the display and execution paths
+    /// cannot drift apart.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_review_row_agrees_with_resolved_review_name() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
+        let paths = ModelPaths::sah();
+        let resolved =
+            ModelManager::resolve_review_agent_name(&paths).expect("resolve review name");
+
+        let rows = build_model_rows(&paths);
+        let review = &rows[1];
+        assert_eq!(review.0, "review");
+        assert!(
+            review.1.contains(&resolved),
+            "displayed review model '{}' must contain the resolved effective name '{}'",
+            review.1,
+            resolved
         );
     }
 
