@@ -1,0 +1,2 @@
+description: Make the claude-code executor able to select a Claude model via CLI switches driven by model YAML. Wire the existing unused ClaudeCodeConfig.args through to the `claude` spawn command, add a builtin claude-code-haiku model that passes `--model haiku`, and make claude-code-haiku the baked-in default for the review scope.
+name: Smarter Claude Model Selection

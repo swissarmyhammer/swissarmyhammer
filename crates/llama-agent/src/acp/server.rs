@@ -11,7 +11,7 @@ use swissarmyhammer_common::Pretty;
 use tokio::sync::{broadcast, RwLock};
 
 use agent_client_protocol_extras::{
-    RawMessageManager, SessionSource, SessionStore, MAX_TOKENS_META_KEY,
+    RawMessageManager, SessionSource, SessionStore, MAX_TOKENS_META_KEY, PIN_ON_SAVE_META_KEY,
 };
 
 use super::config::AcpConfig;
@@ -2609,6 +2609,14 @@ impl AcpServer {
         // the caller via `map_finish_reason_to_stop_reason`.
         let requested_max_tokens = extract_request_max_tokens(request.meta.as_ref());
 
+        // Optional "born-pinned save" intent. A review fan-out's prime turn sets
+        // this so the prefix it leaves cached is pinned atomically at save time,
+        // closing the prime→pin eviction race structurally (see
+        // [`PIN_ON_SAVE_META_KEY`]). Threaded onto the `GenerationRequest` below;
+        // the queue worker's prompt-boundary save honors it by saving the entry
+        // born pinned.
+        let pin_on_save = extract_request_pin_on_save(request.meta.as_ref());
+
         // Translate ACP content to llama messages
         let messages = super::translation::acp_to_llama_messages(request.prompt).map_err(|e| {
             tracing::error!("Failed to translate ACP content to llama messages: {}", e);
@@ -2721,6 +2729,7 @@ impl AcpServer {
                 top_p: None,
                 stop_tokens: vec![],
                 stopping_config: None,
+                pin_on_save,
             };
 
             let mut stream = self
@@ -3815,6 +3824,26 @@ fn extract_request_max_tokens(
         return None;
     }
     usize::try_from(raw).ok()
+}
+
+/// Extract the caller-supplied "pin the saved state on this turn" intent from a
+/// `PromptRequest`'s `_meta` map.
+///
+/// The validators pool sets [`PIN_ON_SAVE_META_KEY`] to `true` on a review
+/// fan-out's *prime* turn so the prefix it leaves cached is born pinned —
+/// pinned atomically at save time rather than by a separate, racy post-turn
+/// `session/pin`. This closes the prime→pin eviction race structurally: a
+/// concurrent session's save can never evict the prefix in the window between
+/// its save and its pin, because there is no such window.
+///
+/// Returns `true` only for the boolean `true` value; any other value (or an
+/// absent key/meta) is the default unpinned save. Like
+/// [`extract_request_max_tokens`], this is a pure JSON inspection pulled out of
+/// the prompt loop so it is unit-testable without a live `AcpServer`.
+fn extract_request_pin_on_save(meta: Option<&serde_json::Map<String, serde_json::Value>>) -> bool {
+    meta.and_then(|m| m.get(PIN_ON_SAVE_META_KEY))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -6027,6 +6056,51 @@ mod tests {
         let mut meta = serde_json::Map::new();
         meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(-1_i64));
         assert_eq!(extract_request_max_tokens(Some(&meta)), None);
+    }
+
+    // =========================================================================
+    // extract_request_pin_on_save — caller-supplied born-pinned save intent
+    // =========================================================================
+
+    /// No meta map → no pin-on-save intent: an ordinary turn saves unpinned.
+    #[test]
+    fn test_extract_request_pin_on_save_false_when_meta_missing() {
+        assert!(!extract_request_pin_on_save(None));
+    }
+
+    /// Meta present but without the key → no pin-on-save (unrelated `_meta`
+    /// keys must never be read as the pin intent).
+    #[test]
+    fn test_extract_request_pin_on_save_false_when_key_missing() {
+        let mut meta = serde_json::Map::new();
+        meta.insert(MAX_TOKENS_META_KEY.to_string(), serde_json::json!(4096));
+        assert!(!extract_request_pin_on_save(Some(&meta)));
+    }
+
+    /// The canonical prime turn: `pin_on_save: true` → born-pinned save.
+    #[test]
+    fn test_extract_request_pin_on_save_true() {
+        let mut meta = serde_json::Map::new();
+        meta.insert(PIN_ON_SAVE_META_KEY.to_string(), serde_json::json!(true));
+        assert!(extract_request_pin_on_save(Some(&meta)));
+    }
+
+    /// Anything other than the boolean `true` — `false`, integers, strings —
+    /// is the default unpinned save; we never coerce or guess.
+    #[test]
+    fn test_extract_request_pin_on_save_non_true_treated_as_unset() {
+        for value in [
+            serde_json::json!(false),
+            serde_json::json!(1),
+            serde_json::json!("true"),
+        ] {
+            let mut meta = serde_json::Map::new();
+            meta.insert(PIN_ON_SAVE_META_KEY.to_string(), value.clone());
+            assert!(
+                !extract_request_pin_on_save(Some(&meta)),
+                "non-true value {value} must not request pin-on-save"
+            );
+        }
     }
 
     // =========================================================================

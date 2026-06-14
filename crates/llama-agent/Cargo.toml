@@ -71,6 +71,11 @@ llama-common = { workspace = true }
 # Same crate the leader-election flock uses; kernel-released on process death.
 fs2 = { workspace = true }
 
+# Total-RAM detection so the session-state KV cache byte budget scales with the
+# machine instead of a fixed 2 GiB — a high-RAM box holds every validator
+# prefix + fork, closing the prime→pin eviction race.
+sysinfo = { workspace = true }
+
 # JSON Schema validation
 jsonschema = { workspace = true }
 md5 = { workspace = true }

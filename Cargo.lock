@@ -4425,6 +4425,7 @@ dependencies = [
  "swissarmyhammer-skills",
  "swissarmyhammer-templating",
  "swissarmyhammer-tools",
+ "sysinfo",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

@@ -50,14 +50,22 @@ mod tests {
     use crate::types::SessionId;
     use std::time::{Duration, SystemTime};
 
+    /// Arbitrary-but-valid sample generation-config values for the fixture.
+    /// The session-state validator inspects the session, not these knobs, so
+    /// any valid request works — these are named to document that intent.
+    const TEST_MAX_TOKENS: u32 = 100;
+    const TEST_TEMPERATURE: f32 = 0.7;
+    const TEST_TOP_P: f32 = 0.9;
+
     fn create_test_request() -> GenerationRequest {
         GenerationRequest {
             session_id: SessionId::new(),
-            max_tokens: Some(100),
-            temperature: Some(0.7),
-            top_p: Some(0.9),
+            max_tokens: Some(TEST_MAX_TOKENS),
+            temperature: Some(TEST_TEMPERATURE),
+            top_p: Some(TEST_TOP_P),
             stop_tokens: vec![],
             stopping_config: None,
+            pin_on_save: false,
         }
     }
 

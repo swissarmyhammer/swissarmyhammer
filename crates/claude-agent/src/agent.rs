@@ -1506,6 +1506,7 @@ impl ClaudeAgent {
             .system_prompt(system_prompt)
             .ephemeral(self.config.claude.ephemeral)
             .tools_override(self.config.claude.tools_override.clone())
+            .extra_args(self.config.claude.extra_args.clone())
             .build()
     }
 
@@ -1813,6 +1814,7 @@ impl ClaudeAgent {
             .system_prompt(system_prompt)
             .ephemeral(self.config.claude.ephemeral)
             .tools_override(self.config.claude.tools_override.clone())
+            .extra_args(self.config.claude.extra_args.clone())
             .build()
     }
 

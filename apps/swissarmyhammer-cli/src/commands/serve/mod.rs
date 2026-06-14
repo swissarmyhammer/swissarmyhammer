@@ -62,20 +62,30 @@ async fn wire_review_factories(
 /// Resolve the review-specific model override from config.
 ///
 /// Reads `review.model` from the template context (mirroring
-/// [`review_concurrency`]). When set, resolves the named model to a
-/// [`ModelConfig`] via [`ModelManager::find_agent_by_name`] + [`parse_model_config`]
-/// and returns it wrapped in an `Arc`. Returns `None` when:
-/// - `review.model` is unset (the global `agent_config` is used unchanged), or
-/// - the name cannot be resolved or its config cannot be parsed — a warning is
-///   logged and resolution falls back to the global default rather than failing
-///   to wire the review pool.
+/// [`review_concurrency`]). The review scope is baked-in to default to
+/// `claude-code-haiku` ([`REVIEW_DEFAULT_AGENT`]) rather than the global
+/// `agent_config`, so this always returns `Some` for the live serve paths:
+/// - When `review.model` is set, the named model is resolved via
+///   [`ModelManager::find_agent_by_name`] + [`parse_model_config`].
+/// - When `review.model` is unset, the baked-in `claude-code-haiku` default is
+///   used.
+/// - When the configured name cannot be resolved or parsed, a warning is logged
+///   and resolution falls back to the same `claude-code-haiku` default rather
+///   than failing to wire the review pool.
+///
+/// Returns `None` only if the `claude-code-haiku` built-in itself cannot be
+/// resolved (it ships built-in, so this should not happen in practice); in that
+/// case [`wire_review_factories`] falls back to the global `agent_config`.
 fn review_model_config(cli_context: &CliContext) -> Option<Arc<ModelConfig>> {
-    use swissarmyhammer_config::model::{parse_model_config, ModelManager};
+    use swissarmyhammer_config::model::{parse_model_config, ModelManager, REVIEW_DEFAULT_AGENT};
 
-    let model_name = cli_context
+    let Some(model_name) = cli_context
         .template_context
         .get("review.model")
-        .and_then(|v| v.as_str())?;
+        .and_then(|v| v.as_str())
+    else {
+        return review_default_config();
+    };
 
     match ModelManager::find_agent_by_name(model_name)
         .and_then(|info| Ok(parse_model_config(&info.content)?))
@@ -83,8 +93,28 @@ fn review_model_config(cli_context: &CliContext) -> Option<Arc<ModelConfig>> {
         Ok(config) => Some(Arc::new(config)),
         Err(e) => {
             tracing::warn!(
-                "review.model '{}' could not be resolved ({}); falling back to the global agent config",
+                "review.model '{}' could not be resolved ({}); falling back to the baked-in '{}' default",
                 model_name,
+                e,
+                REVIEW_DEFAULT_AGENT
+            );
+            review_default_config()
+        }
+    }
+}
+
+/// Resolve the baked-in `claude-code-haiku` review default to a [`ModelConfig`].
+///
+/// Single source of truth for the review scope's default; reuses the config
+/// layer's [`ModelConfig::claude_code_haiku`] rather than duplicating the name.
+/// Returns `None` only if the built-in cannot be resolved, in which case
+/// [`wire_review_factories`] falls back to the global `agent_config`.
+fn review_default_config() -> Option<Arc<ModelConfig>> {
+    match ModelConfig::claude_code_haiku() {
+        Ok(config) => Some(Arc::new(config)),
+        Err(e) => {
+            tracing::warn!(
+                "baked-in review default could not be resolved ({}); falling back to the global agent config",
                 e
             );
             None
@@ -612,25 +642,47 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial(cwd)]
-    async fn test_review_model_config_none_when_unset() {
+    async fn test_review_model_config_defaults_to_haiku_when_unset() {
+        use swissarmyhammer_config::model::{ModelExecutorConfig, ModelExecutorType};
+
         let (cli_context, _env, _cwd) = cli_context_with_review_model(None).await;
 
-        assert!(
-            review_model_config(&cli_context).is_none(),
-            "an unset review.model must yield no override (global agent_config is used)"
-        );
+        let resolved = review_model_config(&cli_context)
+            .expect("an unset review.model must resolve to the baked-in claude-code-haiku default");
+        assert_eq!(resolved.executor_type(), ModelExecutorType::ClaudeCode);
+        match resolved.executor() {
+            ModelExecutorConfig::ClaudeCode(claude_config) => {
+                assert_eq!(
+                    claude_config.args,
+                    vec!["--model".to_string(), "haiku".to_string()],
+                    "unset review.model must default to claude-code-haiku (--model haiku)"
+                );
+            }
+            _ => panic!("Should be Claude Code config"),
+        }
     }
 
     #[tokio::test]
     #[serial_test::serial(cwd)]
-    async fn test_review_model_config_unknown_falls_back_to_none() {
+    async fn test_review_model_config_unknown_falls_back_to_haiku() {
+        use swissarmyhammer_config::model::{ModelExecutorConfig, ModelExecutorType};
+
         let (cli_context, _env, _cwd) =
             cli_context_with_review_model(Some("definitely-not-a-real-model")).await;
 
-        assert!(
-            review_model_config(&cli_context).is_none(),
-            "an unresolvable review.model must fall back to None (warning path), not panic"
-        );
+        let resolved = review_model_config(&cli_context)
+            .expect("an unresolvable review.model must fall back to claude-code-haiku, not panic");
+        assert_eq!(resolved.executor_type(), ModelExecutorType::ClaudeCode);
+        match resolved.executor() {
+            ModelExecutorConfig::ClaudeCode(claude_config) => {
+                assert_eq!(
+                    claude_config.args,
+                    vec!["--model".to_string(), "haiku".to_string()],
+                    "an invalid review.model must warn and fall back to claude-code-haiku"
+                );
+            }
+            _ => panic!("Should be Claude Code config"),
+        }
     }
 
     #[tokio::test]

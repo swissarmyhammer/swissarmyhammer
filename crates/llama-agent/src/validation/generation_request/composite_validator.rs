@@ -103,6 +103,7 @@ mod tests {
             top_p: Some(0.9),
             stop_tokens: vec!["Human:".to_string()],
             stopping_config: None,
+            pin_on_save: false,
         }
     }
 
@@ -284,6 +285,7 @@ mod tests {
             top_p: Some(0.9),
             stop_tokens: vec!["Human:".to_string(), "\n\n".to_string()],
             stopping_config: None,
+            pin_on_save: false,
         };
 
         assert!(validator.validate(&session, &request).is_ok());

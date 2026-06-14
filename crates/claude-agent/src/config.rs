@@ -103,6 +103,12 @@ pub struct ClaudeConfig {
     /// This is used for validator agents that should only have MCP-provided tools.
     #[serde(default)]
     pub tools_override: Option<String>,
+    /// Extra CLI switches passed verbatim to the spawned `claude` command
+    /// (e.g. `["--model", "opus"]`). Flows into
+    /// [`crate::claude_process::SpawnConfig::extra_args`]. A `--model` here
+    /// takes precedence over ephemeral mode's default model.
+    #[serde(default)]
+    pub extra_args: Vec<String>,
 }
 
 /// Server configuration options  
@@ -601,6 +607,7 @@ impl Default for AgentConfig {
                 mode: ClaudeAgentMode::default(),
                 ephemeral: false,
                 tools_override: None,
+                extra_args: Vec::new(),
             },
             server: ServerConfig {
                 port: None,
