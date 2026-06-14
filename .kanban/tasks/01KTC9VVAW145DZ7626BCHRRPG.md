@@ -27,9 +27,12 @@ Embeddings (real model, always — lazy-fill via the cache card's store):
 
 Rank + map back:
 - Build `Query { text: query, embedding: Some(query_vec), weights: SignalWeights::default(), top_k: top_k.unwrap_or(10), min_score: None }` and call `swissarmyhammer_search::search(&docs, &query)`. (Default top_k 10 to match `list tasks`' `DEFAULT_PAGE_SIZE` — keep AI tool results lean.)
-- Map each `Hit` back to the enriched task JSON (via `task_entity_to_rich_json`) and attach the hit's `score` + `signals`. Return `{ "tasks": [ {<enriched task>, "score": .., "signals": {..}} , ... ], "count": N }` (shape consistent with `list tasks` plus score/signals).
+- Map each `Hit` back to task JSON and attach the hit's `score` + `signals`. Return `{ "tasks": [ {<task>, "score": .., "signals": {..}} , ... ], "count": N }` (shape consistent with `list tasks` plus score/signals). **See Revision below: use the SLIM task shape, not the full enriched JSON.**
 
 Right-sizing: if op + cache wiring + corpus build exceeds ~5 subtasks or 500 LOC, split the lazy-fill embedding loop into a helper module under `task/` and link with depends_on. Keep this card focused on: op struct + corpus scoping + Doc build + embed-or-cache loop + map-back.
+
+## Revision (2026-06-10) — slim map-back
+`list tasks` is gaining a `detail: slim|full` param with SLIM as default (card `624prsf` / 01KTRYRC9DSWX5X5X11624PRSF in `card-comments`): an allowlist projection (id, short_id, title, position, project, tags, filter/virtual tags, assignees, progress, dependency fields, ready, dates) that EXCLUDES description/comments/attachments. `search tasks` results must use that SAME slim projection (`slim_task_json`) + `score`/`signals` — this SUPERSEDES the "enriched task JSON via task_entity_to_rich_json" wording above. The full enriched corpus entities are still what you scope/build Docs from internally; only the RESPONSE shape is slim. The agent follows up with `get task` (always full) on the hit it cares about.
 
 ## Acceptance Criteria
 - [ ] `SearchTasks` op exists with `query` (required), optional `filter`, optional `top_k`, and is exported from `task/mod.rs`.
@@ -37,13 +40,13 @@ Right-sizing: if op + cache wiring + corpus build exceeds ~5 subtasks or 500 LOC
 - [ ] Each in-scope task becomes a `Doc` with title (high weight), description (low), tags (mid) as lexical fields, and its cached embedding; the embedded text is `task_embedding_text(title, description)` (tags excluded).
 - [ ] The embedder is loaded at most once per process (not per call); cache miss embeds and stores; cache hit reuses; a second `search tasks` call does not re-embed unchanged tasks.
 - [ ] If the embedder cannot load, the op returns a `KanbanError` — it does NOT fall back to a lexical-only mode.
-- [ ] Response is ranked `Hit`s mapped to enriched task JSON carrying `score` + `signals`.
+- [ ] Response is ranked `Hit`s mapped to SLIM task JSON (the `slim_task_json` projection — no description/comments/attachments) carrying `score` + `signals`.
 
 ## Tests
 - [ ] Unit tests in `search.rs` `#[cfg(test)] mod tests` using a `TempDir` board (pattern from `list.rs` tests: `InitBoard` + `AddTask`) for the NON-embedding logic — no model required:
   - filter-scoping: `#bug` (or similar) narrows the in-scope set before ranking; no filter = whole non-done board.
   - Doc construction: a task maps to a `Doc` with the right fields/weights and `task_embedding_text` excludes tags.
-  - map-back: a `Vec<Hit>` maps to the `{tasks:[{..,score,signals}], count}` response shape.
+  - map-back: a `Vec<Hit>` maps to the `{tasks:[{..,score,signals}], count}` response shape using the slim projection (assert no `description` key on response tasks).
 - [ ] `cargo test -p swissarmyhammer-kanban search` passes (these tests need no real model; the full real-embedder embed+rank is proven in the kanban search e2e card).
 
 ## Workflow

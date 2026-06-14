@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::task_helpers::task_entity_to_json;
+use crate::task_helpers::task_mutation_ack;
 use crate::types::{Ordinal, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -75,7 +75,9 @@ impl Execute<KanbanContext, KanbanError> for CompleteTask {
             );
 
             ectx.write(&entity).await?;
-            Ok(task_entity_to_json(&entity))
+            // Thin ack — success implies the task landed in the terminal
+            // column; `get task` returns the stored position when it matters.
+            Ok(task_mutation_ack(&entity))
         }
         .await;
 
@@ -107,29 +109,33 @@ mod tests {
         (temp, ctx)
     }
 
+    /// The complete response is the thin ack `{ok, id, short_id}` — no
+    /// position echo. The stored effect is verified via `get task`.
     #[tokio::test]
-    async fn test_complete_task() {
+    async fn test_complete_task_returns_thin_ack_and_stores_position() {
         let (_temp, ctx) = setup().await;
 
-        let add_result = AddTask::new("Task to complete")
+        let add_result = AddTask::new("Task")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
-        // Task should start in todo column
-        assert_eq!(add_result["position"]["column"], "todo");
-
-        // Complete the task
         let result = CompleteTask::new(task_id)
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        // Task should now be in done column
-        assert_eq!(result["position"]["column"], "done");
+        crate::task_helpers::assert_task_mutation_ack(&result, task_id);
+
+        let fetched = crate::task::GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(fetched["position"]["column"], "done");
     }
 
     #[tokio::test]
@@ -163,23 +169,28 @@ mod tests {
             .unwrap();
         let id2 = r2["id"].as_str().unwrap();
 
-        let done1 = CompleteTask::new(id1)
+        CompleteTask::new(id1)
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let done2 = CompleteTask::new(id2)
+        CompleteTask::new(id2)
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        assert_eq!(done1["position"]["column"], "done");
-        assert_eq!(done2["position"]["column"], "done");
+        // The complete response is a thin ack — assert the stored positions.
+        let ectx = ctx.entity_context().await.unwrap();
+        let done1 = ectx.read("task", id1).await.unwrap();
+        let done2 = ectx.read("task", id2).await.unwrap();
+
+        assert_eq!(done1.get_str("position_column"), Some("done"));
+        assert_eq!(done2.get_str("position_column"), Some("done"));
 
         // Second completed task should have a higher ordinal than the first.
-        let ord1 = done1["position"]["ordinal"].as_str().unwrap();
-        let ord2 = done2["position"]["ordinal"].as_str().unwrap();
+        let ord1 = done1.get_str("position_ordinal").unwrap();
+        let ord2 = done2.get_str("position_ordinal").unwrap();
         assert!(
             ord2 > ord1,
             "second done task ({}) should sort after first ({})",

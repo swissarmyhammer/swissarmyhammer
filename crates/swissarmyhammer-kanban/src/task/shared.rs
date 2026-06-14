@@ -67,6 +67,48 @@ pub(crate) fn parse_filter_expr(
     }
 }
 
+/// Per-task payload shape for list-style task operations.
+///
+/// `Slim` (the default) is the allowlist projection produced by
+/// `task_helpers::slim_task_json`; `Full` is the unprojected enriched task
+/// JSON — the same shape `get task` returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TaskDetail {
+    /// Allowlist projection — no `description`, `comments`, or `attachments`.
+    Slim,
+    /// The full enriched task JSON, unchanged.
+    Full,
+}
+
+impl TaskDetail {
+    /// Apply this detail level to a full per-task JSON value.
+    ///
+    /// `Slim` projects through `task_helpers::slim_task_json`; `Full` passes
+    /// the value through unchanged. The single projection policy for every
+    /// list-style task op.
+    pub(crate) fn project(self, full: serde_json::Value) -> serde_json::Value {
+        match self {
+            TaskDetail::Slim => crate::task_helpers::slim_task_json(&full),
+            TaskDetail::Full => full,
+        }
+    }
+}
+
+/// Parse an optional `detail` parameter into a [`TaskDetail`].
+///
+/// `None`, empty/whitespace-only, and `"slim"` resolve to [`TaskDetail::Slim`]
+/// (the default); `"full"` resolves to [`TaskDetail::Full`]. Any other value
+/// is a clear parse error — never a silent fallback.
+pub(crate) fn parse_detail(detail: Option<&str>) -> Result<TaskDetail, KanbanError> {
+    match detail.map(str::trim) {
+        None | Some("") | Some("slim") => Ok(TaskDetail::Slim),
+        Some("full") => Ok(TaskDetail::Full),
+        Some(other) => Err(KanbanError::parse(format!(
+            "invalid detail: {other:?} — expected \"slim\" or \"full\""
+        ))),
+    }
+}
+
 /// Auto-create Tag entities for any `#tag` patterns in an entity's body field.
 ///
 /// Tags that already exist are skipped. New tags get an auto-generated color.

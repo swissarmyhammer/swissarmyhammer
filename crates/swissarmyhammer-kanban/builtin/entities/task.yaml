@@ -10,6 +10,10 @@ sections:
   - id: system
     label: System
   - id: footer
+  # `log` is last so the conversation log renders at the bottom of the
+  # inspector, below footer/attachments.
+  - id: log
+    label: Log
 search_display_field: title
 mention_prefix: "^"
 mention_display_field: title
@@ -30,6 +34,7 @@ fields:
   - position_column
   - position_ordinal
   - attachments
+  - comments
   - virtual_tags
   - filter_tags
   - due

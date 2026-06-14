@@ -14,4 +14,5 @@ import "./progress";
 import "./progress-ring";
 import "./status-date";
 import "./attachment";
+import "./comment-log";
 import "./virtual-badge-list";

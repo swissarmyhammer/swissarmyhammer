@@ -1,0 +1,11 @@
+# Sentinel ID: builtin field definitions use zero-padded IDs that sort before
+# real ULIDs. The last two characters are the builtin field code.
+id: "00000000000000000000000018"
+name: comments
+description: Conversation log
+type:
+  kind: comment-log
+icon: message-square
+editor: comment-log
+display: comment-log
+section: log

@@ -73,6 +73,14 @@ pub enum FieldType {
         #[serde(default)]
         multiple: bool,
     },
+    /// Conversation log -- an inline list of comment members, each capturing
+    /// who (actor id), what (free text), and when (ISO 8601 timestamp).
+    ///
+    /// Unlike `Attachment` (which references separate attachment entities),
+    /// comments are not their own entity kind: the value is stored inline on
+    /// the owning field as a JSON array of `{actor, text, timestamp}` objects.
+    /// Always a list type, so there is no `multiple` flag.
+    CommentLog {},
     /// Read-only derived value -- no stored triple.
     ///
     /// `depends_on` declares which entity types this aggregate depends on.
@@ -166,6 +174,7 @@ impl FieldDef {
                 multiple: false, ..
             } => "select",
             FieldType::Attachment { .. } => "attachment",
+            FieldType::CommentLog {} => "comment-log",
             FieldType::Computed { .. } => "none",
         }
         .to_string()
@@ -192,6 +201,7 @@ impl FieldDef {
             FieldType::Attachment {
                 multiple: false, ..
             } => "attachment",
+            FieldType::CommentLog {} => "comment-log",
             FieldType::Computed { .. } => "text",
         }
         .to_string()
@@ -1453,6 +1463,26 @@ fields:
         assert_eq!(multi.effective_editor(), "attachment");
         assert_eq!(multi.effective_display(), "attachment-list");
         assert_eq!(multi.effective_sort(), SortKind::Lexical);
+    }
+
+    #[test]
+    fn field_type_comment_log_yaml_round_trip() {
+        let ft = FieldType::CommentLog {};
+        let yaml = serde_yaml_ng::to_string(&ft).unwrap();
+        let parsed: FieldType = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(ft, parsed);
+
+        // Bare kind string parses to the variant.
+        let parsed_bare: FieldType = serde_yaml_ng::from_str("kind: comment-log\n").unwrap();
+        assert_eq!(FieldType::CommentLog {}, parsed_bare);
+    }
+
+    #[test]
+    fn comment_log_field_infers_editor_display() {
+        let field = make_field(FieldType::CommentLog {});
+        assert_eq!(field.effective_editor(), "comment-log");
+        assert_eq!(field.effective_display(), "comment-log");
+        assert_eq!(field.effective_sort(), SortKind::Lexical);
     }
 
     fn field_with_type(type_: FieldType) -> FieldDef {
