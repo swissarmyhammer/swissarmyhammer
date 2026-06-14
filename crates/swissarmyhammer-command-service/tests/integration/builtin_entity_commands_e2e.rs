@@ -39,7 +39,6 @@ use swissarmyhammer_entity::{Entity, EntityContext};
 use swissarmyhammer_entity_mcp::EntityServer;
 use swissarmyhammer_kanban::board::InitBoard;
 use swissarmyhammer_kanban::clipboard::{ClipboardProvider, InMemoryClipboard};
-use swissarmyhammer_kanban::commands::clipboard_commands::COPYABLE_ENTITY_TYPES;
 use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor, OperationProcessor};
 use swissarmyhammer_plugin::{
     CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR,
@@ -48,7 +47,7 @@ use swissarmyhammer_store::StoreContext;
 use swissarmyhammer_ui_state::UIState;
 use tempfile::TempDir;
 
-use crate::support::call_command;
+use crate::support::{assert_operable_applies_to, call_command};
 
 /// A generous upper bound on any single host or isolate interaction.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -493,6 +492,92 @@ async fn entity_commands_plugin_registers_and_executes() {
     );
 }
 
+/// The committed `entity-commands` bundle gates the CRUD trio
+/// (`entity.delete` / `entity.archive` / `entity.unarchive`) by the real
+/// cross-cutting entity capability set: `list command` suppresses them when the
+/// focus is a `field:` projection moniker (a field is NOT an entity), and still
+/// offers them when a real entity (task) is focused.
+///
+/// This is the production-path acceptance for the field-moniker suppression:
+/// the bundle is loaded through the V8 isolate, the surfaced `applies_to`
+/// drives `applies_to_focus`, with NO UI special-casing.
+#[tokio::test]
+async fn crud_commands_suppressed_on_a_field_offered_on_an_entity() {
+    let user_root = TempDir::new().expect("user root temp dir");
+    let builtin_root = TempDir::new().expect("builtin layer root temp dir");
+
+    stage_entity_commands(builtin_root.path());
+
+    let host = PluginHost::new(
+        Some(builtin_root.path().to_path_buf()),
+        user_root.path().to_path_buf(),
+        None,
+        user_root.path().to_path_buf(),
+        false,
+        user_root.path().to_path_buf(),
+    );
+
+    let service = install_commands_module(&host)
+        .await
+        .expect("install_commands_module must succeed");
+
+    let _entity = tokio::time::timeout(TIMEOUT, expose_entity_module(&host))
+        .await
+        .expect("exposing entity should not hang");
+
+    tokio::time::timeout(TIMEOUT, host.discover_and_load_all::<KanbanConfig>())
+        .await
+        .expect("discovery should not hang")
+        .expect("discovering the entity-commands builtin plugin should succeed");
+
+    // ── Field focus: the CRUD trio must be ABSENT ───────────────────────────
+    let on_field = commands_by_id(
+        &call_command(
+            &service,
+            CallerId::HostInternal,
+            json!({
+                "op": "list command",
+                "ctx": {
+                    "target": "field:task:01ABC.title",
+                    "scope_chain": ["field:task:01ABC.title", "ui:field", "task:01ABC"],
+                },
+            }),
+        )
+        .await,
+    );
+    for id in ["entity.delete", "entity.archive", "entity.unarchive"] {
+        assert!(
+            !on_field.contains_key(id),
+            "{id} must NOT surface when a field is focused — a field is a \
+             projection, not an entity; got {:?}",
+            on_field.keys().collect::<Vec<_>>()
+        );
+    }
+
+    // ── Task focus: the CRUD trio must be PRESENT (no regression) ───────────
+    let on_task = commands_by_id(
+        &call_command(
+            &service,
+            CallerId::HostInternal,
+            json!({
+                "op": "list command",
+                "ctx": {
+                    "target": "task:01ABC",
+                    "scope_chain": ["task:01ABC", "column:todo"],
+                },
+            }),
+        )
+        .await,
+    );
+    for id in ["entity.delete", "entity.archive", "entity.unarchive"] {
+        assert!(
+            on_task.contains_key(id),
+            "{id} MUST surface when a real entity (task) is focused; got {:?}",
+            on_task.keys().collect::<Vec<_>>()
+        );
+    }
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Per-command metadata regression asserts (locked against entity.yaml)
 // ───────────────────────────────────────────────────────────────────────────
@@ -610,6 +695,7 @@ fn assert_entity_delete_metadata(cmd: &Value) {
         json!([{ "name": "moniker", "from": "target" }]),
         "entity.delete params must match entity.yaml 1:1"
     );
+    assert_operable_applies_to(cmd, "entity.delete");
 }
 
 /// `entity.archive` — entity.yaml: undoable, context_menu (group 2, order 1),
@@ -642,6 +728,7 @@ fn assert_entity_archive_metadata(cmd: &Value) {
         json!([{ "name": "moniker", "from": "target" }]),
         "entity.archive params must match entity.yaml 1:1"
     );
+    assert_operable_applies_to(cmd, "entity.archive");
 }
 
 /// `entity.unarchive` — entity.yaml: undoable, context_menu (group 2, order 2),
@@ -676,6 +763,7 @@ fn assert_entity_unarchive_metadata(cmd: &Value) {
         json!([{ "name": "moniker", "from": "target" }]),
         "entity.unarchive params must match entity.yaml 1:1"
     );
+    assert_operable_applies_to(cmd, "entity.unarchive");
 }
 
 /// `entity.cut` — entity.yaml: undoable, context_menu (group 1, order 0), keys
@@ -800,7 +888,7 @@ fn assert_entity_paste_metadata(cmd: &Value) {
 ///
 /// The capability lives in two places that cannot import each other:
 ///
-///   - TS `CLIPBOARD_ENTITY_TYPES` (`builtin/plugins/entity-commands/index.ts`)
+///   - TS `OPERABLE_ENTITY_TYPES` (`builtin/plugins/entity-commands/index.ts`)
 ///     — surfaced here through the real registered metadata as each command's
 ///     `applies_to`. This is the LIST-time gate: `list command` reads
 ///     `applies_to` and suppresses the command when the focused object's type
@@ -814,41 +902,5 @@ fn assert_entity_paste_metadata(cmd: &Value) {
 /// than re-introducing a shown-but-unsupported command. View / perspective
 /// are absent from both — they have no clipboard semantics.
 fn assert_clipboard_applies_to(cmd: &Value, id: &str) {
-    // Order-insensitive set comparison: the TS source and the Rust constant
-    // are two independently authored lists; only their MEMBERSHIP must match.
-    let mut declared: Vec<String> = cmd["applies_to"]
-        .as_array()
-        .unwrap_or_else(|| panic!("{id} applies_to must be an array"))
-        .iter()
-        .map(|t| {
-            t.as_str()
-                .unwrap_or_else(|| panic!("{id} applies_to entries must be strings"))
-                .to_string()
-        })
-        .collect();
-    declared.sort();
-
-    let mut enforced: Vec<String> = COPYABLE_ENTITY_TYPES
-        .iter()
-        .map(|t| t.to_string())
-        .collect();
-    enforced.sort();
-
-    assert_eq!(
-        declared, enforced,
-        "{id} list-time applies_to (TS CLIPBOARD_ENTITY_TYPES, surfaced via \
-         list command) must equal the dispatch-time COPYABLE_ENTITY_TYPES \
-         (swissarmyhammer-kanban) — declared and enforced clipboard capability \
-         must not drift"
-    );
-
-    // Anchor: neither list may name a clipboard-less entity type. This holds
-    // independently of the set-equality above, so a future edit that adds
-    // view/perspective to BOTH lists still trips here.
-    for unsupported in ["view", "perspective"] {
-        assert!(
-            !declared.iter().any(|t| t == unsupported),
-            "{id} applies_to must NOT include {unsupported:?} — it has no clipboard semantics"
-        );
-    }
+    assert_operable_applies_to(cmd, id);
 }

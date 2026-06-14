@@ -28,6 +28,7 @@ use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::{json, Value};
 use swissarmyhammer_command_service::bootstrap::install_commands_module;
 use swissarmyhammer_command_service::CommandService;
+use swissarmyhammer_kanban::commands::clipboard_commands::COPYABLE_ENTITY_TYPES;
 use swissarmyhammer_plugin::{CallerId, PluginHost};
 use tempfile::TempDir;
 
@@ -288,4 +289,65 @@ pub fn write_sentinel_probe_plugin(
     );
     std::fs::write(plugin_dir.join("index.ts"), entry).expect("index.ts");
     plugin_dir
+}
+
+/// Drift guard core: the list-time `applies_to` a command surfaces must equal
+/// the Rust `COPYABLE_ENTITY_TYPES` capability set — the real cross-cutting
+/// entity types (task, tag, column, board, actor, project, attachment), which
+/// deliberately EXCLUDES `field` (a projection, not an entity) and
+/// `view`/`perspective` (their own `perspective.*` commands).
+///
+/// Shared across the `integration` test binary by every command that declares
+/// the operable-entity set in TS (`OPERABLE_ENTITY_TYPES` in
+/// `builtin/plugins/entity-commands/index.ts`): the clipboard trio
+/// (`entity.cut` / `entity.copy` / `entity.paste`), the CRUD trio
+/// (`entity.delete` / `entity.archive` / `entity.unarchive`), and `app.inspect`
+/// in the `app-shell-commands` bundle. Each surfaces the set here through its
+/// registered metadata as `applies_to`.
+///
+/// Pinning the TS-surfaced `applies_to` directly against the Rust constant
+/// (NOT a third hand-maintained literal) keeps declared (list-time) and
+/// enforced (dispatch-time `available()`) capability from silently diverging:
+/// if Rust drops `actor` from `COPYABLE_ENTITY_TYPES` while TS keeps listing
+/// it, this goes RED rather than re-introducing a shown-but-unsupported
+/// command. `view` / `perspective` / `field` are absent from both.
+pub fn assert_operable_applies_to(cmd: &Value, id: &str) {
+    // Order-insensitive set comparison: the TS source and the Rust constant
+    // are two independently authored lists; only their MEMBERSHIP must match.
+    let mut declared: Vec<String> = cmd["applies_to"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{id} applies_to must be an array"))
+        .iter()
+        .map(|t| {
+            t.as_str()
+                .unwrap_or_else(|| panic!("{id} applies_to entries must be strings"))
+                .to_string()
+        })
+        .collect();
+    declared.sort();
+
+    let mut enforced: Vec<String> = COPYABLE_ENTITY_TYPES
+        .iter()
+        .map(|t| t.to_string())
+        .collect();
+    enforced.sort();
+
+    assert_eq!(
+        declared, enforced,
+        "{id} list-time applies_to (TS OPERABLE_ENTITY_TYPES, surfaced via \
+         list command) must equal the dispatch-time COPYABLE_ENTITY_TYPES \
+         (swissarmyhammer-kanban) — declared and enforced capability \
+         must not drift"
+    );
+
+    // Anchor: neither list may name a non-entity / non-cross-cutting type.
+    // This holds independently of the set-equality above, so a future edit
+    // that adds these to BOTH lists still trips here.
+    for unsupported in ["view", "perspective", "field"] {
+        assert!(
+            !declared.iter().any(|t| t == unsupported),
+            "{id} applies_to must NOT include {unsupported:?} — it is not a \
+             cross-cutting entity type"
+        );
+    }
 }

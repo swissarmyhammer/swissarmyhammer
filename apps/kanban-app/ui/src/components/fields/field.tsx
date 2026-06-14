@@ -551,6 +551,17 @@ export function Field({
   // is pre-bound here so the closure stays cheap on the keystroke path.
   const spatialActions = useOptionalSpatialFocusActions();
   const dispatchNavFocus = useDispatchCommand("nav.focus");
+  // Re-dispatch `field.edit` at the target field when a palette / context-menu
+  // dispatch names a DIFFERENT field than the one currently focused (see the
+  // closure below). Pre-bound so the keystroke path stays cheap.
+  const dispatchFieldEdit = useDispatchCommand("field.edit");
+
+  // This field's own spatial moniker (`field:{type}:{id}.{name}`) — the same
+  // segment that keys the `<FocusScope>` below and the focus-gated bus
+  // registration. The closure compares it against an incoming dispatch's
+  // explicit `target` to decide whether THIS field is the target or it must
+  // route to another field.
+  const fmk = asSegment(fieldMoniker(entityType, entityId, fieldDef.name));
 
   // Per-zone Enter behavior (Card D): the `field.edit` / `field.editEnter`
   // command DEFINITIONS (id / name / keys / scope) live in the `app-shell-commands`
@@ -592,19 +603,64 @@ export function Field({
     onEdit,
     spatialActions,
     dispatchNavFocus,
+    dispatchFieldEdit,
+    fmk,
   });
-  editCtxRef.current = { isEditing, onEdit, spatialActions, dispatchNavFocus };
+  editCtxRef.current = {
+    isEditing,
+    onEdit,
+    spatialActions,
+    dispatchNavFocus,
+    dispatchFieldEdit,
+    fmk,
+  };
   const editHandlers = useMemo<
     Readonly<Record<string, WebviewCommandHandler>>
   >(() => {
-    const editClosure = async () => {
+    const editClosure = async (opts?: { target?: string }) => {
       const {
         isEditing: editing,
         onEdit: enterEdit,
         spatialActions: spatial,
         dispatchNavFocus: navFocus,
+        dispatchFieldEdit: reEdit,
+        fmk: myMoniker,
       } = editCtxRef.current;
       if (editing) return;
+
+      // Context-menu / palette dispatch routing: a dispatch may name an
+      // explicit `field:` target (the right-clicked field). The keyboard and
+      // palette cases dispatch at the already-focused field, so the target is
+      // THIS field and the branch is a no-op. But a context-menu dispatch can
+      // carry a `field:` target that is NOT the focused field; only the
+      // focused field has a live bus handler, so its closure must route to the
+      // target — claim focus for the target moniker, then re-dispatch
+      // `field.edit` BARE so the now-focused TARGET field's own handler opens
+      // its editor (or drills into its pills). One code path serves Enter,
+      // palette, and context-menu.
+      //
+      // The re-dispatch is BARE (no `target`) on purpose: it must never carry
+      // the target again, or — if focus failed to move — this same handler
+      // would re-enter the branch and recurse without end. A bare dispatch
+      // routes by focus only: when the target is now focused (the normal case,
+      // since a context-menu right-click already focused it before the menu
+      // popped, and the `nav.focus` above reinforces it) the target's handler
+      // runs and edits the target; in the degenerate case where focus did not
+      // move, this field handles it as an ordinary focused dispatch.
+      const target = opts?.target;
+      if (
+        typeof target === "string" &&
+        target.startsWith("field:") &&
+        target !== myMoniker
+      ) {
+        await navFocus({ args: { fq: target } }).catch((err) =>
+          console.error("[field.edit] nav.focus to target failed", err),
+        );
+        await reEdit().catch((err) =>
+          console.error("[field.edit] re-dispatch to target failed", err),
+        );
+        return;
+      }
       // Drill into spatial children first — pills (`<FocusScope>`
       // leaves) win over edit mode. Read the focused FQM off the
       // spatial provider: the command only fires while focus is
@@ -646,13 +702,12 @@ export function Field({
   }, []);
 
   // A field row wraps a real entity field moniker
-  // (`field:<type>:<id>.<name>`); the same segment names the `<FocusScope>`
-  // below and keys the focus-gated bus registration here. When
+  // (`field:<type>:<id>.<name>`); `fmk` (computed above) names the
+  // `<FocusScope>` below and keys the focus-gated bus registration here. When
   // `register={false}` (the grid-cell case) the zone never registers, no
   // focused FQM ever sits within this moniker's subtree, and the handlers
   // never install — the enclosing grid cell owns edit-mode entry through
   // `grid.edit` instead.
-  const fmk = asSegment(fieldMoniker(entityType, entityId, fieldDef.name));
   useFocusedWebviewCommandHandlers(fmk, editHandlers);
 
   const inner = isEditing ? (

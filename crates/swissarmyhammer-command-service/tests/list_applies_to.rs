@@ -164,6 +164,236 @@ async fn clipboard_commands_present_when_a_task_is_focused() {
     );
 }
 
+/// Register the CRUD/inspect-shaped fixture: the four cross-cutting commands
+/// (`entity.delete` / `entity.archive` / `entity.unarchive` / `app.inspect`)
+/// that — like the clipboard trio — declare they apply only to real
+/// cross-cutting entity types (task, tag, column, board, attachment), never to
+/// a `field:` projection moniker.
+///
+/// Deliberately a REDUCED representative set (not the canonical production
+/// `COPYABLE_ENTITY_TYPES`, which also includes `actor` / `project`); this
+/// isolated unit only needs a supported type (task) vs the unsupported `field`
+/// projection to exercise the list-time gate. The production set is pinned
+/// against the Rust constant by
+/// `builtin_entity_commands_e2e::assert_clipboard_applies_to` and the e2e
+/// field-target cases.
+async fn register_crud_inspect_fixture(service: &CommandService, caller: &CallerId) {
+    let operable = &["task", "tag", "column", "board", "attachment"];
+    for (id, name) in [
+        ("entity.delete", "Delete {{entity.type}}"),
+        ("entity.archive", "Archive {{entity.type}}"),
+        ("entity.unarchive", "Unarchive {{entity.type}}"),
+        ("app.inspect", "Inspect {{entity.type}}"),
+    ] {
+        call_tool(
+            service,
+            "register command",
+            register_with_applies_to(id, name, operable),
+            caller,
+        )
+        .await
+        .expect("fixture register should succeed");
+    }
+}
+
+#[tokio::test]
+async fn crud_inspect_commands_absent_when_a_field_is_the_context_menu_target() {
+    let service = CommandService::new();
+    let caller = CallerId::Plugin(PluginId::new("plugin-a"));
+    register_crud_inspect_fixture(&service, &caller).await;
+
+    // Context menu fired over a field row: the target is the field's
+    // `field:{type}:{id}.{name}` projection moniker (explicit target wins
+    // verbatim, so `focused_entity_type` resolves the leading `field` type),
+    // and the focused chain leaf is the same field moniker.
+    let got = list_ids(
+        &service,
+        json!({
+            "op": "list command",
+            "ctx": {
+                "target": "field:task:01ABC.title",
+                "scope_chain": ["field:task:01ABC.title", "ui:field", "task:01ABC"],
+            },
+        }),
+        &caller,
+    )
+    .await;
+
+    assert!(
+        !got.contains("entity.delete")
+            && !got.contains("entity.archive")
+            && !got.contains("entity.unarchive")
+            && !got.contains("app.inspect"),
+        "delete/archive/unarchive/inspect must NOT appear when a field is the \
+         focus — a field is a projection, not an entity; got {got:?}",
+    );
+}
+
+#[tokio::test]
+async fn crud_inspect_commands_present_when_a_task_is_focused() {
+    let service = CommandService::new();
+    let caller = CallerId::Plugin(PluginId::new("plugin-a"));
+    register_crud_inspect_fixture(&service, &caller).await;
+
+    // A focused task is a real entity, so all four must still surface and
+    // work — the field-suppression must not regress real-entity focus.
+    let got = list_ids(
+        &service,
+        json!({
+            "op": "list command",
+            "ctx": { "target": "task:01ABC", "scope_chain": ["task:01ABC", "column:todo"] },
+        }),
+        &caller,
+    )
+    .await;
+
+    assert!(
+        got.contains("entity.delete")
+            && got.contains("entity.archive")
+            && got.contains("entity.unarchive")
+            && got.contains("app.inspect"),
+        "delete/archive/unarchive/inspect MUST appear when a task is focused; got {got:?}",
+    );
+}
+
+/// Register the `field.edit` registration as the `app-shell-commands` plugin
+/// declares it: scope-gated to the `ui:field` marker, surfaced on the context
+/// menu, NO `applies_to` (the scope marker — not the capability set — is the
+/// gate; see the gating nuance in card `01KV30ZXHWPS4FZK9WEH4DMMZY`). A
+/// `field:` projection moniker resolves through `focused_entity_type` to its
+/// CONTAINING entity for a palette focus, but to `"field"` for an explicit
+/// context-menu target, so an `applies_to: ["field"]` gate would behave
+/// differently across the two surfaces — which is exactly why `field.edit`
+/// relies on the scope marker instead.
+fn register_field_edit(service_payload_id: &str) -> Value {
+    json!({
+        "op": "register command",
+        "id": service_payload_id,
+        "name": "Edit Field",
+        "execute": { "$callback": "cb_x" },
+        "scope": ["ui:field"],
+        "context_menu": true,
+        "context_menu_group": 0,
+        "context_menu_order": 0,
+        "keys": { "vim": "i", "cua": "Enter" },
+    })
+}
+
+#[tokio::test]
+async fn field_edit_surfaces_on_a_field_context_menu_target() {
+    let service = CommandService::new();
+    let caller = CallerId::Plugin(PluginId::new("plugin-a"));
+    call_tool(
+        &service,
+        "register command",
+        register_field_edit("field.edit"),
+        &caller,
+    )
+    .await
+    .expect("register should succeed");
+
+    // Context menu fired over a field row: the explicit target is the field's
+    // `field:{type}:{id}.{name}` moniker; the focused chain carries the
+    // `ui:field` marker. The client-side context-menu filter additionally
+    // requires `context_menu: true` AND a scope match against the chain — but
+    // the SERVER `list command` must already include the command, gated only
+    // by its `scope` marker being in the chain (the `scope` arg the context
+    // menu sends).
+    let got = list_ids(
+        &service,
+        json!({
+            "op": "list command",
+            "scope": "ui:field",
+            "ctx": {
+                "target": "field:task:01ABC.title",
+                "scope_chain": ["field:task:01ABC.title", "ui:field", "task:01ABC"],
+            },
+        }),
+        &caller,
+    )
+    .await;
+
+    assert!(
+        got.contains("field.edit"),
+        "field.edit MUST surface when a field row is the context-menu target; got {got:?}",
+    );
+}
+
+#[tokio::test]
+async fn field_edit_surfaces_in_the_palette_for_a_focused_field() {
+    let service = CommandService::new();
+    let caller = CallerId::Plugin(PluginId::new("plugin-a"));
+    call_tool(
+        &service,
+        "register command",
+        register_field_edit("field.edit"),
+        &caller,
+    )
+    .await
+    .expect("register should succeed");
+
+    // The command palette filters `list command` by the INNERMOST focused
+    // scope moniker (`scopeChain[0]`). For a focused field that leaf is the
+    // `field:` zone moniker — the `ui:field` marker is its PARENT in the
+    // chain. The palette surfaces a scope-gated command whenever its declared
+    // scope appears anywhere in the focused chain (the marker-in-chain gate),
+    // so `field.edit` must list here even though the leaf itself is not
+    // `ui:field`.
+    let got = list_ids(
+        &service,
+        json!({
+            "op": "list command",
+            "scope": "field:task:01ABC.title",
+            "ctx": {
+                "scope_chain": ["field:task:01ABC.title", "ui:field", "task:01ABC"],
+            },
+        }),
+        &caller,
+    )
+    .await;
+
+    assert!(
+        got.contains("field.edit"),
+        "field.edit MUST surface in the palette when a field is focused (the \
+         ui:field marker is in the focused chain); got {got:?}",
+    );
+}
+
+#[tokio::test]
+async fn field_edit_absent_in_the_palette_for_a_focused_non_field_entity() {
+    let service = CommandService::new();
+    let caller = CallerId::Plugin(PluginId::new("plugin-a"));
+    call_tool(
+        &service,
+        "register command",
+        register_field_edit("field.edit"),
+        &caller,
+    )
+    .await
+    .expect("register should succeed");
+
+    // A focused task entity (no field in the chain, no `ui:field` marker):
+    // "Edit Field" is nonsensical and must NOT surface.
+    let got = list_ids(
+        &service,
+        json!({
+            "op": "list command",
+            "scope": "task:01ABC",
+            "ctx": {
+                "target": "task:01ABC",
+                "scope_chain": ["task:01ABC", "column:todo", "board:b1"],
+            },
+        }),
+        &caller,
+    )
+    .await;
+
+    assert!(
+        !got.contains("field.edit"),
+        "field.edit must NOT surface on a non-field entity focus; got {got:?}",
+    );
+}
+
 #[tokio::test]
 async fn applies_to_absent_command_is_global_in_every_focus() {
     // A command with NO `applies_to` is unconstrained — it must still list

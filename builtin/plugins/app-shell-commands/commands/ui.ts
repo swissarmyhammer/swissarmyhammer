@@ -51,12 +51,38 @@ import {
 } from "./context.ts";
 
 /** One UI-surface command's identity + metadata. `scope` is the surface's
- * literal marker moniker (`ui:field` / `ui:pressable`). */
+ * literal marker moniker (`ui:field` / `ui:pressable`).
+ *
+ * Most of these surfaces are keybinding-only — the four Card D/E drill-ins
+ * carry no menu placement (none had one in their React defs). `field.edit` is
+ * the exception: "Edit Field" is the ONE command that makes sense to offer on
+ * a field from the command palette and context menu (the complement of the
+ * sibling task that suppresses delete/archive/unarchive/inspect on fields), so
+ * it additionally declares the visible-surface metadata below. The optional
+ * fields stay absent for every keybinding-only entry, keeping the data table
+ * the single source of truth interpreted by ONE registration `.map`. */
 interface UiSurfaceCommandSpec {
   id: string;
   name: string;
   scope: string;
   keys: Record<string, string>;
+  /**
+   * When true, the command appears in the right-click context menu (and is
+   * eligible for the palette). Modelled on `app.inspect`'s richer
+   * registration. Absent → keybinding-only (the default for this table).
+   */
+  context_menu?: boolean;
+  /** Context-menu group bucket. Lower groups sort first. */
+  context_menu_group?: number;
+  /** Sort order within the context-menu group. */
+  context_menu_order?: number;
+  /**
+   * Param schema for a dispatch carrying an explicit target. `field.edit`
+   * declares `moniker(target)` exactly like `app.inspect` so a context-menu
+   * dispatch threads the right-clicked field's `field:` moniker through to the
+   * webview handler, which focuses that target before opening its editor.
+   */
+  params?: ReadonlyArray<{ name: string; from: string }>;
 }
 
 /**
@@ -119,11 +145,27 @@ const UI_SURFACE_COMMANDS: readonly UiSurfaceCommandSpec[] = [
   // children). vim's normal-mode `i` enters insert mode; cua `Enter` shadows
   // the global `nav.drillIn: Enter` only while the `ui:field` marker is in
   // the focused chain (the field zone itself or a pill inside it).
+  //
+  // `field.edit` also surfaces on the palette + context menu: "Edit Field" is
+  // the one command that makes sense on a field. It declares `context_menu`
+  // (an "Edit" entry — group 0 — above the entity Cut/Copy/Paste/Inspect
+  // groups) and `params: [{ moniker(target) }]`, modelled on `app.inspect`.
+  // Gating stays on the `scope: "ui:field"` marker — NOT `applies_to: ["field"]`:
+  // a `field:` scope-chain moniker resolves through `focused_entity_type` to its
+  // CONTAINING entity (e.g. `task`) for a palette focus, while a `field:`
+  // explicit context-menu `target` resolves to `"field"`, so an `applies_to`
+  // gate would behave differently across the two surfaces. The scope marker is
+  // in the focused chain whenever a field surface is focused, so `list command`
+  // offers the row for both palette and context-menu and nowhere else.
   {
     id: "field.edit",
     name: "Edit Field",
     scope: "ui:field",
     keys: { vim: "i", cua: "Enter" },
+    context_menu: true,
+    context_menu_group: 0,
+    context_menu_order: 0,
+    params: [{ name: "moniker", from: "target" }],
   },
   // vim parity for the cua `Enter` binding above — lets users press the same
   // key regardless of keymap.
@@ -230,6 +272,41 @@ const INSPECTABLE_ENTITY_PREFIXES = [
 ] as const;
 
 /**
+ * The real cross-cutting entity types the VISIBLE inspect surface
+ * (`app.inspect`) declares as its `applies_to` capability set.
+ *
+ * `list command` lists `app.inspect` only when the focused object's entity
+ * type is one of these. The set deliberately excludes `field` — a
+ * `field:{type}:{id}.{name}` moniker is a PROJECTION of its containing entity,
+ * not an entity, so a focused field would otherwise show a nonsensical
+ * "Inspect Field" row. With this gate the row is suppressed at the command
+ * surface, with NO UI special-casing — exactly as the clipboard / CRUD trios
+ * are gated in the `entity-commands` bundle.
+ *
+ * Mirrors the TS `OPERABLE_ENTITY_TYPES` in
+ * `builtin/plugins/entity-commands/index.ts` and the Rust `COPYABLE_ENTITY_TYPES`
+ * (`swissarmyhammer-kanban::commands::clipboard_commands`); the drift guard
+ * `builtin_app_shell_commands_e2e::assert_operable_applies_to` reads the
+ * surfaced `applies_to` and pins it to the Rust constant so this list cannot
+ * silently diverge.
+ *
+ * NOTE: this is the visible/context-menu surface only. `entity.inspect` (the
+ * global Space gesture below) is intentionally UNGATED — it resolves its
+ * target server-side via {@link resolveInspectTarget}, which already skips
+ * `field:` monikers and lands on the containing entity, so it never inspects a
+ * field and needs no `applies_to`.
+ */
+const OPERABLE_ENTITY_TYPES: readonly string[] = [
+  "task",
+  "tag",
+  "column",
+  "board",
+  "actor",
+  "project",
+  "attachment",
+];
+
+/**
  * Resolve the moniker `entity.inspect` / `app.inspect` should inspect.
  *
  * An explicit `ctx.target` wins verbatim (palette result rows, context-menu
@@ -311,6 +388,10 @@ export function uiCommands(
       context_menu: true,
       context_menu_group: 3,
       context_menu_order: 0,
+      // Gate the visible inspect surface to real cross-cutting entity types:
+      // `list command` suppresses it on a `field:` focus (a field is a
+      // projection, not an entity) so no "Inspect Field" row ever appears.
+      applies_to: OPERABLE_ENTITY_TYPES,
       params: [{ name: "moniker", from: "target" }],
       execute: buildInspectExecute("app.inspect", uiState, log),
     },
@@ -344,6 +425,12 @@ export function uiCommands(
       visible: false,
       undoable: false,
       keys: { vim: "Space", cua: "Space", emacs: "Space" },
+      // Intentionally UNGATED (no `applies_to`): unlike the visible
+      // `app.inspect` above, this Space gesture resolves its target server-side
+      // via `resolveInspectTarget`, which already skips `field:` projection
+      // monikers and lands on the containing entity — so Space on a field
+      // inspects the task, never the field. Gating it would suppress the
+      // gesture on a field focus and break that resolution.
       execute: buildInspectExecute("entity.inspect", uiState, log),
     },
 
@@ -543,9 +630,24 @@ export function uiCommands(
       undoable: false,
       // Gate to the surface's marker moniker: keys apply only while
       // `ui:field` / `ui:pressable` is in the focused scope chain; never
-      // lifted into the global key table.
+      // lifted into the global key table. The same marker also gates the
+      // visible surfaces: `list command` matches a scoped command whenever
+      // its marker is anywhere in the focused chain, so a `context_menu`
+      // entry surfaces on both the palette and the context menu for a focused
+      // field — and nowhere else.
       scope: [spec.scope],
       keys: spec.keys,
+      // Visible-surface metadata (only `field.edit` declares it; absent on
+      // the keybinding-only entries). Spread so the registration carries the
+      // field only when the spec opted in, exactly like `app.inspect`.
+      ...(spec.context_menu !== undefined
+        ? {
+            context_menu: spec.context_menu,
+            context_menu_group: spec.context_menu_group,
+            context_menu_order: spec.context_menu_order,
+          }
+        : {}),
+      ...(spec.params !== undefined ? { params: spec.params } : {}),
       execute: async () => {
         return { ok: true };
       },

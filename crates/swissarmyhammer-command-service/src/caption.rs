@@ -46,13 +46,27 @@ use crate::types::CommandContext;
 ///   CONTAINING entity, deliberately namespaced so they never masquerade as
 ///   entity monikers in the scope chain (see `fieldMoniker` in the webview
 ///   and `emit_scoped_commands` in swissarmyhammer-kanban) — a focused field
-///   resolves to its containing task, not to "Field". Fields remain
-///   inspectable via an explicit `target` (double-click `<Inspectable>`),
-///   which always wins verbatim and is not filtered by this list.
+///   resolves to its containing task, not to "Field".
 ///
 /// Because caption rendering and execute-time target resolution share this
 /// rule, a palette row's caption ("Inspect Task") and what picking it
 /// inspects can never disagree.
+///
+/// ## Field commands are suppressed at the command surface
+///
+/// When a `field:` moniker is the EXPLICIT `ctx.target` (a context menu fired
+/// over a field row), [`focused_entity_type`] returns `"field"` verbatim —
+/// explicit target wins, unfiltered. The cross-cutting CRUD + inspect commands
+/// (`entity.delete` / `entity.archive` / `entity.unarchive` / `app.inspect`)
+/// now declare an `applies_to` capability set of the real cross-cutting entity
+/// types (`COPYABLE_ENTITY_TYPES`, which excludes `field`), so the list-time
+/// gate ([`crate::service::CommandService`]'s `applies_to_focus`) suppresses
+/// them on a field focus — no "Delete Field" / "Inspect Field" row ever
+/// surfaces. The earlier intent ("fields remain inspectable via an explicit
+/// target") is deliberately reversed for these visible commands. The Space
+/// gesture `entity.inspect` stays ungated and field-safe via its own
+/// server-side target resolution (it skips `field:` monikers and inspects the
+/// containing entity).
 ///
 /// # Intentional divergence from the clipboard capability set
 ///

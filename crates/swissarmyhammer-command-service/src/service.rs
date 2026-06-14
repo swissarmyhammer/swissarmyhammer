@@ -807,10 +807,22 @@ impl CommandService {
         if let Some(expected_scope) = req.scope.as_deref() {
             // A command's scope chain is "global" when the field is absent
             // or empty — global commands match every scope filter. When the
-            // field is populated, the filter must appear in the vec.
+            // field is populated, the command matches if its declared scope
+            // contains the `expected_scope` leaf OR appears anywhere in the
+            // focused `ctx.scope_chain`. The chain branch is the
+            // "marker in the focused chain" gate: a surface whose spatial
+            // leaf is a dynamic moniker (`field:{type}:{id}.{name}`) mounts a
+            // constant MARKER (`ui:field`) as a PARENT in the chain, and a
+            // command scoped to that marker must surface whenever the marker
+            // is in the chain even though the leaf the palette filters by is
+            // the dynamic moniker — the same "global OR contained" rule the
+            // frontend context-menu filter (`scopeMatches`) already applies
+            // across the whole chain.
             let scope_matches = match registration.scope.as_deref() {
                 None | Some([]) => true,
-                Some(scopes) => scopes.iter().any(|s| s == expected_scope),
+                Some(scopes) => scopes
+                    .iter()
+                    .any(|s| s == expected_scope || req.ctx.scope_chain.iter().any(|m| m == s)),
             };
             if !scope_matches {
                 return false;

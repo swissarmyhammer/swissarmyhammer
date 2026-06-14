@@ -96,7 +96,7 @@ use swissarmyhammer_window_service::{
 use tempfile::TempDir;
 use tokio::sync::Mutex as TokioMutex;
 
-use crate::support::{call_command, execute_result, try_call_command};
+use crate::support::{assert_operable_applies_to, call_command, execute_result, try_call_command};
 
 /// A generous upper bound on any single host or isolate interaction.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -1116,6 +1116,171 @@ async fn ui_origin_commands_execute_against_their_backends() {
     }
 }
 
+/// The committed `app-shell-commands` bundle gates the VISIBLE inspect surface
+/// (`app.inspect`) by the real cross-cutting entity capability set: `list
+/// command` suppresses it when the focus is a `field:` projection moniker (a
+/// field is NOT an entity), and still offers it when a real entity (task) is
+/// focused. `entity.inspect` (the Space gesture, ungated, server-side target
+/// resolution) is unaffected — it carries no `applies_to`, so it lists in
+/// either focus and resolves the containing entity itself.
+#[tokio::test]
+async fn app_inspect_suppressed_on_a_field_offered_on_an_entity() {
+    let user_root = TempDir::new().expect("user root temp dir");
+    let builtin_root = TempDir::new().expect("builtin layer root temp dir");
+
+    stage_app_shell_commands(builtin_root.path());
+
+    let host = PluginHost::new(
+        Some(builtin_root.path().to_path_buf()),
+        user_root.path().to_path_buf(),
+        None,
+        user_root.path().to_path_buf(),
+        false,
+        user_root.path().to_path_buf(),
+    );
+
+    let service = install_commands_module(&host)
+        .await
+        .expect("install_commands_module must succeed");
+
+    let _backends = tokio::time::timeout(TIMEOUT, expose_backends(&host))
+        .await
+        .expect("exposing backends should not hang");
+
+    tokio::time::timeout(TIMEOUT, host.discover_and_load_all::<KanbanConfig>())
+        .await
+        .expect("discovery should not hang")
+        .expect("discovering the app-shell-commands builtin plugin should succeed");
+
+    // ── Field focus: app.inspect ABSENT; entity.inspect still PRESENT ───────
+    let on_field = commands_by_id(
+        &call_command(
+            &service,
+            CallerId::HostInternal,
+            json!({
+                "op": "list command",
+                "ctx": {
+                    "target": "field:task:01ABC.title",
+                    "scope_chain": ["field:task:01ABC.title", "ui:field", "task:01ABC"],
+                },
+            }),
+        )
+        .await,
+    );
+    assert!(
+        !on_field.contains_key("app.inspect"),
+        "app.inspect must NOT surface when a field is focused — a field is a \
+         projection, not an entity; got {:?}",
+        on_field.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        on_field.contains_key("entity.inspect"),
+        "entity.inspect (ungated Space gesture) must still list on a field \
+         focus — it resolves the containing entity server-side; got {:?}",
+        on_field.keys().collect::<Vec<_>>()
+    );
+
+    // ── Task focus: app.inspect PRESENT (no regression) ─────────────────────
+    let on_task = commands_by_id(
+        &call_command(
+            &service,
+            CallerId::HostInternal,
+            json!({
+                "op": "list command",
+                "ctx": {
+                    "target": "task:01ABC",
+                    "scope_chain": ["task:01ABC", "column:todo"],
+                },
+            }),
+        )
+        .await,
+    );
+    assert!(
+        on_task.contains_key("app.inspect"),
+        "app.inspect MUST surface when a real entity (task) is focused; got {:?}",
+        on_task.keys().collect::<Vec<_>>()
+    );
+
+    // ── field.edit is the COMPLEMENT of the suppression above ────────────────
+    // "Edit Field" is the one command that makes sense on a field. It is gated
+    // by its `scope: ["ui:field"]` marker (NOT `applies_to`), so it surfaces
+    // whenever the `ui:field` marker is in the focused chain — both the
+    // context-menu surface (scope filter = `ui:field`) and the palette surface
+    // (scope filter = the dynamic `field:` leaf, with `ui:field` in the chain)
+    // — and nowhere else (card 01KV30ZXHWPS4FZK9WEH4DMMZY).
+
+    // Context-menu over a field row: the surface filters by the marker scope.
+    let field_ctx_menu = commands_by_id(
+        &call_command(
+            &service,
+            CallerId::HostInternal,
+            json!({
+                "op": "list command",
+                "scope": "ui:field",
+                "ctx": {
+                    "target": "field:task:01ABC.title",
+                    "scope_chain": ["field:task:01ABC.title", "ui:field", "task:01ABC"],
+                },
+            }),
+        )
+        .await,
+    );
+    assert!(
+        field_ctx_menu.contains_key("field.edit"),
+        "field.edit MUST surface on a field context menu; got {:?}",
+        field_ctx_menu.keys().collect::<Vec<_>>()
+    );
+
+    // Command palette with a field focused: the surface filters by the dynamic
+    // `field:` leaf, and the `ui:field` marker is its parent in the chain.
+    let field_palette = commands_by_id(
+        &call_command(
+            &service,
+            CallerId::HostInternal,
+            json!({
+                "op": "list command",
+                "scope": "field:task:01ABC.title",
+                "ctx": {
+                    "scope_chain": ["field:task:01ABC.title", "ui:field", "task:01ABC"],
+                },
+            }),
+        )
+        .await,
+    );
+    assert!(
+        field_palette.contains_key("field.edit"),
+        "field.edit MUST surface in the palette for a focused field; got {:?}",
+        field_palette.keys().collect::<Vec<_>>()
+    );
+
+    // A non-field entity (task) focus, queried the way a surface does — with a
+    // `scope` filter for the focused leaf. "Edit Field" is nonsensical here:
+    // the `ui:field` marker is not in a task's chain, so the scope gate omits
+    // it. (The unfiltered `on_task` list above carries every scope-gated
+    // command because a `scope`-less `list command` skips the scope gate
+    // entirely; real surfaces always pass the focused leaf as `scope`.)
+    let task_palette = commands_by_id(
+        &call_command(
+            &service,
+            CallerId::HostInternal,
+            json!({
+                "op": "list command",
+                "scope": "task:01ABC",
+                "ctx": {
+                    "target": "task:01ABC",
+                    "scope_chain": ["task:01ABC", "column:todo"],
+                },
+            }),
+        )
+        .await,
+    );
+    assert!(
+        !task_palette.contains_key("field.edit"),
+        "field.edit must NOT surface on a non-field entity focus; got {:?}",
+        task_palette.keys().collect::<Vec<_>>()
+    );
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Per-command metadata regression asserts (locked against the source YAMLs)
 // ───────────────────────────────────────────────────────────────────────────
@@ -1398,6 +1563,7 @@ fn assert_app_inspect(cmd: &Value) {
     assert_single_param(cmd, "app.inspect", "moniker", "target");
     assert_no_keys(cmd, "app.inspect");
     assert_no_menu(cmd, "app.inspect");
+    assert_operable_applies_to(cmd, "app.inspect");
 }
 
 /// `entity.inspect` — Card G's consolidated global Space inspect command.
@@ -1591,6 +1757,12 @@ fn assert_ui_surface_command(cmd: &Value, id: &str, name: &str, keys: Value, sco
 
 /// `field.edit` — retired field.tsx def: keys vim:i / cua:Enter; gated to the
 /// `ui:field` marker scope the field zone mounts above its `<FocusScope>`.
+///
+/// Unlike the other six UI-surface commands (keybinding-only), `field.edit`
+/// ALSO surfaces on the palette + context menu: "Edit Field" is the one
+/// command that makes sense on a field (card `01KV30ZXHWPS4FZK9WEH4DMMZY`). It
+/// carries `context_menu: true` (group 0, order 0) and `params:
+/// [{ moniker(target) }]`, modelled on `app.inspect`.
 fn assert_field_edit(cmd: &Value) {
     assert_ui_surface_command(
         cmd,
@@ -1598,6 +1770,22 @@ fn assert_field_edit(cmd: &Value) {
         "Edit Field",
         json!({ "vim": "i", "cua": "Enter" }),
         "ui:field",
+    );
+    assert_eq!(cmd["context_menu"], json!(true), "field.edit context_menu");
+    assert_eq!(
+        cmd["context_menu_group"],
+        json!(0),
+        "field.edit context_menu_group"
+    );
+    assert_eq!(
+        cmd["context_menu_order"],
+        json!(0),
+        "field.edit context_menu_order"
+    );
+    assert_eq!(
+        cmd["params"],
+        json!([{ "name": "moniker", "from": "target" }]),
+        "field.edit params"
     );
 }
 

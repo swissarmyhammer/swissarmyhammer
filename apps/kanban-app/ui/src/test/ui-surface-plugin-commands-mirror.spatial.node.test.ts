@@ -95,6 +95,30 @@ describe("UI_SURFACE_PLUGIN_COMMANDS drift guard", () => {
     }
   });
 
+  it("field.edit — and only field.edit — declares context_menu: true", () => {
+    // Card `01KV30ZXHWPS4FZK9WEH4DMMZY`: "Edit Field" is the one UI-surface
+    // command that surfaces on the palette + context menu. Slice the table
+    // body by `id:` anchors (the same technique `parseCommandTable` uses) and
+    // assert the `context_menu: true` marker lands on `field.edit` alone — the
+    // other six entries stay keybinding-only.
+    const table =
+      /UI_SURFACE_COMMANDS[^=]*=\s*\[([\s\S]*?)\n\];/.exec(source)?.[1] ?? "";
+    expect(table.length).toBeGreaterThan(0);
+    const idRe = /id:\s*"([^"]+)"/g;
+    const anchors: Array<{ id: string; start: number }> = [];
+    for (let m = idRe.exec(table); m; m = idRe.exec(table)) {
+      anchors.push({ id: m[1], start: m.index });
+    }
+    const withContextMenu = anchors
+      .filter(({ id, start }, i) => {
+        void id;
+        const slice = table.slice(start, anchors[i + 1]?.start ?? table.length);
+        return /context_menu:\s*true/.test(slice);
+      })
+      .map((a) => a.id);
+    expect(withContextMenu).toEqual(["field.edit"]);
+  });
+
   // ── Guard teeth — prove the comparison actually detects drift ──────────
 
   it("detects a rebound key", () => {

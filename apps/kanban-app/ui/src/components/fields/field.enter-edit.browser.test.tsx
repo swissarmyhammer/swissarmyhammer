@@ -101,6 +101,7 @@ import { Field } from "@/components/fields/field";
 import { AppShell } from "@/components/app-shell";
 import { commandToolCall } from "@/test/mock-command-list";
 import {
+  getWebviewCommandHandler,
   hasWebviewCommandHandler,
   resetWebviewCommandBusForTest,
 } from "@/lib/webview-command-bus";
@@ -131,6 +132,16 @@ import type { Entity, FieldDef } from "@/types/kanban";
 const EDITABLE_TITLE_FIELD: FieldDef = {
   id: "f1",
   name: "title",
+  type: { kind: "markdown", single_line: true },
+  editor: "markdown",
+  display: "text",
+  icon: "type",
+  section: "header",
+};
+
+const EDITABLE_NOTES_FIELD: FieldDef = {
+  id: "f4",
+  name: "notes",
   type: { kind: "markdown", single_line: true },
   editor: "markdown",
   display: "text",
@@ -173,9 +184,14 @@ const TAGS_FIELD: FieldDef = {
 const TASK_SCHEMA = {
   entity: {
     name: "task",
-    fields: ["title", "id", "tags"],
+    fields: ["title", "notes", "id", "tags"],
   },
-  fields: [EDITABLE_TITLE_FIELD, READ_ONLY_FIELD, TAGS_FIELD],
+  fields: [
+    EDITABLE_TITLE_FIELD,
+    EDITABLE_NOTES_FIELD,
+    READ_ONLY_FIELD,
+    TAGS_FIELD,
+  ],
 };
 
 /** Tag schema so `MentionView` resolves tag pills (mention prefix + display field). */
@@ -382,6 +398,66 @@ function renderFieldHarness(props: {
                         <ActiveBoardPathProvider value="/test/board">
                           <AppShell>
                             <Harness />
+                          </AppShell>
+                        </ActiveBoardPathProvider>
+                      </FieldUpdateProvider>
+                    </EntityStoreProvider>
+                  </SchemaProvider>
+                </TooltipProvider>
+              </UndoProvider>
+            </AppModeProvider>
+          </UIStateProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
+  );
+}
+
+/**
+ * Render TWO editable fields of the same task, each managing its own `editing`
+ * state, inside the production-shaped stack. Used by the context-menu-target
+ * test: the dispatch names one field as its `target` while the OTHER is the
+ * spatially-focused field, so the closure must focus + edit the TARGET, not
+ * the field that happened to be focused.
+ */
+function renderTwoFieldHarness(props: {
+  fieldA: FieldDef;
+  fieldB: FieldDef;
+  entity: Entity;
+}) {
+  function OneField({ fieldDef }: { fieldDef: FieldDef }) {
+    const [editing, setEditing] = useState(false);
+    return (
+      <Field
+        fieldDef={fieldDef}
+        entityType={props.entity.entity_type}
+        entityId={props.entity.id}
+        mode="full"
+        editing={editing}
+        onEdit={() => setEditing(true)}
+        onDone={() => setEditing(false)}
+        onCancel={() => setEditing(false)}
+      />
+    );
+  }
+
+  return render(
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <UIStateProvider>
+            <AppModeProvider>
+              <UndoProvider>
+                <TooltipProvider delayDuration={100}>
+                  <SchemaProvider>
+                    <EntityStoreProvider
+                      entities={{ task: [props.entity], tag: [] }}
+                    >
+                      <FieldUpdateProvider>
+                        <ActiveBoardPathProvider value="/test/board">
+                          <AppShell>
+                            <OneField fieldDef={props.fieldA} />
+                            <OneField fieldDef={props.fieldB} />
                           </AppShell>
                         </ActiveBoardPathProvider>
                       </FieldUpdateProvider>
@@ -750,6 +826,240 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
       inspectDispatches().length,
       "Enter on a non-editable field must NOT dispatch app.inspect",
     ).toBe(0);
+
+    unmount();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Palette / context-menu surface dispatch.
+//
+// Card `01KV30ZXHWPS4FZK9WEH4DMMZY`: "Edit Field" surfaces on the command
+// palette and context menu, not just the keymap. Picking it must produce the
+// EXACT same outcome as pressing Enter — focus + activate the target field's
+// editor (or drill into its first pill) — reusing the one `editClosure`. These
+// tests dispatch `field.edit` the way the palette / context-menu surface does:
+// by invoking the registered webview-bus handler directly (the dispatch path
+// `useDispatchCommand` takes when an id has a bus handler), NOT through the
+// keymap. They fail before the metadata + dispatch change and pass after.
+// ---------------------------------------------------------------------------
+
+describe("Field — palette/context-menu field.edit dispatch", () => {
+  beforeEach(() => {
+    mockInvoke.mockClear();
+    mockListen.mockClear();
+    listeners.clear();
+    mockInvoke.mockImplementation(defaultInvokeImpl);
+    resetWebviewCommandBusForTest();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // A palette/context-menu dispatch (via the bus, not the keymap) at a focused
+  // non-pill text field enters edit mode — identical to the Enter test.
+  // -------------------------------------------------------------------------
+
+  it("bus dispatch of field.edit on a focused text field enters edit mode", async () => {
+    const { container, unmount } = renderFieldHarness({
+      field: EDITABLE_TITLE_FIELD,
+      entity: makeTask({ title: "Hello" }),
+    });
+    await flushSetup();
+
+    const titleZone = registerScopeArgs().find(
+      (a) => a.segment === "field:task:T1.title",
+    );
+    expect(titleZone).toBeTruthy();
+
+    await fireFocusChanged({
+      next_fq: titleZone!.fq as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.title"),
+    });
+    await flushSetup();
+
+    // The focused field registers the `field.edit` bus handler. Dispatch it
+    // exactly as the palette/context-menu would — through the bus, with the
+    // field's own moniker as the explicit target, NOT via a keystroke.
+    const handler = getWebviewCommandHandler("field.edit");
+    expect(
+      handler,
+      "the focused field must register a field.edit bus handler",
+    ).toBeTruthy();
+    await act(async () => {
+      await handler!({ target: "field:task:T1.title" });
+    });
+    await flushSetup();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    await waitFor(() => {
+      const editor = container.querySelector(
+        "[data-segment='field:task:T1.title'] .cm-editor",
+      );
+      expect(
+        editor,
+        "a palette/context-menu field.edit dispatch must open the editor, same as Enter",
+      ).not.toBeNull();
+    });
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // A pill field still drills into the first pill on a bus dispatch — the
+  // two-outcome behavior is preserved for the new surfaces, not just the
+  // keybinding.
+  // -------------------------------------------------------------------------
+
+  it("bus dispatch of field.edit on a pill field drills into the first pill", async () => {
+    const onEditSpy = vi.fn();
+    const { unmount } = renderFieldHarness({
+      field: TAGS_FIELD,
+      entity: makeTask({ tags: ["bugfix", "feature"] }),
+      tags: TAG_ENTITIES,
+      onEditSpy,
+    });
+    await flushSetup();
+
+    const tagsZone = registerScopeArgs().find(
+      (a) => a.segment === "field:task:T1.tags",
+    );
+    expect(tagsZone).toBeTruthy();
+    const firstPill = registerScopeArgs().find(
+      (a) => a.segment === "tag:tag-1",
+    );
+    expect(firstPill).toBeTruthy();
+
+    // A field WITH pills drills into the first pill: program the kernel so a
+    // `drill_in layer` from the tags zone descends to the first pill (≠ the
+    // focused FQM), the structural answer the closure reads to choose "drill
+    // in" over "open editor". The drill-in lowers onto `command_tool_call`
+    // (op `drill_in layer`); the default mock returns null for it (the
+    // no-children echo case the text-field test above exercises).
+    mockInvoke.mockImplementation(async (cmd, args) => {
+      if (cmd === "command_tool_call") {
+        const a = args as { op?: string; params?: { focused_fq?: string } };
+        if (
+          a?.op === "drill_in layer" &&
+          a.params?.focused_fq === tagsZone!.fq
+        ) {
+          return { next_fq: firstPill!.fq };
+        }
+      }
+      return defaultInvokeImpl(cmd, args);
+    });
+
+    // Focus the field zone itself (not a pill) — the state a palette pick on
+    // the field leaves the user in.
+    await fireFocusChanged({
+      next_fq: tagsZone!.fq as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.tags"),
+    });
+    await flushSetup();
+
+    // A focus claim to the first pill (`nav.focus` lowers onto the focus
+    // kernel's `set focus`) is the observable signal of a drill-in.
+    const focusClaims = () =>
+      mockInvoke.mock.calls.filter(
+        (c) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "set focus",
+      ).length;
+    const focusClaimsBefore = focusClaims();
+
+    const handler = getWebviewCommandHandler("field.edit");
+    expect(handler).toBeTruthy();
+    await act(async () => {
+      await handler!({ target: "field:task:T1.tags" });
+    });
+    await flushSetup();
+
+    // Drill-in path: focus moved to the first pill, and the editor did NOT
+    // open (onEdit not called) — the two-outcome behavior preserved for the
+    // palette/context-menu surface, not just the keybinding.
+    expect(
+      focusClaims(),
+      "a bus field.edit on a pill field must drill into the first pill (focus moves)",
+    ).toBeGreaterThan(focusClaimsBefore);
+    expect(
+      onEditSpy,
+      "a pill field must drill in, not open the editor, on a bus dispatch",
+    ).not.toHaveBeenCalled();
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Context-menu target case: a dispatch carrying an explicit `field:` target
+  // that is NOT the currently-focused field must put the TARGET field into
+  // edit mode (focus moves to it, its editor mounts), not the field that
+  // happened to be focused. A single code path serves Enter, palette, and
+  // context-menu.
+  // -------------------------------------------------------------------------
+
+  it("bus dispatch of field.edit with an unfocused field target focuses + re-dispatches to the target", async () => {
+    // Capture `nav.focus` claims and `field.edit` re-dispatches at the
+    // backend boundary so the test sees the closure's target-routing contract
+    // without depending on the kernel actually relocating focus in the
+    // lightweight harness.
+    const navFocusCalls: unknown[] = [];
+    mockInvoke.mockImplementation(async (cmd, args) => {
+      if (cmd === "command_tool_call") {
+        const a = args as { op?: string; params?: { fq?: string } };
+        if (a?.op === "set focus") navFocusCalls.push(a.params?.fq);
+      }
+      if (cmd === "dispatch_command") {
+        const a = args as { cmd?: string; args?: { fq?: string } };
+        if (a?.cmd === "nav.focus") navFocusCalls.push(a.args?.fq);
+      }
+      return defaultInvokeImpl(cmd, args);
+    });
+
+    const { unmount } = renderTwoFieldHarness({
+      fieldA: EDITABLE_TITLE_FIELD,
+      fieldB: EDITABLE_NOTES_FIELD,
+      entity: makeTask({ title: "Hello", notes: "World" }),
+    });
+    await flushSetup();
+
+    const titleZone = registerScopeArgs().find(
+      (a) => a.segment === "field:task:T1.title",
+    );
+    expect(titleZone).toBeTruthy();
+
+    // Focus field A (title) — the previously-focused field. Field B (notes)
+    // is the context-menu TARGET and is NOT spatially focused.
+    await fireFocusChanged({
+      next_fq: titleZone!.fq as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.title"),
+    });
+    await flushSetup();
+
+    // The dispatch the bus path takes when a context-menu selection over B's
+    // row carries B as its explicit target. Only the focused field (A) has a
+    // live `field.edit` handler, so A's closure must route to the target:
+    // claim focus for B's moniker and re-dispatch `field.edit`, so once B is
+    // focused its OWN handler opens B's editor (a single code path for Enter,
+    // palette, and context-menu).
+    const handler = getWebviewCommandHandler("field.edit");
+    expect(handler).toBeTruthy();
+    await act(async () => {
+      await handler!({ target: "field:task:T1.notes" });
+    });
+    await flushSetup();
+
+    // The closure claimed focus for the TARGET field's moniker — the first
+    // half of "operate on the targeted field, not the focused one".
+    expect(
+      navFocusCalls.some((c) =>
+        JSON.stringify(c).includes("field:task:T1.notes"),
+      ),
+      `field.edit with a non-focused field target must claim focus for that target; saw ${JSON.stringify(navFocusCalls)}`,
+    ).toBe(true);
 
     unmount();
   });
