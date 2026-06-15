@@ -98,9 +98,16 @@ slow-timeout = { period = "60s", terminate-after = 6 }
 [[profile.default.overrides]]
 filter = "package(kanban-app) and binary(ai_panel_e2e)"
 test-group = "llama-embedding-serial"
-# The MCP tool-loop test runs several real agentic generation rounds; warn every
-# 60s, hard-kill after 6 periods (6 minutes).
-slow-timeout = { period = "60s", terminate-after = 6 }
+# These run several real agentic generation rounds and retry the prompt pair on
+# transient 0.6B variance (KV-cache exhaustion / runaway-guard aborts) up to 6
+# attempts. Uncontended a clean pair lands in ~26s (measured locally), but the
+# GPU is still time-sliced against the separate embedding test-groups: under that
+# contention turns slow down AND hit more transient variance, so the retry path
+# can run many generations and grind past a 6-minute budget without landing a
+# clean pair (observed TIMEOUT at 360s). Warn every 60s, hard-kill after 10
+# periods (10 minutes) so the bounded retry loop has room to converge under
+# contention rather than being killed mid-retry.
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 # The swissarmyhammer-agent real-model review e2e drives the production review
 # pipeline over a real local model (qwen-0.6B chat) AND loads the real platform
