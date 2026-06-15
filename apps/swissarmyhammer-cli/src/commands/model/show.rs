@@ -3,7 +3,7 @@
 use crate::context::CliContext;
 use colored::Colorize;
 use comfy_table::Cell;
-use swissarmyhammer_config::model::{ModelManager, ModelPaths, REVIEW_DEFAULT_AGENT};
+use swissarmyhammer_config::model::{ModelManager, ModelPaths};
 
 /// A single scope row in the `sah model show` table: (scope, model name, source).
 type ModelRow = (String, String, String);
@@ -13,18 +13,19 @@ type ModelRow = (String, String, String);
 /// Produces one row per scope:
 /// - `default`: the global default model (top-level `model:`), or
 ///   `claude-code (default)` when unset.
-/// - `review`: the review-tool override (`review.model`), or the baked-in
-///   default `claude-code-haiku (default)` when no review-specific model is
-///   configured — matching what the review tooling actually runs.
+/// - `review`: the review-tool override (`review.model`), or — when no
+///   review-specific model is configured — the effective default shown as
+///   `<model> (default)`. That effective default follows the overall `model:`
+///   when one is set, otherwise the baked-in `claude-code-haiku`.
 ///
 /// Each row is `(scope, model_name, source)`. The source column reflects where
 /// the named model was discovered (builtin/project/user), `default` for the
 /// unconfigured fallbacks, or `error` when the config could not be read.
 ///
-/// The review row resolves the same effective default
-/// ([`REVIEW_DEFAULT_AGENT`]) used by `resolve_review_agent_config` and the
-/// serve-time review factory wiring, so the displayed model never disagrees
-/// with the one the review scope executes.
+/// The review row resolves through `ModelManager::resolve_review_agent_name`,
+/// the same rule used by `resolve_review_agent_config` and the serve-time review
+/// factory wiring, so the displayed model never disagrees with the one the
+/// review scope executes.
 fn build_model_rows(paths: &ModelPaths) -> Vec<ModelRow> {
     let default_row = match ModelManager::get_agent(paths) {
         Ok(Some(name)) => {
@@ -48,14 +49,24 @@ fn build_model_rows(paths: &ModelPaths) -> Vec<ModelRow> {
             let source = resolve_source(&name);
             ("review".to_string(), name, source)
         }
-        Ok(None) => (
-            // No `review.model` configured: the review scope falls back to the
-            // baked-in REVIEW_DEFAULT_AGENT. Display the effective model so the
-            // table agrees with what the review tooling actually runs.
-            "review".to_string(),
-            format!("{REVIEW_DEFAULT_AGENT} (default)"),
-            "default".to_string(),
-        ),
+        Ok(None) => {
+            // No explicit `review.model`: display the effective default, which
+            // follows the overall `model:` when set, else the baked-in
+            // claude-code-haiku — so the table agrees with what the review
+            // tooling actually runs.
+            match ModelManager::resolve_review_agent_name(paths) {
+                Ok(name) => (
+                    "review".to_string(),
+                    format!("{name} (default)"),
+                    "default".to_string(),
+                ),
+                Err(_) => (
+                    "review".to_string(),
+                    "(error)".to_string(),
+                    "error".to_string(),
+                ),
+            }
+        }
         Err(_) => (
             "review".to_string(),
             "(error)".to_string(),
@@ -94,6 +105,7 @@ pub async fn execute_show_command(
 mod tests {
     use super::*;
     use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+    use swissarmyhammer_config::model::REVIEW_DEFAULT_AGENT;
 
     #[test]
     #[serial_test::serial(cwd)]
@@ -116,6 +128,38 @@ mod tests {
             "unset review should display the baked-in claude-code-haiku default"
         );
         assert_eq!(rows[1].2, "default");
+    }
+
+    /// When an overall `model:` is set but `review.model` is not, the review row
+    /// must show that overall model as its (inherited) default — not the
+    /// baked-in claude-code-haiku.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_build_model_rows_unset_review_inherits_overall_default() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
+        let paths = ModelPaths::sah();
+        // Pick a builtin that is NOT the review factory default so the
+        // inheritance is observable.
+        let overall = ModelManager::load_builtin_models()
+            .expect("builtin models")
+            .into_iter()
+            .map(|m| m.name)
+            .find(|n| n != REVIEW_DEFAULT_AGENT)
+            .expect("a non-haiku builtin");
+
+        ModelManager::use_agent(&overall, &paths).expect("set overall model");
+
+        let rows = build_model_rows(&paths);
+
+        assert_eq!(rows[0].1, overall, "default row shows the overall model");
+        assert_eq!(rows[1].0, "review");
+        assert_eq!(
+            rows[1].1,
+            format!("{overall} (default)"),
+            "review must inherit the explicit overall model, not fall to claude-code-haiku"
+        );
     }
 
     /// Regression guard for the bug where `sah model` showed `review: (uses

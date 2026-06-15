@@ -13,7 +13,6 @@ metadata:
 
 Run tests with coverage instrumentation, identify gaps, produce a concrete work list.
 
-{% include "_partials/delegate-to-subagent" %}
 
 **Measure — never guess or structurally deduce.**
 

@@ -13,7 +13,6 @@ metadata:
 
 **Zero failures. Zero warnings. Zero skipped. The build is clean or it's broken.**
 
-{% include "_partials/delegate-to-subagent" %}
 
 ## Guidelines
 

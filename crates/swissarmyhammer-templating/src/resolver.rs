@@ -162,10 +162,10 @@ mod tests {
             .load_all_prompts(&mut library)
             .expect("load_all_prompts should succeed");
 
-        // The delegate-to-subagent partial lives in builtin/_partials/ and must be present.
+        // Shared partials live in builtin/_partials/ and must be present.
         library
-            .get("_partials/delegate-to-subagent")
-            .expect("_partials/delegate-to-subagent should be registered");
+            .get("_partials/record-progress")
+            .expect("_partials/record-progress should be registered");
     }
 
     #[test]
