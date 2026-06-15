@@ -40,19 +40,14 @@ impl Execute<KanbanContext, KanbanError> for UnassignTask {
 
             // Remove assignee (idempotent - no error if not assigned)
             let mut assignees = entity.get_string_list("assignees");
-            let was_assigned = assignees.contains(&self.assignee.to_string());
             assignees.retain(|a| a != self.assignee.as_str());
             entity.set("assignees", serde_json::to_value(&assignees)?);
 
             ectx.write(&entity).await?;
 
-            // Return confirmation
-            Ok(serde_json::json!({
-                "unassigned": was_assigned,
-                "task_id": self.id,
-                "assignee": self.assignee,
-                "all_assignees": assignees,
-            }))
+            // Thin ack — success implies the assignee is gone (idempotent);
+            // `get task` is the escape hatch for the post-op assignee list.
+            Ok(crate::task_helpers::task_mutation_ack(&entity))
         }
         .await;
 
@@ -68,7 +63,8 @@ mod tests {
     use super::*;
     use crate::actor::AddActor;
     use crate::board::InitBoard;
-    use crate::task::{AddTask, AssignTask};
+    use crate::task::{AddTask, AssignTask, GetTask};
+    use crate::task_helpers::assert_task_mutation_ack;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -114,9 +110,16 @@ mod tests {
             .into_result()
             .unwrap();
 
-        assert_eq!(result["unassigned"], true);
-        assert_eq!(result["task_id"], task_id);
-        assert_eq!(result["all_assignees"].as_array().unwrap().len(), 0);
+        // Mutations acknowledge, they don't echo — the assignee's removal
+        // is asserted via `get task` (stored state).
+        assert_task_mutation_ack(&result, task_id);
+
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(task["assignees"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -142,8 +145,15 @@ mod tests {
             .into_result()
             .unwrap();
 
-        assert_eq!(result["unassigned"], false);
-        assert_eq!(result["all_assignees"].as_array().unwrap().len(), 0);
+        // Unassigning an actor that isn't assigned still acks identically.
+        assert_task_mutation_ack(&result, task_id);
+
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(task["assignees"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -198,8 +208,14 @@ mod tests {
             .into_result()
             .unwrap();
 
-        assert_eq!(result["unassigned"], true);
-        let remaining: Vec<&str> = result["all_assignees"]
+        assert_task_mutation_ack(&result, task_id);
+
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let remaining: Vec<&str> = task["assignees"]
             .as_array()
             .unwrap()
             .iter()

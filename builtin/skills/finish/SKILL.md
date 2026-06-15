@@ -62,6 +62,12 @@ The `^<task-id>` atom and every id argument accept a full ULID, a 7-char short i
 
 The Stop hook blocks stopping while ralph is active. Only `clear ralph` when the stop condition is met.
 
+### Record progress (both modes)
+
+Log each iteration / state transition — implement batch landed in `review`, tests run, review verdict, task stuck — on the task being driven.
+
+{% include "_partials/record-progress" %}
+
 ### Single-task mode
 
 Pin `<TASK_ID>` for the entire loop — never `next task`, never switch tasks.

@@ -46,7 +46,15 @@ function editableFieldsFor(entityType: string): FieldDef[] {
         d !== undefined &&
         d.editor !== "none" &&
         d.editor !== undefined &&
+        // Array-CRUD editors (attachment list, comment log) mutate via
+        // explicit per-item actions and emit through onChange only when
+        // the user actually adds/edits/removes something — they have no
+        // text buffer to save on blur/Enter/Escape, so the save matrix
+        // does not apply. Their save behavior is covered by their own
+        // suites (attachment-editor.test.tsx, comment-log-editor.test.tsx,
+        // entity-inspector.comment-log.test.tsx).
         d.editor !== "attachment" &&
+        d.editor !== "comment-log" &&
         d.section !== "hidden",
     );
 }

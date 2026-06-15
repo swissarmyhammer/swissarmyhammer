@@ -70,7 +70,7 @@ Example usage:
 * `deinit` — Remove sah from all detected AI coding agents (skills + MCP)
 * `doctor` — Diagnose configuration and setup issues
 * `completion` — Generate shell completion scripts
-* `validate` — Validate prompt files for syntax and best practices
+* `validate` — Validate skills and workflows for syntax and best practices
 * `model` — Manage and interact with models
 * `agent` — Manage and interact with Agent Client Protocol server
 * `tools` — Manage tool enable/disable state
@@ -95,10 +95,8 @@ Example usage:
 Run as MCP server. This is the default mode when
 invoked via stdio (e.g., by Claude Code). The server will:
 
-- Load all prompts from builtin, user, and local directories
-- Watch for file changes and reload prompts automatically  
-- Expose prompts via the MCP protocol
-- Support template substitution with {{variables}}
+- Expose the SwissArmyHammer tools and workflows via the MCP protocol
+- Watch for file changes and reload automatically
 
 Example:
   swissarmyhammer serve        # Stdio mode (default)
@@ -150,7 +148,7 @@ Set up SwissArmyHammer for all detected AI coding agents.
 
 This command:
 1. Registers sah as an MCP server for all detected agents (Claude Code, Cursor, Windsurf, etc.)
-2. Creates the .sah/ project directory and .prompts/
+2. Creates the .sah/ project directory
 3. Installs builtin skills to the central .skills/ store with symlinks to each agent
 
 The command is idempotent - safe to run multiple times.
@@ -191,7 +189,7 @@ Examples:
 Remove SwissArmyHammer from all detected AI coding agents.
 
 By default, only the MCP server entries are removed from agent config files.
-Use --remove-directory to also delete .sah/, .prompts/, and installed skills.
+Use --remove-directory to also delete .sah/ and installed skills.
 
 Examples:
   sah deinit                     # Remove from project settings
@@ -235,7 +233,7 @@ WHAT IT CHECKS
 The doctor command runs a complete health assessment of your environment:
 • PATH Configuration - Verifies swissarmyhammer is accessible from your shell
 • Claude Code Integration - Validates MCP server configuration and connectivity
-• Prompt System - Checks directories, file permissions, and YAML syntax
+• Skills - Checks directories, file permissions, and YAML syntax
 • File Watching - Tests file system event monitoring capabilities
 • System Resources - Validates required dependencies and system capabilities
 
@@ -331,7 +329,7 @@ and best practice violations before they impact your workflows.
 ## Quality Assurance
 
 Comprehensive Validation:
-• Prompt files from all sources (builtin, user, project)
+• Skill files from all sources (builtin, user, project)
 • Workflow definitions from standard locations
 • MCP tool schemas and CLI integration (with --validate-tools)
 • Template syntax and variable usage
@@ -356,7 +354,7 @@ CI/CD Integration:
 
 ## What Gets Validated
 
-Prompt Files:
+Skill Files:
 • YAML frontmatter syntax correctness
 • Required fields: title, description
 • Template variable declarations match usage
@@ -385,7 +383,7 @@ MCP Tools (with --validate-tools):
 
 ## Validation Modes
 
-Standard validation (prompts and workflows):
+Standard validation (skills and workflows):
 ```bash
 sah validate
 ```
@@ -420,10 +418,10 @@ sah validate || exit 1
 
 ## Discovery and Sources
 
-Prompts validated from:
-• Built-in prompts (embedded in binary)
-• User prompts (~/.prompts/)
-• Project prompts (./.prompts/)
+Skills validated from:
+• Built-in skills (embedded in binary)
+• User skills ($XDG_DATA_HOME/sah/skills)
+• Project skills (./.skills/)
 
 Workflows validated from:
 • Built-in workflows (embedded in binary)
@@ -547,7 +545,7 @@ YAML format:
 
 ## Troubleshooting
 
-Validation errors in prompts:
+Validation errors in skills:
 • Check YAML frontmatter syntax
 • Verify all required fields present
 • Ensure template variables declared
@@ -623,7 +621,7 @@ Support Automation:
 • Continuous quality monitoring
 
 The validate command is your quality assurance system for SwissArmyHammer
-configuration, ensuring that prompts, workflows, and tools are correct,
+configuration, ensuring that skills, workflows, and tools are correct,
 complete, and ready for reliable operation.
 
 **Usage:** `swissarmyhammer validate [OPTIONS]`
