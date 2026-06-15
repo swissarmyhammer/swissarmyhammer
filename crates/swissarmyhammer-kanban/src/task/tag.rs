@@ -72,11 +72,9 @@ impl Execute<KanbanContext, KanbanError> for TagTask {
                 ectx.write(&entity).await?;
             }
 
-            Ok(serde_json::json!({
-                "tagged": true,
-                "task_id": self.id.to_string(),
-                "tag": slug
-            }))
+            // Thin ack — success implies the tag took effect; `get task` is
+            // the escape hatch for the post-op tag list.
+            Ok(crate::task_helpers::task_mutation_ack(&entity))
         }
         .await;
 
@@ -84,5 +82,98 @@ impl Execute<KanbanContext, KanbanError> for TagTask {
             Ok(value) => ExecutionResult::Success { value },
             Err(error) => ExecutionResult::Failed { error },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::InitBoard;
+    use crate::task::{AddTask, GetTask};
+    use crate::task_helpers::assert_task_mutation_ack;
+    use tempfile::TempDir;
+
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        (temp, ctx)
+    }
+
+    /// `tag task` returns exactly the thin ack; the tag's presence is
+    /// asserted via `get task` (stored state, not response echo).
+    #[tokio::test]
+    async fn test_tag_task_returns_thin_ack() {
+        let (_temp, ctx) = setup().await;
+
+        let add_result = AddTask::new("Tag me")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        let result = TagTask::new(task_id, "bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_task_mutation_ack(&result, task_id);
+
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert!(
+            task["tags"].as_array().unwrap().contains(&json!("bug")),
+            "tag must be applied to the stored task, got: {}",
+            task["tags"]
+        );
+    }
+
+    /// Re-tagging with the same tag is idempotent and still returns the ack.
+    #[tokio::test]
+    async fn test_tag_task_idempotent_returns_thin_ack() {
+        let (_temp, ctx) = setup().await;
+
+        let add_result = AddTask::new("Tag me twice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        TagTask::new(task_id, "bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let result = TagTask::new(task_id, "bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_task_mutation_ack(&result, task_id);
+
+        let task = GetTask::new(task_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            task["tags"].as_array().unwrap().len(),
+            1,
+            "duplicate tag must not be appended twice"
+        );
     }
 }

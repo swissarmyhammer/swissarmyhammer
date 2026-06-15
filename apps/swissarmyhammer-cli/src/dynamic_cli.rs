@@ -645,10 +645,8 @@ const SERVE_COMMAND_LONG_ABOUT: &str = "
 Runs swissarmyhammer as an MCP server. This is the default mode when
 invoked via stdio (e.g., by Claude Code). The server will:
 
-- Load all prompts from builtin, user, and local directories
-- Watch for file changes and reload prompts automatically
-- Expose prompts via the MCP protocol
-- Support template substitution with {{variables}}
+- Expose the SwissArmyHammer tools and workflows via the MCP protocol
+- Watch for file changes and reload automatically
 
 Example:
   swissarmyhammer serve
@@ -675,7 +673,7 @@ Initialize SwissArmyHammer for use with Claude Code.
 
 This command:
 1. Registers sah as an MCP server in Claude Code settings
-2. Creates the .sah/ project directory and .prompts/
+2. Creates the .sah/ project directory
 
 The command is idempotent - safe to run multiple times.
 
@@ -708,8 +706,8 @@ The doctor command will check:
 
 - If swissarmyhammer is in your PATH
 - Claude Code MCP configuration
-- Prompt directories and permissions
-- YAML syntax in prompt files
+- Skill and workflow directories and permissions
+- YAML syntax in skill and workflow files
 - File watching capabilities
 
 Exit codes:
@@ -723,11 +721,11 @@ Example:
 ";
 
 const VALIDATE_COMMAND_LONG_ABOUT: &str = "
-Validates prompt files and skills for syntax errors and best practices.
+Validates skills and workflows for syntax errors and best practices.
 
 This command comprehensively validates:
-- All prompt files from builtin, user, and local directories
-- All skills from standard locations
+- All skills from builtin, user, and local directories
+- All workflows from standard locations
 
 Validation checks:
 - YAML front matter syntax (skipped for .liquid files with {% partial %} marker)
@@ -737,7 +735,7 @@ Validation checks:
 - Best practice recommendations
 
 Examples:
-  swissarmyhammer validate                 # Validate all prompts and skills
+  swissarmyhammer validate                 # Validate all skills and workflows
   swissarmyhammer validate --quiet         # CI/CD mode - only shows errors, hides warnings
   swissarmyhammer validate --format json   # JSON output for tooling
 ";
@@ -1536,7 +1534,7 @@ impl CliBuilder {
         Self::build_command_with_args(
             CommandConfig {
                 name: "validate",
-                about: "Validate prompt files and skills for syntax and best practices",
+                about: "Validate skills and workflows for syntax and best practices",
                 long_about: VALIDATE_COMMAND_LONG_ABOUT,
             },
             Self::create_validate_command_args(),

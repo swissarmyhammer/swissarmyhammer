@@ -20,6 +20,7 @@ chrono = { workspace = true }
 fs2 = { workspace = true }
 async-trait = { workspace = true }
 open = "5"
+whoami = "1"
 
 # Local workspace dependencies
 swissarmyhammer-common = { workspace = true }

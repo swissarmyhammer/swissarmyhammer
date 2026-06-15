@@ -7,7 +7,7 @@ and best practice violations before they impact your workflows.
 ## Quality Assurance
 
 Comprehensive Validation:
-• Prompt files from all sources (builtin, user, project)
+• Skill files from all sources (builtin, user, project)
 • Workflow definitions from standard locations
 • MCP tool schemas and CLI integration (with --validate-tools)
 • Template syntax and variable usage
@@ -32,7 +32,7 @@ CI/CD Integration:
 
 ## What Gets Validated
 
-Prompt Files:
+Skill Files:
 • YAML frontmatter syntax correctness
 • Required fields: title, description
 • Template variable declarations match usage
@@ -61,7 +61,7 @@ MCP Tools (with --validate-tools):
 
 ## Validation Modes
 
-Standard validation (prompts and workflows):
+Standard validation (skills and workflows):
 ```bash
 sah validate
 ```
@@ -96,10 +96,10 @@ sah validate || exit 1
 
 ## Discovery and Sources
 
-Prompts validated from:
-• Built-in prompts (embedded in binary)
-• User prompts (~/.prompts/)
-• Project prompts (./.prompts/)
+Skills validated from:
+• Built-in skills (embedded in binary)
+• User skills ($XDG_DATA_HOME/sah/skills)
+• Project skills (./.skills/)
 
 Workflows validated from:
 • Built-in workflows (embedded in binary)
@@ -223,7 +223,7 @@ YAML format:
 
 ## Troubleshooting
 
-Validation errors in prompts:
+Validation errors in skills:
 • Check YAML frontmatter syntax
 • Verify all required fields present
 • Ensure template variables declared
@@ -299,5 +299,5 @@ Support Automation:
 • Continuous quality monitoring
 
 The validate command is your quality assurance system for SwissArmyHammer
-configuration, ensuring that prompts, workflows, and tools are correct,
+configuration, ensuring that skills, workflows, and tools are correct,
 complete, and ready for reliable operation.

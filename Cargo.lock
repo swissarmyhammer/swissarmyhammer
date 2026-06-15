@@ -8409,6 +8409,7 @@ dependencies = [
  "tracing",
  "tracing-test",
  "ulid",
+ "whoami",
 ]
 
 [[package]]
