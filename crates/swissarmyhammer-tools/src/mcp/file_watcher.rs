@@ -955,8 +955,28 @@ mod tests {
     /// the guarantee. We deliberately do NOT bound the build's wall time: the
     /// FSEvents registration itself takes seconds under load, but that latency
     /// is independent of the lock — the point here is only that it is not held.
+    ///
+    /// `start` resolves the directories to watch from the process CWD (via
+    /// `PromptResolver::get_prompt_directories()`) and then runs a live FSEvents
+    /// `.watch()` on each. To keep that resolution deterministic and off the
+    /// shared process-global CWD, this test anchors its own prompt directory in
+    /// a `TempDir` under a `CurrentDirGuard` and is serialized on `cwd` — exactly
+    /// like the other CWD-dependent watcher tests. Without that, a concurrent
+    /// `serial(cwd)` test can repoint CWD at a TempDir and delete it mid-build,
+    /// making `.watch()` fail intermittently on a vanished directory.
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_start_builds_without_shared_lock() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+        use tempfile::TempDir;
+
+        // Deterministic prompt directory: `.git` anchors the temp dir as the
+        // git root, `.prompts` is the directory the resolver returns.
+        let temp = TempDir::new().expect("create temp dir");
+        std::fs::create_dir(temp.path().join(".git")).expect("create .git marker");
+        std::fs::create_dir(temp.path().join(".prompts")).expect("create .prompts dir");
+        let _cwd_guard = CurrentDirGuard::new(temp.path()).expect("change cwd into temp dir");
+
         let shared: Arc<Mutex<FileWatcher>> = Arc::new(Mutex::new(FileWatcher::new()));
 
         // Hold the shared lock for the whole build to prove `start` never needs it.
