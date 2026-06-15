@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 9d80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffae80
 project: local-review
 title: 'eval(review): primed-prefix forks for verify turns — measured prefix share ~<10%, deferred'
 ---

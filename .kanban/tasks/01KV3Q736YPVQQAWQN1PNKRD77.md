@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 9f80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffab80
 project: local-review
 title: 'Incremental review working: skip files unchanged since last review via .validators tracking'
 ---
