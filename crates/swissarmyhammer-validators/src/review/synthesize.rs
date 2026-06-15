@@ -325,38 +325,22 @@ pub async fn run_review(
     // the engine itself stays a pure data barrier and never errors on it.
     let report = synthesize(outcome.verified, &tally, now);
 
-    // Record the incremental-tracking baseline for a working-scope review that
-    // actually ran. Every reviewed file gets a fresh `.validators/.hashes/` entry
-    // — regardless of findings — so the next `review working` subtracts it unless
-    // its content (or the rules) changed. Recording is skipped when no fan-out
-    // task ran (an empty/already-subtracted scope) so a short-circuit pass does
-    // no I/O, and is best-effort: a tracking write failure is logged, never
-    // allowed to fail an otherwise-complete review.
-    if is_working && tally.attempted > 0 {
-        let reviewed = reviewed_files(&work);
-        let rules = crate::review::tracking::rules_hash(loader);
-        let reviewed_at = crate::review::tracking::now_rfc3339();
-        if let Err(e) =
-            crate::review::tracking::record_reviewed(repo_path, &reviewed, &rules, &reviewed_at)
-        {
-            tracing::warn!(error = %e, "review tracking: failed to record reviewed files");
-        }
-    }
+    // Record the incremental-tracking baseline through the single shared helper
+    // every pipeline driver reaches: for a working-scope pass that actually ran,
+    // it stamps a fresh `.validators/.hashes/` entry per reviewed file so the next
+    // `review working` subtracts it unless its content (or the rules) changed. The
+    // helper owns the gate and the best-effort error handling, so there is exactly
+    // one recording site for both the pure and the agent-driven drivers.
+    crate::review::tracking::record_baseline_if_working(
+        is_working,
+        repo_path,
+        loader,
+        &work,
+        &tally,
+        &crate::review::tracking::now_rfc3339(),
+    );
 
     Ok(report)
-}
-
-/// The deduped, sorted set of files that appeared in the work-list — the files a
-/// validator actually reviewed this pass. This is the set the incremental
-/// tracking baseline is recorded for.
-fn reviewed_files(work: &WorkList) -> Vec<String> {
-    let mut files: BTreeSet<String> = BTreeSet::new();
-    for validator in &work.validators {
-        for file in &validator.files {
-            files.insert(file.path.clone());
-        }
-    }
-    files.into_iter().collect()
 }
 
 /// Pair each fan-out [`Finding`] back with the ground-truth context its file

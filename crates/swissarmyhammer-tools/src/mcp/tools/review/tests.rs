@@ -676,6 +676,135 @@ fn concurrency_probe_embedder_factory(
 }
 
 // ---------------------------------------------------------------------------
+// incremental tracking through the production tool path (review_op)
+//
+// pnkrd77 wired the baseline RECORDER into the engine, but no test asserted it
+// fires through the PRODUCTION tool entry point `run_review_request` — the layer
+// the live calcutron run actually drove (it adds the on-disk index connection,
+// the `force` -> `use_tracking` mapping, the process gate, and the
+// spawn_blocking runtime over the agent path). The calcutron symptom was
+// `subtracted=0` forever: `.validators/.hashes/` was never written. These tests
+// pin the recorder at that seam so a regression in any of those layers — not
+// just in the engine `record_reviewed` site — re-surfaces here.
+// ---------------------------------------------------------------------------
+
+/// A `review working` through the production `run_review_request` (tracking on)
+/// records a `.validators/.hashes/<path>.yaml` baseline for every reviewed file
+/// and lazily writes `.validators/.gitignore` ignoring `.hashes/`.
+///
+/// This is the production-path assertion the calcutron run proved missing: the
+/// drive-level test (`drive::incremental_tracking_*`) covers
+/// `run_review_over_agent`, but nothing asserted the baseline survives the extra
+/// `review_op` layers. It must fail if the recorder is not reached through this
+/// path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn run_review_request_records_a_tracking_baseline_and_gitignore() {
+    use super::review_op::{run_review_request, ReviewRequest};
+    use swissarmyhammer_validators::review::{read_entry, Scope};
+
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
+
+    let report = run_review_request(
+        ReviewRequest {
+            scope: Scope::Working,
+            backend: Some("local".to_string()),
+            validators: Vec::new(),
+            concurrency: None,
+            force: false, // tracking ON — the production default
+        },
+        repo.path().to_path_buf(),
+        mock_embedder_factory(),
+        factory,
+        "2026-06-15 12:00".to_string(),
+    )
+    .await
+    .expect("review working through run_review_request");
+
+    // The pass actually reviewed the changed file (so the recorder is reachable).
+    assert!(
+        report.counts.tasks_attempted > 0,
+        "the working change must have produced fan-out tasks: {:?}",
+        report.counts
+    );
+
+    // The production tool path recorded a baseline entry for the reviewed file.
+    assert!(
+        read_entry(repo.path(), "src/lib.rs").is_some(),
+        "run_review_request must record a .validators/.hashes/ entry for the \
+         reviewed file (the calcutron `subtracted=0` gap)"
+    );
+
+    // The hash dir's gitignore was lazily written, ignoring `.hashes/`.
+    let gitignore = repo.path().join(".validators/.gitignore");
+    let content = std::fs::read_to_string(&gitignore)
+        .expect("run_review_request must write .validators/.gitignore");
+    assert!(
+        content.lines().any(|l| l.trim() == ".hashes/"),
+        "the gitignore must ignore .hashes/, got:\n{content}"
+    );
+}
+
+/// Two `review working` passes through `run_review_request` with no edits
+/// between them: the first records baselines, the second subtracts the unchanged
+/// file and short-circuits to zero fan-out tasks. This is the end-to-end
+/// duplicate-avoidance the calcutron run never achieved (`subtracted=0` forever).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn run_review_request_subtracts_an_unchanged_file_on_a_second_pass() {
+    use super::review_op::{run_review_request, ReviewRequest};
+    use swissarmyhammer_validators::review::Scope;
+
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
+
+    let run = |path: std::path::PathBuf, factory: AgentFactory| async move {
+        run_review_request(
+            ReviewRequest {
+                scope: Scope::Working,
+                backend: Some("local".to_string()),
+                validators: Vec::new(),
+                concurrency: None,
+                force: false,
+            },
+            path,
+            mock_embedder_factory(),
+            factory,
+            "2026-06-15 12:00".to_string(),
+        )
+        .await
+        .expect("review working through run_review_request")
+    };
+
+    // Pass 1: reviews the changed file and records its baseline.
+    let first = run(repo.path().to_path_buf(), Arc::clone(&factory)).await;
+    assert!(
+        first.counts.tasks_attempted > 0,
+        "the first pass reviews the changed file: {:?}",
+        first.counts
+    );
+
+    // Pass 2: no edits → the file is subtracted, so the pass attempts zero
+    // fan-out tasks and short-circuits to the empty-scope marker.
+    let second = run(repo.path().to_path_buf(), factory).await;
+    assert_eq!(
+        second.counts.tasks_attempted, 0,
+        "an unchanged second pass subtracts every reviewed file (zero fan-out): {:?}",
+        second.counts
+    );
+    assert!(
+        second.markdown.contains("Nothing in scope to review"),
+        "the subtracted second pass renders the empty-scope marker: {}",
+        second.markdown
+    );
+}
+
+// ---------------------------------------------------------------------------
 // scripted-agent + on-disk-index harness
 //
 // The throwaway git repo (`TestRepo`), the on-disk index builder

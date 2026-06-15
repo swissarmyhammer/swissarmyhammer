@@ -32,8 +32,8 @@ pub use probes::{
 pub use scope::{scope_review, FileWork, Scope, ScopeSpec, ValidatorWork, WorkList};
 pub use synthesize::{run_review, synthesize, FleetTally, ReviewCounts, ReviewReport};
 pub use tracking::{
-    context_hash, ensure_gitignore, now_rfc3339, read_entry, record_reviewed, rules_hash,
-    subtract_unchanged, upsert_entry, TrackingEntry,
+    context_hash, ensure_gitignore, now_rfc3339, read_entry, record_baseline_if_working,
+    record_reviewed, rules_hash, subtract_unchanged, upsert_entry, TrackingEntry,
 };
 pub use types::{parse_findings, Finding, RefutingLayer, Severity, VerifiedFinding};
 pub use verify::{

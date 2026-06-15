@@ -60,6 +60,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::AvpError;
+use crate::review::scope::WorkList;
+use crate::review::synthesize::FleetTally;
 use crate::validators::ValidatorLoader;
 
 /// The project validators directory name (`<repo>/.validators`).
@@ -290,6 +292,66 @@ pub fn record_reviewed(
         upsert_entry(repo_path, &entry)?;
     }
     Ok(())
+}
+
+/// Record the incremental-tracking baseline after a review pass — the single,
+/// shared recording step every pipeline driver reaches.
+///
+/// This is the post-review tail of [`run_review`](crate::review::run_review): for
+/// a working-scope pass that actually fanned out, it stamps a fresh
+/// `.validators/.hashes/` entry for every reviewed file (via [`record_reviewed`],
+/// which lazily [`ensure_gitignore`]s) so the next `review working` subtracts each
+/// file unless its content or the rules changed. Both pipeline drivers — the pure
+/// [`run_review`](crate::review::run_review) and the agent-driven
+/// [`run_review_over_agent`](crate::review::run_review_over_agent), which calls
+/// `run_review` — record through THIS one helper, so there is exactly one
+/// recording site and no duplicated block can drift.
+///
+/// The step is gated and best-effort, matching the original inline behavior:
+///
+/// - **Only the working scope** participates (`is_working`) — `sha`/`file`/`glob`
+///   are explicit, one-shot targets whose files must never seed the incremental
+///   baseline. The caller computes the discriminant ([`Scope::Working`]) before
+///   the scope is consumed by `scope_review` and passes it here.
+/// - **Only when fan-out actually ran** (`tally.attempted > 0`) — an
+///   empty/already-subtracted scope short-circuits with no tracking I/O, so a
+///   no-op pass writes nothing.
+/// - **Best-effort** — a filesystem/serialization failure is logged at `warn` and
+///   swallowed; it never fails an otherwise-complete review.
+///
+/// `reviewed_at` is the caller-formatted RFC 3339 timestamp stamped onto each
+/// entry (the engine stays clock-free); pass [`now_rfc3339`] when the caller has
+/// no clock value of its own.
+pub fn record_baseline_if_working(
+    is_working: bool,
+    repo_path: &Path,
+    loader: &ValidatorLoader,
+    work: &WorkList,
+    tally: &FleetTally,
+    reviewed_at: &str,
+) {
+    // Only a working-scope pass that actually fanned out seeds the baseline.
+    if !is_working || tally.attempted == 0 {
+        return;
+    }
+    let reviewed = reviewed_files(work);
+    let rules = rules_hash(loader);
+    if let Err(e) = record_reviewed(repo_path, &reviewed, &rules, reviewed_at) {
+        tracing::warn!(error = %e, "review tracking: failed to record reviewed files");
+    }
+}
+
+/// The deduped, sorted set of files that appeared in the work-list — the files a
+/// validator actually reviewed this pass. This is the set the incremental
+/// tracking baseline is recorded for.
+fn reviewed_files(work: &WorkList) -> Vec<String> {
+    let mut files: BTreeSet<String> = BTreeSet::new();
+    for validator in &work.validators {
+        for file in &validator.files {
+            files.insert(file.path.clone());
+        }
+    }
+    files.into_iter().collect()
 }
 
 /// Subtract files whose tracking entry's `context_hash` matches their current
@@ -652,6 +714,103 @@ mod tests {
         assert!(
             survivors.is_empty(),
             "an unedited second pass subtracts every recorded file, got: {survivors:?}"
+        );
+    }
+
+    // ---- record_baseline_if_working (the single shared recording step) ----
+
+    use crate::review::scope::{FileWork, ValidatorWork, WorkList};
+    use crate::review::synthesize::FleetTally;
+
+    /// A one-file [`WorkList`] over `path` for one validator.
+    fn work_with(path: &str) -> WorkList {
+        WorkList {
+            change_purpose: "p".to_string(),
+            validators: vec![ValidatorWork {
+                validator_name: "dedup".to_string(),
+                severity: Severity::Warn,
+                rules: vec![],
+                probes: vec![],
+                files: vec![FileWork {
+                    path: path.to_string(),
+                    semantic_diff: vec![],
+                    changed_symbols: vec![],
+                    source_slice: String::new(),
+                    inlined_full: true,
+                    probe_results: vec![],
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn record_baseline_if_working_records_for_a_working_pass_that_ran() {
+        let repo = TempDir::new().unwrap();
+        std::fs::write(repo.path().join("src.rs"), "content").unwrap();
+        let loader = loader_with("dedup", "*.rs", &[], Severity::Warn);
+
+        record_baseline_if_working(
+            true, // is_working
+            repo.path(),
+            &loader,
+            &work_with("src.rs"),
+            &FleetTally::new(1, 0), // fan-out ran
+            NOW,
+        );
+
+        assert!(
+            read_entry(repo.path(), "src.rs").is_some(),
+            "a working pass that fanned out must record a baseline entry"
+        );
+        assert!(
+            repo.path().join(".validators/.gitignore").exists(),
+            "recording lazily writes the gitignore"
+        );
+    }
+
+    #[test]
+    fn record_baseline_if_working_skips_a_non_working_scope() {
+        let repo = TempDir::new().unwrap();
+        std::fs::write(repo.path().join("src.rs"), "content").unwrap();
+        let loader = loader_with("dedup", "*.rs", &[], Severity::Warn);
+
+        record_baseline_if_working(
+            false, // not the working scope (sha/file/glob)
+            repo.path(),
+            &loader,
+            &work_with("src.rs"),
+            &FleetTally::new(1, 0),
+            NOW,
+        );
+
+        assert!(
+            read_entry(repo.path(), "src.rs").is_none(),
+            "a non-working scope must never seed the incremental baseline"
+        );
+    }
+
+    #[test]
+    fn record_baseline_if_working_skips_when_no_fan_out_task_ran() {
+        let repo = TempDir::new().unwrap();
+        std::fs::write(repo.path().join("src.rs"), "content").unwrap();
+        let loader = loader_with("dedup", "*.rs", &[], Severity::Warn);
+
+        record_baseline_if_working(
+            true,
+            repo.path(),
+            &loader,
+            &work_with("src.rs"),
+            &FleetTally::new(0, 0), // an empty/already-subtracted scope: no fan-out
+            NOW,
+        );
+
+        assert!(
+            read_entry(repo.path(), "src.rs").is_none(),
+            "a short-circuit pass (zero attempted) does no tracking I/O"
+        );
+        assert!(
+            !repo.path().join(".validators").exists(),
+            "a no-op pass writes nothing at all"
         );
     }
 }
