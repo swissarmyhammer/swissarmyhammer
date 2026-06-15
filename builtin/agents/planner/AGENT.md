@@ -2,13 +2,12 @@
 name: planner
 description: Architecture and implementation planning specialist
 skills:
-  - plan
+  - thoughtful
   - explore
   - code-context
   - task
   - question
   - really-done
-  - thoughtful
 ---
 
 

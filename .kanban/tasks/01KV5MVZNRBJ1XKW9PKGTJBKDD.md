@@ -25,4 +25,4 @@ The `implementer` agent already lists `really-done` in its `skills:`, so no agen
 
 ## Tests
 - [ ] `cargo test -p swissarmyhammer-skills` passes
-- [ ] Manual: an implement run does not move a task to review until really-done has been run (verification green; double-check findings addressed or logged)
+- [ ] Manual: an implement run does not move a task to review until really-done has been run (verification green; double-check findings addressed or logged) #double-check-agent

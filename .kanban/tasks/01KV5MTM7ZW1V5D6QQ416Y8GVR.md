@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a080
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffb080
 title: Create the double-check adversarial agent
 ---
 ## What
@@ -34,3 +34,18 @@ This is the foundational artifact the other tasks wire into.
 - [ ] `cargo test -p swissarmyhammer-agents` passes
 - [ ] Add an assertion in `agent_resolver.rs` tests that the resolved agent map `contains_key("double-check")` (mirrors existing tester/reviewer/explorer checks)
 - [ ] `cargo build -p swissarmyhammer-agents` succeeds (confirms build.rs embeds the new agent dir) #double-check-agent
+
+## Review Findings (2026-06-15 07:53)
+
+### Warnings
+- [x] `crates/swissarmyhammer-agents/src/agent_resolver.rs:53` — Parameter type `PathBuf` is concrete; accept `impl AsRef<Path>` instead for better caller ergonomics. Callers currently must allocate or convert their `&str` or `&Path` to `PathBuf` unnecessarily. Change to `pub fn add_search_path(&mut self, path: impl AsRef<Path>)` and call `self.vfs.add_search_path(path.as_ref().to_path_buf(), FileSource::Local)` to convert inside the function.
+- [x] `crates/swissarmyhammer-agents/src/agent_resolver.rs:191` — Literal "tester" appears 6 times across the tests module. Extract to a named constant to avoid duplication and reduce maintenance burden. Define const TESTER_AGENT: &str = "tester"; near the start of the tests module and use it throughout.
+
+## Review Findings (2026-06-15 08:19)
+
+### Warnings
+- [x] `crates/swissarmyhammer-agents/src/agent_resolver.rs:116` — Function has 4-level deep nesting (for loop → if statement → match statement → match arms), exceeding the 3-level threshold. This makes the function harder to read and reason about. Extract the inner match logic into a helper function to reduce nesting. For example, create a `load_agent_or_warn` function that takes the path and source, performs the match, and handles both Ok/Err cases, then call it from inside the if block. This keeps the for-if-call chain at 3 levels.
+
+## Resolution (2026-06-15 13:30)
+
+Extracted the inner `match load_agent_from_dir(...)` out of `load_agents_from_directory` into a new `load_agent_or_warn(path, source, agents)` helper (with docstring), flattening the directory loop to the `for -> if -> call` 3-level chain. Behavior is identical. Verified: `cargo test -p swissarmyhammer-agents` => 109 passed; 0 failed. `cargo clippy -p swissarmyhammer-agents --all-targets` => 0 warnings (exit 0). All acceptance criteria, tests, and review findings verified.

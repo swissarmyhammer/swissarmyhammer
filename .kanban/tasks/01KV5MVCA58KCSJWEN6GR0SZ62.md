@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a280
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffb280
 title: Wire really-done to get adversarial sign-off from the double-check agent
 ---
 ## What
@@ -20,12 +20,19 @@ really-done has NO `agent:` frontmatter (it runs inline inside whatever agent in
 - Skip the double-check spawn when there is no diff (nothing to verify adversarially).
 
 ## Acceptance Criteria
-- [ ] really-done body has a step that spawns the `double-check` agent via the Task tool for adversarial sign-off
-- [ ] Evidence-before-claims (run the command) remains required and primary (hard, not advisory)
-- [ ] double-check findings are advisory: caller may proceed past REVISE with a logged justification
-- [ ] Loop is explicitly bounded (re-check at most once)
-- [ ] No `agent:` field added to really-done frontmatter
+- [x] really-done body has a step that spawns the `double-check` agent via the Task tool for adversarial sign-off
+- [x] Evidence-before-claims (run the command) remains required and primary (hard, not advisory)
+- [x] double-check findings are advisory: caller may proceed past REVISE with a logged justification
+- [x] Loop is explicitly bounded (re-check at most once)
+- [x] No `agent:` field added to really-done frontmatter
 
 ## Tests
-- [ ] `cargo test -p swissarmyhammer-skills` passes
-- [ ] Manual: invoking really-done after a code change launches double-check and surfaces findings; proceeding past REVISE requires a logged justification
+- [x] `cargo test -p swissarmyhammer-skills` passes
+- [ ] Manual: invoking really-done after a code change launches double-check and surfaces findings; proceeding past REVISE requires a logged justification #double-check-agent
+
+## Progress (2026-06-15, claude-code)
+Added an **Adversarial Sign-Off (advisory gate)** section to `builtin/skills/really-done/SKILL.md`, placed immediately after **The Gate** so the Iron Law / evidence-before-claims hard requirement stays primary and fully intact. The new section: spawns the `double-check` agent via the Task tool (`subagent_type: double-check`), reads its PASS/REVISE verdict, allows the caller to fix findings OR proceed past REVISE with a brief logged justification, bounds the loop to re-check at most once, and skips the spawn when there is no diff. Also added a discoverability line to the "When to Apply" list. No `agent:` field added to the frontmatter (verified by grep — no match). 
+
+Verification evidence:
+- grep confirmed: `subagent_type: double-check` + Task tool step present; Iron Law / "NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE" intact; "advisory" + "logged justification" present; "at most once" present; no `^agent:` line.
+- `cargo test -p swissarmyhammer-skills`: `test result: ok. 114 passed; 0 failed` (+ 2 passed, 2 passed, 0 doc-tests), 0 warnings, 0 errors. Includes the builtin description compliance and skill comment guidance integration tests that embed the builtin skill.

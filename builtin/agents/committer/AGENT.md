@@ -2,6 +2,7 @@
 name: committer
 description: Git commit specialist for clean, well-organized commits
 skills:
+  - thoughtful
   - commit
   
 ---
