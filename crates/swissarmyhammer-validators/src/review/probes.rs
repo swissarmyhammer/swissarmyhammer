@@ -138,6 +138,65 @@ pub fn probe_exists(name: &str) -> bool {
     catalog_entry(name).is_some()
 }
 
+/// Render a set of [`ProbeResult`]s into `out` as Markdown evidence blocks.
+///
+/// The one renderer both review stages share: the **fan-out** stage
+/// ([`fleet`](crate::review::fleet)) shows the agent the engine-run probe
+/// evidence per file, and the **verify** stage ([`verify`](crate::review::verify))
+/// shows the adversary the same evidence per candidate. The row format
+/// (`file_path:line `symbol` @ {sim:.2} — {detail}`, each optional field elided
+/// when absent) and the `_No probe evidence._` / `(no rows)` sentinels are
+/// identical, so they live here once.
+///
+/// `show_kind` is the stages' only divergence: verify annotates each probe header
+/// with its `(fact)`/`(candidate)` [kind](ProbeKind) so the adversary knows which
+/// rows are deterministic facts; fan-out omits it.
+pub(crate) fn render_probe_evidence(out: &mut String, results: &[ProbeResult], show_kind: bool) {
+    use std::fmt::Write as _;
+
+    if results.is_empty() {
+        out.push_str("_No probe evidence._\n\n");
+        return;
+    }
+    for result in results {
+        if show_kind {
+            let kind = match result.kind {
+                ProbeKind::Fact => "fact",
+                ProbeKind::Candidate => "candidate",
+            };
+            let _ = writeln!(
+                out,
+                "- probe `{}` ({kind}) on `{}`:",
+                result.name, result.target
+            );
+        } else {
+            let _ = writeln!(out, "- probe `{}` on `{}`:", result.name, result.target);
+        }
+        if result.rows.is_empty() {
+            out.push_str("  - (no rows)\n");
+            continue;
+        }
+        for row in &result.rows {
+            out.push_str("  - ");
+            out.push_str(&row.file_path);
+            if let Some(line) = row.line {
+                let _ = write!(out, ":{line}");
+            }
+            if let Some(symbol) = &row.symbol {
+                let _ = write!(out, " `{symbol}`");
+            }
+            if let Some(similarity) = row.similarity {
+                let _ = write!(out, " @ {similarity:.2}");
+            }
+            if let Some(detail) = &row.detail {
+                let _ = write!(out, " — {detail}");
+            }
+            out.push('\n');
+        }
+    }
+    out.push('\n');
+}
+
 /// A changed entity derived from the git semantic diff.
 ///
 /// Mirrors the subset of the git `get diff` tool's `ChangeEntry` the probe
@@ -592,6 +651,66 @@ mod tests {
         assert!(!probe_exists("search_symbol"));
         assert!(!probe_exists("blastradius"));
         assert!(!probe_exists("nonsense"));
+    }
+
+    // --- shared probe-evidence renderer --------------------------------
+
+    /// A `callers` (fact) result with one caller row carrying every optional
+    /// field, so the rendered row exercises line/symbol/similarity/detail.
+    fn rich_result() -> ProbeResult {
+        ProbeResult {
+            name: "duplicates".to_string(),
+            kind: ProbeKind::Fact,
+            target: "src/a.rs".to_string(),
+            rows: vec![ProbeRow {
+                file_path: "src/b.rs".to_string(),
+                symbol: Some("dupe".to_string()),
+                line: Some(42),
+                similarity: Some(0.94),
+                detail: Some("matched block".to_string()),
+            }],
+        }
+    }
+
+    #[test]
+    fn render_probe_evidence_without_kind_matches_the_fanout_block_format() {
+        let mut out = String::new();
+        render_probe_evidence(&mut out, &[rich_result()], false);
+        // Fan-out's historical format: no `(kind)` annotation on the header.
+        assert_eq!(
+            out,
+            "- probe `duplicates` on `src/a.rs`:\n\
+             \x20 - src/b.rs:42 `dupe` @ 0.94 — matched block\n\n"
+        );
+    }
+
+    #[test]
+    fn render_probe_evidence_with_kind_annotates_the_header() {
+        let mut out = String::new();
+        render_probe_evidence(&mut out, &[rich_result()], true);
+        // Verify's format: the `(fact)`/`(candidate)` kind annotation.
+        assert_eq!(
+            out,
+            "- probe `duplicates` (fact) on `src/a.rs`:\n\
+             \x20 - src/b.rs:42 `dupe` @ 0.94 — matched block\n\n"
+        );
+    }
+
+    #[test]
+    fn render_probe_evidence_emits_the_empty_and_no_rows_sentinels() {
+        let mut empty = String::new();
+        render_probe_evidence(&mut empty, &[], false);
+        assert_eq!(empty, "_No probe evidence._\n\n");
+
+        let no_rows = ProbeResult {
+            name: "callers".to_string(),
+            kind: ProbeKind::Fact,
+            target: "sym".to_string(),
+            rows: vec![],
+        };
+        let mut out = String::new();
+        render_probe_evidence(&mut out, &[no_rows], true);
+        assert_eq!(out, "- probe `callers` (fact) on `sym`:\n  - (no rows)\n\n");
     }
 
     // --- run_probes errors ---------------------------------------------

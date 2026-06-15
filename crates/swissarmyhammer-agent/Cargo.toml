@@ -30,11 +30,7 @@ which.workspace = true
 futures-util = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "rt-multi-thread", "time", "net", "macros"] }
 tokio-tungstenite = { workspace = true }
-swissarmyhammer-validators = { workspace = true }
-swissarmyhammer-code-context = { workspace = true }
-git2 = { workspace = true }
-rusqlite = { workspace = true }
-tempfile = { workspace = true }
+swissarmyhammer-validators = { workspace = true, features = ["test-support"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 

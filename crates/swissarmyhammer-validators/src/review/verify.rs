@@ -25,8 +25,9 @@
 //!    TO refuted (`confirmed = false`) on uncertainty or tool failure, so only
 //!    positively-substantiated findings survive.
 //!
-//! Each [`VerifiedFinding`] records which layer refuted it
-//! ([`VerifiedFinding::refuted_by`]) so synthesis can report confirmed/refuted
+//! Each [`VerifiedFinding`] records which layer reached the verdict
+//! ([`VerifiedFinding::decided_by`]) — the deciding layer regardless of the
+//! verdict, not a "was refuted" flag — so synthesis can report confirmed/refuted
 //! counts and reasons.
 //!
 //! # Why verify does NOT use primed prefix sessions
@@ -48,7 +49,7 @@ use std::fmt::Write as _;
 
 use serde::Deserialize;
 
-use crate::review::probes::{ProbeKind, ProbeResult};
+use crate::review::probes::{render_probe_evidence, ProbeKind, ProbeResult};
 use crate::review::types::{extract_json_value, Finding, RefutingLayer, VerifiedFinding};
 use crate::validators::AgentPool;
 
@@ -163,7 +164,7 @@ pub fn run_guard(candidates: &[Candidate]) -> GuardOutcome {
                     finding: candidate.finding.clone(),
                     confirmed: false,
                     reason: rule.reason.to_string(),
-                    refuted_by: Some(RefutingLayer::Guard),
+                    decided_by: Some(RefutingLayer::Guard),
                 });
             }
             None => outcome.survivors.push(candidate.clone()),
@@ -296,7 +297,7 @@ pub async fn verify_findings(candidates: Vec<Candidate>, pool: &AgentPool) -> Ve
             finding: task.finding,
             confirmed: verdict.confirmed,
             reason: verdict.reason,
-            refuted_by: Some(RefutingLayer::Agent),
+            decided_by: Some(RefutingLayer::Agent),
         });
     }
 
@@ -417,56 +418,11 @@ pub fn render_verify_prompt(candidate: &Candidate) -> String {
     out.push_str("\n```\n\n");
 
     out.push_str("# Probe evidence (ground truth)\n\n");
-    render_probe_evidence(&mut out, &candidate.probe_results);
+    render_probe_evidence(&mut out, &candidate.probe_results, true);
 
     out.push_str(VERIFY_OUTPUT_CONTRACT);
 
     out
-}
-
-/// Render a candidate's probe results as ground-truth evidence blocks.
-///
-/// Mirrors the fan-out renderer's probe block so the adversary sees the same
-/// evidence shape, annotated with each probe's `fact`/`candidate` kind so the
-/// agent knows which rows are deterministic facts.
-fn render_probe_evidence(out: &mut String, results: &[ProbeResult]) {
-    if results.is_empty() {
-        out.push_str("_No probe evidence._\n\n");
-        return;
-    }
-    for result in results {
-        let kind = match result.kind {
-            ProbeKind::Fact => "fact",
-            ProbeKind::Candidate => "candidate",
-        };
-        let _ = writeln!(
-            out,
-            "- probe `{}` ({kind}) on `{}`:",
-            result.name, result.target
-        );
-        if result.rows.is_empty() {
-            out.push_str("  - (no rows)\n");
-            continue;
-        }
-        for row in &result.rows {
-            out.push_str("  - ");
-            out.push_str(&row.file_path);
-            if let Some(line) = row.line {
-                let _ = write!(out, ":{line}");
-            }
-            if let Some(symbol) = &row.symbol {
-                let _ = write!(out, " `{symbol}`");
-            }
-            if let Some(similarity) = row.similarity {
-                let _ = write!(out, " @ {similarity:.2}");
-            }
-            if let Some(detail) = &row.detail {
-                let _ = write!(out, " — {detail}");
-            }
-            out.push('\n');
-        }
-    }
-    out.push('\n');
 }
 
 /// The verify output contract, shared verbatim by every verify prompt.
@@ -540,7 +496,7 @@ mod tests {
         );
         assert_eq!(outcome.refuted.len(), 1);
         assert!(!outcome.refuted[0].confirmed);
-        assert_eq!(outcome.refuted[0].refuted_by, Some(RefutingLayer::Guard));
+        assert_eq!(outcome.refuted[0].decided_by, Some(RefutingLayer::Guard));
     }
 
     #[test]
@@ -655,7 +611,7 @@ mod tests {
             "an empty duplicates fact refutes duplication"
         );
         assert_eq!(outcome.refuted.len(), 1);
-        assert_eq!(outcome.refuted[0].refuted_by, Some(RefutingLayer::Guard));
+        assert_eq!(outcome.refuted[0].decided_by, Some(RefutingLayer::Guard));
     }
 
     #[test]
@@ -862,13 +818,13 @@ mod tests {
         assert!(verdict("alpha").confirmed);
         assert!(verdict("beta").confirmed);
         assert!(!verdict("gamma").confirmed);
-        assert_eq!(verdict("gamma").refuted_by, Some(RefutingLayer::Agent));
+        assert_eq!(verdict("gamma").decided_by, Some(RefutingLayer::Agent));
         // delta's task errored → refuted by the agent layer, default-false.
         assert!(
             !verdict("delta").confirmed,
             "an erroring verify task refutes by default"
         );
-        assert_eq!(verdict("delta").refuted_by, Some(RefutingLayer::Agent));
+        assert_eq!(verdict("delta").decided_by, Some(RefutingLayer::Agent));
     }
 
     #[tokio::test]

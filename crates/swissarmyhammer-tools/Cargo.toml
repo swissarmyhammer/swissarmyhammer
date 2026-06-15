@@ -137,6 +137,10 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 # MockEmbedder for code_context indexing tests, to avoid loading a real ML model.
 model-embedding = { workspace = true, features = ["test-support"] }
+# The ONE shared scripted ACP agent harness (`ScriptedAgent`/`ScriptedAdapter`/
+# `prompt_text`) the review-tool tests drive their agents through — consumed via
+# the validators crate's `test-support` feature, never copied per-file.
+swissarmyhammer-validators = { workspace = true, features = ["test-support"] }
 # Scripted ACP agent harness for the review-tool integration tests.
 agent-client-protocol-extras = { workspace = true }
 # Captures `tracing` output to assert the review engine's observability traces
