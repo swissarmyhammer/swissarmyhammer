@@ -464,7 +464,7 @@ impl ClaudeProcess {
         Self::configure_ephemeral_mode(&mut command, &config);
         Self::configure_tools_override(&mut command, &config);
         Self::configure_mcp_servers(&mut command, &config);
-        Self::log_command(&command);
+        Self::log_command(&config.session_id, &command);
 
         let cmd = Self::execute_spawn(&mut command, &config)?;
         Self::create_process_instance(config.session_id, cmd, test_context)
@@ -685,7 +685,7 @@ impl ClaudeProcess {
     ///   `.sah` logs. The multi-line YAML list renders each arg on its own line,
     ///   which makes proving the resolved tier (`--model haiku`) by a plain log
     ///   search unreliable; the flat line is the provable record.
-    fn log_command(command: &Command) {
+    fn log_command(session_id: &SessionId, command: &Command) {
         #[derive(serde::Serialize, Debug)]
         struct CommandInfo {
             program: String,
@@ -710,8 +710,9 @@ impl ClaudeProcess {
             args: args.clone(),
         };
         // Single-line, space-joined argv FIRST so the resolved tier (`--model
-        // <tier>`) is greppable as one contiguous record in the `.sah` logs.
-        tracing::info!("🚀 Spawning Claude CLI argv: {}", argv);
+        // <tier>`) is greppable as one contiguous record in the `.sah` logs,
+        // tagged with the session_id so the spawn is attributable.
+        tracing::info!(session_id = %session_id, "🚀 Spawning Claude CLI argv: {}", argv);
         // Multi-line YAML block for human reading.
         tracing::info!("🚀 Spawning Claude CLI: {}", Pretty(&cmd_info));
     }
@@ -1352,12 +1353,13 @@ mod tests {
     #[traced_test]
     #[test]
     fn test_log_command_emits_argv_with_model_haiku() {
+        let session_id = SessionId::new();
         let command = ClaudeProcess::build_base_command(
             "the-uuid",
             &ConversationAttachment::New,
             &["--model".to_string(), "haiku".to_string()],
         );
-        ClaudeProcess::log_command(&command);
+        ClaudeProcess::log_command(&session_id, &command);
 
         assert!(
             logs_contain("Spawning Claude CLI"),
@@ -1371,6 +1373,10 @@ mod tests {
             logs_contain("haiku"),
             "the logged argv must include the haiku model value"
         );
+        assert!(
+            logs_contain(&session_id.to_string()),
+            "the logged argv line must be tagged with the session_id"
+        );
     }
 
     /// The flat argv log line must NOT inline the `--system-prompt` value (the
@@ -1381,13 +1387,14 @@ mod tests {
     #[test]
     fn test_log_command_redacts_system_prompt_value() {
         const SAMPLE_BODY: &str = "SECRET-SYSTEM-PROMPT-BODY-do-not-leak-this-into-the-log";
+        let session_id = SessionId::new();
         let mut command = ClaudeProcess::build_base_command(
             "the-uuid",
             &ConversationAttachment::New,
             &["--model".to_string(), "haiku".to_string()],
         );
         command.arg("--system-prompt").arg(SAMPLE_BODY);
-        ClaudeProcess::log_command(&command);
+        ClaudeProcess::log_command(&session_id, &command);
 
         assert!(
             !logs_contain(SAMPLE_BODY),
