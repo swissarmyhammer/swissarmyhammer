@@ -19,7 +19,6 @@ Perform a structured code review. You are a **thin driver**: detect the mode, ca
 Here is what the user provided: 
 $ARGUMENTS
 
-{% include "_partials/delegate-to-subagent" %}
 
 ## Guidelines
 

@@ -19,7 +19,6 @@ Use whenever you enter Plan Mode or the user asks you to plan work.
 
 $ARGUMENTS
 
-{% include "_partials/delegate-to-subagent" %}
 
 ## Interpreting the arguments
 

@@ -654,7 +654,16 @@ impl TemplateContext {
         configs
     }
 
-    /// Provide a simple default model name for template rendering
+    /// Provide a simple default model name for template (prompt) rendering.
+    ///
+    /// PROMPT-RENDERING ONLY — never agent/model SELECTION. This is the value of
+    /// the `{{ model }}` Liquid variable when a prompt references it and nothing
+    /// else set it; it is NOT how an executor is chosen. Agent selection reads
+    /// the config files via [`crate::model::ModelManager`] (e.g.
+    /// `resolve_agent_config` / `resolve_review_agent_config`), which correctly
+    /// return `None`/defaults when unset. Consuming this `"claude"` default for
+    /// selection silently defeated the `claude-code-haiku` review fallback — do
+    /// not reintroduce that coupling.
     ///
     /// Returns "claude" as the default. The model name should be set via:
     /// - The --model CLI flag
@@ -666,7 +675,13 @@ impl TemplateContext {
         "claude".to_string()
     }
 
-    /// Set model variable if not already provided by user
+    /// Set the `model` template variable if not already provided by the user.
+    ///
+    /// PROMPT-RENDERING ONLY. Injects the [`Self::resolve_model_name`] default
+    /// (`"claude"`) so `{{ model }}` always renders. This makes the `model`
+    /// template variable non-`None` in production, so it must NOT be consulted
+    /// for agent/model selection — selection reads the config files via
+    /// [`crate::model::ModelManager`].
     fn set_model_variable(&mut self) {
         if self.get("model").is_none() {
             let model_name = self.resolve_model_name();
