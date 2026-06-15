@@ -19,4 +19,4 @@ APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 "${SCRIPT_DIR}/stage-cli-sidecar.sh" "$@"
 
 # Step 2: build the UI bundle (the original beforeBuildCommand behavior).
-(cd "${APP_DIR}/ui" && npm install && npm run build)
+(cd "${APP_DIR}/ui" && npm ci && npm run build)
