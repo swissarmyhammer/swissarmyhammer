@@ -3,52 +3,20 @@
 //! These tests verify that AgentServer properly uses cached models when restarted
 //! with the same configuration.
 
-use llama_agent::types::{ModelConfig, ModelSource, RetryConfig};
-use llama_agent::{AgentAPI, AgentConfig, AgentServer, ParallelConfig, QueueConfig, SessionConfig};
+use llama_agent::types::AgentAPI;
+use llama_agent::AgentServer;
 use serial_test::serial;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
-/// Small model for testing cache behavior with actual AgentServer
-// Use standard test models from test_models module
-use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
-
-/// Create a test agent config with a small model
-fn create_test_agent_config() -> AgentConfig {
-    AgentConfig {
-        model: ModelConfig {
-            source: ModelSource::HuggingFace {
-                repo: TEST_MODEL_REPO.to_string(),
-                filename: Some(TEST_MODEL_FILE.to_string()),
-                folder: None,
-            },
-            batch_size: 64,
-            use_hf_params: true,
-            retry_config: RetryConfig {
-                max_retries: 2,
-                initial_delay_ms: 100,
-                backoff_multiplier: 1.5,
-                max_delay_ms: 1000,
-            },
-            debug: true,
-            n_seq_max: 1,
-            n_threads: 4,
-            n_threads_batch: 4,
-        },
-        mcp_servers: Vec::new(),
-        session_config: SessionConfig::default(),
-        parallel_execution_config: ParallelConfig::default(),
-        tool_execution_config: Default::default(),
-        queue_config: QueueConfig::default(),
-    }
-}
+use crate::integration::real_model_helpers::{is_environmental_model_failure, real_model_config};
 
 /// Test that AgentServer uses cache on second initialization
 /// This is the core test that verifies cache hit behavior
 #[tokio::test]
 #[serial]
 async fn test_agent_server_cache_hit_on_restart() {
-    let config = create_test_agent_config();
+    let config = real_model_config();
 
     info!("=== FIRST AGENT SERVER INITIALIZATION ===");
     info!("Testing first AgentServer initialization (may use cache or download)");
@@ -79,19 +47,13 @@ async fn test_agent_server_cache_hit_on_restart() {
             info!("First AgentServer dropped");
         }
         Err(e) => {
-            let error_msg = e.to_string().to_lowercase();
-            // Check if this is a HuggingFace rate limiting issue
-            if error_msg.contains("429")
-                || error_msg.contains("too many requests")
-                || error_msg.contains("rate limited")
-                || error_msg.contains("loadingfailed")
-            {
-                warn!("⚠️  Skipping test due to HuggingFace rate limiting: {}", e);
-                println!("⚠️  Agent cache test skipped (HuggingFace rate limited)");
+            // Only an environmental failure (rate limit / network) is a skip;
+            // a genuine model-loading regression must panic, never skip.
+            if is_environmental_model_failure(&e.to_string().to_lowercase()) {
+                warn!("⚠️  Skipping test: environmental model-load failure: {}", e);
                 return;
-            } else {
-                panic!("First AgentServer initialization failed: {}", e);
             }
+            panic!("First AgentServer initialization failed: {}", e);
         }
     }
 
@@ -153,7 +115,7 @@ async fn test_agent_server_cache_hit_on_restart() {
 #[tokio::test]
 #[serial]
 async fn test_agent_server_concurrent_cache_sharing() {
-    let config = create_test_agent_config();
+    let config = real_model_config();
 
     info!("Testing concurrent AgentServer instances with shared cache");
 
@@ -168,9 +130,8 @@ async fn test_agent_server_concurrent_cache_sharing() {
             agent
         }
         Err(e) => {
-            let error_msg = e.to_string().to_lowercase();
-            if error_msg.contains("429") || error_msg.contains("rate limited") {
-                warn!("⚠️  Skipping test due to HuggingFace rate limiting");
+            if is_environmental_model_failure(&e.to_string().to_lowercase()) {
+                warn!("⚠️  Skipping test: environmental model-load failure: {}", e);
                 return;
             }
             panic!("First agent initialization failed: {}", e);

@@ -60,6 +60,7 @@ mod integration_tests {
             top_p: None,
             stop_tokens: vec!["Human:".to_string()],
             stopping_config: None,
+            pin_on_save: false,
         };
 
         // Validation should pass
@@ -122,6 +123,7 @@ mod integration_tests {
             top_p: Some(0.95),
             stop_tokens: vec!["User:".to_string(), "Human:".to_string()],
             stopping_config: None,
+            pin_on_save: false,
         };
 
         // This should pass all validation stages
@@ -164,6 +166,7 @@ mod integration_tests {
             top_p: Some(0.95),
             stop_tokens: vec!["User:".to_string()],
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let result = validator.validate(&session, &request);
@@ -222,6 +225,7 @@ mod integration_tests {
             top_p: Some(0.5),
             stop_tokens: vec!["stop".to_string()],
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let result = validator.validate(&session, &request);

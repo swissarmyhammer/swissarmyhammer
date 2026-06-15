@@ -17,48 +17,29 @@
 //! If the system was NOT doing incremental processing, each subsequent generation
 //! would process increasingly more tokens (N, 2N, 3N, etc.).
 
-use llama_agent::types::{
-    AgentConfig, GenerationRequest, Message, MessageRole, ModelConfig, ModelSource, ParallelConfig,
-    QueueConfig, RetryConfig, SessionConfig,
-};
-use llama_agent::{AgentAPI, AgentServer};
+use llama_agent::types::{GenerationRequest, Message, MessageRole, SessionConfig};
+use llama_agent::AgentAPI;
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{info, warn};
 
 // Use standard test models from test_models module
 use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
 
-/// Create a test agent config with context state enabled
-fn create_test_agent_config() -> AgentConfig {
-    AgentConfig {
-        model: ModelConfig {
-            source: ModelSource::HuggingFace {
-                repo: TEST_MODEL_REPO.to_string(),
-                filename: Some(TEST_MODEL_FILE.to_string()),
-                folder: None,
-            },
-            batch_size: 64,
-            use_hf_params: true,
-            retry_config: RetryConfig {
-                max_retries: 2,
-                initial_delay_ms: 100,
-                backoff_multiplier: 1.5,
-                max_delay_ms: 1000,
-            },
-            debug: true,
-            n_seq_max: 1,
-            n_threads: 4,
-            n_threads_batch: 4,
-        },
-        mcp_servers: Vec::new(),
-        session_config: SessionConfig {
-            persistence_enabled: true, // Enable session persistence for context state
+use crate::integration::real_model_helpers::{hf_model_config, try_init_real_model_agent};
+
+/// The canonical Qwen test-model config with session persistence enabled — the
+/// one real variation axis this test needs, so it can prove incremental token
+/// processing across multi-turn context state. All other model knobs come from
+/// the shared [`hf_model_config`].
+fn create_test_agent_config() -> llama_agent::types::AgentConfig {
+    hf_model_config(
+        TEST_MODEL_REPO,
+        TEST_MODEL_FILE,
+        SessionConfig {
+            persistence_enabled: true,
             ..Default::default()
         },
-        parallel_execution_config: ParallelConfig::default(),
-        tool_execution_config: Default::default(),
-        queue_config: QueueConfig::default(),
-    }
+    )
 }
 
 #[tokio::test]
@@ -72,29 +53,12 @@ async fn test_incremental_token_processing_proof() {
     info!("=== INCREMENTAL TOKEN PROCESSING TEST ===");
     info!("This test proves that only new tokens are processed in multi-turn conversations");
 
-    let config = create_test_agent_config();
-
     // Initialize agent
     info!("Initializing AgentServer...");
-    let agent = match AgentServer::initialize(config).await {
-        Ok(agent) => {
-            info!("✅ AgentServer initialized successfully");
-            agent
-        }
-        Err(e) => {
-            let error_msg = e.to_string().to_lowercase();
-            if error_msg.contains("429")
-                || error_msg.contains("too many requests")
-                || error_msg.contains("rate limited")
-            {
-                warn!("⚠️  Skipping test due to HuggingFace rate limiting: {}", e);
-                println!("⚠️  Incremental processing test skipped (HuggingFace rate limited)");
-                return;
-            } else {
-                panic!("AgentServer initialization failed: {}", e);
-            }
-        }
+    let Some(agent) = try_init_real_model_agent(create_test_agent_config()).await else {
+        return;
     };
+    info!("✅ AgentServer initialized successfully");
 
     // Create a session
     let session = agent

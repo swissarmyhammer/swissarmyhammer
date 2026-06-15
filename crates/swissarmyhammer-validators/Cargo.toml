@@ -11,6 +11,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
+# Per-reviewed-file context-hash tracking: SHA-256 over path+content+rules so an
+# unchanged file is subtracted from the next `review working` pass, and an RFC3339
+# `reviewed_at` timestamp on each tracking entry.
+sha2 = { workspace = true }
+chrono = { workspace = true }
+
 # Error handling
 thiserror = { workspace = true }
 
@@ -64,6 +70,28 @@ tokio = { workspace = true }
 # `join_all` drives the per-validator prime→fork fan-out runs concurrently
 # (the pool still owns the only real concurrency control)
 futures = { workspace = true }
+
+# The scope stage reads blobs via the `swissarmyhammer-git` repo handle's raw
+# git2 layer and must distinguish "path absent at this ref" (the Added/Deleted
+# signal) from a genuine read failure (a binary/non-UTF8 tracked blob) — that
+# discrimination names `git2::ErrorCode`, so git2 is a direct, non-optional dep.
+git2 = { workspace = true }
+
+# Optional dep activated only by the `test-support` feature, which exports the
+# review test fixtures (`test_support`) to downstream crates' tests — the shared
+# scripted ACP agent harness plus the throwaway git repo / seeded code_context
+# index fixtures. During this crate's OWN `#[cfg(test)]` runs this is supplied
+# by the matching `[dev-dependencies]` below.
+tempfile = { workspace = true, optional = true }
+
+[features]
+# Export the review `test_support` fixtures (the shared scripted ACP agent
+# harness, the throwaway git repo, and the seeded in-memory code_context index)
+# to downstream crates' tests, mirroring agent-client-protocol-extras' and
+# acp-conformance's `test-support` features. `swissarmyhammer-tools` dev-depends
+# on this so its review-tool tests consume the one shared harness rather than
+# carrying their own copies.
+test-support = ["dep:tempfile", "model-embedding/test-support"]
 
 [build-dependencies]
 swissarmyhammer-build = { workspace = true }

@@ -50,6 +50,57 @@ pub const FORK_PARENT_STATE_UNAVAILABLE: &str = "fork_parent_state_unavailable";
 /// and the client must know that rather than trust a phantom pin.
 pub const SESSION_STATE_NOT_FOUND: &str = "session_state_not_found";
 
+/// Error kind (carried in the ACP error's `data.error` field) when a
+/// `sessionId`-accepting method resolves its id to no live session. Not
+/// fork-specific — every session-scoped method shares this kind — but it lives
+/// alongside the fork kinds because both agents build all of them through the
+/// same uniform `{sessionId, error}` error shape.
+pub const SESSION_NOT_FOUND: &str = "session_not_found";
+
+/// The machine-readable error kind carried in a session-scoped ACP error's
+/// `data.error` field.
+///
+/// Both agents (`llama-agent`, `claude-agent`) build their session errors
+/// through one uniform `{sessionId, error: <kind>}` payload. Passing the kind
+/// as this enum instead of a bare `&str` keeps the set of legal kinds closed
+/// and named at every call site, so a typo or a positional argument swap is a
+/// compile error rather than a silently wrong wire value. Each variant maps to
+/// exactly one of the contract's kind constants via [`SessionErrorKind::as_str`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionErrorKind {
+    /// The fork parent session does not exist. Maps to [`FORK_PARENT_NOT_FOUND`].
+    ForkParentNotFound,
+    /// The fork parent exists but has no saved, restorable state to seed the
+    /// fork with. Maps to [`FORK_PARENT_STATE_UNAVAILABLE`].
+    ForkParentStateUnavailable,
+    /// A session-state operation (status/pin) targets a session with no saved
+    /// state. Maps to [`SESSION_STATE_NOT_FOUND`].
+    SessionStateNotFound,
+    /// A `sessionId`-accepting method resolved its id to no live session. Maps
+    /// to [`SESSION_NOT_FOUND`].
+    SessionNotFound,
+}
+
+impl SessionErrorKind {
+    /// The contract's wire string for this kind — the exact value that lands in
+    /// the ACP error's `data.error` field, identical from both agents.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ForkParentNotFound => FORK_PARENT_NOT_FOUND,
+            Self::ForkParentStateUnavailable => FORK_PARENT_STATE_UNAVAILABLE,
+            Self::SessionStateNotFound => SESSION_STATE_NOT_FOUND,
+            Self::SessionNotFound => SESSION_NOT_FOUND,
+        }
+    }
+}
+
+impl std::fmt::Display for SessionErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Parameters of [`SESSION_FORK_METHOD`]: fork a new session from `parent`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -215,6 +266,34 @@ mod tests {
         assert_eq!(value, serde_json::json!({"saved": false, "pinned": false}));
         let parsed: SessionStateStatusResponse = serde_json::from_value(value).unwrap();
         assert_eq!(parsed, unsaved);
+    }
+
+    /// Every `SessionErrorKind` variant maps to its contract wire constant, so
+    /// the typed kind is interchangeable with the bare `&str` it replaces and a
+    /// client branching on `data.error` sees the identical value.
+    #[test]
+    fn session_error_kind_maps_to_contract_constants() {
+        assert_eq!(
+            SessionErrorKind::ForkParentNotFound.as_str(),
+            FORK_PARENT_NOT_FOUND
+        );
+        assert_eq!(
+            SessionErrorKind::ForkParentStateUnavailable.as_str(),
+            FORK_PARENT_STATE_UNAVAILABLE
+        );
+        assert_eq!(
+            SessionErrorKind::SessionStateNotFound.as_str(),
+            SESSION_STATE_NOT_FOUND
+        );
+        assert_eq!(
+            SessionErrorKind::SessionNotFound.as_str(),
+            SESSION_NOT_FOUND
+        );
+        // Display matches as_str so it can be formatted into log lines directly.
+        assert_eq!(
+            SessionErrorKind::ForkParentNotFound.to_string(),
+            FORK_PARENT_NOT_FOUND
+        );
     }
 
     /// The pin types round-trip through their camelCase wire shape.

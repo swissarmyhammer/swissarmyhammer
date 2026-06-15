@@ -768,7 +768,7 @@ impl ClaudeAgent {
     pub(crate) fn session_not_found_error(session_id: &SessionId) -> agent_client_protocol::Error {
         crate::acp_error::session_error(
             session_id.0.as_ref(),
-            "session_not_found",
+            agent_client_protocol_extras::SessionErrorKind::SessionNotFound,
             format!("Session not found: {session_id}"),
         )
     }

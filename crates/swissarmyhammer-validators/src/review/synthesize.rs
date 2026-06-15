@@ -290,9 +290,16 @@ pub async fn run_review(
     pool: &AgentPool,
     fleet_config: FleetConfig,
     now: &str,
+    use_tracking: bool,
 ) -> Result<ReviewReport, AvpError> {
-    // Stage 1: scope → work-list (deterministic).
-    let work = scope_review(scope, repo_path, loader, conn, embedder).await?;
+    // Only the working scope participates in incremental tracking; sha/file/glob
+    // are explicit, one-shot targets whose files must never seed the baseline.
+    let is_working = matches!(scope, Scope::Working);
+
+    // Stage 1: scope → work-list (deterministic). `use_tracking` narrows a
+    // working scope to files edited since their last review (the `/finish`
+    // fix-loop win); it is inert for every other scope.
+    let work = scope_review(scope, repo_path, loader, conn, embedder, use_tracking).await?;
 
     let total_files: usize = work.validators.iter().map(|v| v.files.len()).sum();
     tracing::info!(
@@ -316,7 +323,40 @@ pub async fn run_review(
     // Stage 4: synthesize the deduped, severity-ranked, dated report. The tally
     // rides into the report so the tool boundary can flag/fail an incomplete run;
     // the engine itself stays a pure data barrier and never errors on it.
-    Ok(synthesize(outcome.verified, &tally, now))
+    let report = synthesize(outcome.verified, &tally, now);
+
+    // Record the incremental-tracking baseline for a working-scope review that
+    // actually ran. Every reviewed file gets a fresh `.validators/.hashes/` entry
+    // — regardless of findings — so the next `review working` subtracts it unless
+    // its content (or the rules) changed. Recording is skipped when no fan-out
+    // task ran (an empty/already-subtracted scope) so a short-circuit pass does
+    // no I/O, and is best-effort: a tracking write failure is logged, never
+    // allowed to fail an otherwise-complete review.
+    if is_working && tally.attempted > 0 {
+        let reviewed = reviewed_files(&work);
+        let rules = crate::review::tracking::rules_hash(loader);
+        let reviewed_at = crate::review::tracking::now_rfc3339();
+        if let Err(e) =
+            crate::review::tracking::record_reviewed(repo_path, &reviewed, &rules, &reviewed_at)
+        {
+            tracing::warn!(error = %e, "review tracking: failed to record reviewed files");
+        }
+    }
+
+    Ok(report)
+}
+
+/// The deduped, sorted set of files that appeared in the work-list — the files a
+/// validator actually reviewed this pass. This is the set the incremental
+/// tracking baseline is recorded for.
+fn reviewed_files(work: &WorkList) -> Vec<String> {
+    let mut files: BTreeSet<String> = BTreeSet::new();
+    for validator in &work.validators {
+        for file in &validator.files {
+            files.insert(file.path.clone());
+        }
+    }
+    files.into_iter().collect()
 }
 
 /// Pair each fan-out [`Finding`] back with the ground-truth context its file
@@ -387,7 +427,7 @@ mod tests {
             },
             confirmed: true,
             reason: "confirmed".to_string(),
-            refuted_by: None,
+            decided_by: None,
         }
     }
 
@@ -406,7 +446,7 @@ mod tests {
             },
             confirmed: false,
             reason: "refuted by guard".to_string(),
-            refuted_by: Some(RefutingLayer::Guard),
+            decided_by: Some(RefutingLayer::Guard),
         }
     }
 
@@ -776,6 +816,7 @@ mod tests {
             semantic_diff: vec![],
             changed_symbols: vec![],
             source_slice: format!("// slice for {path}"),
+            inlined_full: true,
             probe_results: vec![],
         }
     }

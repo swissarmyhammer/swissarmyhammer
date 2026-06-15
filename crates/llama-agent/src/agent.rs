@@ -1046,6 +1046,7 @@ impl AgentAPI for AgentServer {
                 top_p: request.top_p,
                 stop_tokens: request.stop_tokens.clone(),
                 stopping_config: request.stopping_config.clone(),
+                pin_on_save: request.pin_on_save,
             };
 
             // Submit to request queue
@@ -1263,6 +1264,7 @@ impl AgentAPI for AgentServer {
             top_p: request.top_p,
             stop_tokens: request.stop_tokens,
             stopping_config: request.stopping_config,
+            pin_on_save: request.pin_on_save,
         };
 
         // Submit to request queue for streaming
@@ -1820,6 +1822,7 @@ impl AgentServer {
             top_p: None,
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
 
         let generation_response = self.generate(generation_request).await?;
@@ -1977,6 +1980,7 @@ impl AgentServer {
                             top_p: None,
                             stop_tokens: Vec::new(),
                             stopping_config: None,
+                            pin_on_save: false,
                         };
 
                         let batch_size = model_manager.get_batch_size();
@@ -2168,6 +2172,7 @@ impl AgentServer {
                     top_p: None,
                     stop_tokens: Vec::new(),
                     stopping_config: None,
+                    pin_on_save: false,
                 };
 
                 let batch_size = model_manager.get_batch_size();
@@ -2294,6 +2299,7 @@ impl AgentServer {
             top_p: None,
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         };
         self.request_queue
             .submit_request(request, &session)

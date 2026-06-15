@@ -309,11 +309,15 @@ impl ReviewTool {
         })?;
 
         let repo_path = self.resolve_repo_path(context)?;
+        // `force` (alias `all`) is the escape hatch that ignores the incremental
+        // tracking baseline and reviews the whole resolved set; default-narrow
+        // otherwise once a baseline exists.
         let request = ReviewRequest {
             scope,
             backend: string_arg(args, "backend"),
             validators: string_array_arg(args, "validators"),
             concurrency: self.concurrency,
+            force: bool_arg(args, "force") || bool_arg(args, "all"),
         };
 
         let embedder_factory = self
@@ -509,6 +513,17 @@ fn string_arg(args: &serde_json::Map<String, serde_json::Value>, key: &str) -> O
     args.get(key)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+/// Read an optional boolean flag (`false` when absent or wrong-typed). Accepts a
+/// real JSON `true`/`false` or the strings `"true"`/`"false"` so a forgiving
+/// caller can pass either shape.
+fn bool_arg(args: &serde_json::Map<String, serde_json::Value>, key: &str) -> bool {
+    match args.get(key) {
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(serde_json::Value::String(s)) => s.eq_ignore_ascii_case("true"),
+        _ => false,
+    }
 }
 
 /// Read an optional string-array argument (empty when absent or wrong-typed).

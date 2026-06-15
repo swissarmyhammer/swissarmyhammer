@@ -72,11 +72,14 @@
 
 use std::fmt::Write as _;
 
+use crate::review::probes::render_probe_evidence;
 use crate::review::scope::{FileWork, ValidatorWork, WorkList};
 use crate::review::types::{parse_findings, Finding};
 use crate::validators::{
-    AgentPool, PoolError, RuleSet, SessionPinGuard, SessionTurnResult, Severity, ValidatorLoader,
+    AgentPool, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult, Severity,
+    ValidatorLoader,
 };
+use agent_client_protocol_extras::SessionStateStatusResponse;
 
 /// Default number of files packed into a single fan-out task.
 ///
@@ -307,13 +310,28 @@ async fn run_validator_fleet(
 }
 
 /// Prime one validator's shared prompt prefix in a dedicated session, confirm
-/// the agent saved restorable state for it ("never fork blind"), and pin that
-/// state for the validator's fan-out.
+/// the agent saved restorable state for it ("never fork blind"), and acquire
+/// the scoped pin guard that governs the fan-out's pin lifecycle.
 ///
-/// Returns the pin guard for the primed session (carrying its id, the fork
-/// parent), or `None` when any step failed — the caller degrades to monolithic
-/// prompts (correct, just cold), never a lost task. The guard guarantees the
-/// unpin even if the fan-out future is cancelled mid-flight.
+/// The prime turn is submitted with a born-pinned save intent
+/// ([`AgentPool::submit_primed`] carries `pin_on_save` in `_meta`), so the
+/// prefix is pinned **atomically at save time** — never an unpinned eviction
+/// candidate, so a concurrent session's save cannot evict it before the fan-out
+/// forks from it. That is the structural close of the prime→pin eviction race.
+///
+/// The post-turn [`AgentPool::pin_session_scoped`] is therefore no longer the
+/// load-bearing pin: it is an **idempotent re-pin / confirm** that (a) verifies
+/// the state is still resident and (b) returns the [`SessionPinGuard`] whose
+/// `release()`/`Drop` performs the matching unpin when the validator's batches
+/// complete (or the fan-out future is dropped mid-flight). There is one pin
+/// protocol — born-pinned at save, unpinned by the guard — not two competing
+/// ones. A backend without a KV cache (claude) born-pins as a no-op and reports
+/// `pinned: false`; forking still works, consistent with the pin=no-op
+/// contract.
+///
+/// Returns the guard for the primed session (carrying its id, the fork parent),
+/// or `None` when any step failed — the caller degrades to monolithic prompts
+/// (correct, just cold), never a lost task.
 async fn prime_validator_prefix(
     change_purpose: &str,
     validator: &ValidatorWork,
@@ -322,29 +340,45 @@ async fn prime_validator_prefix(
 ) -> Option<SessionPinGuard> {
     let name = validator.validator_name.as_str();
     let prefix = render_validator_prefix(change_purpose, validator, ruleset);
-    let turn = match pool.submit_primed(prefix).await {
-        Ok(Ok(turn)) => turn,
+    let turn = submit_prime(pool, name, prefix).await?;
+    let status = confirm_saved_state(pool, name, &turn).await?;
+    pin_prefix(pool, name, &turn, &status).await
+}
+
+/// Submit the born-pinned prime turn for a validator's shared prefix.
+/// `None` (and a warn) on either a turn failure or a dropped result —
+/// the caller degrades to monolithic prompts.
+async fn submit_prime(pool: &AgentPool, name: &str, prefix: String) -> Option<SessionTurn> {
+    match pool.submit_primed(prefix).await {
+        Ok(Ok(turn)) => Some(turn),
         Ok(Err(err)) => {
             tracing::warn!(
                 validator = %name,
                 error = %err,
                 "prefix prime turn failed; falling back to monolithic prompts"
             );
-            return None;
+            None
         }
         Err(_) => {
             tracing::warn!(
                 validator = %name,
                 "prefix prime result was dropped; falling back to monolithic prompts"
             );
-            return None;
+            None
         }
-    };
+    }
+}
 
-    // Confirm the prime actually saved restorable state. `saved` is the
-    // contract's gate; a backend that tracks token counts must also report a
-    // non-empty prefix. Backends without token counts (`prompt_tokens: None`,
-    // e.g. the claude CLI) are still forkable per the contract.
+/// Confirm the prime actually saved restorable state ("never fork blind").
+/// `saved` is the contract's gate; a backend that tracks token counts must also
+/// report a non-empty prefix. Backends without token counts (`prompt_tokens:
+/// None`, e.g. the claude CLI) are still forkable per the contract. `None` (and
+/// a warn) when the status check fails or the state is not restorable.
+async fn confirm_saved_state(
+    pool: &AgentPool,
+    name: &str,
+    turn: &SessionTurn,
+) -> Option<SessionStateStatusResponse> {
     let status = match pool.session_state_status(&turn.session_id).await {
         Ok(status) => status,
         Err(err) => {
@@ -367,20 +401,33 @@ async fn prime_validator_prefix(
         );
         return None;
     }
+    Some(status)
+}
 
-    // Pin the saved state for the fan-out so cache eviction cannot drop it
-    // while forks are in flight. A backend without pinning reports an
-    // effective `pinned: false` and forking still works; only a pin ERROR
-    // (the state vanished) degrades. The scoped pin's guard releases the pin
-    // even when the fan-out future is dropped mid-collect.
+/// Acquire the scoped pin guard that governs the fan-out's pin lifecycle.
+///
+/// The prefix was already born pinned by the prime turn (the `_meta`
+/// pin-on-save intent). This scoped call is therefore an idempotent
+/// re-pin/confirm — it re-asserts the pin (a no-op when the state is already
+/// born pinned) and, crucially, returns the guard that owns the matching unpin
+/// for the fan-out's lifetime. A backend without pinning reports an effective
+/// `pinned: false` and forking still works; only a pin ERROR (the state
+/// vanished) degrades to monolithic prompts.
+async fn pin_prefix(
+    pool: &AgentPool,
+    name: &str,
+    turn: &SessionTurn,
+    status: &SessionStateStatusResponse,
+) -> Option<SessionPinGuard> {
     match pool.pin_session_scoped(&turn.session_id).await {
         Ok((pin, guard)) => {
             tracing::info!(
                 validator = %name,
                 session = %turn.session_id,
                 prefix_tokens = ?status.prompt_tokens,
+                born_pinned = status.pinned,
                 pinned = pin.pinned,
-                "primed validator prefix session"
+                "primed validator prefix session (born pinned at save; pin confirmed)"
             );
             Some(guard)
         }
@@ -696,11 +743,22 @@ fn severity_default(severity: Severity) -> &'static str {
 /// validator name as a tool), leaving the parsed message empty and failing the
 /// task.
 const OUTPUT_CONTRACT: &str = "\
+## Reading files
+
+The changed files under review are already provided in full below — their \
+COMPLETE current contents are inlined, so do NOT `read_file` (or `glob`/`grep`) \
+the changed files; you already have them. `read_file`/`glob`/`grep` remain \
+available, but only for OTHER files: cross-file duplication evidence, a changed \
+symbol's callers, or a type defined elsewhere. Reach for them only when a \
+finding genuinely depends on a file that is not already inlined here.
+
 ## Output contract
 
-Reply with your findings as a JSON array, written directly as the plain text \
-of your reply — the reply is parsed as JSON. Do NOT call any tools: tools are \
-not part of this task, and a tool call is not a valid way to report findings.
+Once you have reviewed the inlined files (reading other files only if needed), \
+reply with your findings as a JSON array, written directly as the plain text of \
+your reply — the reply is parsed as JSON. The findings reply itself must be \
+plain JSON text, never a tool call: a tool call is not a valid way to report \
+findings.
 
 Each finding is one object with these fields:
 
@@ -716,21 +774,42 @@ Each finding is one object with these fields:
 Report only real issues. If you find none, emit an empty array `[]`.
 ";
 
-/// Append one file's review block: path, semantic diff, bounded source slice,
-/// and the probe results rendered as evidence.
+/// Append one file's review block: path, the full current source (or the bounded
+/// fallback for an oversized file), the semantic diff of what changed, and the
+/// probe results rendered as evidence.
+///
+/// The changed file is handed to the model **in full** when it fits the inline
+/// budget ([`FileWork::inlined_full`]), framed explicitly as the complete current
+/// contents the model does NOT need to re-read — the read-round-trips that
+/// dominated review wall-clock came from the model re-reading a file it was only
+/// given a partial slice of. An oversized file falls back to the bounded slice
+/// (which already carries a `read_file` note from the scope stage) and is framed
+/// as a partial view.
 fn render_file_block(out: &mut String, file: &FileWork) {
     let _ = writeln!(out, "## File: {}\n", file.path);
 
-    out.push_str("### Semantic diff\n\n");
-    render_semantic_diff(out, file);
-
-    out.push_str("### Source slice\n\n");
+    if file.inlined_full {
+        out.push_str(
+            "### Full current contents\n\n\
+             This is the COMPLETE current source of the file. You do not need to read this \
+             file — it is provided here in full. Review it directly.\n\n",
+        );
+    } else {
+        out.push_str(
+            "### Source slice (partial — file too large to inline in full)\n\n\
+             This is a BOUNDED slice of an oversized file, not its complete contents. \
+             Use `read_file` on this path to see the remainder before reasoning about it.\n\n",
+        );
+    }
     out.push_str("```\n");
     out.push_str(file.source_slice.trim_end());
     out.push_str("\n```\n\n");
 
+    out.push_str("### What changed (semantic diff)\n\n");
+    render_semantic_diff(out, file);
+
     out.push_str("### Probe evidence\n\n");
-    render_probe_evidence(out, file);
+    render_probe_evidence(out, &file.probe_results, false);
 }
 
 /// Append the structured semantic diff for a file as a list of changed entities.
@@ -745,39 +824,6 @@ fn render_semantic_diff(out: &mut String, file: &FileWork) {
             "- {} {} `{}`",
             change.change_type, change.entity_type, change.entity_name
         );
-    }
-    out.push('\n');
-}
-
-/// Append the probe results for a file as evidence blocks.
-fn render_probe_evidence(out: &mut String, file: &FileWork) {
-    if file.probe_results.is_empty() {
-        out.push_str("_No probe evidence._\n\n");
-        return;
-    }
-    for result in &file.probe_results {
-        let _ = writeln!(out, "- probe `{}` on `{}`:", result.name, result.target);
-        if result.rows.is_empty() {
-            out.push_str("  - (no rows)\n");
-            continue;
-        }
-        for row in &result.rows {
-            out.push_str("  - ");
-            out.push_str(&row.file_path);
-            if let Some(line) = row.line {
-                let _ = write!(out, ":{line}");
-            }
-            if let Some(symbol) = &row.symbol {
-                let _ = write!(out, " `{symbol}`");
-            }
-            if let Some(similarity) = row.similarity {
-                let _ = write!(out, " @ {similarity:.2}");
-            }
-            if let Some(detail) = &row.detail {
-                let _ = write!(out, " — {detail}");
-            }
-            out.push('\n');
-        }
     }
     out.push('\n');
 }
@@ -871,6 +917,7 @@ mod tests {
             }],
             changed_symbols: vec![symbol.to_string()],
             source_slice: format!("// slice for {path}\nfn {symbol}() {{}}"),
+            inlined_full: true,
             probe_results: vec![ProbeResult {
                 name: "duplicates".to_string(),
                 kind: ProbeKind::Fact,
@@ -1041,6 +1088,13 @@ mod tests {
             !prefix.contains("# Files under review"),
             "the prefix must not carry any file payload: {prefix}"
         );
+        // The cached/primed prefix must not carry the per-file source — that
+        // (now full-file) content lives only in the forked payload, so the
+        // shared prefix bytes (and their cache) are unaffected by file size.
+        assert!(
+            !prefix.contains("// slice for src/a.rs") && !prefix.contains("fn alpha"),
+            "the prefix must not carry the file's source contents: {prefix}"
+        );
 
         // The payload carries ONLY the file blocks — no rules, no contract.
         assert!(payload.starts_with("# Files under review"), "{payload}");
@@ -1058,6 +1112,76 @@ mod tests {
             monolithic,
             format!("{shared}{payload}"),
             "monolithic prompt must compose from the same shared sections + payload"
+        );
+    }
+
+    /// A small (fully-inlined) changed file's payload carries the file's
+    /// COMPLETE current contents in a clearly-labeled fenced block plus explicit
+    /// "you do NOT need to read this file" framing — so the model stops
+    /// re-reading the changed file it was already handed.
+    #[test]
+    fn full_inline_payload_carries_complete_source_and_no_reread_framing() {
+        // A FileWork whose source_slice is the WHOLE file (inlined_full = true),
+        // including a marker line the old bounded slice would have trimmed.
+        let mut file = file_work("src/a.rs", "alpha", "src/x.rs");
+        file.source_slice =
+            "use std::fmt;\n// distant_marker_kept_in_full\npub fn alpha() {}".to_string();
+        file.inlined_full = true;
+
+        let payload = render_file_payload(std::slice::from_ref(&file));
+
+        // The complete source — including the distant marker — is present.
+        assert!(
+            payload.contains("// distant_marker_kept_in_full"),
+            "full inline must carry every line of the file: {payload}"
+        );
+        // Explicit framing that the file is the complete contents and need not
+        // be read.
+        assert!(
+            payload.to_lowercase().contains("full")
+                && payload.to_lowercase().contains("do not need to read"),
+            "the block must frame the source as the full file the model need not read: {payload}"
+        );
+    }
+
+    /// An oversized (fallback) changed file's payload carries the bounded slice
+    /// and the read-the-rest note carried through from the scope stage, and does
+    /// NOT claim to be the complete file.
+    #[test]
+    fn fallback_payload_keeps_the_read_for_the_rest_note() {
+        let mut file = file_work("src/big.rs", "huge", "src/x.rs");
+        file.source_slice =
+            "// bounded slice\npub fn huge() {}\n\n// NOTE: this file is too large to inline in full; \
+the slice above is bounded. Use `read_file` on this path to see the remainder before reasoning about it."
+                .to_string();
+        file.inlined_full = false;
+
+        let payload = render_file_payload(std::slice::from_ref(&file));
+
+        assert!(
+            payload.contains("read_file"),
+            "the fallback payload must direct the model to read_file for the rest: {payload}"
+        );
+        assert!(
+            !payload.to_lowercase().contains("do not need to read"),
+            "an oversized file must NOT be framed as fully provided: {payload}"
+        );
+    }
+
+    /// The output contract scopes intrinsic reads to OTHER files (cross-file
+    /// duplication, callers, type defs), not the changed files already inlined in
+    /// full — while still leaving the tools advertised.
+    #[test]
+    fn output_contract_scopes_reads_to_other_files() {
+        assert!(
+            OUTPUT_CONTRACT.contains("other files"),
+            "the contract must scope reads to other (cross-file) files: {OUTPUT_CONTRACT}"
+        );
+        // The changed files are provided in full — the contract says so.
+        assert!(
+            OUTPUT_CONTRACT.to_lowercase().contains("already provided")
+                || OUTPUT_CONTRACT.to_lowercase().contains("provided in full"),
+            "the contract must state the changed files are provided in full: {OUTPUT_CONTRACT}"
         );
     }
 
@@ -1355,6 +1479,45 @@ mod tests {
         assert!(logs_contain("primed validator prefix session"));
     }
 
+    /// The primed prefix is born pinned through the PRODUCTION prime path:
+    /// `prime_validator_prefix` → `submit_primed` → the prompt's `_meta`
+    /// pin-on-save intent → the agent saving its prefix pinned atomically at
+    /// turn completion — BEFORE any separate `session/pin` confirm runs. This is
+    /// the end-to-end (scripted agent, no real model) assertion for the
+    /// structural close of the prime→pin eviction race: the prefix is never an
+    /// unpinned eviction candidate, independent of any post-turn pin.
+    #[tokio::test]
+    async fn primed_prefix_is_born_pinned_through_the_production_path() {
+        let rs = ruleset("val", "mandate", &[("r", "body")]);
+        let loader = loader_with(vec![rs]);
+        let files: Vec<FileWork> = (0..2)
+            .map(|i| file_work(&format!("src/f{i}.rs"), &format!("sym{i}"), "src/x.rs"))
+            .collect();
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work("val", files)],
+        };
+
+        let agent = forking_agent(vec![]);
+        let agent_probe = Arc::clone(&agent);
+
+        with_pool(agent, PoolConfig::remote(2), move |pool| async move {
+            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 2 }).await
+        })
+        .await;
+
+        // The prefix session the validator primed (`sess-0`) was born pinned by
+        // the prime turn's `_meta` intent — recorded at turn completion, before
+        // the post-turn `session/pin` confirm. Forked batch sessions are NOT
+        // born pinned (they save their own cold state unpinned).
+        assert_eq!(
+            agent_probe.born_pinned_sessions(),
+            vec!["sess-0".to_string()],
+            "the primed prefix must be born pinned through the production prime path, \
+             and only the prefix (not the forked batch sessions)"
+        );
+    }
+
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn fork_failure_falls_back_to_monolithic_without_losing_tasks() {
@@ -1556,13 +1719,18 @@ mod tests {
         );
     }
 
-    /// Poll `condition` every 10ms until it holds, panicking after ~3s.
+    /// Poll `condition` every [`POLL_INTERVAL`] until it holds, panicking after
+    /// [`POLL_TIMEOUT`]. The retry count is derived from the two so the wait
+    /// budget is expressed once, not as a product of two coupled literals.
     async fn wait_for(what: &str, condition: impl Fn() -> bool) {
-        for _ in 0..300 {
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+        const POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+        let attempts = POLL_TIMEOUT.as_millis() / POLL_INTERVAL.as_millis();
+        for _ in 0..attempts {
             if condition() {
                 return;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            tokio::time::sleep(POLL_INTERVAL).await;
         }
         panic!("timed out waiting for {what}");
     }

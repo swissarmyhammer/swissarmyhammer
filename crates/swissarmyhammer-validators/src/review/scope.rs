@@ -45,6 +45,7 @@ use swissarmyhammer_sem::parser::plugins::create_default_registry;
 
 use crate::error::AvpError;
 use crate::review::probes::{run_probes, ChangeEntry, FileChange as ProbeChange, ProbeResult};
+use crate::review::tracking;
 use crate::validators::{MatchContext, RuleSet, Severity, ValidatorLoader};
 
 /// How many lines of context to keep on each side of a changed hunk in the
@@ -54,6 +55,29 @@ const HUNK_WINDOW_LINES: usize = 40;
 /// How many leading lines of a file count as its "header" (imports / module
 /// declaration) for the bounded slice.
 const HEADER_LINES: usize = 20;
+
+/// Maximum byte length of a changed file's source to inline **in full** in the
+/// review payload.
+///
+/// The binding constraint is the review model's **context window**, not the
+/// per-call generation cap ([`crate::validators::DEFAULT_MAX_TOKENS`] = 16 Ki,
+/// which bounds the *reply*, never the input). The fan-out's primed prefix is
+/// only ~5k tokens, so a context window of 32k+ tokens has ample headroom to
+/// carry a typical source file whole alongside its prefix and the reply budget.
+///
+/// This is the inline budget expressed in **bytes** (~1 byte ≈ ¼ token for code,
+/// so this corresponds to roughly the per-file slice of an ~8k-token inline
+/// budget — well inside a 32k context window after the prefix and reply). Only a
+/// pathologically large file relative to the window exceeds it; such a file
+/// falls back to the bounded [`bounded_slice`] plus an explicit note directing
+/// the model to `read_file` for the remainder. Typical source files inline whole.
+const MAX_INLINE_SOURCE_BYTES: usize = 32 * 1024;
+
+/// The synthetic validator name carried on scope-stage [`AvpError::Validator`]s.
+///
+/// The scope stage is not a real loaded validator, so its failures are attributed
+/// to this fixed name rather than any user RuleSet.
+const SCOPE_VALIDATOR: &str = "scope";
 
 /// The review scope — exactly one of these resolves to a file set.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,13 +130,13 @@ impl ScopeSpec {
         match chosen.len() {
             1 => Ok(chosen.into_iter().next().expect("len checked")),
             0 => Err(AvpError::Validator {
-                validator: "scope".to_string(),
+                validator: SCOPE_VALIDATOR.to_string(),
                 message:
                     "a review scope must set exactly one of file/glob/working/sha; none were set"
                         .to_string(),
             }),
             n => Err(AvpError::Validator {
-                validator: "scope".to_string(),
+                validator: SCOPE_VALIDATOR.to_string(),
                 message: format!(
                     "a review scope must set exactly one of file/glob/working/sha; {n} were set"
                 ),
@@ -154,8 +178,18 @@ pub struct FileWork {
     pub semantic_diff: Vec<SemanticChange>,
     /// The names of the changed symbols.
     pub changed_symbols: Vec<String>,
-    /// A bounded slice of source.
+    /// The file's source for the review payload.
+    ///
+    /// When [`inlined_full`](FileWork::inlined_full) is `true` this is the file's
+    /// **complete** current contents, so the model never needs to `read_file` the
+    /// changed file. When `false` (a file too large for the inline budget,
+    /// [`MAX_INLINE_SOURCE_BYTES`]) it is the bounded [`bounded_slice`] plus a note
+    /// directing the model to `read_file` for the remainder.
     pub source_slice: String,
+    /// Whether [`source_slice`](FileWork::source_slice) is the file's complete
+    /// contents (`true`) or the bounded-slice fallback for an oversized file
+    /// (`false`).
+    pub inlined_full: bool,
     /// The shared `(file, probe)` results.
     pub probe_results: Vec<ProbeResult>,
 }
@@ -180,6 +214,16 @@ pub struct FileWork {
 /// this signature: task context is plumbed in a later wiring stage that wraps
 /// this call, not derived inside the deterministic scope stage.
 ///
+/// # Incremental working scope
+///
+/// When `use_tracking` is `true` and `scope` is [`Scope::Working`], the resolved
+/// candidate set is narrowed by the [`tracking`] filter: a file whose current
+/// `context_hash` (path + content + global rules hash) matches its recorded
+/// `.validators/.hashes/<path>.yaml` entry is **subtracted**, so a `/finish`
+/// fix-loop only re-reviews files actually edited since the last pass. `false`
+/// (the force/all hatch) ignores tracking and reviews the whole set. The flag is
+/// inert for every non-working scope (`sha`/`file`/`glob` are explicit targets).
+///
 /// # Errors
 ///
 /// Returns [`AvpError::Context`] on git or index failure, or
@@ -190,8 +234,12 @@ pub async fn scope_review(
     loader: &ValidatorLoader,
     conn: &Connection,
     embedder: &dyn TextEmbedder,
+    use_tracking: bool,
 ) -> Result<WorkList, AvpError> {
-    let resolved = resolve_scope_files(&scope, repo_path)?;
+    // The global rules hash feeds the working-scope tracking filter so a rule
+    // edit invalidates every entry; computed once per run from the loaded rules.
+    let rules_hash = tracking::rules_hash(loader);
+    let resolved = resolve_scope_files(&scope, repo_path, use_tracking, &rules_hash)?;
 
     // The single semantic-diff pass: one `FileChange` per resolved file fed to
     // the sem differ once. Whole-content files (glob / unchanged single file)
@@ -242,11 +290,13 @@ pub async fn scope_review(
     for file in &matched_files {
         let entities = entities_by_file.get(file).cloned().unwrap_or_default();
         let after = resolved.after_content.get(file).map(String::as_str);
+        let (source_slice, inlined_full) = inline_or_slice(after, &entities);
         per_file.insert(
             file.clone(),
             FileFacts {
                 changed_symbols: changed_symbols(&entities),
-                source_slice: bounded_slice(after, &entities),
+                source_slice,
+                inlined_full,
                 semantic_diff: entities,
             },
         );
@@ -267,6 +317,7 @@ pub async fn scope_review(
                         semantic_diff: facts.semantic_diff.clone(),
                         changed_symbols: facts.changed_symbols.clone(),
                         source_slice: facts.source_slice.clone(),
+                        inlined_full: facts.inlined_full,
                         probe_results: select_probe_results(
                             &probe_cache,
                             file,
@@ -354,6 +405,7 @@ struct FileFacts {
     semantic_diff: Vec<SemanticChange>,
     changed_symbols: Vec<String>,
     source_slice: String,
+    inlined_full: bool,
 }
 
 /// The resolved scope: the changed-file set, the sem-diff inputs, the per-file
@@ -378,9 +430,18 @@ fn to_probe_entry(change: &SemanticChange) -> ChangeEntry {
 
 /// Resolve a [`Scope`] to its changed-file set and the inputs every later step
 /// needs (sem-diff `FileChange`s, after-content, change purpose).
-fn resolve_scope_files(scope: &Scope, repo_path: &Path) -> Result<ResolvedScope, AvpError> {
+///
+/// `use_tracking`/`rules_hash` only steer [`Scope::Working`]: they drive the
+/// incremental subtract-unchanged filter. Every other scope is an explicit
+/// target and ignores them.
+fn resolve_scope_files(
+    scope: &Scope,
+    repo_path: &Path,
+    use_tracking: bool,
+    rules_hash: &str,
+) -> Result<ResolvedScope, AvpError> {
     match scope {
-        Scope::Working => resolve_working(repo_path),
+        Scope::Working => resolve_working(repo_path, use_tracking, rules_hash),
         Scope::Sha(range) => resolve_sha(repo_path, range),
         Scope::File(path) => resolve_file(repo_path, path),
         Scope::Glob(pattern) => resolve_glob(repo_path, pattern),
@@ -393,25 +454,74 @@ fn open_repo(repo_path: &Path) -> Result<GitOperations, AvpError> {
         .map_err(|e| AvpError::Context(format!("failed to open git repo: {e}")))
 }
 
-/// Read a path's working-tree content from disk, `None` when absent/unreadable.
-fn read_working(repo_path: &Path, path: &str) -> Option<String> {
-    std::fs::read_to_string(repo_path.join(path)).ok()
+/// Read a path's working-tree content from disk.
+///
+/// Returns `Ok(None)` only when the path is **absent** (the intended
+/// deletion/added signal — a file gone from the working tree). Any *other*
+/// failure — a permission error, or a binary/non-UTF8 file that
+/// [`read_to_string`](std::fs::read_to_string) rejects — is propagated as
+/// [`AvpError::Context`] rather than collapsed to `None`, so an unreadable
+/// tracked file is never silently diffed as wholly added/removed.
+fn read_working(repo_path: &Path, path: &str) -> Result<Option<String>, AvpError> {
+    match std::fs::read_to_string(repo_path.join(path)) {
+        Ok(content) => Ok(Some(content)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(AvpError::Context(format!(
+            "failed to read working-tree file {path}: {e}"
+        ))),
+    }
 }
 
-/// Read a blob at `ref:path` via libgit2, `None` when it doesn't resolve.
+/// Read a blob at `ref:path` via libgit2.
 ///
 /// This is the same `git show ref:path` content read the git tool does, via the
 /// shared `swissarmyhammer-git` repository handle instead of a shell-out.
-fn read_at_ref(repo: &GitOperations, refspec: &str, path: &str) -> Option<String> {
+///
+/// Returns `Ok(None)` only when the path does **not exist** at the ref (the
+/// intended Added/Deleted signal — `revparse_single` resolving to not-found, or
+/// the object not being a blob). A blob that exists but cannot be read — a
+/// binary/non-UTF8 tracked file, or any other libgit2 failure — is propagated as
+/// [`AvpError::Context`], so an unreadable tracked file is never silently diffed
+/// as wholly added/removed.
+fn read_at_ref(
+    repo: &GitOperations,
+    refspec: &str,
+    path: &str,
+) -> Result<Option<String>, AvpError> {
     let inner = repo.repository().inner();
-    let object = inner.revparse_single(&format!("{refspec}:{path}")).ok()?;
-    let blob = object.as_blob()?;
-    String::from_utf8(blob.content().to_vec()).ok()
+    let object = match inner.revparse_single(&format!("{refspec}:{path}")) {
+        Ok(object) => object,
+        // The path is absent at this ref — the intended Added/Deleted signal.
+        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(AvpError::Context(format!(
+                "failed to resolve {refspec}:{path}: {e}"
+            )))
+        }
+    };
+    // Not a blob (e.g. a tree at that path) — there is no file content to read.
+    let Some(blob) = object.as_blob() else {
+        return Ok(None);
+    };
+    String::from_utf8(blob.content().to_vec())
+        .map(Some)
+        .map_err(|e| AvpError::Context(format!("blob {refspec}:{path} is not valid UTF-8: {e}")))
 }
 
 /// Resolve the working-tree scope: uncommitted changes vs HEAD (staged +
 /// unstaged + untracked), reusing the git tool's changed-file accounting.
-fn resolve_working(repo_path: &Path) -> Result<ResolvedScope, AvpError> {
+///
+/// When `use_tracking` is set, the candidate set is narrowed by the [`tracking`]
+/// subtract-unchanged filter: a file whose current content hashes to the same
+/// `context_hash` recorded on its last review is dropped before any diff/probe
+/// work, so an incremental `review working` only carries files edited since the
+/// baseline. Each survivor's `before` stays HEAD, so its semantic diff still
+/// shows the real change — tracking decides *inclusion* only, never the diff.
+fn resolve_working(
+    repo_path: &Path,
+    use_tracking: bool,
+    rules_hash: &str,
+) -> Result<ResolvedScope, AvpError> {
     let repo = open_repo(repo_path)?;
     let status = repo
         .get_status()
@@ -426,10 +536,41 @@ fn resolve_working(repo_path: &Path) -> Result<ResolvedScope, AvpError> {
     files.sort();
     files.dedup();
 
+    // Read each candidate's working-tree content once, then (when tracking is on)
+    // subtract files unchanged since their last review. A file with no readable
+    // content (a deletion) carries an empty string here; it has no tracking entry
+    // to match, so it always survives the filter and is diffed as a deletion.
+    let after_by_path: BTreeMap<String, Option<String>> = files
+        .iter()
+        .map(|path| Ok((path.clone(), read_working(repo_path, path)?)))
+        .collect::<Result<_, AvpError>>()?;
+
+    if use_tracking {
+        let candidates: Vec<(String, String)> = files
+            .iter()
+            .map(|path| {
+                let content = after_by_path
+                    .get(path)
+                    .and_then(|c| c.clone())
+                    .unwrap_or_default();
+                (path.clone(), content)
+            })
+            .collect();
+        let before = files.len();
+        files = tracking::subtract_unchanged(repo_path, &candidates, rules_hash);
+        files.sort();
+        tracing::info!(
+            candidates = before,
+            survivors = files.len(),
+            subtracted = before - files.len(),
+            "review working: incremental tracking filter applied"
+        );
+    }
+
     let mut builder = FileChangeBuilder::new();
     for path in &files {
-        let after = read_working(repo_path, path);
-        let before = read_at_ref(&repo, "HEAD", path);
+        let after = after_by_path.get(path).cloned().unwrap_or(None);
+        let before = read_at_ref(&repo, "HEAD", path)?;
         builder.push(path, before, after);
     }
     Ok(builder.finish(files, auto_purpose("working-tree changes")))
@@ -450,8 +591,8 @@ fn resolve_sha(repo_path: &Path, range: &str) -> Result<ResolvedScope, AvpError>
 
     let mut builder = FileChangeBuilder::new();
     for path in &files {
-        let before = read_at_ref(&repo, &from_ref, path);
-        let after = read_at_ref(&repo, &to_ref, path);
+        let before = read_at_ref(&repo, &from_ref, path)?;
+        let after = read_at_ref(&repo, &to_ref, path)?;
         builder.push(path, before, after);
     }
 
@@ -464,8 +605,8 @@ fn resolve_sha(repo_path: &Path, range: &str) -> Result<ResolvedScope, AvpError>
 /// content reviewed as all-added work.
 fn resolve_file(repo_path: &Path, path: &str) -> Result<ResolvedScope, AvpError> {
     let repo = open_repo(repo_path)?;
-    let after = read_working(repo_path, path);
-    let before = read_at_ref(&repo, "HEAD", path);
+    let after = read_working(repo_path, path)?;
+    let before = read_at_ref(&repo, "HEAD", path)?;
 
     let mut builder = FileChangeBuilder::new();
     builder.push(path, before, after);
@@ -479,7 +620,7 @@ fn resolve_file(repo_path: &Path, path: &str) -> Result<ResolvedScope, AvpError>
 /// before side, so each diffs as all-added).
 fn resolve_glob(repo_path: &Path, pattern: &str) -> Result<ResolvedScope, AvpError> {
     let compiled = glob::Pattern::new(pattern).map_err(|e| AvpError::Validator {
-        validator: "scope".to_string(),
+        validator: SCOPE_VALIDATOR.to_string(),
         message: format!("invalid glob pattern '{pattern}': {e}"),
     })?;
 
@@ -494,7 +635,7 @@ fn resolve_glob(repo_path: &Path, pattern: &str) -> Result<ResolvedScope, AvpErr
 
     let mut builder = FileChangeBuilder::new();
     for path in &files {
-        let after = read_working(repo_path, path);
+        let after = read_working(repo_path, path)?;
         builder.push(path, None, after);
     }
     Ok(builder.finish(files, auto_purpose(&format!("files matching {pattern}"))))
@@ -630,6 +771,37 @@ fn changed_symbols(entities: &[SemanticChange]) -> Vec<String> {
     names.into_iter().collect()
 }
 
+/// The note appended to the bounded-slice fallback, directing the model to read
+/// the rest of an oversized changed file rather than reasoning from the slice
+/// alone. Names `read_file` explicitly so the model knows which tool to reach for.
+const OVERSIZED_FILE_READ_NOTE: &str =
+    "\n\n// NOTE: this file is too large to inline in full; the slice above is bounded. \
+Use `read_file` on this path to see the remainder before reasoning about it.";
+
+/// Resolve a changed file's review source, returning the source text and whether
+/// it is the file's **complete** contents.
+///
+/// The model re-reads any file it is not given in full, and those tool
+/// round-trips dominate review wall-clock — so the changed file is inlined whole
+/// whenever it fits the inline budget ([`MAX_INLINE_SOURCE_BYTES`], keyed off the
+/// model's context window, NOT the generation cap). Returns `(full_source, true)`
+/// in that common case.
+///
+/// Only a pathologically large file relative to the window exceeds the budget; it
+/// falls back to the bounded [`bounded_slice`] plus [`OVERSIZED_FILE_READ_NOTE`]
+/// and returns `(slice_with_note, false)` so the caller frames it as a partial
+/// view the model should `read_file` to complete.
+fn inline_or_slice(after: Option<&str>, entities: &[SemanticChange]) -> (String, bool) {
+    match after {
+        Some(content) if content.len() <= MAX_INLINE_SOURCE_BYTES => (content.to_string(), true),
+        _ => {
+            let mut slice = bounded_slice(after, entities);
+            slice.push_str(OVERSIZED_FILE_READ_NOTE);
+            (slice, false)
+        }
+    }
+}
+
 /// Build the bounded source slice for a file: its header, each changed entity's
 /// `after_content`, and a window around each changed entity's location in the
 /// after-content — never the whole file.
@@ -752,7 +924,7 @@ mod tests {
     // ---- scope_review: working scope, duplicate function ------------------
 
     #[tokio::test]
-    async fn working_scope_groups_duplicate_under_validator_with_bounded_slice() {
+    async fn working_scope_groups_duplicate_under_validator_with_full_source() {
         let repo = TestRepo::new();
         // Header = imports; an unrelated marker sits in the MIDDLE of the file,
         // outside both the header window and any changed-hunk window.
@@ -777,9 +949,16 @@ mod tests {
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
-            .await
-            .unwrap();
+        let work = scope_review(
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            false,
+        )
+        .await
+        .unwrap();
 
         let validator = work
             .validators
@@ -801,19 +980,21 @@ mod tests {
             file.changed_symbols
         );
 
-        // Bounded slice: includes the changed function + the import header, but
-        // NOT the distant unrelated marker padded far away.
+        // Full source: a small changed file is inlined whole, so the model never
+        // re-reads it. The changed function, the header, AND the distant unrelated
+        // marker (which the old bounded slice trimmed) are all present.
+        assert!(file.inlined_full, "a small changed file inlines in full");
         assert!(
             file.source_slice.contains("pub fn compute"),
-            "slice must include the changed function"
+            "full source must include the changed function"
         );
         assert!(
             file.source_slice.contains("use std::fmt"),
-            "slice must include the file header"
+            "full source must include the file header"
         );
         assert!(
-            !file.source_slice.contains("distant_unrelated_marker"),
-            "slice must NOT include unrelated distant code, got:\n{}",
+            file.source_slice.contains("distant_unrelated_marker"),
+            "the full inline carries even distant code, got:\n{}",
             file.source_slice
         );
 
@@ -846,9 +1027,16 @@ mod tests {
         let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
-            .await
-            .unwrap();
+        let work = scope_review(
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            false,
+        )
+        .await
+        .unwrap();
 
         let validator = work
             .validators
@@ -881,9 +1069,16 @@ mod tests {
         let loader = loader_with("everything", "*", &[], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
-            .await
-            .unwrap();
+        let work = scope_review(
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            false,
+        )
+        .await
+        .unwrap();
 
         assert!(
             work.validators.is_empty(),
@@ -909,9 +1104,16 @@ mod tests {
         let loader = loader_with("everything", "*", &[], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
-            .await
-            .unwrap();
+        let work = scope_review(
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            false,
+        )
+        .await
+        .unwrap();
 
         let validator = work
             .validators
@@ -926,6 +1128,139 @@ mod tests {
                 .iter()
                 .map(|f| f.path.as_str())
                 .collect::<Vec<_>>()
+        );
+    }
+
+    // ---- scope_review: incremental tracking filter -----------------------
+
+    /// Every file path that appears anywhere in a work-list, deduped.
+    fn worklist_files(work: &WorkList) -> BTreeSet<String> {
+        work.validators
+            .iter()
+            .flat_map(|v| v.files.iter().map(|f| f.path.clone()))
+            .collect()
+    }
+
+    /// Seed a tracking entry whose `context_hash` matches `content` for `path`,
+    /// so a later `subtract_unchanged` over the same content drops it.
+    fn seed_tracking(repo_path: &Path, path: &str, content: &str, rules_hash: &str) {
+        let entry = crate::review::tracking::TrackingEntry::new(
+            path,
+            content,
+            rules_hash,
+            "2026-06-14T00:00:00Z",
+        );
+        crate::review::tracking::upsert_entry(repo_path, &entry).unwrap();
+    }
+
+    #[tokio::test]
+    async fn tracking_subtracts_unchanged_keeps_changed_and_new() {
+        let repo = TestRepo::new();
+        // Two committed files; a third is added untracked. After commit, edit one.
+        let stable = format!("{}\n", body("stable_fn"));
+        let edited_before = format!("{}\n", body("edited_fn"));
+        repo.write("src/stable.rs", &stable);
+        repo.write("src/edited.rs", &edited_before);
+        repo.commit("initial");
+
+        // Edit one file and add a brand-new one.
+        let edited_after = format!("{}\n// edited\n", body("edited_fn"));
+        repo.write("src/edited.rs", &edited_after);
+        repo.write("src/fresh.rs", &format!("{}\n", body("fresh_fn")));
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
+        let embedder = MockEmbedder::new(DIM);
+
+        // Baseline tracking: stable matches its current content; edited's entry is
+        // for the OLD content; fresh has no entry. The rules hash must match what
+        // scope_review computes from this loader.
+        let rules = crate::review::tracking::rules_hash(&loader);
+        seed_tracking(repo.path(), "src/stable.rs", &stable, &rules);
+        seed_tracking(repo.path(), "src/edited.rs", &edited_before, &rules);
+
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, true)
+            .await
+            .unwrap();
+        let files = worklist_files(&work);
+
+        assert!(
+            !files.contains("src/stable.rs"),
+            "an unchanged tracked file is subtracted, got: {files:?}"
+        );
+        assert!(
+            files.contains("src/edited.rs"),
+            "an edited file (its tracked content differs) survives, got: {files:?}"
+        );
+        assert!(
+            files.contains("src/fresh.rs"),
+            "a brand-new file (no entry) survives, got: {files:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn force_full_ignores_tracking_and_reviews_everything() {
+        let repo = TestRepo::new();
+        let stable = format!("{}\n", body("stable_fn"));
+        repo.write("src/stable.rs", &stable);
+        repo.commit("initial");
+        // A working-tree edit so there is at least one change in scope.
+        repo.write("src/stable.rs", &format!("{stable}// touched\n"));
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
+        let embedder = MockEmbedder::new(DIM);
+
+        // Seed an entry matching the CURRENT (touched) content, which `use_tracking`
+        // would subtract — but the force hatch must ignore it.
+        let rules = crate::review::tracking::rules_hash(&loader);
+        seed_tracking(
+            repo.path(),
+            "src/stable.rs",
+            &format!("{stable}// touched\n"),
+            &rules,
+        );
+
+        let work = scope_review(
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(
+            worklist_files(&work).contains("src/stable.rs"),
+            "the force/all hatch reviews the file even though tracking would subtract it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rules_change_keeps_every_file_in_scope() {
+        let repo = TestRepo::new();
+        let stable = format!("{}\n", body("stable_fn"));
+        repo.write("src/stable.rs", &stable);
+        repo.commit("initial");
+        // Touch it so it is a working change.
+        repo.write("src/stable.rs", &format!("{stable}// change\n"));
+        let current = format!("{stable}// change\n");
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
+        let embedder = MockEmbedder::new(DIM);
+
+        // The entry matches the current content but under a DIFFERENT (stale) rules
+        // hash, so its context hash no longer matches and the file must survive.
+        seed_tracking(repo.path(), "src/stable.rs", &current, "sha256:stale-rules");
+
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, true)
+            .await
+            .unwrap();
+        assert!(
+            worklist_files(&work).contains("src/stable.rs"),
+            "a rules change invalidates the tracking entry and keeps the file in scope"
         );
     }
 
@@ -947,9 +1282,16 @@ mod tests {
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
-            .await
-            .unwrap();
+        let _work = scope_review(
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            false,
+        )
+        .await
+        .unwrap();
 
         // The selection summary names the matched validator and file count.
         assert!(logs_contain("review scope resolved"));
@@ -973,9 +1315,16 @@ mod tests {
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
-            .await
-            .unwrap();
+        let _work = scope_review(
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            false,
+        )
+        .await
+        .unwrap();
 
         // The summary still fires, reporting zero matched validators.
         assert!(logs_contain("review scope resolved"));
@@ -1009,6 +1358,7 @@ mod tests {
             &single,
             &conn,
             &baseline_embedder,
+            false,
         )
         .await
         .unwrap();
@@ -1021,9 +1371,16 @@ mod tests {
         loader.add_builtin_ruleset(ruleset("dedupe-b", "*.rs", &["duplicates"], Severity::Warn));
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
-            .await
-            .unwrap();
+        let work = scope_review(
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            false,
+        )
+        .await
+        .unwrap();
 
         // Execution count: the shared (file, probe) run embeds exactly as often
         // as the single-validator baseline — a per-validator re-run would
@@ -1079,9 +1436,16 @@ mod tests {
         let loader = loader_with("reuse", "*.rs", &["callers", "similar"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
-            .await
-            .unwrap();
+        let work = scope_review(
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            false,
+        )
+        .await
+        .unwrap();
 
         let validator = work
             .validators
@@ -1148,6 +1512,7 @@ mod tests {
             &loader,
             &conn,
             &embedder,
+            false,
         )
         .await
         .unwrap();
@@ -1178,6 +1543,7 @@ mod tests {
             &loader,
             &conn,
             &embedder,
+            false,
         )
         .await
         .unwrap();
@@ -1219,14 +1585,209 @@ mod tests {
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
-            .await
-            .unwrap();
+        let work = scope_review(
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            false,
+        )
+        .await
+        .unwrap();
 
         assert!(
             work.validators.is_empty(),
             "a changed .lock with no matching validator yields no work, got: {:?}",
             work.validators
         );
+    }
+
+    // ---- inline_or_slice: full source under the cap, bounded fallback over ----
+
+    /// A small changed file inlines its COMPLETE source (every line, including
+    /// ones the bounded slice would have trimmed) and reports `inlined_full`.
+    #[test]
+    fn small_file_inlines_full_source_and_reports_inlined_full() {
+        // A distant marker far from the header and the changed hunk — exactly
+        // what `bounded_slice` trims away, so its presence proves the FULL file
+        // is inlined, not the slice.
+        let mid_padding: String = (0..30).map(|i| format!("// mid {i}\n")).collect();
+        let after = format!(
+            "use std::fmt;\n{mid_padding}fn distant_unrelated_marker() {{}}\npub fn compute() {{}}\n"
+        );
+        let entities = vec![added_entity("compute", "pub fn compute() {}")];
+
+        let (source, inlined_full) = inline_or_slice(Some(&after), &entities);
+
+        assert!(inlined_full, "a small file must inline in full");
+        assert!(
+            source.contains("distant_unrelated_marker"),
+            "the full inline must carry the distant line the bounded slice trims, got:\n{source}"
+        );
+        assert!(
+            source.contains("pub fn compute"),
+            "the full inline must carry the changed function, got:\n{source}"
+        );
+    }
+
+    /// A changed file whose full content exceeds [`MAX_INLINE_SOURCE_BYTES`]
+    /// falls back to the bounded slice plus an explicit read-the-rest note, and
+    /// reports `inlined_full == false`.
+    #[test]
+    fn oversized_file_falls_back_to_bounded_slice_with_read_note() {
+        // A short header (imports), then a marker placed in the MIDDLE of a huge
+        // body — outside both the header window (`HEADER_LINES`) and the changed
+        // hunk — so the bounded slice trims it. Its absence proves the fallback
+        // is the slice, not the whole file.
+        let header = "use std::fmt;\n";
+        // Many newline-separated lines so the marker sits far past the header
+        // window (line > HEADER_LINES) and far from the changed hunk, and the
+        // whole file still blows past the inline byte cap.
+        let lead: String = (0..MAX_INLINE_SOURCE_BYTES)
+            .map(|i| format!("// lead {i}\n"))
+            .collect();
+        let trail: String = (0..MAX_INLINE_SOURCE_BYTES)
+            .map(|i| format!("// trail {i}\n"))
+            .collect();
+        let after = format!(
+            "{header}{lead}fn distant_unrelated_marker() {{}}\n{trail}pub fn compute() {{}}\n"
+        );
+        assert!(
+            after.len() > MAX_INLINE_SOURCE_BYTES,
+            "fixture must exceed the inline cap"
+        );
+        let entities = vec![added_entity("compute", "pub fn compute() {}")];
+
+        let (source, inlined_full) = inline_or_slice(Some(&after), &entities);
+
+        assert!(!inlined_full, "an oversized file must NOT inline in full");
+        assert!(
+            source.contains("pub fn compute"),
+            "the fallback slice must still carry the changed function, got:\n{source}"
+        );
+        assert!(
+            !source.contains("distant_unrelated_marker"),
+            "the fallback must be the bounded slice, not the whole file, got:\n{source}"
+        );
+        assert!(
+            source.contains("read_file"),
+            "the fallback must direct the model to read_file for the remainder, got:\n{source}"
+        );
+    }
+
+    // ---- read_working / read_at_ref error discipline --------------------
+
+    /// A non-UTF8 byte sequence: a lone continuation byte that is invalid as
+    /// the start of a UTF-8 sequence, so `read_to_string` / `from_utf8` reject
+    /// it. Models a binary/unreadable tracked blob.
+    const BINARY_BYTES: &[u8] = &[0xff, 0xfe, 0x00, 0x01];
+
+    /// An absent working-tree path resolves to `Ok(None)` — the intended
+    /// deletion signal — not an error.
+    #[test]
+    fn read_working_maps_an_absent_path_to_ok_none() {
+        let repo = TestRepo::new();
+        let got = read_working(repo.path(), "src/does_not_exist.rs")
+            .expect("an absent path must not be an error");
+        assert_eq!(got, None, "an absent path is the deletion signal: Ok(None)");
+    }
+
+    /// A present, readable working-tree path resolves to `Ok(Some(content))`.
+    #[test]
+    fn read_working_reads_a_present_file() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "pub fn compute() {}\n");
+        let got = read_working(repo.path(), "src/lib.rs").expect("a readable file must succeed");
+        assert_eq!(got.as_deref(), Some("pub fn compute() {}\n"));
+    }
+
+    /// A binary/non-UTF8 working-tree file is a genuine read failure, NOT the
+    /// deletion signal — it must surface as an error, never as `Ok(None)`.
+    #[test]
+    fn read_working_propagates_a_non_utf8_file_as_an_error() {
+        let repo = TestRepo::new();
+        std::fs::write(repo.path().join("blob.bin"), BINARY_BYTES).unwrap();
+
+        let err = read_working(repo.path(), "blob.bin")
+            .expect_err("a non-UTF8 file must not be silently treated as absent");
+        match err {
+            AvpError::Context(msg) => {
+                assert!(
+                    msg.contains("blob.bin"),
+                    "the error must name the path: {msg}"
+                );
+            }
+            other => panic!("expected AvpError::Context, got: {other:?}"),
+        }
+    }
+
+    /// A path absent at the requested ref resolves to `Ok(None)`.
+    #[test]
+    fn read_at_ref_maps_a_path_absent_at_ref_to_ok_none() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "pub fn compute() {}\n");
+        repo.commit("initial");
+        let git = open_repo(repo.path()).unwrap();
+
+        let got = read_at_ref(&git, "HEAD", "src/never_committed.rs")
+            .expect("a path absent at the ref must not be an error");
+        assert_eq!(got, None, "absent at the ref is Ok(None)");
+    }
+
+    /// A blob present at the ref resolves to `Ok(Some(content))`.
+    #[test]
+    fn read_at_ref_reads_a_committed_blob() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "pub fn compute() {}\n");
+        repo.commit("initial");
+        let git = open_repo(repo.path()).unwrap();
+
+        let got = read_at_ref(&git, "HEAD", "src/lib.rs").expect("a committed blob must succeed");
+        assert_eq!(got.as_deref(), Some("pub fn compute() {}\n"));
+    }
+
+    /// A binary/non-UTF8 blob committed at the ref is a genuine read failure,
+    /// NOT a missing-path signal — it must surface as an error so the file is
+    /// never silently diffed as wholly added/removed.
+    #[test]
+    fn read_at_ref_propagates_a_non_utf8_blob_as_an_error() {
+        let repo = TestRepo::new();
+        std::fs::write(repo.path().join("blob.bin"), BINARY_BYTES).unwrap();
+        repo.commit("add a binary blob");
+        let git = open_repo(repo.path()).unwrap();
+
+        let err = read_at_ref(&git, "HEAD", "blob.bin")
+            .expect_err("a non-UTF8 blob must not be silently treated as absent");
+        match err {
+            AvpError::Context(msg) => {
+                assert!(
+                    msg.contains("blob.bin"),
+                    "the error must name the path: {msg}"
+                );
+            }
+            other => panic!("expected AvpError::Context, got: {other:?}"),
+        }
+    }
+
+    /// A small `SemanticChange` carrying just an added entity's body, enough to
+    /// drive the bounded-slice path in the helper tests.
+    fn added_entity(name: &str, body: &str) -> SemanticChange {
+        use swissarmyhammer_sem::model::change::ChangeType;
+        SemanticChange {
+            id: format!("test:{name}"),
+            entity_id: name.to_string(),
+            change_type: ChangeType::Added,
+            entity_type: "function".to_string(),
+            entity_name: name.to_string(),
+            file_path: "src/lib.rs".to_string(),
+            old_file_path: None,
+            before_content: None,
+            after_content: Some(body.to_string()),
+            commit_sha: None,
+            author: None,
+            timestamp: None,
+            structural_change: None,
+        }
     }
 }

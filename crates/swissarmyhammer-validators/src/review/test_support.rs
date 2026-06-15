@@ -10,6 +10,13 @@
 //! fixture and the scripted ACP mock-agent harness ([`ScriptedAgent`] and
 //! friends, below) the same way — one implementation, parameterized by
 //! [`ScriptedAgentConfig`], instead of per-module copies that drift.
+//!
+//! Exported behind the `test-support` feature, so downstream crates' tests
+//! (notably `swissarmyhammer-tools`' review-tool tests) drive the SAME scripted
+//! agent rather than carrying their own. Each consumer — and each in-crate test
+//! module — uses a different subset of these fixtures, so `dead_code` is allowed
+//! module-wide rather than chasing per-item gates per build configuration.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 
@@ -23,7 +30,7 @@ use crate::validators::types::{RuleSet, RuleSetManifest, RuleSetMetadata, Valida
 use crate::validators::{Rule, Severity, ValidatorLoader, ValidatorSource};
 
 /// Embedding dimension shared by the seeded index and the mock embedder.
-pub(crate) const DIM: usize = 4;
+pub const DIM: usize = 4;
 
 /// A fresh notification channel for pool-backed tests. The 64-slot buffer
 /// comfortably exceeds any test's notification volume so the broadcast
@@ -39,7 +46,7 @@ const LSP_SYMBOL_KIND_FUNCTION: i64 = 12;
 /// A deterministic embedding two chunks can share so they register as
 /// duplicates. The length derives from [`DIM`] so the seeded index and the
 /// mock embedder can never drift apart.
-pub(crate) fn dup_emb() -> Vec<f32> {
+pub fn dup_emb() -> Vec<f32> {
     let mut v = vec![0.0; DIM];
     v[0] = 1.0;
     v
@@ -49,13 +56,19 @@ pub(crate) fn dup_emb() -> Vec<f32> {
 
 /// A throwaway git repo backed by a [`TempDir`], driven via libgit2 so the
 /// pipeline's real `swissarmyhammer-git` reads see real refs/working-tree.
-pub(crate) struct TestRepo {
+pub struct TestRepo {
     dir: TempDir,
     repo: git2::Repository,
 }
 
+impl Default for TestRepo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestRepo {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let dir = TempDir::new().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
         {
@@ -66,12 +79,12 @@ impl TestRepo {
         Self { dir, repo }
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         self.dir.path()
     }
 
     /// Write a file to the working tree (no staging).
-    pub(crate) fn write(&self, rel: &str, content: &str) {
+    pub fn write(&self, rel: &str, content: &str) {
         let full = self.dir.path().join(rel);
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent).unwrap();
@@ -80,7 +93,7 @@ impl TestRepo {
     }
 
     /// Stage everything and commit, returning the commit sha.
-    pub(crate) fn commit(&self, message: &str) -> String {
+    pub fn commit(&self, message: &str) -> String {
         let mut index = self.repo.index().unwrap();
         index
             .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
@@ -103,8 +116,25 @@ impl TestRepo {
 
 /// Open a real, schema-applied, in-memory code_context index (same shape the
 /// probe runner uses in production), seeded deterministically.
-pub(crate) fn index_conn() -> Connection {
+pub fn index_conn() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
+    configure_connection(&conn).unwrap();
+    create_schema(&conn).unwrap();
+    conn
+}
+
+/// Open a real, schema-applied, **on-disk** code_context index at
+/// `<root>/.code-context/index.db` — exactly the path the production review tool
+/// opens read-only. The in-memory [`index_conn`] is what the engine's own probe
+/// unit tests drive; the cross-crate tool/e2e tests instead need the index to
+/// exist on disk where the tool's `open_index_connection` finds it. Each caller
+/// seeds its scenario rows through the shared [`seed_chunk`] / [`seed_symbol`] /
+/// [`seed_call_edge`] helpers (or leaves it empty), so the boilerplate — the
+/// directory, the connection, the production schema — lives here exactly once.
+pub fn on_disk_index_conn(root: &Path) -> Connection {
+    let ctx_dir = root.join(".code-context");
+    std::fs::create_dir_all(&ctx_dir).unwrap();
+    let conn = Connection::open(ctx_dir.join("index.db")).unwrap();
     configure_connection(&conn).unwrap();
     create_schema(&conn).unwrap();
     conn
@@ -113,7 +143,7 @@ pub(crate) fn index_conn() -> Connection {
 /// Register a file in `indexed_files`. `ts_chunks` / `lsp_symbols` carry a
 /// foreign key onto this table (and `configure_connection` enforces it), so
 /// every seeded chunk/symbol needs its file registered first.
-pub(crate) fn seed_file(conn: &Connection, file_path: &str) {
+pub fn seed_file(conn: &Connection, file_path: &str) {
     conn.execute(
         "INSERT OR IGNORE INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed, embedded)
          VALUES (?1, X'DEADBEEF', 1024, 1000, 1, 1, 1)",
@@ -124,7 +154,7 @@ pub(crate) fn seed_file(conn: &Connection, file_path: &str) {
 
 /// Seed a `ts_chunks` row with an embedding so `find_duplicates` /
 /// `search_code` (which filter on `embedding IS NOT NULL`) can see it.
-pub(crate) fn seed_chunk(
+pub fn seed_chunk(
     conn: &Connection,
     file_path: &str,
     symbol_path: &str,
@@ -143,7 +173,7 @@ pub(crate) fn seed_chunk(
 
 /// Seed an `lsp_symbols` row (a function) so the `callers` probe can resolve a
 /// symbol.
-pub(crate) fn seed_symbol(conn: &Connection, id: &str, name: &str, file_path: &str) {
+pub fn seed_symbol(conn: &Connection, id: &str, name: &str, file_path: &str) {
     seed_file(conn, file_path);
     conn.execute(
         "INSERT INTO lsp_symbols (id, name, kind, file_path, start_line, start_char, end_line, end_char, detail)
@@ -154,7 +184,7 @@ pub(crate) fn seed_symbol(conn: &Connection, id: &str, name: &str, file_path: &s
 }
 
 /// Seed an `lsp_call_edges` row (caller -> callee) for the `callers` probe.
-pub(crate) fn seed_call_edge(
+pub fn seed_call_edge(
     conn: &Connection,
     caller_id: &str,
     callee_id: &str,
@@ -175,7 +205,7 @@ pub(crate) fn seed_call_edge(
 /// declares `probes` at `severity`. `add_builtin_ruleset` is the deterministic
 /// injection seam (no on-disk validators, so tests don't depend on the
 /// machine).
-pub(crate) fn loader_with(
+pub fn loader_with(
     name: &str,
     file_glob: &str,
     probes: &[&str],
@@ -187,7 +217,7 @@ pub(crate) fn loader_with(
 }
 
 /// A single-rule RuleSet matching `file_glob` and declaring `probes`.
-pub(crate) fn ruleset(name: &str, file_glob: &str, probes: &[&str], severity: Severity) -> RuleSet {
+pub fn ruleset(name: &str, file_glob: &str, probes: &[&str], severity: Severity) -> RuleSet {
     RuleSet {
         manifest: RuleSetManifest {
             name: name.to_string(),
@@ -245,7 +275,7 @@ pub(crate) fn seeded_dup_repo() -> (TestRepo, Connection, model_embedding::mock:
 }
 
 /// A function body long enough to clear the default `min_chunk_bytes` (100).
-pub(crate) fn body(label: &str) -> String {
+pub fn body(label: &str) -> String {
     format!(
         "pub fn {label}(input: &[f64]) -> f64 {{\n    let mut total = 0.0;\n    for value in input {{\n        total += value * value;\n    }}\n    total / input.len() as f64\n}}"
     )
@@ -284,17 +314,18 @@ use agent_client_protocol::schema::{
     TextContent,
 };
 use agent_client_protocol::{Channel, Client, ConnectTo, ConnectionTo, Role};
+use agent_client_protocol_extras::PIN_ON_SAVE_META_KEY;
 use tokio::sync::broadcast;
 
 use crate::review::fleet::PRIME_HANDOFF;
 use crate::validators::{AgentPool, PoolConfig};
 
 /// Prompt-token count the mock reports for every saved prefix state.
-pub(crate) const MOCK_PREFIX_TOKENS: u64 = 1234;
+pub const MOCK_PREFIX_TOKENS: u64 = 1234;
 
 /// One scripted reaction, matched in script order by substring needle.
 #[derive(Debug, Clone)]
-pub(crate) enum ScriptedReply {
+pub enum ScriptedReply {
     /// Stream this text back as an `agent_message_chunk`, then end the turn.
     Text(String),
     /// Fail the prompt with an internal error.
@@ -306,7 +337,7 @@ pub(crate) enum ScriptedReply {
 
 /// How the mock agent answers the session-fork extension surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ForkMode {
+pub enum ForkMode {
     /// Fork/status/pin behave like the llama backend (state + token counts).
     Supported,
     /// `session/fork` is rejected (`fork_parent_state_unavailable`);
@@ -323,7 +354,8 @@ pub(crate) enum ForkMode {
 /// plainest agent: no fork extension, replies emitted over the live
 /// connection, no mid-turn agent→client round-trips, and an empty findings
 /// array (`[]`) when no script entry matches.
-pub(crate) struct ScriptedAgentConfig {
+#[derive(Debug, Clone)]
+pub struct ScriptedAgentConfig {
     /// How the session-fork extension surface answers.
     pub fork_mode: ForkMode,
     /// The reply when no script entry matches the session context.
@@ -372,11 +404,15 @@ struct SessionState {
 /// defaults) or [`ScriptedAgent::with_config`], wire it up with
 /// [`ScriptedAdapter`] (or [`with_pool`] for pool-backed tests), and probe what
 /// it saw through the accessor methods.
-pub(crate) struct ScriptedAgent {
+pub struct ScriptedAgent {
     next_session: AtomicUsize,
-    /// (context-substring, reply), matched in order against the session's
-    /// full conversation history.
-    script: Vec<(String, ScriptedReply)>,
+    /// (needles, reply), matched in order against the session's full
+    /// conversation history: EVERY needle must be present for the entry to
+    /// fire. A single-needle entry (the common case) is a one-element slice;
+    /// multi-needle entries let a fan-out script key on both a validator header
+    /// and a specific file/claim, which a single contiguous substring can't
+    /// express.
+    script: Vec<(Vec<String>, ScriptedReply)>,
     config: ScriptedAgentConfig,
     /// Every prompt seen, with the session it ran on (payload-only text for
     /// forked turns).
@@ -385,6 +421,12 @@ pub(crate) struct ScriptedAgent {
     sessions: Mutex<HashMap<String, SessionState>>,
     /// Every `session/pin` call, in order: (session id, requested pin).
     pin_calls: Mutex<Vec<(String, bool)>>,
+    /// Sessions whose prefix was born pinned (saved pinned atomically at the
+    /// prime turn's completion, via the `_meta` pin-on-save intent) — recorded
+    /// at turn time, BEFORE any separate `session/pin` call, so a fleet test can
+    /// prove the prefix is pinned through the production prime path rather than
+    /// only by the post-turn confirm.
+    born_pinned: Mutex<Vec<String>>,
     /// Number of successful `session/fork` calls.
     forks: AtomicUsize,
     /// Content received from `fs/read_text_file` round-trips, in order.
@@ -392,12 +434,31 @@ pub(crate) struct ScriptedAgent {
 }
 
 impl ScriptedAgent {
-    pub(crate) fn new(script: Vec<(String, ScriptedReply)>) -> Arc<Self> {
+    /// A scripted agent matching on a single substring per entry — the common
+    /// case (each entry's needle is matched with `contains` against the
+    /// session's accumulated context).
+    pub fn new(script: Vec<(String, ScriptedReply)>) -> Arc<Self> {
         Self::with_config(script, ScriptedAgentConfig::default())
     }
 
-    pub(crate) fn with_config(
+    /// A scripted agent with a custom [`ScriptedAgentConfig`], matching on a
+    /// single substring per entry.
+    pub fn with_config(
         script: Vec<(String, ScriptedReply)>,
+        config: ScriptedAgentConfig,
+    ) -> Arc<Self> {
+        Self::with_script(
+            script.into_iter().map(|(n, r)| (vec![n], r)).collect(),
+            config,
+        )
+    }
+
+    /// A scripted agent whose entries each match a SET of needles (all must be
+    /// present). The general form behind [`new`](Self::new) and
+    /// [`with_config`](Self::with_config); a fan-out script keys on both a
+    /// validator header and a file/claim this way.
+    pub fn with_script(
+        script: Vec<(Vec<String>, ScriptedReply)>,
         config: ScriptedAgentConfig,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -407,9 +468,30 @@ impl ScriptedAgent {
             seen: Mutex::new(Vec::new()),
             sessions: Mutex::new(HashMap::new()),
             pin_calls: Mutex::new(Vec::new()),
+            born_pinned: Mutex::new(Vec::new()),
             forks: AtomicUsize::new(0),
             observed_reads: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Clone `base`'s script and config into a fresh agent whose replies stream
+    /// onto `broadcast` (and, when `bridge_to_connection`, the live connection
+    /// too) — the per-connection rebind a factory needs when it mints one
+    /// `AgentHandle` per review run, each with its own broadcast channel that
+    /// the handle's `notification_rx` subscribes to.
+    pub fn rebind_broadcast(
+        base: &Arc<Self>,
+        broadcast: broadcast::Sender<SessionNotification>,
+        bridge_to_connection: bool,
+    ) -> Arc<Self> {
+        Self::with_script(
+            base.script.clone(),
+            ScriptedAgentConfig {
+                broadcast: Some(broadcast),
+                bridge_to_connection,
+                ..base.config.clone()
+            },
+        )
     }
 
     /// The text of every prompt seen, in order.
@@ -436,6 +518,13 @@ impl ScriptedAgent {
         self.pin_calls.lock().unwrap().clone()
     }
 
+    /// Sessions whose prefix was born pinned by the prime turn's `_meta`
+    /// pin-on-save intent — recorded at turn completion, before any separate
+    /// `session/pin` call.
+    pub(crate) fn born_pinned_sessions(&self) -> Vec<String> {
+        self.born_pinned.lock().unwrap().clone()
+    }
+
     pub(crate) fn fork_count(&self) -> usize {
         self.forks.load(Ordering::SeqCst)
     }
@@ -448,8 +537,8 @@ impl ScriptedAgent {
     /// The scripted reply for `context` — the first matching script entry, or
     /// the configured default response when nothing matches.
     fn reply_for(&self, context: &str) -> ScriptedReply {
-        for (needle, reply) in &self.script {
-            if context.contains(needle) {
+        for (needles, reply) in &self.script {
+            if needles.iter().all(|n| context.contains(n.as_str())) {
                 return reply.clone();
             }
         }
@@ -470,10 +559,22 @@ impl ScriptedAgent {
         state.history.clone()
     }
 
-    /// Mark one completed turn on the session: it now has saved state.
-    fn complete_turn(&self, session_id: &str) {
+    /// Mark one completed turn on the session: it now has saved state. When
+    /// `pin_on_save` is set (the prime turn's born-pinned intent, carried in the
+    /// prompt's `_meta`), the saved state is born pinned — pinned atomically at
+    /// save time, mirroring the llama backend's `insert_inner(.., true)`. This
+    /// is what lets a fleet test assert the primed prefix is born pinned through
+    /// the production path, before any separate `session/pin` lands.
+    fn complete_turn(&self, session_id: &str, pin_on_save: bool) {
         if let Some(state) = self.sessions.lock().unwrap().get_mut(session_id) {
             state.completed_turns += 1;
+            if pin_on_save {
+                state.pinned = true;
+                self.born_pinned
+                    .lock()
+                    .unwrap()
+                    .push(session_id.to_string());
+            }
         }
     }
 
@@ -506,7 +607,7 @@ impl ScriptedAgent {
 }
 
 /// Adapter wiring a [`ScriptedAgent`] as an ACP server over a channel.
-pub(crate) struct ScriptedAdapter(pub(crate) Arc<ScriptedAgent>);
+pub struct ScriptedAdapter(pub Arc<ScriptedAgent>);
 
 impl ConnectTo<Client> for ScriptedAdapter {
     async fn connect_to(
@@ -620,8 +721,17 @@ async fn handle_prompt(
         ScriptedReply::Text(text) => text,
     };
     mock.emit_reply(cx, &req.session_id, text);
-    // The turn completed: the session now has saved state.
-    mock.complete_turn(&session_key);
+    // The turn completed: the session now has saved state. A prime turn carries
+    // the born-pinned save intent in its `_meta` (`PIN_ON_SAVE_META_KEY`), so
+    // the saved prefix is pinned atomically at save time — the production
+    // prime→pin race close — rather than relying on a separate post-turn pin.
+    let pin_on_save = req
+        .meta
+        .as_ref()
+        .and_then(|m| m.get(PIN_ON_SAVE_META_KEY))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    mock.complete_turn(&session_key, pin_on_save);
     responder
         .cast()
         .respond_with_result(Ok(PromptResponse::new(StopReason::EndTurn)))
@@ -792,7 +902,7 @@ fn state_not_found() -> agent_client_protocol::Error {
 }
 
 /// The concatenated text blocks of one prompt request.
-pub(crate) fn prompt_text(req: &PromptRequest) -> String {
+pub fn prompt_text(req: &PromptRequest) -> String {
     req.prompt
         .iter()
         .filter_map(|block| match block {

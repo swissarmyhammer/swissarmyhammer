@@ -60,6 +60,15 @@ pub struct GenerationRequest {
     pub top_p: Option<f32>,
     pub stop_tokens: Vec<String>,
     pub stopping_config: Option<StoppingConfig>,
+    /// When `true`, the session-state snapshot this turn saves at the prompt
+    /// boundary is born pinned against cache eviction — atomically at save
+    /// time, never an unpinned eviction candidate. Set by a review fan-out's
+    /// prime turn (carried over ACP in `_meta` under
+    /// [`agent_client_protocol_extras::PIN_ON_SAVE_META_KEY`]) so a concurrent
+    /// session's save cannot evict the prefix before a separate post-turn pin
+    /// lands — the prime→pin eviction race. Defaults to `false`: an ordinary
+    /// turn saves unpinned.
+    pub pin_on_save: bool,
 }
 
 impl GenerationRequest {
@@ -72,6 +81,7 @@ impl GenerationRequest {
             top_p: None,
             stop_tokens: Vec::new(),
             stopping_config: None,
+            pin_on_save: false,
         }
     }
 
