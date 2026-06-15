@@ -21,7 +21,6 @@ Pick up a kanban task and get it done.
 Here is what the user provided: 
 $ARGUMENTS
 
-{% include "_partials/delegate-to-subagent" %}
 
 ## Guidelines
 

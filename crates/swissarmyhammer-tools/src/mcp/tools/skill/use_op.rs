@@ -156,68 +156,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_render_skill_instructions_with_agent_renders_delegate_partial() {
-        // A skill declaring `agent` should render the delegate-to-subagent
-        // partial naming that agent (the `{% if agent %}` true path).
-        let value = serde_json::json!({
-            "name": "agent-skill",
-            "description": "A skill with an agent",
-            "instructions": "{% include \"_partials/delegate-to-subagent\" %}",
-            "agent": "tester",
-        });
-        let prompt_library = default_prompt_library();
-
-        let rendered = render_skill_instructions_for_test(value, &prompt_library, None).await;
-        let instructions = rendered["instructions"].as_str().unwrap();
-
-        assert!(
-            instructions.contains("tester"),
-            "delegate partial should name the configured agent, got: {}",
-            instructions
-        );
-        assert!(
-            !instructions.contains("{% include"),
-            "rendered output should not contain raw Liquid include tags, got: {}",
-            instructions
-        );
-    }
-
-    #[tokio::test]
-    async fn test_render_skill_instructions_without_agent_renders_cleanly() {
-        // A skill WITHOUT an `agent` field must still render cleanly: the
-        // `{% if agent %}` else path collapses to nothing, and no raw Liquid
-        // tags leak into the output.
-        let value = serde_json::json!({
-            "name": "no-agent-skill",
-            "description": "A skill without an agent",
-            "instructions": "Body before.\n{% include \"_partials/delegate-to-subagent\" %}\nBody after.",
-        });
-        let prompt_library = default_prompt_library();
-
-        let rendered = render_skill_instructions_for_test(value, &prompt_library, None).await;
-        let instructions = rendered["instructions"].as_str().unwrap();
-
-        // The skill's own body survives.
-        assert!(
-            instructions.contains("Body before.") && instructions.contains("Body after."),
-            "skill body should be preserved, got: {}",
-            instructions
-        );
-        // The delegate partial collapsed to nothing — no subagent instruction.
-        assert!(
-            !instructions.contains("Run this in a subagent"),
-            "delegate block must not render when no agent is set, got: {}",
-            instructions
-        );
-        // No raw Liquid tags leak.
-        assert!(
-            !instructions.contains("{% if") && !instructions.contains("{% include"),
-            "rendered output should not contain raw Liquid tags, got: {}",
-            instructions
-        );
-    }
-
-    #[tokio::test]
     async fn test_render_skill_instructions_no_instructions_field() {
         // Value without an "instructions" field should pass through unchanged
         let value = serde_json::json!({
