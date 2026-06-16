@@ -748,6 +748,75 @@ async fn run_review_request_records_a_tracking_baseline_and_gitignore() {
     );
 }
 
+/// A `review working` through the production `run_review_request` against a repo
+/// whose `.validators/.gitignore` was **already written by swissarmyhammer-directory**
+/// (the store deploy) must append the `.hashes/` ignore line while preserving the
+/// store's original lines.
+///
+/// This reproduces the live calcutron gap (apvst51): the existing baseline test
+/// starts from no gitignore, so it never exercised the append-to-store-content
+/// branch through the production layers. Here the store-authored content
+/// pre-exists exactly as swissarmyhammer-directory's `ValidatorsConfig::GITIGNORE_CONTENT`
+/// writes it, and the recorder must append `.hashes/` to it idempotently.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn run_review_request_appends_hashes_to_a_store_authored_gitignore() {
+    use super::review_op::{run_review_request, ReviewRequest};
+    use swissarmyhammer_directory::{DirectoryConfig, ValidatorsConfig};
+    use swissarmyhammer_validators::review::Scope;
+
+    // The EXACT content swissarmyhammer-directory writes on store deploy,
+    // referenced from the real source of truth so this test cannot silently
+    // drift from the on-disk store content it asserts against.
+    let store_gitignore = <ValidatorsConfig as DirectoryConfig>::GITIGNORE_CONTENT;
+
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
+
+    // The store deployed `.validators/.gitignore` BEFORE any review ran.
+    let validators_dir = repo.path().join(".validators");
+    std::fs::create_dir_all(&validators_dir).expect("create .validators");
+    std::fs::write(validators_dir.join(".gitignore"), store_gitignore)
+        .expect("seed store-authored .validators/.gitignore");
+
+    let report = run_review_request(
+        ReviewRequest {
+            scope: Scope::Working,
+            backend: Some("local".to_string()),
+            validators: Vec::new(),
+            concurrency: None,
+            force: false, // tracking ON — the production default
+        },
+        repo.path().to_path_buf(),
+        mock_embedder_factory(),
+        factory,
+        "2026-06-15 12:00".to_string(),
+    )
+    .await
+    .expect("review working through run_review_request");
+
+    assert!(
+        report.counts.tasks_attempted > 0,
+        "the working change must have produced fan-out tasks: {:?}",
+        report.counts
+    );
+
+    let content = std::fs::read_to_string(validators_dir.join(".gitignore"))
+        .expect("the store gitignore is still present after the review");
+    // The store's original lines are preserved (no clobber).
+    assert!(
+        content.contains("# Keep validator definitions (they should be committed)"),
+        "the store-authored lines must be preserved, got:\n{content}"
+    );
+    // The recorder appended the `.hashes/` ignore line.
+    assert!(
+        content.lines().any(|l| l.trim() == ".hashes/"),
+        "the .hashes/ ignore line must be appended to the store gitignore, got:\n{content}"
+    );
+}
+
 /// Two `review working` passes through `run_review_request` with no edits
 /// between them: the first records baselines, the second subtracts the unchanged
 /// file and short-circuits to zero fan-out tasks. This is the end-to-end

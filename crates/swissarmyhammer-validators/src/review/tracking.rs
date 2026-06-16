@@ -571,6 +571,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ensure_gitignore_appends_to_the_store_authored_gitignore() {
+        use swissarmyhammer_directory::{DirectoryConfig, ValidatorsConfig};
+
+        // The EXACT `.validators/.gitignore` content swissarmyhammer-directory writes
+        // when it deploys the validators store, referenced from the real source of
+        // truth so this test cannot silently drift from the on-disk store content.
+        // Reproduces the live calcutron gap: this is the file already on disk when the
+        // recorder runs, and the `.hashes/` line must be appended to it.
+        let store_gitignore = <ValidatorsConfig as DirectoryConfig>::GITIGNORE_CONTENT;
+
+        let repo = TempDir::new().unwrap();
+        let dir = repo.path().join(".validators");
+        std::fs::create_dir_all(&dir).unwrap();
+        // The pre-existing gitignore swissarmyhammer-directory wrote on store deploy.
+        std::fs::write(dir.join(".gitignore"), store_gitignore).unwrap();
+
+        ensure_gitignore(repo.path()).unwrap();
+
+        let content = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(
+            content.contains("# Keep validator definitions (they should be committed)"),
+            "the store's original lines are preserved: {content}"
+        );
+        assert!(
+            content.lines().any(|l| l.trim() == ".hashes/"),
+            "the .hashes/ ignore line is appended to the store gitignore: {content}"
+        );
+    }
+
     // ---- upsert / read entry ---------------------------------------------
 
     #[test]
