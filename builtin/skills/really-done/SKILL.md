@@ -31,6 +31,19 @@ Before any status claim or expression of satisfaction:
 
 Skip any step = lying, not verifying.
 
+## Adversarial Sign-Off (advisory gate)
+
+Running the verification command above is the **hard, primary requirement** — the Iron Law is not negotiable and this step does not replace it. After the command passes, when there are **code changes to verify**, get a second pair of eyes before claiming done:
+
+1. **Skip if there is no diff.** No code changed → nothing to critique adversarially → skip this gate entirely.
+2. **Spawn the critic.** Launch the `double-check` agent via the **Task tool** (`subagent_type: double-check`) for an adversarial critique of the changes.
+3. **Read the verdict.** It returns `PASS` or `REVISE` with findings.
+   - `PASS` → proceed to the completion claim.
+   - `REVISE` → either fix the findings, **or** proceed past them with a brief logged justification (e.g. a kanban task comment) explaining why they are acceptable. Silently ignoring them is not allowed.
+4. **Bound the loop.** Act on the findings and re-spawn `double-check` **at most once**. Do not loop indefinitely re-reviewing the same tree — after one re-check, either claim done or proceed-with-justification.
+
+This is an **advisory** gate: it surfaces risk and informs the decision, but the caller may proceed. The evidence-before-claims command run remains the requirement that cannot be waived.
+
 ## What Counts as Proof
 
 | Claim | Requires | Not sufficient |
@@ -85,6 +98,7 @@ Before any:
 - Commit, PR, task completion
 - Moving to the next task
 - Delegating to agents
+- Claiming a code change done — get adversarial sign-off from the `double-check` agent first (advisory; see above)
 
 ## Why It Matters
 
