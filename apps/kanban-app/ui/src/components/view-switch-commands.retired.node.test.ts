@@ -8,9 +8,15 @@
  *   - The webview dispatches `view.set` with the view id in `args.view_id`
  *     (LeftNav's `ViewButton`, plugin definition in
  *     `builtin/plugins/app-shell-commands/commands/ui.ts`).
- *   - The palette's per-view "Switch to <ViewName>" rows are emitted by Rust
+ *   - The per-view "Switch to View <ViewName>" rows are emitted by Rust
  *     (`swissarmyhammer_kanban::scope_commands::emit_view_switch`) as
  *     `view.set` rows with pre-filled args — never as `view.switch:*` ids.
+ *     These rows ship for every view (palette-switchable from anywhere); the
+ *     view whose `view:{id}` moniker is in the right-click scope chain also
+ *     gets ITS OWN row flagged `context_menu: true` (card
+ *     01KV5K29FFQJTBER6HYA4J2DW6). That context-menu surfacing reuses the
+ *     canonical `view.set` command — it does NOT resurrect a `view.switch:*`
+ *     id, so the guard below is unaffected by it.
  *   - The dispatcher-side `view.switch:*` rewrite was retired in
  *     01KPZMXXEXKVE3RNPA4XJP0105, so a minted id would not even resolve.
  *

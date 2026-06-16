@@ -1,8 +1,13 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8480'
+comments:
+- actor: claude-code
+  id: 01kv8arxc99c6kw9djrzqp9hnq
+  text: 'Finish loop: verified 5/5 browser tests pass + tsc --noEmit clean. Scoped review found 0 blockers; the card''s actual contribution (setFocusFqOf helper) is clean, and all flagged items are pre-existing clarity nits in shared scaffolding (confirmed via git show on 66e47ccfb). Moved to done.'
+  timestamp: 2026-06-16T13:43:43.753535+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffbc80
 project: ui-command-cleanup
 title: Fix pre-existing perspective-tab-bar.filter-migration.test.tsx failures (filter button click → empty spatial_focus fq)
 ---

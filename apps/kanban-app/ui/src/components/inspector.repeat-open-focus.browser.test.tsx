@@ -439,6 +439,12 @@ describe("Inspector — auto-focus on every inspect (not only the first)", () =>
     });
 
     // Helper: every spatial_focus dispatch in the order it fired.
+    //
+    // Production routes `set focus` through the in-process `focus` MCP
+    // server, so the fq lives at `args.params.fq` for the
+    // `command_tool_call` envelope and at `args.fq` for the legacy
+    // `spatial_focus` command. Read from `params` first, then fall back to
+    // the top-level field.
     const focusCalls = () =>
       mockInvoke.mock.calls
         .filter(
@@ -448,7 +454,12 @@ describe("Inspector — auto-focus on every inspect (not only the first)", () =>
               (c[1] as any)?.tool === "focus" &&
               (c[1] as any)?.op === "set focus"),
         )
-        .map((c) => (c[1] as { fq?: string } | undefined)?.fq ?? "?");
+        .map((c) => {
+          const a = c[1] as
+            | { fq?: string; params?: { fq?: string } }
+            | undefined;
+          return a?.params?.fq ?? a?.fq ?? "?";
+        });
 
     /** Simulate a card click: nav.focus(card_fq) then inspect open. */
     async function clickCardThenInspect(

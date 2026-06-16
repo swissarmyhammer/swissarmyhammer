@@ -539,6 +539,12 @@ async fn build_dynamic_sources_filters_perspectives_by_active_view_kind() {
 const GRID_VIEW_A_ID: &str = "01JMVIEW0000000000TGRID0";
 const GRID_VIEW_B_ID: &str = "01JMVIEW0000000000PGRID0";
 
+// View ids for the context-menu view-switch scoping tests. Hoisted to module
+// level (matching the `GRID_VIEW_*_ID` convention above) so the same two ULIDs
+// are shared across every test that exercises `switch_rows_for_scope`.
+const VIEW_X_ID: &str = "01JMVIEW0000000000XGRID0";
+const VIEW_Y_ID: &str = "01JMVIEW0000000000YGRID0";
+
 /// Per-`view_id` scoping: a perspective pinned to view A's id must appear
 /// only when view A is active and must NOT appear when view B (a sibling
 /// of the same kind) is active.
@@ -677,5 +683,177 @@ async fn legacy_kind_perspectives_remain_shared_by_kind() {
             .iter()
             .map(|p| (&p.id, &p.view))
             .collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Per-view "Switch to View «name»" context-menu coverage
+// (card 01KV5K29FFQJTBER6HYA4J2DW6).
+//
+// View switching stays palette-only (`context_menu: false`) for EVERY view so
+// the palette can switch to any view from anywhere. Additionally, the view
+// whose `view:{id}` moniker is present in the scope chain gets ITS OWN row
+// flagged `context_menu: true` — so right-clicking view X surfaces exactly
+// "Switch to View «X»" and nothing for sibling views.
+// ---------------------------------------------------------------------------
+
+/// Build a minimal grid-kind [`ViewInfo`] for the switch-row tests.
+fn view_info(id: &str, name: &str) -> swissarmyhammer_views::ViewInfo {
+    swissarmyhammer_views::ViewInfo {
+        id: id.into(),
+        name: name.into(),
+        entity_type: Some("task".into()),
+        kind: "grid".into(),
+    }
+}
+
+/// Run `commands_for_scope` over a fixed two-view `DynamicSources` and the
+/// supplied scope chain, returning every emitted command. Uses an empty UIState
+/// and the composed kanban registry — the same plumbing the other tests use.
+fn switch_rows_for_scope(
+    views: &[swissarmyhammer_views::ViewInfo],
+    scope: &[String],
+) -> Vec<swissarmyhammer_kanban::scope_commands::ResolvedCommand> {
+    let dynamic = DynamicSources {
+        views: views.to_vec(),
+        ..Default::default()
+    };
+    let registry = compose_registry![swissarmyhammer_kanban];
+    let impls: HashMap<String, Arc<dyn swissarmyhammer_kanban::commands_core::Command>> =
+        HashMap::new();
+    let ui_arc = Arc::new(UIState::new());
+    commands_for_scope(
+        scope,
+        &registry,
+        &impls,
+        None,
+        &ui_arc,
+        false,
+        Some(&dynamic),
+        None,
+    )
+}
+
+/// Pull the `view_id` from a `view.set` row's args, if present.
+fn view_set_view_id(
+    cmd: &swissarmyhammer_kanban::scope_commands::ResolvedCommand,
+) -> Option<String> {
+    if cmd.id != "view.set" {
+        return None;
+    }
+    cmd.args
+        .as_ref()
+        .and_then(|v| v.get("view_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// With `view:{X}` in the scope chain, exactly ONE `view.set` row is flagged
+/// `context_menu: true`, it carries view X's `view_id`, and no sibling view's
+/// id appears as a context-menu row. The palette (`context_menu: false`) rows
+/// for ALL views remain.
+#[test]
+fn context_menu_view_switch_is_scoped_to_the_view_in_scope() {
+    let views = vec![
+        view_info(VIEW_X_ID, "Board"),
+        view_info(VIEW_Y_ID, "Backlog"),
+    ];
+
+    let cmds = switch_rows_for_scope(&views, &[format!("view:{VIEW_X_ID}")]);
+
+    // Exactly one context_menu:true view.set row, and it is view X's.
+    let ctx_menu_view_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| c.context_menu)
+        .filter_map(view_set_view_id)
+        .collect();
+    assert_eq!(
+        ctx_menu_view_ids,
+        vec![VIEW_X_ID.to_string()],
+        "exactly one context-menu view.set row, scoped to the view in the chain; got {:?}",
+        cmds.iter()
+            .map(|c| (&c.id, c.context_menu, &c.args))
+            .collect::<Vec<_>>()
+    );
+
+    // Sibling view Y must NOT have a context-menu row.
+    assert!(
+        !ctx_menu_view_ids.iter().any(|id| id == VIEW_Y_ID),
+        "sibling view Y must not surface a context-menu switch row"
+    );
+
+    // The context-menu row's caption reads "Switch to View «Board»" — names
+    // that don't already contain "View" get the "View" word.
+    let x_ctx_row = cmds
+        .iter()
+        .find(|c| c.context_menu && view_set_view_id(c).as_deref() == Some(VIEW_X_ID))
+        .expect("view X context-menu row exists");
+    assert_eq!(x_ctx_row.name, "Switch to View Board");
+
+    // Palette rows (context_menu:false) for BOTH views remain — every view is
+    // palette-switchable from anywhere.
+    let palette_view_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| !c.context_menu)
+        .filter_map(view_set_view_id)
+        .collect();
+    assert!(
+        palette_view_ids.iter().any(|id| id == VIEW_Y_ID),
+        "view Y must still have a palette (context_menu:false) switch row; got {palette_view_ids:?}"
+    );
+}
+
+/// A view whose stored name already contains "View" must not be double-named:
+/// the caption reads "Switch to Board View", never "Switch to View Board View".
+#[test]
+fn context_menu_view_switch_caption_avoids_double_view_word() {
+    let views = vec![view_info(VIEW_X_ID, "Board View")];
+
+    let cmds = switch_rows_for_scope(&views, &[format!("view:{VIEW_X_ID}")]);
+
+    let x_ctx_row = cmds
+        .iter()
+        .find(|c| c.context_menu && view_set_view_id(c).as_deref() == Some(VIEW_X_ID))
+        .expect("view X context-menu row exists");
+    assert_eq!(
+        x_ctx_row.name, "Switch to Board View",
+        "a view name already containing 'View' must not get a second 'View' word"
+    );
+}
+
+/// With NO `view:` moniker in the scope chain (e.g. a global/board/task
+/// context menu), no `view.set` row is flagged `context_menu: true` — view
+/// switching does not leak into unrelated context menus. The palette rows
+/// (context_menu:false) still exist for every view.
+#[test]
+fn no_context_menu_view_switch_row_without_a_view_in_scope() {
+    let views = vec![
+        view_info(VIEW_X_ID, "Board"),
+        view_info(VIEW_Y_ID, "Backlog"),
+    ];
+
+    // A scope chain with only a board moniker — no view in scope.
+    let cmds = switch_rows_for_scope(&views, &["board:/tmp/sample/.kanban".into()]);
+
+    let ctx_menu_view_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| c.context_menu)
+        .filter_map(view_set_view_id)
+        .collect();
+    assert!(
+        ctx_menu_view_ids.is_empty(),
+        "no context-menu view.set row may appear without a view:{{id}} in scope; got {ctx_menu_view_ids:?}"
+    );
+
+    // Palette rows still present for both views.
+    let palette_view_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| !c.context_menu)
+        .filter_map(view_set_view_id)
+        .collect();
+    assert!(
+        palette_view_ids.iter().any(|id| id == VIEW_X_ID)
+            && palette_view_ids.iter().any(|id| id == VIEW_Y_ID),
+        "both views must still have palette switch rows; got {palette_view_ids:?}"
     );
 }

@@ -52,23 +52,29 @@ interface ParsedMoniker {
 }
 
 /**
- * The real cross-cutting entity types — the DECLARED CAPABILITY shared by the
- * clipboard trio (`entity.cut` / `entity.copy` / `entity.paste`) AND the CRUD
- * trio (`entity.delete` / `entity.archive` / `entity.unarchive`).
+ * The entity types that can be the SUBJECT of a clipboard / CRUD operation —
+ * the DECLARED CAPABILITY shared by the clipboard pair (`entity.cut` /
+ * `entity.copy`) AND the CRUD trio (`entity.delete` / `entity.archive` /
+ * `entity.unarchive`). These five commands act ON the focused entity AS the
+ * subject (cut/copy/delete/archive/unarchive THIS entity).
  *
- * The command surface (`list command`) lists these six commands only when the
+ * The command surface (`list command`) lists these five commands only when the
  * focused object's entity type is one of these. The set deliberately excludes:
  *
+ * - `board` — the board is the ROOT, so it can never be the subject of its own
+ *   cut/copy/delete/archive/unarchive. Right-clicking the root board background
+ *   must NOT offer "Cut Board" / "Delete Board" etc. The board IS a valid PASTE
+ *   TARGET (clipboard contents drop INTO it) — but that is the opposite
+ *   direction, gated by {@link PASTE_TARGET_ENTITY_TYPES}, not this subject set.
  * - `field` — a `field:{type}:{id}.{name}` moniker is a PROJECTION of its
  *   containing entity, not an entity, so a focused field would otherwise show
- *   nonsensical "Delete Field" / "Archive Field" / "Inspect Field" rows. The
- *   gate suppresses all of them, with no UI special-casing.
+ *   nonsensical "Delete Field" / "Archive Field" rows. The gate suppresses all
+ *   of them, with no UI special-casing.
  * - `view` / `perspective` — they have their own `perspective.*` commands and
- *   no cut/copy/paste or CRUD semantics here.
+ *   no cut/copy or CRUD semantics here.
  *
  * The fine-grained, per-type DISPATCH gating (e.g. cut only deletes
- * task/tag/attachment, paste needs a matching `PasteMatrix` handler) stays in
- * the Rust `available()` impls in
+ * task/tag/attachment) stays in the Rust `available()` impls in
  * `swissarmyhammer-kanban::commands::clipboard_commands`; this set is the
  * coarse list-level capability that keeps the commands off types they cannot
  * operate on at all.
@@ -76,21 +82,50 @@ interface ParsedMoniker {
  * Mirrors `COPYABLE_ENTITY_TYPES` in
  * `crates/swissarmyhammer-kanban/src/commands/clipboard_commands.rs` — the two
  * lists must stay in lockstep. That lockstep is ENFORCED, not just documented:
- * the drift guard `builtin_entity_commands_e2e::assert_operable_applies_to`
- * loads this plugin, reads each surfaced `applies_to`, and asserts set-equality
- * against the Rust `COPYABLE_ENTITY_TYPES`, so this list and that constant
- * cannot silently diverge. (`app.inspect` in the `app-shell-commands` bundle
- * declares the same set, pinned by the matching guard in
- * `builtin_app_shell_commands_e2e`.)
+ * the drift guard `support::assert_operable_applies_to` loads this plugin,
+ * reads each surfaced `applies_to`, and asserts set-equality against the Rust
+ * `COPYABLE_ENTITY_TYPES`, so this list and that constant cannot silently
+ * diverge. (`app.inspect` in the `app-shell-commands` bundle declares the same
+ * subject set, pinned by the matching guard in `builtin_app_shell_commands_e2e`.)
  */
-const OPERABLE_ENTITY_TYPES: readonly string[] = [
+const SUBJECT_OPERABLE_ENTITY_TYPES: readonly string[] = [
   "task",
   "tag",
   "column",
-  "board",
   "actor",
   "project",
   "attachment",
+];
+
+/**
+ * The entity types that can RECEIVE a paste — the DECLARED CAPABILITY for
+ * `entity.paste`. Paste is the OPPOSITE direction from the subject ops: it
+ * drops the clipboard contents INTO the target, so the gate is "which entity
+ * types can be a paste TARGET", NOT "which can be a subject".
+ *
+ * Derived from the registered `PasteMatrix` handlers' TARGET side
+ * (`crates/swissarmyhammer-kanban/src/commands/paste_handlers/`):
+ *
+ *   - `task`    — `tag_onto_task`, `attachment_onto_task`, `actor_onto_task`
+ *   - `attachment` — `attachment_onto_attachment`
+ *   - `board`   — `task_into_board`, `column_into_board`
+ *   - `column`  — `task_into_column`
+ *   - `project` — `task_into_project`
+ *
+ * `board` IS here — the board is a legitimate paste target (e.g. dropping a
+ * task or column onto an empty board background), which is exactly why
+ * `entity.paste` STAYS on the root board even though the subject ops do not.
+ *
+ * Pinned against the Rust `register_paste_handlers()` target set by the drift
+ * guard `support::assert_paste_target_applies_to`, so this list can never
+ * silently drift from the handlers that actually exist.
+ */
+const PASTE_TARGET_ENTITY_TYPES: readonly string[] = [
+  "task",
+  "attachment",
+  "board",
+  "column",
+  "project",
 ];
 
 /**
@@ -236,7 +271,7 @@ export default class EntityCommandsPlugin extends Plugin {
         context_menu_group: 2,
         context_menu_order: 0,
         keys: { cua: "Mod+Backspace" },
-        applies_to: OPERABLE_ENTITY_TYPES,
+        applies_to: SUBJECT_OPERABLE_ENTITY_TYPES,
         params: [{ name: "moniker", from: "target" }],
         available: (rawCtx: unknown) =>
           requireTarget((rawCtx ?? {}) as CommandContext),
@@ -263,7 +298,7 @@ export default class EntityCommandsPlugin extends Plugin {
         context_menu_group: 2,
         context_menu_order: 1,
         keys: { vim: "d d" },
-        applies_to: OPERABLE_ENTITY_TYPES,
+        applies_to: SUBJECT_OPERABLE_ENTITY_TYPES,
         params: [{ name: "moniker", from: "target" }],
         available: (rawCtx: unknown) =>
           requireTarget((rawCtx ?? {}) as CommandContext),
@@ -287,7 +322,7 @@ export default class EntityCommandsPlugin extends Plugin {
         context_menu: true,
         context_menu_group: 2,
         context_menu_order: 2,
-        applies_to: OPERABLE_ENTITY_TYPES,
+        applies_to: SUBJECT_OPERABLE_ENTITY_TYPES,
         params: [{ name: "moniker", from: "target" }],
         available: (rawCtx: unknown) =>
           requireTarget((rawCtx ?? {}) as CommandContext),
@@ -315,7 +350,7 @@ export default class EntityCommandsPlugin extends Plugin {
         context_menu_order: 0,
         keys: { cua: "Mod+X", vim: "x" },
         menu: { path: ["Edit"], group: 1, order: 0 },
-        applies_to: OPERABLE_ENTITY_TYPES,
+        applies_to: SUBJECT_OPERABLE_ENTITY_TYPES,
         params: [{ name: "moniker", from: "target" }],
         available: (rawCtx: unknown) =>
           requireTarget((rawCtx ?? {}) as CommandContext),
@@ -342,7 +377,7 @@ export default class EntityCommandsPlugin extends Plugin {
         context_menu_order: 1,
         keys: { cua: "Mod+C", vim: "y" },
         menu: { path: ["Edit"], group: 1, order: 1 },
-        applies_to: OPERABLE_ENTITY_TYPES,
+        applies_to: SUBJECT_OPERABLE_ENTITY_TYPES,
         params: [{ name: "moniker", from: "target" }],
         available: (rawCtx: unknown) =>
           requireTarget((rawCtx ?? {}) as CommandContext),
@@ -363,16 +398,27 @@ export default class EntityCommandsPlugin extends Plugin {
       // that CREATES via the shared PasteMatrix (NOT internal-drag mutation).
       // The op takes the destination `target` moniker (verbatim) plus the
       // scope chain for association-shaped paste handlers.
+      //
+      // Caption is the clipboard-driven plain "Paste" — NOT
+      // "Paste {{entity.type}}". Paste is about WHAT IS ON THE CLIPBOARD, not
+      // the target entity, so rendering the target type would produce the
+      // meaningless "Paste Board" on the root board. The list-time
+      // CommandContext carries no clipboard, so a `{{clipboard.type}}` token is
+      // not resolvable at this surface; plain "Paste" is the correct caption.
+      //
+      // Gated by PASTE_TARGET_ENTITY_TYPES (the paste-TARGET capability),
+      // which INCLUDES `board` — unlike the subject ops, paste STAYS on the
+      // root board because the board is a valid paste target.
       {
         id: "entity.paste",
-        name: "Paste {{entity.type}}",
+        name: "Paste",
         undoable: true,
         context_menu: true,
         context_menu_group: 1,
         context_menu_order: 2,
         keys: { cua: "Mod+V", vim: "p" },
         menu: { path: ["Edit"], group: 1, order: 2 },
-        applies_to: OPERABLE_ENTITY_TYPES,
+        applies_to: PASTE_TARGET_ENTITY_TYPES,
         params: [{ name: "moniker", from: "target" }],
         available: (rawCtx: unknown) => {
           const ctx = (rawCtx ?? {}) as CommandContext;

@@ -98,6 +98,11 @@ import { BoardView } from "./board-view";
 import { AppShell } from "./app-shell";
 import { commandToolCall, navDispatchCmds } from "@/test/mock-command-list";
 import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
+import {
+  UNHANDLED,
+  emitToListenerMap,
+  makeSpatialKernelMock,
+} from "@/test/mock-spatial-kernel";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -179,15 +184,14 @@ const tasks: Entity[] = [
 let mockKeymapMode: "cua" | "vim" | "emacs" = "cua";
 
 /**
- * Tracks the moniker → FullyQualifiedMoniker mapping so `spatial_focus_by_moniker`
- * can synthesize the kernel's `focus-changed` emit. Card
+ * Shared spatial-kernel mock — maintains the moniker → fq projection and
+ * synthesizes the kernel's `focus-changed` emit so `setFocus(moniker)`
+ * flows through the spatial-focus bridge into the React store. Card
  * `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus store a pure
- * projection of kernel events; tests that mock `invoke` without a
- * kernel simulator need this minimal stub so `setFocus(moniker)`
- * still flows through the spatial-focus bridge into the React store.
+ * projection of kernel events.
  */
-const monikerToKey = new Map<string, string>();
-const currentFocusKey: { key: string | null } = { key: null };
+const { handleSpatialCommand, reset: resetSpatialKernel } =
+  makeSpatialKernelMock({ emit: emitToListenerMap(listeners) });
 
 // ---------------------------------------------------------------------------
 // Default invoke responses — the handful of IPCs the AppShell + BoardView
@@ -246,75 +250,8 @@ async function defaultInvokeImpl(
   // The spatial-nav register/unregister/focus calls all return void —
   // undefined is the safe default. Drill has no client-side IPC at all:
   // it executes host-side in the `nav-commands` builtin plugin.
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
-    const a = (args ?? {}) as { fq?: string; segment?: string };
-    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
-    return undefined;
-  }
-  if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { fq?: string };
-    if (a.fq) {
-      for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.fq) {
-          monikerToKey.delete(m);
-          break;
-        }
-      }
-    }
-    return undefined;
-  }
-  if (cmd === "spatial_focus") {
-    // Queued via `queueMicrotask` to match the kernel simulator and
-    // real Tauri events — emitting synchronously would hide
-    // regressions where `setFocus` writes the store synchronously.
-    const a = (args ?? {}) as { fq?: string };
-    const fq = a.fq ?? null;
-    let moniker: string | null = null;
-    for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) {
-        moniker = s;
-        break;
-      }
-    }
-
-    if (fq) {
-      const prev = currentFocusKey.key;
-      currentFocusKey.key = fq;
-      queueMicrotask(() => {
-        const handlers = listeners.get("focus-changed") ?? [];
-        for (const handler of handlers) {
-          handler({
-            payload: {
-              window_label: "main",
-              prev_fq: prev,
-              next_fq: fq,
-              next_segment: moniker,
-            },
-          });
-        }
-      });
-    }
-    return undefined;
-  }
-  if (cmd === "spatial_clear_focus") {
-    const prev = currentFocusKey.key;
-    if (prev === null) return undefined;
-    currentFocusKey.key = null;
-    queueMicrotask(() => {
-      const handlers = listeners.get("focus-changed") ?? [];
-      for (const handler of handlers) {
-        handler({
-          payload: {
-            window_label: "main",
-            prev_fq: prev,
-            next_fq: null,
-            next_segment: null,
-          },
-        });
-      }
-    });
-    return undefined;
-  }
+  const spatial = handleSpatialCommand(cmd, args);
+  if (spatial !== UNHANDLED) return spatial;
   return undefined;
 }
 
@@ -507,8 +444,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
     mockInvoke.mockClear();
     mockListen.mockClear();
     listeners.clear();
-    monikerToKey.clear();
-    currentFocusKey.key = null;
+    resetSpatialKernel();
     mockKeymapMode = "cua";
     mockInvoke.mockImplementation(defaultInvokeImpl);
   });

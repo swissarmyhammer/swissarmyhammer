@@ -96,7 +96,7 @@ use swissarmyhammer_window_service::{
 use tempfile::TempDir;
 use tokio::sync::Mutex as TokioMutex;
 
-use crate::support::{assert_operable_applies_to, call_command, execute_result, try_call_command};
+use crate::support::{assert_inspect_applies_to, call_command, execute_result, try_call_command};
 
 /// A generous upper bound on any single host or isolate interaction.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -836,6 +836,52 @@ async fn ui_origin_commands_execute_against_their_backends() {
          moniker from the scope chain (the palette-pick shape) — never \
          inspect the empty string"
     );
+
+    // ── (a'') app.inspect with a CHROME-leaf target falls through ────────────
+    // The toolbar (nav-bar) context-menu dispatch shape (kanban card
+    // 01KV5KYZT9J2BXFJ6H2X782E14): `lib/context-menu.ts` sets `target` to the
+    // INNERMOST scope-chain moniker, which on the toolbar is a `ui:navbar.*`
+    // CHROME leaf, not an entity. The caption ("Inspect Board") is rendered
+    // by `focused_entity_type`, which skips chrome and resolves the `board:`
+    // ANCESTOR — so a chrome `target` that wins verbatim would inspect a
+    // non-inspectable moniker and no-op while the caption promised a board.
+    // `resolveInspectTarget` must therefore IGNORE a non-inspectable explicit
+    // target and fall through to the innermost inspectable scope-chain
+    // moniker (the `board:` ancestor), matching the caption.
+    execute_inner_ok(
+        &service,
+        "app.inspect",
+        json!({
+            "target": "ui:navbar.board-selector",
+            "scope_chain": [
+                "ui:navbar.board-selector",
+                "board:01BOARD",
+                format!("window:{WINDOW}"),
+                "engine",
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(
+        backends.ui_state.inspector_stack(WINDOW),
+        vec![
+            "task:01ABC".to_string(),
+            "tag:bug".to_string(),
+            "task:01PALETTE".to_string(),
+            "board:01BOARD".to_string(),
+        ],
+        "app.inspect with a non-inspectable CHROME-leaf target \
+         (ui:navbar.board-selector) must fall through to the innermost \
+         inspectable scope-chain moniker (board:01BOARD) — the toolbar \
+         context-menu Inspect-Board shape — never inspect the chrome leaf"
+    );
+    execute_inner_ok(
+        &service,
+        "app.inspector.close",
+        json!({ "scope_chain": window_scope() }),
+    )
+    .await;
+
     execute_inner_ok(
         &service,
         "app.inspector.close",
@@ -1117,12 +1163,15 @@ async fn ui_origin_commands_execute_against_their_backends() {
 }
 
 /// The committed `app-shell-commands` bundle gates the VISIBLE inspect surface
-/// (`app.inspect`) by the real cross-cutting entity capability set: `list
-/// command` suppresses it when the focus is a `field:` projection moniker (a
-/// field is NOT an entity), and still offers it when a real entity (task) is
-/// focused. `entity.inspect` (the Space gesture, ungated, server-side target
-/// resolution) is unaffected — it carries no `applies_to`, so it lists in
-/// either focus and resolves the containing entity itself.
+/// (`app.inspect`) by the INSPECTABLE entity capability set: `list command`
+/// suppresses it when the focus is a `field:` projection moniker (a field is
+/// NOT an entity), still offers it when a real entity (task) is focused, AND
+/// still offers it on the root `board:` focus ("Inspect Board" — the board is
+/// inspectable even though it is never a cut/copy/delete SUBJECT). The inspect
+/// set is decoupled from the board-less subject set on purpose. `entity.inspect`
+/// (the Space gesture, ungated, server-side target resolution) is unaffected —
+/// it carries no `applies_to`, so it lists in every focus and resolves the
+/// containing entity itself.
 #[tokio::test]
 async fn app_inspect_suppressed_on_a_field_offered_on_an_entity() {
     let user_root = TempDir::new().expect("user root temp dir");
@@ -1199,6 +1248,32 @@ async fn app_inspect_suppressed_on_a_field_offered_on_an_entity() {
         on_task.contains_key("app.inspect"),
         "app.inspect MUST surface when a real entity (task) is focused; got {:?}",
         on_task.keys().collect::<Vec<_>>()
+    );
+
+    // ── Root board focus: app.inspect PRESENT ("Inspect Board") ─────────────
+    // Inspect is decoupled from the subject ops: the root board can never be
+    // cut/copied/deleted from itself, but it CAN be inspected. `board:` is in
+    // the inspectable set, so "Inspect Board" must surface on the root board
+    // background — the regression this card restores.
+    let on_board = commands_by_id(
+        &call_command(
+            &service,
+            CallerId::HostInternal,
+            json!({
+                "op": "list command",
+                "ctx": {
+                    "target": "board:b1",
+                    "scope_chain": ["board:b1"],
+                },
+            }),
+        )
+        .await,
+    );
+    assert!(
+        on_board.contains_key("app.inspect"),
+        "app.inspect MUST surface on the root board — \"Inspect Board\" is a \
+         meaningful root-board affordance (board is inspectable); got {:?}",
+        on_board.keys().collect::<Vec<_>>()
     );
 
     // ── field.edit is the COMPLEMENT of the suppression above ────────────────
@@ -1563,7 +1638,9 @@ fn assert_app_inspect(cmd: &Value) {
     assert_single_param(cmd, "app.inspect", "moniker", "target");
     assert_no_keys(cmd, "app.inspect");
     assert_no_menu(cmd, "app.inspect");
-    assert_operable_applies_to(cmd, "app.inspect");
+    // Inspect gates on the INSPECTABLE set (board PRESENT) — NOT the board-less
+    // subject set: "Inspect Board" is a meaningful root-board affordance.
+    assert_inspect_applies_to(cmd, "app.inspect");
 }
 
 /// `entity.inspect` — Card G's consolidated global Space inspect command.

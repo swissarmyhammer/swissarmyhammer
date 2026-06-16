@@ -15,9 +15,7 @@
 
 mod common;
 
-use std::collections::BTreeSet;
-
-use common::call_tool;
+use common::{call_tool, list_ids};
 use serde_json::{json, Value};
 use swissarmyhammer_command_service::CommandService;
 use swissarmyhammer_plugin::{CallerId, PluginId};
@@ -33,32 +31,6 @@ fn register_with_applies_to(id: &str, name: &str, applies_to: &[&str]) -> Value 
         "params": [{ "name": "moniker", "from": "target" }],
         "applies_to": applies_to,
     })
-}
-
-/// Drive `list command` with the given arguments and return the id set.
-async fn list_ids(
-    service: &CommandService,
-    arguments: Value,
-    caller: &CallerId,
-) -> BTreeSet<String> {
-    let result = call_tool(service, "list command", arguments, caller)
-        .await
-        .expect("list should succeed");
-    let structured = result
-        .structured_content
-        .expect("list response should carry structured content");
-    assert_eq!(structured["ok"], json!(true));
-    structured["commands"]
-        .as_array()
-        .expect("`commands` should be an array")
-        .iter()
-        .map(|entry| {
-            entry["id"]
-                .as_str()
-                .expect("each entry should carry a string id")
-                .to_string()
-        })
-        .collect()
 }
 
 /// Register the clipboard-shaped fixture: three cross-cutting commands that
@@ -164,6 +136,120 @@ async fn clipboard_commands_present_when_a_task_is_focused() {
     );
 }
 
+/// Register the subject-vs-paste-target fixture as the production
+/// `entity-commands` bundle declares them after the subject/paste-target split:
+/// the five SUBJECT commands (cut/copy/delete/archive/unarchive) gate on the
+/// subject set (which deliberately EXCLUDES `board` — the root can't be the
+/// subject of its own cut/copy/delete), while `entity.paste` gates on the
+/// paste-TARGET set (which INCLUDES `board` — the board is a legitimate paste
+/// target via the `task_into_board` / `column_into_board` handlers).
+///
+/// Deliberately a REDUCED representative set; the production sets are pinned
+/// against the Rust constants by the e2e drift guards.
+async fn register_subject_paste_split_fixture(service: &CommandService, caller: &CallerId) {
+    // SUBJECT set: no `board` — these act ON the focused entity as the subject.
+    let subject = &["task", "tag", "column", "actor", "project", "attachment"];
+    for (id, name) in [
+        ("entity.cut", "Cut {{entity.type}}"),
+        ("entity.copy", "Copy {{entity.type}}"),
+        ("entity.delete", "Delete {{entity.type}}"),
+        ("entity.archive", "Archive {{entity.type}}"),
+        ("entity.unarchive", "Unarchive {{entity.type}}"),
+    ] {
+        call_tool(
+            service,
+            "register command",
+            register_with_applies_to(id, name, subject),
+            caller,
+        )
+        .await
+        .expect("fixture register should succeed");
+    }
+    // PASTE-TARGET set: INCLUDES `board` — clipboard contents drop INTO it. The
+    // caption is plain "Paste" (clipboard-driven), never "Paste {{entity.type}}".
+    let paste_targets = &["task", "attachment", "board", "column", "project"];
+    call_tool(
+        service,
+        "register command",
+        register_with_applies_to("entity.paste", "Paste", paste_targets),
+        caller,
+    )
+    .await
+    .expect("fixture register should succeed");
+}
+
+#[tokio::test]
+async fn subject_commands_absent_but_paste_present_when_the_root_board_is_focused() {
+    let service = CommandService::new();
+    let caller = CallerId::Plugin(PluginId::new("plugin-a"));
+    register_subject_paste_split_fixture(&service, &caller).await;
+
+    // Right-click the root board background: the context menu fires over the
+    // board moniker. The five subject ops are meaningless on the root and must
+    // NOT surface; paste MUST surface (the board is a paste target).
+    let got = list_ids(
+        &service,
+        json!({
+            "op": "list command",
+            "ctx": { "target": "board:b1", "scope_chain": ["board:b1"] },
+        }),
+        &caller,
+    )
+    .await;
+
+    for absent in [
+        "entity.cut",
+        "entity.copy",
+        "entity.delete",
+        "entity.archive",
+        "entity.unarchive",
+    ] {
+        assert!(
+            !got.contains(absent),
+            "{absent} must NOT surface on the root board — the board cannot be \
+             the subject of its own cut/copy/delete/archive; got {got:?}",
+        );
+    }
+    assert!(
+        got.contains("entity.paste"),
+        "entity.paste MUST surface on the root board — it is a valid paste \
+         target; got {got:?}",
+    );
+}
+
+#[tokio::test]
+async fn subject_commands_present_when_a_column_is_focused() {
+    let service = CommandService::new();
+    let caller = CallerId::Plugin(PluginId::new("plugin-a"));
+    register_subject_paste_split_fixture(&service, &caller).await;
+
+    // A focused column is a real subject — all five subject ops must surface
+    // (no regression from excluding `board` from the subject set).
+    let got = list_ids(
+        &service,
+        json!({
+            "op": "list command",
+            "ctx": { "target": "column:todo", "scope_chain": ["column:todo", "board:b1"] },
+        }),
+        &caller,
+    )
+    .await;
+
+    for present in [
+        "entity.cut",
+        "entity.copy",
+        "entity.delete",
+        "entity.archive",
+        "entity.unarchive",
+        "entity.paste",
+    ] {
+        assert!(
+            got.contains(present),
+            "{present} MUST surface when a column is focused; got {got:?}",
+        );
+    }
+}
+
 /// Register the CRUD/inspect-shaped fixture: the four cross-cutting commands
 /// (`entity.delete` / `entity.archive` / `entity.unarchive` / `app.inspect`)
 /// that — like the clipboard trio — declare they apply only to real
@@ -253,6 +339,71 @@ async fn crud_inspect_commands_present_when_a_task_is_focused() {
             && got.contains("entity.unarchive")
             && got.contains("app.inspect"),
         "delete/archive/unarchive/inspect MUST appear when a task is focused; got {got:?}",
+    );
+}
+
+/// Register `app.inspect` as the `app-shell-commands` bundle declares it after
+/// the subject/inspect decoupling: gated on the INSPECTABLE set, which INCLUDES
+/// `board` (the root board can never be a cut/copy/delete SUBJECT, but it IS
+/// inspectable — "Inspect Board"), while still EXCLUDING the `field:` projection.
+///
+/// Deliberately a REDUCED representative set; the production inspect set is
+/// pinned against the Rust inspectable set (subject `COPYABLE_ENTITY_TYPES` plus
+/// `board`) by `builtin_app_shell_commands_e2e::assert_inspect_applies_to`.
+async fn register_inspect_fixture(service: &CommandService, caller: &CallerId) {
+    // INSPECTABLE set: INCLUDES `board` (Inspect Board), unlike the subject set.
+    let inspectable = &["task", "tag", "column", "board", "attachment"];
+    call_tool(
+        service,
+        "register command",
+        register_with_applies_to("app.inspect", "Inspect {{entity.type}}", inspectable),
+        caller,
+    )
+    .await
+    .expect("fixture register should succeed");
+}
+
+#[tokio::test]
+async fn inspect_present_on_the_root_board_but_absent_on_a_field() {
+    let service = CommandService::new();
+    let caller = CallerId::Plugin(PluginId::new("plugin-a"));
+    register_inspect_fixture(&service, &caller).await;
+
+    // Right-click the root board background: "Inspect Board" MUST surface — the
+    // board is inspectable even though it is never a cut/copy/delete subject.
+    let on_board = list_ids(
+        &service,
+        json!({
+            "op": "list command",
+            "ctx": { "target": "board:b1", "scope_chain": ["board:b1"] },
+        }),
+        &caller,
+    )
+    .await;
+    assert!(
+        on_board.contains("app.inspect"),
+        "app.inspect MUST surface on the root board — \"Inspect Board\" is a \
+         meaningful root-board affordance; got {on_board:?}",
+    );
+
+    // A focused field is a projection, not an entity — "Inspect Field" must NOT
+    // surface (board PRESENT, field ABSENT is the whole point of the split).
+    let on_field = list_ids(
+        &service,
+        json!({
+            "op": "list command",
+            "ctx": {
+                "target": "field:task:01ABC.title",
+                "scope_chain": ["field:task:01ABC.title", "ui:field", "task:01ABC"],
+            },
+        }),
+        &caller,
+    )
+    .await;
+    assert!(
+        !on_field.contains("app.inspect"),
+        "app.inspect must NOT surface when a field is focused — a field is a \
+         projection, not an entity; got {on_field:?}",
     );
 }
 

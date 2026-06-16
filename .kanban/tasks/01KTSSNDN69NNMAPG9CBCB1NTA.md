@@ -1,8 +1,13 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '80'
+comments:
+- actor: claude-code
+  id: 01kv88bdrpva9g2qa9tsj8a5ch
+  text: 'Finish loop: verified 12/12 browser tests pass + tsc --noEmit clean. Scoped review (single file) found only the already-captured harness duplication (zd74s4t) + pre-existing clarity nits in that same shared harness — no new in-scope findings. Moved to done.'
+  timestamp: 2026-06-16T13:01:24.630737+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffb980
 title: 'Pre-existing vitest browser-mode failures: inspectable.space.browser.test.tsx (4) — Space-inspect dispatch contract'
 ---
 ## What

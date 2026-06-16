@@ -1,8 +1,13 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8280'
+comments:
+- actor: claude-code
+  id: 01kv89gwnfn4bcm1n78sktxzc4
+  text: 'Finish loop: verified 65/65 browser tests pass (both files) + tsc --noEmit clean. Scoped review found only the already-captured harness duplication (zd74s4t) + pre-existing clarity nits in shared scaffolding — no new in-scope findings. Moved to done.'
+  timestamp: 2026-06-16T13:21:52.303334+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffba80
 title: 'Pre-existing vitest browser-mode failures: focus-scope.test.tsx (9) + attachment-display "Open and Show in Finder" right-click (1)'
 ---
 ## What

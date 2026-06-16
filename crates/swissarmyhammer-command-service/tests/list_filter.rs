@@ -14,7 +14,7 @@ mod common;
 
 use std::collections::BTreeSet;
 
-use common::call_tool;
+use common::{call_tool, list_ids};
 use serde_json::{json, Value};
 use swissarmyhammer_command_service::CommandService;
 use swissarmyhammer_plugin::{CallerId, PluginId};
@@ -93,35 +93,6 @@ async fn register_fixture(service: &CommandService, caller: &CallerId) {
         .await
         .expect("fixture register should succeed");
     }
-}
-
-/// Drive `list command` with the given filter arguments and return the
-/// set of ids in the response. Sorting via a `BTreeSet` keeps assertions
-/// independent of HashMap iteration order.
-async fn list_ids(
-    service: &CommandService,
-    arguments: Value,
-    caller: &CallerId,
-) -> BTreeSet<String> {
-    let result = call_tool(service, "list command", arguments, caller)
-        .await
-        .expect("list should succeed");
-    let structured = result
-        .structured_content
-        .expect("list response should carry structured content");
-    assert_eq!(structured["ok"], json!(true));
-    let commands = structured["commands"]
-        .as_array()
-        .expect("`commands` should be an array");
-    commands
-        .iter()
-        .map(|entry| {
-            entry["id"]
-                .as_str()
-                .expect("each entry should carry a string id")
-                .to_string()
-        })
-        .collect()
 }
 
 /// Helper that turns a slice of static ids into a `BTreeSet<String>` so

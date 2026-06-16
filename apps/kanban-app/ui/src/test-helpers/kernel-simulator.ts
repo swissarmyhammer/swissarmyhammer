@@ -197,6 +197,91 @@ export interface KernelSimulatorOptions {
   strictFocusValidation?: boolean;
 }
 
+/** A lowered focus-bridge call: the legacy command, its args, and an
+ * optional wrapper that re-envelopes the legacy handler's raw return into
+ * the shape `focus-mcp.ts`'s wrapper expects. */
+interface LoweredFocusCall {
+  cmd: string;
+  args: Record<string, unknown>;
+  /** Re-envelope the legacy handler's raw return value, if needed. */
+  wrap?: (raw: unknown) => unknown;
+}
+
+/**
+ * Lower a `focus` MCP op (the verb `focus-mcp.ts` passes to
+ * `callMcpTool("focus", op, params)`) onto the legacy `spatial_*` command
+ * name + args the simulator's `dispatchSpatial` answers.
+ *
+ * The op strings and param shapes mirror `focus-mcp.ts` 1:1:
+ *   - `"set focus"`      → `spatial_focus`        `{ fq, snapshot }`
+ *   - `"clear focus"`    → `spatial_clear_focus`  `{}`
+ *   - `"navigate focus"` → `spatial_navigate`     `{ focusedFq, direction }`
+ *   - `"push layer"`     → `spatial_push_layer`   `{ fq, segment, name, parent }`
+ *   - `"pop layer"`      → `spatial_pop_layer`    `{ fq }` (wrapped `{ next_fq }`)
+ *   - `"drill_in layer"` → `spatial_drill_in`     `{ focusedFq }` (wrapped `{ next_fq }`)
+ *   - `"drill_out layer"`→ `spatial_drill_out`    `{ focusedFq }` (wrapped `{ next_fq }`)
+ *
+ * `pop layer` / `drill_*` wrap the raw FQM the legacy handler returns into
+ * the `{ ok, next_fq }` envelope the `popLayer` / `drillIn` / `drillOut`
+ * wrappers read. Returns `null` for an unmodelled op so the caller can
+ * answer with a benign success envelope.
+ */
+function lowerFocusBridge(
+  op: string,
+  params: Record<string, unknown>,
+): LoweredFocusCall | null {
+  const wrapNextFq = (raw: unknown) => ({ ok: true, next_fq: raw ?? null });
+  switch (op) {
+    case "set focus":
+      return { cmd: "spatial_focus", args: params };
+    case "clear focus":
+      return { cmd: "spatial_clear_focus", args: params };
+    case "navigate focus":
+      return { cmd: "spatial_navigate", args: params };
+    case "push layer":
+      return { cmd: "spatial_push_layer", args: params };
+    case "pop layer":
+      return { cmd: "spatial_pop_layer", args: params, wrap: wrapNextFq };
+    case "drill_in layer":
+      return { cmd: "spatial_drill_in", args: params, wrap: wrapNextFq };
+    case "drill_out layer":
+      return { cmd: "spatial_drill_out", args: params, wrap: wrapNextFq };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Lower an `entity` MCP op (the verb `entity-mcp.ts` passes to
+ * `callMcpTool("entity", op, params)`) onto the legacy `get_entity` Tauri
+ * command name + args the test fallbacks answer.
+ *
+ * Today only `get entity` is wired (it is the single verb `entity-mcp.ts`
+ * routes through the bridge):
+ *   - `"get entity"` → `get_entity` `{ entityType, id }`, wrapped back into
+ *     the `{ ok, entity }` envelope `getEntity` unwraps.
+ *
+ * The wire params arrive as `{ type, id }` (the `entity` server's op shape);
+ * the legacy command took `{ entityType, id }`, so the lowering renames
+ * `type` → `entityType`. Returns `null` for an unmodelled op so the caller
+ * can answer with a benign success envelope.
+ */
+function lowerEntityBridge(
+  op: string,
+  params: Record<string, unknown>,
+): LoweredFocusCall | null {
+  switch (op) {
+    case "get entity":
+      return {
+        cmd: "get_entity",
+        args: { entityType: params.type, id: params.id },
+        wrap: (raw: unknown) => ({ ok: true, entity: raw ?? {} }),
+      };
+    default:
+      return null;
+  }
+}
+
 /**
  * Install a `mockInvoke` implementation that records spatial-nav IPCs
  * into a fresh simulator and routes `spatial_navigate` / `spatial_focus`
@@ -256,9 +341,19 @@ export function installKernelSimulator(
     focusable: rec.focusable,
   });
 
-  mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
-    const a = (args ?? {}) as Record<string, unknown>;
-
+  /**
+   * Dispatch a legacy `spatial_*` command against the in-test cascade.
+   *
+   * This is the simulator's core: it answers the legacy Tauri command
+   * names (`spatial_focus`, `spatial_navigate`, `spatial_push_layer`, …)
+   * the simulator was originally written against. Production focus IPC
+   * now flows through the in-process `focus` MCP server
+   * (`callMcpTool("focus", op, …)` → `invoke("command_tool_call", …)`);
+   * `mockInvoke`'s implementation below lowers that bridge call back onto
+   * these legacy command names before delegating here, so a single
+   * cascade implementation serves both wire shapes.
+   */
+  const dispatchSpatial = async (cmd: string, a: Record<string, unknown>) => {
     if (cmd === "spatial_push_layer") {
       const fq = a.fq as FullyQualifiedMoniker;
       // Re-pushing an existing FQM preserves the prior `lastFocused` —
@@ -431,7 +526,60 @@ export function installKernelSimulator(
       // explicitly via the fallback.
       return (a.focusedFq ?? "") as FullyQualifiedMoniker;
     }
-    return fallback(cmd, args);
+    return fallback(cmd, a);
+  };
+
+  mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+    const a = (args ?? {}) as Record<string, unknown>;
+
+    // Production focus IPC flows through the in-process `focus` MCP server:
+    // `focus-mcp.ts` calls `callMcpTool("focus", op, params)`, which lowers
+    // onto `invoke("command_tool_call", { module: "focus", tool, op, params })`
+    // (`mcp-transport.ts`). The simulator answers the legacy `spatial_*`
+    // command names, so lower the bridge call back onto them here and delegate
+    // to `dispatchSpatial`. Without this, the auto-focus `set focus` the
+    // inspector dispatches on mount falls through to `fallback` (which never
+    // emits `focus-changed`), so the title zone's `data-focused` never flips.
+    if (cmd === "command_tool_call" && a.module === "focus") {
+      const lowered = lowerFocusBridge(
+        a.op as string,
+        (a.params ?? {}) as Record<string, unknown>,
+      );
+      if (lowered) {
+        const raw = await dispatchSpatial(lowered.cmd, lowered.args);
+        return lowered.wrap ? lowered.wrap(raw) : raw;
+      }
+      // An unmodelled focus op (e.g. `lose focus`, `generate sneak_codes`):
+      // answer with a benign success envelope so the wrapper resolves.
+      return { ok: true };
+    }
+
+    // Production entity reads flow through the in-process `entity` MCP server:
+    // `entity-mcp.ts::getEntity` calls `callMcpTool("entity", "get entity",
+    // { type, id })`, which lowers onto `invoke("command_tool_call",
+    // { module: "entity", tool: "entity", op: "get entity", params })`. The
+    // existing test fallbacks (`defaultInvokeImpl`) answer the legacy
+    // `invoke("get_entity", { entityType, id })` command, so lower the bridge
+    // call back onto that name and re-envelope the raw field bag into the
+    // `{ ok, entity }` shape `getEntity` unwraps. Without this, the inspector
+    // panel's `getEntity` fetch resolves to `{}`, the entity carries no
+    // `entity_type`/`fields`, and `<EntityInspector>` renders "Loading
+    // schema..." forever — so no field `<FocusScope>`s ever register.
+    if (cmd === "command_tool_call" && a.module === "entity") {
+      const lowered = lowerEntityBridge(
+        a.op as string,
+        (a.params ?? {}) as Record<string, unknown>,
+      );
+      if (lowered) {
+        const raw = await fallback(lowered.cmd, lowered.args);
+        return lowered.wrap ? lowered.wrap(raw) : raw;
+      }
+      // An unmodelled entity op: answer with a benign success envelope so the
+      // wrapper resolves rather than rejecting the panel's fetch.
+      return { ok: true };
+    }
+
+    return dispatchSpatial(cmd, a);
   });
 
   return {

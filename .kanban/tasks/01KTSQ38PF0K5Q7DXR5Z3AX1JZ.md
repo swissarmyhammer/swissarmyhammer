@@ -1,8 +1,13 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8180'
+comments:
+- actor: claude-code
+  id: 01kv87mahyf7131g743tvqpvh2
+  text: 'Finish loop: tests verified green (9/9 in board-view.enter-drill-in.browser.test.tsx, tsc --noEmit exit 0). Review engine surfaced 1 blocker — shared spatial-nav test-harness duplication spanning ~20 files — but that is pre-existing and out of scope for this card''s 6-test wire-shape repair (all ACs met). Captured the duplication as new task zd74s4t (01KV87M0YFYHB1F3ZDWZD74S4T), and an unrelated genuine blocker the sweep found (emit_view_switch double-def in scope_commands.rs:18) as yrdj19h (01KV87M49BGGXY9GCZ8YRDJ19H). Moving this card to done.'
+  timestamp: 2026-06-16T12:48:47.678470+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffb880
 title: 'Stale drill wire-shape expectations: board-view.enter-drill-in.browser.test.tsx — 6 tests fail pre-existing'
 ---
 ## What
@@ -34,3 +39,8 @@ Do NOT weaken assertions — assert the real current contract (dispatch of the c
 ## Implementation notes (2026-06-12)
 
 Repaired in the 7c5015141 style. The two `passes_snapshot` tests were renamed to `*_sends_no_snapshot_or_fq_on_drill_wire` — they now pin the NEGATIVE: the `dispatch_command` payload carries no `snapshot`/`fq`/`focused_fq`, and zero client-side drill IPC leaves the webview. The drill-in/out IPC helpers were repurposed as must-stay-empty no-legacy guards (matching `column-view.spatial.test.tsx`); a `spatialFocusCalls()` guard additionally pins that no webview-side `spatial_focus` fan-out fires (the kernel commits focus host-side). DOM outcomes retained: kernel `focus-changed` emissions are mimicked and `data-focused` transitions asserted (column→first card, column→remembered t2, card→field unfocus, field→parent card refocus). No shared-helper changes. Verified: `npx vitest run src/components/board-view.enter-drill-in.browser.test.tsx` → 9/9 pass; `npx tsc --noEmit` → exit 0.
+
+## Review Findings (2026-06-16 07:40)
+
+### Blockers
+- [ ] `apps/kanban-app/ui/src/components/board-view.enter-drill-in.browser.test.tsx:36` — Test harness setup (lines 36–255) is verbatim-copied across ~20 spatial/browser test files. The entire mock bootstrap—listeners, mockInvoke, mockListen, Tauri API mocks, spatial kernel mock, default invoke responses, and 15+ helper functions—is duplicated with no parameterization. Copies drift out of sync (existing code has cleanup issues across files); this blocks adding new coverage or fixing test infra bugs without mechanical churn across the test suite. Extract the shared harness into a single test utility file (e.g., `src/test/spatial-nav-harness.ts`) exporting: `setupSpatialMocks()` (returns mocked Tauri + listeners), `makeSpatialTestHelpers()` (returns `flushSetup`, `fireFocusChanged`, `renderBoardWithShell`, `registerScopeArgs`, etc.), and a `defaultInvokeImpl` factory parameterized on keymap mode. Replace all 20+ copies with single imports from that utility. This is a prerequisite for systematic test infra improvements.

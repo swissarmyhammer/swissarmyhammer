@@ -243,15 +243,37 @@ function spatialNavigateCalls(): Array<{
   focusedFq: FullyQualifiedMoniker;
   direction: string;
 }> {
+  // Production routes `navigate focus` through the in-process `focus` MCP
+  // server, so the call surfaces as `command_tool_call` with the args under
+  // `params` (and `focusedFq` renamed `focused_fq` on the kernel wire). Count
+  // both that envelope and the legacy `spatial_navigate` command, normalizing
+  // each onto the `{ focusedFq, direction }` shape the assertions read.
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_navigate")
-    .map(
+    .filter(
       (c) =>
-        c[1] as {
-          focusedFq: FullyQualifiedMoniker;
-          direction: string;
-        },
-    );
+        c[0] === "spatial_navigate" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "navigate focus"),
+    )
+    .map((c) => {
+      const a = (c[1] ?? {}) as {
+        focusedFq?: FullyQualifiedMoniker;
+        direction?: string;
+        params?: {
+          focusedFq?: FullyQualifiedMoniker;
+          focused_fq?: FullyQualifiedMoniker;
+          direction?: string;
+        };
+      };
+      const p = a.params;
+      return {
+        focusedFq: (p?.focusedFq ??
+          p?.focused_fq ??
+          a.focusedFq) as FullyQualifiedMoniker,
+        direction: (p?.direction ?? a.direction) as string,
+      };
+    });
 }
 
 /** Find the test wrapper that owns the outer scroll. */

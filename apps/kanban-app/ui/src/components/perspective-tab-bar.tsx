@@ -1023,6 +1023,27 @@ function ScopedPerspectiveTab({
 }: ScopedPerspectiveTabProps) {
   const isActive = activePerspectiveId === perspective.id;
   const dispatchPerspectiveSwitch = useDispatchCommand("perspective.switch");
+
+  // Drill-in must not rely SOLELY on the `isActive` prop, which trails the
+  // `perspective.switch` dispatch by a round-trip: `activePerspectiveId` is
+  // derived from the per-window `active_perspective_id` UI-state slot
+  // (perspective-context.tsx), so it only reflects a switch AFTER the backend
+  // emits the UI-state event. Without this guard a user who presses Enter to
+  // SELECT an inactive tab and then presses Enter AGAIN — before the event
+  // lands — sees the stale `isActive === false` re-dispatch the switch instead
+  // of drilling into the caption editor (card 01KV5JC141Z0TZQSZTW4KZ12PM).
+  //
+  // `selectedByThisTab` records that THIS tab's own drill-in just dispatched a
+  // switch and is waiting for the prop to catch up. A ref (not state) keeps the
+  // `tabScopeCommands` memo from churning on the transient flag. The effect
+  // below clears it once `isActive` reflects the switch, so a later genuine
+  // deactivation (the user switched away) correctly re-selects on the next
+  // Enter rather than drilling.
+  const selectedByThisTabRef = useRef(false);
+  useEffect(() => {
+    if (isActive) selectedByThisTabRef.current = false;
+  }, [isActive]);
+
   const tabScopeCommands = useMemo<readonly CommandDef[]>(() => {
     return [
       {
@@ -1039,13 +1060,21 @@ function ScopedPerspectiveTab({
         //     item edits it. This reuses the SAME caption editor the F2 /
         //     double-click / `+`-create paths arm — no new machinery, no new
         //     backend command (presentation-layer routing only).
+        //
+        // "Already-active" is `isActive` OR "this tab just selected itself and
+        // the prop hasn't caught up" (`selectedByThisTabRef`) — see the ref's
+        // docblock above for why the prop alone is insufficient in production.
         id: "nav.drillIn",
         name: "Switch Perspective",
         execute: async () => {
-          if (isActive) {
+          if (isActive || selectedByThisTabRef.current) {
             triggerStartRename(perspective.id);
             return;
           }
+          // First Enter on an inactive tab selects it; remember that this
+          // tab's own drill-in armed the switch so a follow-up Enter drills
+          // in even while the `isActive` prop is still stale.
+          selectedByThisTabRef.current = true;
           await dispatchPerspectiveSwitch({
             args: { perspective_id: perspective.id },
           });

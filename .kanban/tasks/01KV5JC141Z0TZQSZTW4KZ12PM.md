@@ -1,8 +1,34 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: fb80
+comments:
+- actor: claude-code
+  id: 01kv631c6g1y7xwjskkg8fh05m
+  text: |-
+    Picked up. Root-caused: the `nav.drillIn` shadow on ScopedPerspectiveTab branches on `isActive = activePerspectiveId === perspective.id`, where `activePerspectiveId` is a prop derived from `uiState.windows[main].active_perspective_id` (perspective-context.tsx). That value only updates AFTER a `perspective.switch` dispatch round-trips and the UI-state event propagates.
+
+    Production sequence the existing green test #1 never reproduces: user focuses an INACTIVE tab and presses Enter → shadow dispatches `perspective.switch` (select). Before the UI-state event lands and refreshes `activePerspectiveId`, the user presses Enter AGAIN on the same now-selected tab expecting to drill into the caption editor — but `isActive` is still stale `false`, so the shadow re-dispatches `perspective.switch` instead of arming rename. The caption editor never opens. This is the same staleness the F2 handler already works around by passing an explicit id.
+
+    Existing suite is green (13/13 baseline). Writing a red-first regression test that drives this stale-prop double-Enter production sequence, then fixing the shadow to drill in when the tab is the active perspective OR has just been selected by this tab's own switch (don't rely solely on the lagging `isActive` prop).
+  timestamp: 2026-06-15T16:50:03.600362+00:00
+- actor: claude-code
+  id: 01kv63xvw38h102c46yvb0jjhd
+  text: |-
+    Fix landed in apps/kanban-app/ui/src/components/perspective-tab-bar.tsx (ScopedPerspectiveTab). Kept the single branching nav.drillIn shadow — no new command, no dispatch-chain refactor. Added a per-tab `selectedByThisTabRef`: the drill-in's `if (isActive || selectedByThisTabRef.current)` now drills when the tab is the active perspective OR when this tab's own drill-in just dispatched the switch and the lagging `activePerspectiveId` prop hasn't caught up. A useEffect clears the ref once `isActive` reflects the switch, so a genuine later deactivation re-selects on the next Enter rather than drilling. F2/double-click paths untouched.
+
+    TDD: red-first test #2b in perspective-tab-bar.activate-and-rename.spatial.test.tsx ("a second Enter on the just-selected tab drills into the caption editor before the switch UI-state event propagates (stale activePerspectiveId)") drives the real production sequence by keeping the `activePerspective` mock on p1 across both Enter presses. Confirmed RED before the fix (caption editor never mounts on p2) and GREEN after.
+
+    Verification:
+    - perspective-tab-bar.activate-and-rename.spatial.test.tsx: 14/14 pass (13 prior + new).
+    - All 17 perspective-tab-bar test files: 107/107 pass — no regressions to inactive-select, F2, double-click, commit, or Escape cases.
+    - `npx tsc --noEmit`: exit 0, clean.
+
+    review-working validator notes (both NOT caused by this change): (1) "ScopedPerspectiveTab defined twice" is a FALSE POSITIVE — grep confirms a single definition at one site and tsc passes (a real duplicate decl would be a compile error); the engine likely read the diff's old+new function bodies as two defs. (2) the `20`ms setTimeout nit is in pre-existing commit-path/Escape tests (#7/#8), not in the test I added. No action warranted.
+
+    Moving to review.
+  timestamp: 2026-06-15T17:05:37.155933+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffb280
 project: builtin-commands
 title: 'Fix: Enter on the already-selected perspective tab doesn''t drill into the caption editor'
 ---

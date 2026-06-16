@@ -244,20 +244,38 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       // Mirror the real kernel's rejection of an unregistered moniker by
-      // having the next `spatial_focus` invocation throw. Tauri surfaces
-      // a Rust `Err(_)` as a rejected invoke promise, which the React
+      // having the next `set focus` invocation throw. Tauri surfaces a
+      // Rust `Err(_)` as a rejected invoke promise, which the React
       // adapter catches and logs as `console.error`. The simulator's
-      // default `spatial_focus` handler is permissive (registration
-      // races in real React trees would otherwise produce false
-      // negatives — see the inspector kernel-focus advance tests), so
-      // the rejection is staged just for this case via
-      // `mockImplementationOnce`.
+      // default focus handler is permissive (registration races in real
+      // React trees would otherwise produce false negatives — see the
+      // inspector kernel-focus advance tests), so the rejection is staged
+      // just for this case via `mockImplementationOnce`.
+      //
+      // Production routes `set focus` through the in-process `focus` MCP
+      // server, so the rejection must match the `command_tool_call`
+      // envelope (`{ module: "focus", op: "set focus", params: { fq } }`)
+      // as well as the legacy `spatial_focus` command name.
       const previousImpl = mockInvoke.getMockImplementation();
+      const targetsUnknownMoniker = (cmd: string, args: unknown): boolean => {
+        const a = (args ?? {}) as {
+          fq?: string;
+          module?: string;
+          op?: string;
+          params?: { fq?: string };
+        };
+        if (cmd === "spatial_focus") {
+          return a.fq === "task:does-not-exist";
+        }
+        return (
+          cmd === "command_tool_call" &&
+          a.module === "focus" &&
+          a.op === "set focus" &&
+          a.params?.fq === "task:does-not-exist"
+        );
+      };
       mockInvoke.mockImplementationOnce(async (cmd, args) => {
-        if (
-          cmd === "spatial_focus" &&
-          (args as { fq: string } | undefined)?.fq === "task:does-not-exist"
-        ) {
+        if (targetsUnknownMoniker(cmd, args)) {
           throw new Error(
             "spatial_focus: unknown moniker task:does-not-exist",
           );

@@ -272,23 +272,35 @@ const INSPECTABLE_ENTITY_PREFIXES = [
 ] as const;
 
 /**
- * The real cross-cutting entity types the VISIBLE inspect surface
- * (`app.inspect`) declares as its `applies_to` capability set.
+ * The entity types the VISIBLE inspect surface (`app.inspect`) declares as its
+ * `applies_to` capability set — the INSPECTABLE set.
  *
- * `list command` lists `app.inspect` only when the focused object's entity
- * type is one of these. The set deliberately excludes `field` — a
- * `field:{type}:{id}.{name}` moniker is a PROJECTION of its containing entity,
- * not an entity, so a focused field would otherwise show a nonsensical
- * "Inspect Field" row. With this gate the row is suppressed at the command
- * surface, with NO UI special-casing — exactly as the clipboard / CRUD trios
- * are gated in the `entity-commands` bundle.
+ * Derived directly from {@link INSPECTABLE_ENTITY_PREFIXES} (the same prefixes
+ * `entity.inspect` / `app.inspect` resolve a target from), stripping the
+ * trailing `:` of each prefix so a `"task:"` prefix yields the `"task"` entity
+ * type. There is no second hand-maintained literal: the inspectable entity-type
+ * set is the projection of the inspectable prefix set, so the two can never
+ * drift.
  *
- * Mirrors the TS `OPERABLE_ENTITY_TYPES` in
- * `builtin/plugins/entity-commands/index.ts` and the Rust `COPYABLE_ENTITY_TYPES`
- * (`swissarmyhammer-kanban::commands::clipboard_commands`); the drift guard
- * `builtin_app_shell_commands_e2e::assert_operable_applies_to` reads the
- * surfaced `applies_to` and pins it to the Rust constant so this list cannot
- * silently diverge.
+ * `list command` lists `app.inspect` only when the focused object's entity type
+ * is one of these. The set is DECOUPLED from the subject ops on purpose:
+ *
+ * - `board` — the board IS here, unlike the subject ops in the `entity-commands`
+ *   bundle (cut/copy/delete/archive/unarchive). The root board can never be the
+ *   SUBJECT of its own cut/copy/delete, but it CAN be inspected: "Inspect Board"
+ *   is a meaningful root-board affordance (`board:` is in the inspectable prefix
+ *   set), so Inspect must continue to surface on the root board.
+ * - `field` — a `field:{type}:{id}.{name}` moniker is a PROJECTION of its
+ *   containing entity, not an entity, so a focused field would otherwise show
+ *   a nonsensical "Inspect Field" row. `field:` is deliberately ABSENT from the
+ *   inspectable prefix set, so the projection is excluded here too, with NO UI
+ *   special-casing.
+ *
+ * Pinned against the Rust inspectable set (the subject `COPYABLE_ENTITY_TYPES`
+ * PLUS `board`) by the drift guard
+ * `builtin_app_shell_commands_e2e::assert_inspect_applies_to`, so this list
+ * cannot silently diverge from either the subject constant or the
+ * board-inspectable intent.
  *
  * NOTE: this is the visible/context-menu surface only. `entity.inspect` (the
  * global Space gesture below) is intentionally UNGATED — it resolves its
@@ -296,21 +308,36 @@ const INSPECTABLE_ENTITY_PREFIXES = [
  * `field:` monikers and lands on the containing entity, so it never inspects a
  * field and needs no `applies_to`.
  */
-const OPERABLE_ENTITY_TYPES: readonly string[] = [
-  "task",
-  "tag",
-  "column",
-  "board",
-  "actor",
-  "project",
-  "attachment",
-];
+const INSPECTABLE_ENTITY_TYPES: readonly string[] = INSPECTABLE_ENTITY_PREFIXES.map(
+  (prefix) => prefix.slice(0, -1),
+);
+
+/**
+ * True when `moniker` names an INSPECTABLE entity — its prefix is in
+ * {@link INSPECTABLE_ENTITY_PREFIXES} (`task:`/`tag:`/`column:`/`board:`/
+ * `attachment:`). Chrome (`ui:*`) and field-projection (`field:`) monikers
+ * are NOT inspectable and return false, mirroring the Rust caption renderer's
+ * `focused_entity_type` rule so a row's caption and what inspecting it does
+ * can never disagree.
+ */
+function isInspectableMoniker(moniker: string): boolean {
+  return INSPECTABLE_ENTITY_PREFIXES.some((prefix) => moniker.startsWith(prefix));
+}
 
 /**
  * Resolve the moniker `entity.inspect` / `app.inspect` should inspect.
  *
- * An explicit `ctx.target` wins verbatim (palette result rows, context-menu
- * dispatches, and other programmatic dispatches name their entity directly).
+ * An explicit `ctx.target` wins verbatim ONLY when it is an inspectable-entity
+ * moniker (palette result rows, context-menu dispatches on a real entity, and
+ * other programmatic dispatches name their entity directly). A NON-inspectable
+ * explicit target — a chrome `ui:*` leaf or a `field:` projection — is IGNORED:
+ * the toolbar (nav-bar) context menu sets `target` to its innermost scope-chain
+ * moniker, which on the toolbar is a `ui:navbar.*` chrome leaf, not the
+ * `board:{id}` ancestor the "Inspect Board" caption resolves. Inspecting that
+ * chrome leaf no-ops, so we fall through instead — matching the caption renderer
+ * (`focused_entity_type`) and the palette path (kanban card
+ * 01KV5KYZT9J2BXFJ6H2X782E14).
+ *
  * Otherwise the INNERMOST inspectable-entity moniker in the scope chain is
  * the target — the chain is leaf-first, so the first matching entry is the
  * closest enclosing ENTITY of the focused scope (a focused field's
@@ -319,10 +346,10 @@ const OPERABLE_ENTITY_TYPES: readonly string[] = [
  * chrome / no focus) — the command then no-ops (warn-logged by the caller).
  */
 function resolveInspectTarget(ctx: CommandContext): string | undefined {
-  if (ctx.target !== undefined) return ctx.target;
-  return (ctx.scope_chain ?? []).find((moniker) =>
-    INSPECTABLE_ENTITY_PREFIXES.some((prefix) => moniker.startsWith(prefix)),
-  );
+  if (ctx.target !== undefined && isInspectableMoniker(ctx.target)) {
+    return ctx.target;
+  }
+  return (ctx.scope_chain ?? []).find(isInspectableMoniker);
 }
 
 /**
@@ -388,10 +415,12 @@ export function uiCommands(
       context_menu: true,
       context_menu_group: 3,
       context_menu_order: 0,
-      // Gate the visible inspect surface to real cross-cutting entity types:
+      // Gate the visible inspect surface to the INSPECTABLE entity types:
       // `list command` suppresses it on a `field:` focus (a field is a
-      // projection, not an entity) so no "Inspect Field" row ever appears.
-      applies_to: OPERABLE_ENTITY_TYPES,
+      // projection, not an entity) so no "Inspect Field" row ever appears, but
+      // KEEPS it on a `board:` focus — "Inspect Board" is a meaningful root-
+      // board affordance. Decoupled from the subject set on purpose.
+      applies_to: INSPECTABLE_ENTITY_TYPES,
       params: [{ name: "moniker", from: "target" }],
       execute: buildInspectExecute("app.inspect", uiState, log),
     },

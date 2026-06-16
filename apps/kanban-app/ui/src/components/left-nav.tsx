@@ -20,10 +20,13 @@ import type { ViewDef } from "@/types/kanban";
  *
  * Each button is wrapped in its own {@link CommandScopeProvider} with a
  * `view:{id}` moniker so right-click on that specific button resolves a
- * scope chain the backend recognises. View switching is palette-only, so
- * the context menu never shows a "Switch to <ViewName>" entry; the
- * `view:{id}` moniker is still needed for other dynamics (e.g.
- * `entity.add:{type}` when the view declares an `entity_type`).
+ * scope chain the backend recognises. The backend's `commands_for_scope`
+ * flips THIS view's "Switch to View «name»" row to `context_menu: true`
+ * when its `view:{id}` is in the chain, so right-clicking view X surfaces
+ * exactly "Switch to View «X»" (and nothing for sibling views). The same
+ * `view:{id}` moniker also resolves other dynamics (e.g. `entity.add:{type}`
+ * when the view declares an `entity_type`). View switching to ANY view stays
+ * available from the command palette everywhere.
  */
 export function LeftNav() {
   const { views, activeView } = useViews();
@@ -61,10 +64,11 @@ interface ScopedViewButtonProps {
  *
  * Mirrors `ScopedPerspectiveTab` in `perspective-tab-bar.tsx`: the moniker
  * placed in the scope chain is what `useContextMenu` reads via
- * `CommandScopeContext`. The backend does not emit `view.switch:*` as a
- * context-menu entry, but other dynamic commands (notably
- * `entity.add:{type}` for views with an `entity_type`) still require the
- * `view:{id}` moniker to resolve their scope.
+ * `CommandScopeContext`. The backend resolves this view's own
+ * "Switch to View «name»" row (the canonical `view.set` command with
+ * `args.view_id`) to `context_menu: true` for the in-scope `view:{id}`, and
+ * other dynamic commands (notably `entity.add:{type}` for views with an
+ * `entity_type`) also require the `view:{id}` moniker to resolve their scope.
  */
 function ScopedViewButton({ view, isActive }: ScopedViewButtonProps) {
   return (
@@ -98,10 +102,10 @@ function ScopedViewButton({ view, isActive }: ScopedViewButtonProps) {
  * Left-click dispatches the canonical `view.set` command with the view id
  * in `args` (the palette fan-out that used to emit `view.switch:{id}` was
  * retired in 01KPZMXXEXKVE3RNPA4XJP0105). Right-click raises the native
- * context menu via `useContextMenu`. The menu never contains a
- * `Switch to <ViewName>` entry — view switching is palette-only — but
- * scope-dependent dynamics (e.g. `entity.add:{type}`) still surface for
- * views that declare an `entity_type`.
+ * context menu via `useContextMenu`, which surfaces this view's own
+ * "Switch to View «name»" entry (scope-resolved to its `view:{id}`) plus any
+ * scope-dependent dynamics (e.g. `entity.add:{type}`) for views that declare
+ * an `entity_type`. Switching to ANY view stays available from the palette.
  */
 function ViewButton({ view, isActive }: ScopedViewButtonProps) {
   const dispatch = useDispatchCommand("view.set");

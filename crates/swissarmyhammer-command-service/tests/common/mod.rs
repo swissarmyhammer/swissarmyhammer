@@ -137,6 +137,38 @@ pub async fn call_tool(
     service.call_tool(request, context).await
 }
 
+/// Drive `list command` with the given arguments and return the set of command
+/// ids in the response.
+///
+/// Shared by every list-filter / list-applies-to test: collecting into a
+/// `BTreeSet` keeps assertions independent of the registry's HashMap iteration
+/// order. Asserts the response envelope is `ok: true` and carries a `commands`
+/// array of `{ id, … }` entries.
+pub async fn list_ids(
+    service: &CommandService,
+    arguments: Value,
+    caller: &CallerId,
+) -> std::collections::BTreeSet<String> {
+    let result = call_tool(service, "list command", arguments, caller)
+        .await
+        .expect("list should succeed");
+    let structured = result
+        .structured_content
+        .expect("list response should carry structured content");
+    assert_eq!(structured["ok"], json!(true));
+    structured["commands"]
+        .as_array()
+        .expect("`commands` should be an array")
+        .iter()
+        .map(|entry| {
+            entry["id"]
+                .as_str()
+                .expect("each entry should carry a string id")
+                .to_string()
+        })
+        .collect()
+}
+
 /// One recorded invocation against a [`FakeDispatcher`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedInvocation {

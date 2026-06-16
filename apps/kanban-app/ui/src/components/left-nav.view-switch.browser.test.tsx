@@ -25,12 +25,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import type { RenderResult } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ViewDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
 // Mocks — Tauri APIs must be mocked before importing components that pull
-// them in transitively. `listeners` records every `listen(event, cb)`
+// them in transitively. `listeners` records every `listen(event, callback)`
 // registration so tests can fire backend events by name.
 // ---------------------------------------------------------------------------
 
@@ -38,27 +39,28 @@ const { mockInvoke, listeners } = vi.hoisted(() => {
   type Listener = (event: { payload: unknown }) => void;
   const listeners = new Map<string, Listener[]>();
   const mockInvoke = vi.fn(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (_cmd: string, _args?: any): Promise<unknown> => Promise.resolve(null),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Tauri invoke arguments are command-specific and untyped at this mock boundary
+    (_command: string, _arguments?: any): Promise<unknown> =>
+      Promise.resolve(null),
   );
   return { mockInvoke, listeners };
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- forwards the real `invoke` variadic signature, whose argument types vary by command
   invoke: (...args: any[]) => mockInvoke(...(args as [string, unknown])),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: (event: string, cb: (event: { payload: unknown }) => void) => {
+  listen: (event: string, callback: (event: { payload: unknown }) => void) => {
     const list = listeners.get(event) ?? [];
-    list.push(cb);
+    list.push(callback);
     listeners.set(event, list);
     return Promise.resolve(() => {
-      const cur = listeners.get(event) ?? [];
+      const currentCallbacks = listeners.get(event) ?? [];
       listeners.set(
         event,
-        cur.filter((c) => c !== cb),
+        currentCallbacks.filter((registered) => registered !== callback),
       );
     });
   },
@@ -80,6 +82,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // Import after mocks so the mocked module bindings are the ones used.
 import { LeftNav } from "./left-nav";
 import { UIStateProvider } from "@/lib/ui-state-context";
+import type { UIStateSnapshot } from "@/lib/ui-state-context";
 import { ViewsProvider } from "@/lib/views-context";
 import { CommandScopeProvider } from "@/lib/command-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
@@ -94,7 +97,7 @@ const V1: ViewDef = { id: "v1", name: "View 1", kind: "board", icon: "kanban" };
 const V2: ViewDef = { id: "v2", name: "View 2", kind: "grid", icon: "table" };
 
 /** Full UIState snapshot with one `main` window slot. */
-function uiStateSnapshot(activeViewId: string) {
+function uiStateSnapshot(activeViewId: string): UIStateSnapshot {
   return {
     keymap_mode: "cua",
     scope_chain: [],
@@ -117,9 +120,9 @@ function uiStateSnapshot(activeViewId: string) {
 }
 
 /** Fire a backend event into every registered `listen` subscriber. */
-function emitTauriEvent(event: string, payload: unknown) {
+function emitTauriEvent(event: string, payload: unknown): void {
   act(() => {
-    listeners.get(event)?.forEach((cb) => cb({ payload }));
+    listeners.get(event)?.forEach((callback) => callback({ payload }));
   });
 }
 
@@ -128,7 +131,7 @@ function emitTauriEvent(event: string, payload: unknown) {
  * stack, a `window:main` command scope (what `WindowContainer` provides in
  * `App.tsx`), and the REAL UIState + Views providers.
  */
-function renderLeftNavLoop() {
+function renderLeftNavLoop(): RenderResult {
   return render(
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>
@@ -154,12 +157,12 @@ describe("LeftNav — view-switch loop (view.set)", () => {
     vi.clearAllMocks();
     listeners.clear();
     mockInvoke.mockImplementation(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (cmd: string, _args?: any): Promise<unknown> => {
-        if (cmd === "get_ui_state") {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Tauri invoke arguments are command-specific and untyped at this mock boundary
+      (command: string, _arguments?: any): Promise<unknown> => {
+        if (command === "get_ui_state") {
           return Promise.resolve(uiStateSnapshot("v1"));
         }
-        if (cmd === "list_views") {
+        if (command === "list_views") {
           return Promise.resolve([V1, V2]);
         }
         return Promise.resolve(null);
@@ -200,6 +203,93 @@ describe("LeftNav — view-switch loop (view.set)", () => {
     // The clicked view's moniker rides along so the backend can rewrite
     // the recorded focus chain's `view:*` entries.
     expect(payload.scopeChain).toEqual(expect.arrayContaining(["view:v2"]));
+  });
+
+  /**
+   * Context-menu scoping (card 01KV5K29FFQJTBER6HYA4J2DW6): right-clicking
+   * view X surfaces exactly ITS OWN "Switch to View «X»" entry and nothing
+   * for a sibling view Y. The backend's `commands_for_scope` flips only the
+   * in-scope view's `view.set` row to `context_menu: true`; the frontend
+   * filters the `list command` response to `context_menu === true` and hands
+   * the survivors to the native `show context menu`. This drives the REAL
+   * `ViewButton`/`useContextMenu` path: the right-click fires `list command`
+   * with the clicked view's `view:{id}` in the scope chain, and the chosen
+   * item dispatches `view.set` with that view's id.
+   */
+  it("right-clicking a view button shows only its own Switch to View entry", async () => {
+    // The backend response for a right-click whose scope chain carries
+    // `view:v2`: v2's row is context_menu:true (its own scoped entry), v1's
+    // palette row stays context_menu:false. Both carry pre-filled view_id
+    // args, exactly as `emit_view_switch` emits them.
+    const listCommandResponse = {
+      ok: true,
+      commands: [
+        {
+          id: "view.set",
+          name: "Switch to View View 1",
+          context_menu: false,
+          args: { view_id: "v1" },
+        },
+        {
+          id: "view.set",
+          name: "Switch to View View 2",
+          context_menu: true,
+          args: { view_id: "v2" },
+        },
+      ],
+    };
+    mockInvoke.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Tauri invoke arguments are command-specific and untyped at this mock boundary
+      (cmd: string, args?: any): Promise<unknown> => {
+        if (cmd === "get_ui_state") return Promise.resolve(uiStateSnapshot("v1"));
+        if (cmd === "list_views") return Promise.resolve([V1, V2]);
+        if (
+          cmd === "command_tool_call" &&
+          args?.module === "commands" &&
+          args?.op === "list command"
+        ) {
+          return Promise.resolve(listCommandResponse);
+        }
+        return Promise.resolve(null);
+      },
+    );
+
+    renderLeftNavLoop();
+
+    const viewTwo = await screen.findByRole("button", { name: "View 2" });
+    fireEvent.contextMenu(viewTwo);
+    await act(async () => {});
+
+    // The `list command` fetch must carry the clicked view's moniker so the
+    // backend resolves v2's own context-menu row.
+    const listCalls = mockInvoke.mock.calls.filter(
+      ([cmd, args]) =>
+        cmd === "command_tool_call" &&
+        (args as { op?: string })?.op === "list command",
+    );
+    expect(listCalls.length).toBeGreaterThan(0);
+    const listCtx = (
+      listCalls[0][1] as { params?: { ctx?: { scope_chain?: string[] } } }
+    ).params?.ctx;
+    expect(listCtx?.scope_chain).toEqual(expect.arrayContaining(["view:v2"]));
+
+    // The native `show context menu` must receive exactly v2's switch entry —
+    // v1's palette row (context_menu:false) is filtered out by the frontend.
+    const showMenuCall = mockInvoke.mock.calls.find(
+      ([cmd, args]) =>
+        cmd === "command_tool_call" &&
+        (args as { module?: string; op?: string })?.module === "window" &&
+        (args as { op?: string })?.op === "show context menu",
+    );
+    expect(showMenuCall).toBeDefined();
+    const items = (
+      showMenuCall![1] as {
+        params: { items: { name: string; cmd: string; separator: boolean }[] };
+      }
+    ).params.items.filter((i) => !i.separator);
+    expect(items.map((i) => i.name)).toEqual(["Switch to View View 2"]);
+    expect(items.map((i) => i.name)).not.toContain("Switch to View View 1");
+    expect(items[0].cmd).toBe("view.set");
   });
 
   /**

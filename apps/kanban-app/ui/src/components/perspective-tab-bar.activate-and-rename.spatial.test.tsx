@@ -501,6 +501,75 @@ describe("PerspectiveTabBar — Enter activates the focused tab; F2 renames", ()
   });
 
   // -------------------------------------------------------------------------
+  // Test #2b — PRODUCTION drill path: a SECOND Enter on the tab the user just
+  // selected drills into the caption editor even before the `perspective.switch`
+  // UI-state event has propagated `activePerspectiveId` back to the prop.
+  //
+  // This reproduces the real-app failure card 01KV5JC141Z0TZQSZTW4KZ12PM is
+  // about. The `activePerspective` mock deliberately STAYS on `p1` across both
+  // Enter presses — modeling the async lag between dispatching
+  // `perspective.switch` and the per-window `active_perspective_id` UI-state
+  // event landing (perspective-context.tsx derives `activePerspective` from
+  // `uiState.windows[main].active_perspective_id`, so the prop trails the
+  // dispatch by a round-trip). Test #1 never exercises this: it starts with
+  // `activePerspective === p1` AND focuses p1, so `isActive` is fresh.
+  //
+  // Sequence:
+  //   1. Focus the INACTIVE tab `p2` (active is `p1`).
+  //   2. Enter → select: dispatch `perspective.switch({ perspective_id: p2 })`.
+  //   3. Enter AGAIN on the same focused tab → the drill idiom must arm the
+  //      inline caption editor on `p2` and must NOT re-dispatch the switch,
+  //      even though the stale `activePerspectiveId` prop still reads `p1`.
+  // -------------------------------------------------------------------------
+
+  it("a second Enter on the just-selected tab drills into the caption editor before the switch UI-state event propagates (stale activePerspectiveId)", async () => {
+    const { container, unmount } = await renderInAppShell();
+    await flushSetup();
+
+    // Active perspective is `p1`; spatially focus the inactive `p2` tab.
+    await focusTab(container, "perspective_tab:p2");
+
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation(defaultInvokeImpl);
+
+    // First Enter — selects p2 (dispatches the switch). The mock's
+    // `activePerspective` is NOT advanced, mirroring the production lag.
+    await pressKeyInAct("{Enter}");
+    await flushSetup();
+
+    const firstSwitch = findDispatch("perspective.switch");
+    expect(firstSwitch).toBeTruthy();
+    expect(firstSwitch!.args).toEqual(
+      expect.objectContaining({ perspective_id: "p2" }),
+    );
+    // First Enter selects, it must not arm the editor.
+    expectNoRenameEditor(container);
+
+    // Reset the dispatch spy so the second Enter's IPC is measured alone.
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation(defaultInvokeImpl);
+
+    // Second Enter on the still-focused, just-selected tab — drill in.
+    await pressKeyInAct("{Enter}");
+    await flushSetup();
+
+    // The caption editor for p2 must mount (drill into the name editor).
+    await waitFor(() => {
+      const renameEditor = container.querySelector(
+        "[data-segment='perspective_tab:p2'] .cm-editor",
+      );
+      expect(renameEditor).not.toBeNull();
+    });
+
+    // And the second Enter must NOT re-dispatch the switch — re-selecting the
+    // tab you just selected is a no-op; Enter drills.
+    expect(dispatchedCommand("perspective.switch")).toBe(false);
+    expect(dispatchedCommand("nav.drillIn")).toBe(false);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
   // Test #3 — Enter outside the perspective scope still drills in
   // -------------------------------------------------------------------------
 

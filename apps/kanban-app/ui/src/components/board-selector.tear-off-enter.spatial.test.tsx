@@ -23,6 +23,11 @@ import {
   answerListCommand,
   globalCommandsFromBindingTables,
 } from "@/test/mock-command-list";
+import {
+  UNHANDLED,
+  emitToCallbackRecord,
+  makeSpatialKernelMock,
+} from "@/test/mock-spatial-kernel";
 import { render, fireEvent, act } from "@testing-library/react";
 import type { OpenBoard } from "@/types/kanban";
 
@@ -33,9 +38,11 @@ import type { OpenBoard } from "@/types/kanban";
 // scope.
 // ---------------------------------------------------------------------------
 
-const monikerToKey = new Map<string, string>();
-const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
+
+const { currentFocusKey, handleSpatialCommand, reset } = makeSpatialKernelMock({
+  emit: emitToCallbackRecord(listenCallbacks),
+});
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
   // The pressable activation commands are DEFINED by the `app-shell-commands`
@@ -60,56 +67,8 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
-    const a = (args ?? {}) as { fq?: string; segment?: string };
-    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { fq?: string };
-    if (a.fq) {
-      for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.fq) {
-          monikerToKey.delete(m);
-          break;
-        }
-      }
-    }
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
-    const a = (args ?? {}) as { focusedFq?: string };
-    return Promise.resolve(a.focusedFq ?? null);
-  }
-  if (cmd === "spatial_focus") {
-    const a = (args ?? {}) as { fq?: string };
-    const fq = a.fq ?? null;
-    let moniker: string | null = null;
-    for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) {
-        moniker = s;
-        break;
-      }
-    }
-    if (fq) {
-      const prev = currentFocusKey.key;
-      currentFocusKey.key = fq;
-      queueMicrotask(() => {
-        const cb = listenCallbacks["focus-changed"];
-        if (cb) {
-          cb({
-            payload: {
-              window_label: "main",
-              prev_fq: prev,
-              next_fq: fq,
-              next_segment: moniker,
-            },
-          });
-        }
-      });
-    }
-    return Promise.resolve(null);
-  }
+  const spatial = handleSpatialCommand(cmd, args);
+  if (spatial !== UNHANDLED) return Promise.resolve(spatial);
   return Promise.resolve(null);
 }
 
@@ -241,8 +200,7 @@ function dispatchCommandCalls(): Array<Record<string, unknown>> {
 describe("BoardSelector tear-off button — Enter activates window.new via Pressable", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    monikerToKey.clear();
-    currentFocusKey.key = null;
+    reset();
     for (const key of Object.keys(listenCallbacks)) {
       delete listenCallbacks[key];
     }

@@ -24,27 +24,28 @@ use crate::context::KanbanContext;
 use async_trait::async_trait;
 use serde_json::Value;
 
-/// Entity types that have a known copy path (generic via
-/// `EntityContext::read`). Must stay in sync with the entity definitions
-/// under `swissarmyhammer-kanban/builtin/entities/*.yaml`.
+/// Entity types that can be the SUBJECT of a clipboard / CRUD operation —
+/// the entity types with a known copy path (generic via `EntityContext::read`)
+/// AND that make sense as the subject of cut/copy/delete/archive/unarchive.
+/// Must stay in sync with the entity definitions under
+/// `swissarmyhammer-kanban/builtin/entities/*.yaml`.
 ///
-/// This is the CANONICAL clipboard-capability set. It is the dispatch-time
-/// `available()` gate here, and it is also the source of truth the
-/// list-time gate is pinned against: the `entity-commands` plugin's
-/// `OPERABLE_ENTITY_TYPES` (`builtin/plugins/entity-commands/index.ts`)
-/// declares the same set as each clipboard command's `applies_to`, and the
-/// drift guard `builtin_entity_commands_e2e::assert_clipboard_applies_to`
-/// asserts the TS-surfaced `applies_to` equals THIS constant — so declared
-/// (list) and enforced (dispatch) can never silently diverge.
-pub const COPYABLE_ENTITY_TYPES: &[&str] = &[
-    "task",
-    "tag",
-    "column",
-    "board",
-    "actor",
-    "project",
-    "attachment",
-];
+/// This is the CANONICAL clipboard-SUBJECT capability set. It is the
+/// dispatch-time `available()` gate here, and it is also the source of truth
+/// the list-time gate is pinned against: the `entity-commands` plugin's
+/// `SUBJECT_OPERABLE_ENTITY_TYPES` (`builtin/plugins/entity-commands/index.ts`)
+/// declares the same set as each subject command's `applies_to`, and the
+/// drift guard `support::assert_operable_applies_to` asserts the TS-surfaced
+/// `applies_to` equals THIS constant — so declared (list) and enforced
+/// (dispatch) can never silently diverge.
+///
+/// `board` is deliberately EXCLUDED: the board is the ROOT, so it can never be
+/// the subject of its own cut/copy/delete/archive/unarchive. The board IS a
+/// valid PASTE TARGET, but that is the opposite direction (clipboard contents
+/// drop INTO the board) and is gated by the registered `PasteMatrix` handlers
+/// (`task_into_board` / `column_into_board`), NOT by this subject set.
+pub const COPYABLE_ENTITY_TYPES: &[&str] =
+    &["task", "tag", "column", "actor", "project", "attachment"];
 
 /// Check whether a target moniker names a known entity type that can be
 /// copied. Returns `true` when the moniker parses and the entity type is

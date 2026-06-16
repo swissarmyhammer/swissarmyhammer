@@ -265,15 +265,40 @@ fn push_dedup(
     result.push(cmd);
 }
 
-/// Emit one "Switch to <ViewName>" palette row per known view, each one
-/// dispatching the canonical `view.set` command with its `view_id`
-/// pre-filled in `args`.
+/// Render the "Switch to View «name»" caption for a view-switch row.
 ///
-/// Always marked `context_menu: false` — view switching is a palette-only
-/// navigation action, alongside `board.switch`, `window.focus`, and the
-/// sibling `perspective.switch` fan-out. Right-clicking a view button never
-/// surfaces a "Switch to <ViewName>" entry; the palette
-/// (`context_menu_only == false`) still lists one row per view.
+/// The literal "View" word is appended only when the view's stored name does
+/// not already contain it (case-insensitive whole-word check), so names like
+/// `"Board"` read "Switch to View Board" while names like `"Board View"` read
+/// "Switch to Board View" rather than the doubled "Switch to View Board View".
+fn view_switch_caption(view_name: &str) -> String {
+    let mentions_view = view_name
+        .split_whitespace()
+        .any(|w| w.eq_ignore_ascii_case("view"));
+    if mentions_view {
+        format!("Switch to {view_name}")
+    } else {
+        format!("Switch to View {view_name}")
+    }
+}
+
+/// Emit one "Switch to View «name»" row per known view, each one dispatching
+/// the canonical `view.set` command with its `view_id` pre-filled in `args`.
+///
+/// Every view is palette-switchable from anywhere, so every row is emitted.
+/// The row is marked `context_menu: true` for the single view whose
+/// `view:{id}` moniker is present in `scope_chain` — so right-clicking view X
+/// surfaces exactly "Switch to View «X»" and nothing for sibling views (the
+/// scope-resolved context-menu entry the card 01KV5K29FFQJTBER6HYA4J2DW6
+/// requires). Every other view's row stays `context_menu: false` (palette
+/// only), alongside `board.switch`, `window.focus`, and the sibling
+/// `perspective.switch` fan-out.
+///
+/// One row per `(id, args)` pair is the design: a separate context-menu-only
+/// row carrying the same `view.set`/`view_id` would collapse against the
+/// palette row in `dedupe_by_id` (which keys on `(id, args)` and keeps the
+/// first), so the in-scope view's single row simply flips its
+/// `context_menu` flag instead of duplicating.
 ///
 /// Shares `seen` with the other emit_* helpers so cross-emitter dedup works.
 /// Every emitted row has `id == "view.set"` and `target == None`; the
@@ -286,20 +311,28 @@ fn push_dedup(
 /// latter (PR #40, task 01KPZMXXEXKVE3RNPA4XJP0105).
 fn emit_view_switch(
     views: &[ViewInfo],
+    scope_chain: &[String],
     seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
 ) {
+    // The set of view ids whose `view:{id}` moniker is in the scope chain —
+    // those (typically exactly one) get a context-menu-visible switch row.
+    let in_scope: HashSet<&str> = scope_chain
+        .iter()
+        .filter_map(|m| m.strip_prefix("view:"))
+        .collect();
     for view in views {
+        let context_menu = in_scope.contains(view.id.as_str());
         push_dedup(
             seen,
             result,
             ResolvedCommand {
                 id: "view.set".into(),
-                name: format!("Switch to {}", view.name),
+                name: view_switch_caption(&view.name),
                 menu_name: None,
                 target: None,
                 group: "view".into(),
-                context_menu: false,
+                context_menu,
                 keys: None,
                 available: true,
                 args: Some(serde_json::json!({ "view_id": view.id })),
@@ -542,13 +575,15 @@ fn emit_entity_add(
 /// commands from the dynamic sources. Skips commands already in the
 /// `seen` set.
 ///
-/// `entity.add:{type}` is the only dynamic command that depends on the current
-/// scope chain: it surfaces only when a `view:{id}` moniker is active and
-/// the matching view declares an `entity_type`. Unlike the navigation
-/// dynamics (view switching, board switching, perspective switching,
-/// window focus) which all set `context_menu: false`, `entity.add:*` is a
-/// first-class creation action and is emitted with `context_menu: true` so
-/// it appears on right-click inside the view.
+/// Two dynamic emissions depend on the current scope chain. `entity.add:{type}`
+/// surfaces only when a `view:{id}` moniker is active and the matching view
+/// declares an `entity_type`, and is `context_menu: true` (a first-class
+/// creation action). View switching (`emit_view_switch`) emits a row for every
+/// view — `context_menu: false` for the palette — and additionally flips the
+/// in-scope view's row to `context_menu: true` so right-clicking view X
+/// surfaces exactly "Switch to View «X»". The remaining navigation dynamics
+/// (board switching, perspective switching, window focus) stay
+/// `context_menu: false` (palette only).
 ///
 /// The dispatch-side handler that actually creates the entity lives in
 /// `crate::entity::add::AddEntity`; `entity.add:{type}` monikers produced
@@ -565,7 +600,7 @@ fn emit_dynamic_commands(
     // rather than O(scope × views).
     let views_by_id: HashMap<&str, &ViewInfo> =
         dyn_src.views.iter().map(|v| (v.id.as_str(), v)).collect();
-    emit_view_switch(&dyn_src.views, seen, result);
+    emit_view_switch(&dyn_src.views, scope_chain, seen, result);
     emit_board_switch(&dyn_src.boards, seen, result);
     emit_window_focus(&dyn_src.windows, seen, result);
     emit_perspective_goto(&dyn_src.perspectives, seen, result);

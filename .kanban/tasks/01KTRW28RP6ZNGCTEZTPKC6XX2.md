@@ -1,8 +1,13 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8380'
+comments:
+- actor: claude-code
+  id: 01kv8a489b0wvpwb25h307fxrb
+  text: 'Finish loop: verified 4/4 browser tests pass + tsc --noEmit clean. Scoped review found 0 blockers; all surfaced items are pre-existing clarity nits in shared scaffolding (traced via git blame to b5c56683f1, predating this card). No new in-scope findings. Moved to done.'
+  timestamp: 2026-06-16T13:32:26.795617+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffbb80
 title: Pre-existing failures in entity-inspector.field-vertical-nav.browser.test.tsx (4 tests) — stale spatial_navigate expectations, untracked by existing breakage cards
 ---
 ## What

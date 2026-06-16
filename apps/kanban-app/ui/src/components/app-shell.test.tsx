@@ -2,6 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, fireEvent, act } from "@testing-library/react";
 import { renderInAct } from "@/test/act-render";
 import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
+import {
+  UNHANDLED,
+  emitToCallbackRecord,
+  makeSpatialKernelMock,
+} from "@/test/mock-spatial-kernel";
 
 /**
  * Shared default `invoke` stub for tests in this file.
@@ -24,9 +29,6 @@ import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
  * implementation without preserving the UIState branch will crash the
  * AppShell render.
  */
-const monikerToKey = new Map<string, string>();
-const currentFocusKey: { key: string | null } = { key: null };
-
 /**
  * Captured event listeners keyed by event name.
  *
@@ -34,6 +36,16 @@ const currentFocusKey: { key: string | null } = { key: null };
  * events by calling `listenCallbacks["event-name"](payload)`.
  */
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
+
+/**
+ * Shared spatial-kernel mock — maintains the moniker → fq projection and
+ * synthesizes the `focus-changed` emit the React-side bridge expects, so
+ * click-driven `setFocus` updates the entity-focus store. Card
+ * `01KQD0WK54G0FRD7SZVZASA9ST` made that store a pure projection of kernel
+ * events.
+ */
+const { handleSpatialCommand, reset: resetSpatialKernel } =
+  makeSpatialKernelMock({ emit: emitToCallbackRecord(listenCallbacks) });
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
   // Post-Stage-3 focus / entity ops route through `command_tool_call`.
@@ -63,100 +75,8 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
-    const a = (args ?? {}) as { fq?: string; segment?: string };
-    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { fq?: string };
-    if (a.fq) {
-      for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.fq) {
-          monikerToKey.delete(m);
-          break;
-        }
-      }
-    }
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
-    // Under the no-silent-dropout contract the kernel always returns a
-    // moniker — typically the focused moniker (echoed) when no descent
-    // / drill-out is possible. Tests override this when they want a
-    // specific drill result.
-    const a = (args ?? {}) as { focusedFq?: string };
-    return Promise.resolve(a.focusedFq ?? null);
-  }
-  if (cmd === "spatial_focus") {
-    // Synthesize the kernel's focus-changed emit so the
-    // entity-focus bridge writes the React store. Mirrors the real
-    // kernel behavior under card `01KQD0WK54G0FRD7SZVZASA9ST`: the
-    // kernel resolves the moniker, advances `focus_by_window`, and
-    // emits `focus-changed` with both `next_fq` and `next_segment`.
-    //
-    // The emit is queued via `queueMicrotask` to match the kernel
-    // simulator's timing contract (see `test-helpers/kernel-simulator.ts`):
-    // production `focus-changed` events arrive asynchronously through
-    // Tauri's event channel, so emitting synchronously here would hide
-    // any timing-related defect (e.g. a regression that re-introduces
-    // a synchronous `store.set(moniker)` in `setFocus`). Tests that
-    // need to observe the post-emit state should drain the microtask
-    // queue inside an `act(...)` block.
-    const a = (args ?? {}) as { fq?: string };
-    const fq = a.fq ?? null;
-    let moniker: string | null = null;
-    for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) {
-        moniker = s;
-        break;
-      }
-    }
-
-    if (fq) {
-      const prev = currentFocusKey.key;
-      currentFocusKey.key = fq;
-      queueMicrotask(() => {
-        const cb = listenCallbacks["focus-changed"];
-        if (cb) {
-          cb({
-            payload: {
-              window_label: "main",
-              prev_fq: prev,
-              next_fq: fq,
-              next_segment: moniker,
-            },
-          });
-        }
-      });
-    }
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_clear_focus") {
-    // Explicit-clear counterpart of `spatial_focus_by_moniker`. The
-    // kernel removes the per-window focus slot and emits
-    // `focus-changed { next_fq: null, next_segment: null }`. Mirror
-    // that here so the bridge flips the React store back to `null`.
-    const prev = currentFocusKey.key;
-    if (prev === null) {
-      return Promise.resolve(null);
-    }
-    currentFocusKey.key = null;
-    queueMicrotask(() => {
-      const cb = listenCallbacks["focus-changed"];
-      if (cb) {
-        cb({
-          payload: {
-            window_label: "main",
-            prev_fq: prev,
-            next_fq: null,
-            next_segment: null,
-          },
-        });
-      }
-    });
-    return Promise.resolve(null);
-  }
+  const spatial = handleSpatialCommand(cmd, args);
+  if (spatial !== UNHANDLED) return Promise.resolve(spatial);
   return Promise.resolve(null);
 }
 
@@ -274,8 +194,7 @@ const MOD_KEY = /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 describe("AppShell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    monikerToKey.clear();
-    currentFocusKey.key = null;
+    resetSpatialKernel();
     for (const key of Object.keys(listenCallbacks)) {
       delete listenCallbacks[key];
     }

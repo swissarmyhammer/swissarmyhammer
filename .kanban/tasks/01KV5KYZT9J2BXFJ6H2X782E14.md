@@ -1,8 +1,24 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: fe80
+comments:
+- actor: claude-code
+  id: 01kv6da85pg5gaqnpdzb9t2nn8
+  text: |-
+    Picked up. Confirmed root cause: resolveInspectTarget (builtin/plugins/app-shell-commands/commands/ui.ts) returned an explicit ctx.target verbatim, so the toolbar context-menu dispatch (target = chrome leaf ui:navbar.board-selector) inspected the non-inspectable chrome moniker instead of the board: ancestor.
+
+    TDD:
+    - RED: added section (a'') to ui_origin_commands_execute_against_their_backends in crates/swissarmyhammer-command-service/tests/integration/builtin_app_shell_commands_e2e.rs — dispatches app.inspect with target "ui:navbar.board-selector" and scope_chain [ui:navbar.board-selector, board:01BOARD, window:..., engine]. Failed as expected: pushed "ui:navbar.board-selector" instead of "board:01BOARD" (proving the backend pushes the chrome leaf verbatim — no validation there, so the fix must live in the resolver).
+    - GREEN: tightened resolveInspectTarget so an explicit ctx.target only wins when isInspectableMoniker(target) (prefix in INSPECTABLE_ENTITY_PREFIXES); otherwise falls through to scope_chain.find(isInspectable). Extracted isInspectableMoniker helper (reused by both branches). This mirrors the Rust focused_entity_type caption rule, so caption and executed inspect can no longer disagree.
+
+    The existing (a') palette-shape (no target) case and the explicit task:/tag: verbatim cases are unchanged and still green — proving no regression to palette, the inspect button, or entity.inspect.
+
+    Results: cargo test -p swissarmyhammer-command-service --test integration = 51 passed. Also re-ran inspectable_prefixes_mirror + list_applies_to = 12 passed. No build step for the plugin (raw TS loaded by the V8 isolate; test stages builtin/plugins/app-shell-commands directly).
+
+    Did NOT touch lib/context-menu.ts (generic target: scopeChain[0] is correct for other commands) — one-place fix in the inspect resolver as the card directed.
+  timestamp: 2026-06-15T19:49:40.150216+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffb580
 project: builtin-commands
 title: 'Fix: "Inspect Board" from the toolbar context menu no-ops (chrome leaf passed as inspect target)'
 ---

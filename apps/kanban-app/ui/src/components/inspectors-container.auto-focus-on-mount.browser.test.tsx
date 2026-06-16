@@ -100,11 +100,28 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Collect every `spatial_focus` invocation, in order. */
+/**
+ * Collect every `set focus` invocation, in order.
+ *
+ * Production routes the dispatch through the in-process `focus` MCP server,
+ * so the fq lives at `args.params.fq` for the `command_tool_call` envelope
+ * and at `args.fq` for the legacy `spatial_focus` command.
+ */
 function spatialFocusCalls(): FullyQualifiedMoniker[] {
   return mockInvoke.mock.calls
-    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
-    .map((c) => (c[1] as { fq: FullyQualifiedMoniker }).fq);
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
+    .map((c) => {
+      const a = c[1] as
+        | { fq?: FullyQualifiedMoniker; params?: { fq?: FullyQualifiedMoniker } }
+        | undefined;
+      return (a?.params?.fq ?? a?.fq) as FullyQualifiedMoniker;
+    });
 }
 
 /**
@@ -204,10 +221,23 @@ describe("InspectorsContainer — auto-focus on mount", () => {
     // Stub IPC: forward `focus-changed` events the kernel would emit
     // after a successful `spatial_focus` call so the entity-focus
     // bridge can mirror the new FQM.
+    // Production routes `set focus` through the in-process `focus` MCP
+    // server, so the dispatch arrives as `command_tool_call`
+    // (`{ module: "focus", op: "set focus", params: { fq } }`). Accept both
+    // that envelope and the legacy `spatial_focus` command, forwarding the
+    // `focus-changed` event the kernel would emit on a successful commit so
+    // the entity-focus bridge can mirror the new FQM.
     mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
       const a = (args ?? {}) as Record<string, unknown>;
-      if (cmd === "spatial_focus") {
-        const fq = a.fq as FullyQualifiedMoniker;
+      const fq =
+        cmd === "spatial_focus"
+          ? (a.fq as FullyQualifiedMoniker | undefined)
+          : cmd === "command_tool_call" &&
+              a.module === "focus" &&
+              a.op === "set focus"
+            ? ((a.params as { fq?: FullyQualifiedMoniker } | undefined)?.fq)
+            : undefined;
+      if (fq) {
         const handlers = listeners.get("focus-changed") ?? [];
         for (const h of handlers) {
           h({

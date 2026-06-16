@@ -47,7 +47,7 @@ use swissarmyhammer_store::StoreContext;
 use swissarmyhammer_ui_state::UIState;
 use tempfile::TempDir;
 
-use crate::support::{assert_operable_applies_to, call_command};
+use crate::support::{assert_operable_applies_to, assert_paste_target_applies_to, call_command};
 
 /// A generous upper bound on any single host or isolate interaction.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -578,6 +578,120 @@ async fn crud_commands_suppressed_on_a_field_offered_on_an_entity() {
     }
 }
 
+/// The committed `entity-commands` bundle splits the cross-cutting capability
+/// metadata into a SUBJECT set and a PASTE-TARGET set:
+///
+///   - The five SUBJECT ops (`entity.cut` / `entity.copy` / `entity.delete` /
+///     `entity.archive` / `entity.unarchive`) act ON the focused entity as the
+///     subject. The board is the ROOT — you cannot cut/copy/delete/archive the
+///     root board from itself — so these must NOT surface on a `board:` focus.
+///   - `entity.paste` is the opposite direction: it drops the clipboard
+///     contents INTO the target. The board is a legitimate paste target (the
+///     `task_into_board` / `column_into_board` handlers), so paste MUST surface
+///     on a `board:` focus — and its caption is the clipboard-driven plain
+///     "Paste", NEVER the meaningless "Paste Board".
+///
+/// Production-path acceptance: the bundle loads through the V8 isolate, the
+/// surfaced `applies_to` drives `applies_to_focus`, and the surfaced `name`
+/// is the display-rendered caption — all with NO UI special-casing.
+#[tokio::test]
+async fn subject_ops_suppressed_paste_offered_with_clean_caption_on_the_root_board() {
+    let user_root = TempDir::new().expect("user root temp dir");
+    let builtin_root = TempDir::new().expect("builtin layer root temp dir");
+
+    stage_entity_commands(builtin_root.path());
+
+    let host = PluginHost::new(
+        Some(builtin_root.path().to_path_buf()),
+        user_root.path().to_path_buf(),
+        None,
+        user_root.path().to_path_buf(),
+        false,
+        user_root.path().to_path_buf(),
+    );
+
+    let service = install_commands_module(&host)
+        .await
+        .expect("install_commands_module must succeed");
+
+    let _entity = tokio::time::timeout(TIMEOUT, expose_entity_module(&host))
+        .await
+        .expect("exposing entity should not hang");
+
+    tokio::time::timeout(TIMEOUT, host.discover_and_load_all::<KanbanConfig>())
+        .await
+        .expect("discovery should not hang")
+        .expect("discovering the entity-commands builtin plugin should succeed");
+
+    // ── Root board focus: the five SUBJECT ops must be ABSENT, paste PRESENT ──
+    let on_board = commands_by_id(
+        &call_command(
+            &service,
+            CallerId::HostInternal,
+            json!({
+                "op": "list command",
+                "ctx": { "target": "board:b1", "scope_chain": ["board:b1"] },
+            }),
+        )
+        .await,
+    );
+    for id in [
+        "entity.cut",
+        "entity.copy",
+        "entity.delete",
+        "entity.archive",
+        "entity.unarchive",
+    ] {
+        assert!(
+            !on_board.contains_key(id),
+            "{id} must NOT surface on the root board — the board cannot be the \
+             subject of its own cut/copy/delete/archive; got {:?}",
+            on_board.keys().collect::<Vec<_>>()
+        );
+    }
+    let paste = on_board.get("entity.paste").unwrap_or_else(|| {
+        panic!(
+            "entity.paste MUST surface on the root board (a valid paste target); got {:?}",
+            on_board.keys().collect::<Vec<_>>()
+        )
+    });
+    // The clipboard-driven caption: plain "Paste", never "Paste Board".
+    assert_eq!(
+        paste["name"],
+        json!("Paste"),
+        "entity.paste caption must be the clipboard-driven plain \"Paste\" on a \
+         board target — never the meaningless \"Paste Board\"; got {}",
+        paste["name"]
+    );
+
+    // ── Column focus: every subject op PRESENT (no regression) ───────────────
+    let on_column = commands_by_id(
+        &call_command(
+            &service,
+            CallerId::HostInternal,
+            json!({
+                "op": "list command",
+                "ctx": { "target": "column:todo", "scope_chain": ["column:todo", "board:b1"] },
+            }),
+        )
+        .await,
+    );
+    for id in [
+        "entity.cut",
+        "entity.copy",
+        "entity.delete",
+        "entity.archive",
+        "entity.unarchive",
+        "entity.paste",
+    ] {
+        assert!(
+            on_column.contains_key(id),
+            "{id} MUST surface when a real subject (column) is focused; got {:?}",
+            on_column.keys().collect::<Vec<_>>()
+        );
+    }
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Per-command metadata regression asserts (locked against entity.yaml)
 // ───────────────────────────────────────────────────────────────────────────
@@ -878,7 +992,7 @@ fn assert_entity_paste_metadata(cmd: &Value) {
         json!([{ "name": "moniker", "from": "target" }]),
         "entity.paste params must match entity.yaml 1:1"
     );
-    assert_clipboard_applies_to(cmd, "entity.paste");
+    assert_paste_target_applies_to(cmd, "entity.paste");
 }
 
 /// Drift guard: the clipboard trio (`entity.cut` / `entity.copy` /
@@ -888,7 +1002,8 @@ fn assert_entity_paste_metadata(cmd: &Value) {
 ///
 /// The capability lives in two places that cannot import each other:
 ///
-///   - TS `OPERABLE_ENTITY_TYPES` (`builtin/plugins/entity-commands/index.ts`)
+///   - TS `SUBJECT_OPERABLE_ENTITY_TYPES`
+///     (`builtin/plugins/entity-commands/index.ts`)
 ///     — surfaced here through the real registered metadata as each command's
 ///     `applies_to`. This is the LIST-time gate: `list command` reads
 ///     `applies_to` and suppresses the command when the focused object's type

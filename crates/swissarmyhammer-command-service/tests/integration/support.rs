@@ -28,7 +28,9 @@ use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::{json, Value};
 use swissarmyhammer_command_service::bootstrap::install_commands_module;
 use swissarmyhammer_command_service::CommandService;
+use swissarmyhammer_command_service::INSPECTABLE_ENTITY_PREFIXES;
 use swissarmyhammer_kanban::commands::clipboard_commands::COPYABLE_ENTITY_TYPES;
+use swissarmyhammer_kanban::commands::paste_handlers::register_paste_handlers;
 use swissarmyhammer_plugin::{CallerId, PluginHost};
 use tempfile::TempDir;
 
@@ -217,11 +219,16 @@ pub fn ids_of(list_result: &Value) -> Vec<String> {
 pub fn write_noop_probe_plugin(plugins_dir: &Path, id: &str) -> PathBuf {
     let plugin_dir = plugins_dir.join(id);
     std::fs::create_dir_all(&plugin_dir).expect("plugin dir");
+    // Inject `id` as a JSON string literal (`JSON.stringify`-equivalent), not
+    // by bare interpolation into a single-quoted TS literal: a quote or newline
+    // in `id` would otherwise break out of the literal and inject arbitrary
+    // code into the generated plugin source the V8 isolate runs.
+    let loaded_message = json_string(&format!("{id} loaded"));
     let entry = format!(
         "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
          export default class P extends Plugin {{\n\
            async load(): Promise<void> {{\n\
-             this.log.info('{id} loaded');\n\
+             this.log.info({loaded_message});\n\
            }}\n\
          }}\n"
     );
@@ -264,6 +271,17 @@ pub fn write_sentinel_probe_plugin(
 ) -> PathBuf {
     let plugin_dir = plugins_dir.join(id);
     std::fs::create_dir_all(&plugin_dir).expect("plugin dir");
+    // Inject every test-supplied value as a JSON string literal
+    // (`JSON.stringify`-equivalent), not by bare interpolation into single-
+    // quoted TS literals: a quote or newline in any of `command_id` / `id` /
+    // `sentinel` would otherwise break out of the literal and inject arbitrary
+    // code into the generated plugin source the V8 isolate runs.
+    let command_id_lit = json_string(command_id);
+    let name_lit = json_string(&format!("{id} archive"));
+    let sentinel_lit = json_string(sentinel);
+    let log_message = json_string(&format!(
+        "{id} registered {command_id} with sentinel {sentinel}"
+    ));
     // The bundle is deliberately minimal — no descriptive metadata, no
     // unload hook. The SDK's per-plugin ledger drains the command and
     // callback registrations on unload without an explicit body, which
@@ -279,11 +297,11 @@ pub fn write_sentinel_probe_plugin(
            async load(): Promise<void> {{\n\
              await ensureServices(this, ['commands']);\n\
              await registerCommands(this, [{{\n\
-               id: '{command_id}',\n\
-               name: '{id} archive',\n\
-               execute: () => '{sentinel}',\n\
+               id: {command_id_lit},\n\
+               name: {name_lit},\n\
+               execute: () => {sentinel_lit},\n\
              }}]);\n\
-             this.log.info('{id} registered {command_id} with sentinel {sentinel}');\n\
+             this.log.info({log_message});\n\
            }}\n\
          }}\n"
     );
@@ -291,29 +309,22 @@ pub fn write_sentinel_probe_plugin(
     plugin_dir
 }
 
-/// Drift guard core: the list-time `applies_to` a command surfaces must equal
-/// the Rust `COPYABLE_ENTITY_TYPES` capability set — the real cross-cutting
-/// entity types (task, tag, column, board, actor, project, attachment), which
-/// deliberately EXCLUDES `field` (a projection, not an entity) and
-/// `view`/`perspective` (their own `perspective.*` commands).
+/// Serialize `value` as a JSON string literal (escaping quotes, backslashes,
+/// and control characters), suitable for embedding verbatim in generated
+/// TypeScript source. Delegates the escaping to `serde_json` so a quote or
+/// newline in a test input can never break out of the generated literal.
+fn json_string(value: &str) -> String {
+    serde_json::to_string(value).expect("a string always serializes to JSON")
+}
+
+/// Read a command's surfaced `applies_to` into a sorted `Vec<String>`.
 ///
-/// Shared across the `integration` test binary by every command that declares
-/// the operable-entity set in TS (`OPERABLE_ENTITY_TYPES` in
-/// `builtin/plugins/entity-commands/index.ts`): the clipboard trio
-/// (`entity.cut` / `entity.copy` / `entity.paste`), the CRUD trio
-/// (`entity.delete` / `entity.archive` / `entity.unarchive`), and `app.inspect`
-/// in the `app-shell-commands` bundle. Each surfaces the set here through its
-/// registered metadata as `applies_to`.
-///
-/// Pinning the TS-surfaced `applies_to` directly against the Rust constant
-/// (NOT a third hand-maintained literal) keeps declared (list-time) and
-/// enforced (dispatch-time `available()`) capability from silently diverging:
-/// if Rust drops `actor` from `COPYABLE_ENTITY_TYPES` while TS keeps listing
-/// it, this goes RED rather than re-introducing a shown-but-unsupported
-/// command. `view` / `perspective` / `field` are absent from both.
-pub fn assert_operable_applies_to(cmd: &Value, id: &str) {
-    // Order-insensitive set comparison: the TS source and the Rust constant
-    // are two independently authored lists; only their MEMBERSHIP must match.
+/// The single shared extraction the drift guards build on: `applies_to` is the
+/// list-time capability set every gated command declares, surfaced through its
+/// registered metadata. Order-insensitive comparison is what the guards want
+/// (the TS source and the Rust constant are independently authored lists; only
+/// their MEMBERSHIP must match), so the result is sorted.
+fn declared_applies_to(cmd: &Value, id: &str) -> Vec<String> {
     let mut declared: Vec<String> = cmd["applies_to"]
         .as_array()
         .unwrap_or_else(|| panic!("{id} applies_to must be an array"))
@@ -325,6 +336,51 @@ pub fn assert_operable_applies_to(cmd: &Value, id: &str) {
         })
         .collect();
     declared.sort();
+    declared.dedup();
+    declared
+}
+
+/// Assert a command's surfaced `applies_to` never names a non-entity /
+/// non-cross-cutting type. This holds independently of any set-equality check,
+/// so a future edit that adds these to BOTH the TS list and the Rust constant
+/// still trips here.
+fn assert_no_non_entity_types(declared: &[String], id: &str) {
+    for unsupported in ["view", "perspective", "field"] {
+        assert!(
+            !declared.iter().any(|t| t == unsupported),
+            "{id} applies_to must NOT include {unsupported:?} — it is not a \
+             cross-cutting entity type"
+        );
+    }
+}
+
+/// Drift guard core: the list-time `applies_to` a command surfaces must equal
+/// the Rust `COPYABLE_ENTITY_TYPES` capability set — the SUBJECT entity types
+/// (task, tag, column, actor, project, attachment), which deliberately EXCLUDES
+/// `board` (the ROOT can never be the subject of its own cut/copy/delete) and
+/// `field` (a projection, not an entity), and `view`/`perspective` (their own
+/// `perspective.*` commands).
+///
+/// Shared across the `integration` test binary by every command that declares
+/// the SUBJECT set in TS (`SUBJECT_OPERABLE_ENTITY_TYPES` in
+/// `builtin/plugins/entity-commands/index.ts`): the clipboard pair
+/// (`entity.cut` / `entity.copy`) and the CRUD trio (`entity.delete` /
+/// `entity.archive` / `entity.unarchive`). Each surfaces the set here through
+/// its registered metadata as `applies_to`.
+///
+/// NOTE: `app.inspect` is NOT pinned here — Inspect is meaningful on the root
+/// board ("Inspect Board"), so it gates on the INSPECTABLE set (board PRESENT),
+/// pinned by [`assert_inspect_applies_to`]. `entity.paste` is the paste-TARGET
+/// set, pinned by [`assert_paste_target_applies_to`].
+///
+/// Pinning the TS-surfaced `applies_to` directly against the Rust constant
+/// (NOT a third hand-maintained literal) keeps declared (list-time) and
+/// enforced (dispatch-time `available()`) capability from silently diverging:
+/// if Rust drops `actor` from `COPYABLE_ENTITY_TYPES` while TS keeps listing
+/// it, this goes RED rather than re-introducing a shown-but-unsupported
+/// command. `board` / `view` / `perspective` / `field` are absent from both.
+pub fn assert_operable_applies_to(cmd: &Value, id: &str) {
+    let declared = declared_applies_to(cmd, id);
 
     let mut enforced: Vec<String> = COPYABLE_ENTITY_TYPES
         .iter()
@@ -334,20 +390,133 @@ pub fn assert_operable_applies_to(cmd: &Value, id: &str) {
 
     assert_eq!(
         declared, enforced,
-        "{id} list-time applies_to (TS OPERABLE_ENTITY_TYPES, surfaced via \
-         list command) must equal the dispatch-time COPYABLE_ENTITY_TYPES \
+        "{id} list-time applies_to (TS SUBJECT_OPERABLE_ENTITY_TYPES, surfaced \
+         via list command) must equal the dispatch-time COPYABLE_ENTITY_TYPES \
          (swissarmyhammer-kanban) — declared and enforced capability \
          must not drift"
     );
 
-    // Anchor: neither list may name a non-entity / non-cross-cutting type.
-    // This holds independently of the set-equality above, so a future edit
-    // that adds these to BOTH lists still trips here.
-    for unsupported in ["view", "perspective", "field"] {
-        assert!(
-            !declared.iter().any(|t| t == unsupported),
-            "{id} applies_to must NOT include {unsupported:?} — it is not a \
-             cross-cutting entity type"
-        );
-    }
+    // The board is NOT a subject: the root cannot be cut/copied/deleted from
+    // itself. This holds independently of the set-equality above.
+    assert!(
+        !declared.iter().any(|t| t == "board"),
+        "{id} applies_to must NOT include \"board\" — the root board can never \
+         be the SUBJECT of its own cut/copy/delete/archive/unarchive"
+    );
+
+    assert_no_non_entity_types(&declared, id);
+}
+
+/// The entity types the VISIBLE inspect surface (`app.inspect`) declares as its
+/// `applies_to` — the INSPECTABLE set.
+///
+/// Derived directly from the Rust [`INSPECTABLE_ENTITY_PREFIXES`] constant
+/// (`swissarmyhammer-command-service::caption`) by stripping each prefix's
+/// trailing `:` (`"task:"` → `"task"`). This is the EXACT mirror of how the TS
+/// source derives `INSPECTABLE_ENTITY_TYPES` from its own
+/// `INSPECTABLE_ENTITY_PREFIXES`, and the two prefix lists are themselves pinned
+/// 1:1 by `inspectable_prefixes_mirror.rs` — so no third hand-maintained literal
+/// exists. `board:` IS in the prefix set, so `board` is in the inspect set;
+/// `field:` is deliberately ABSENT, so a focused field never surfaces Inspect.
+///
+/// NOTE: the inspect set is NOT the subject set plus board: `actor` / `project`
+/// are subjects but are intentionally omitted from the inspectable prefixes
+/// (they are never bare scope-chain leaves), so the two sets differ by more than
+/// just `board`.
+fn inspectable_entity_types() -> Vec<String> {
+    let mut types: Vec<String> = INSPECTABLE_ENTITY_PREFIXES
+        .iter()
+        .map(|prefix| prefix.trim_end_matches(':').to_string())
+        .collect();
+    types.sort();
+    types.dedup();
+    types
+}
+
+/// Drift guard for `app.inspect`: its list-time `applies_to` must equal the
+/// INSPECTABLE entity-type set — the entity-type projection of the inspectable
+/// prefixes (`task, tag, column, board, attachment`).
+///
+/// Inspect is decoupled from the SUBJECT ops on purpose: the root board cannot
+/// be cut/copied/deleted from itself, but it CAN be inspected ("Inspect Board"),
+/// so `board` is PRESENT in the inspect set even though it is ABSENT from the
+/// subject set. Pinning the TS-surfaced `applies_to` against the inspectable
+/// prefix constant (NOT a hand-maintained literal) keeps the inspect capability
+/// from silently drifting from the inspectable target-resolution set.
+pub fn assert_inspect_applies_to(cmd: &Value, id: &str) {
+    let declared = declared_applies_to(cmd, id);
+    let enforced = inspectable_entity_types();
+
+    assert_eq!(
+        declared, enforced,
+        "{id} list-time applies_to (TS INSPECTABLE_ENTITY_TYPES, surfaced via \
+         list command) must equal the entity-type projection of \
+         INSPECTABLE_ENTITY_PREFIXES (caption) — Inspect is meaningful on the \
+         root board, so board must be PRESENT"
+    );
+
+    // The board IS inspectable — this is the whole point of decoupling inspect
+    // from the subject set: "Inspect Board" surfaces on the root board even
+    // though the board can never be a cut/copy/delete SUBJECT.
+    assert!(
+        declared.iter().any(|t| t == "board"),
+        "{id} applies_to must include \"board\" — the board IS inspectable \
+         (\"Inspect Board\" surfaces on the root board)"
+    );
+
+    assert_no_non_entity_types(&declared, id);
+}
+
+/// The distinct TARGET entity types of the production `PasteMatrix` — the
+/// entity types that have at least one registered paste handler as the
+/// destination (e.g. `board` via `column_into_board` / `task_into_board`,
+/// `task` via `tag_onto_task` / `attachment_onto_task` / `actor_onto_task`).
+///
+/// Derived directly from `register_paste_handlers()` so it can never drift
+/// from the registered handler set: this is the SINGLE source of truth for
+/// "which entity types can RECEIVE a paste".
+fn paste_target_entity_types() -> Vec<String> {
+    let mut targets: Vec<String> = register_paste_handlers()
+        .keys()
+        .map(|(_clip, target)| target.to_string())
+        .collect();
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+/// Drift guard for `entity.paste`: its list-time `applies_to` must equal the
+/// set of TARGET entity types in the production `PasteMatrix`.
+///
+/// Paste is the opposite direction from the SUBJECT ops: it drops the clipboard
+/// contents INTO the target, so the gate is "which entity types can RECEIVE a
+/// paste" — NOT the subject `COPYABLE_ENTITY_TYPES` set. The two sets diverge:
+/// the board is a valid paste TARGET (`task_into_board` / `column_into_board`)
+/// but never a paste SUBJECT, while `tag` / `actor` are subjects (or sources)
+/// but have no registered paste-target handler.
+///
+/// Pinning the TS-surfaced `applies_to` directly against the registered handler
+/// keys (NOT a hand-maintained literal) keeps the declared paste-target list
+/// from silently drifting from the handlers that actually exist: add or drop a
+/// `*_onto_<type>` / `*_into_<type>` handler and this goes RED unless the TS
+/// `PASTE_TARGET_ENTITY_TYPES` set is updated to match.
+pub fn assert_paste_target_applies_to(cmd: &Value, id: &str) {
+    let declared = declared_applies_to(cmd, id);
+    let enforced = paste_target_entity_types();
+
+    assert_eq!(
+        declared, enforced,
+        "{id} list-time applies_to (TS PASTE_TARGET_ENTITY_TYPES, surfaced via \
+         list command) must equal the set of TARGET types in the production \
+         PasteMatrix (register_paste_handlers) — declared paste targets and \
+         registered handlers must not drift"
+    );
+
+    // The board IS a paste target — this is the whole point of the split: the
+    // root board offers Paste even though it can never be a SUBJECT.
+    assert!(
+        declared.iter().any(|t| t == "board"),
+        "{id} applies_to must include \"board\" — the board is a valid paste \
+         target via the task_into_board / column_into_board handlers"
+    );
 }

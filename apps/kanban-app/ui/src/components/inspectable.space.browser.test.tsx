@@ -118,6 +118,11 @@ import { Inspectable } from "./inspectable";
 import { FocusScope } from "./focus-scope";
 import { AppShell } from "./app-shell";
 import { commandToolCall } from "@/test/mock-command-list";
+import {
+  UNHANDLED,
+  emitToListenerMap,
+  makeSpatialKernelMock,
+} from "@/test/mock-spatial-kernel";
 import { FocusLayer } from "./focus-layer";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
@@ -145,15 +150,14 @@ async function flushSetup() {
 }
 
 /**
- * Tracks the moniker → FullyQualifiedMoniker mapping that the kernel would normally
- * maintain. Card `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus
- * store a pure projection of kernel events; tests that mock `invoke`
- * without a kernel simulator need this minimal stub so click-driven
- * `setFocus` still updates the React store via the spatial-focus
- * bridge.
+ * Shared spatial-kernel mock — maintains the moniker → fq projection the
+ * kernel would normally own and synthesizes the `focus-changed` emit so
+ * click-driven `setFocus` updates the React store via the spatial-focus
+ * bridge. Card `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus store a
+ * pure projection of kernel events.
  */
-const monikerToKey = new Map<string, string>();
-const currentFocusKey: { key: string | null } = { key: null };
+const { handleSpatialCommand, reset: resetSpatialKernel } =
+  makeSpatialKernelMock({ emit: emitToListenerMap(listeners) });
 
 /**
  * Build the default `invoke` implementation covering the IPCs the
@@ -213,90 +217,8 @@ function makeDefaultInvokeImpl(
         recent_boards: [],
       };
     }
-    if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
-      const a = (args ?? {}) as { fq?: string; segment?: string };
-      if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
-      return undefined;
-    }
-    if (cmd === "spatial_unregister_scope") {
-      const a = (args ?? {}) as { fq?: string };
-      if (a.fq) {
-        for (const [m, k] of monikerToKey.entries()) {
-          if (k === a.fq) {
-            monikerToKey.delete(m);
-            break;
-          }
-        }
-      }
-      return undefined;
-    }
-    if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
-      const a = (args ?? {}) as { focusedFq?: string };
-      return a.focusedFq ?? null;
-    }
-    if (cmd === "spatial_focus") {
-      // Synthesize the kernel's focus-changed emit so the entity-focus
-      // bridge writes the React store. Mirrors the real kernel behavior:
-      // resolve moniker → key, advance focus_by_window, emit
-      // focus-changed with both fields. See card
-      // `01KQD0WK54G0FRD7SZVZASA9ST` for the projection invariant.
-      //
-      // Queued via `queueMicrotask` to match the kernel simulator's
-      // timing contract — production events arrive asynchronously, so
-      // emitting synchronously would hide regressions that depend on
-      // the async write semantics.
-      const a = (args ?? {}) as { fq?: string };
-      const fq = a.fq ?? null;
-      let moniker: string | null = null;
-      for (const [s, k] of monikerToKey.entries()) {
-        if (k === fq) {
-          moniker = s;
-          break;
-        }
-      }
-
-      if (fq) {
-        const prev = currentFocusKey.key;
-        currentFocusKey.key = fq;
-        queueMicrotask(() => {
-          const handlers = listeners.get("focus-changed") ?? [];
-          for (const h of handlers) {
-            h({
-              payload: {
-                window_label: "main",
-                prev_fq: prev,
-                next_fq: fq,
-                next_segment: moniker,
-              },
-            });
-          }
-        });
-      }
-      return undefined;
-    }
-    if (cmd === "spatial_clear_focus") {
-      // Explicit-clear counterpart — kernel emits a
-      // `Some(prev) → None` `focus-changed` event so the React-side
-      // bridge flips the store back to `null`. Idempotent when the
-      // window had no prior focus.
-      const prev = currentFocusKey.key;
-      if (prev === null) return undefined;
-      currentFocusKey.key = null;
-      queueMicrotask(() => {
-        const handlers = listeners.get("focus-changed") ?? [];
-        for (const h of handlers) {
-          h({
-            payload: {
-              window_label: "main",
-              prev_fq: prev,
-              next_fq: null,
-              next_segment: null,
-            },
-          });
-        }
-      });
-      return undefined;
-    }
+    const spatial = handleSpatialCommand(cmd, args);
+    if (spatial !== UNHANDLED) return spatial;
     if (cmd === "list_entity_types") return [];
     if (cmd === "get_entity_schema") return null;
     if (cmd === "list_commands_for_scope") return [];
@@ -418,8 +340,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
     mockInvoke.mockClear();
     mockListen.mockClear();
     listeners.clear();
-    monikerToKey.clear();
-    currentFocusKey.key = null;
+    resetSpatialKernel();
     mockInvoke.mockImplementation(defaultInvokeImpl);
   });
 
