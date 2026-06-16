@@ -8213,6 +8213,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-diagnostics"
+version = "0.14.0"
+dependencies = [
+ "lsp-types",
+ "serde",
+ "serde_json",
+ "swissarmyhammer-lsp",
+]
+
+[[package]]
 name = "swissarmyhammer-directory"
 version = "0.14.0"
 dependencies = [
@@ -8530,6 +8540,15 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "tempfile",
+]
+
+[[package]]
+name = "swissarmyhammer-search"
+version = "0.14.0"
+dependencies = [
+ "convert_case",
+ "serde",
+ "unicode-segmentation",
 ]
 
 [[package]]
