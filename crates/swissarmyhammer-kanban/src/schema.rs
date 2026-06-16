@@ -22,7 +22,7 @@ use crate::project::{AddProject, DeleteProject, GetProject, ListProjects, Update
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
 use crate::task::{
     AddTask, ArchiveTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListArchived, ListTasks,
-    MoveTask, NextTask, TagTask, UnarchiveTask, UnassignTask, UntagTask, UpdateTask,
+    MoveTask, NextTask, SearchTasks, TagTask, UnarchiveTask, UnassignTask, UntagTask, UpdateTask,
 };
 
 /// All kanban operations — the canonical list used for schema generation and CLI.
@@ -57,6 +57,7 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(TagTask::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(UntagTask::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(ListTasks::new())) as &dyn Operation,
+        Box::leak(Box::new(SearchTasks::new(""))) as &dyn Operation,
         Box::leak(Box::new(ArchiveTask::new(""))) as &dyn Operation,
         Box::leak(Box::new(UnarchiveTask::new(""))) as &dyn Operation,
         Box::leak(Box::new(ListArchived)) as &dyn Operation,
@@ -197,7 +198,7 @@ fn get_kanban_verb_aliases() -> Map<String, Value> {
         json!(["edit", "modify", "set", "patch"]),
     );
     aliases.insert("delete".to_string(), json!(["remove", "rm", "del"]));
-    aliases.insert("list".to_string(), json!(["ls", "find", "search", "query"]));
+    aliases.insert("list".to_string(), json!(["ls", "find", "query"]));
     aliases.insert("move".to_string(), json!(["mv"]));
     aliases.insert("complete".to_string(), json!(["done", "finish", "close"]));
 
@@ -361,6 +362,59 @@ mod tests {
                     op_strings
                 );
             }
+        }
+    }
+
+    /// `search tasks` must surface as a first-class op on both schema surfaces
+    /// (the op enum) and carry its `query`/`filter`/`top_k` params in the full
+    /// schema's `x-operation-schemas`. This is the schema-side proof that the
+    /// relevance-search op — distinct from `list tasks` — reaches MCP clients.
+    #[test]
+    fn test_schema_includes_search_tasks_with_params() {
+        let ops = kanban_operations();
+
+        // The op enum (identical on both surfaces) advertises `search tasks`,
+        // and `list tasks` is unaffected.
+        for schema in [
+            generate_kanban_mcp_schema(ops),
+            generate_kanban_mcp_schema_full(ops),
+        ] {
+            let op_strings: Vec<&str> = schema["properties"]["op"]["enum"]
+                .as_array()
+                .expect("op enum should be an array")
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect();
+            assert!(
+                op_strings.contains(&"search tasks"),
+                "op enum should contain 'search tasks', got: {op_strings:?}"
+            );
+            assert!(
+                op_strings.contains(&"list tasks"),
+                "'list tasks' must remain in the op enum, got: {op_strings:?}"
+            );
+        }
+
+        // The full schema's per-op `x-operation-schemas` entry for `search
+        // tasks` exposes the query/filter/top_k params.
+        let full = generate_kanban_mcp_schema_full(ops);
+        let op_schemas = full["x-operation-schemas"]
+            .as_array()
+            .expect("x-operation-schemas should be an array");
+        let search_schema = op_schemas
+            .iter()
+            .find(|s| s["title"] == json!("search tasks"))
+            .expect("x-operation-schemas should contain 'search tasks'");
+
+        let props = search_schema["properties"]
+            .as_object()
+            .expect("search tasks schema should have properties");
+        for param in ["query", "filter", "top_k"] {
+            assert!(
+                props.contains_key(param),
+                "search tasks schema should expose '{param}' param, got: {:?}",
+                props.keys().collect::<Vec<_>>()
+            );
         }
     }
 

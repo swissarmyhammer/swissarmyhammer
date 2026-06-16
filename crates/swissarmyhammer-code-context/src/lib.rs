@@ -113,7 +113,7 @@ pub use ops::lsp_helpers::parse_lsp_range;
 pub use ops::query_ast::{query_ast, AstCapture, AstMatch, QueryAstOptions, QueryAstResult};
 pub use ops::search_code::{
     load_all_embedded_chunks, search_code, search_loaded, serialize_embedding, IndexingProgress,
-    LoadedChunk, SearchCodeMatch, SearchCodeOptions, SearchCodeResult,
+    LoadedChunk, SearchCodeMatch, SearchCodeOptions, SearchCodeResult, Signals,
 };
 pub use ops::search_symbol::{search_symbol, SearchSymbolMatch, SearchSymbolOptions};
 pub use ops::status::{

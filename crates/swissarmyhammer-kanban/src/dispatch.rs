@@ -17,7 +17,7 @@ use crate::project::{AddProject, DeleteProject, GetProject, ListProjects, Update
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
 use crate::task::{
     AddTask, ArchiveTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListArchived, ListTasks,
-    MoveTask, NextTask, TagTask, UnarchiveTask, UnassignTask, UntagTask, UpdateTask,
+    MoveTask, NextTask, SearchTasks, TagTask, UnarchiveTask, UnassignTask, UntagTask, UpdateTask,
 };
 use crate::types::{
     resolve_short_ref, ActorId, Noun, Operation as KanbanOperation, ResolveResult, TaskId, Verb,
@@ -527,7 +527,7 @@ async fn execute_task_assignment_operation(
     }
 }
 
-/// Dispatch task query operations: list, next.
+/// Dispatch task query operations: list, next, search.
 async fn execute_task_query_operation(
     processor: &KanbanOperationProcessor,
     ctx: &KanbanContext,
@@ -564,6 +564,19 @@ async fn execute_task_query_operation(
             }
             processor.process(&cmd, ctx).await
         }
+        Verb::Search => {
+            // `query` is required; `filter` scopes the corpus and `top_k`
+            // caps the ranked hits (defaults applied inside SearchTasks).
+            let query = req(op, "query")?;
+            let mut cmd = SearchTasks::new(query);
+            if let Some(filter) = op.get_string("filter") {
+                cmd = cmd.with_filter(filter);
+            }
+            if let Some(top_k) = op.get_u64("top_k").and_then(|n| usize::try_from(n).ok()) {
+                cmd = cmd.with_top_k(top_k);
+            }
+            processor.process(&cmd, ctx).await
+        }
         _ => Err(KanbanError::parse(format!(
             "unsupported operation: {} {}",
             op.verb, op.noun
@@ -589,7 +602,9 @@ async fn execute_task_operation(
         Verb::Assign | Verb::Unassign | Verb::Tag | Verb::Untag => {
             execute_task_assignment_operation(processor, ctx, op).await
         }
-        Verb::Next | Verb::List => execute_task_query_operation(processor, ctx, op).await,
+        Verb::Next | Verb::List | Verb::Search => {
+            execute_task_query_operation(processor, ctx, op).await
+        }
         _ => Err(KanbanError::parse(format!(
             "unsupported operation: {} {}",
             op.verb, op.noun
@@ -1072,6 +1087,29 @@ mod tests {
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["count"], 1);
         assert_eq!(result["tasks"][0]["id"], task_id);
+    }
+
+    /// `search tasks` must parse to (Verb::Search, Noun::Tasks) and dispatch to
+    /// SearchTasks. On an empty board the op short-circuits before loading any
+    /// model, so this proves the wiring without an embedding model. A missing
+    /// `query` must surface a parse error.
+    #[tokio::test]
+    async fn dispatch_search_tasks_wiring() {
+        let (_temp, ctx) = setup().await;
+
+        // Parses to the Search verb and the Tasks noun.
+        let ops = parse_input(json!({"op": "search tasks", "query": "anything"})).unwrap();
+        assert_eq!(ops[0].verb, Verb::Search);
+        assert_eq!(ops[0].noun, Noun::Tasks);
+
+        // Empty board → ranked result of zero, no model loaded.
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["count"], 0);
+        assert!(result["tasks"].as_array().unwrap().is_empty());
+
+        // `query` is required.
+        let ops = parse_input(json!({"op": "search tasks"})).unwrap();
+        assert!(execute_operation(&ctx, &ops[0]).await.is_err());
     }
 
     #[tokio::test]

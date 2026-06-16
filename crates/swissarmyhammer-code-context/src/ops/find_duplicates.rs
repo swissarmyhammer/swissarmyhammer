@@ -201,7 +201,7 @@ pub fn find_duplicates_in(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ops::search_code::serialize_embedding;
+    use crate::serialize_embedding;
     use crate::test_fixtures::{insert_file_simple as insert_file, test_db};
 
     fn insert_chunk(

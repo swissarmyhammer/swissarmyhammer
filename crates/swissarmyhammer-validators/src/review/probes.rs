@@ -509,7 +509,9 @@ async fn run_similar(
             top_k: DEFAULT_SIMILAR_TOP_K + 1,
             ..Default::default()
         };
-        let matches = search_loaded(corpus, &query, &options);
+        // The added function body drives both the lexical (BM25/trigram) and the
+        // cosine signals in the hybrid fusion ranking.
+        let matches = search_loaded(corpus, body, &query, &options);
 
         let rows: Vec<ProbeRow> = matches
             .iter()
@@ -519,7 +521,7 @@ async fn run_similar(
                 file_path: m.file_path.clone(),
                 symbol: m.symbol_path.clone(),
                 line: Some(m.start_line),
-                similarity: Some(m.similarity),
+                similarity: Some(m.score),
                 detail: Some(snippet(&m.text)),
             })
             .collect();
