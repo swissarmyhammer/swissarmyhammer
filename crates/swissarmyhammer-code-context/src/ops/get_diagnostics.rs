@@ -188,78 +188,68 @@ fn try_pull_diagnostics(
 
 /// Parse diagnostics from a `textDocument/diagnostic` response result.
 ///
-/// The result contains either:
-/// - `{ "kind": "full", "items": [...] }` (DocumentDiagnosticReport)
-/// - `{ "items": [...] }` (simplified)
-/// - A direct array of diagnostics
+/// Delegates the JSON-to-[`lsp_types::Diagnostic`] mapping to the single shared
+/// parser in `swissarmyhammer-lsp`, then converts each into this crate's
+/// enriched [`Diagnostic`]. Accepts the same shapes the shared parser does
+/// (`{ "kind": "full", "items": [...] }`, `{ "items": [...] }`, or a bare
+/// array).
 pub fn parse_diagnostics_from_result(result: &serde_json::Value) -> Vec<Diagnostic> {
-    // Try "items" array first (standard pull diagnostics response)
-    let items = if let Some(items) = result.get("items").and_then(|v| v.as_array()) {
-        items.clone()
-    } else if let Some(arr) = result.as_array() {
-        arr.clone()
-    } else {
-        return Vec::new();
-    };
-
-    items.iter().filter_map(parse_single_diagnostic).collect()
+    swissarmyhammer_lsp::parse_diagnostics_from_result(result)
+        .iter()
+        .map(diagnostic_from_lsp)
+        .collect()
 }
 
-/// Parse diagnostics from a `publishDiagnostics` notification.
+/// Parse diagnostics from a `publishDiagnostics` notification's params.
 ///
-/// The notification params contain `{ "uri": "...", "diagnostics": [...] }`.
+/// Delegates to the shared parser in `swissarmyhammer-lsp` and converts the
+/// result into this crate's enriched [`Diagnostic`]. The params contain
+/// `{ "uri": "...", "diagnostics": [...] }`.
 pub fn parse_publish_diagnostics(params: &serde_json::Value) -> Vec<Diagnostic> {
-    let items = match params.get("diagnostics").and_then(|v| v.as_array()) {
-        Some(arr) => arr,
-        None => return Vec::new(),
-    };
-
-    items.iter().filter_map(parse_single_diagnostic).collect()
+    swissarmyhammer_lsp::parse_publish_diagnostics(params)
+        .iter()
+        .map(diagnostic_from_lsp)
+        .collect()
 }
 
-/// Parse a single LSP diagnostic object into our `Diagnostic` type.
-fn parse_single_diagnostic(item: &serde_json::Value) -> Option<Diagnostic> {
-    let range_val = item.get("range")?;
-    let start = range_val.get("start")?;
-    let end = range_val.get("end")?;
+/// Map a shared [`lsp_types::DiagnosticSeverity`] onto this crate's
+/// [`DiagnosticSeverity`], defaulting unrecognized values to `Hint`.
+fn severity_from_lsp(severity: lsp_types::DiagnosticSeverity) -> DiagnosticSeverity {
+    match severity {
+        lsp_types::DiagnosticSeverity::ERROR => DiagnosticSeverity::Error,
+        lsp_types::DiagnosticSeverity::WARNING => DiagnosticSeverity::Warning,
+        lsp_types::DiagnosticSeverity::INFORMATION => DiagnosticSeverity::Info,
+        lsp_types::DiagnosticSeverity::HINT => DiagnosticSeverity::Hint,
+        _ => DiagnosticSeverity::Hint,
+    }
+}
 
-    let range = LspRange {
-        start_line: start.get("line")?.as_u64()? as u32,
-        start_character: start.get("character")?.as_u64()? as u32,
-        end_line: end.get("line")?.as_u64()? as u32,
-        end_character: end.get("character")?.as_u64()? as u32,
-    };
-
-    let severity = item
-        .get("severity")
-        .and_then(|v| v.as_u64())
-        .map(DiagnosticSeverity::from_lsp)
-        .unwrap_or(DiagnosticSeverity::Hint);
-
-    let message = item.get("message")?.as_str()?.to_string();
-
-    let code = item.get("code").and_then(|v| {
-        // Code can be a string or integer
-        if let Some(s) = v.as_str() {
-            Some(s.to_string())
-        } else {
-            v.as_u64().map(|n| n.to_string())
-        }
+/// Convert a shared [`lsp_types::Diagnostic`] into this crate's enriched
+/// [`Diagnostic`] (sans enrichment, which `enrich_and_filter` fills in later).
+fn diagnostic_from_lsp(d: &lsp_types::Diagnostic) -> Diagnostic {
+    let code = d.code.as_ref().map(|c| match c {
+        lsp_types::NumberOrString::Number(n) => n.to_string(),
+        lsp_types::NumberOrString::String(s) => s.clone(),
     });
 
-    let source = item
-        .get("source")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    let severity = d
+        .severity
+        .map(severity_from_lsp)
+        .unwrap_or(DiagnosticSeverity::Hint);
 
-    Some(Diagnostic {
-        range,
+    Diagnostic {
+        range: LspRange {
+            start_line: d.range.start.line,
+            start_character: d.range.start.character,
+            end_line: d.range.end.line,
+            end_character: d.range.end.character,
+        },
         severity,
-        message,
+        message: d.message.clone(),
         code,
-        source,
+        source: d.source.clone(),
         containing_symbol: None, // enriched later
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------

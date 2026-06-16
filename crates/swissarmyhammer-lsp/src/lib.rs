@@ -25,6 +25,7 @@
 
 pub mod client;
 pub mod daemon;
+pub mod diagnostics;
 pub mod error;
 pub mod registry;
 pub mod server_spec;
@@ -38,6 +39,7 @@ pub(crate) mod test_support;
 
 pub use client::{parse_document_symbols, LspJsonRpcClient, LspTransport, SharedLspClient};
 pub use daemon::LspDaemon;
+pub use diagnostics::{parse_diagnostics_from_result, parse_publish_diagnostics, DiagnosticUpdate};
 pub use error::LspError;
 pub use registry::{all_servers, servers_for_extensions, servers_for_project, SERVERS};
 pub use server_spec::{

@@ -17,10 +17,23 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use lsp_types::Diagnostic;
 use serde_json::{json, Value};
+use tokio::sync::broadcast;
 
 use crate::client::{LspJsonRpcClient, LspTransport};
+use crate::diagnostics::{
+    parse_diagnostics_from_result, parse_publish_diagnostics, DiagnosticUpdate,
+};
 use crate::error::LspError;
+
+/// Capacity of the per-session diagnostics broadcast channel.
+///
+/// Each in-process subscriber gets its own ring buffer of this many updates; a
+/// slow subscriber that lags past it sees `RecvError::Lagged` and resyncs from
+/// the cache rather than blocking publishers. Diagnostics are low-frequency
+/// (one batch per document per re-analysis), so a modest buffer is ample.
+const DIAGNOSTICS_CHANNEL_CAPACITY: usize = 256;
 
 /// What the server is believed to know about one open document.
 ///
@@ -58,6 +71,16 @@ struct SessionInner<C: LspTransport> {
     client: Arc<Mutex<Option<C>>>,
     /// What the server believes is open: `uri -> `[`DocState`].
     docs: Mutex<HashMap<String, DocState>>,
+    /// Latest-per-uri diagnostics cache: `uri -> `latest full diagnostic set.
+    ///
+    /// This is **derived state** — a live mirror of what the server has most
+    /// recently published (push) or returned (pull) for each document. It is
+    /// never persisted to disk; it is rebuilt from server output and discarded
+    /// when the session is dropped or reset.
+    diagnostics: Mutex<HashMap<String, Vec<Diagnostic>>>,
+    /// In-process fan-out of diagnostic updates. Both push and pull feed this
+    /// one channel so every consumer sees the same stream.
+    diagnostics_tx: broadcast::Sender<DiagnosticUpdate>,
 }
 
 /// A single owned LSP session with a shared open-document set.
@@ -91,10 +114,13 @@ impl<C: LspTransport> LspSession<C> {
     /// there is none). `language_id` is the LSP language identifier sent on
     /// `didOpen`.
     pub fn new(client: Arc<Mutex<Option<C>>>, language_id: impl Into<String>) -> Self {
+        let (diagnostics_tx, _) = broadcast::channel(DIAGNOSTICS_CHANNEL_CAPACITY);
         Self {
             inner: Arc::new(SessionInner {
                 client,
                 docs: Mutex::new(HashMap::new()),
+                diagnostics: Mutex::new(HashMap::new()),
+                diagnostics_tx,
             }),
             language_id: language_id.into(),
         }
@@ -271,6 +297,89 @@ impl<C: LspTransport> LspSession<C> {
         client.send_notification(method, params)
     }
 
+    /// Subscribe to the in-process diagnostics fan-out.
+    ///
+    /// Every captured diagnostics batch — whether it arrived via a push
+    /// `publishDiagnostics` notification or a pull `textDocument/diagnostic`
+    /// request — is broadcast as a [`DiagnosticUpdate`]. A new subscriber sees
+    /// updates published *after* it subscribes; to seed its initial state it
+    /// should read the current cache via [`diagnostics_for`](Self::diagnostics_for).
+    pub fn subscribe(&self) -> broadcast::Receiver<DiagnosticUpdate> {
+        self.inner.diagnostics_tx.subscribe()
+    }
+
+    /// The latest captured diagnostics for a document uri.
+    ///
+    /// Returns a snapshot copy of the cached set, or an empty vector if no
+    /// diagnostics have been captured for that uri. The cache is derived,
+    /// in-memory state and is never read from or written to disk.
+    pub fn diagnostics_for(&self, uri: &str) -> Vec<Diagnostic> {
+        self.lock_diagnostics()
+            .get(uri)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Handle a `textDocument/publishDiagnostics` notification (push model).
+    ///
+    /// Parses `params` into [`lsp_types::Diagnostic`] records, replaces the
+    /// latest-per-uri cache entry for the document, and broadcasts a
+    /// [`DiagnosticUpdate`] to every subscriber. A publish with an empty
+    /// `diagnostics` array clears the document's entry — the server is saying
+    /// the document is now clean.
+    ///
+    /// Called by the daemon's read loop when it drains a `publishDiagnostics`
+    /// message off the wire.
+    pub fn handle_publish_diagnostics(&self, params: &Value) {
+        let uri = match params.get("uri").and_then(|v| v.as_str()) {
+            Some(uri) => uri.to_string(),
+            // A publish without a uri is malformed and un-routable; ignore it.
+            None => return,
+        };
+        let diagnostics = parse_publish_diagnostics(params);
+        self.store_and_broadcast(uri, diagnostics);
+    }
+
+    /// Request diagnostics for a document via the pull model
+    /// (`textDocument/diagnostic`, LSP 3.17+) and feed the result through the
+    /// same cache and fan-out as push diagnostics.
+    ///
+    /// Servers that do not push `publishDiagnostics` still surface here, so
+    /// in-process consumers observe one unified diagnostics stream regardless of
+    /// which model a given server speaks. Returns the parsed diagnostics for the
+    /// document. Returns [`LspError::NotRunning`] when there is no live client.
+    pub fn pull_diagnostics(&self, path: &Path) -> Result<Vec<Diagnostic>, LspError> {
+        let uri = file_uri(path);
+        let response = self.request(
+            "textDocument/diagnostic",
+            json!({ "textDocument": { "uri": uri } }),
+        )?;
+
+        // The result may be nested under "result" (full JSON-RPC envelope) or be
+        // the bare report; parse whichever is present.
+        let result = response.get("result").unwrap_or(&response);
+        let diagnostics = parse_diagnostics_from_result(result);
+        self.store_and_broadcast(uri, diagnostics.clone());
+        Ok(diagnostics)
+    }
+
+    /// Replace the cached diagnostics for `uri` and broadcast the update.
+    ///
+    /// The single write path shared by push and pull: it keeps the cache and the
+    /// fan-out in lockstep so no consumer can observe one without the other. A
+    /// send error (no subscribers) is ignored — the cache is still authoritative
+    /// and a future subscriber reads it via [`diagnostics_for`](Self::diagnostics_for).
+    fn store_and_broadcast(&self, uri: String, diagnostics: Vec<Diagnostic>) {
+        self.lock_diagnostics()
+            .insert(uri.clone(), diagnostics.clone());
+        // `send` only errors when there are zero receivers; that is fine — the
+        // cache already holds the latest state.
+        let _ = self
+            .inner
+            .diagnostics_tx
+            .send(DiagnosticUpdate { uri, diagnostics });
+    }
+
     /// Forget every open document without sending any `didClose`.
     ///
     /// Called by the owning daemon when the underlying server process is gone
@@ -280,14 +389,26 @@ impl<C: LspTransport> LspSession<C> {
     /// wrong — the pipe is closed and the documents no longer exist from the
     /// server's perspective. After a reset the next `open` for any uri emits a
     /// fresh `didOpen` instead of being suppressed as a stale duplicate.
+    ///
+    /// The diagnostics cache is cleared too: it is derived state describing the
+    /// gone process's analysis, so it must not outlive that process.
     pub fn reset_documents(&self) {
         self.lock_docs().clear();
+        self.lock_diagnostics().clear();
     }
 
     /// Lock the open-document map, recovering from a poisoned mutex.
     fn lock_docs(&self) -> std::sync::MutexGuard<'_, HashMap<String, DocState>> {
         self.inner
             .docs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Lock the per-uri diagnostics cache, recovering from a poisoned mutex.
+    fn lock_diagnostics(&self) -> std::sync::MutexGuard<'_, HashMap<String, Vec<Diagnostic>>> {
+        self.inner
+            .diagnostics
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -497,6 +618,157 @@ mod tests {
             2,
             "re-open after reset must emit a fresh didOpen"
         );
+    }
+
+    #[test]
+    fn publish_diagnostics_updates_cache_and_fans_out_to_subscriber() {
+        // Feed a scripted publishDiagnostics notification through the session's
+        // handler and assert: (1) the per-uri cache holds the parsed diagnostics,
+        // (2) a subscriber receives the matching DiagnosticUpdate, and (3) the
+        // cache is purely in-memory — nothing is written to disk. Fully
+        // model-free via FakeTransport.
+        let (session, _client) = session_with_fake();
+        let mut rx = session.subscribe();
+
+        // Snapshot an isolated temp dir before capture so we can prove the
+        // derived cache never persists anything.
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let before = dir_entry_count(scratch.path());
+
+        let params = json!({
+            "uri": "file:///src/main.rs",
+            "diagnostics": [
+                {
+                    "range": {
+                        "start": { "line": 5, "character": 10 },
+                        "end": { "line": 5, "character": 20 }
+                    },
+                    "severity": 1,
+                    "message": "mismatched types",
+                    "code": "E0308",
+                    "source": "rustc"
+                }
+            ]
+        });
+
+        session.handle_publish_diagnostics(&params);
+
+        // Cache: latest diagnostics keyed by uri.
+        let cached = session.diagnostics_for("file:///src/main.rs");
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].message, "mismatched types");
+
+        // Fan-out: the subscriber receives the same update.
+        let update = rx.try_recv().expect("subscriber should receive the update");
+        assert_eq!(update.uri, "file:///src/main.rs");
+        assert_eq!(update.diagnostics.len(), 1);
+        assert_eq!(update.diagnostics[0].message, "mismatched types");
+
+        // Derived state: capturing diagnostics must not touch disk.
+        assert_eq!(
+            dir_entry_count(scratch.path()),
+            before,
+            "the diagnostics cache must be in-memory only — no files written"
+        );
+    }
+
+    /// Count filesystem entries under `dir` (recursively), used to assert that
+    /// capturing diagnostics writes nothing to disk.
+    fn dir_entry_count(dir: &Path) -> usize {
+        fn walk(dir: &Path) -> usize {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return 0;
+            };
+            entries
+                .filter_map(Result::ok)
+                .map(|e| {
+                    let mut n = 1;
+                    if e.path().is_dir() {
+                        n += walk(&e.path());
+                    }
+                    n
+                })
+                .sum()
+        }
+        walk(dir)
+    }
+
+    #[test]
+    fn publish_diagnostics_replaces_latest_per_uri() {
+        // A second publish for the same uri replaces the first — diagnostics are
+        // a full per-document snapshot, not an append.
+        let (session, _client) = session_with_fake();
+
+        session.handle_publish_diagnostics(&json!({
+            "uri": "file:///src/a.rs",
+            "diagnostics": [
+                {
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 0, "character": 1 }
+                    },
+                    "severity": 1,
+                    "message": "first"
+                }
+            ]
+        }));
+        assert_eq!(session.diagnostics_for("file:///src/a.rs").len(), 1);
+
+        // Clearing the document publishes an empty set, which must replace.
+        session.handle_publish_diagnostics(&json!({
+            "uri": "file:///src/a.rs",
+            "diagnostics": []
+        }));
+        assert!(session.diagnostics_for("file:///src/a.rs").is_empty());
+    }
+
+    #[test]
+    fn pull_diagnostics_feeds_the_same_cache_and_fan_out() {
+        // The pull model (textDocument/diagnostic) feeds the exact same cache
+        // and broadcast as push, so servers without push still surface through
+        // one fan-out.
+        let client = Arc::new(Mutex::new(Some(FakeTransport::default().with_response(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "kind": "full",
+                    "items": [
+                        {
+                            "range": {
+                                "start": { "line": 2, "character": 0 },
+                                "end": { "line": 2, "character": 8 }
+                            },
+                            "severity": 2,
+                            "message": "unused import"
+                        }
+                    ]
+                }
+            }),
+        ))));
+        let session = LspSession::new(Arc::clone(&client), "rust");
+        let mut rx = session.subscribe();
+        let path = PathBuf::from("/src/lib.rs");
+        let uri = file_uri(&path);
+
+        let pulled = session.pull_diagnostics(&path).expect("pull diagnostics");
+        assert_eq!(pulled.len(), 1);
+        assert_eq!(pulled[0].message, "unused import");
+
+        // Same cache.
+        assert_eq!(session.diagnostics_for(&uri).len(), 1);
+        // Same fan-out.
+        let update = rx
+            .try_recv()
+            .expect("subscriber should receive pull update");
+        assert_eq!(update.uri, uri);
+        assert_eq!(update.diagnostics[0].message, "unused import");
+    }
+
+    #[test]
+    fn diagnostics_for_unknown_uri_is_empty() {
+        let (session, _client) = session_with_fake();
+        assert!(session.diagnostics_for("file:///never.rs").is_empty());
     }
 
     #[test]
