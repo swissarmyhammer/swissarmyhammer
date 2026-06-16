@@ -603,58 +603,7 @@ fn read_jsonrpc_response<R: BufRead>(reader: &mut R) -> Result<Value, LspError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::VecDeque;
-
-    /// An in-memory [`LspTransport`] for unit tests.
-    ///
-    /// It records every request/notification it is handed and replays a
-    /// scripted queue of responses for `send_request` and a separate queue of
-    /// server-initiated messages for `read_message`. This is the model-free,
-    /// rust-analyzer-free seam the diagnostics session tasks use to drive the
-    /// open-document state machine and the diagnostics fan-out.
-    #[derive(Default)]
-    struct FakeTransport {
-        /// `(method, params)` of every request that was sent, in order.
-        sent_requests: Vec<(String, Value)>,
-        /// `(method, params)` of every notification that was sent, in order.
-        sent_notifications: Vec<(String, Value)>,
-        /// Scripted responses returned by `send_request`, in FIFO order.
-        responses: VecDeque<Value>,
-        /// Scripted server messages returned by `read_message`, in FIFO order.
-        incoming: VecDeque<Value>,
-    }
-
-    impl FakeTransport {
-        fn with_response(mut self, response: Value) -> Self {
-            self.responses.push_back(response);
-            self
-        }
-
-        fn with_incoming(mut self, message: Value) -> Self {
-            self.incoming.push_back(message);
-            self
-        }
-    }
-
-    impl LspTransport for FakeTransport {
-        fn send_request(&mut self, method: &str, params: Value) -> Result<Value, LspError> {
-            self.sent_requests.push((method.to_string(), params));
-            self.responses
-                .pop_front()
-                .ok_or_else(|| LspError::JsonRpc(format!("no scripted response for {}", method)))
-        }
-
-        fn send_notification(&mut self, method: &str, params: Value) -> Result<(), LspError> {
-            self.sent_notifications.push((method.to_string(), params));
-            Ok(())
-        }
-
-        fn read_message(&mut self) -> Result<Value, LspError> {
-            self.incoming
-                .pop_front()
-                .ok_or_else(|| LspError::JsonRpc("no scripted incoming message".into()))
-        }
-    }
+    use crate::test_support::FakeTransport;
 
     #[test]
     fn fake_transport_records_request_and_replays_response() {
