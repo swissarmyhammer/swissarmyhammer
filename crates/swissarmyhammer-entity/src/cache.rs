@@ -309,8 +309,8 @@ impl EntityCache {
     /// type are overwritten.
     pub async fn load_all(&self, entity_type: &str) -> Result<()> {
         // Read raw on-disk entities — compute fields (especially aggregate
-        // ones like `parse-body-tags` that query sibling entity types) must
-        // be re-evaluated on every read out of the cache, not frozen at
+        // ones like board `percent_complete` that query sibling entity types)
+        // must be re-evaluated on every read out of the cache, not frozen at
         // preload time. Storing post-compute entities would turn cross-type
         // writes into silent staleness bombs.
         let entities = self.inner.list_raw_internal(entity_type).await?;
@@ -438,11 +438,38 @@ impl EntityCache {
         };
 
         // Compute the field-level diff before moving `canonical` into the map.
-        let changes = if changed {
+        //
+        // `canonical` and `old_entity` are RAW (no compute applied), so a
+        // change to a computed field's source — e.g. editing `tags` rewrites
+        // `#tag` mentions in `body`, which `parse-body-tags` turns back into
+        // `tags` — would otherwise emit a `body`-only event and the UI would
+        // never re-render the dependent `tags` field. Derive the computed
+        // fields on both sides (clones — the stored cache entry stays raw to
+        // keep aggregate computes fresh on read) so the diff surfaces the
+        // derived changes too.
+        let mut changes = if changed {
             diff(old_entity.as_ref(), &canonical)
         } else {
             Vec::new()
         };
+        // The raw diff above never carries computed fields. Augment it with
+        // any computed field whose source changed (e.g. `body` → `tags`) so
+        // the UI re-renders the dependent field after an edit. Targeted by
+        // `depends_on`, so writes touching unrelated fields recompute nothing.
+        if !changes.is_empty() {
+            let changed_fields: std::collections::HashSet<String> =
+                changes.iter().map(|c| c.field.clone()).collect();
+            let mut computed = self
+                .inner
+                .computed_field_changes(
+                    &entity.entity_type,
+                    &changed_fields,
+                    old_entity.as_ref(),
+                    &canonical,
+                )
+                .await;
+            changes.append(&mut computed);
+        }
 
         let mut map = self.cache.write().await;
         map.insert(

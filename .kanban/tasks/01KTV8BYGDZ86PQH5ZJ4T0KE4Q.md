@@ -32,4 +32,4 @@ Fix — coerce, consistent with the op system's documented forgiving input ("ali
 - [ ] `cargo nextest run -p swissarmyhammer-kanban` — green.
 
 ## Workflow
-- Use `/tdd` — write the failing stringified-array and plain-string coercion tests first, then implement the coercion in `resolve_depends_on`.
+- Use `/tdd` — write the failing stringified-array and plain-string coercion tests first, then implement the coercion in `resolve_depends_on`. #bug

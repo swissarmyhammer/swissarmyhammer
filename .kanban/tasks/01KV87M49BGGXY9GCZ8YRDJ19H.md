@@ -15,3 +15,5 @@ Discovered incidentally during the review of z3ax1jz (a UI-test card); out of sc
 - [ ] Confirm the double-definition at `crates/swissarmyhammer-kanban/src/scope_commands.rs:18`
 - [ ] Resolve it (remove/merge the duplicate) so there is a single source of truth
 - [ ] Workspace builds clean; relevant tests green
+
+#bug

@@ -83,6 +83,29 @@ pub fn parse_tags(text: &str) -> Vec<String> {
     tags.into_iter().collect()
 }
 
+/// Compute the `tags` field value for an entity body.
+///
+/// Returns the deduplicated `#tag` slugs found in `body` as a JSON string
+/// array — exactly what [`parse_tags`] yields, wrapped for the computed-field
+/// layer.
+///
+/// This is the **single source of truth** for the `tags` computed field. Both
+/// the read path (the `ComputeEngine` derivation registered in
+/// `crate::defaults::register_parse_body_tags`, run on every entity read) and
+/// the write path (`crate::derive_handlers::ParseBodyTags::compute`) delegate
+/// here, so the value the inspector displays and the baseline the tag-field
+/// editor diffs against can never diverge. The body is the source of truth:
+/// every `#tag` in the body appears, with no gating on whether a matching
+/// `tag` entity already exists.
+pub fn body_tags_value(body: &str) -> serde_json::Value {
+    serde_json::Value::Array(
+        parse_tags(body)
+            .into_iter()
+            .map(serde_json::Value::String)
+            .collect(),
+    )
+}
+
 /// Append `#tag` to the end of description text.
 ///
 /// If the text already contains the tag, this is a no-op.

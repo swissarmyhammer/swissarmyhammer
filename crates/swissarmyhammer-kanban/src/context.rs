@@ -648,9 +648,16 @@ impl KanbanContext {
         // to avoid circular dependency.
         let lookup = KanbanLookup::new(root, Arc::clone(&fields));
         let compute = Arc::new(kanban_compute_engine());
+        // Write-side counterpart to the compute engine: lets the shared
+        // `EntityContext::update_field` route computed-field edits (e.g. the
+        // `tags` field) through their derive handler so editing the field
+        // rewrites the underlying body — on the generic `entity` MCP face too,
+        // not just the domain `kanban` op.
+        let derive = Arc::new(crate::derive_handlers::kanban_derive_registry());
         let validation = Arc::new(ValidationEngine::new().with_lookup(lookup));
         let entities = EntityContext::new(root, Arc::clone(&fields))
             .with_compute(compute)
+            .with_derive(derive)
             .with_validation(validation);
         Ok((fields, entities))
     }

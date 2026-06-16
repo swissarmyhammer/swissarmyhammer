@@ -28,8 +28,7 @@ impl DeriveHandler for ParseBodyTags {
             .get(body_field)
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let tags = tag_parser::parse_tags(body);
-        Value::Array(tags.into_iter().map(Value::String).collect())
+        tag_parser::body_tags_value(body)
     }
 
     fn apply(

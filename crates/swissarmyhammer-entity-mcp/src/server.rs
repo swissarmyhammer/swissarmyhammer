@@ -321,19 +321,18 @@ impl EntityServer {
 
     /// Handle an `UpdateField` call — set one field on an existing entity.
     ///
-    /// Reads the current entity through the kernel, replaces the field, and
-    /// writes it back so the mutation is undoable and emits an event.
+    /// Delegates to [`EntityContext::update_field`], the single write path
+    /// shared with the domain `kanban` op. For a **computed** field (e.g.
+    /// `tags`) this routes through the field's writable derive handler so the
+    /// edit mutates the underlying source — editing `tags` rewrites the `#tag`
+    /// mentions in the body — rather than blindly storing a value the read-path
+    /// compute would immediately overwrite. The write is undoable and emits an
+    /// event.
     async fn handle_update_field(&self, req: UpdateField) -> Result<Value, McpError> {
         let services = self.services()?;
-        let mut entity = services
-            .entity_ctx
-            .read(&req.entity_type, &req.id)
-            .await
-            .map_err(entity_error_to_mcp)?;
-        entity.set(req.field, req.value);
         let entry_id = services
             .entity_ctx
-            .write(&entity)
+            .update_field(&req.entity_type, &req.id, &req.field, req.value)
             .await
             .map_err(entity_error_to_mcp)?;
         Ok(serde_json::json!({

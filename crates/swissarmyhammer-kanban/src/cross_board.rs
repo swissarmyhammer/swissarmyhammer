@@ -209,27 +209,26 @@ pub async fn transfer_task(
         }
     }
 
-    // Strip tags that don't exist in the target board
-    if let Some(tags_val) = source_task.get("tags") {
-        if let Some(tags_arr) = tags_val.as_array() {
-            let target_tags = target_ectx.list("tag").await.unwrap_or_default();
-            let target_tag_names: std::collections::HashSet<String> = target_tags
-                .iter()
-                .filter_map(|t| t.get_str("tag_name").map(|s| s.to_string()))
-                .collect();
-            let filtered: Vec<Value> = tags_arr
-                .iter()
-                .filter(|t| {
-                    t.as_str()
-                        .map(|s| target_tag_names.contains(s))
-                        .unwrap_or(false)
-                })
-                .cloned()
-                .collect();
-            if !filtered.is_empty() {
-                new_task.set("tags", json!(filtered));
+    // Strip tags that don't exist on the target board.
+    //
+    // The body is the single source of truth for a task's tags (the `tags`
+    // field is computed from `#tag` mentions in the body on every read), so
+    // stripping must edit the BODY — filtering the computed `tags` array would
+    // be futile, since it is recomputed from the copied body on the next read.
+    // Each body slug with no matching target tag is removed from the body.
+    {
+        let target_tags = target_ectx.list("tag").await.unwrap_or_default();
+        let target_tag_names: std::collections::HashSet<String> = target_tags
+            .iter()
+            .filter_map(|t| t.get_str("tag_name").map(|s| s.to_string()))
+            .collect();
+        let mut body = new_task.get_str("body").unwrap_or("").to_string();
+        for slug in crate::tag_parser::parse_tags(&body) {
+            if !target_tag_names.contains(&slug) {
+                body = crate::tag_parser::remove_tag(&body, &slug);
             }
         }
+        new_task.set("body", json!(body));
     }
 
     // Set position on target board
@@ -436,10 +435,9 @@ mod tests {
 
         let tgt_tasks = tgt_ctx.list_entities_generic("task").await.unwrap();
         assert_eq!(tgt_tasks.len(), 1);
-        // "bug" tag entity does not exist on target — the tags field should be absent/empty.
-        // Note: the body "#bug" is copied over, but the tags filter in transfer_task
-        // uses tag entities on the target board to filter the `tags` computed field.
-        // The body is copied as-is; tag filtering affects the explicit `tags` field only.
+        // "bug" tag entity does not exist on target, so transfer_task strips
+        // `#bug` from the copied BODY (the source of truth for tags). The
+        // computed `tags` field, derived from the now-tagless body, is empty.
         let tags = tgt_tasks[0].get("tags");
         let is_empty = tags
             .map(|v| v.as_array().map(|a| a.is_empty()).unwrap_or(true))
