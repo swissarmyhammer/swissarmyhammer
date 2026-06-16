@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a480
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffb380
 title: Make the implement skill run really-done before moving a task to review
 ---
 ## What
@@ -19,10 +19,20 @@ The `implementer` agent already lists `really-done` in its `skills:`, so no agen
 - Keep "stop after moving to review" and "no worktrees" intact.
 
 ## Acceptance Criteria
-- [ ] implement skill body runs really-done before "move to review"; verification-command pass gates the move, double-check findings are advisory
-- [ ] really-done's double-check sign-off is reached transitively (no direct double-check spawn from implement)
-- [ ] Existing invocation/filter-DSL and review-column sections unchanged
+- [x] implement skill body runs really-done before "move to review"; verification-command pass gates the move, double-check findings are advisory
+- [x] really-done's double-check sign-off is reached transitively (no direct double-check spawn from implement)
+- [x] Existing invocation/filter-DSL and review-column sections unchanged
 
 ## Tests
-- [ ] `cargo test -p swissarmyhammer-skills` passes
+- [x] `cargo test -p swissarmyhammer-skills` passes
 - [ ] Manual: an implement run does not move a task to review until really-done has been run (verification green; double-check findings addressed or logged) #double-check-agent
+
+## Progress Summary (done)
+Edited `builtin/skills/implement/SKILL.md`:
+- Added step "### 5.5 Verify with really-done" between Implement (5) and Move to review (6). It invokes really-done; verification-command pass (really-done's hard requirement) gates the move; advisory double-check is reached transitively through really-done; explicit "Do NOT spawn the double-check agent directly from implement".
+- Added Rules bullet: "Do not move a task to `review` until really-done has been run (verification commands green)."
+- Kept invocation/filter-DSL, review-column, no-worktrees, and stop-after-review sections intact.
+
+Evidence:
+- grep confirms 5.5 step + Rules bullet referencing really-done; NO `subagent_type: double-check` present; "Always stop after moving to review" and "No worktrees" text intact.
+- `cargo test -p swissarmyhammer-skills` → `test result: ok. 114 passed; 0 failed` (+ 2/2, 2/2, 0 doc-tests); 0 failures, 0 warnings.
