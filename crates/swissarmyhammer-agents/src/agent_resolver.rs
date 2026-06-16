@@ -11,7 +11,7 @@
 use crate::agent::{Agent, AgentSource};
 use crate::agent_loader::{load_agent_from_builtin, load_agent_from_dir};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use swissarmyhammer_common::file_loader::{FileSource, VirtualFileSystem};
 
 // Include the generated builtin agents
@@ -52,8 +52,9 @@ impl AgentResolver {
     /// Delegates to the VFS so that extra paths appear in
     /// `get_search_paths()` alongside user and local directories.
     /// Files found in extra paths are loaded with `Local` precedence.
-    pub fn add_search_path(&mut self, path: PathBuf) {
-        self.vfs.add_search_path(path, FileSource::Local);
+    pub fn add_search_path(&mut self, path: impl AsRef<Path>) {
+        self.vfs
+            .add_search_path(path.as_ref().to_path_buf(), FileSource::Local);
     }
 
     /// Resolve all agents from all sources.
@@ -101,6 +102,16 @@ impl AgentResolver {
         }
 
         for (agent_name, files) in &agent_groups {
+            // Skip groups that don't contain an AGENT.md — they are resource
+            // files/directories (the discovery README.md, supporting docs)
+            // rather than agents.
+            let has_agent_md = files
+                .iter()
+                .any(|(name, _)| name.ends_with("/AGENT.md") || *name == "AGENT.md");
+            if !has_agent_md {
+                continue;
+            }
+
             match load_agent_from_builtin(agent_name, files) {
                 Ok(agent) => {
                     tracing::debug!("Loaded builtin agent: {}", agent.name);
@@ -147,20 +158,30 @@ fn load_agents_from_directory(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            match load_agent_from_dir(&path, source.clone()) {
-                Ok(agent) => {
-                    tracing::debug!(
-                        "Loaded {} agent: {} from {}",
-                        source,
-                        agent.name,
-                        path.display()
-                    );
-                    agents.insert(agent.name.as_str().to_string(), agent);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to load agent from {}: {}", path.display(), e);
-                }
-            }
+            load_agent_or_warn(&path, source.clone(), agents);
+        }
+    }
+}
+
+/// Load a single agent directory into `agents`, logging on success or failure.
+///
+/// On success the agent is inserted (overriding any existing entry with the
+/// same name) and a debug line is emitted. On failure a warning is logged and
+/// `agents` is left unchanged. Extracted from [`load_agents_from_directory`] to
+/// keep the directory loop's nesting shallow.
+fn load_agent_or_warn(path: &Path, source: AgentSource, agents: &mut HashMap<String, Agent>) {
+    match load_agent_from_dir(path, source.clone()) {
+        Ok(agent) => {
+            tracing::debug!(
+                "Loaded {} agent: {} from {}",
+                source,
+                agent.name,
+                path.display()
+            );
+            agents.insert(agent.name.as_str().to_string(), agent);
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load agent from {}: {}", path.display(), e);
         }
     }
 }
@@ -176,13 +197,41 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+    use tracing_test::traced_test;
+
+    /// Name of the builtin `tester` agent, referenced across multiple tests.
+    const TESTER_AGENT: &str = "tester";
+
+    #[traced_test]
+    #[test]
+    fn test_load_builtins_does_not_warn_on_readme() {
+        // The discovery README.md deployed into the builtin agents store is a
+        // resource file, not an agent. Loading builtins must skip it silently
+        // rather than warning that it has no AGENT.md.
+        let resolver = AgentResolver::new();
+        let agents = resolver.resolve_builtins();
+
+        // Sanity: real agents still load.
+        assert!(agents.contains_key(TESTER_AGENT));
+        // The README is never registered as an agent.
+        assert!(!agents.contains_key("README.md"));
+        assert!(!agents.contains_key("README"));
+
+        assert!(
+            !logs_contain("no AGENT.md found in builtin files"),
+            "loading builtins must not warn about the discovery README"
+        );
+    }
 
     #[test]
     fn test_resolve_builtins() {
         let resolver = AgentResolver::new();
         let agents = resolver.resolve_builtins();
 
-        assert!(agents.contains_key("tester"), "should have tester agent");
+        assert!(
+            agents.contains_key(TESTER_AGENT),
+            "should have tester agent"
+        );
         assert!(agents.contains_key("planner"), "should have planner agent");
         assert!(
             agents.contains_key("committer"),
@@ -196,6 +245,10 @@ mod tests {
             agents.contains_key("explorer"),
             "should have explorer agent"
         );
+        assert!(
+            agents.contains_key("double-check"),
+            "should have double-check agent"
+        );
     }
 
     #[test]
@@ -203,8 +256,8 @@ mod tests {
         let resolver = AgentResolver::new();
         let agents = resolver.resolve_builtins();
 
-        let tester = agents.get("tester").unwrap();
-        assert_eq!(tester.name.as_str(), "tester");
+        let tester = agents.get(TESTER_AGENT).unwrap();
+        assert_eq!(tester.name.as_str(), TESTER_AGENT);
         assert!(!tester.description.is_empty());
         assert!(!tester.instructions.is_empty());
         assert_eq!(tester.source, AgentSource::Builtin);
@@ -226,13 +279,17 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         // Create an agent that shadows a builtin
-        create_agent_dir(temp_dir.path(), "tester", "Custom tester from extra path");
+        create_agent_dir(
+            temp_dir.path(),
+            TESTER_AGENT,
+            "Custom tester from extra path",
+        );
 
         let mut resolver = AgentResolver::new();
-        resolver.add_search_path(temp_dir.path().to_path_buf());
+        resolver.add_search_path(temp_dir.path());
 
         let agents = resolver.resolve_all();
-        let tester = agents.get("tester").unwrap();
+        let tester = agents.get(TESTER_AGENT).unwrap();
 
         assert_eq!(tester.source, AgentSource::Local);
         assert_eq!(tester.description, "Custom tester from extra path");
@@ -263,7 +320,7 @@ mod tests {
         let user_dir = TempDir::new().unwrap();
 
         // Create an agent that shadows a builtin
-        create_agent_dir(user_dir.path(), "tester", "User tester override");
+        create_agent_dir(user_dir.path(), TESTER_AGENT, "User tester override");
 
         let mut agents = HashMap::new();
 
@@ -271,13 +328,13 @@ mod tests {
         let resolver = AgentResolver::new();
         resolver.load_builtins(&mut agents);
 
-        let builtin_tester = agents.get("tester").unwrap();
+        let builtin_tester = agents.get(TESTER_AGENT).unwrap();
         assert_eq!(builtin_tester.source, AgentSource::Builtin);
 
         // Now user overrides
         load_agents_from_directory(user_dir.path(), AgentSource::User, &mut agents);
 
-        let user_tester = agents.get("tester").unwrap();
+        let user_tester = agents.get(TESTER_AGENT).unwrap();
         assert_eq!(user_tester.source, AgentSource::User);
         assert_eq!(user_tester.description, "User tester override");
     }
@@ -322,7 +379,7 @@ mod tests {
         let agents = resolver.resolve_all();
 
         // resolve_all should include all the same builtins
-        assert!(agents.contains_key("tester"));
+        assert!(agents.contains_key(TESTER_AGENT));
         assert!(agents.contains_key("reviewer"));
     }
 
@@ -432,7 +489,7 @@ mod tests {
         create_agent_dir(temp_dir.path(), "custom-agent", "My custom agent");
 
         let mut resolver = AgentResolver::new();
-        resolver.add_search_path(temp_dir.path().to_path_buf());
+        resolver.add_search_path(temp_dir.path());
 
         let agents = resolver.resolve_all();
         assert!(

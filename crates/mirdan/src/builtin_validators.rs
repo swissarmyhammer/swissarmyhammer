@@ -37,6 +37,13 @@ pub fn builtin_validators_by_set(
     let mut sets: std::collections::BTreeMap<&'static str, Vec<(&'static str, &'static str)>> =
         std::collections::BTreeMap::new();
     for (name, content) in get_builtin_validators() {
+        // Skip top-level files that are not part of a set subdirectory — a real
+        // set member is always `<set>/...`. The store's own `README.md` (a
+        // discovery doc deployed to `.validators/`, not a validator) lives at the
+        // top level, so this keeps it from forming a phantom, manifest-less set.
+        if !name.contains('/') {
+            continue;
+        }
         sets.entry(set_name(name))
             .or_default()
             .push((name, content));
