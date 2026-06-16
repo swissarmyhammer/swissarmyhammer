@@ -19,37 +19,11 @@ use crate::ops::lsp_helpers::file_path_to_uri;
 // ---------------------------------------------------------------------------
 
 /// Severity level for a diagnostic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DiagnosticSeverity {
-    Error,
-    Warning,
-    Info,
-    Hint,
-}
-
-impl DiagnosticSeverity {
-    /// Convert an LSP severity integer (1=Error, 2=Warning, 3=Info, 4=Hint)
-    /// to our enum. Defaults to `Hint` for unknown values.
-    pub fn from_lsp(value: u64) -> Self {
-        match value {
-            1 => Self::Error,
-            2 => Self::Warning,
-            3 => Self::Info,
-            4 => Self::Hint,
-            _ => Self::Hint,
-        }
-    }
-
-    /// Convert to the LSP severity integer.
-    pub fn to_lsp(self) -> u64 {
-        match self {
-            Self::Error => 1,
-            Self::Warning => 2,
-            Self::Info => 3,
-            Self::Hint => 4,
-        }
-    }
-}
+///
+/// Re-exported from the canonical definition in `swissarmyhammer-lsp` — there is
+/// exactly one severity enum for the workspace, and this crate uses it rather
+/// than defining a competing copy.
+pub use swissarmyhammer_lsp::DiagnosticSeverity;
 
 /// A single diagnostic for a file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,18 +186,6 @@ pub fn parse_publish_diagnostics(params: &serde_json::Value) -> Vec<Diagnostic> 
         .collect()
 }
 
-/// Map a shared [`lsp_types::DiagnosticSeverity`] onto this crate's
-/// [`DiagnosticSeverity`], defaulting unrecognized values to `Hint`.
-fn severity_from_lsp(severity: lsp_types::DiagnosticSeverity) -> DiagnosticSeverity {
-    match severity {
-        lsp_types::DiagnosticSeverity::ERROR => DiagnosticSeverity::Error,
-        lsp_types::DiagnosticSeverity::WARNING => DiagnosticSeverity::Warning,
-        lsp_types::DiagnosticSeverity::INFORMATION => DiagnosticSeverity::Info,
-        lsp_types::DiagnosticSeverity::HINT => DiagnosticSeverity::Hint,
-        _ => DiagnosticSeverity::Hint,
-    }
-}
-
 /// Convert a shared [`lsp_types::Diagnostic`] into this crate's enriched
 /// [`Diagnostic`] (sans enrichment, which `enrich_and_filter` fills in later).
 fn diagnostic_from_lsp(d: &lsp_types::Diagnostic) -> Diagnostic {
@@ -234,7 +196,7 @@ fn diagnostic_from_lsp(d: &lsp_types::Diagnostic) -> Diagnostic {
 
     let severity = d
         .severity
-        .map(severity_from_lsp)
+        .map(DiagnosticSeverity::from_lsp_types)
         .unwrap_or(DiagnosticSeverity::Hint);
 
     Diagnostic {

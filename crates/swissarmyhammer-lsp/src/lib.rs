@@ -30,6 +30,7 @@ pub mod error;
 pub mod registry;
 pub mod server_spec;
 pub mod session;
+pub mod severity;
 pub mod supervisor;
 pub mod types;
 pub mod yaml_loader;
@@ -47,5 +48,6 @@ pub use server_spec::{
     start_lsp_server, LspServerConfig, LspServerHandle, LSP_REGISTRY,
 };
 pub use session::LspSession;
+pub use severity::DiagnosticSeverity;
 pub use supervisor::LspSupervisorManager;
 pub use types::{DaemonStatus, LspDaemonState, LspServerSpec, OwnedLspServerSpec};
