@@ -1039,6 +1039,47 @@ fn render_profile_skill(
 /// new profile is introduced.
 pub const KNOWN_PROFILES: &[&str] = &["kanban", "code-context"];
 
+/// Write a builtin `README.md` at a store root to aid discovery, logging a
+/// warning on failure rather than failing the install.
+///
+/// `content` is the co-located `builtin/<kind>/README.md` for the store, embedded
+/// at the call site with `include_str!`. The README sits *beside* the item
+/// subdirectories; the resolvers only consider subdirectories that contain a
+/// manifest (`SKILL.md` / `AGENT.md` / `VALIDATOR.md`), so a top-level
+/// `README.md` is ignored and never mistaken for an installable item. A write
+/// failure must never abort an otherwise successful deploy. Call only after the
+/// store has been populated so the README never creates an empty store dir.
+fn write_store_readme_for(store_root: &Path, content: &str, reporter: &dyn InitReporter) {
+    let result = std::fs::create_dir_all(store_root)
+        .and_then(|()| std::fs::write(store_root.join("README.md"), content));
+    if let Err(e) = result {
+        reporter.emit(&InitEvent::Warning {
+            message: format!("failed to write {}/README.md: {e}", store_root.display()),
+        });
+    }
+}
+
+/// Remove the builtin discovery `README.md` from a store root on deinit, then
+/// remove the now-empty store directory.
+///
+/// The README is builtin-owned, so deinit removes it the same way it removes the
+/// builtin items. The store directory itself is removed only when nothing else
+/// remains, so any user-authored items keep the directory (and are untouched).
+fn prune_store_readme(store_root: &Path, reporter: &dyn InitReporter) {
+    match std::fs::remove_file(store_root.join("README.md")) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => reporter.emit(&InitEvent::Warning {
+            message: format!("failed to remove {}/README.md: {e}", store_root.display()),
+        }),
+    }
+    if let Ok(mut entries) = std::fs::read_dir(store_root) {
+        if entries.next().is_none() {
+            let _ = std::fs::remove_dir(store_root);
+        }
+    }
+}
+
 /// Resolve, render, and deploy the profile's selected builtin skills.
 ///
 /// Returns the deduplicated list of agent targets the skills were deployed to.
@@ -1090,6 +1131,20 @@ fn install_profile_skills(
             swissarmyhammer_skills::deploy::format_skill_md(skill, &instructions, &metadata);
         let deployed = stage_and_deploy_rendered(&name, &content, "SKILL.md", scope, root, true)?;
         merge_targets(&mut targets, deployed);
+    }
+
+    // Drop a discovery README at the store root so a user browsing `.skills/`
+    // learns what it is and how to customize it. Only when something was
+    // deployed (the store dir now exists); a deploy of >0 skills cannot reach
+    // here with an absent store.
+    if skill_count > 0 {
+        let global = scope_is_global(scope);
+        let store_root = rooted(root, global, store::skill_store_dir(global));
+        write_store_readme_for(
+            &store_root,
+            include_str!("../../../builtin/skills/README.md"),
+            reporter,
+        );
     }
 
     if !targets.is_empty() {
@@ -1147,6 +1202,17 @@ fn install_profile_agents(
         let content = rendered_agent.to_agent_md(&rendered_body);
         let deployed = stage_and_deploy_rendered(&name, &content, "AGENT.md", scope, root, false)?;
         merge_targets(&mut targets, deployed);
+    }
+
+    // Drop a discovery README at the agent store root (see the skills path).
+    if agent_count > 0 {
+        let global = scope_is_global(scope);
+        let store_root = rooted(root, global, store::agent_store_dir(global));
+        write_store_readme_for(
+            &store_root,
+            include_str!("../../../builtin/agents/README.md"),
+            reporter,
+        );
     }
 
     if !targets.is_empty() {
@@ -1215,6 +1281,15 @@ fn install_profile_validators(
         copy_dir_recursive(staged.path(), &dest_set_dir)?;
 
         materialized.push(set.clone());
+    }
+
+    // Drop a discovery README at the validator store root (see the skills path).
+    if !materialized.is_empty() {
+        write_store_readme_for(
+            &target_root,
+            include_str!("../../../builtin/validators/README.md"),
+            reporter,
+        );
     }
 
     if !materialized.is_empty() {
@@ -1851,6 +1926,11 @@ pub fn deinit_profile(
                 format!("Removed {} skill(s)", names.len()),
             ));
         }
+        // Remove the builtin discovery README and prune the store if now empty.
+        prune_store_readme(
+            &rooted(root, global, store::skill_store_dir(global)),
+            reporter,
+        );
     }
 
     if let Some(ref selector) = profile.agents {
@@ -1868,6 +1948,10 @@ pub fn deinit_profile(
                 format!("Removed {} agent(s)", names.len()),
             ));
         }
+        prune_store_readme(
+            &rooted(root, global, store::agent_store_dir(global)),
+            reporter,
+        );
     }
 
     if let Some(ref selector) = profile.validators {
@@ -1878,6 +1962,10 @@ pub fn deinit_profile(
                 format!("Removed {} validator set(s)", removed.len()),
             ));
         }
+        prune_store_readme(
+            &rooted(root, global, store::validators_store_dir(global)),
+            reporter,
+        );
     }
 
     if profile.statusline {
@@ -3157,6 +3245,60 @@ mod applier_tests {
             .iter()
             .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error));
     }
+
+    /// Real deploy path: `init_profile` writes the discovery README at the skill
+    /// and agent store roots, beside the real items, when those stores are
+    /// populated (a fake agent makes skill/agent deployment fire).
+    #[test]
+    #[serial]
+    fn init_profile_writes_skill_and_agent_store_readmes() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().canonicalize().unwrap();
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(&project).unwrap();
+        let config_path = write_generic_agents_config(&project);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let profile = Profile {
+            skills: Some(Selector::All),
+            agents: Some(Selector::All),
+            ..Profile::default()
+        };
+        let reporter = NullReporter;
+        let results = init_profile(&profile, InitScope::Project, Some(&project), &reporter);
+        assert!(
+            results
+                .iter()
+                .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+            "init_profile must not error: {results:?}"
+        );
+
+        let skills_readme = project.join(".skills/README.md");
+        assert!(
+            skills_readme.is_file(),
+            "skills README must be written: {skills_readme:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&skills_readme).unwrap(),
+            include_str!("../../../builtin/skills/README.md"),
+        );
+
+        let agents_readme = project.join(".agents/README.md");
+        assert!(
+            agents_readme.is_file(),
+            "agents README must be written: {agents_readme:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&agents_readme).unwrap(),
+            include_str!("../../../builtin/agents/README.md"),
+        );
+
+        // The README is never mistaken for an item: a real builtin skill
+        // materialized as its own subdirectory beside the README.
+        assert!(
+            project.join(".skills/commit/SKILL.md").is_file(),
+            "a real builtin skill must deploy beside the README"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3318,6 +3460,57 @@ mod tests {
             std::fs::read_to_string(&user_set_manifest).unwrap(),
             "USER SET",
             "a user-created set must never be touched"
+        );
+    }
+
+    /// `init_profile` drops the builtin discovery `README.md` at the store root,
+    /// it is not mistaken for a validator set, and `deinit_profile` removes it.
+    #[test]
+    #[serial(cwd)]
+    fn init_profile_writes_store_readme_and_deinit_removes_it() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let reporter = NullReporter;
+        let validators_root = env.home_path().join(".validators");
+
+        init_profile(&validators_only_profile(), InitScope::User, None, &reporter);
+
+        // The README is written at the store root with the embedded content.
+        let readme = validators_root.join("README.md");
+        assert!(
+            readme.is_file(),
+            "init must write a discovery README at the validator store root: {readme:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&readme).unwrap(),
+            include_str!("../../../builtin/validators/README.md"),
+            "the deployed README must match the builtin source content"
+        );
+
+        // The README sits beside the set subdirectories and is never treated as a
+        // set — the loader only considers subdirectories, so it has no VALIDATOR.md
+        // child and the real builtin sets still materialize alongside it.
+        assert!(readme.is_file() && !readme.is_dir());
+        assert!(
+            validators_root.join("dead-code/VALIDATOR.md").is_file(),
+            "real builtin sets must materialize beside the README"
+        );
+
+        // A user-authored set keeps the store directory alive across deinit, but
+        // the builtin README is still removed (it is builtin-owned).
+        let user_set_manifest = validators_root.join("my-team-rules/VALIDATOR.md");
+        std::fs::create_dir_all(user_set_manifest.parent().unwrap()).unwrap();
+        std::fs::write(&user_set_manifest, "USER SET").unwrap();
+
+        deinit_profile(&validators_only_profile(), InitScope::User, None, &reporter);
+
+        assert!(
+            !readme.exists(),
+            "deinit must remove the builtin discovery README"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&user_set_manifest).unwrap(),
+            "USER SET",
+            "deinit must leave user-authored sets untouched"
         );
     }
 
