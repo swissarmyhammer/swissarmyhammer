@@ -13,8 +13,6 @@ metadata:
 
 Run an adversarial verification of recent work for correctness, completeness, and alignment with intent.
 
-{% include "_partials/delegate-to-subagent" %}
-
 ## Process
 
 1. **Hand off the change and its intent.** Give the `double-check` agent the recent changes, the related files, and the original intent / acceptance criteria. It uses the `code_context` MCP tool for symbol lookup and blast radius, and the `git` tool to `get changes`, to gather its own evidence.
