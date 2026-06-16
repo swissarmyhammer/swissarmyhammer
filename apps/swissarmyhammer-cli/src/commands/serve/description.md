@@ -23,7 +23,6 @@ Complete Tool Ecosystem:
 • Shell Integration - Execute commands and scripts
 • Web Capabilities - Fetch content and search the web
 • Workflow Execution - Run automated development workflows
-• Prompt Management - Access and execute prompt templates
 
 AI-Native Protocol:
 • Standard MCP protocol for broad AI compatibility
@@ -114,7 +113,6 @@ Development Workflow:
 Execution:
 • shell_execute - Run shell commands
 • workflow operations - Execute automated workflows
-• prompt operations - Render and test prompts
 
 Web Access:
 • web_fetch - Download and process web content

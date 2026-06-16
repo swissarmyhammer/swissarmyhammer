@@ -68,8 +68,8 @@ pub struct VerifyOutcome {
 
 /// Per-sequence state carried across MTP generation steps.
 ///
-/// `pending_h` is the pre-norm hidden row that pairs with the *next* token fed
-/// to the MTP head; `verify_h`/`n_rows` hold the target pre-norm rows captured
+/// `pending_h` is the nextn hidden row that pairs with the *next* token fed
+/// to the MTP head; `verify_h`/`n_rows` hold the target nextn rows captured
 /// during the most recent verification decode.
 #[derive(Debug)]
 pub struct MtpSession {
@@ -93,11 +93,11 @@ impl MtpSession {
         }
     }
 
-    /// Capture the target's pre-norm rows and mirror the accepted tokens onto
+    /// Capture the target's nextn rows and mirror the accepted tokens onto
     /// the draft context (reference `process()`).
     ///
     /// Call after a target `decode` of `n` sequential positions. Captures each
-    /// position's pre-norm row into `verify_h`, carries the last row as
+    /// position's nextn row into `verify_h`, carries the last row as
     /// `pending_h`, and replays the tokens on the draft with the
     /// correctness-critical right-shift h-pairing (slot 0 ← pre-call carry, slot
     /// `k>=1` ← `verify_h` row `k-1`; see [`shift_h_mapping`]).
@@ -127,13 +127,13 @@ impl MtpSession {
         // overwrites pending_h with the freshly captured last row.
         let carry = self.pending_h.clone();
 
-        // Step 1: capture the target's pre-norm rows into verify_h.
+        // Step 1: capture the target's nextn rows into verify_h.
         self.n_rows = n;
         self.verify_h.resize(n * self.n_embd, 0.0);
         for i in 0..n {
             let row = target
-                .get_embeddings_pre_norm_ith(i32::try_from(i).expect("row index fits into i32"))
-                .expect("target produced no pre-norm row for a verified position");
+                .get_embeddings_nextn_ith(i32::try_from(i).expect("row index fits into i32"))
+                .expect("target produced no nextn row for a verified position");
             self.verify_h[i * self.n_embd..(i + 1) * self.n_embd].copy_from_slice(row);
         }
         // The last captured row pairs with the next token (cross-call carryover).
@@ -183,7 +183,7 @@ impl MtpSession {
     /// Produce up to `params.n_max` draft tokens on the draft context (reference
     /// `draft()`). Greedy CPU drafting on a single sequence: the seed pairs
     /// `id_last` with the carried `pending_h`, and every subsequent step pairs
-    /// the just-sampled token with the pre-norm row the draft produced for it.
+    /// the just-sampled token with the nextn row the draft produced for it.
     ///
     /// Returns the drafted tokens (`0..=params.n_max`), or empty when shorter
     /// than `params.n_min` or a decode fails.
@@ -191,7 +191,7 @@ impl MtpSession {
     /// # Panics
     ///
     /// Panics if the draft length does not fit into an [`i32`], or if a logits
-    /// position yields no candidates/pre-norm row (a backend fault).
+    /// position yields no candidates/nextn row (a backend fault).
     #[must_use]
     pub fn draft(
         &mut self,
@@ -225,10 +225,10 @@ impl MtpSession {
             }
 
             // h_k for the token we are about to keep, read before the next decode
-            // invalidates the draft's pre-norm buffer.
+            // invalidates the draft's nextn buffer.
             let h_row = draft
-                .get_embeddings_pre_norm_ith(i_batch)
-                .expect("draft produced no pre-norm row for a logits position")
+                .get_embeddings_nextn_ith(i_batch)
+                .expect("draft produced no nextn row for a logits position")
                 .to_vec();
 
             result.push(top1);
@@ -318,7 +318,7 @@ impl MtpSession {
     }
 
     /// Accept the verified prefix: roll the target KV back to the accepted
-    /// frontier and carry the matching pre-norm row forward (reference
+    /// frontier and carry the matching nextn row forward (reference
     /// `accept()`).
     ///
     /// `accepted_pos` is the first *rejected* position — [`VerifyOutcome::next_pos`]

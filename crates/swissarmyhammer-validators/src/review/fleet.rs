@@ -72,6 +72,7 @@
 
 use std::fmt::Write as _;
 
+use crate::review::probes::render_probe_evidence;
 use crate::review::scope::{FileWork, ValidatorWork, WorkList};
 use crate::review::types::{parse_findings, Finding};
 use crate::validators::{
@@ -742,11 +743,22 @@ fn severity_default(severity: Severity) -> &'static str {
 /// validator name as a tool), leaving the parsed message empty and failing the
 /// task.
 const OUTPUT_CONTRACT: &str = "\
+## Reading files
+
+The changed files under review are already provided in full below — their \
+COMPLETE current contents are inlined, so do NOT `read_file` (or `glob`/`grep`) \
+the changed files; you already have them. `read_file`/`glob`/`grep` remain \
+available, but only for OTHER files: cross-file duplication evidence, a changed \
+symbol's callers, or a type defined elsewhere. Reach for them only when a \
+finding genuinely depends on a file that is not already inlined here.
+
 ## Output contract
 
-Reply with your findings as a JSON array, written directly as the plain text \
-of your reply — the reply is parsed as JSON. Do NOT call any tools: tools are \
-not part of this task, and a tool call is not a valid way to report findings.
+Once you have reviewed the inlined files (reading other files only if needed), \
+reply with your findings as a JSON array, written directly as the plain text of \
+your reply — the reply is parsed as JSON. The findings reply itself must be \
+plain JSON text, never a tool call: a tool call is not a valid way to report \
+findings.
 
 Each finding is one object with these fields:
 
@@ -762,21 +774,42 @@ Each finding is one object with these fields:
 Report only real issues. If you find none, emit an empty array `[]`.
 ";
 
-/// Append one file's review block: path, semantic diff, bounded source slice,
-/// and the probe results rendered as evidence.
+/// Append one file's review block: path, the full current source (or the bounded
+/// fallback for an oversized file), the semantic diff of what changed, and the
+/// probe results rendered as evidence.
+///
+/// The changed file is handed to the model **in full** when it fits the inline
+/// budget ([`FileWork::inlined_full`]), framed explicitly as the complete current
+/// contents the model does NOT need to re-read — the read-round-trips that
+/// dominated review wall-clock came from the model re-reading a file it was only
+/// given a partial slice of. An oversized file falls back to the bounded slice
+/// (which already carries a `read_file` note from the scope stage) and is framed
+/// as a partial view.
 fn render_file_block(out: &mut String, file: &FileWork) {
     let _ = writeln!(out, "## File: {}\n", file.path);
 
-    out.push_str("### Semantic diff\n\n");
-    render_semantic_diff(out, file);
-
-    out.push_str("### Source slice\n\n");
+    if file.inlined_full {
+        out.push_str(
+            "### Full current contents\n\n\
+             This is the COMPLETE current source of the file. You do not need to read this \
+             file — it is provided here in full. Review it directly.\n\n",
+        );
+    } else {
+        out.push_str(
+            "### Source slice (partial — file too large to inline in full)\n\n\
+             This is a BOUNDED slice of an oversized file, not its complete contents. \
+             Use `read_file` on this path to see the remainder before reasoning about it.\n\n",
+        );
+    }
     out.push_str("```\n");
     out.push_str(file.source_slice.trim_end());
     out.push_str("\n```\n\n");
 
+    out.push_str("### What changed (semantic diff)\n\n");
+    render_semantic_diff(out, file);
+
     out.push_str("### Probe evidence\n\n");
-    render_probe_evidence(out, file);
+    render_probe_evidence(out, &file.probe_results, false);
 }
 
 /// Append the structured semantic diff for a file as a list of changed entities.
@@ -791,39 +824,6 @@ fn render_semantic_diff(out: &mut String, file: &FileWork) {
             "- {} {} `{}`",
             change.change_type, change.entity_type, change.entity_name
         );
-    }
-    out.push('\n');
-}
-
-/// Append the probe results for a file as evidence blocks.
-fn render_probe_evidence(out: &mut String, file: &FileWork) {
-    if file.probe_results.is_empty() {
-        out.push_str("_No probe evidence._\n\n");
-        return;
-    }
-    for result in &file.probe_results {
-        let _ = writeln!(out, "- probe `{}` on `{}`:", result.name, result.target);
-        if result.rows.is_empty() {
-            out.push_str("  - (no rows)\n");
-            continue;
-        }
-        for row in &result.rows {
-            out.push_str("  - ");
-            out.push_str(&row.file_path);
-            if let Some(line) = row.line {
-                let _ = write!(out, ":{line}");
-            }
-            if let Some(symbol) = &row.symbol {
-                let _ = write!(out, " `{symbol}`");
-            }
-            if let Some(similarity) = row.similarity {
-                let _ = write!(out, " @ {similarity:.2}");
-            }
-            if let Some(detail) = &row.detail {
-                let _ = write!(out, " — {detail}");
-            }
-            out.push('\n');
-        }
     }
     out.push('\n');
 }
@@ -917,6 +917,7 @@ mod tests {
             }],
             changed_symbols: vec![symbol.to_string()],
             source_slice: format!("// slice for {path}\nfn {symbol}() {{}}"),
+            inlined_full: true,
             probe_results: vec![ProbeResult {
                 name: "duplicates".to_string(),
                 kind: ProbeKind::Fact,
@@ -1087,6 +1088,13 @@ mod tests {
             !prefix.contains("# Files under review"),
             "the prefix must not carry any file payload: {prefix}"
         );
+        // The cached/primed prefix must not carry the per-file source — that
+        // (now full-file) content lives only in the forked payload, so the
+        // shared prefix bytes (and their cache) are unaffected by file size.
+        assert!(
+            !prefix.contains("// slice for src/a.rs") && !prefix.contains("fn alpha"),
+            "the prefix must not carry the file's source contents: {prefix}"
+        );
 
         // The payload carries ONLY the file blocks — no rules, no contract.
         assert!(payload.starts_with("# Files under review"), "{payload}");
@@ -1104,6 +1112,76 @@ mod tests {
             monolithic,
             format!("{shared}{payload}"),
             "monolithic prompt must compose from the same shared sections + payload"
+        );
+    }
+
+    /// A small (fully-inlined) changed file's payload carries the file's
+    /// COMPLETE current contents in a clearly-labeled fenced block plus explicit
+    /// "you do NOT need to read this file" framing — so the model stops
+    /// re-reading the changed file it was already handed.
+    #[test]
+    fn full_inline_payload_carries_complete_source_and_no_reread_framing() {
+        // A FileWork whose source_slice is the WHOLE file (inlined_full = true),
+        // including a marker line the old bounded slice would have trimmed.
+        let mut file = file_work("src/a.rs", "alpha", "src/x.rs");
+        file.source_slice =
+            "use std::fmt;\n// distant_marker_kept_in_full\npub fn alpha() {}".to_string();
+        file.inlined_full = true;
+
+        let payload = render_file_payload(std::slice::from_ref(&file));
+
+        // The complete source — including the distant marker — is present.
+        assert!(
+            payload.contains("// distant_marker_kept_in_full"),
+            "full inline must carry every line of the file: {payload}"
+        );
+        // Explicit framing that the file is the complete contents and need not
+        // be read.
+        assert!(
+            payload.to_lowercase().contains("full")
+                && payload.to_lowercase().contains("do not need to read"),
+            "the block must frame the source as the full file the model need not read: {payload}"
+        );
+    }
+
+    /// An oversized (fallback) changed file's payload carries the bounded slice
+    /// and the read-the-rest note carried through from the scope stage, and does
+    /// NOT claim to be the complete file.
+    #[test]
+    fn fallback_payload_keeps_the_read_for_the_rest_note() {
+        let mut file = file_work("src/big.rs", "huge", "src/x.rs");
+        file.source_slice =
+            "// bounded slice\npub fn huge() {}\n\n// NOTE: this file is too large to inline in full; \
+the slice above is bounded. Use `read_file` on this path to see the remainder before reasoning about it."
+                .to_string();
+        file.inlined_full = false;
+
+        let payload = render_file_payload(std::slice::from_ref(&file));
+
+        assert!(
+            payload.contains("read_file"),
+            "the fallback payload must direct the model to read_file for the rest: {payload}"
+        );
+        assert!(
+            !payload.to_lowercase().contains("do not need to read"),
+            "an oversized file must NOT be framed as fully provided: {payload}"
+        );
+    }
+
+    /// The output contract scopes intrinsic reads to OTHER files (cross-file
+    /// duplication, callers, type defs), not the changed files already inlined in
+    /// full — while still leaving the tools advertised.
+    #[test]
+    fn output_contract_scopes_reads_to_other_files() {
+        assert!(
+            OUTPUT_CONTRACT.contains("other files"),
+            "the contract must scope reads to other (cross-file) files: {OUTPUT_CONTRACT}"
+        );
+        // The changed files are provided in full — the contract says so.
+        assert!(
+            OUTPUT_CONTRACT.to_lowercase().contains("already provided")
+                || OUTPUT_CONTRACT.to_lowercase().contains("provided in full"),
+            "the contract must state the changed files are provided in full: {OUTPUT_CONTRACT}"
         );
     }
 

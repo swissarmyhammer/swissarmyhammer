@@ -388,9 +388,31 @@ async fn test_kanban_task_update() {
         "Expected success, got stderr: {}",
         result.stderr
     );
+    // Mutations return a thin ack ({ok, id, short_id}) — no field echo.
     assert!(
-        result.stdout.contains("Updated Title"),
-        "Output should contain updated title"
+        result.stdout.contains(&task_id),
+        "Ack should carry the task id, got: {}",
+        result.stdout
+    );
+    assert!(
+        !result.stdout.contains("Updated Title"),
+        "Ack must not echo the updated title, got: {}",
+        result.stdout
+    );
+
+    // The stored state carries the change — verify via get.
+    let get_result = executor
+        .execute(&["tool", "kanban", "task", "get", "--id", &task_id])
+        .await;
+    assert!(
+        get_result.stdout.contains("Updated Title"),
+        "Stored task should have the updated title, got: {}",
+        get_result.stdout
+    );
+    assert!(
+        get_result.stdout.contains("New description"),
+        "Stored task should have the updated description, got: {}",
+        get_result.stdout
     );
 }
 

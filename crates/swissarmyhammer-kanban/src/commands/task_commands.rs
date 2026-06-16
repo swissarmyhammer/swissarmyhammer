@@ -288,6 +288,17 @@ mod tests {
         ctx
     }
 
+    /// Read a task's stored `(column, ordinal)` — `task.move` returns a thin
+    /// ack, so position assertions go through the stored entity.
+    async fn stored_position(kanban: &KanbanContext, id: &str) -> (String, String) {
+        let ectx = kanban.entity_context().await.unwrap();
+        let entity = ectx.read("task", id).await.unwrap();
+        (
+            entity.get_str("position_column").unwrap().to_string(),
+            entity.get_str("position_ordinal").unwrap().to_string(),
+        )
+    }
+
     // =========================================================================
     // MoveTaskCmd
     // =========================================================================
@@ -312,8 +323,9 @@ mod tests {
             None,
             args,
         );
-        let result = cmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
+        cmd.execute(&ctx).await.unwrap();
+        let (column, _) = stored_position(&kanban, &task_id).await;
+        assert_eq!(column, "doing");
     }
 
     #[tokio::test]
@@ -335,8 +347,9 @@ mod tests {
             Some("column:done".into()),
             HashMap::new(),
         );
-        let result = cmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["position"]["column"], "done");
+        cmd.execute(&ctx).await.unwrap();
+        let (column, _) = stored_position(&kanban, &task_id).await;
+        assert_eq!(column, "done");
     }
 
     #[tokio::test]
@@ -360,10 +373,11 @@ mod tests {
             None,
             args,
         );
-        let result = cmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
+        cmd.execute(&ctx).await.unwrap();
+        let (column, ordinal) = stored_position(&kanban, &task_id).await;
+        assert_eq!(column, "doing");
         // The ordinal is passed through to the MoveTask operation
-        assert!(result["position"]["ordinal"].as_str().is_some());
+        assert!(!ordinal.is_empty());
     }
 
     #[tokio::test]
@@ -393,8 +407,9 @@ mod tests {
             None,
             args,
         );
-        let result = cmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
+        cmd.execute(&ctx).await.unwrap();
+        let (column, _) = stored_position(&kanban, &mover_id).await;
+        assert_eq!(column, "doing");
     }
 
     #[tokio::test]
@@ -423,8 +438,9 @@ mod tests {
             None,
             args,
         );
-        let result = cmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
+        cmd.execute(&ctx).await.unwrap();
+        let (column, _) = stored_position(&kanban, &mover_id).await;
+        assert_eq!(column, "doing");
     }
 
     #[tokio::test]
@@ -457,8 +473,9 @@ mod tests {
             None,
             args,
         );
-        let result = cmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
+        cmd.execute(&ctx).await.unwrap();
+        let (column, _) = stored_position(&kanban, &mover_id).await;
+        assert_eq!(column, "doing");
     }
 
     #[tokio::test]
@@ -478,8 +495,9 @@ mod tests {
         args.insert("column".into(), serde_json::json!("doing"));
         // No task in scope — using id arg
         let ctx = make_ctx(Arc::clone(&kanban), vec![], None, args);
-        let result = cmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
+        cmd.execute(&ctx).await.unwrap();
+        let (column, _) = stored_position(&kanban, &task_id).await;
+        assert_eq!(column, "doing");
     }
 
     #[tokio::test]
@@ -570,7 +588,17 @@ mod tests {
             HashMap::new(),
         );
         let result = cmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["untagged"], true);
+        // UntagTask returns the standard thin mutation ack.
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["id"], task_id.as_str());
+
+        // The effect is asserted via stored state, not the response.
+        let ectx = kanban.entity_context().await.unwrap();
+        let task = ectx.read("task", &task_id).await.unwrap();
+        assert!(
+            !task.get_str("body").unwrap_or("").contains("#bug"),
+            "untag must remove the #bug tag from the task body"
+        );
     }
 
     #[tokio::test]
@@ -700,17 +728,18 @@ mod tests {
             None,
             HashMap::new(),
         );
-        let result = cmd.execute(&ctx).await.unwrap();
+        cmd.execute(&ctx).await.unwrap();
+
+        // The move response is a thin ack — assert the stored position.
+        let (column, target_new_ordinal) = stored_position(&kanban, &target_id).await;
 
         // Target landed in the order-0 column, which is now `doing`.
         assert_eq!(
-            result["position"]["column"], "doing",
-            "DoThisNextCmd must move to the order-0 column (doing), got {}",
-            result["position"]["column"]
+            column, "doing",
+            "DoThisNextCmd must move to the order-0 column (doing), got {column}"
         );
 
         // Target is at the top: its ordinal sorts lexicographically before the anchor's.
-        let target_new_ordinal = result["position"]["ordinal"].as_str().unwrap().to_string();
         assert!(
             target_new_ordinal.as_str() < anchor_ordinal.as_str(),
             "target ordinal {target_new_ordinal:?} should sort before anchor ordinal {anchor_ordinal:?}"
@@ -744,11 +773,8 @@ mod tests {
             None,
             HashMap::new(),
         );
-        let dtn_result = DoThisNextCmd.execute(&ctx_a).await.unwrap();
-        let dtn_ordinal = dtn_result["position"]["ordinal"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        DoThisNextCmd.execute(&ctx_a).await.unwrap();
+        let (_, dtn_ordinal) = stored_position(&kanban_a, &target_a_id).await;
 
         // Board B: direct MoveTask.with_before() path (what drag does)
         let (_temp_b, kctx_b) = setup().await;
@@ -771,12 +797,9 @@ mod tests {
         let target_b_result = target_b.execute(&kctx_b).await.into_result().unwrap();
         let target_b_id = target_b_result["id"].as_str().unwrap().to_string();
 
-        let drag_op = MoveTask::to_column(target_b_id, "todo").with_before(anchor_b_id);
-        let drag_result = drag_op.execute(&kctx_b).await.into_result().unwrap();
-        let drag_ordinal = drag_result["position"]["ordinal"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let drag_op = MoveTask::to_column(target_b_id.clone(), "todo").with_before(anchor_b_id);
+        drag_op.execute(&kctx_b).await.into_result().unwrap();
+        let (_, drag_ordinal) = stored_position(&kctx_b, &target_b_id).await;
 
         // Both paths produced the same ordinal because they both go through
         // MoveTask::execute's before_id logic.

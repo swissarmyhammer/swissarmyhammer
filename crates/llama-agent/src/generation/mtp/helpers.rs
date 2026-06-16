@@ -24,7 +24,7 @@ pub fn longest_accepted_prefix(target: &[LlamaToken], draft: &[LlamaToken]) -> u
 
 /// The `verify_h` row index to carry forward as `pending_h` after acceptance.
 ///
-/// Mirrors the reference `accept()` row pick: the pre-norm row for the last
+/// Mirrors the reference `accept()` row pick: the nextn row for the last
 /// accepted token, clamped to the last available row so it never indexes past
 /// the captured rows. Returns `min(n_accepted, n_rows.saturating_sub(1))`.
 #[must_use]

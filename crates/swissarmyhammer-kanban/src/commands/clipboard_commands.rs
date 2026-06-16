@@ -1155,11 +1155,11 @@ mod tests {
         );
         let result = PasteEntityCmd::new().execute(&paste_ctx).await.unwrap();
         // The (tag, task) paste handler delegates to `TagTask`, whose result
-        // shape is `{"tagged": true, "task_id": ..., "tag": <slug>}`. We
-        // assert against the underlying op's contract — wrapping it would
-        // require every paste handler to translate its result.
-        assert_eq!(result["tagged"], true);
-        assert_eq!(result["tag"], "urgent");
+        // is the standard thin mutation ack `{ok, id, short_id}`. We assert
+        // against the underlying op's contract — wrapping it would require
+        // every paste handler to translate its result.
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["id"], task_id);
 
         let ectx = kanban.entity_context().await.unwrap();
         let task = ectx.read("task", task_id).await.unwrap();

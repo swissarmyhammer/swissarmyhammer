@@ -163,6 +163,11 @@ pub struct ReviewRequest {
     /// The pinned pool worker count from `review.concurrency`, applied by the
     /// server at the wiring layer. `None` defers to the coarse `backend` policy.
     pub concurrency: Option<usize>,
+    /// The force/all escape hatch. `false` (the default) keeps `review working`
+    /// incremental — files unchanged since their last review are subtracted via
+    /// the `.validators/.hashes/` tracking baseline. `true` ignores tracking and
+    /// reviews the whole resolved set. Inert for non-working scopes.
+    pub force: bool,
 }
 
 /// Run a resolved review request end to end and return the report.
@@ -242,6 +247,10 @@ async fn run_review_request_inner(
 
     let handle = agent_factory().await?;
 
+    // Incremental working review unless the caller forced a full pass: the engine
+    // subtracts files unchanged since their last review (via `.validators/.hashes/`)
+    // and records a fresh baseline for every reviewed file when the pass completes.
+    let use_tracking = !request.force;
     let report = run_review_over_agent(
         handle.agent,
         handle.notification_rx,
@@ -253,6 +262,7 @@ async fn run_review_request_inner(
         pool_config_for(request.backend.as_deref(), request.concurrency),
         FleetConfig::default(),
         &now,
+        use_tracking,
     )
     .await
     .map_err(|e| format!("review pipeline failed: {e}"))?;
@@ -394,6 +404,39 @@ mod tests {
                 ..ReviewCounts::default()
             },
         }
+    }
+
+    /// Parity guard: the `backend` modifier influences ONLY the pool's worker
+    /// count, never which agent/model runs.
+    ///
+    /// The review pipeline drives a single agent built by `agent_factory()` from
+    /// the resolved review `ModelConfig` (default `claude-code-haiku`), shared
+    /// across every pool worker. `backend` reaches only `pool_config_for`, so a
+    /// `local` and a `session` run over the same config resolve the SAME model —
+    /// the two backends differ exclusively in worker count and AIMD, never in the
+    /// agent. This asserts that contract so a future change cannot quietly route
+    /// `local` to a different agent and drift the model.
+    #[test]
+    fn backend_only_governs_pool_policy_not_the_agent_model() {
+        let local = pool_config_for(Some("local"), None);
+        let session = pool_config_for(Some("session"), None);
+
+        // The local backend serializes to one in-process model/GPU worker; the
+        // session backend runs the remote default fan-out. This is the ONLY
+        // axis `backend` controls.
+        assert_eq!(local.workers, 1, "local backend is single-worker");
+        assert_eq!(
+            session.workers, DEFAULT_REMOTE_WORKERS,
+            "session backend runs the remote default fan-out"
+        );
+
+        // A pinned `review.concurrency` overrides the worker count for BOTH
+        // backends identically, confirming the only difference is the policy —
+        // not the agent the worker drives.
+        let local_pinned = pool_config_for(Some("local"), Some(3));
+        let session_pinned = pool_config_for(Some("session"), Some(3));
+        assert_eq!(local_pinned.workers, session_pinned.workers);
+        assert_eq!(local_pinned.workers, 3);
     }
 
     #[test]

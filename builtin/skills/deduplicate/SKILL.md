@@ -14,8 +14,6 @@ metadata:
 
 Find near-duplicates with tree-sitter semantic similarity, then refactor to remove redundancy.
 
-{% include "_partials/delegate-to-subagent" %}
-
 ## Process
 
 1. **Scope:**

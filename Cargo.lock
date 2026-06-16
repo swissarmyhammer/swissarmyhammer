@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acp-conformance"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol-extras"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-schema",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "ane-embedding"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "block2",
@@ -694,7 +694,7 @@ dependencies = [
  "bitflags 2.11.1",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1294,7 +1294,7 @@ dependencies = [
 
 [[package]]
 name = "claude-agent"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -1329,6 +1329,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
+ "tracing-test",
  "typed-builder",
  "ulid",
  "url",
@@ -1355,7 +1356,7 @@ dependencies = [
 
 [[package]]
 name = "code-context-cli"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2517,7 +2518,7 @@ checksum = "4ef6b89e5b37196644d8796de5268852ff179b44e96276cf4290264843743bb7"
 
 [[package]]
 name = "embedding-benchmark"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "ane-embedding",
  "criterion",
@@ -3632,7 +3633,7 @@ dependencies = [
 
 [[package]]
 name = "heb"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -4323,15 +4324,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -4563,7 +4555,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-app"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "agent-client-protocol",
  "async-trait",
@@ -4622,7 +4614,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-cli"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "clap",
  "clap-markdown",
@@ -4902,7 +4894,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "llama-agent"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -4957,7 +4949,7 @@ dependencies = [
 
 [[package]]
 name = "llama-common"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -4973,7 +4965,7 @@ dependencies = [
 [[package]]
 name = "llama-cpp-2"
 version = "0.1.123"
-source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#5a6ab38f2808e8fd6987ab7e2f7937f48e1d9653"
+source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#8df220d24b9b1671f0c83b753ba970b5a749830d"
 dependencies = [
  "enumflags2",
  "llama-cpp-sys-2",
@@ -4985,7 +4977,7 @@ dependencies = [
 [[package]]
 name = "llama-cpp-sys-2"
 version = "0.1.123"
-source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#5a6ab38f2808e8fd6987ab7e2f7937f48e1d9653"
+source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#8df220d24b9b1671f0c83b753ba970b5a749830d"
 dependencies = [
  "bindgen",
  "cc",
@@ -4997,7 +4989,7 @@ dependencies = [
 
 [[package]]
 name = "llama-embedding"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "llama-common",
@@ -5086,7 +5078,7 @@ checksum = "670fdfda89751bc4a84ac13eaa63e205cf0fd22b4c9a5fbfa085b63c1f1d3a30"
 
 [[package]]
 name = "markdowndown"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5262,7 +5254,7 @@ dependencies = [
 
 [[package]]
 name = "mirdan"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -5310,7 +5302,7 @@ dependencies = [
 
 [[package]]
 name = "mirdan-app"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5331,7 +5323,7 @@ dependencies = [
 
 [[package]]
 name = "mirdan-cli"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "clap",
  "clap-markdown",
@@ -5371,7 +5363,7 @@ dependencies = [
 
 [[package]]
 name = "model-context-protocol-extras"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5389,7 +5381,7 @@ dependencies = [
 
 [[package]]
 name = "model-embedding"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "md5",
@@ -5404,7 +5396,7 @@ dependencies = [
 
 [[package]]
 name = "model-loader"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "dirs",
  "hf-hub",
@@ -8137,7 +8129,7 @@ checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shelltool-cli"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "clap",
  "clap-markdown",
@@ -8955,7 +8947,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9020,36 +9012,34 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-agent"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
  "claude-agent",
  "futures-util",
- "git2",
  "llama-agent",
- "rusqlite",
  "serde",
  "serde_json",
- "swissarmyhammer-code-context",
+ "serial_test",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-templating",
  "swissarmyhammer-tools",
  "swissarmyhammer-validators",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "tracing-test",
  "which 8.0.2",
 ]
 
 [[package]]
 name = "swissarmyhammer-agents"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "once_cell",
@@ -9064,11 +9054,12 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tracing-test",
 ]
 
 [[package]]
 name = "swissarmyhammer-app-service"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "rmcp",
@@ -9084,11 +9075,11 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-build"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "swissarmyhammer-cli"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -9146,13 +9137,14 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "tracing-test",
  "walkdir",
  "which 8.0.2",
 ]
 
 [[package]]
 name = "swissarmyhammer-cli-completions"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -9164,7 +9156,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-code-context"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "fuzzy-matcher",
  "ignore",
@@ -9192,14 +9184,14 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-command-options"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "swissarmyhammer-command-service"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "rmcp",
@@ -9232,7 +9224,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-common"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "colored 2.2.0",
@@ -9263,7 +9255,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -9286,7 +9278,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-directory"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-watcher",
  "dirs",
@@ -9303,7 +9295,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-doctor"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "comfy-table",
  "crossterm",
@@ -9314,7 +9306,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-embedding"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "ane-embedding",
  "async-trait",
@@ -9329,7 +9321,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-entity"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9357,7 +9349,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-entity-mcp"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "rmcp",
@@ -9379,7 +9371,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-entity-search"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "fuzzy-matcher",
  "model-embedding",
@@ -9392,7 +9384,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-fields"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -9410,7 +9402,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-filter-expr"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "chumsky",
  "thiserror 2.0.18",
@@ -9418,7 +9410,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-focus"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "include_dir",
@@ -9439,7 +9431,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-git"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9455,7 +9447,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-js"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9475,7 +9467,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-kanban"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9511,11 +9503,12 @@ dependencies = [
  "tracing",
  "tracing-test",
  "ulid",
+ "whoami",
 ]
 
 [[package]]
 name = "swissarmyhammer-leader-election"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "fs2",
  "md5",
@@ -9528,7 +9521,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-lsp"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "lsp-types",
  "once_cell",
@@ -9548,7 +9541,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-mcp-proxy"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9574,7 +9567,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-merge"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "diffy",
  "serde_json",
@@ -9585,7 +9578,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-operations"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9601,7 +9594,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-operations-macros"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9613,7 +9606,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-perspectives"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -9631,7 +9624,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-plugin"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -9660,7 +9653,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-project-detection"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -9670,7 +9663,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-sem"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "rayon",
  "regex",
@@ -9702,7 +9695,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-shell"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "regex",
  "serde",
@@ -9720,7 +9713,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-skills"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "dirs",
@@ -9735,12 +9728,13 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tracing-test",
  "walkdir",
 ]
 
 [[package]]
 name = "swissarmyhammer-statusline"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "dirs",
  "git2",
@@ -9759,7 +9753,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-store"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9780,7 +9774,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-templating"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "liquid",
@@ -9804,7 +9798,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-tools"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-extras",
@@ -9881,7 +9875,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-treesitter"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-watcher",
@@ -9938,7 +9932,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-ui-state"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "rmcp",
  "serde",
@@ -9954,11 +9948,12 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-validators"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "acp-conformance",
  "agent-client-protocol",
  "agent-client-protocol-extras",
+ "chrono",
  "claude-agent",
  "dirs",
  "futures",
@@ -9971,6 +9966,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "serial_test",
+ "sha2",
  "swissarmyhammer-build",
  "swissarmyhammer-code-context",
  "swissarmyhammer-directory",
@@ -9987,7 +9983,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-views"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -10011,7 +10007,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-web"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -10037,7 +10033,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-window-service"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "open",

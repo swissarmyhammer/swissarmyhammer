@@ -18,7 +18,7 @@ import { useSchema } from "@/lib/schema-context";
 import { moniker } from "@/lib/moniker";
 import { deriveActorColor } from "@/lib/actor-colors";
 import { asSegment } from "@/types/spatial";
-import { getStr } from "@/types/kanban";
+import { getStr, type Entity } from "@/types/kanban";
 
 const SIZES = {
   sm: "w-5 h-5 min-w-5 min-h-5 text-[9px]",
@@ -41,7 +41,24 @@ function initials(name: string): string {
   return (name[0] ?? "?").toUpperCase();
 }
 
-export function Avatar({ actorId, size = "md", className }: AvatarProps) {
+/**
+ * Resolve an actor id to its entity and display name.
+ *
+ * Looks the actor up in the EntityStore and resolves the display-name
+ * field from the actor schema (`mention_display_field`, falling back to
+ * `name`). When the actor is unknown, `actor` is `undefined` and `name`
+ * falls back to the raw id — callers always get something renderable.
+ *
+ * Shared by {@link Avatar} and the comment-log display so every surface
+ * that turns an actor id into a label resolves it identically.
+ *
+ * @param actorId - The actor entity id to resolve.
+ * @returns The actor entity (if loaded) and its display name.
+ */
+export function useActorDisplay(actorId: string): {
+  actor: Entity | undefined;
+  name: string;
+} {
   const { getEntity } = useEntityStore();
   const { mentionableTypes } = useSchema();
   const actor = getEntity("actor", actorId);
@@ -51,6 +68,11 @@ export function Avatar({ actorId, size = "md", className }: AvatarProps) {
     mentionableTypes.find((mt) => mt.entityType === "actor")?.displayField ??
     "name";
   const name = actor ? getStr(actor, nameField) || actorId : actorId;
+  return { actor, name };
+}
+
+export function Avatar({ actorId, size = "md", className }: AvatarProps) {
+  const { actor, name } = useActorDisplay(actorId);
   const color = actor
     ? getStr(actor, "color") || deriveActorColor(actorId)
     : deriveActorColor(actorId);

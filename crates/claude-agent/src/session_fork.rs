@@ -32,9 +32,8 @@
 //! is needed here.
 
 use agent_client_protocol_extras::{
-    SessionForkRequest, SessionForkResponse, SessionPinRequest, SessionPinResponse,
-    SessionStateStatusRequest, SessionStateStatusResponse, FORK_PARENT_NOT_FOUND,
-    FORK_PARENT_STATE_UNAVAILABLE, SESSION_STATE_NOT_FOUND,
+    SessionErrorKind, SessionForkRequest, SessionForkResponse, SessionPinRequest,
+    SessionPinResponse, SessionStateStatusRequest, SessionStateStatusResponse,
 };
 
 use crate::acp_error::session_error;
@@ -47,8 +46,8 @@ use crate::session::{Session, SessionId};
 ///
 /// The CLI cleanly rejecting the fork is the genuine "parent state
 /// unavailable" condition and maps onto `invalid_params` with `data.error ==`
-/// [`FORK_PARENT_STATE_UNAVAILABLE`] — the permanent signal telling the
-/// client to fall back to `session/new` + full prompt. An environment
+/// [`SessionErrorKind::ForkParentStateUnavailable`] — the permanent signal
+/// telling the client to fall back to `session/new` + full prompt. An environment
 /// failure launching the process (claude binary missing, spawn I/O) says
 /// nothing about the parent's state and maps onto a retryable `-32603`
 /// internal error instead — a client must never re-prime futilely against a
@@ -58,9 +57,11 @@ fn fork_attach_error(
     failure: ForkAttachError,
 ) -> agent_client_protocol::Error {
     match failure {
-        ForkAttachError::Rejected { detail } => {
-            session_error(parent_session_id, FORK_PARENT_STATE_UNAVAILABLE, detail)
-        }
+        ForkAttachError::Rejected { detail } => session_error(
+            parent_session_id,
+            SessionErrorKind::ForkParentStateUnavailable,
+            detail,
+        ),
         ForkAttachError::Spawn(e) => {
             tracing::error!(
                 "Failed to spawn forked claude process for parent {parent_session_id}: {e}"
@@ -114,8 +115,9 @@ impl ClaudeAgent {
     /// # Errors
     ///
     /// `invalid_params` with `data.error` distinguishing the failure:
-    /// [`FORK_PARENT_NOT_FOUND`] when the parent session does not exist,
-    /// [`FORK_PARENT_STATE_UNAVAILABLE`] when it exists but has no
+    /// [`SessionErrorKind::ForkParentNotFound`] when the parent session does not
+    /// exist, [`SessionErrorKind::ForkParentStateUnavailable`] when it exists
+    /// but has no
     /// restorable transcript — it has not completed a turn, the agent runs in
     /// ephemeral mode (no CLI persistence), or the CLI cleanly rejected the
     /// fork. A session-store failure or an environment failure launching the
@@ -179,12 +181,13 @@ impl ClaudeAgent {
     /// Resolve the fork parent and confirm it has restorable state.
     ///
     /// Distinguishes "the parent genuinely does not exist" (the permanent
-    /// [`FORK_PARENT_NOT_FOUND`] fallback signal — including ids this agent
-    /// never minted, per the crate's opaque-id convention) from a
+    /// [`SessionErrorKind::ForkParentNotFound`] fallback signal — including ids
+    /// this agent never minted, per the crate's opaque-id convention) from a
     /// session-store FAILURE (lock poisoning), which is a retryable internal
     /// error. A parent that exists but has no restorable transcript — no
     /// completed turn yet, or ephemeral mode disabled CLI persistence —
-    /// reports [`FORK_PARENT_STATE_UNAVAILABLE`] so the client can fall back
+    /// reports [`SessionErrorKind::ForkParentStateUnavailable`] so the client
+    /// can fall back
     /// to a plain `session/new` + full prompt instead of forking blind.
     fn resolve_fork_parent(
         &self,
@@ -194,7 +197,7 @@ impl ClaudeAgent {
         let parent = self.resolve_session_with(parent_id, || {
             session_error(
                 parent_id,
-                FORK_PARENT_NOT_FOUND,
+                SessionErrorKind::ForkParentNotFound,
                 format!("fork parent session {parent_id} not found"),
             )
         })?;
@@ -202,7 +205,7 @@ impl ClaudeAgent {
         if self.config.claude.ephemeral {
             return Err(session_error(
                 parent_id,
-                FORK_PARENT_STATE_UNAVAILABLE,
+                SessionErrorKind::ForkParentStateUnavailable,
                 format!(
                     "fork parent session {parent_id} has no restorable state: the agent \
                      runs in ephemeral mode, which disables CLI transcript persistence"
@@ -212,7 +215,7 @@ impl ClaudeAgent {
         if !Self::has_first_exchange(&parent) {
             return Err(session_error(
                 parent_id,
-                FORK_PARENT_STATE_UNAVAILABLE,
+                SessionErrorKind::ForkParentStateUnavailable,
                 format!(
                     "fork parent session {parent_id} has not completed a turn; the CLI \
                      has no transcript to fork from"
@@ -260,8 +263,9 @@ impl ClaudeAgent {
     ///
     /// # Errors
     ///
-    /// `invalid_params` with `data.error ==` [`SESSION_STATE_NOT_FOUND`] when
-    /// the session itself does not exist.
+    /// `invalid_params` with `data.error ==`
+    /// [`SessionErrorKind::SessionStateNotFound`] when the session itself does
+    /// not exist.
     pub async fn session_state_status(
         &self,
         request: SessionStateStatusRequest,
@@ -285,8 +289,9 @@ impl ClaudeAgent {
     ///
     /// # Errors
     ///
-    /// `invalid_params` with `data.error ==` [`SESSION_STATE_NOT_FOUND`] when
-    /// the session does not exist.
+    /// `invalid_params` with `data.error ==`
+    /// [`SessionErrorKind::SessionStateNotFound`] when the session does not
+    /// exist.
     pub async fn pin_session(
         &self,
         request: SessionPinRequest,
@@ -296,8 +301,8 @@ impl ClaudeAgent {
     }
 
     /// Resolve a session for the state-status/pin extensions, mapping a miss
-    /// onto the contract's [`SESSION_STATE_NOT_FOUND`] kind (and a store
-    /// failure onto a retryable internal error).
+    /// onto the contract's [`SessionErrorKind::SessionStateNotFound`] kind (and
+    /// a store failure onto a retryable internal error).
     fn resolve_extension_session(
         &self,
         session_id: &str,
@@ -305,7 +310,7 @@ impl ClaudeAgent {
         self.resolve_session_with(session_id, || {
             session_error(
                 session_id,
-                SESSION_STATE_NOT_FOUND,
+                SessionErrorKind::SessionStateNotFound,
                 format!("session {session_id} not found"),
             )
         })
@@ -318,7 +323,8 @@ mod tests {
 
     use agent_client_protocol::schema::{ExtRequest, RawValue};
     use agent_client_protocol_extras::{
-        SessionStore, SESSION_FORK_METHOD, SESSION_PIN_METHOD, SESSION_STATE_STATUS_METHOD,
+        SessionStore, FORK_PARENT_NOT_FOUND, FORK_PARENT_STATE_UNAVAILABLE, SESSION_FORK_METHOD,
+        SESSION_PIN_METHOD, SESSION_STATE_NOT_FOUND, SESSION_STATE_STATUS_METHOD,
     };
     use serial_test::serial;
     use std::sync::Arc;

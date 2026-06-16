@@ -13,67 +13,19 @@
 //! consumer does not expose a "force MTP off" knob — auto-detect is auto).
 
 use futures::StreamExt;
-use llama_agent::test_models::{MTP_TEST_MODEL_FILE, MTP_TEST_MODEL_REPO};
-use llama_agent::types::{
-    AgentAPI, AgentConfig, GenerationRequest, Message, MessageRole, ModelConfig, ModelSource,
-    ParallelConfig, QueueConfig, RetryConfig, SessionConfig,
-};
+use llama_agent::types::{AgentAPI, GenerationRequest, Message, MessageRole};
 use llama_agent::AgentServer;
 use serial_test::serial;
 use std::time::SystemTime;
-use tracing::{info, warn};
+use tracing::info;
 
-/// Build the agent config pointed at the small MTP test model.
-fn mtp_test_agent_config() -> AgentConfig {
-    AgentConfig {
-        model: ModelConfig {
-            source: ModelSource::HuggingFace {
-                repo: MTP_TEST_MODEL_REPO.to_string(),
-                filename: Some(MTP_TEST_MODEL_FILE.to_string()),
-                folder: None,
-            },
-            batch_size: 64,
-            use_hf_params: true,
-            retry_config: RetryConfig {
-                max_retries: 2,
-                initial_delay_ms: 100,
-                backoff_multiplier: 1.5,
-                max_delay_ms: 1000,
-            },
-            debug: true,
-            n_seq_max: 1,
-            n_threads: 4,
-            n_threads_batch: 4,
-        },
-        mcp_servers: Vec::new(),
-        session_config: SessionConfig::default(),
-        parallel_execution_config: ParallelConfig::default(),
-        tool_execution_config: Default::default(),
-        queue_config: QueueConfig::default(),
-    }
-}
+use crate::integration::real_model_helpers::{mtp_model_config, try_init_real_model_agent};
 
-/// Initialize the agent against the MTP test model, skipping (not failing) on
-/// HuggingFace rate limits or load failures — matches the rest of the
-/// real-model integration tests so CI without the cached model still passes.
+/// Initialize the agent against the MTP test model, skipping (not failing) only
+/// on environmental model-load failures. A genuine model-loading regression
+/// panics — see [`try_init_real_model_agent`].
 async fn try_init_mtp_agent() -> Option<AgentServer> {
-    match AgentServer::initialize(mtp_test_agent_config()).await {
-        Ok(agent) => Some(agent),
-        Err(e) => {
-            let msg = e.to_string().to_lowercase();
-            if msg.contains("429")
-                || msg.contains("too many requests")
-                || msg.contains("rate limited")
-                || msg.contains("loadingfailed")
-                || msg.contains("failed to load")
-            {
-                warn!("Skipping MTP test: model unavailable ({e})");
-                None
-            } else {
-                panic!("MTP test agent init failed: {e}");
-            }
-        }
-    }
+    try_init_real_model_agent(mtp_model_config()).await
 }
 
 async fn add_user_message(

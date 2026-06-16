@@ -1906,65 +1906,60 @@ impl AcpServer {
         session_id
     }
 
-    pub async fn new_session(
+    /// Inject the default mode's system prompt as the session's initial System
+    /// message, when the default mode declares one.
+    ///
+    /// A mode with no configured system prompt is a no-op (`Ok(())`); a backend
+    /// failure to set the prompt fails session creation, since a session
+    /// missing its mode's system prompt would behave inconsistently.
+    async fn inject_default_system_prompt(
         &self,
-        request: agent_client_protocol::schema::NewSessionRequest,
-    ) -> Result<agent_client_protocol::schema::NewSessionResponse, agent_client_protocol::Error>
-    {
-        self.log_request("new_session", &request);
-        tracing::info!(
-            "Creating new ACP session with cwd: {:?}, mcp_servers: {}",
-            request.cwd,
-            request.mcp_servers.len()
-        );
-
-        // Validate MCP transport capabilities before accepting servers
-        self.validate_mcp_transports(&request.mcp_servers)?;
-
-        // Capture the session cwd before it is moved into session creation: the
-        // per-session hook config is loaded from this directory's `.claude`
-        // settings, and SessionStart hooks need it.
-        let session_cwd = request.cwd.clone();
-
-        // Create a new llama-agent session with the provided cwd
-        let llama_session = self
-            .agent_server
-            .create_session_with_cwd(request.cwd)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to create llama session: {}", e);
-                Self::convert_error(e)
-            })?;
-
-        // Inject the default mode's system prompt as the initial System message
-        if let Some(system_prompt) = self
+        llama_session_id: &LlamaSessionId,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let Some(system_prompt) = self
             .config
             .mode_system_prompts
             .get(&self.config.default_mode_id)
-        {
-            self.agent_server
-                .set_session_system_prompt(&llama_session.id, system_prompt.clone())
-                .await
-                .map_err(|e| {
-                    tracing::warn!("Failed to set default system prompt: {}", e);
-                    agent_client_protocol::Error::internal_error()
-                })?;
-            tracing::info!(
-                "Injected system prompt from mode '{}' ({} chars)",
-                self.config.default_mode_id,
-                system_prompt.len()
-            );
-        }
+        else {
+            return Ok(());
+        };
 
+        self.agent_server
+            .set_session_system_prompt(llama_session_id, system_prompt.clone())
+            .await
+            .map_err(|e| {
+                tracing::warn!("Failed to set default system prompt: {}", e);
+                agent_client_protocol::Error::internal_error()
+            })?;
+        tracing::info!(
+            "Injected system prompt from mode '{}' ({} chars)",
+            self.config.default_mode_id,
+            system_prompt.len()
+        );
+        Ok(())
+    }
+
+    /// Assemble the MCP backends a new session routes its tools through.
+    ///
+    /// The in-process Agent-tools mount comes first and is ALWAYS present — the
+    /// agent's intrinsic tools (files, web, skill, subagent, shell) are mounted
+    /// in-process regardless of how many external MCP servers the request
+    /// lists, so an empty external server list still yields a fully-tooled
+    /// agent. The mount is mandatory: a connect failure FAILS session creation
+    /// rather than silently yielding a tool-less agent (the load-bearing
+    /// invariant that a llama-agent session always has its intrinsic tools).
+    ///
+    /// External servers (config defaults merged with `request_mcp_servers`) are
+    /// best-effort: a server that fails to connect is logged and skipped so one
+    /// bad server never sinks the whole session.
+    async fn assemble_session_mcp_clients(
+        &self,
+        request_mcp_servers: &[agent_client_protocol::schema::McpServer],
+    ) -> Result<Vec<Arc<dyn crate::mcp::MCPClient>>, agent_client_protocol::Error> {
         // Merge default MCP servers from config with request MCP servers
         let mut all_mcp_servers = self.config.default_mcp_servers.clone();
-        all_mcp_servers.extend(request.mcp_servers.clone());
+        all_mcp_servers.extend(request_mcp_servers.iter().cloned());
 
-        // Assemble the session's MCP clients. The Agent-tools mount comes first
-        // and is ALWAYS present — the agent's intrinsic tools (files, web,
-        // skill, subagent, shell) are mounted in-process regardless of how many
-        // external MCP servers the request lists. An empty external server list
-        // therefore still yields a fully-tooled agent.
         let mut clients: Vec<Arc<dyn crate::mcp::MCPClient>> = Vec::new();
 
         match self.agent_tools_mount.connect().await {
@@ -1973,12 +1968,6 @@ impl AcpServer {
                 clients.push(mount_client);
             }
             Err(e) => {
-                // The mount is intrinsic; failing to mount it leaves the agent
-                // without its base tools. Unlike an external MCP server (optional,
-                // log-and-continue below), the agent-tools mount is mandatory, so a
-                // connect failure must FAIL session creation rather than silently
-                // yield a tool-less agent. This enforces the load-bearing invariant
-                // that a llama-agent session always has its intrinsic Agent tools.
                 tracing::error!("Failed to mount in-process Agent-tools server: {}", e);
                 return Err(Self::convert_error(e));
             }
@@ -1989,7 +1978,7 @@ impl AcpServer {
                 "Creating {} external MCP clients for session ({} from config, {} from request)",
                 all_mcp_servers.len(),
                 self.config.default_mcp_servers.len(),
-                request.mcp_servers.len()
+                request_mcp_servers.len()
             );
 
             // Create notifying handler that forwards MCP notifications as ACP
@@ -2022,81 +2011,151 @@ impl AcpServer {
             }
         }
 
-        if !clients.is_empty() {
-            let client_count = clients.len();
+        Ok(clients)
+    }
 
-            // Discover tools from all MCP clients, preserving each
-            // tool's full JSON Schema (description + parameters) so
-            // the chat-template renderer sees the real parameter
-            // contract rather than a placeholder empty object.
-            // No cross-client name-collision dedup: this assumes tool names are
-            // unique across the mount and external servers. Holds today because
-            // llama gets shell only from the intrinsic mount and external servers
-            // serve `Shared`-only tools; a future external server exposing a
-            // duplicate name would silently double-register and must dedup here.
-            // Discover each client's tools exactly once. The discovery is used
-            // for BOTH the model-visible `available_tools` set and the
-            // dispatch-routing index, so a tool advertised to the model is
-            // always routable to the client that advertised it. Discovering
-            // once (rather than re-querying when building the routing index)
-            // also closes the second discovery-race window where a transient
-            // list-tools failure could drop a client's tools from the index and
-            // mis-route its calls to the wrong backend (-32602 "tool not found"
-            // — the runaway-loop trigger).
-            let mut all_tools = Vec::new();
-            let mut discovered: Vec<(Arc<dyn crate::mcp::MCPClient>, Vec<String>)> =
-                Vec::with_capacity(clients.len());
-            for client in clients {
-                match client.list_tools_with_schemas().await {
-                    Ok(tools) => {
-                        tracing::info!("Discovered {} tools from MCP client", tools.len());
-                        let names = tools.iter().map(|t| t.name.clone()).collect();
-                        all_tools.extend(tools);
-                        discovered.push((client, names));
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to list tools from MCP client: {}", e);
-                        // Keep the client attached with no routed tools; a call
-                        // to one of its tools falls back to first-client routing
-                        // exactly as before, and the agentic-loop guard bounds
-                        // any resulting failures.
-                        discovered.push((client, Vec::new()));
-                    }
+    /// Discover each backend's tools and register them onto the session: the
+    /// model-visible `available_tools` set AND the dispatch-routing index.
+    ///
+    /// Each client is queried exactly once (`list_tools_with_schemas`),
+    /// preserving the full JSON Schema so the chat-template renderer sees the
+    /// real parameter contract rather than a placeholder. The single discovery
+    /// feeds BOTH the model's tool set and the routing index, so a tool
+    /// advertised to the model is always routable to the client that advertised
+    /// it — and a transient list-tools failure can't drop a client's tools from
+    /// only one of the two and mis-route its calls (the `-32602 "tool not
+    /// found"` runaway-loop trigger). A client whose discovery fails is kept
+    /// attached with no routed tools (first-client routing fallback).
+    ///
+    /// No cross-client name-collision dedup: tool names are assumed unique
+    /// across the mount and external servers. Holds today because llama gets
+    /// shell only from the intrinsic mount and external servers serve
+    /// `Shared`-only tools; a future external server exposing a duplicate name
+    /// would silently double-register and must dedup here.
+    async fn discover_and_register_tools(
+        &self,
+        llama_session_id: LlamaSessionId,
+        clients: Vec<Arc<dyn crate::mcp::MCPClient>>,
+    ) {
+        if clients.is_empty() {
+            return;
+        }
+        let client_count = clients.len();
+
+        let mut all_tools = Vec::new();
+        let mut discovered: Vec<(Arc<dyn crate::mcp::MCPClient>, Vec<String>)> =
+            Vec::with_capacity(clients.len());
+        for client in clients {
+            match client.list_tools_with_schemas().await {
+                Ok(tools) => {
+                    tracing::info!("Discovered {} tools from MCP client", tools.len());
+                    let names = tools.iter().map(|t| t.name.clone()).collect();
+                    all_tools.extend(tools);
+                    discovered.push((client, names));
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to list tools from MCP client: {}", e);
+                    discovered.push((client, Vec::new()));
                 }
             }
+        }
 
-            // Update session with discovered tools
-            if !all_tools.is_empty() {
-                if let Ok(Some(mut session)) = self
+        // Update session with discovered tools
+        if !all_tools.is_empty() {
+            if let Ok(Some(mut session)) = self
+                .agent_server
+                .session_manager()
+                .get_session(&llama_session_id)
+                .await
+            {
+                tracing::info!(
+                    "Adding {} MCP tools to session {}",
+                    all_tools.len(),
+                    llama_session_id
+                );
+                session.available_tools.extend(all_tools);
+                let _ = self
                     .agent_server
                     .session_manager()
-                    .get_session(&llama_session.id)
-                    .await
-                {
-                    tracing::info!(
-                        "Adding {} MCP tools to session {}",
-                        all_tools.len(),
-                        llama_session.id
-                    );
-                    session.available_tools.extend(all_tools);
-                    let _ = self
-                        .agent_server
-                        .session_manager()
-                        .update_session(session)
-                        .await;
-                }
+                    .update_session(session)
+                    .await;
             }
-
-            self.agent_server.session_mcp_clients.write().await.insert(
-                llama_session.id,
-                crate::agent::SessionMcpClients::from_discovered(discovered),
-            );
-            tracing::info!(
-                "Stored {} MCP clients for session {}",
-                client_count,
-                llama_session.id
-            );
         }
+
+        self.agent_server.session_mcp_clients.write().await.insert(
+            llama_session_id,
+            crate::agent::SessionMcpClients::from_discovered(discovered),
+        );
+        tracing::info!(
+            "Stored {} MCP clients for session {}",
+            client_count,
+            llama_session_id
+        );
+    }
+
+    /// Create a new ACP session, running its full lifecycle as a flat sequence
+    /// of phases:
+    ///
+    /// 1. **Validate** the request's MCP transports against the agent's
+    ///    declared capabilities (rejects an unsupported transport up front).
+    /// 2. **Create** the underlying llama session against `request.cwd` and
+    ///    inject the default mode's system prompt as its first System message.
+    /// 3. **Assemble** the session's MCP backends
+    ///    ([`assemble_session_mcp_clients`](Self::assemble_session_mcp_clients)):
+    ///    the mandatory in-process Agent-tools mount plus any external servers.
+    /// 4. **Discover and register** those backends' tools onto the session and
+    ///    the dispatch-routing index
+    ///    ([`discover_and_register_tools`](Self::discover_and_register_tools)).
+    /// 5. **Register** the ACP session
+    ///    ([`register_session`](Self::register_session): store, persist, wire
+    ///    the transcript recorder, fire SessionStart hooks).
+    /// 6. **Assemble** the response, attaching the default mode state when the
+    ///    agent advertises mode support.
+    ///
+    /// Each phase carries its own failure policy: transport validation, llama
+    /// session creation, system-prompt injection, and the mandatory Agent-tools
+    /// mount all fail session creation; an external MCP server that fails to
+    /// connect or list tools is logged and skipped (best-effort), never fatal.
+    pub async fn new_session(
+        &self,
+        request: agent_client_protocol::schema::NewSessionRequest,
+    ) -> Result<agent_client_protocol::schema::NewSessionResponse, agent_client_protocol::Error>
+    {
+        self.log_request("new_session", &request);
+        tracing::info!(
+            "Creating new ACP session with cwd: {:?}, mcp_servers: {}",
+            request.cwd,
+            request.mcp_servers.len()
+        );
+
+        // Validate MCP transport capabilities before accepting servers
+        self.validate_mcp_transports(&request.mcp_servers)?;
+
+        // Capture the session cwd before it is moved into session creation: the
+        // per-session hook config is loaded from this directory's `.claude`
+        // settings, and SessionStart hooks need it.
+        let session_cwd = request.cwd.clone();
+
+        // Create a new llama-agent session with the provided cwd
+        let llama_session = self
+            .agent_server
+            .create_session_with_cwd(request.cwd)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to create llama session: {}", e);
+                Self::convert_error(e)
+            })?;
+
+        // Inject the default mode's system prompt as the initial System message.
+        self.inject_default_system_prompt(&llama_session.id).await?;
+
+        // Assemble the session's MCP backends, then discover and register their
+        // tools onto the session and the dispatch-routing index.
+        let clients = self
+            .assemble_session_mcp_clients(&request.mcp_servers)
+            .await?;
+        self.discover_and_register_tools(llama_session.id, clients)
+            .await;
 
         // Get stored client capabilities
         let client_caps = self
@@ -3176,8 +3235,7 @@ impl AcpServer {
         &self,
         method: &str,
         declared: impl FnOnce(&agent_client_protocol::schema::ClientCapabilities) -> bool,
-        undeclared_message: impl Into<String>,
-        uninitialized_message: impl Into<String>,
+        messages: CapabilityErrorMessages,
     ) -> Result<(), agent_client_protocol::Error> {
         let client_caps = self.client_capabilities.read().await;
         match &*client_caps {
@@ -3187,11 +3245,11 @@ impl AcpServer {
             }
             Some(_) => {
                 tracing::error!("{method} capability not declared by client");
-                Err(super::acp_error::invalid_params(undeclared_message))
+                Err(super::acp_error::invalid_params(messages.undeclared))
             }
             None => {
                 tracing::error!("No client capabilities available for {method} validation");
-                Err(super::acp_error::invalid_params(uninitialized_message))
+                Err(super::acp_error::invalid_params(messages.uninitialized))
             }
         }
     }
@@ -3201,8 +3259,10 @@ impl AcpServer {
         self.require_capability(
             "fs/read_text_file",
             |caps| caps.fs.read_text_file,
-            "File system read capability not declared by client. Set client_capabilities.fs.read_text_file = true during initialization.",
-            "Client capabilities not initialized. Cannot perform file system operations without capability declaration.",
+            CapabilityErrorMessages {
+                undeclared: "File system read capability not declared by client. Set client_capabilities.fs.read_text_file = true during initialization.".to_string(),
+                uninitialized: "Client capabilities not initialized. Cannot perform file system operations without capability declaration.".to_string(),
+            },
         )
         .await
     }
@@ -3212,8 +3272,10 @@ impl AcpServer {
         self.require_capability(
             "fs/write_text_file",
             |caps| caps.fs.write_text_file,
-            "File system write capability not declared by client. Set client_capabilities.fs.write_text_file = true during initialization.",
-            "Client capabilities not initialized. Cannot perform file system operations without capability declaration.",
+            CapabilityErrorMessages {
+                undeclared: "File system write capability not declared by client. Set client_capabilities.fs.write_text_file = true during initialization.".to_string(),
+                uninitialized: "Client capabilities not initialized. Cannot perform file system operations without capability declaration.".to_string(),
+            },
         )
         .await
     }
@@ -3227,8 +3289,10 @@ impl AcpServer {
         self.require_capability(
             method,
             |caps| caps.terminal,
-            format!("Terminal capability not declared by client; {method} requires client_capabilities.terminal = true during initialization."),
-            format!("Client capabilities not initialized; cannot perform {method} without capability declaration."),
+            CapabilityErrorMessages {
+                undeclared: format!("Terminal capability not declared by client; {method} requires client_capabilities.terminal = true during initialization."),
+                uninitialized: format!("Client capabilities not initialized; cannot perform {method} without capability declaration."),
+            },
         )
         .await
     }
@@ -3275,209 +3339,26 @@ impl AcpServer {
                 ))
             })?;
 
-        // Route extension methods to appropriate handlers
-        let result: serde_json::Value = match request.method.as_ref() {
-            // Filesystem operations
-            "fs/read_text_file" => {
-                self.require_fs_read_capability().await?;
-                let method = "fs/read_text_file";
-                dispatch_ext(
-                    method,
-                    params_value,
-                    |req: agent_client_protocol::schema::ReadTextFileRequest| async move {
-                        let session = self.fs_session(method, &req.session_id).await?;
-                        self.filesystem_ops
-                            .read_text_file(&session, req)
-                            .await
-                            .map_err(|e| {
-                                tracing::error!("{method} failed: {e}");
-                                filesystem_error_to_protocol_error(e)
-                            })
-                    },
-                )
-                .await?
+        // Route the method to its per-domain handler. Each `route_*` helper
+        // owns one extension surface (filesystem, terminal, session-fork) and
+        // its capability gating; an unrecognized method is genuinely "not
+        // found".
+        let method = request.method.as_ref();
+        let result: serde_json::Value = match method {
+            "fs/read_text_file" | "fs/write_text_file" => {
+                self.route_fs(method, params_value).await?
             }
-
-            "fs/write_text_file" => {
-                self.require_fs_write_capability().await?;
-                let method = "fs/write_text_file";
-                dispatch_ext(
-                    method,
-                    params_value,
-                    |req: agent_client_protocol::schema::WriteTextFileRequest| async move {
-                        let session = self.fs_session(method, &req.session_id).await?;
-                        self.filesystem_ops
-                            .write_text_file(&session, req)
-                            .await
-                            .map_err(|e| {
-                                tracing::error!("{method} failed: {e}");
-                                filesystem_error_to_protocol_error(e)
-                            })
-                    },
-                )
-                .await?
+            "terminal/create"
+            | "terminal/output"
+            | "terminal/wait_for_exit"
+            | "terminal/get"
+            | "terminal/kill"
+            | "terminal/release" => self.route_terminal(method, params_value).await?,
+            agent_client_protocol_extras::SESSION_FORK_METHOD
+            | agent_client_protocol_extras::SESSION_STATE_STATUS_METHOD
+            | agent_client_protocol_extras::SESSION_PIN_METHOD => {
+                self.route_session_fork(method, params_value).await?
             }
-
-            // Terminal operations
-            "terminal/create" => {
-                let method = "terminal/create";
-                self.require_terminal_capability(method).await?;
-                dispatch_ext(
-                    method,
-                    params_value,
-                    |req: super::terminal::CreateTerminalRequest| async move {
-                        self.terminal_manager
-                            .write()
-                            .await
-                            .create_terminal(req)
-                            .await
-                            .map_err(|e| {
-                                tracing::error!("{method} failed: {e}");
-                                Self::convert_error(e)
-                            })
-                    },
-                )
-                .await?
-            }
-
-            "terminal/output" => {
-                let method = "terminal/output";
-                self.require_terminal_capability(method).await?;
-                dispatch_ext(
-                    method,
-                    params_value,
-                    |req: super::terminal::TerminalOutputRequest| async move {
-                        self.terminal_manager
-                            .write()
-                            .await
-                            .get_output(req)
-                            .await
-                            .map_err(|e| {
-                                tracing::error!("{method} failed: {e}");
-                                Self::convert_error(e)
-                            })
-                    },
-                )
-                .await?
-            }
-
-            "terminal/wait_for_exit" => {
-                let method = "terminal/wait_for_exit";
-                self.require_terminal_capability(method).await?;
-                dispatch_ext(
-                    method,
-                    params_value,
-                    |req: super::terminal::WaitForExitRequest| async move {
-                        self.terminal_manager
-                            .write()
-                            .await
-                            .wait_for_exit(req)
-                            .await
-                            .map_err(|e| {
-                                tracing::error!("{method} failed: {e}");
-                                Self::convert_error(e)
-                            })
-                    },
-                )
-                .await?
-            }
-
-            "terminal/get" => {
-                let method = "terminal/get";
-                self.require_terminal_capability(method).await?;
-                dispatch_ext(
-                    method,
-                    params_value,
-                    |req: super::terminal::GetTerminalRequest| async move {
-                        self.terminal_manager
-                            .read()
-                            .await
-                            .get_terminal(req)
-                            .map_err(|e| {
-                                tracing::error!("{method} failed: {e}");
-                                Self::convert_error(e)
-                            })
-                    },
-                )
-                .await?
-            }
-
-            "terminal/kill" => {
-                let method = "terminal/kill";
-                self.require_terminal_capability(method).await?;
-                dispatch_ext(
-                    method,
-                    params_value,
-                    |req: super::terminal::KillTerminalRequest| async move {
-                        self.terminal_manager
-                            .write()
-                            .await
-                            .kill_terminal(req)
-                            .await
-                            .map_err(|e| {
-                                tracing::error!("{method} failed: {e}");
-                                Self::convert_error(e)
-                            })
-                    },
-                )
-                .await?
-            }
-
-            "terminal/release" => {
-                let method = "terminal/release";
-                self.require_terminal_capability(method).await?;
-                // The handler returns `()`, which serializes to the null
-                // response a successful release reports.
-                dispatch_ext(
-                    method,
-                    params_value,
-                    |req: super::terminal::ReleaseTerminalRequest| async move {
-                        self.terminal_manager
-                            .write()
-                            .await
-                            .release_terminal(req)
-                            .await
-                            .map_err(|e| {
-                                tracing::error!("{method} failed: {e}");
-                                Self::convert_error(e)
-                            })
-                    },
-                )
-                .await?
-            }
-
-            // Session forking surface (see `super::session_fork`): fork a new
-            // session from a parent's saved state, query saved-state status,
-            // and pin/unpin against cache eviction. The request/response
-            // shapes are the shared backend-agnostic contract in
-            // `agent_client_protocol_extras::session_fork`.
-            agent_client_protocol_extras::SESSION_FORK_METHOD => {
-                dispatch_ext(
-                    agent_client_protocol_extras::SESSION_FORK_METHOD,
-                    params_value,
-                    |req| self.fork_session(req),
-                )
-                .await?
-            }
-
-            agent_client_protocol_extras::SESSION_STATE_STATUS_METHOD => {
-                dispatch_ext(
-                    agent_client_protocol_extras::SESSION_STATE_STATUS_METHOD,
-                    params_value,
-                    |req| self.session_state_status(req),
-                )
-                .await?
-            }
-
-            agent_client_protocol_extras::SESSION_PIN_METHOD => {
-                dispatch_ext(
-                    agent_client_protocol_extras::SESSION_PIN_METHOD,
-                    params_value,
-                    |req| self.pin_session(req),
-                )
-                .await?
-            }
-
             // Unknown method. An extension method the agent does not
             // implement is genuinely "not found", so it is rejected with
             // `method_not_found` (`-32601`) — matching claude-agent, so a
@@ -3513,6 +3394,214 @@ impl AcpServer {
         Ok(response)
     }
 
+    /// Route a filesystem `fs/*` extension method.
+    ///
+    /// Validates the matching read/write capability, then runs the shared
+    /// [`dispatch_ext`] scaffolding. `method` is one of the two `fs/*` names
+    /// `ext_method` matched; any other value is a routing bug and panics.
+    async fn route_fs(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, agent_client_protocol::Error> {
+        match method {
+            "fs/read_text_file" => {
+                self.require_fs_read_capability().await?;
+                dispatch_ext(
+                    method,
+                    params,
+                    |req: agent_client_protocol::schema::ReadTextFileRequest| async move {
+                        let session = self.fs_session(method, &req.session_id).await?;
+                        self.filesystem_ops
+                            .read_text_file(&session, req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                filesystem_error_to_protocol_error(e)
+                            })
+                    },
+                )
+                .await
+            }
+            "fs/write_text_file" => {
+                self.require_fs_write_capability().await?;
+                dispatch_ext(
+                    method,
+                    params,
+                    |req: agent_client_protocol::schema::WriteTextFileRequest| async move {
+                        let session = self.fs_session(method, &req.session_id).await?;
+                        self.filesystem_ops
+                            .write_text_file(&session, req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                filesystem_error_to_protocol_error(e)
+                            })
+                    },
+                )
+                .await
+            }
+            other => unreachable!("route_fs received non-fs method {other}"),
+        }
+    }
+
+    /// Route a terminal `terminal/*` extension method.
+    ///
+    /// Every terminal method shares one gate — the client must have declared
+    /// `terminal` capability — so that check runs once here before the per-op
+    /// dispatch. Each arm then drives one terminal-manager operation through
+    /// the shared [`dispatch_ext`] scaffolding; the arms differ only in the
+    /// request type, the lock acquired (`read` for the read-only `get`,
+    /// `write` otherwise), and the manager method. `method` is one of the six
+    /// `terminal/*` names `ext_method` matched; any other value is a routing
+    /// bug and panics.
+    async fn route_terminal(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, agent_client_protocol::Error> {
+        self.require_terminal_capability(method).await?;
+        match method {
+            "terminal/create" => {
+                dispatch_ext(
+                    method,
+                    params,
+                    |req: super::terminal::CreateTerminalRequest| async move {
+                        self.terminal_manager
+                            .write()
+                            .await
+                            .create_terminal(req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                Self::convert_error(e)
+                            })
+                    },
+                )
+                .await
+            }
+            "terminal/output" => {
+                dispatch_ext(
+                    method,
+                    params,
+                    |req: super::terminal::TerminalOutputRequest| async move {
+                        self.terminal_manager
+                            .write()
+                            .await
+                            .get_output(req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                Self::convert_error(e)
+                            })
+                    },
+                )
+                .await
+            }
+            "terminal/wait_for_exit" => {
+                dispatch_ext(
+                    method,
+                    params,
+                    |req: super::terminal::WaitForExitRequest| async move {
+                        self.terminal_manager
+                            .write()
+                            .await
+                            .wait_for_exit(req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                Self::convert_error(e)
+                            })
+                    },
+                )
+                .await
+            }
+            "terminal/get" => {
+                dispatch_ext(
+                    method,
+                    params,
+                    |req: super::terminal::GetTerminalRequest| async move {
+                        self.terminal_manager
+                            .read()
+                            .await
+                            .get_terminal(req)
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                Self::convert_error(e)
+                            })
+                    },
+                )
+                .await
+            }
+            "terminal/kill" => {
+                dispatch_ext(
+                    method,
+                    params,
+                    |req: super::terminal::KillTerminalRequest| async move {
+                        self.terminal_manager
+                            .write()
+                            .await
+                            .kill_terminal(req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                Self::convert_error(e)
+                            })
+                    },
+                )
+                .await
+            }
+            "terminal/release" => {
+                // The handler returns `()`, which serializes to the null
+                // response a successful release reports.
+                dispatch_ext(
+                    method,
+                    params,
+                    |req: super::terminal::ReleaseTerminalRequest| async move {
+                        self.terminal_manager
+                            .write()
+                            .await
+                            .release_terminal(req)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("{method} failed: {e}");
+                                Self::convert_error(e)
+                            })
+                    },
+                )
+                .await
+            }
+            other => unreachable!("route_terminal received non-terminal method {other}"),
+        }
+    }
+
+    /// Route a session-fork extension method (`session/fork`,
+    /// `session/state_status`, `session/pin`).
+    ///
+    /// These need no capability gate — they are always available — and map
+    /// straight onto the [`session_fork`](super::session_fork) handlers through
+    /// the shared [`dispatch_ext`] scaffolding. `method` is one of the three
+    /// shared-contract constants `ext_method` matched; any other value is a
+    /// routing bug and panics.
+    async fn route_session_fork(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, agent_client_protocol::Error> {
+        match method {
+            agent_client_protocol_extras::SESSION_FORK_METHOD => {
+                dispatch_ext(method, params, |req| self.fork_session(req)).await
+            }
+            agent_client_protocol_extras::SESSION_STATE_STATUS_METHOD => {
+                dispatch_ext(method, params, |req| self.session_state_status(req)).await
+            }
+            agent_client_protocol_extras::SESSION_PIN_METHOD => {
+                dispatch_ext(method, params, |req| self.pin_session(req)).await
+            }
+            other => unreachable!("route_session_fork received non-fork method {other}"),
+        }
+    }
+
     pub async fn ext_notification(
         &self,
         notification: agent_client_protocol::schema::ExtNotification,
@@ -3521,6 +3610,19 @@ impl AcpServer {
         // Extension notifications are ignored for now
         Ok(())
     }
+}
+
+/// The two distinct capability-gating failure messages
+/// [`AcpServer::require_capability`] chooses between.
+///
+/// Both fields are `String`, so passing them positionally is exactly the swap
+/// hazard this struct removes: naming them at the call site (`undeclared:` /
+/// `uninitialized:`) makes a transposition impossible to write by accident.
+struct CapabilityErrorMessages {
+    /// Message for "the client connected but never declared this capability".
+    undeclared: String,
+    /// Message for "no client capabilities were ever initialized".
+    uninitialized: String,
 }
 
 /// Run one `ext_method` route's shared scaffolding: deserialize `params` into
@@ -6340,9 +6442,9 @@ mod tests {
     /// so the Stop seam is exercised directly rather than through a live turn.
     mod hook_lifecycle {
         use super::*;
+        use crate::acp::test_utils::text_prompt;
         use agent_client_protocol::schema::{
-            ContentBlock, NewSessionRequest, PromptRequest, PromptResponse, SessionId, StopReason,
-            TextContent,
+            NewSessionRequest, PromptResponse, SessionId, StopReason,
         };
         use std::fs;
         use std::path::Path;
@@ -6387,14 +6489,6 @@ mod tests {
             fs::create_dir_all(&claude).unwrap();
             fs::write(claude.join("settings.json"), contents).unwrap();
             dir
-        }
-
-        /// A single user text block carrying `text`.
-        fn text_prompt(session_id: SessionId, text: &str) -> PromptRequest {
-            PromptRequest::new(
-                session_id,
-                vec![ContentBlock::Text(TextContent::new(text.to_string()))],
-            )
         }
 
         /// Resolve the ACP session id to its llama `SessionId`.

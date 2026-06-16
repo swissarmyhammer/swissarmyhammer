@@ -182,6 +182,13 @@ fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
             | (Verb::Complete, Noun::Task)
             | (Verb::Assign, Noun::Task)
             | (Verb::Unassign, Noun::Task)
+            | (Verb::Tag, Noun::Task)
+            | (Verb::Untag, Noun::Task)
+            // Comment mutations are task mutations: their ack's top-level
+            // `id` is the owning TASK id, which feeds `affected_task_id`.
+            | (Verb::Add, Noun::Comment)
+            | (Verb::Update, Noun::Comment)
+            | (Verb::Delete, Noun::Comment)
     )
 }
 
@@ -520,6 +527,16 @@ mod tests {
         data["id"].as_str().expect("Expected id field").to_string()
     }
 
+    /// Fetch the full task via `get task` — mutation responses are thin acks
+    /// / slim projections, so effect assertions go through the stored state.
+    async fn get_task(tool: &KanbanTool, context: &ToolContext, task_id: &str) -> Value {
+        let mut get_args = serde_json::Map::new();
+        get_args.insert("op".to_string(), json!("get task"));
+        get_args.insert("id".to_string(), json!(task_id));
+        let result = tool.execute(get_args, context).await.unwrap();
+        parse_json(&result)
+    }
+
     #[tokio::test]
     async fn test_init_board() {
         let temp = TempDir::new().unwrap();
@@ -617,7 +634,7 @@ mod tests {
         let add_result = tool.execute(add_args, &context).await.unwrap();
         let task_id = extract_task_id(&add_result);
 
-        // Update the task
+        // Update the task — the response is a thin ack carrying the id
         let mut update_args = serde_json::Map::new();
         update_args.insert("op".to_string(), json!("update task"));
         update_args.insert("id".to_string(), json!(task_id));
@@ -625,8 +642,43 @@ mod tests {
 
         let result = tool.execute(update_args, &context).await.unwrap();
         let data = parse_json(&result);
+        assert_eq!(data["ok"], true);
+        assert_eq!(data["id"], task_id);
 
-        assert_eq!(data["title"], "Updated Title");
+        // The effect is asserted via `get task`
+        let task = get_task(&tool, &context, &task_id).await;
+        assert_eq!(task["title"], "Updated Title");
+    }
+
+    /// Mutation responses still drive the `_plan` attachment: the thin ack's
+    /// top-level `id` is what populates `_plan._meta.affected_task_id`.
+    #[tokio::test]
+    async fn test_update_task_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Plan target"));
+        let add_result = tool.execute(add_args, &context).await.unwrap();
+        let task_id = extract_task_id(&add_result);
+
+        let mut update_args = serde_json::Map::new();
+        update_args.insert("op".to_string(), json!("update task"));
+        update_args.insert("id".to_string(), json!(task_id));
+        update_args.insert("title".to_string(), json!("Plan target renamed"));
+
+        let result = tool.execute(update_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(
+            data["_plan"]["_meta"]["affected_task_id"], task_id,
+            "the _plan attachment must carry the mutated task id, got: {data}"
+        );
     }
 
     #[tokio::test]
@@ -712,21 +764,21 @@ mod tests {
             .unwrap()
             .to_string();
 
-        // Move to "doing" column
+        // Move to "doing" column — the response is a thin ack
         let mut move_args = serde_json::Map::new();
         move_args.insert("op".to_string(), json!("move task"));
         move_args.insert("id".to_string(), json!(task_id));
         move_args.insert("column".to_string(), json!("doing"));
 
-        let result = tool.execute(move_args, &context).await.unwrap();
-        let data = parse_json(&result);
+        tool.execute(move_args, &context).await.unwrap();
 
-        // Verify column changed (position.column)
+        // Verify column changed via `get task` (position.column)
+        let task = get_task(&tool, &context, &task_id).await;
         assert_ne!(
-            data["position"]["column"].as_str().unwrap(),
+            task["position"]["column"].as_str().unwrap(),
             original_column
         );
-        assert_eq!(data["position"]["column"], "doing");
+        assert_eq!(task["position"]["column"], "doing");
     }
 
     #[tokio::test]
@@ -1211,10 +1263,9 @@ mod tests {
         let result = tool.execute(tag_task_args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        // Response format: {"tagged": true, "task_id": ..., "tag": ...}
-        assert_eq!(data["tagged"], true);
-        assert_eq!(data["task_id"], task_id);
-        assert_eq!(data["tag"], "bug");
+        // Thin ack: the standard mutation envelope with a top-level id
+        assert_eq!(data["ok"], true);
+        assert_eq!(data["id"], task_id);
 
         // Verify by getting the task
         let mut get_args = serde_json::Map::new();
@@ -1227,6 +1278,111 @@ mod tests {
         assert!(task_data["tags"].is_array());
         let tags = task_data["tags"].as_array().unwrap();
         assert!(!tags.is_empty(), "Task should have at least one tag");
+    }
+
+    /// `tag task` is a task mutation: its thin ack carries a top-level `id`,
+    /// which must populate `_plan._meta.affected_task_id` (regression for the
+    /// previously-missed extraction — the old `task_id` key was never picked
+    /// up by the `_plan` wrapper).
+    #[tokio::test]
+    async fn test_tag_task_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Plan tag target"));
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        let mut tag_args = serde_json::Map::new();
+        tag_args.insert("op".to_string(), json!("tag task"));
+        tag_args.insert("id".to_string(), json!(task_id));
+        tag_args.insert("tag".to_string(), json!("bug"));
+
+        let result = tool.execute(tag_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(
+            data["_plan"]["_meta"]["affected_task_id"], task_id,
+            "the _plan attachment must carry the tagged task id, got: {data}"
+        );
+    }
+
+    /// Same regression for `assign task`: the thin ack's top-level `id`
+    /// must populate `_plan._meta.affected_task_id`.
+    #[tokio::test]
+    async fn test_assign_task_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut actor_args = serde_json::Map::new();
+        actor_args.insert("op".to_string(), json!("add actor"));
+        actor_args.insert("id".to_string(), json!("assistant"));
+        actor_args.insert("name".to_string(), json!("Assistant"));
+        actor_args.insert("type".to_string(), json!("agent"));
+        tool.execute(actor_args, &context).await.unwrap();
+
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Plan assign target"));
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        let mut assign_args = serde_json::Map::new();
+        assign_args.insert("op".to_string(), json!("assign task"));
+        assign_args.insert("id".to_string(), json!(task_id));
+        assign_args.insert("assignee".to_string(), json!("assistant"));
+
+        let result = tool.execute(assign_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(
+            data["_plan"]["_meta"]["affected_task_id"], task_id,
+            "the _plan attachment must carry the assigned task id, got: {data}"
+        );
+    }
+
+    /// Same regression for `add comment`: the comment mutation ack's
+    /// top-level `id` is the TASK id and must populate
+    /// `_plan._meta.affected_task_id` — without the `(Add, Comment)` arm in
+    /// `is_task_modifying_operation` the `_plan` wrapper silently skips
+    /// comment mutations, exactly like tag/assign used to be skipped.
+    #[tokio::test]
+    async fn test_add_comment_plan_carries_affected_task_id() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Plan comment target"));
+        let result = tool.execute(add_args, &context).await.unwrap();
+        let task_id = extract_task_id(&result);
+
+        let mut comment_args = serde_json::Map::new();
+        comment_args.insert("op".to_string(), json!("add comment"));
+        comment_args.insert("task_id".to_string(), json!(task_id));
+        comment_args.insert("text".to_string(), json!("plan-worthy remark"));
+
+        let result = tool.execute(comment_args, &context).await.unwrap();
+        let data = parse_json(&result);
+
+        assert_eq!(
+            data["_plan"]["_meta"]["affected_task_id"], task_id,
+            "the _plan attachment must carry the commented task id, got: {data}"
+        );
     }
 
     #[tokio::test]
@@ -1270,10 +1426,9 @@ mod tests {
         let result = tool.execute(untag_args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        // Response format: {"untagged": true, "task_id": ..., "tag": ...}
-        assert_eq!(data["untagged"], true);
-        assert_eq!(data["task_id"], task_id);
-        assert_eq!(data["tag"], "bug");
+        // Thin ack: the standard mutation envelope with a top-level id
+        assert_eq!(data["ok"], true);
+        assert_eq!(data["id"], task_id);
 
         // Verify by getting the task
         let mut get_args = serde_json::Map::new();
@@ -1312,20 +1467,20 @@ mod tests {
             .unwrap()
             .to_string();
 
-        // Complete the task
+        // Complete the task — the response is a thin ack
         let mut complete_args = serde_json::Map::new();
         complete_args.insert("op".to_string(), json!("complete task"));
         complete_args.insert("id".to_string(), json!(task_id));
 
-        let result = tool.execute(complete_args, &context).await.unwrap();
-        let data = parse_json(&result);
+        tool.execute(complete_args, &context).await.unwrap();
 
-        // Verify task moved to the done column (position.column)
+        // Verify task moved to the done column via `get task`
+        let task = get_task(&tool, &context, &task_id).await;
         assert_ne!(
-            data["position"]["column"].as_str().unwrap(),
+            task["position"]["column"].as_str().unwrap(),
             original_column
         );
-        assert_eq!(data["position"]["column"], "done");
+        assert_eq!(task["position"]["column"], "done");
     }
 
     #[tokio::test]
@@ -1390,11 +1545,13 @@ mod tests {
         let result = tool.execute(assign_args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        // Response format: {"assigned": true, "task_id": ..., "assignee": ..., "all_assignees": [...]}
-        assert_eq!(data["assigned"], true);
-        assert_eq!(data["task_id"], task_id);
-        assert_eq!(data["assignee"], "assistant");
-        assert!(data["all_assignees"]
+        // Thin ack: the standard mutation envelope with a top-level id
+        assert_eq!(data["ok"], true);
+        assert_eq!(data["id"], task_id);
+
+        // The effect is asserted via `get task`
+        let task = get_task(&tool, &context, &task_id).await;
+        assert!(task["assignees"]
             .as_array()
             .unwrap()
             .contains(&json!("assistant")));
@@ -1820,16 +1977,16 @@ mod tests {
         let result2 = tool.execute(add2, &context).await.unwrap();
         let task2_id = extract_task_id(&result2);
 
-        // Move task 2 to doing column
+        // Move task 2 to doing column — the response is a thin ack
         let mut move_args = serde_json::Map::new();
         move_args.insert("op".to_string(), json!("move task"));
         move_args.insert("id".to_string(), json!(task2_id));
         move_args.insert("column".to_string(), json!("doing"));
 
-        let result = tool.execute(move_args, &context).await.unwrap();
-        let data = parse_json(&result);
+        tool.execute(move_args, &context).await.unwrap();
 
-        assert_eq!(data["position"]["column"], "doing");
+        let task = get_task(&tool, &context, &task2_id).await;
+        assert_eq!(task["position"]["column"], "doing");
     }
 
     #[tokio::test]
@@ -1894,7 +2051,11 @@ mod tests {
         let data = parse_json(&result);
 
         assert_eq!(data["title"], "Task with description");
-        assert_eq!(data["description"], "This is a detailed description");
+        // The add response is slim (no description echo) — assert the stored
+        // description via `get task`.
+        let task_id = data["id"].as_str().unwrap();
+        let task = get_task(&tool, &context, task_id).await;
+        assert_eq!(task["description"], "This is a detailed description");
     }
 
     #[tokio::test]

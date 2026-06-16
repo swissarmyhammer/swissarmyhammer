@@ -31,9 +31,8 @@
 
 use agent_client_protocol::schema::SessionId as AcpSessionId;
 use agent_client_protocol_extras::{
-    SessionForkRequest, SessionForkResponse, SessionPinRequest, SessionPinResponse,
-    SessionStateStatusRequest, SessionStateStatusResponse, FORK_PARENT_NOT_FOUND,
-    FORK_PARENT_STATE_UNAVAILABLE, SESSION_STATE_NOT_FOUND,
+    SessionErrorKind, SessionForkRequest, SessionForkResponse, SessionPinRequest,
+    SessionPinResponse, SessionStateStatusRequest, SessionStateStatusResponse,
 };
 
 use super::server::AcpServer;
@@ -45,15 +44,21 @@ use crate::types::Session;
 /// maps onto: the message is human-readable, and `data` carries the session id
 /// plus a machine-readable error kind from the shared extension contract so
 /// the client can branch on it.
+///
+/// `kind` is the typed [`SessionErrorKind`] (not a bare `&str`) so the legal
+/// set of `data.error` values stays closed and named, and a swap of the
+/// `kind`/`message` arguments is a compile error. This is the same shape as
+/// claude-agent's `acp_error::session_error`, keeping the two backends'
+/// session errors in lockstep.
 fn extension_error(
     session_id: &str,
-    kind: &str,
+    kind: SessionErrorKind,
     message: impl std::fmt::Display,
 ) -> agent_client_protocol::Error {
     tracing::warn!("Session extension call failed for {session_id}: {message}");
     super::acp_error::invalid_params(message.to_string()).data(serde_json::json!({
         "sessionId": session_id,
-        "error": kind,
+        "error": kind.as_str(),
     }))
 }
 
@@ -78,8 +83,9 @@ impl AcpServer {
     /// # Errors
     ///
     /// `invalid_params` with `data.error` distinguishing the failure:
-    /// [`FORK_PARENT_NOT_FOUND`] when the parent session does not exist,
-    /// [`FORK_PARENT_STATE_UNAVAILABLE`] when it exists but has no saved,
+    /// [`SessionErrorKind::ForkParentNotFound`] when the parent session does not
+    /// exist, [`SessionErrorKind::ForkParentStateUnavailable`] when it exists
+    /// but has no saved,
     /// strict-prefix-restorable state — the caller falls back to a plain
     /// `session/new` + full prompt, or re-primes. A degraded fork is never
     /// created silently.
@@ -98,7 +104,11 @@ impl AcpServer {
             .request_queue()
             .fork_session_state(&parent_state.llama_session_id, &child_id)
             .map_err(|e| {
-                extension_error(&request.parent_session_id, FORK_PARENT_STATE_UNAVAILABLE, e)
+                extension_error(
+                    &request.parent_session_id,
+                    SessionErrorKind::ForkParentStateUnavailable,
+                    e,
+                )
             })?;
 
         let child_session = clone_child_session(&parent_session, child_id);
@@ -151,7 +161,8 @@ impl AcpServer {
     /// conversation.
     ///
     /// Distinguishes "the parent genuinely does not exist" (the permanent
-    /// [`FORK_PARENT_NOT_FOUND`] fallback signal) from a session-store
+    /// [`SessionErrorKind::ForkParentNotFound`] fallback signal) from a
+    /// session-store
     /// FAILURE (I/O, corrupt record): the latter is a retryable internal
     /// error — misreporting it as not-found would make the client abandon a
     /// parent that is actually alive.
@@ -163,7 +174,7 @@ impl AcpServer {
         let parent_state = self.get_session(&parent_acp_id).await.ok_or_else(|| {
             extension_error(
                 &request.parent_session_id,
-                FORK_PARENT_NOT_FOUND,
+                SessionErrorKind::ForkParentNotFound,
                 format!(
                     "fork parent session {} not found",
                     request.parent_session_id
@@ -181,7 +192,7 @@ impl AcpServer {
             Ok(None) => {
                 return Err(extension_error(
                     &request.parent_session_id,
-                    FORK_PARENT_NOT_FOUND,
+                    SessionErrorKind::ForkParentNotFound,
                     format!(
                         "fork parent session {} has no live conversation state",
                         request.parent_session_id
@@ -260,7 +271,7 @@ impl AcpServer {
         let state = self.get_session(&acp_id).await.ok_or_else(|| {
             extension_error(
                 &request.session_id,
-                SESSION_STATE_NOT_FOUND,
+                SessionErrorKind::SessionStateNotFound,
                 format!("session {} not found", request.session_id),
             )
         })?;
@@ -297,9 +308,9 @@ impl AcpServer {
     ///
     /// # Errors
     ///
-    /// `invalid_params` with `data.error == `[`SESSION_STATE_NOT_FOUND`] when
-    /// the session does not exist, or a pin was requested and no snapshot is
-    /// cached.
+    /// `invalid_params` with `data.error == `[`SessionErrorKind::SessionStateNotFound`]
+    /// when the session does not exist, or a pin was requested and no snapshot
+    /// is cached.
     pub async fn pin_session(
         &self,
         request: SessionPinRequest,
@@ -308,7 +319,7 @@ impl AcpServer {
         let state = self.get_session(&acp_id).await.ok_or_else(|| {
             extension_error(
                 &request.session_id,
-                SESSION_STATE_NOT_FOUND,
+                SessionErrorKind::SessionStateNotFound,
                 format!("session {} not found", request.session_id),
             )
         })?;
@@ -320,7 +331,7 @@ impl AcpServer {
         if !updated && request.pinned {
             return Err(extension_error(
                 &request.session_id,
-                SESSION_STATE_NOT_FOUND,
+                SessionErrorKind::SessionStateNotFound,
                 format!("session {} has no saved state to pin", request.session_id),
             ));
         }
@@ -336,6 +347,9 @@ mod tests {
     use std::sync::Arc;
 
     use agent_client_protocol::schema::NewSessionRequest;
+    use agent_client_protocol_extras::{
+        FORK_PARENT_NOT_FOUND, FORK_PARENT_STATE_UNAVAILABLE, SESSION_STATE_NOT_FOUND,
+    };
     use serial_test::serial;
     use tempfile::TempDir;
 

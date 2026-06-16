@@ -21,7 +21,6 @@ Pick up a kanban task and get it done.
 Here is what the user provided: 
 $ARGUMENTS
 
-{% include "_partials/delegate-to-subagent" %}
 
 ## Guidelines
 
@@ -87,6 +86,10 @@ Parallel orchestrators (`finish`) always pass an explicit `<task-id>` to avoid r
 
 Full description + subtasks. Understand before writing code.
 
+### Record progress
+
+{% include "_partials/record-progress" %}
+
 ### 4. Research before writing
 
 **Don't guess.** Run the Code-Context Checkpoints (above) before changing any code:
@@ -108,6 +111,16 @@ Never modify code you haven't read. Never assume what a function does — read i
 
 Do the work in the task and subtasks. After changing any symbol's signature or behavior, re-run `get callgraph` (inbound) and confirm every blast-radius caller still holds.
 
+### 5.5 Verify with really-done
+
+Before moving the task to `review`, invoke the `really-done` skill to verify the work.
+
+- The verification-command pass is really-done's **hard requirement** — verification commands must be green before the task moves to `review`. This gates the move.
+- really-done now runs the advisory adversarial double-check internally, so its sign-off is reached **transitively** through really-done. **Do NOT spawn the double-check agent directly from implement** — reach it through really-done.
+- Double-check findings are advisory: fix them, or proceed with a logged justification per really-done's contract.
+
+Not green? Do NOT move to review — fix the work, re-run really-done, or record what blocked you on the task and report back.
+
 ### 6. Move to review
 
 When work is done and every subtask checkbox is `- [x]`:
@@ -123,7 +136,7 @@ A task left in `doing` is not finished.
 
 **Do NOT use `complete task`** — it jumps to the terminal column, skipping the review gate. Use `move task` with `column: "review"` explicitly.
 
-Cannot complete? Do NOT move forward. Comment what happened, report back.
+Cannot complete? Do NOT move forward. Record what happened on the task — `{"op": "add comment", "task_id": "<id>", "text": "<what blocked you>"}` — and report back.
 
 ### 7. Stop for review
 
@@ -141,5 +154,6 @@ Exception: if the task description explicitly says **auto-continue** or **chain 
 - All tests pass before reporting success. Zero failures, zero warnings.
 - Kanban is the single source of truth — no TodoWrite/TaskCreate.
 - New work discovered? Add as a new kanban task.
+- Do not move a task to `review` until really-done has been run (verification commands green).
 - Stuck? Report what you tried and where you're blocked — don't silently give up.
 - **No worktrees.** `isolation: "worktree"` loses changes — agents write to isolated copies never merged back. Work directly in the current tree.

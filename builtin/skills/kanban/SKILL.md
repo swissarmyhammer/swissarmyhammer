@@ -31,13 +31,18 @@ The kanban board is your todo list. **Never use TodoWrite, TaskCreate, or any ot
    - Assignee: `op: "next task", filter: "@alice"`
    - Combined: `op: "next task", filter: "#bug && @alice"`
 2. **Move to doing**: `op: "move task", id: "<id>", column: "doing"`
-3. **Read details**: `op: "get task", id: "<id>"`
+3. **Read details**: `op: "get task", id: "<id>"`. Then review prior context per **Record progress** below.
 4. **Work each subtask, check off immediately**:
    - Implement what it describes
    - `op: "update task", id: "<id>"`, change `- [ ]` → `- [x]` for the finished subtask
    - After EVERY subtask — never batch. The checklist is the progress indicator.
    - Preserve all other description content; only flip the one checkbox you finished.
-5. **Move to review** when all subtasks are `- [x]`: first ensure the `review` column exists (idempotent — use the partial above), then `op: "move task", id: "<id>", column: "review"`. **Never use `complete task`** — that skips the review gate. After moving, stop and tell the user the task is ready for `/review`.
+5. **Record progress**: log milestones, failures, and discoveries on the task — see **Record progress** below.
+6. **Move to review** when all subtasks are `- [x]`: first ensure the `review` column exists (idempotent — use the partial above), then `op: "move task", id: "<id>", column: "review"`. **Never use `complete task`** — that skips the review gate. After moving, stop and tell the user the task is ready for `/review`.
+
+### Record progress
+
+{% include "_partials/record-progress" %}
 
 ## Filtering Work
 
@@ -163,7 +168,7 @@ Tasks without a project have `"project": ""`. Filter with `$slug`:
 ## Guidelines
 
 - Every subtask must be done — never skip or mark complete without doing the work
-- Blocked or unclear → add a comment explaining
+- Blocked or unclear → record it on the task (see **Record progress** above)
 - Run tests after each subtask
 - Only complete the task when all subtasks are done and tests pass
 - New work discovered? Add a new kanban task — don't hold it in your head

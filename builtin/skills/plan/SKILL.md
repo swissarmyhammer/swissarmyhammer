@@ -19,7 +19,6 @@ Use whenever you enter Plan Mode or the user asks you to plan work.
 
 $ARGUMENTS
 
-{% include "_partials/delegate-to-subagent" %}
 
 ## Interpreting the arguments
 
@@ -51,7 +50,8 @@ Either way, still do the `code_context` research below before creating tasks —
    - `{"op": "add task", "title": "Implement POST /api/login", "description": "…", "depends_on": ["<user-model-task-id>"]}`
 4. Encode ordering with `depends_on` so foundational tasks precede integration.
 5. Verify with `{"op": "list tasks"}`, present the board, iterate.
-6. User approves → remind: `/finish` (autonomous) or `/implement` (one at a time). Do NOT call `ExitPlanMode`, do NOT start implementing.
+6. Before handoff, **double-check the board** (see below): launch the `double-check` agent to critique it, apply its REVISE findings once.
+7. User approves → remind: `/finish` (autonomous) or `/implement` (one at a time). Do NOT call `ExitPlanMode`, do NOT start implementing.
 
 The board IS the plan. **Never write a markdown plan file** (`PLAN.md`, `DRAFT_PLAN.md`, scratch files) — `/finish` and `/implement` read kanban, not prose. If the `kanban` tool is unavailable or its calls fail, STOP and tell the user; do not substitute markdown and do not claim tasks exist without a `list tasks` read-back.
 
@@ -78,6 +78,17 @@ Every planned item becomes a kanban task. The board IS the plan; no markdown fil
 ### Board naming
 
 Name the board for the workspace/repository, not the feature being planned.
+
+### Double-check the board
+
+Once the board is built and before you remind the user to `/finish` or `/implement`, adversarially double-check it. Launch the `double-check` agent via the Task tool (`subagent_type: double-check`) against the just-created tasks and ask it to try to prove the plan is wrong or incomplete:
+
+- Are tasks **right-sized** — each one focused, independently implementable and verifiable?
+- Are the **acceptance criteria verifiable** — concrete, machine-checkable, not vague?
+- Are **dependencies and ordering** sound — foundational work precedes integration, no cycles?
+- Is **anything from the stated intent missing** — work the request implies but no task covers?
+
+The agent returns a PASS/REVISE verdict. **Apply REVISE findings once** — adjust, add, or reorder tasks with the `kanban` tool to address them — then proceed to the handoff reminder. Do not loop: one double-check pass, incorporate it, hand off. This double-check operates on the kanban board itself (the board IS the plan); it never produces or reads a markdown plan file.
 
 ### User controls plan-mode exit
 

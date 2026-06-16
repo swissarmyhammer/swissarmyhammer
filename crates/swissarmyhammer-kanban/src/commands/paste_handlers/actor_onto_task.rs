@@ -159,9 +159,10 @@ mod tests {
         let handler = matrix.find("actor", "task").expect("handler registered");
         let result = handler.execute(&payload, &target, &ctx).await.unwrap();
 
-        assert_eq!(result["assigned"], true);
-        assert_eq!(result["assignee"], "alice");
-        assert_eq!(result["task_id"], task_id);
+        // AssignTask returns the standard thin mutation ack; the effect is
+        // asserted via stored state below.
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["id"], task_id);
 
         let after = ectx.read("task", task_id).await.unwrap();
         assert_eq!(
@@ -197,8 +198,8 @@ mod tests {
         let handler = matrix.find("actor", "task").expect("handler registered");
         let result = handler.execute(&payload, &target, &ctx).await.unwrap();
 
-        // Assignment still happened.
-        assert_eq!(result["assigned"], true);
+        // Assignment still happened (thin ack; effect verified below).
+        assert_eq!(result["ok"], true);
 
         let ectx = kanban.entity_context().await.unwrap();
         let after = ectx.read("task", task_id).await.unwrap();
@@ -243,9 +244,9 @@ mod tests {
         handler.execute(&payload, &target, &ctx).await.unwrap();
         let second = handler.execute(&payload, &target, &ctx).await.unwrap();
 
-        // The second paste still reports the assignment as logically true,
-        // but the assignee list contains a single occurrence of the actor.
-        assert_eq!(second["assignee"], "alice");
+        // The second paste still acks success, but the assignee list
+        // contains a single occurrence of the actor.
+        assert_eq!(second["ok"], true);
 
         let ectx = kanban.entity_context().await.unwrap();
         let after = ectx.read("task", task_id).await.unwrap();

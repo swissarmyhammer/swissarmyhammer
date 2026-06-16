@@ -916,7 +916,7 @@ mod tests {
         );
         let result = ArchiveEntityCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(result["archived"], true);
-        assert_eq!(result["title"].as_str().unwrap(), "Archive me");
+        assert_eq!(result["id"].as_str().unwrap(), task_id);
 
         // Verify task is gone from live list
         let ectx = kanban.entity_context().await.unwrap();

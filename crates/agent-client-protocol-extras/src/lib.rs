@@ -92,10 +92,10 @@ pub use test_mcp_server::{start_test_mcp_server_with_capture, TestMcpServer};
 // for a phantom `RecordedEvent`.
 pub use recording::{RecordedCall, RecordedSession, RecordingAgent, RecordingFlushHandle};
 pub use session_fork::{
-    SessionForkRequest, SessionForkResponse, SessionPinRequest, SessionPinResponse,
-    SessionStateStatusRequest, SessionStateStatusResponse, FORK_PARENT_NOT_FOUND,
-    FORK_PARENT_STATE_UNAVAILABLE, SESSION_FORK_METHOD, SESSION_PIN_METHOD,
-    SESSION_STATE_NOT_FOUND, SESSION_STATE_STATUS_METHOD,
+    SessionErrorKind, SessionForkRequest, SessionForkResponse, SessionPinRequest,
+    SessionPinResponse, SessionStateStatusRequest, SessionStateStatusResponse,
+    FORK_PARENT_NOT_FOUND, FORK_PARENT_STATE_UNAVAILABLE, SESSION_FORK_METHOD, SESSION_NOT_FOUND,
+    SESSION_PIN_METHOD, SESSION_STATE_NOT_FOUND, SESSION_STATE_STATUS_METHOD,
 };
 
 /// `PromptRequest` `_meta` key carrying the caller-supplied per-turn

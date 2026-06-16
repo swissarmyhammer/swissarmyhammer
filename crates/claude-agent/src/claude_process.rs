@@ -464,7 +464,7 @@ impl ClaudeProcess {
         Self::configure_ephemeral_mode(&mut command, &config);
         Self::configure_tools_override(&mut command, &config);
         Self::configure_mcp_servers(&mut command, &config);
-        Self::log_command(&command);
+        Self::log_command(&config.session_id, &command);
 
         let cmd = Self::execute_spawn(&mut command, &config)?;
         Self::create_process_instance(config.session_id, cmd, test_context)
@@ -652,21 +652,68 @@ impl ClaudeProcess {
         }
     }
 
+    /// Return a copy of `args` with the value immediately following
+    /// `--system-prompt` replaced by a `<system-prompt: N chars>` placeholder,
+    /// where N is the original value's character length. The `--system-prompt`
+    /// flag itself and every other argument are preserved verbatim, so the
+    /// resolved tier (`--model <tier>`) stays greppable. This is the single
+    /// redaction code path shared by both forms `log_command` emits.
+    fn redact_system_prompt_value(args: &[String]) -> Vec<String> {
+        let mut out = Vec::with_capacity(args.len());
+        let mut redact_next = false;
+        for arg in args {
+            if redact_next {
+                out.push(format!("<system-prompt: {} chars>", arg.chars().count()));
+                redact_next = false;
+            } else {
+                if arg == "--system-prompt" {
+                    redact_next = true;
+                }
+                out.push(arg.clone());
+            }
+        }
+        out
+    }
+
     /// Log the complete command being executed.
-    fn log_command(command: &Command) {
+    ///
+    /// Emits the assembled argv twice on purpose:
+    /// - a `Pretty` (multi-line YAML) `program`/`args` block for human reading,
+    ///   and
+    /// - a single-line, space-joined `argv` string so the spawn args (including
+    ///   any `--model <tier>`) are greppable as one contiguous token in the
+    ///   `.sah` logs. The multi-line YAML list renders each arg on its own line,
+    ///   which makes proving the resolved tier (`--model haiku`) by a plain log
+    ///   search unreliable; the flat line is the provable record.
+    fn log_command(session_id: &SessionId, command: &Command) {
         #[derive(serde::Serialize, Debug)]
         struct CommandInfo {
             program: String,
             args: Vec<String>,
         }
+        let program = command.as_std().get_program().to_string_lossy().to_string();
+        let raw_args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+        // Redact the value following `--system-prompt`: it can be the full SAH
+        // system prompt (large, noisy, sensitive). Both the flat line and the
+        // Pretty block consume the same redacted args so there is one code path.
+        let args = Self::redact_system_prompt_value(&raw_args);
+        let argv = std::iter::once(program.clone())
+            .chain(args.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(" ");
         let cmd_info = CommandInfo {
-            program: command.as_std().get_program().to_string_lossy().to_string(),
-            args: command
-                .as_std()
-                .get_args()
-                .map(|s| s.to_string_lossy().to_string())
-                .collect(),
+            program,
+            args: args.clone(),
         };
+        // Single-line, space-joined argv FIRST so the resolved tier (`--model
+        // <tier>`) is greppable as one contiguous record in the `.sah` logs,
+        // tagged with the session_id so the spawn is attributable.
+        tracing::info!(session_id = %session_id, "🚀 Spawning Claude CLI argv: {}", argv);
+        // Multi-line YAML block for human reading.
         tracing::info!("🚀 Spawning Claude CLI: {}", Pretty(&cmd_info));
     }
 
@@ -963,6 +1010,7 @@ impl Drop for ClaudeProcess {
 mod tests {
     use super::*;
     use crate::config::{HttpHeader, HttpTransport, McpServerConfig, SseTransport};
+    use tracing_test::traced_test;
 
     #[tokio::test]
     async fn test_process_manager_new() {
@@ -1294,6 +1342,75 @@ mod tests {
             args.get(model_pos + 1).map(String::as_str),
             Some("haiku"),
             "--model must be immediately followed by haiku, got args: {args:?}"
+        );
+    }
+
+    /// The spawn path's `log_command` must emit the assembled argv — including a
+    /// caller-supplied `--model haiku` — at a level that lands in the `.sah`
+    /// logs, so an operator can prove which tier a review run used without
+    /// reading the (swallowed) subprocess stderr. Drives the real
+    /// `build_base_command` → `log_command` seam and captures the tracing output.
+    #[traced_test]
+    #[test]
+    fn test_log_command_emits_argv_with_model_haiku() {
+        let session_id = SessionId::new();
+        let command = ClaudeProcess::build_base_command(
+            "the-uuid",
+            &ConversationAttachment::New,
+            &["--model".to_string(), "haiku".to_string()],
+        );
+        ClaudeProcess::log_command(&session_id, &command);
+
+        assert!(
+            logs_contain("Spawning Claude CLI"),
+            "log_command must emit the spawn-argv line"
+        );
+        assert!(
+            logs_contain("--model"),
+            "the logged argv must include the --model flag"
+        );
+        assert!(
+            logs_contain("haiku"),
+            "the logged argv must include the haiku model value"
+        );
+        assert!(
+            logs_contain(&session_id.to_string()),
+            "the logged argv line must be tagged with the session_id"
+        );
+    }
+
+    /// The flat argv log line must NOT inline the `--system-prompt` value (the
+    /// full SAH system prompt can be large and noisy). The flag itself stays
+    /// visible, its value is replaced by a `<system-prompt: N chars>` placeholder,
+    /// and every other arg — crucially `--model haiku` — stays fully greppable.
+    #[traced_test]
+    #[test]
+    fn test_log_command_redacts_system_prompt_value() {
+        const SAMPLE_BODY: &str = "SECRET-SYSTEM-PROMPT-BODY-do-not-leak-this-into-the-log";
+        let session_id = SessionId::new();
+        let mut command = ClaudeProcess::build_base_command(
+            "the-uuid",
+            &ConversationAttachment::New,
+            &["--model".to_string(), "haiku".to_string()],
+        );
+        command.arg("--system-prompt").arg(SAMPLE_BODY);
+        ClaudeProcess::log_command(&session_id, &command);
+
+        assert!(
+            !logs_contain(SAMPLE_BODY),
+            "the flat argv log line must not inline the system-prompt body"
+        );
+        assert!(
+            logs_contain("--model haiku"),
+            "the flat argv log line must keep --model haiku fully visible"
+        );
+        assert!(
+            logs_contain("--system-prompt"),
+            "the flat argv log line must keep the --system-prompt flag visible"
+        );
+        assert!(
+            logs_contain("<system-prompt:"),
+            "the flat argv log line must use the <system-prompt: N chars> placeholder"
         );
     }
 

@@ -103,8 +103,13 @@ builtin/workflows/*-test.md
 # Python bytecode caches (helper scripts under scripts/)
 __pycache__/
 
-# Node.js (no package.json in this Rust project)
+# Node.js — ignore lockfiles by default, but COMMIT the app UI lockfiles so CI
+# (`npm ci`) installs a deterministic dep set. Unpinned `npm install` lets a
+# freshly-published transitive dep silently break a green build with no code
+# change (see the radix dismissable-layer regression, 2026-06).
 package-lock.json
+!apps/kanban-app/ui/package-lock.json
+!apps/mirdan-app/ui/package-lock.json
 node_modules/
 # Reject pnpm lockfiles entirely — Tauri apps enforce npm via `only-allow npm`.
 pnpm-lock.yaml
@@ -173,3 +178,6 @@ ane-embedding/convert/output/
 
 # Isolated CARGO_TARGET_DIR scratch dirs used by implement/verify runs
 target-implement-verify/
+
+# Generated skill deploy targets (source of truth lives in builtin/skills/)
+/.skills/

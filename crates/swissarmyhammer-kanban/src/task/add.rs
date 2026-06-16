@@ -4,7 +4,7 @@ use crate::context::KanbanContext;
 use crate::entity::position;
 use crate::error::{KanbanError, Result};
 use crate::task::shared::{auto_create_body_tags, parse_iso8601_date};
-use crate::task_helpers::task_entity_to_json;
+use crate::task_helpers::{slim_task_json, task_entity_to_json};
 use crate::types::{mint_unique_short_id, ActorId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -197,7 +197,9 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
             let ectx = ctx.entity_context().await?;
             let entity = self.build_entity(&ectx).await?;
             self.persist(&ectx, &entity).await?;
-            Ok(task_entity_to_json(&entity))
+            // Slim projection — the caller needs the identity and placement
+            // it didn't have, not its own description/attachments echoed back.
+            Ok(slim_task_json(&task_entity_to_json(&entity)))
         }
         .await;
 
@@ -228,6 +230,31 @@ mod tests {
         (temp, ctx)
     }
 
+    /// The add response is the slim projection: the agent gets the identity
+    /// and placement it didn't have (`id`/`short_id`/`position`) but not its
+    /// own description/attachments echoed back. The stored description is
+    /// verified via `get task`.
+    #[tokio::test]
+    async fn test_add_task_returns_slim_projection() {
+        let (_temp, ctx) = setup().await;
+
+        let result = AddTask::new("Slim task")
+            .with_description("Body the agent already has")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        crate::task_helpers::assert_slim_task_response(&result);
+
+        let fetched = crate::task::GetTask::new(result["id"].as_str().unwrap())
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(fetched["description"], "Body the agent already has");
+    }
+
     #[tokio::test]
     async fn test_add_task() {
         let (_temp, ctx) = setup().await;
@@ -236,8 +263,9 @@ mod tests {
         let result = cmd.execute(&ctx).await.into_result().unwrap();
 
         assert_eq!(result["title"], "Test task");
-        assert_eq!(result["description"], "A test task");
         assert_eq!(result["position"]["column"], "todo");
+        // The response is slim — the stored description is covered by
+        // `test_add_task_returns_slim_projection`.
     }
 
     #[tokio::test]

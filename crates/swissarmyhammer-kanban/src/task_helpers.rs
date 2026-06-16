@@ -523,6 +523,144 @@ pub fn task_entity_to_rich_json(entity: &Entity) -> Value {
     result
 }
 
+/// Field names retained by the slim task projection ([`slim_task_json`]).
+///
+/// An explicit ALLOWLIST — roughly what a board card renders: identity,
+/// position, organization (project/tags/assignees), progress, the dependency
+/// fields, readiness, and the date fields. Heavy payload fields
+/// (`description`, `attachments`, and any future conversation log such as
+/// `comments`) are deliberately absent, so a new heavy field is excluded
+/// from listings by default rather than leaking in.
+pub(crate) const SLIM_TASK_FIELDS: &[&str] = &[
+    "id",
+    "short_id",
+    "title",
+    "position",
+    "project",
+    "tags",
+    "filter_tags",
+    "virtual_tags",
+    "assignees",
+    "progress",
+    "depends_on",
+    "blocked_by",
+    "blocks",
+    "ready",
+    "created",
+    "updated",
+    "due",
+    "scheduled",
+    "started",
+    "completed",
+];
+
+/// Project an enriched task JSON value down to the slim listing shape.
+///
+/// Copies only the [`SLIM_TASK_FIELDS`] allowlist keys that are present on
+/// `task` into a fresh object — listings are for orienting/selecting, so the
+/// full payload (`description`, `attachments`, …) stays on the single-task
+/// fetch (`get task`).
+pub(crate) fn slim_task_json(task: &Value) -> Value {
+    let mut slim = serde_json::Map::new();
+    if let Some(obj) = task.as_object() {
+        for field in SLIM_TASK_FIELDS {
+            if let Some(value) = obj.get(*field) {
+                slim.insert((*field).to_string(), value.clone());
+            }
+        }
+    }
+    Value::Object(slim)
+}
+
+/// Thin acknowledgment envelope for heavy task mutations.
+///
+/// `update task`, `move task`, and `complete task` return exactly
+/// `{ "ok": true, "id": "<ulid>", "short_id": "<7-char>" }` — no field echo.
+/// The mutation either fully succeeds (this ack) or errors (`KanbanError`),
+/// so there is no partial-success state the response needs to describe, and
+/// echoing fields back would re-bill the agent for a payload it already has.
+/// The full card remains one `get task` away.
+pub(crate) fn task_mutation_ack(entity: &Entity) -> Value {
+    json!({
+        "ok": true,
+        "id": entity.id,
+        "short_id": crate::types::short_id(entity.id.as_str()),
+    })
+}
+
+/// Assert that `result` is exactly the thin mutation ack for `expected_id`.
+///
+/// Test-only helper shared by the per-op test modules so the "exactly
+/// ok/id/short_id, nothing else" contract is asserted identically everywhere.
+#[cfg(test)]
+pub(crate) fn assert_task_mutation_ack(result: &Value, expected_id: &str) {
+    assert_task_mutation_ack_with(result, expected_id, &[]);
+}
+
+/// Assert that `result` is the thin mutation ack for `expected_id` plus
+/// exactly the given `extra_keys` (op-specific flags / payloads).
+///
+/// Test-only helper for ops whose envelope is the identity ack extended with
+/// op-specific keys: `delete task` (`deleted`), `archive task` (`archived`),
+/// `unarchive task` (`unarchived`), and the clipboard ops `cut` / `copy`
+/// (`cut`/`copied` + `clipboard_json`). The key set is asserted exactly so
+/// stray echo fields cannot creep back in.
+#[cfg(test)]
+pub(crate) fn assert_task_mutation_ack_with(
+    result: &Value,
+    expected_id: &str,
+    extra_keys: &[&str],
+) {
+    let obj = result
+        .as_object()
+        .expect("mutation ack must be a JSON object");
+    let mut expected: Vec<&str> = ["id", "ok", "short_id"]
+        .into_iter()
+        .chain(extra_keys.iter().copied())
+        .collect();
+    expected.sort_unstable();
+    let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys, expected,
+        "mutation ack must contain exactly {expected:?}, got: {result}"
+    );
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["id"], expected_id);
+    assert_eq!(result["short_id"], crate::types::short_id(expected_id));
+}
+
+/// Assert that `result` is a slim task projection (creation response shape).
+///
+/// Test-only helper for `add task` / `paste task` responses: every key must
+/// be on the [`SLIM_TASK_FIELDS`] allowlist (so no `description`, no
+/// `attachments`), and the identity/placement keys the caller actually needs
+/// must be present.
+#[cfg(test)]
+pub(crate) fn assert_slim_task_response(result: &Value) {
+    let obj = result
+        .as_object()
+        .expect("slim task response must be a JSON object");
+    for heavy in ["description", "attachments"] {
+        assert!(
+            !obj.contains_key(heavy),
+            "slim task response must not contain {heavy:?}, got: {result}"
+        );
+    }
+    for key in obj.keys() {
+        assert!(
+            SLIM_TASK_FIELDS.contains(&key.as_str()),
+            "unexpected key {key:?} in slim task response"
+        );
+    }
+    for needed in ["id", "short_id", "position"] {
+        assert!(
+            obj.contains_key(needed),
+            "slim task response must contain {needed:?}, got: {result}"
+        );
+    }
+}
+
 /// Lookup table for resolving entity ids from display-name slugs.
 ///
 /// The filter DSL lets users write `$project-slug`, `@user-slug`, or
@@ -1089,6 +1227,72 @@ mod tests {
         assert_eq!(result["blocked_by"], json!(["dep1"]));
         assert_eq!(result["virtual_tags"], json!([]));
         assert_eq!(result["filter_tags"], json!([]));
+    }
+
+    /// The slim projection is an allowlist: given an enriched task value
+    /// carrying heavy payload fields (`description`, `attachments`, and a
+    /// hypothetical future `comments`), the result contains exactly the
+    /// allowlist fields that were present — and none of the heavy ones.
+    #[test]
+    fn test_slim_task_json_is_an_allowlist_projection() {
+        let dep = make_task("dep1", "Dep", "", "todo");
+        let mut e = make_task("t1", "Test", "A long description", "todo");
+        e.set("depends_on", json!(["dep1"]));
+        e.set("assignees", json!(["alice"]));
+
+        let all = vec![dep, e.clone()];
+        let registry = VirtualTagRegistry::new();
+        enrich_task_entity(&mut e, &all, "done", &registry);
+
+        let mut enriched = task_entity_to_rich_json(&e);
+        // Simulate a future heavy field riding on the enriched shape.
+        enriched["comments"] = json!([{"author": "alice", "body": "hi"}]);
+        assert_eq!(enriched["description"], "A long description");
+        assert!(enriched["attachments"].is_array());
+
+        let slim = slim_task_json(&enriched);
+        let obj = slim.as_object().expect("slim projection is an object");
+
+        // Heavy fields are gone.
+        for heavy in ["description", "comments", "attachments"] {
+            assert!(
+                !obj.contains_key(heavy),
+                "slim projection must not contain {heavy:?}"
+            );
+        }
+
+        // Every key present is on the allowlist...
+        for key in obj.keys() {
+            assert!(
+                SLIM_TASK_FIELDS.contains(&key.as_str()),
+                "unexpected key {key:?} in slim projection"
+            );
+        }
+
+        // ...and the allowlist fields the enriched value carried survive.
+        assert_eq!(slim["id"], "t1");
+        assert_eq!(slim["title"], "Test");
+        assert_eq!(slim["position"]["column"], "todo");
+        assert_eq!(slim["assignees"], json!(["alice"]));
+        assert_eq!(slim["depends_on"], json!(["dep1"]));
+        assert_eq!(slim["blocked_by"], json!(["dep1"]));
+        assert_eq!(slim["ready"], false);
+        assert!(obj.contains_key("created"), "date fields are retained");
+    }
+
+    /// The mutation ack is exactly `{ok, id, short_id}` — nothing else — with
+    /// `short_id` derived from the ULID, never echoing any task field.
+    #[test]
+    fn test_task_mutation_ack_is_exactly_ok_id_short_id() {
+        let e = make_task(
+            "01KT6SAAM6CR85YZD26JHSC87E",
+            "Test",
+            "A long description the agent already has",
+            "todo",
+        );
+        let ack = task_mutation_ack(&e);
+        assert_task_mutation_ack(&ack, "01KT6SAAM6CR85YZD26JHSC87E");
+        assert_eq!(ack["short_id"], "jhsc87e");
     }
 
     #[test]
