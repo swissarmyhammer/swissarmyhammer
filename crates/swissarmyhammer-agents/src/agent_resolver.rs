@@ -102,6 +102,16 @@ impl AgentResolver {
         }
 
         for (agent_name, files) in &agent_groups {
+            // Skip groups that don't contain an AGENT.md — they are resource
+            // files/directories (the discovery README.md, supporting docs)
+            // rather than agents.
+            let has_agent_md = files
+                .iter()
+                .any(|(name, _)| name.ends_with("/AGENT.md") || *name == "AGENT.md");
+            if !has_agent_md {
+                continue;
+            }
+
             match load_agent_from_builtin(agent_name, files) {
                 Ok(agent) => {
                     tracing::debug!("Loaded builtin agent: {}", agent.name);
@@ -187,9 +197,31 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+    use tracing_test::traced_test;
 
     /// Name of the builtin `tester` agent, referenced across multiple tests.
     const TESTER_AGENT: &str = "tester";
+
+    #[traced_test]
+    #[test]
+    fn test_load_builtins_does_not_warn_on_readme() {
+        // The discovery README.md deployed into the builtin agents store is a
+        // resource file, not an agent. Loading builtins must skip it silently
+        // rather than warning that it has no AGENT.md.
+        let resolver = AgentResolver::new();
+        let agents = resolver.resolve_builtins();
+
+        // Sanity: real agents still load.
+        assert!(agents.contains_key(TESTER_AGENT));
+        // The README is never registered as an agent.
+        assert!(!agents.contains_key("README.md"));
+        assert!(!agents.contains_key("README"));
+
+        assert!(
+            !logs_contain("no AGENT.md found in builtin files"),
+            "loading builtins must not warn about the discovery README"
+        );
+    }
 
     #[test]
     fn test_resolve_builtins() {
