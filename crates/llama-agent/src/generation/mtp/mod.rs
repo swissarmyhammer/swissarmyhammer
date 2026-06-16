@@ -4,7 +4,7 @@
 //! This is the consumer-side port of the `draft-mtp` orchestration whose
 //! bindings and reference loop live in the `llama-cpp-rs` fork (see that fork's
 //! `mtp-orchestration.md` and `examples/mtp/`). The fork exposes the primitives
-//! (`LlamaContextType::Mtp`, pre-norm embeddings, `LlamaMtpBatch` / `decode_mtp`,
+//! (`LlamaContextType::Mtp`, nextn embeddings, `LlamaMtpBatch` / `decode_mtp`,
 //! seq-state); the draft→verify→accept *loop* is reimplemented here because we
 //! drive our own decode loop rather than running `llama-server`.
 //!
