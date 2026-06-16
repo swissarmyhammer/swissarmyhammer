@@ -1891,7 +1891,7 @@ fn wait_for_lsp_symbols(
     let poll_interval = std::time::Duration::from_millis(500);
     let mut last_count = 0;
     while start.elapsed() < timeout {
-        if let Ok(result) = client.collect_file_symbols(file_path) {
+        if let Ok(result) = swissarmyhammer_code_context::collect_file_symbols(client, file_path) {
             last_count = result.symbol_count;
             if last_count >= min_symbols {
                 return last_count;
@@ -2025,9 +2025,13 @@ pub fn greet(config: &Config) -> String {
     .unwrap();
 
     // -- Step 8: Persist symbols using collect_and_persist_file_symbols ------
-    let persist_result = client
-        .collect_and_persist_file_symbols(&conn, &lib_rs_path, "src/lib.rs")
-        .expect("collect_and_persist_file_symbols failed");
+    let persist_result = swissarmyhammer_code_context::collect_and_persist_file_symbols(
+        &mut client,
+        &conn,
+        &lib_rs_path,
+        "src/lib.rs",
+    )
+    .expect("collect_and_persist_file_symbols failed");
 
     println!(
         "Persisted {} symbols for src/lib.rs",
@@ -2312,9 +2316,13 @@ edition = "2021"
 
     // Step 5: Collect and persist LSP symbols.
     let rel_path = "src/main.rs";
-    let persist_result = client
-        .collect_and_persist_file_symbols(conn, &main_rs_path, rel_path)
-        .expect("collect_and_persist_file_symbols failed");
+    let persist_result = swissarmyhammer_code_context::collect_and_persist_file_symbols(
+        &mut client,
+        conn,
+        &main_rs_path,
+        rel_path,
+    )
+    .expect("collect_and_persist_file_symbols failed");
 
     println!(
         "LSP symbols: {} persisted, error: {:?}",
@@ -2382,7 +2390,12 @@ edition = "2021"
     // Step 8: Attempt to collect LSP call edges via callHierarchy/outgoingCalls.
     // This may not be supported by all rust-analyzer versions, so we handle
     // gracefully if it fails.
-    match client.collect_and_persist_call_edges(conn, &main_rs_path, rel_path) {
+    match swissarmyhammer_code_context::collect_and_persist_call_edges(
+        &mut client,
+        conn,
+        &main_rs_path,
+        rel_path,
+    ) {
         Ok(edge_count) => {
             println!("LSP call edges persisted: {}", edge_count);
 
@@ -2548,9 +2561,13 @@ pub fn greet(name: &str) -> String {
     );
 
     // -- Step 6: Persist LSP symbols ----------------------------------------
-    let persist_result = client
-        .collect_and_persist_file_symbols(conn, &lib_rs_path, rel_path)
-        .expect("collect_and_persist_file_symbols failed");
+    let persist_result = swissarmyhammer_code_context::collect_and_persist_file_symbols(
+        &mut client,
+        conn,
+        &lib_rs_path,
+        rel_path,
+    )
+    .expect("collect_and_persist_file_symbols failed");
 
     println!(
         "Persisted {} LSP symbols, error: {:?}",

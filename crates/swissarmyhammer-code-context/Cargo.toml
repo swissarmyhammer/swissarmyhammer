@@ -11,6 +11,7 @@ homepage.workspace = true
 [dependencies]
 swissarmyhammer-leader-election = { workspace = true }
 swissarmyhammer-directory = { workspace = true }
+swissarmyhammer-lsp = { workspace = true }
 swissarmyhammer-project-detection = { workspace = true }
 rusqlite = { workspace = true }
 tracing = { workspace = true }

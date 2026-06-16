@@ -1,18 +1,17 @@
-//! LSP server detection and startup for code indexing.
+//! LSP server detection, startup, and the builtin server registry.
 //!
 //! Manages spawning and communicating with language servers (e.g., rust-analyzer)
-//! to extract symbol definitions and track call edges.
-//!
-//! This module also owns the single source of truth for the builtin LSP server
-//! registry: every supported language server is declared by a YAML file under
+//! and owns the single source of truth for the builtin LSP server registry:
+//! every supported language server is declared by a YAML file under
 //! `builtin/lsp/`. Those files are embedded at compile time via `include_dir!`
 //! and parsed into [`OwnedLspServerSpec`] values on first access. Adding a new
 //! server requires only dropping a YAML file into `builtin/lsp/` — the directory
 //! is walked automatically at compile time with no source edits needed.
 //!
-//! The `swissarmyhammer-lsp` crate depends on this crate and re-exports
+//! This module is the workspace-wide home for the LSP server registry. The
+//! `swissarmyhammer-code-context` crate depends on this crate and re-exports
 //! [`OwnedLspServerSpec`], [`builtin_lsp_yaml_sources`], and [`load_lsp_servers`]
-//! directly — there is no second definition anywhere in the workspace.
+//! so its existing callers compile unchanged.
 
 use std::env;
 use std::fmt;
@@ -26,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use swissarmyhammer_project_detection::ProjectType;
 use tracing::{debug, info, warn};
 
-use crate::error::CodeContextError;
+use crate::error::LspError;
 
 /// Builtin LSP server YAML directory embedded at compile time.
 ///
@@ -37,11 +36,11 @@ static BUILTIN_LSP_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../builtin/ls
 /// Owned LSP server specification loaded from YAML configuration.
 ///
 /// This is the single, workspace-wide definition used by both
-/// `swissarmyhammer-code-context` (for indexing) and `swissarmyhammer-lsp`
-/// (for daemon lifecycle management). Every builtin `builtin/lsp/*.yaml` file
-/// deserialises into exactly one of these. Fields required in YAML are
-/// required here; fields that are truly optional (`icon`) use `Option<T>`;
-/// fields with sensible defaults (`startup_timeout_secs`,
+/// `swissarmyhammer-lsp` (for daemon lifecycle management) and
+/// `swissarmyhammer-code-context` (for indexing scope). Every builtin
+/// `builtin/lsp/*.yaml` file deserialises into exactly one of these. Fields
+/// required in YAML are required here; fields that are truly optional (`icon`)
+/// use `Option<T>`; fields with sensible defaults (`startup_timeout_secs`,
 /// `health_check_interval_secs`) fall back to those defaults when missing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OwnedLspServerSpec {
@@ -154,8 +153,8 @@ pub fn load_lsp_servers() -> Vec<OwnedLspServerSpec> {
 /// Lazy-initialized registry of LSP server specs loaded from embedded YAML.
 ///
 /// This is the single registry of builtin servers shared across the workspace.
-/// Both `swissarmyhammer-code-context` (for indexing scope) and
-/// `swissarmyhammer-lsp` (for daemon spawning) read from it.
+/// Both `swissarmyhammer-lsp` (for daemon spawning) and
+/// `swissarmyhammer-code-context` (for indexing scope) read from it.
 pub static LSP_REGISTRY: LazyLock<Vec<OwnedLspServerSpec>> = LazyLock::new(load_lsp_servers);
 
 /// Configuration for starting an LSP server.
@@ -320,14 +319,14 @@ fn create_config_from_spec(language: &str, spec: OwnedLspServerSpec) -> LspServe
 ///
 /// # Returns
 /// Result indicating success or error
-fn spawn_server(config: &LspServerConfig, project_root: &Path) -> Result<(), CodeContextError> {
+fn spawn_server(config: &LspServerConfig, project_root: &Path) -> Result<(), LspError> {
     let exe_path = resolve_executable(&config.executable)?;
     spawn_and_verify(&exe_path, &config.args, project_root)
 }
 
 /// Resolve the executable path: use as-is if the file exists on disk,
 /// otherwise search PATH. Returns an error if not found anywhere.
-fn resolve_executable(executable: &Path) -> Result<PathBuf, CodeContextError> {
+fn resolve_executable(executable: &Path) -> Result<PathBuf, LspError> {
     if executable.exists() {
         return Ok(executable.to_path_buf());
     }
@@ -351,11 +350,7 @@ fn resolve_executable(executable: &Path) -> Result<PathBuf, CodeContextError> {
 /// The process is spawned with piped stdio (stdin, stdout, stderr) so
 /// a JSON-RPC client can be attached later. If the process exits within
 /// 100 ms it is treated as a startup failure.
-fn spawn_and_verify(
-    exe_path: &Path,
-    args: &[String],
-    project_root: &Path,
-) -> Result<(), CodeContextError> {
+fn spawn_and_verify(exe_path: &Path, args: &[String], project_root: &Path) -> Result<(), LspError> {
     let mut cmd = Command::new(exe_path);
     cmd.current_dir(project_root)
         .stdin(Stdio::piped())
@@ -549,8 +544,8 @@ mod tests {
         assert!(result.is_err(), "Should fail when executable not found");
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("IO error"),
-            "Error should be IO-based, got: {}",
+            err_msg.contains("failed to spawn LSP server"),
+            "Error should be a spawn failure, got: {}",
             err_msg
         );
     }
@@ -697,7 +692,7 @@ mod tests {
         // Use an absolute path to 'true' (which exits immediately) to exercise
         // the direct-executable branch (config.executable.exists() == true).
         // Verifies the specific "exited immediately" error message via the
-        // inner io::Error (CodeContextError::Io wraps it with Display "IO error").
+        // inner io::Error (LspError::SpawnFailed wraps it).
         let true_path = find_executable("true");
         if let Some(abs_path) = true_path {
             let config = LspServerConfig {
@@ -713,15 +708,11 @@ mod tests {
                 "Process that exits immediately should error"
             );
             let err = result.unwrap_err();
-            // CodeContextError::Io Display is just "IO error"; check the source chain
-            // for the actual io::Error message.
-            let inner_msg = std::error::Error::source(&err)
-                .map(|e| e.to_string())
-                .unwrap_or_default();
+            // LspError::SpawnFailed Display includes the inner io::Error message.
             assert!(
-                inner_msg.contains("exited immediately"),
-                "Inner error should mention 'exited immediately', got: {}",
-                inner_msg
+                err.to_string().contains("exited immediately"),
+                "Error should mention 'exited immediately', got: {}",
+                err
             );
         }
     }

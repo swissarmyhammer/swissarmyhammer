@@ -18,10 +18,20 @@ use tokio::process::{Child, Command};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
-use swissarmyhammer_code_context::{LspJsonRpcClient, SharedLspClient};
-
+use crate::client::{LspJsonRpcClient, SharedLspClient};
 use crate::error::LspError;
 use crate::types::{LspDaemonState, OwnedLspServerSpec};
+
+/// Predicate that decides whether a line of LSP-server stderr should be
+/// suppressed from debug logs.
+///
+/// LSP servers can be noisy on stderr (progress chatter, info banners). The
+/// daemon drains stderr in the background and applies this filter so callers
+/// can suppress known-noise lines. The filter is injected by the owner (via
+/// [`LspSupervisorManager::with_stderr_filter`](crate::LspSupervisorManager::with_stderr_filter))
+/// rather than hard-wired, so this crate stays free of any configuration-source
+/// dependency. When no filter is set, every stderr line is logged.
+pub type StderrFilter = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// Maximum consecutive failures before we stop retrying.
 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
@@ -73,6 +83,11 @@ pub struct LspDaemon {
     /// [`set_shutdown_grace`](Self::set_shutdown_grace) so they don't wait out
     /// the full production grace period when probing the timeout path.
     shutdown_grace: Duration,
+    /// Optional predicate suppressing matching LSP-server stderr lines.
+    ///
+    /// Injected by the owner so this crate doesn't depend on any config source.
+    /// `None` logs every stderr line.
+    stderr_filter: Option<StderrFilter>,
 }
 
 impl std::fmt::Debug for LspDaemon {
@@ -97,7 +112,18 @@ impl LspDaemon {
             state_tx,
             state_rx,
             shutdown_grace: Duration::from_secs(SHUTDOWN_GRACE_SECS),
+            stderr_filter: None,
         }
+    }
+
+    /// Set the stderr-noise filter for this daemon.
+    ///
+    /// The predicate receives each line the LSP server writes to stderr and
+    /// returns `true` to suppress it from debug logs. Injecting the filter here
+    /// keeps the configuration source (e.g. code-context's stderr-filter config)
+    /// in the owning crate instead of this one.
+    pub fn set_stderr_filter(&mut self, filter: StderrFilter) {
+        self.stderr_filter = Some(filter);
     }
 
     /// Override the graceful-shutdown grace period.
@@ -220,29 +246,17 @@ impl LspDaemon {
                     .unwrap_or_default()
                     .as_millis() as u64;
 
-                // Drain stderr in the background, filtering noise via config
+                // Drain stderr in the background, suppressing lines the
+                // injected filter matches (the owner supplies the filter so
+                // this crate carries no configuration-source dependency).
                 if let Some(stderr) = child.stderr.take() {
                     let cmd = self.spec.command.clone();
-                    // Load stderr filter config once at daemon start
-                    let filter_config = {
-                        use swissarmyhammer_code_context::config::{
-                            load_code_context_config, CompiledCodeContextConfig,
-                        };
-                        let raw = load_code_context_config();
-                        CompiledCodeContextConfig::compile(&raw).ok()
-                    };
+                    let filter = self.stderr_filter.clone();
                     tokio::spawn(async move {
                         use tokio::io::{AsyncBufReadExt, BufReader};
                         let mut lines = BufReader::new(stderr).lines();
                         while let Ok(Some(line)) = lines.next_line().await {
-                            let filtered = filter_config
-                                .as_ref()
-                                .map(|c| {
-                                    swissarmyhammer_code_context::config::should_filter_stderr(
-                                        &line, c,
-                                    )
-                                })
-                                .unwrap_or(false);
+                            let filtered = filter.as_ref().map(|f| f(&line)).unwrap_or(false);
                             if !filtered {
                                 tracing::debug!(cmd = %cmd, "LSP stderr: {}", line);
                             }

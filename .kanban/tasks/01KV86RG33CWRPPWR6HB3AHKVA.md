@@ -1,8 +1,72 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a080
+comments:
+- actor: claude-code
+  id: 01kv8ew613y32f9g178ygbhshr
+  text: 'Picked up as task 1/15 in the diagnostics /finish batch (full-batch, manual dependency order — this is the foundational root). Driving via /implement → /test → /review. Key risks to watch: this is a dependency inversion that must compile in one commit (move LspJsonRpcClient/SharedLspClient + server specs/registry/yaml from code-context into swissarmyhammer-lsp, flip the Cargo edge, re-export from code-context to keep downstream compiling), plus extracting an LspTransport trait so the downstream session tasks (g167jrk/3z6g7da) can unit-test against an in-memory fake. cargo build --workspace + clippy must be clean.'
+  timestamp: 2026-06-16T14:55:25.219093+00:00
+- actor: claude-code
+  id: 01kv8f3a2tmt19zpsfs8qsra69
+  text: |-
+    Research milestone. Mapped the inversion seam:
+    - lsp_server.rs (OwnedLspServerSpec, LSP_REGISTRY, load_lsp_servers, builtin_lsp_yaml_sources, LspServerConfig/Handle, find_executable, detect_rust_analyzer, start_lsp_server) is nearly self-contained — only `use crate::error::CodeContextError`. Will move it whole into swissarmyhammer-lsp and re-target its spawn fns to the lsp crate's LspError (io #[from] maps cleanly; one test asserts "IO error" Display text → will update).
+    - builtin/lsp/*.yaml stays at repo root: include_dir!("$CARGO_MANIFEST_DIR/../../builtin/lsp") resolves identically from both crate manifests, so no physical YAML move.
+    - WRINKLE: daemon.rs also uses swissarmyhammer_code_context::config::{load_code_context_config, CompiledCodeContextConfig, should_filter_stderr} to filter LSP-server stderr noise. config.rs is the full .code-context/ VFS config loader (depends on swissarmyhammer-directory) — moving it is out of scope. Plan: add an injectable stderr-filter seam on LspSupervisorManager/LspDaemon (Arc<dyn Fn(&str)->bool>), default no-op; wire the code-context-loaded filter from swissarmyhammer-tools (which depends on both crates) so behavior is preserved without lsp depending on code-context.
+    - Only production consumer of LspSupervisorManager is swissarmyhammer-tools/src/mcp/server.rs; it references swissarmyhammer_code_context::SharedLspClient (kept valid via re-export).
+    - Deep map of lsp_communication.rs (LspJsonRpcClient methods, for the LspTransport trait) + lsp_worker.rs (SharedLspClient) in progress.
+  timestamp: 2026-06-16T14:59:18.746642+00:00
+- actor: claude-code
+  id: 01kv8f61q7w9x3175419a8n5dd
+  text: |-
+    Plan validated by deep exploration. Final design:
+
+    MOVE to swissarmyhammer-lsp:
+    1. New module `server_spec.rs` (was lsp_server.rs): OwnedLspServerSpec + defaults + impls, builtin_lsp_yaml_sources, load_lsp_servers, LSP_REGISTRY, LspServerConfig, LspServerHandle, find_executable, detect_rust_analyzer, start_lsp_server + private spawn helpers. include_dir!("$CARGO_MANIFEST_DIR/../../builtin/lsp") unchanged (lsp crate is also crates/<x>, ../../ → repo root). Swap CodeContextError→LspError in spawn_server/resolve_executable/spawn_and_verify (io #[from] maps; LspError::SpawnFailed). NEW LspError::NotFound-style variant or reuse SpawnFailed for the not-found path; will model with io::Error.
+    2. New module `client.rs` (LspJsonRpcClient transport core): struct + new/send_request/send_notification/initialize/send_did_open/send_did_close/shutdown + private framing/timeout helpers (write_jsonrpc_request, read_matching_response, wait_for_readable, poll_fd, classify_response/ResponseMatch, read_jsonrpc_response, LSP_REQUEST_TIMEOUT) + parse_document_symbols + symbol_information_to_document_symbols + count_symbols_recursive. Methods return LspError now. collect_file_symbols stays out (it returns LspCollectionResult which holds InvalidationAction = code-context). Actually move collect_file_symbols? No — it builds LspCollectionResult (code-context type). Keep collect_file_symbols in code-context as a free fn too.
+    3. NEW `LspTransport` trait (send_request/send_notification/read_message) impl by LspJsonRpcClient, + an in-memory FakeTransport for tests (TDD: write the fake-transport unit test first).
+    4. SharedLspClient alias → lsp (Arc<Mutex<Option<LspJsonRpcClient>>>).
+
+    STAYS in code-context (cycle if moved): collect_and_persist_symbols, collect_file_symbols, collect_call_edges, collect_and_persist_call_edges, collect_edges_for_symbol → refactor the four client methods into FREE FUNCTIONS taking &mut LspJsonRpcClient (only callers: index_single_file in lsp_worker.rs). LspCollectionResult, parse_call_hierarchy_items, parse_outgoing_calls, uri_to_relative_path stay. lsp_worker.rs (worker loop, LspWorkerConfig, ShutdownFlag, new_shutdown_flag, spawn_lsp_indexing_worker) stays.
+
+    STDERR-FILTER cross-edge (daemon.rs uses code_context::config): add injectable seam — LspSupervisorManager::with_stderr_filter(Arc<dyn Fn(&str)->bool + Send+Sync>) threaded into LspDaemon; default no-op. Wire the code-context-config-backed filter from swissarmyhammer-tools/src/mcp/server.rs (depends on both crates). Removes the last lsp→code-context edge.
+
+    CARGO: lsp drops swissarmyhammer-code-context, adds include_dir + rusqlite? No — client.rs has NO rusqlite after split. lsp adds include_dir. code-context adds swissarmyhammer-lsp.
+
+    RE-EXPORTS from code-context (keep tools compiling): pub use swissarmyhammer_lsp::{LspJsonRpcClient, SharedLspClient, OwnedLspServerSpec, LspServerConfig, LspServerHandle, detect_rust_analyzer, find_executable, start_lsp_server, LSP_REGISTRY, load_lsp_servers, builtin_lsp_yaml_sources}.
+  timestamp: 2026-06-16T15:00:48.487696+00:00
+- actor: claude-code
+  id: 01kv8fhp6v2fv4dswtdkvez59g
+  text: 'Milestone: swissarmyhammer-lsp now builds and tests green WITHOUT depending on swissarmyhammer-code-context. Edge is inverted on the lsp side. Created client.rs (LspJsonRpcClient transport core + LspTransport trait + in-memory FakeTransport unit tests + SharedLspClient + parse_document_symbols) and server_spec.rs (OwnedLspServerSpec/registry/yaml/find_executable/start_lsp_server, CodeContextError→LspError). Added injectable StderrFilter seam on LspDaemon/LspSupervisorManager (with_stderr_filter/set_stderr_filter), removing the daemon.rs→code_context::config edge. `cargo test -p swissarmyhammer-lsp` = 170 passed, incl. 5 client::tests (fake transport, model-free, <1s). Now flipping the code-context side: delete its lsp_server.rs (re-export from lsp), strip transport core from lsp_communication.rs and convert the 5 collect_* client methods to free fns over &mut LspJsonRpcClient, move SharedLspClient alias to lsp + re-export, update lsp_worker call sites, fix lib.rs re-exports.'
+  timestamp: 2026-06-16T15:07:09.915025+00:00
+- actor: claude-code
+  id: 01kv8gbrb8px9j4zr2azrz58bz
+  text: |-
+    Implementation landed. Inversion complete and verified:
+    - swissarmyhammer-code-context now depends on swissarmyhammer-lsp; lsp has NO edge to code-context (cargo tree -i confirms single direction, no cycle).
+    - Moved into lsp: client.rs (LspJsonRpcClient transport + LspTransport trait + FakeTransport tests + SharedLspClient + parse_document_symbols), server_spec.rs (OwnedLspServerSpec/registry/yaml/find_executable/start_lsp_server). Deleted code-context/src/lsp_server.rs.
+    - code-context kept the indexing layer: collect_file_symbols/collect_and_persist_file_symbols/collect_call_edges/collect_and_persist_call_edges/collect_edges_for_symbol converted from client methods to FREE FUNCTIONS over &mut LspJsonRpcClient (only callers: lsp_worker::index_single_file + integration/e2e tests, all updated). Added From<LspError> for CodeContextError.
+    - Re-exports keep public API stable: code-context re-exports LspJsonRpcClient/SharedLspClient/OwnedLspServerSpec/registry/etc from swissarmyhammer_lsp; also re-exports the collect_* free fns and keeps crate::lsp_communication::LspJsonRpcClient + crate::lsp_worker::SharedLspClient paths via pub use (internal call sites untouched).
+    - stderr-filter cross-edge removed: injectable StderrFilter seam on LspDaemon/LspSupervisorManager; swissarmyhammer-tools/src/mcp/server.rs wires the code-context-config-backed filter when spawning the supervisor (behavior preserved).
+    - ARCHITECTURE.md updated with the LSP-client-owner note and inverted edge.
+
+    Verification (all fresh):
+    - cargo build --workspace: Finished, clean.
+    - cargo clippy --workspace --all-targets -- -D warnings: Finished, zero warnings.
+    - cargo test -p swissarmyhammer-lsp: 170 lib + 1 doctest passed (incl. 5 client::tests fake-transport, model-free <1s).
+    - cargo test -p swissarmyhammer-code-context: 624 lib + 26 + 2 = 652 passed, 0 failed (incl. get_diagnostics unit tests + mock-LSP free-fn tests; real-rust-analyzer integration tests test_real_lsp_document_symbols/test_lsp_call_edges_known_graph/test_lsp_symbol_lookup_end_to_end all pass through the refactored free fns).
+    - tools_tests compile clean (the e2e LSP test call sites updated).
+  timestamp: 2026-06-16T15:21:24.072658+00:00
+- actor: claude-code
+  id: 01kv8ge80jpm2yhwmrjtq4vhzp
+  text: 'really-done gate: all four verification commands re-run fresh and green (build Finished exit 0; clippy --all-targets -D warnings Finished exit 0; lsp 170+1 passed/0 failed; code-context 624+26+2 passed/0 failed). Spawned the double-check adversarial verifier on the working-tree diff; awaiting its PASS/REVISE verdict before moving to review.'
+  timestamp: 2026-06-16T15:22:45.650226+00:00
+- actor: claude-code
+  id: 01kv8gkwc64zsgbc5qc8heaxjs
+  text: 'double-check verdict: PASS, no defects. It independently re-ran build/clippy/lsp+code-context tests and verified all nine focus areas (edge direction/no cycle, single definitions in lsp, LspTransport trait + non-trivial fake tests, stable re-exports, behavior-preserving collect_* free-fn refactor + all call sites updated, injected stderr-filter seam with no remaining code_context refs in lsp src, include_dir path resolves, ARCHITECTURE.md, From<LspError> mapping sound and used). really-done gate satisfied. Moved to review.'
+  timestamp: 2026-06-16T15:25:50.342957+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffb680
 project: diagnostics
 title: 'Invert lsp↔code-context dependency: relocate LSP client + server specs into swissarmyhammer-lsp'
 ---

@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -19,9 +19,14 @@ use rusqlite::types::Value;
 use rusqlite::Connection;
 use tracing::{debug, info, warn};
 
+use swissarmyhammer_lsp::LspJsonRpcClient;
+// Re-exported so existing `crate::lsp_worker::SharedLspClient` paths in this
+// crate keep resolving after the alias moved into `swissarmyhammer-lsp`.
+pub use swissarmyhammer_lsp::SharedLspClient;
+
 use crate::error::CodeContextError;
 use crate::invalidation::InvalidationAction;
-use crate::lsp_communication::LspJsonRpcClient;
+use crate::lsp_communication::{collect_and_persist_call_edges, collect_and_persist_file_symbols};
 use crate::lsp_indexer::mark_lsp_indexed;
 use crate::workspace::SharedDb;
 
@@ -45,13 +50,6 @@ impl Default for LspWorkerConfig {
         }
     }
 }
-
-/// Shared handle to an LSP client that may or may not be available.
-///
-/// The `Option` is `None` when the LSP daemon hasn't started or is restarting.
-/// The worker locks the mutex, checks for `Some`, and uses the client to send
-/// requests. The daemon's owner is responsible for populating and clearing this.
-pub type SharedLspClient = Arc<Mutex<Option<LspJsonRpcClient>>>;
 
 /// Shared flag for signaling graceful shutdown to worker threads.
 ///
@@ -297,7 +295,7 @@ fn index_single_file(
     // Symbol phase — lock DB for the write.
     let result = {
         let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-        client.collect_and_persist_file_symbols(&conn, full_path, relative_path)?
+        collect_and_persist_file_symbols(client, &conn, full_path, relative_path)?
     };
 
     if let Some(err) = &result.error {
@@ -321,7 +319,7 @@ fn index_single_file(
     // `collect_and_persist_call_edges`.
     let edge_persist_result = {
         let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-        client.collect_and_persist_call_edges(&conn, full_path, relative_path)
+        collect_and_persist_call_edges(client, &conn, full_path, relative_path)
     };
     match edge_persist_result {
         Ok(edge_count) => debug!(
@@ -388,12 +386,12 @@ fn apply_invalidation_actions(db: &SharedDb, source_file: &str, actions: &[Inval
 
 /// File extensions supported by a given LSP server.
 ///
-/// The list is looked up in the YAML-loaded [`crate::lsp_server::LSP_REGISTRY`]
-/// by matching `server_name` against each spec's `command` field. Unknown
-/// servers resolve to an empty slice, which prevents indexing files that no
-/// server understands.
+/// The list is looked up in the YAML-loaded
+/// [`swissarmyhammer_lsp::LSP_REGISTRY`] by matching `server_name` against each
+/// spec's `command` field. Unknown servers resolve to an empty slice, which
+/// prevents indexing files that no server understands.
 pub fn lsp_supported_extensions(server_name: &str) -> &'static [String] {
-    for spec in crate::lsp_server::LSP_REGISTRY.iter() {
+    for spec in swissarmyhammer_lsp::LSP_REGISTRY.iter() {
         if spec.command == server_name {
             return spec.file_extensions.as_slice();
         }
@@ -410,7 +408,7 @@ pub fn lsp_supported_extensions(server_name: &str) -> &'static [String] {
 pub fn lsp_capable_extensions() -> &'static [String] {
     static EXTENSIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
         let mut all: Vec<String> = Vec::new();
-        for spec in crate::lsp_server::LSP_REGISTRY.iter() {
+        for spec in swissarmyhammer_lsp::LSP_REGISTRY.iter() {
             for ext in &spec.file_extensions {
                 if !all.iter().any(|e| e == ext) {
                     all.push(ext.clone());
@@ -501,6 +499,7 @@ fn extension_to_language_id(path: &Path) -> &'static str {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+    use std::sync::Mutex;
 
     /// Create an in-memory DB with the required schema.
     fn create_test_db() -> Connection {

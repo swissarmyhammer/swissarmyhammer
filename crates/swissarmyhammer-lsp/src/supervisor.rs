@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use tracing::{info, warn};
 
-use crate::daemon::LspDaemon;
+use crate::daemon::{LspDaemon, StderrFilter};
 use crate::error::LspError;
 use crate::registry::servers_for_project;
 use crate::types::{DaemonStatus, LspDaemonState, OwnedLspServerSpec};
@@ -21,6 +21,10 @@ pub struct LspSupervisorManager {
     workspace_root: PathBuf,
     /// Map from command name to its daemon.
     daemons: HashMap<String, LspDaemon>,
+    /// Optional stderr-noise filter applied to every daemon this supervisor
+    /// spawns. Injected by the owner so this crate carries no
+    /// configuration-source dependency.
+    stderr_filter: Option<StderrFilter>,
 }
 
 impl std::fmt::Debug for LspSupervisorManager {
@@ -38,7 +42,20 @@ impl LspSupervisorManager {
         Self {
             workspace_root,
             daemons: HashMap::new(),
+            stderr_filter: None,
         }
+    }
+
+    /// Attach a stderr-noise filter applied to every daemon this supervisor
+    /// spawns.
+    ///
+    /// The predicate receives each line an LSP server writes to stderr and
+    /// returns `true` to suppress it from debug logs. The owner supplies the
+    /// filter (e.g. backed by code-context's stderr-filter config) so this
+    /// crate stays free of any configuration-source dependency.
+    pub fn with_stderr_filter(mut self, filter: StderrFilter) -> Self {
+        self.stderr_filter = Some(filter);
+        self
     }
 
     /// Detect projects in the workspace and start an LSP daemon for each
@@ -82,6 +99,9 @@ impl LspSupervisorManager {
                 continue;
             }
             let mut daemon = LspDaemon::new(spec, self.workspace_root.clone());
+            if let Some(filter) = &self.stderr_filter {
+                daemon.set_stderr_filter(filter.clone());
+            }
             let outcome = daemon.start().await;
             self.daemons.insert(command, daemon);
             results.push(outcome);

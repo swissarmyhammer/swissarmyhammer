@@ -23,15 +23,22 @@
 //! # }
 //! ```
 
+pub mod client;
 pub mod daemon;
 pub mod error;
 pub mod registry;
+pub mod server_spec;
 pub mod supervisor;
 pub mod types;
 pub mod yaml_loader;
 
+pub use client::{parse_document_symbols, LspJsonRpcClient, LspTransport, SharedLspClient};
 pub use daemon::LspDaemon;
 pub use error::LspError;
 pub use registry::{all_servers, servers_for_extensions, servers_for_project, SERVERS};
+pub use server_spec::{
+    builtin_lsp_yaml_sources, detect_rust_analyzer, find_executable, load_lsp_servers,
+    start_lsp_server, LspServerConfig, LspServerHandle, LSP_REGISTRY,
+};
 pub use supervisor::LspSupervisorManager;
 pub use types::{DaemonStatus, LspDaemonState, LspServerSpec, OwnedLspServerSpec};

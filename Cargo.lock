@@ -8134,6 +8134,7 @@ dependencies = [
  "swissarmyhammer-directory",
  "swissarmyhammer-entity-search",
  "swissarmyhammer-leader-election",
+ "swissarmyhammer-lsp",
  "swissarmyhammer-project-detection",
  "tempfile",
  "thiserror 2.0.18",
@@ -8425,12 +8426,12 @@ dependencies = [
 name = "swissarmyhammer-lsp"
 version = "0.14.0"
 dependencies = [
+ "include_dir",
  "lsp-types",
  "once_cell",
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "swissarmyhammer-code-context",
  "swissarmyhammer-project-detection",
  "tempfile",
  "thiserror 2.0.18",

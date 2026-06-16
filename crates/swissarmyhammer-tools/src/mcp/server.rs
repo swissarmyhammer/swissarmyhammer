@@ -393,7 +393,20 @@ impl McpServer {
         workspace_root: std::path::PathBuf,
     ) -> tokio::task::JoinHandle<Vec<(String, swissarmyhammer_code_context::SharedLspClient)>> {
         tokio::spawn(async move {
+            // Build the LSP-server stderr-noise filter from code-context's
+            // stacked config and inject it into the supervisor. The filter
+            // source lives in code-context; `swissarmyhammer-lsp` only exposes
+            // the injection seam, so it carries no config dependency.
             let mut supervisor = swissarmyhammer_lsp::LspSupervisorManager::new(workspace_root);
+            if let Ok(compiled) = swissarmyhammer_code_context::CompiledCodeContextConfig::compile(
+                &swissarmyhammer_code_context::load_code_context_config(),
+            ) {
+                let compiled = std::sync::Arc::new(compiled);
+                supervisor =
+                    supervisor.with_stderr_filter(std::sync::Arc::new(move |line: &str| {
+                        swissarmyhammer_code_context::should_filter_stderr(line, &compiled)
+                    }));
+            }
             let results = supervisor.start().await;
             let ok_count = results.iter().filter(|r| r.is_ok()).count();
             let err_count = results.iter().filter(|r| r.is_err()).count();

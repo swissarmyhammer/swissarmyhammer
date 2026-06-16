@@ -26,7 +26,6 @@ pub mod invalidation;
 pub mod layered_context;
 pub mod lsp_communication;
 pub mod lsp_indexer;
-pub mod lsp_server;
 pub mod lsp_worker;
 pub mod ops;
 pub mod progress;
@@ -52,19 +51,18 @@ pub use layered_context::{
     LspRange, SourceLayer, SymbolInfo, TextEdit,
 };
 pub use lsp_communication::{
-    collect_and_persist_symbols, parse_document_symbols, LspCollectionResult, LspJsonRpcClient,
+    collect_and_persist_call_edges, collect_and_persist_file_symbols, collect_and_persist_symbols,
+    collect_call_edges, collect_file_symbols, LspCollectionResult,
 };
 pub use lsp_indexer::{
     build_qualified_path, build_symbol_id, flatten_symbols, mark_lsp_indexed, write_edges,
     write_symbols, CallEdge, FlatSymbol,
 };
-pub use lsp_server::{
-    builtin_lsp_yaml_sources, detect_rust_analyzer, find_executable, load_lsp_servers,
-    start_lsp_server, LspServerConfig, LspServerHandle, OwnedLspServerSpec, LSP_REGISTRY,
-};
-pub use lsp_worker::{
-    new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig, SharedLspClient, ShutdownFlag,
-};
+// The LSP client, server-spec types, and builtin registry now live in
+// `swissarmyhammer-lsp` (the dependency edge was inverted: this crate depends
+// on `swissarmyhammer-lsp`). Re-export them here so existing consumers of
+// `swissarmyhammer_code_context::{...}` compile unchanged.
+pub use lsp_worker::{new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig, ShutdownFlag};
 pub use ops::find_duplicates::{
     find_duplicates, find_duplicates_in, ChunkRef, DuplicateGroup, DuplicateMatch,
     FindDuplicatesOptions, FindDuplicatesResult,
@@ -123,6 +121,11 @@ pub use ops::status::{
 pub use ops::workspace_symbol_live::{
     parse_workspace_symbols, workspace_symbol_live, WorkspaceSymbolLiveOptions,
     WorkspaceSymbolLiveResult, WorkspaceSymbolResult,
+};
+pub use swissarmyhammer_lsp::{
+    builtin_lsp_yaml_sources, detect_rust_analyzer, find_executable, load_lsp_servers,
+    parse_document_symbols, start_lsp_server, LspJsonRpcClient, LspServerConfig, LspServerHandle,
+    LspTransport, OwnedLspServerSpec, SharedLspClient, LSP_REGISTRY,
 };
 // NOTE: `IndexProgress` (event enum, emitted by the indexer) is distinct from
 // `IndexingProgress` (snapshot status returned by `search_code`, re-exported
