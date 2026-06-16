@@ -59,3 +59,4 @@ futures = { workspace = true }
 uuid = { workspace = true }
 serial_test = { workspace = true }
 piper = { workspace = true }
+tracing-test = { workspace = true }

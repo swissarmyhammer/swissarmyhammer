@@ -98,25 +98,37 @@ slow-timeout = { period = "60s", terminate-after = 6 }
 [[profile.default.overrides]]
 filter = "package(kanban-app) and binary(ai_panel_e2e)"
 test-group = "llama-embedding-serial"
-# The MCP tool-loop test runs several real agentic generation rounds; warn every
-# 60s, hard-kill after 6 periods (6 minutes).
-slow-timeout = { period = "60s", terminate-after = 6 }
+# These run several real agentic generation rounds and retry the prompt pair on
+# transient 0.6B variance (KV-cache exhaustion / runaway-guard aborts) up to 6
+# attempts. Uncontended a clean pair lands in ~26s (measured locally), but the
+# GPU is still time-sliced against the separate embedding test-groups: under that
+# contention turns slow down AND hit more transient variance, so the retry path
+# can run many generations and grind past a 6-minute budget without landing a
+# clean pair (observed TIMEOUT at 360s). Warn every 60s, hard-kill after 10
+# periods (10 minutes) so the bounded retry loop has room to converge under
+# contention rather than being killed mid-retry.
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 # The swissarmyhammer-agent real-model review e2e drives the production review
 # pipeline over a real local model (qwen-0.6B chat) AND loads the real platform
-# embedder (qwen-embedding). It is the MINIMUM real end-to-end: scoped to a single
-# `function-length` validator over one root-level `.rs` file, it drives exactly ONE
-# fan-out generation and zero verify calls — well under a minute on the GPU. Put it
-# in the SAME global serial lane as the llama-agent / llama-embedding / kanban-app
-# real-model tests so at most one real-model test drives the GPU at a time (the
-# GPU's compute is time-sliced across processes; concurrent real-model turns blow
-# their hang budgets). Scoped to the binary so the fast, model-free `review_factory`
-# wiring test stays parallel. Warn every 60s, hard-kill after 5 periods (5 minutes)
-# to leave ample headroom under GPU contention.
+# embedder (qwen-embedding). It is scoped to a single `function-length` validator
+# over one root-level `.rs` file to stay minimal, but it is NOT sub-minute: a cold
+# qwen-0.6B + qwen-embedding GPU load plus the fan-out generation runs ~3 minutes
+# uncontended (measured ~175s locally), and the nondeterministic 0.6B model can
+# flag the tiny diff — producing a candidate that triggers a real VERIFY generation
+# on top of the fan-out, so "zero verify calls" cannot be guaranteed. Put it in the
+# SAME global serial lane as the llama-agent / llama-embedding / kanban-app
+# real-model tests so at most one of THESE drives the GPU at a time. The GPU is
+# still time-sliced against the separate embedding test-groups, so on CI the run
+# lands well over the uncontended ~175s. Scoped to the binary so the fast,
+# model-free `review_factory` wiring test stays parallel. Warn every 60s, hard-kill
+# after 8 periods (8 minutes) — generous headroom over the measured uncontended
+# runtime plus cross-group GPU contention and a possible verify pass, matching the
+# budgets the other heavy real-model tests carry.
 [[profile.default.overrides]]
 filter = "package(swissarmyhammer-agent) and binary(review_real_model_e2e)"
 test-group = "llama-embedding-serial"
-slow-timeout = { period = "60s", terminate-after = 5 }
+slow-timeout = { period = "60s", terminate-after = 8 }
 
 # Apply serial execution to llama-embedding tests
 [[profile.default.overrides]]

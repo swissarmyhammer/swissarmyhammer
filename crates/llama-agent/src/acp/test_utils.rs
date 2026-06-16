@@ -131,6 +131,21 @@ pub async fn create_acp_server_without_model(
     build_acp_server(agent_config, AcpConfig::default(), false).await
 }
 
+/// Build a `PromptRequest` carrying a single user text block — the minimal
+/// prompt every prompt-path test sends. Shared by the in-crate `server.rs`
+/// tests and the real-model integration tests so the two cannot drift.
+pub fn text_prompt(
+    session_id: agent_client_protocol::schema::SessionId,
+    text: &str,
+) -> agent_client_protocol::schema::PromptRequest {
+    agent_client_protocol::schema::PromptRequest::new(
+        session_id,
+        vec![agent_client_protocol::schema::ContentBlock::from(
+            text.to_string(),
+        )],
+    )
+}
+
 // The canonical XDG_STATE_HOME isolation guard lives in
 // `agent-client-protocol-extras` next to the `SessionStore` it isolates
 // (enabled via that dependency's `test-support` feature); re-export it rather

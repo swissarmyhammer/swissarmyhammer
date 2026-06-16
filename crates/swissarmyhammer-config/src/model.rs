@@ -1872,32 +1872,59 @@ impl ModelManager {
         Ok(None)
     }
 
-    /// Resolve the effective review-tool model *name*.
+    /// Apply the review-scope model precedence to already-read config values.
     ///
-    /// Returns the configured `review.model` when set, otherwise the baked-in
-    /// [`REVIEW_DEFAULT_AGENT`] (`claude-code-haiku`). This is the single source
-    /// of truth for *which model the review scope uses*: the `sah model`
+    /// This is the single source of truth for *which model the review scope
+    /// uses*, given the two relevant config keys. Precedence:
+    /// 1. `review_model` (an explicit `review.model`) — wins, review only.
+    /// 2. `default_model` (an explicit top-level `model:`) — if the user set an
+    ///    overall model they mean it everywhere, including review.
+    /// 3. The baked-in [`REVIEW_DEFAULT_AGENT`] (`claude-code-haiku`) — the
+    ///    review scope's factory default, used only when *nothing* is configured.
+    ///
+    /// Kept as a pure function so every resolution path (the `sah model`
     /// display, the serve-time review factory wiring, and
-    /// [`resolve_review_agent_config`] all resolve through this rule, so they
-    /// cannot disagree about the effective review model.
+    /// [`resolve_review_agent_name`]) shares the exact same rule and cannot
+    /// disagree, regardless of where each reads the raw config from.
+    pub fn review_agent_name_from(
+        review_model: Option<String>,
+        default_model: Option<String>,
+    ) -> String {
+        review_model
+            .or(default_model)
+            .unwrap_or_else(|| REVIEW_DEFAULT_AGENT.to_string())
+    }
+
+    /// Resolve the effective review-tool model *name* from config files.
+    ///
+    /// Reads `review.model` and the top-level `model:` and applies
+    /// [`review_agent_name_from`]: explicit `review.model` → explicit overall
+    /// `model:` → the baked-in [`REVIEW_DEFAULT_AGENT`] (`claude-code-haiku`).
+    ///
+    /// So `sah model set <x>` (an overall default) also drives the review scope,
+    /// while a `review.model` override applies to review alone. Only a fully
+    /// unconfigured project falls through to `claude-code-haiku`.
     ///
     /// # Returns
     /// * `Result<String, ModelError>` - The effective review model name
     pub fn resolve_review_agent_name(paths: &ModelPaths) -> Result<String, ModelError> {
-        Ok(Self::get_review_agent(paths)?.unwrap_or_else(|| REVIEW_DEFAULT_AGENT.to_string()))
+        Ok(Self::review_agent_name_from(
+            Self::get_review_agent(paths)?,
+            Self::get_agent(paths)?,
+        ))
     }
 
     /// Resolve complete review-tool agent configuration
     ///
     /// Resolves the effective review model name via
-    /// [`resolve_review_agent_name`] (configured `review.model`, else the
-    /// baked-in [`REVIEW_DEFAULT_AGENT`]) and parses its config. If that name
-    /// cannot be resolved or parsed, logs a warning and falls back to the
-    /// global default via [`resolve_agent_config`].
+    /// [`resolve_review_agent_name`] (explicit `review.model` → explicit overall
+    /// `model:` → baked-in [`REVIEW_DEFAULT_AGENT`]) and parses its config. If
+    /// that name cannot be resolved or parsed, logs a warning and falls back to
+    /// the global default via [`resolve_agent_config`].
     ///
-    /// Unlike [`resolve_agent_config`], the review scope defaults to
-    /// `claude-code-haiku` (a cheaper/faster Claude) rather than plain
-    /// `claude-code`.
+    /// Unlike [`resolve_agent_config`], an *unconfigured* review scope defaults
+    /// to `claude-code-haiku` (a cheaper/faster Claude) rather than plain
+    /// `claude-code` — but an explicit overall `model:` still drives review.
     ///
     /// # Returns
     /// * `Result<ModelConfig, ModelError>` - Resolved review agent configuration
@@ -4151,8 +4178,9 @@ model: qwen
             );
         }
 
-        // resolve_review_agent_config falls back to the global model: when no
-        // review model is set.
+        // When an overall model: is set but review.model is not, the review
+        // scope follows the overall model (NOT the baked-in haiku default):
+        // "if I set an overall model I mean it".
         #[test]
         #[serial_test::serial(cwd)]
         fn test_resolve_review_agent_config_falls_back_to_global() {
@@ -4163,10 +4191,55 @@ model: qwen
             std::fs::write(&config_path, "model: claude-code\n").unwrap();
 
             let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah()).unwrap();
+            assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
+            match config.executor() {
+                ModelExecutorConfig::ClaudeCode(claude_config) => {
+                    assert!(
+                        claude_config.args.is_empty(),
+                        "review must follow the overall model: (plain claude-code, no --model haiku), got {:?}",
+                        claude_config.args
+                    );
+                }
+                _ => panic!("Should be Claude Code config"),
+            }
+        }
+
+        // An overall model: of a llama agent drives the review scope too when no
+        // review.model is set.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_resolve_review_agent_config_inherits_overall_llama() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+            std::fs::write(&config_path, "model: qwen-0.6b-test\n").unwrap();
+
+            let config = ModelManager::resolve_review_agent_config(&ModelPaths::sah()).unwrap();
             assert_eq!(
                 config.executor_type(),
-                ModelExecutorType::ClaudeCode,
-                "Should fall back to the global model when no review model is set"
+                ModelExecutorType::LlamaAgent,
+                "an overall llama model: must drive review when review.model is unset"
+            );
+        }
+
+        // The pure precedence rule: review.model -> overall model: -> haiku.
+        #[test]
+        fn test_review_agent_name_from_precedence() {
+            assert_eq!(
+                ModelManager::review_agent_name_from(Some("rev".into()), Some("def".into())),
+                "rev",
+                "explicit review.model wins"
+            );
+            assert_eq!(
+                ModelManager::review_agent_name_from(None, Some("def".into())),
+                "def",
+                "overall model: drives review when review.model is unset"
+            );
+            assert_eq!(
+                ModelManager::review_agent_name_from(None, None),
+                REVIEW_DEFAULT_AGENT,
+                "fully unconfigured review falls to the baked-in claude-code-haiku"
             );
         }
 

@@ -15,6 +15,7 @@ use crate::attachment::{
 };
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
 use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
+use crate::comment::{AddComment, DeleteComment, GetComment, ListComments, UpdateComment};
 use crate::perspective::{
     AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, UpdatePerspective,
 };
@@ -60,13 +61,19 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(SearchTasks::new(""))) as &dyn Operation,
         Box::leak(Box::new(ArchiveTask::new(""))) as &dyn Operation,
         Box::leak(Box::new(UnarchiveTask::new(""))) as &dyn Operation,
-        Box::leak(Box::new(ListArchived)) as &dyn Operation,
+        Box::leak(Box::new(ListArchived::new())) as &dyn Operation,
         // Tag
         Box::leak(Box::new(AddTag::new(""))) as &dyn Operation,
         Box::leak(Box::new(GetTag::new(""))) as &dyn Operation,
         Box::leak(Box::new(UpdateTag::new(""))) as &dyn Operation,
         Box::leak(Box::new(DeleteTag::new(""))) as &dyn Operation,
         Box::leak(Box::new(ListTags::default())) as &dyn Operation,
+        // Comment
+        Box::leak(Box::new(AddComment::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(GetComment::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(UpdateComment::new("", "", ""))) as &dyn Operation,
+        Box::leak(Box::new(DeleteComment::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(ListComments::new(""))) as &dyn Operation,
         // Attachment
         Box::leak(Box::new(AddAttachment::new("", "", ""))) as &dyn Operation,
         Box::leak(Box::new(GetAttachment::new("", ""))) as &dyn Operation,
@@ -175,6 +182,10 @@ fn generate_kanban_examples() -> Vec<Value> {
         json!({
             "description": "Add attachment to a task",
             "value": {"op": "add attachment", "task_id": "01ABC...", "name": "screenshot.png", "path": "/path/to/screenshot.png"}
+        }),
+        json!({
+            "description": "Add a comment to a task",
+            "value": {"op": "add comment", "task_id": "01ABC...", "text": "Blocked on the API change"}
         }),
         json!({
             "description": "Add a perspective",
@@ -419,6 +430,77 @@ mod tests {
     }
 
     #[test]
+    fn test_schema_includes_comment_ops() {
+        // All five comment ops land on both surfaces' op enum, and the wire
+        // schema carries their required-param signatures — with `add comment`
+        // requiring exactly `task_id` + `text` (`actor` is optional and must
+        // not widen the wire surface).
+        let ops = kanban_operations();
+        let expected = [
+            "add comment",
+            "get comment",
+            "update comment",
+            "delete comment",
+            "list comments",
+        ];
+
+        for schema in [
+            generate_kanban_mcp_schema(ops),
+            generate_kanban_mcp_schema_full(ops),
+        ] {
+            let op_enum = schema["properties"]["op"]["enum"]
+                .as_array()
+                .expect("op enum should be an array");
+            let op_strings: Vec<&str> = op_enum.iter().filter_map(|v| v.as_str()).collect();
+            for expected_op in &expected {
+                assert!(
+                    op_strings.contains(expected_op),
+                    "op enum should contain {expected_op:?}, got: {op_strings:?}"
+                );
+            }
+        }
+
+        let wire = generate_kanban_mcp_schema(ops);
+        let sigs = wire["x-op-signatures"].as_object().unwrap();
+        for expected_op in &expected {
+            assert!(
+                sigs.contains_key(*expected_op),
+                "x-op-signatures should contain {expected_op:?}"
+            );
+        }
+
+        let add_comment: Vec<&str> = sigs["add comment"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(
+            add_comment,
+            vec!["task_id", "text"],
+            "`add comment` requires exactly task_id + text (actor is optional)"
+        );
+    }
+
+    #[test]
+    fn test_full_schema_has_comment_example() {
+        let ops = kanban_operations();
+        let schema = generate_kanban_mcp_schema_full(ops);
+
+        let examples = schema["examples"]
+            .as_array()
+            .expect("examples should be an array");
+
+        let has_add_comment = examples
+            .iter()
+            .any(|ex| ex["value"]["op"].as_str() == Some("add comment"));
+        assert!(
+            has_add_comment,
+            "full schema examples should include an `add comment` example"
+        );
+    }
+
+    #[test]
     fn test_full_schema_has_perspective_examples() {
         let ops = kanban_operations();
         let schema = generate_kanban_mcp_schema_full(ops);
@@ -563,6 +645,49 @@ mod tests {
             !add_actor.contains(&"ensure"),
             "serde-defaulted bool field 'ensure' must not be required"
         );
+    }
+
+    /// The optional `detail` param must NOT widen the wire surface: the
+    /// `x-op-signatures` entries for `list tasks` and `list archived` carry
+    /// required params only, so they stay free of `detail`. The FULL/CLI
+    /// schema's `x-operation-schemas` entries, by contrast, must document it.
+    #[test]
+    fn test_detail_param_absent_from_wire_signatures_but_in_full_schema() {
+        let ops = kanban_operations();
+
+        let wire = generate_kanban_mcp_schema(ops);
+        let sigs = wire["x-op-signatures"].as_object().unwrap();
+        for op_name in ["list tasks", "list archived"] {
+            let required: Vec<&str> = sigs[op_name]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect();
+            assert!(
+                !required.contains(&"detail"),
+                "{op_name:?} wire signature must not require `detail`, got: {required:?}"
+            );
+        }
+
+        let full = generate_kanban_mcp_schema_full(ops);
+        let op_schemas = full["x-operation-schemas"].as_array().unwrap();
+        for op_name in ["list tasks", "list archived"] {
+            let entry = op_schemas
+                .iter()
+                .find(|s| s["properties"]["op"]["const"] == op_name)
+                .unwrap_or_else(|| panic!("full schema entry for {op_name:?}"));
+            let detail = &entry["properties"]["detail"];
+            assert!(
+                detail.is_object(),
+                "{op_name:?} full schema must document `detail`"
+            );
+            let desc = detail["description"].as_str().unwrap_or("");
+            assert!(
+                desc.contains("slim") && desc.contains("full"),
+                "{op_name:?} `detail` description must cover both values: {desc:?}"
+            );
+        }
     }
 
     #[test]

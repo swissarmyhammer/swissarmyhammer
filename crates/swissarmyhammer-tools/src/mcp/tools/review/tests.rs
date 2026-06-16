@@ -15,13 +15,17 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{
-    ContentBlock, ContentChunk, InitializeResponse, NewSessionResponse, PromptRequest,
-    PromptResponse, SessionNotification, SessionUpdate, TextContent,
-};
-use agent_client_protocol::{Client, ConnectTo, ConnectionTo, DynConnectTo, Role};
+use agent_client_protocol::DynConnectTo;
 use serde_json::json;
 use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+// The ONE shared review test seam, consumed via the validators crate's
+// `test-support` feature instead of per-file copies: the scripted ACP agent
+// harness, the throwaway git repo, the on-disk index builder + row seeders, and
+// the shared embedding dimension.
+use swissarmyhammer_validators::review::test_support::{
+    body as dup_body, dup_emb, on_disk_index_conn, seed_chunk, ScriptedAdapter, ScriptedAgent,
+    ScriptedReply, TestRepo, DIM,
+};
 use tokio::sync::broadcast;
 
 use super::review_op::{AgentFactory, AgentHandle, EmbedderFactory};
@@ -494,9 +498,16 @@ fn planted_duplicate_fixture(repo: &TestRepo) -> AgentFactory {
     let agent = ScriptedAgent::new(vec![
         (
             "# Validator: deduplicate".to_string(),
-            findings_json("src/lib.rs", "blocker", "compute duplicates old_compute"),
+            ScriptedReply::Text(findings_json(
+                "src/lib.rs",
+                "blocker",
+                "compute duplicates old_compute",
+            )),
         ),
-        ("compute duplicates old_compute".to_string(), confirm_json()),
+        (
+            "compute duplicates old_compute".to_string(),
+            ScriptedReply::Text(confirm_json()),
+        ),
     ]);
     scripted_factory(agent)
 }
@@ -617,6 +628,7 @@ async fn review_pipelines_run_one_at_a_time_process_wide() {
         backend: Some("local".to_string()),
         validators: Vec::new(),
         concurrency: None,
+        force: false,
     };
     let run = |path: std::path::PathBuf| {
         run_review_request(
@@ -664,92 +676,220 @@ fn concurrency_probe_embedder_factory(
 }
 
 // ---------------------------------------------------------------------------
-// scripted-agent + on-disk-index + git-repo harness
+// incremental tracking through the production tool path (review_op)
+//
+// pnkrd77 wired the baseline RECORDER into the engine, but no test asserted it
+// fires through the PRODUCTION tool entry point `run_review_request` — the layer
+// the live calcutron run actually drove (it adds the on-disk index connection,
+// the `force` -> `use_tracking` mapping, the process gate, and the
+// spawn_blocking runtime over the agent path). The calcutron symptom was
+// `subtracted=0` forever: `.validators/.hashes/` was never written. These tests
+// pin the recorder at that seam so a regression in any of those layers — not
+// just in the engine `record_reviewed` site — re-surfaces here.
 // ---------------------------------------------------------------------------
 
-struct TestRepo {
-    dir: tempfile::TempDir,
-    repo: git2::Repository,
-}
+/// A `review working` through the production `run_review_request` (tracking on)
+/// records a `.validators/.hashes/<path>.yaml` baseline for every reviewed file
+/// and lazily writes `.validators/.gitignore` ignoring `.hashes/`.
+///
+/// This is the production-path assertion the calcutron run proved missing: the
+/// drive-level test (`drive::incremental_tracking_*`) covers
+/// `run_review_over_agent`, but nothing asserted the baseline survives the extra
+/// `review_op` layers. It must fail if the recorder is not reached through this
+/// path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn run_review_request_records_a_tracking_baseline_and_gitignore() {
+    use super::review_op::{run_review_request, ReviewRequest};
+    use swissarmyhammer_validators::review::{read_entry, Scope};
 
-impl TestRepo {
-    fn new() -> Self {
-        let dir = tempfile::TempDir::new().unwrap();
-        let repo = git2::Repository::init(dir.path()).unwrap();
-        {
-            let mut cfg = repo.config().unwrap();
-            cfg.set_str("user.name", "Test").unwrap();
-            cfg.set_str("user.email", "test@example.com").unwrap();
-        }
-        Self { dir, repo }
-    }
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
 
-    fn path(&self) -> &Path {
-        self.dir.path()
-    }
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
 
-    fn write(&self, rel: &str, content: &str) {
-        let full = self.dir.path().join(rel);
-        if let Some(parent) = full.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(full, content).unwrap();
-    }
-
-    fn commit(&self, message: &str) {
-        let mut index = self.repo.index().unwrap();
-        index
-            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
-            .unwrap();
-        index.write().unwrap();
-        let tree_id = index.write_tree().unwrap();
-        let tree = self.repo.find_tree(tree_id).unwrap();
-        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
-        let parent = self.repo.head().ok().and_then(|h| h.peel_to_commit().ok());
-        let parents: Vec<&git2::Commit> = parent.iter().collect();
-        self.repo
-            .commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
-            .unwrap();
-    }
-}
-
-/// A function body long enough to clear the default `min_chunk_bytes` (100).
-fn dup_body(label: &str) -> String {
-    format!(
-        "pub fn {label}(input: &[f64]) -> f64 {{\n    let mut total = 0.0;\n    for value in input {{\n        total += value * value;\n    }}\n    total / input.len() as f64\n}}"
+    let report = run_review_request(
+        ReviewRequest {
+            scope: Scope::Working,
+            backend: Some("local".to_string()),
+            validators: Vec::new(),
+            concurrency: None,
+            force: false, // tracking ON — the production default
+        },
+        repo.path().to_path_buf(),
+        mock_embedder_factory(),
+        factory,
+        "2026-06-15 12:00".to_string(),
     )
+    .await
+    .expect("review working through run_review_request");
+
+    // The pass actually reviewed the changed file (so the recorder is reachable).
+    assert!(
+        report.counts.tasks_attempted > 0,
+        "the working change must have produced fan-out tasks: {:?}",
+        report.counts
+    );
+
+    // The production tool path recorded a baseline entry for the reviewed file.
+    assert!(
+        read_entry(repo.path(), "src/lib.rs").is_some(),
+        "run_review_request must record a .validators/.hashes/ entry for the \
+         reviewed file (the calcutron `subtracted=0` gap)"
+    );
+
+    // The hash dir's gitignore was lazily written, ignoring `.hashes/`.
+    let gitignore = repo.path().join(".validators/.gitignore");
+    let content = std::fs::read_to_string(&gitignore)
+        .expect("run_review_request must write .validators/.gitignore");
+    assert!(
+        content.lines().any(|l| l.trim() == ".hashes/"),
+        "the gitignore must ignore .hashes/, got:\n{content}"
+    );
 }
+
+/// A `review working` through the production `run_review_request` against a repo
+/// whose `.validators/.gitignore` was **already written by swissarmyhammer-directory**
+/// (the store deploy) must append the `.hashes/` ignore line while preserving the
+/// store's original lines.
+///
+/// This reproduces the live calcutron gap (apvst51): the existing baseline test
+/// starts from no gitignore, so it never exercised the append-to-store-content
+/// branch through the production layers. Here the store-authored content
+/// pre-exists exactly as swissarmyhammer-directory's `ValidatorsConfig::GITIGNORE_CONTENT`
+/// writes it, and the recorder must append `.hashes/` to it idempotently.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn run_review_request_appends_hashes_to_a_store_authored_gitignore() {
+    use super::review_op::{run_review_request, ReviewRequest};
+    use swissarmyhammer_directory::{DirectoryConfig, ValidatorsConfig};
+    use swissarmyhammer_validators::review::Scope;
+
+    // The EXACT content swissarmyhammer-directory writes on store deploy,
+    // referenced from the real source of truth so this test cannot silently
+    // drift from the on-disk store content it asserts against.
+    let store_gitignore = <ValidatorsConfig as DirectoryConfig>::GITIGNORE_CONTENT;
+
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
+
+    // The store deployed `.validators/.gitignore` BEFORE any review ran.
+    let validators_dir = repo.path().join(".validators");
+    std::fs::create_dir_all(&validators_dir).expect("create .validators");
+    std::fs::write(validators_dir.join(".gitignore"), store_gitignore)
+        .expect("seed store-authored .validators/.gitignore");
+
+    let report = run_review_request(
+        ReviewRequest {
+            scope: Scope::Working,
+            backend: Some("local".to_string()),
+            validators: Vec::new(),
+            concurrency: None,
+            force: false, // tracking ON — the production default
+        },
+        repo.path().to_path_buf(),
+        mock_embedder_factory(),
+        factory,
+        "2026-06-15 12:00".to_string(),
+    )
+    .await
+    .expect("review working through run_review_request");
+
+    assert!(
+        report.counts.tasks_attempted > 0,
+        "the working change must have produced fan-out tasks: {:?}",
+        report.counts
+    );
+
+    let content = std::fs::read_to_string(validators_dir.join(".gitignore"))
+        .expect("the store gitignore is still present after the review");
+    // The store's original lines are preserved (no clobber).
+    assert!(
+        content.contains("# Keep validator definitions (they should be committed)"),
+        "the store-authored lines must be preserved, got:\n{content}"
+    );
+    // The recorder appended the `.hashes/` ignore line.
+    assert!(
+        content.lines().any(|l| l.trim() == ".hashes/"),
+        "the .hashes/ ignore line must be appended to the store gitignore, got:\n{content}"
+    );
+}
+
+/// Two `review working` passes through `run_review_request` with no edits
+/// between them: the first records baselines, the second subtracts the unchanged
+/// file and short-circuits to zero fan-out tasks. This is the end-to-end
+/// duplicate-avoidance the calcutron run never achieved (`subtracted=0` forever).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn run_review_request_subtracts_an_unchanged_file_on_a_second_pass() {
+    use super::review_op::{run_review_request, ReviewRequest};
+    use swissarmyhammer_validators::review::Scope;
+
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
+
+    let run = |path: std::path::PathBuf, factory: AgentFactory| async move {
+        run_review_request(
+            ReviewRequest {
+                scope: Scope::Working,
+                backend: Some("local".to_string()),
+                validators: Vec::new(),
+                concurrency: None,
+                force: false,
+            },
+            path,
+            mock_embedder_factory(),
+            factory,
+            "2026-06-15 12:00".to_string(),
+        )
+        .await
+        .expect("review working through run_review_request")
+    };
+
+    // Pass 1: reviews the changed file and records its baseline.
+    let first = run(repo.path().to_path_buf(), Arc::clone(&factory)).await;
+    assert!(
+        first.counts.tasks_attempted > 0,
+        "the first pass reviews the changed file: {:?}",
+        first.counts
+    );
+
+    // Pass 2: no edits → the file is subtracted, so the pass attempts zero
+    // fan-out tasks and short-circuits to the empty-scope marker.
+    let second = run(repo.path().to_path_buf(), factory).await;
+    assert_eq!(
+        second.counts.tasks_attempted, 0,
+        "an unchanged second pass subtracts every reviewed file (zero fan-out): {:?}",
+        second.counts
+    );
+    assert!(
+        second.markdown.contains("Nothing in scope to review"),
+        "the subtracted second pass renders the empty-scope marker: {}",
+        second.markdown
+    );
+}
+
+// ---------------------------------------------------------------------------
+// scripted-agent + on-disk-index harness
+//
+// The throwaway git repo (`TestRepo`), the on-disk index builder
+// (`on_disk_index_conn`), the row seeder (`seed_chunk`), the function-body
+// helper (`dup_body`), and the embedding dimension (`DIM`) are all the SHARED
+// review test seam from `swissarmyhammer_validators::review::test_support`,
+// imported above rather than re-declared here.
+// ---------------------------------------------------------------------------
 
 /// Seed an on-disk code_context index at `<root>/.code-context/index.db` with the
 /// duplicate function present in another file, so `find_duplicates` hits.
 fn seed_on_disk_index(root: &Path, dup: &str) {
-    use swissarmyhammer_code_context::db::{configure_connection, create_schema};
-    use swissarmyhammer_code_context::serialize_embedding;
-
-    let ctx_dir = root.join(".code-context");
-    std::fs::create_dir_all(&ctx_dir).unwrap();
-    let conn = rusqlite::Connection::open(ctx_dir.join("index.db")).unwrap();
-    configure_connection(&conn).unwrap();
-    create_schema(&conn).unwrap();
-
-    let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
-    for (file, symbol) in [
-        ("src/lib.rs", "compute"),
-        ("src/existing.rs", "old_compute"),
-    ] {
-        conn.execute(
-            "INSERT OR IGNORE INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed, embedded)
-             VALUES (?1, X'DEADBEEF', 1024, 1000, 1, 1, 1)",
-            rusqlite::params![file],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, symbol_path, text, embedding)
-             VALUES (?1, 0, ?2, 1, 10, ?3, ?4, ?5)",
-            rusqlite::params![file, dup.len() as i64, symbol, dup, serialize_embedding(&emb)],
-        )
-        .unwrap();
-    }
+    let conn = on_disk_index_conn(root);
+    let emb = dup_emb();
+    seed_chunk(&conn, "src/lib.rs", "compute", dup, &emb);
+    seed_chunk(&conn, "src/existing.rs", "old_compute", dup, &emb);
 }
 
 /// A findings array as a fleet agent emits it (the `validator` field is tagged by
@@ -766,9 +906,6 @@ fn findings_json(file: &str, severity: &str, claim: &str) -> String {
 fn confirm_json() -> String {
     "```json\n{\"confirmed\": true, \"reason\": \"the duplicate is real\"}\n```".to_string()
 }
-
-/// Embedding dimension shared by the seeded on-disk index and the mock embedder.
-const DIM: usize = 4;
 
 /// An [`EmbedderFactory`] yielding a deterministic mock embedder (no model load).
 fn mock_embedder_factory() -> EmbedderFactory {
@@ -793,7 +930,10 @@ fn scripted_factory(agent: Arc<ScriptedAgent>) -> AgentFactory {
         let agent = Arc::clone(&agent);
         Box::pin(async move {
             let (notify_tx, notification_rx) = broadcast::channel(64);
-            let agent = ScriptedAgent::with_notifier(agent, notify_tx);
+            // Rebind the shared harness onto this run's broadcast and bridge each
+            // reply onto the live connection too (the production dual-emission the
+            // driver must collect once).
+            let agent = ScriptedAgent::rebind_broadcast(&agent, notify_tx, true);
             let dyn_agent = DynConnectTo::new(ScriptedAdapter(agent));
             Ok(AgentHandle {
                 agent: dyn_agent,
@@ -801,134 +941,4 @@ fn scripted_factory(agent: Arc<ScriptedAgent>) -> AgentFactory {
             })
         })
     })
-}
-
-/// A scripted ACP agent that maps each prompt onto a response by substring match.
-struct ScriptedAgent {
-    next_session: AtomicUsize,
-    script: Vec<(String, String)>,
-    /// Backend broadcast the agent streams its reply onto — the same channel the
-    /// handle's `notification_rx` is a `subscribe()` of. `None` until the factory
-    /// wires it via [`ScriptedAgent::with_notifier`].
-    notify_tx: Option<broadcast::Sender<SessionNotification>>,
-}
-
-impl ScriptedAgent {
-    fn new(script: Vec<(String, String)>) -> Arc<Self> {
-        Arc::new(Self {
-            next_session: AtomicUsize::new(0),
-            script,
-            notify_tx: None,
-        })
-    }
-
-    /// Clone the script into a fresh agent bound to a backend broadcast sender —
-    /// the per-connection notifier the handle's `notification_rx` subscribes to.
-    fn with_notifier(
-        base: Arc<ScriptedAgent>,
-        notify_tx: broadcast::Sender<SessionNotification>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            next_session: AtomicUsize::new(0),
-            script: base.script.clone(),
-            notify_tx: Some(notify_tx),
-        })
-    }
-
-    fn response_for(&self, prompt: &str) -> String {
-        for (needle, response) in &self.script {
-            if prompt.contains(needle) {
-                return response.clone();
-            }
-        }
-        "[]".to_string()
-    }
-}
-
-struct ScriptedAdapter(Arc<ScriptedAgent>);
-
-impl ConnectTo<Client> for ScriptedAdapter {
-    async fn connect_to(
-        self,
-        client: impl ConnectTo<<Client as Role>::Counterpart>,
-    ) -> agent_client_protocol::Result<()> {
-        let mock = Arc::clone(&self.0);
-        agent_client_protocol::Agent
-            .builder()
-            .name("scripted-agent")
-            .on_receive_request(
-                {
-                    let mock = Arc::clone(&mock);
-                    async move |req: agent_client_protocol::ClientRequest, responder, cx| {
-                        dispatch(&mock, req, responder, &cx)
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_notification(
-                async move |_n: agent_client_protocol::ClientNotification, _cx| Ok(()),
-                agent_client_protocol::on_receive_notification!(),
-            )
-            .connect_to(client)
-            .await
-    }
-}
-
-fn dispatch(
-    mock: &Arc<ScriptedAgent>,
-    request: agent_client_protocol::ClientRequest,
-    responder: agent_client_protocol::Responder<serde_json::Value>,
-    cx: &ConnectionTo<Client>,
-) -> agent_client_protocol::Result<()> {
-    use agent_client_protocol::ClientRequest as Req;
-
-    let mock = Arc::clone(mock);
-    let cx = cx.clone();
-    cx.clone().spawn(async move {
-        match request {
-            Req::InitializeRequest(_) => responder
-                .cast()
-                .respond_with_result(Ok(InitializeResponse::new(1.into()))),
-            Req::NewSessionRequest(_req) => {
-                let n = mock.next_session.fetch_add(1, Ordering::SeqCst);
-                let id = agent_client_protocol::schema::SessionId::new(format!("sess-{n}"));
-                responder
-                    .cast()
-                    .respond_with_result(Ok(NewSessionResponse::new(id)))
-            }
-            Req::PromptRequest(req) => {
-                let prompt = prompt_text(&req);
-                let text = mock.response_for(&prompt);
-                let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(
-                    ContentBlock::Text(TextContent::new(text)),
-                ));
-                let notif = SessionNotification::new(req.session_id.clone(), update);
-                // Publish onto the backend broadcast (the driver's
-                // `notification_rx`), AND bridge the same notification onto the
-                // connection (mirroring a real handle). The driver collects the
-                // backend stream once and ignores the connection re-emission.
-                if let Some(tx) = &mock.notify_tx {
-                    let _ = tx.send(notif.clone());
-                }
-                let _ = cx.send_notification(notif);
-                responder.cast().respond_with_result(Ok(PromptResponse::new(
-                    agent_client_protocol::schema::StopReason::EndTurn,
-                )))
-            }
-            _ => responder
-                .cast::<serde_json::Value>()
-                .respond_with_error(agent_client_protocol::Error::method_not_found()),
-        }
-    })
-}
-
-fn prompt_text(req: &PromptRequest) -> String {
-    req.prompt
-        .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text(t) => Some(t.text.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("")
 }

@@ -10,6 +10,7 @@ use crate::attachment::{
 };
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
 use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
+use crate::comment::{AddComment, DeleteComment, GetComment, ListComments, UpdateComment};
 use crate::perspective::{
     AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, UpdatePerspective,
 };
@@ -562,6 +563,9 @@ async fn execute_task_query_operation(
             {
                 cmd = cmd.with_page_size(page_size);
             }
+            if let Some(detail) = op.get_string("detail") {
+                cmd = cmd.with_detail(detail);
+            }
             processor.process(&cmd, ctx).await
         }
         Verb::Search => {
@@ -927,6 +931,54 @@ async fn dispatch_update_attachment(
     processor.process(&cmd, ctx).await
 }
 
+/// Dispatch comment operations (add, get, update, delete, list).
+async fn execute_comment_operation(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let task_id = req_task_id(ctx, op, "task_id").await?;
+    match op.verb {
+        Verb::Add => {
+            let mut cmd = AddComment::new(task_id, req(op, "text")?);
+            // Author pass-through: an explicit `actor` param wins, falling
+            // back to the dispatching actor. Resolution and validation live
+            // in `AddComment::execute` — dispatch only forwards the Option.
+            if let Some(actor) = op
+                .get_string("actor")
+                .map(str::to_string)
+                .or_else(|| op.actor.as_ref().map(|a| a.to_string()))
+            {
+                cmd = cmd.with_actor(actor);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        Verb::Get => {
+            processor
+                .process(&GetComment::new(task_id, req(op, "id")?), ctx)
+                .await
+        }
+        Verb::Update => {
+            processor
+                .process(
+                    &UpdateComment::new(task_id, req(op, "id")?, req(op, "text")?),
+                    ctx,
+                )
+                .await
+        }
+        Verb::Delete => {
+            processor
+                .process(&DeleteComment::new(task_id, req(op, "id")?), ctx)
+                .await
+        }
+        Verb::List => processor.process(&ListComments::new(task_id), ctx).await,
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
+
 /// Execute a parsed kanban operation against a context.
 ///
 /// This is the central dispatch function that maps `(Verb, Noun)` pairs
@@ -953,11 +1005,14 @@ pub async fn execute_operation(
         Noun::Attachment | Noun::Attachments => {
             execute_attachment_operation(&processor, ctx, op).await
         }
-        Noun::Archived => processor.process(&ListArchived, ctx).await,
-        _ => Err(KanbanError::parse(format!(
-            "unsupported operation: {} {}",
-            op.verb, op.noun
-        ))),
+        Noun::Comment | Noun::Comments => execute_comment_operation(&processor, ctx, op).await,
+        Noun::Archived => {
+            let mut cmd = ListArchived::new();
+            if let Some(detail) = op.get_string("detail") {
+                cmd = cmd.with_detail(detail);
+            }
+            processor.process(&cmd, ctx).await
+        }
     }
 }
 
@@ -977,6 +1032,14 @@ mod tests {
         let ops = parse_input(json!({"op": "init board", "name": "Test"})).unwrap();
         execute_operation(&ctx, &ops[0]).await.unwrap();
         (temp, ctx)
+    }
+
+    /// Fetch the full task via `get task` — mutation responses are thin
+    /// acks / slim projections, so effect assertions go through the stored
+    /// state.
+    async fn get_task(ctx: &KanbanContext, id: &str) -> serde_json::Value {
+        let ops = parse_input(json!({"op": "get task", "id": id})).unwrap();
+        execute_operation(ctx, &ops[0]).await.unwrap()
     }
 
     #[tokio::test]
@@ -1206,6 +1269,58 @@ mod tests {
         assert_eq!(result["count"], 1, "should list exactly one archived task");
         let tasks = result["tasks"].as_array().unwrap();
         assert_eq!(tasks[0]["title"], "Will be archived");
+    }
+
+    /// The optional `detail` param flows through dispatch for both listing
+    /// ops: defaults to slim (no `description`), `"full"` restores the
+    /// enriched shape.
+    #[tokio::test]
+    async fn dispatch_list_detail_param() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({
+            "op": "add task", "title": "Live", "description": "live body"
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({
+            "op": "add task", "title": "Gone", "description": "archived body"
+        }))
+        .unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let archived_id = r["id"].as_str().unwrap().to_string();
+        let ops = parse_input(json!({"op": "archive task", "id": archived_id})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        for (op_name, body) in [
+            ("list tasks", "live body"),
+            ("list archived", "archived body"),
+        ] {
+            let ops = parse_input(json!({"op": op_name})).unwrap();
+            let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+            assert!(
+                !result["tasks"][0]
+                    .as_object()
+                    .unwrap()
+                    .contains_key("description"),
+                "{op_name} default must be slim"
+            );
+
+            let ops = parse_input(json!({"op": op_name, "detail": "full"})).unwrap();
+            let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+            assert_eq!(
+                result["tasks"][0]["description"], body,
+                "{op_name} detail=full must include description"
+            );
+
+            let ops = parse_input(json!({"op": op_name, "detail": "verbose"})).unwrap();
+            let err = execute_operation(&ctx, &ops[0]).await.unwrap_err();
+            assert!(
+                err.to_string().contains("verbose"),
+                "{op_name} must reject unknown detail: {err}"
+            );
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1827,8 +1942,13 @@ mod tests {
 
         let ops = parse_input(json!({"op": "update task", "id": task_id, "title": "Updated title", "description": "New desc"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["title"], "Updated title");
-        assert_eq!(result["description"], "New desc");
+        // The update response is the thin ack — the effect is asserted via
+        // `get task`, the agreed escape hatch.
+        crate::task_helpers::assert_task_mutation_ack(&result, &task_id);
+
+        let task = get_task(&ctx, &task_id).await;
+        assert_eq!(task["title"], "Updated title");
+        assert_eq!(task["description"], "New desc");
     }
 
     #[tokio::test]
@@ -1853,8 +1973,8 @@ mod tests {
         let task_id = r["id"].as_str().unwrap().to_string();
 
         let ops = parse_input(json!({"op": "complete task", "id": task_id})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["position"]["column"], "done");
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(get_task(&ctx, &task_id).await["position"]["column"], "done");
     }
 
     #[tokio::test]
@@ -1868,8 +1988,11 @@ mod tests {
 
         let ops =
             parse_input(json!({"op": "move task", "id": task_id, "column": "doing"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(
+            get_task(&ctx, &task_id).await["position"]["column"],
+            "doing"
+        );
     }
 
     #[tokio::test]
@@ -1887,22 +2010,33 @@ mod tests {
         let r = execute_operation(&ctx, &ops[0]).await.unwrap();
         let task_id = r["id"].as_str().unwrap().to_string();
 
-        // Assign — response has all_assignees, not assignees
+        // Assign — thin ack; the effect is asserted via `get task`
         let ops =
             parse_input(json!({"op": "assign task", "id": task_id, "assignee": "frank"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["assigned"], true);
-        let assignees = result["all_assignees"].as_array().unwrap();
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["id"], task_id);
+        let assignees = get_task(&ctx, &task_id).await["assignees"]
+            .as_array()
+            .unwrap()
+            .clone();
         assert!(
             assignees.iter().any(|a| a == "frank"),
             "frank should be assigned"
         );
 
-        // Unassign
+        // Unassign — thin ack; the effect is asserted via `get task`
         let ops = parse_input(json!({"op": "unassign task", "id": task_id, "assignee": "frank"}))
             .unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["unassigned"], true);
+        assert_eq!(result["ok"], true);
+        assert!(
+            get_task(&ctx, &task_id).await["assignees"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "frank should be unassigned"
+        );
     }
 
     #[tokio::test]
@@ -1926,18 +2060,26 @@ mod tests {
         let r = execute_operation(&ctx, &ops[0]).await.unwrap();
         let task_id = r["id"].as_str().unwrap().to_string();
 
-        // Tag the task — TagTask auto-creates the tag and returns {tagged, task_id, tag}
+        // Tag the task — TagTask auto-creates the tag and returns the thin
+        // ack; the effect is asserted via `get task`
         let ops = parse_input(json!({"op": "tag task", "id": task_id, "tag": "feature"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["tagged"], true);
-        assert_eq!(result["tag"], "feature");
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["id"], task_id);
+        assert!(get_task(&ctx, &task_id).await["tags"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("feature")));
 
-        // Untag — UntagTask returns {untagged, task_id, tag}
+        // Untag — thin ack; the effect is asserted via `get task`
         let ops =
             parse_input(json!({"op": "untag task", "id": task_id, "tag": "feature"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["untagged"], true);
-        assert_eq!(result["tag"], "feature");
+        assert_eq!(result["ok"], true);
+        assert!(get_task(&ctx, &task_id).await["tags"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -1977,7 +2119,10 @@ mod tests {
         .unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["title"], "Described");
-        assert_eq!(result["description"], "Some detail");
+        // The add response is slim (no description echo) — assert the stored
+        // description via `get task`.
+        let task_id = result["id"].as_str().unwrap();
+        assert_eq!(get_task(&ctx, task_id).await["description"], "Some detail");
     }
 
     #[tokio::test]
@@ -2097,8 +2242,9 @@ mod tests {
 
         let ops = parse_input(json!({"op": "update task", "id": task_id, "assignees": ["zara"]}))
             .unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        let assignees = result["assignees"].as_array().unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task = get_task(&ctx, &task_id).await;
+        let assignees = task["assignees"].as_array().unwrap();
         assert!(assignees.iter().any(|a| a == "zara"));
     }
 
@@ -2116,8 +2262,9 @@ mod tests {
 
         let ops = parse_input(json!({"op": "update task", "id": task_id, "depends_on": [dep_id]}))
             .unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        let deps = result["depends_on"].as_array().unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task = get_task(&ctx, &task_id).await;
+        let deps = task["depends_on"].as_array().unwrap();
         assert!(deps.iter().any(|d| d.as_str() == Some(&dep_id)));
     }
 
@@ -2137,10 +2284,11 @@ mod tests {
             json!({"op": "move task", "id": task_id, "column": "doing", "ordinal": "z9"}),
         )
         .unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task = get_task(&ctx, &task_id).await;
+        assert_eq!(task["position"]["column"], "doing");
         // Ordinal is passed through to MoveTask
-        assert!(result["position"]["ordinal"].as_str().is_some());
+        assert!(task["position"]["ordinal"].as_str().is_some());
     }
 
     #[tokio::test]
@@ -2165,8 +2313,8 @@ mod tests {
         let ops =
             parse_input(json!({"op": "move task", "id": id3, "column": "doing", "before_id": id1}))
                 .unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(get_task(&ctx, &id3).await["position"]["column"], "doing");
     }
 
     #[tokio::test]
@@ -2185,8 +2333,8 @@ mod tests {
         let ops =
             parse_input(json!({"op": "move task", "id": id2, "column": "doing", "after_id": id1}))
                 .unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(get_task(&ctx, &id2).await["position"]["column"], "doing");
     }
 
     // ------------------------------------------------------------------
@@ -2588,8 +2736,8 @@ mod tests {
             "due": "2026-05-01",
         }))
         .unwrap();
-        let result = execute_operation(&ctx, &update_ops[0]).await.unwrap();
-        assert_eq!(result["due"], "2026-05-01");
+        execute_operation(&ctx, &update_ops[0]).await.unwrap();
+        assert_eq!(get_task(&ctx, id).await["due"], "2026-05-01");
     }
 
     #[tokio::test]
@@ -2612,9 +2760,9 @@ mod tests {
             "due": null,
         }))
         .unwrap();
-        let result = execute_operation(&ctx, &update_ops[0]).await.unwrap();
+        execute_operation(&ctx, &update_ops[0]).await.unwrap();
         assert!(
-            result["due"].is_null(),
+            get_task(&ctx, id).await["due"].is_null(),
             "due must be null after clearing via null"
         );
     }
@@ -2638,9 +2786,9 @@ mod tests {
             "scheduled": "",
         }))
         .unwrap();
-        let result = execute_operation(&ctx, &update_ops[0]).await.unwrap();
+        execute_operation(&ctx, &update_ops[0]).await.unwrap();
         assert!(
-            result["scheduled"].is_null(),
+            get_task(&ctx, id).await["scheduled"].is_null(),
             "scheduled must be null after clearing via empty string"
         );
     }
@@ -2665,10 +2813,11 @@ mod tests {
             "title": "New title",
         }))
         .unwrap();
-        let result = execute_operation(&ctx, &update_ops[0]).await.unwrap();
-        assert_eq!(result["title"], "New title");
+        execute_operation(&ctx, &update_ops[0]).await.unwrap();
+        let task = get_task(&ctx, id).await;
+        assert_eq!(task["title"], "New title");
         assert_eq!(
-            result["due"], "2026-05-01",
+            task["due"], "2026-05-01",
             "missing date param must not touch the field"
         );
     }
@@ -2788,8 +2937,10 @@ mod tests {
 
         let ops = parse_input(json!({"op": "move task", "id": short, "column": "doing"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
+        // The ack carries the resolved full ULID; the stored position is
+        // asserted via `get task`.
         assert_eq!(result["id"].as_str().unwrap(), id);
+        assert_eq!(get_task(&ctx, &id).await["position"]["column"], "doing");
     }
 
     #[tokio::test]
@@ -2916,9 +3067,102 @@ mod tests {
         .unwrap();
         let updated = execute_operation(&ctx, &ops[0]).await.unwrap();
 
+        // The ack carries the resolved full ULID; the persisted dependency
+        // is asserted via `get task`.
         assert_eq!(updated["id"].as_str().unwrap(), task_id);
-        let deps = updated["depends_on"].as_array().unwrap();
+        let task = get_task(&ctx, &task_id).await;
+        let deps = task["depends_on"].as_array().unwrap();
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].as_str().unwrap(), dep_id);
+    }
+
+    /// `add comment` then `list comments` round-trips through
+    /// `parse_input` → `execute_operation`: the add returns the mutation ack
+    /// (top-level `id` = task id) plus the new member, and the list shows it.
+    #[tokio::test]
+    async fn dispatch_add_comment_then_list_round_trip() {
+        let (_temp, ctx) = setup().await;
+        let task_id = add_one_task(&ctx, "Comment target").await;
+
+        let ops =
+            parse_input(json!({"op": "add comment", "task_id": task_id, "text": "hi"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(added["ok"], true);
+        assert_eq!(added["id"].as_str().unwrap(), task_id);
+        assert_eq!(added["comment"]["text"], "hi");
+
+        let ops = parse_input(json!({"op": "list comments", "task_id": task_id})).unwrap();
+        let listed = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let members = listed["comments"].as_array().unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0]["text"], "hi");
+    }
+
+    /// A dispatching actor (the top-level `actor` key, which `parse_input`
+    /// lifts onto `op.actor`) is forwarded to `AddComment` and attributed on
+    /// the resulting member.
+    #[tokio::test]
+    async fn dispatch_add_comment_attributes_dispatching_actor() {
+        let (_temp, ctx) = setup().await;
+        let task_id = add_one_task(&ctx, "Actor attribution").await;
+
+        let ops = parse_input(json!({"op": "add actor", "id": "alice", "name": "Alice"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({
+            "op": "add comment",
+            "task_id": task_id,
+            "text": "from alice",
+            "actor": "alice",
+        }))
+        .unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(added["comment"]["actor"], "alice");
+    }
+
+    /// `get comment`, `update comment`, and `delete comment` all dispatch:
+    /// get returns the member projection, update edits the text in place,
+    /// delete removes the member from the log.
+    #[tokio::test]
+    async fn dispatch_comment_get_update_delete_round_trip() {
+        let (_temp, ctx) = setup().await;
+        let task_id = add_one_task(&ctx, "Edit comments").await;
+
+        let ops = parse_input(json!({"op": "add comment", "task_id": task_id, "text": "original"}))
+            .unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let comment_id = added["comment"]["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "get comment", "task_id": task_id, "id": comment_id}))
+            .unwrap();
+        let got = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(got["text"], "original");
+        assert_eq!(got["id"].as_str().unwrap(), comment_id);
+
+        let ops = parse_input(json!({
+            "op": "update comment",
+            "task_id": task_id,
+            "id": comment_id,
+            "text": "edited",
+        }))
+        .unwrap();
+        let updated = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(updated["ok"], true);
+        assert_eq!(updated["id"].as_str().unwrap(), task_id);
+
+        let ops = parse_input(json!({"op": "get comment", "task_id": task_id, "id": comment_id}))
+            .unwrap();
+        let got = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(got["text"], "edited");
+
+        let ops =
+            parse_input(json!({"op": "delete comment", "task_id": task_id, "id": comment_id}))
+                .unwrap();
+        let deleted = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(deleted["ok"], true);
+
+        let ops = parse_input(json!({"op": "list comments", "task_id": task_id})).unwrap();
+        let listed = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(listed["comments"].as_array().unwrap().len(), 0);
     }
 }

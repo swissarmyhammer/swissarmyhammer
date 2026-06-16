@@ -1694,14 +1694,16 @@ mod tests {
             ctx.set_extension(Arc::clone(&kanban_a));
             ctx
         };
-        let dtn_result = super::super::task_commands::DoThisNextCmd
+        super::super::task_commands::DoThisNextCmd
             .execute(&dtn_ctx)
             .await
             .unwrap();
-        let dtn_ordinal = dtn_result["position"]["ordinal"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        // The move response is a thin ack — read the stored ordinal.
+        let dtn_ordinal = {
+            let ectx = kanban_a.entity_context().await.unwrap();
+            let entity = ectx.read("task", &target_a_id).await.unwrap();
+            entity.get_str("position_ordinal").unwrap().to_string()
+        };
 
         // Board B: DragCompleteCmd with beforeId path
         let temp_b = tempfile::TempDir::new().unwrap();
@@ -1750,14 +1752,16 @@ mod tests {
         args.insert("beforeId".into(), json!(anchor_b_id));
         let mut cmd_ctx = CommandContext::new("drag.complete", vec![], None, args);
         cmd_ctx.ui_state = Some(ui.clone());
-        cmd_ctx.set_extension(Arc::new(kctx_b));
+        let kanban_b = Arc::new(kctx_b);
+        cmd_ctx.set_extension(Arc::clone(&kanban_b));
 
-        let drag_result = DragCompleteCmd.execute(&cmd_ctx).await.unwrap();
-        let dc = drag_result.get("DragComplete").unwrap();
-        let drag_ordinal = dc["move_result"]["position"]["ordinal"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        DragCompleteCmd.execute(&cmd_ctx).await.unwrap();
+        // The embedded move_result is a thin ack — read the stored ordinal.
+        let drag_ordinal = {
+            let ectx = kanban_b.entity_context().await.unwrap();
+            let entity = ectx.read("task", &target_b_id).await.unwrap();
+            entity.get_str("position_ordinal").unwrap().to_string()
+        };
 
         // Both paths must produce the same ordinal
         assert_eq!(

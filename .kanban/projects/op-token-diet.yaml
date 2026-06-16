@@ -1,0 +1,3 @@
+color: 3b82f6
+description: 'Put the kanban op surface on a token diet for agents. Today list/mutation ops echo whole enriched task JSON (full description, attachments) the agent already has — kilobytes per op, compounding over a session that works many cards. Principle: reads orient (slim by default), single-task `get task` stays FULL (the escape hatch), mutations acknowledge (identity + what changed) instead of echoing the world. Matches the house event style (thin entity-level + field-level {field, value}) and the AddComment precedent (return just the new member).'
+name: Lean agent-facing op responses

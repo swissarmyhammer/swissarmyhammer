@@ -1,6 +1,6 @@
 //! Validate command implementation
 //!
-//! Validates prompt files and skills for syntax and best practices
+//! Validates skills and workflows for syntax and best practices
 
 use crate::context::CliContext;
 use crate::exit_codes::EXIT_ERROR;

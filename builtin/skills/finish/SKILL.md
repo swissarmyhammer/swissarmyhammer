@@ -62,6 +62,12 @@ The `^<task-id>` atom and every id argument accept a full ULID, a 7-char short i
 
 The Stop hook blocks stopping while ralph is active. Only `clear ralph` when the stop condition is met.
 
+### Record progress (both modes)
+
+Log each iteration / state transition — implement landed in `review`, tests run, review verdict, task stuck — on the task being driven.
+
+{% include "_partials/record-progress" %}
+
 ### Single-task mode
 
 Pin `<TASK_ID>` for the entire loop — never `next task`, never switch tasks.
@@ -78,36 +84,23 @@ Pin `<TASK_ID>` for the entire loop — never `next task`, never switch tasks.
 
 ### Scoped-batch mode
 
-1. **Ready todo in scope**: `op: "list tasks", column: "todo"`, `filter`:
-   - No scope → `"#READY"`
-   - Scope → `"#READY && (<SCOPE_FILTER>)"`
+**Strictly sequential — one task at a time.** Never spawn parallel `Agent` subagents, never use worktrees, never run concurrent `/implement` or `/review`. Pick one task, drive it fully to `done` using the exact single-task loop, then pick the next. (Parallel agents on the shared working tree have repeatedly clobbered changes via stash/revert races — the slowness of sequential runs is far cheaper than lost work.)
 
-   Tasks in `doing` are already being worked; tasks in `review` are step 4.
+1. **Pick one task in scope.** First check the `review` column, then the ready `todo` column — a task already in `review` is closer to done, so finish it first:
+   - `op: "list tasks", column: "review"`, `filter`:
+     - No scope → absent
+     - Scope → `"<SCOPE_FILTER>"`
+   - `op: "list tasks", column: "todo"`, `filter`:
+     - No scope → `"#READY"`
+     - Scope → `"#READY && (<SCOPE_FILTER>)"`
 
-2. **Implement the batch**: spawn parallel `Agent` subagents, one per task, each running `/implement <task-id>`. Send all Agent calls in a **single message** so they run concurrently. Each `/implement` will move its task into `review` — none to `done`.
+   Tasks in `doing` are already being worked — leave them. Take the **first** task from `review` if any, otherwise the first ready `todo` task. Pin its id as `<TASK_ID>`.
 
-3. **`/test`** after the batch.
+2. **Drive it to done.** Run the **single-task mode loop** (steps 2–6 above) on `<TASK_ID>`: `/implement` → `/test` → `/review`, looping on findings, with the same 3-iteration guardrail. Do not switch tasks mid-loop. A task that hits the guardrail is reported as stuck and skipped.
 
-4. **Review column (scoped)**: `op: "list tasks", column: "review"`, same `<SCOPE_FILTER>`. Spawn parallel `/review <task-id>` agents in a single message. Each either moves its task to `done` (clean + all prior items checked) or appends fresh dated findings and leaves it in `review`.
+3. **Pick the next.** Return to step 1.
 
-5. **Handle remaining**: any task still in scoped `review` has fresh unchecked `- [ ]` items. Dispatch parallel `/implement <task-id>` agents on each — they'll read the description, work the checklist, flip to `- [x]`, move back to `review`. Run `/test`, return to step 4.
-
-6. **Loop** to step 1 until both queries (ready todo + review) return empty.
-
-7. **Stop**: both empty → `clear ralph` and report. **Tasks outside scope are deliberately ignored.**
-
-### Parallel Agent Prompt Template (scoped-batch only)
-
-```
-Run `/implement [TASK-ID]` on kanban task [TASK-ID]: [TASK-TITLE]
-
-The explicit task id form pins `/implement` to this specific task — it will not call `next task`.
-`/implement` will move the task through doing → review. Do NOT let it use `complete task`.
-
-Task ID: [TASK-ID]
-```
-
-Each agent must target a specific task id. Never let parallel agents call `next task` — they'd race.
+4. **Stop**: both the scoped `review` query and the scoped ready `todo` query return empty → `clear ralph` and report. **Tasks outside scope are deliberately ignored.**
 
 ## Examples
 
@@ -125,27 +118,24 @@ Each agent must target a specific task id. Never let parallel agents call `next 
 **Scoped-batch:** `/finish #bug`.
 
 1. Not a ULID → scoped-batch, `<SCOPE_FILTER> = #bug`. Set ralph.
-2. `list tasks column: "todo" filter: "#READY && (#bug)"` → 3 ready bugs.
-3. Spawn 3 parallel Agents in one message, each pinned to a task id.
-4. `/test` → all green.
-5. `list tasks column: "review" filter: "#bug"` → parallel `/review <id>` agents. Two → `done`; one gets findings, stays in `review`.
-6. `/implement` on the remaining one to work the checklist, then `/test`, then re-review.
-7. Loop until both queries empty.
-8. Clear ralph, report. Tasks outside `#bug` untouched.
+2. `list tasks column: "review" filter: "#bug"` → empty. `list tasks column: "todo" filter: "#READY && (#bug)"` → 3 ready bugs.
+3. Pin the first bug. Drive it through the single-task loop: `/implement` → `/test` → `/review` → `done`.
+4. Back to step 1: pick the next bug. Drive it to `done`. Then the third.
+5. Both queries empty → clear ralph, report all three finished + test results. Tasks outside `#bug` untouched.
 
 ## Constraints
 
 ### Delegation
-- `/implement` per task (sequential in single-task, parallel via Agent in scoped-batch) — owns implementation and the move to `review`.
-- `/review` after each implement batch drives `review → done` or back with fresh findings.
-- `/test` after each implement batch verifies green.
+- `/implement` per task — owns implementation and the move to `review`. **Always sequential**, in both modes.
+- `/review` after each implement drives `review → done` or back with fresh findings.
+- `/test` after each implement verifies green.
 - Don't pick tasks, write code, run tests, or review yourself.
-- Stuck agent → move on. In single-task mode, the step 6 guardrail handles it.
+- Stuck task → the step 6 guardrail handles it; in scoped-batch, report it stuck and move to the next task.
 
-### Parallel safety (scoped-batch)
-- **Max 4 concurrent agents.**
-- **No worktrees.** `isolation: "worktree"` loses changes — agents write to isolated copies never merged back. All agents work in the current tree.
-- Parallel failure → continue with the others, report at the end.
+### Sequential safety (both modes)
+- **One task at a time.** Never spawn parallel `Agent` subagents, never run concurrent `/implement` or `/review`. Scoped-batch picks one task, drives it to `done`, then picks the next.
+- **No worktrees.** `isolation: "worktree"` loses changes — agents write to isolated copies never merged back. All work happens in the current tree.
+- Parallel agents on the shared tree have repeatedly clobbered work via stash/revert races. If asked to "speed up" finish, say no — slow and correct beats fast and lost.
 
 ### Scope
 - Do only what tasks say. No bonus refactoring.
@@ -153,4 +143,4 @@ Each agent must target a specific task id. Never let parallel agents call `next 
 
 ### When done
 - single-task: task id, iterations, final test status, persistent findings.
-- scoped-batch: summary of all finished tasks + test results; note parallel vs sequential; report failures/skipped.
+- scoped-batch: summary of all finished tasks + test results; report any stuck/skipped tasks.

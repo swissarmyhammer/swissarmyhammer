@@ -63,7 +63,6 @@
 //! Hangs, transport errors, and malformed reports still fail. It does NOT
 //! assert any specific bug was found.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use swissarmyhammer_agent::review_agent_factory;
@@ -71,6 +70,7 @@ use swissarmyhammer_config::model::{parse_model_config, ModelConfig, ModelManage
 use swissarmyhammer_tools::mcp::tools::review::review_op::{
     default_embedder_factory, run_review_request, ReviewRequest,
 };
+use swissarmyhammer_validators::review::test_support::{on_disk_index_conn, TestRepo};
 use swissarmyhammer_validators::review::Scope;
 
 /// The small llama chat model used for fast, real-model testing — a real
@@ -101,71 +101,6 @@ fn is_model_unavailable(message: &str) -> bool {
         || m.contains("model loading failed")
 }
 
-/// A minimal git repo with one committed root-level `.rs` file plus a working-tree
-/// edit, so `Scope::Working` resolves a small, real changed-file scope for the
-/// engine to fan out over. The file lives at the repo root (not under `src/`) so
-/// the `*.rs` validator glob matches it (see the module doc's GLOB CAVEAT).
-struct TinyRepo {
-    dir: tempfile::TempDir,
-    repo: git2::Repository,
-}
-
-impl TinyRepo {
-    fn new() -> Self {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let repo = git2::Repository::init(dir.path()).expect("git init");
-        {
-            let mut cfg = repo.config().unwrap();
-            cfg.set_str("user.name", "Test").unwrap();
-            cfg.set_str("user.email", "test@example.com").unwrap();
-        }
-        Self { dir, repo }
-    }
-
-    fn path(&self) -> &Path {
-        self.dir.path()
-    }
-
-    fn write(&self, rel: &str, content: &str) {
-        let full = self.dir.path().join(rel);
-        if let Some(parent) = full.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(full, content).unwrap();
-    }
-
-    fn commit(&self, message: &str) {
-        let mut index = self.repo.index().unwrap();
-        index
-            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
-            .unwrap();
-        index.write().unwrap();
-        let tree_id = index.write_tree().unwrap();
-        let tree = self.repo.find_tree(tree_id).unwrap();
-        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
-        let parent = self.repo.head().ok().and_then(|h| h.peel_to_commit().ok());
-        let parents: Vec<&git2::Commit> = parent.iter().collect();
-        self.repo
-            .commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
-            .unwrap();
-    }
-}
-
-/// Seed an empty-but-valid on-disk code_context index at `<root>/.code-context/
-/// index.db` using the real production schema. The review pipeline opens this
-/// read-only (`open_index_connection`); a probe finds no candidates in an empty
-/// corpus, which is exactly fine — the point is the pipeline runs end-to-end over
-/// the real agent, not that the seeded fixture plants a finding.
-fn seed_empty_index(root: &Path) {
-    use swissarmyhammer_code_context::db::{configure_connection, create_schema};
-
-    let ctx_dir = root.join(".code-context");
-    std::fs::create_dir_all(&ctx_dir).unwrap();
-    let conn = rusqlite::Connection::open(ctx_dir.join("index.db")).unwrap();
-    configure_connection(&conn).unwrap();
-    create_schema(&conn).unwrap();
-}
-
 /// The production review pipeline, driven over a real local model end-to-end:
 /// resolve `qwen-0.6b-test`, build the production `review_agent_factory`, and run
 /// `run_review_request` (the MCP `review` op's call path) with the real platform
@@ -191,7 +126,7 @@ async fn review_runs_over_acp_against_a_real_local_model() {
         return;
     }
 
-    let repo = TinyRepo::new();
+    let repo = TestRepo::new();
     // The source file lives at the repo ROOT as `lib.rs`, not under `src/`: the
     // `function-length` validator matches `*.rs` (not `**/*.rs`), so a nested path
     // would miss the work-list matcher and run zero generations (see the module
@@ -205,7 +140,11 @@ async fn review_runs_over_acp_against_a_real_local_model() {
         "lib.rs",
         "pub fn placeholder() {}\n\npub fn added(x: i32) -> i32 {\n    x + 1\n}\n",
     );
-    seed_empty_index(repo.path());
+    // An empty-but-valid on-disk index at the production path the review pipeline
+    // opens read-only: a probe finds no candidates in an empty corpus, which is
+    // exactly fine — the point is the pipeline runs end-to-end over the real
+    // agent, not that the fixture plants a finding.
+    on_disk_index_conn(repo.path());
 
     // The production factory built against the real local model config — the
     // construction `tests/review_factory.rs` proves type-checks, now invoked.
@@ -223,6 +162,7 @@ async fn review_runs_over_acp_against_a_real_local_model() {
         // keeping this the minimum real end-to-end (see the module doc).
         validators: vec!["function-length".to_string()],
         concurrency: None,
+        force: false,
     };
 
     let outcome = run_review_request(

@@ -19,6 +19,7 @@
 //!   code and shape from either agent.
 
 use agent_client_protocol::{Error, ErrorCode};
+use agent_client_protocol_extras::SessionErrorKind;
 
 /// Build an error with a named JSON-RPC code and a custom message.
 ///
@@ -73,17 +74,25 @@ pub fn internal_error(message: impl Into<String>) -> Error {
 ///
 /// This is the single canonical builder for that shape — the core
 /// "session not found" error and the session-fork extension errors
-/// (`fork_parent_not_found`, `fork_parent_state_unavailable`,
-/// `session_state_not_found` from
-/// [`agent_client_protocol_extras::session_fork`]) are all expressed through
-/// it, keeping the wire shape identical to llama-agent's so clients treat
-/// both backends the same. Logs the failure as a warning.
+/// ([`SessionErrorKind`]) are all expressed through it, keeping the wire shape
+/// identical to llama-agent's so clients treat both backends the same. Logs the
+/// failure as a warning.
+///
+/// `kind` is the typed [`SessionErrorKind`] rather than a bare string so the
+/// set of legal `data.error` values stays closed and named — a swap of the
+/// `kind`/`message` arguments no longer compiles. llama-agent's
+/// `session_fork::extension_error` takes the identical typed kind, keeping the
+/// two backends in lockstep.
 #[must_use]
-pub fn session_error(session_id: &str, kind: &str, message: impl std::fmt::Display) -> Error {
+pub fn session_error(
+    session_id: &str,
+    kind: SessionErrorKind,
+    message: impl std::fmt::Display,
+) -> Error {
     tracing::warn!("Session call failed for {session_id}: {message}");
     invalid_params(message.to_string()).data(serde_json::json!({
         "sessionId": session_id,
-        "error": kind,
+        "error": kind.as_str(),
     }))
 }
 

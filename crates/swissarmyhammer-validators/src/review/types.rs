@@ -99,7 +99,9 @@ pub struct Finding {
 /// deterministic probe guard and an adversarial agent. This records which one
 /// produced the verdict so synthesis can report *how* each finding was decided
 /// (a guard refutation is ground-truth-deterministic; an agent verdict is a
-/// judgement).
+/// judgement). It names the *deciding* layer regardless of the verdict — a
+/// confirmed finding records the layer that confirmed it just as a refuted one
+/// records the layer that refuted it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RefutingLayer {
@@ -125,7 +127,11 @@ pub struct VerifiedFinding {
     pub reason: String,
 
     /// Which layer reached the verdict — the deterministic guard or the agent.
-    pub refuted_by: Option<RefutingLayer>,
+    ///
+    /// This names the *deciding* layer, not whether the finding was refuted: a
+    /// confirmed finding still records who confirmed it. `decided_by.is_some()`
+    /// is therefore never the "was refuted" test — use [`Self::confirmed`].
+    pub decided_by: Option<RefutingLayer>,
 }
 
 /// Parse a `Vec<Finding>` out of a raw fleet-agent response.
@@ -379,11 +385,37 @@ mod tests {
             finding: sample_finding(Some("no-copy-paste"), None),
             confirmed: true,
             reason: "Confirmed: the 0.94 match is a real copy-paste.".to_string(),
-            refuted_by: Some(RefutingLayer::Agent),
+            decided_by: Some(RefutingLayer::Agent),
         };
         let json = serde_json::to_string(&verified).unwrap();
         let back: VerifiedFinding = serde_json::from_str(&json).unwrap();
         assert_eq!(verified, back);
+    }
+
+    #[test]
+    fn a_confirmed_finding_does_not_serialize_a_refuted_named_field() {
+        // The verdict-layer field records WHO decided, not that the finding was
+        // refuted. A *confirmed* finding still names the deciding layer, so the
+        // field must not be called `refuted_by` (a confirmed-yet-"refuted_by"
+        // object is self-contradictory on the wire).
+        let confirmed = VerifiedFinding {
+            finding: sample_finding(None, None),
+            confirmed: true,
+            reason: "the agent positively substantiated the claim".to_string(),
+            decided_by: Some(RefutingLayer::Agent),
+        };
+        let value: serde_json::Value = serde_json::to_value(&confirmed).unwrap();
+
+        assert!(
+            value.get("refuted_by").is_none(),
+            "a confirmed finding must not carry a `refuted_by` field: {value}"
+        );
+        assert_eq!(
+            value.get("decided_by").and_then(|v| v.as_str()),
+            Some("agent"),
+            "the deciding layer must serialize under `decided_by`: {value}"
+        );
+        assert_eq!(value.get("confirmed").and_then(|v| v.as_bool()), Some(true));
     }
 
     #[test]

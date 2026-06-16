@@ -137,6 +137,29 @@ impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
 
                     return Ok(entity.to_json());
                 }
+
+                // Comment-log field: merge the incoming (possibly stale) UI
+                // array against the stored log — server-assigned ids and
+                // authors, explicit tombstone deletes, concurrent appends
+                // preserved. All comment/actor logic stays in this crate.
+                if matches!(
+                    field_def.type_,
+                    swissarmyhammer_fields::FieldType::CommentLog {}
+                ) {
+                    let mut entity = ectx
+                        .read(&self.entity_type, &self.id)
+                        .await
+                        .map_err(KanbanError::from_entity_error)?;
+
+                    let old = entity.get(&self.field_name).cloned().unwrap_or(Value::Null);
+                    let normalized =
+                        crate::comment::normalize_comment_log(ctx, &old, &self.value).await?;
+                    entity.set(&self.field_name, normalized);
+
+                    ectx.write(&entity).await?;
+
+                    return Ok(entity.to_json());
+                }
             }
 
             // Normal field: direct read-set-write
@@ -387,6 +410,109 @@ mod tests {
             err.contains("no derive handler"),
             "Error should mention missing handler: {}",
             err
+        );
+    }
+
+    /// The full UI field-set flow for the comment log: a fresh commit
+    /// normalizes a new member, a stale commit must not drop a concurrent
+    /// agent append, and an explicit tombstone deletes.
+    #[tokio::test]
+    async fn test_update_comments_field_normalizes_and_merges() {
+        let (_temp, ctx) = setup().await;
+        let os_user = swissarmyhammer_common::slug(&whoami::username());
+
+        let task_result = AddTask::new("Comment log task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task_result["id"].as_str().unwrap().to_string();
+
+        // 1. Commit a new member with no id — server assigns id/actor/timestamp.
+        let cmd = UpdateEntityField::new(
+            "task",
+            &task_id,
+            "comments",
+            serde_json::json!([{"text": "hi"}]),
+        );
+        cmd.execute(&ctx).await.into_result().unwrap();
+
+        let ectx = ctx.entity_context().await.unwrap();
+        let task = ectx.read("task", &task_id).await.unwrap();
+        let comments = task.get("comments").unwrap().as_array().unwrap().clone();
+        assert_eq!(comments.len(), 1);
+        let first_id = comments[0]["id"].as_str().unwrap().to_string();
+        assert_eq!(first_id.len(), 26, "member must get a ULID id");
+        assert_eq!(comments[0]["actor"], os_user.as_str(), "OS-user fallback");
+        chrono::DateTime::parse_from_rfc3339(comments[0]["timestamp"].as_str().unwrap())
+            .expect("timestamp must be RFC3339");
+
+        // 2. Agent appends concurrently; the UI then commits a stale array
+        //    (text edit of the first member, agent comment absent).
+        crate::comment::AddComment::new(task_id.as_str(), "agent progress")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let cmd = UpdateEntityField::new(
+            "task",
+            &task_id,
+            "comments",
+            serde_json::json!([{"id": first_id, "text": "hi (edited)"}]),
+        );
+        cmd.execute(&ctx).await.into_result().unwrap();
+
+        let task = ectx.read("task", &task_id).await.unwrap();
+        let comments = task.get("comments").unwrap().as_array().unwrap().clone();
+        assert_eq!(comments.len(), 2, "agent comment must survive stale commit");
+        assert_eq!(comments[0]["id"], first_id.as_str());
+        assert_eq!(comments[0]["text"], "hi (edited)");
+        assert_eq!(comments[1]["text"], "agent progress");
+
+        // 3. Explicit tombstone deletes the first member only.
+        let agent_id = comments[1]["id"].as_str().unwrap().to_string();
+        let cmd = UpdateEntityField::new(
+            "task",
+            &task_id,
+            "comments",
+            serde_json::json!([
+                {"id": first_id, "deleted": true},
+                {"id": agent_id, "text": "agent progress"},
+            ]),
+        );
+        cmd.execute(&ctx).await.into_result().unwrap();
+
+        let task = ectx.read("task", &task_id).await.unwrap();
+        let comments = task.get("comments").unwrap().as_array().unwrap().clone();
+        assert_eq!(comments.len(), 1, "tombstoned member must be gone");
+        assert_eq!(comments[0]["id"], agent_id.as_str());
+        assert_eq!(comments[0]["text"], "agent progress");
+    }
+
+    /// A new member naming an unknown explicit actor fails the whole
+    /// field-set (reuses resolve_comment_author validation).
+    #[tokio::test]
+    async fn test_update_comments_field_unknown_actor_errors() {
+        let (_temp, ctx) = setup().await;
+
+        let task_result = AddTask::new("Actor validation")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task_result["id"].as_str().unwrap().to_string();
+
+        let cmd = UpdateEntityField::new(
+            "task",
+            &task_id,
+            "comments",
+            serde_json::json!([{"text": "hi", "actor": "ghost"}]),
+        );
+        let result = cmd.execute(&ctx).await.into_result();
+        assert!(
+            matches!(result, Err(KanbanError::ActorNotFound { ref id }) if id == "ghost"),
+            "expected ActorNotFound, got: {result:?}"
         );
     }
 

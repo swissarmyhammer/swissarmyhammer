@@ -59,62 +59,79 @@ async fn wire_review_factories(
         .await;
 }
 
-/// Resolve the review-specific model override from config.
+/// Resolve the review-specific model override from the `.sah` config files.
 ///
-/// Reads `review.model` from the template context (mirroring
-/// [`review_concurrency`]). The review scope is baked-in to default to
-/// `claude-code-haiku` ([`REVIEW_DEFAULT_AGENT`]) rather than the global
-/// `agent_config`, so this always returns `Some` for the live serve paths:
-/// - When `review.model` is set, the named model is resolved via
-///   [`ModelManager::find_agent_by_name`] + [`parse_model_config`].
-/// - When `review.model` is unset, the baked-in `claude-code-haiku` default is
-///   used.
-/// - When the configured name cannot be resolved or parsed, a warning is logged
-///   and resolution falls back to the same `claude-code-haiku` default rather
-///   than failing to wire the review pool.
+/// Model SELECTION reads the config files via the canonical resolver
+/// ([`ModelManager::resolve_review_agent_name`] over [`ModelPaths::sah`]) — NOT
+/// the template context. The template `model` / `review.model` variables are a
+/// prompt-rendering concern (`set_model_variable` injects a literal `"claude"`
+/// default for `{{ model }}` Liquid expansion) and must never drive agent
+/// selection; consuming them here is exactly what defeated the
+/// `claude-code-haiku` review fallback.
 ///
-/// Returns `None` only if the `claude-code-haiku` built-in itself cannot be
-/// resolved (it ships built-in, so this should not happen in practice); in that
-/// case [`wire_review_factories`] falls back to the global `agent_config`.
+/// The shared review-scope precedence ([`ModelManager::review_agent_name_from`])
+/// applies, reading from config files:
+/// - explicit `review.model` wins (review only);
+/// - else an explicit overall `model:` drives review too ("if I set an overall
+///   model I mean it");
+/// - else the baked-in `claude-code-haiku` ([`REVIEW_DEFAULT_AGENT`]) factory
+///   default is used. The config-file accessors return `None` when unset, so a
+///   fully unconfigured scope falls through to `claude-code-haiku`.
+///
+/// The resolved name is loaded via [`ModelManager::find_agent_by_name`] +
+/// [`parse_model_config`]. Returns `None` only when that name cannot be
+/// resolved or parsed (a warning is logged); in that case
+/// [`wire_review_factories`] falls back to the global `agent_config`.
+///
+/// Deliberate downgrade of the *unresolvable* case: a fully unconfigured scope
+/// resolves to `claude-code-haiku` (the precedence default), but a
+/// *misconfigured* `review.model` (a name that does not resolve) returns `None`
+/// → the global `agent_config` (plain `claude-code`, no `--model`), NOT the haiku
+/// review default. This is intentional — an explicit-but-broken `review.model`
+/// should not be silently "fixed" to haiku; it warns and falls back to the
+/// server's overall agent. (This is why we resolve the *name* via
+/// [`ModelManager::resolve_review_agent_name`] and parse it here, rather than
+/// calling [`ModelManager::resolve_review_agent_config`], which would itself
+/// re-resolve to the config-file global default instead of the server's live
+/// `agent_config`.) Covered by
+/// `test_review_model_config_unknown_returns_none_for_global_fallback` and
+/// `test_review_model_config_defaults_to_haiku_when_unset`.
 fn review_model_config(cli_context: &CliContext) -> Option<Arc<ModelConfig>> {
-    use swissarmyhammer_config::model::{parse_model_config, ModelManager, REVIEW_DEFAULT_AGENT};
+    use swissarmyhammer_config::model::{parse_model_config, ModelManager, ModelPaths};
 
-    let Some(model_name) = cli_context
-        .template_context
-        .get("review.model")
-        .and_then(|v| v.as_str())
-    else {
-        return review_default_config();
+    // `cli_context` is unused for selection on purpose: review-model selection
+    // is a CONFIG-FILE decision, deliberately independent of the prompt-rendering
+    // template variables this context carries.
+    let _ = cli_context;
+
+    let model_name = match ModelManager::resolve_review_agent_name(&ModelPaths::sah()) {
+        Ok(name) => name,
+        Err(e) => {
+            tracing::warn!(
+                "could not resolve review model name from config ({}); falling back to the global agent config",
+                e
+            );
+            return None;
+        }
     };
 
-    match ModelManager::find_agent_by_name(model_name)
+    match ModelManager::find_agent_by_name(&model_name)
         .and_then(|info| Ok(parse_model_config(&info.content)?))
     {
-        Ok(config) => Some(Arc::new(config)),
-        Err(e) => {
-            tracing::warn!(
-                "review.model '{}' could not be resolved ({}); falling back to the baked-in '{}' default",
+        Ok(config) => {
+            // Decision-point record so the tier a review run uses is provable in
+            // the `.sah` logs.
+            tracing::info!(
+                "review scope → {} ({:?})",
                 model_name,
-                e,
-                REVIEW_DEFAULT_AGENT
+                config.executor_type()
             );
-            review_default_config()
+            Some(Arc::new(config))
         }
-    }
-}
-
-/// Resolve the baked-in `claude-code-haiku` review default to a [`ModelConfig`].
-///
-/// Single source of truth for the review scope's default; reuses the config
-/// layer's [`ModelConfig::claude_code_haiku`] rather than duplicating the name.
-/// Returns `None` only if the built-in cannot be resolved, in which case
-/// [`wire_review_factories`] falls back to the global `agent_config`.
-fn review_default_config() -> Option<Arc<ModelConfig>> {
-    match ModelConfig::claude_code_haiku() {
-        Ok(config) => Some(Arc::new(config)),
         Err(e) => {
             tracing::warn!(
-                "baked-in review default could not be resolved ({}); falling back to the global agent config",
+                "review model '{}' could not be resolved ({}); falling back to the global agent config",
+                model_name,
                 e
             );
             None
@@ -570,6 +587,7 @@ mod tests {
     use super::*;
     use clap::{Arg, Command};
     use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+    use tracing_test::traced_test;
 
     #[test]
     fn test_description_content() {
@@ -581,11 +599,22 @@ mod tests {
         );
     }
 
-    /// Build a `CliContext` whose template context carries the given
-    /// `review.model` (or none), with HOME/CWD isolated so config resolution
+    /// Build a production-shaped `CliContext` and write the given `.sah/sah.yaml`
+    /// config content (when `Some`), with HOME/CWD isolated so config resolution
     /// does not touch the host filesystem.
-    async fn cli_context_with_review_model(
-        review_model: Option<&str>,
+    ///
+    /// Model SELECTION for the review scope reads the config FILES, so configured
+    /// scenarios are expressed by writing real `.sah` config (mirroring the
+    /// `model.rs` resolver tests) — not by injecting template variables.
+    ///
+    /// Crucially, the template context is produced via
+    /// [`swissarmyhammer_config::TemplateContext::set_default_variables`], exactly
+    /// like production (`load_for_cli`). That injects the defaulted prompt
+    /// variable `model = "claude"` whenever `model` is unset — the very value that
+    /// used to leak into agent selection. A correct `review_model_config` must
+    /// ignore it and resolve from config files only.
+    async fn cli_context_with_sah_config(
+        config_yaml: Option<&str>,
     ) -> (
         crate::context::CliContext,
         IsolatedTestEnvironment,
@@ -593,21 +622,24 @@ mod tests {
     ) {
         use crate::cli::OutputFormat;
         use crate::context::CliContext;
-        use serde_json::json;
+        use swissarmyhammer_config::model::{ModelManager, ModelPaths};
 
         let env = IsolatedTestEnvironment::new().expect("isolated env");
         let cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
 
+        if let Some(yaml) = config_yaml {
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah())
+                .expect("config structure");
+            std::fs::write(&config_path, yaml).expect("write .sah config");
+        }
+
         let app = Command::new("test").arg(Arg::new("test").long("test"));
         let matches = app.try_get_matches_from(vec!["test"]).unwrap();
 
+        // Reproduce the production template-context shape: `set_default_variables`
+        // injects `model = "claude"` (a PROMPT-rendering default) when unset.
         let mut template_context = swissarmyhammer_config::TemplateContext::new();
-        if let Some(model) = review_model {
-            // `get("review.model")` navigates a nested `review` object, so the
-            // value must be stored under a nested `review` map, not the literal
-            // dotted key.
-            template_context.set("review".to_string(), json!({ "model": model }));
-        }
+        template_context.set_default_variables();
 
         let cli_context = CliContext::new(
             template_context,
@@ -629,7 +661,8 @@ mod tests {
     async fn test_review_model_config_resolves_configured_llama_model() {
         use swissarmyhammer_config::model::ModelExecutorType;
 
-        let (cli_context, _env, _cwd) = cli_context_with_review_model(Some("qwen-0.6b-test")).await;
+        let (cli_context, _env, _cwd) =
+            cli_context_with_sah_config(Some("review:\n  model: qwen-0.6b-test\n")).await;
 
         let resolved =
             review_model_config(&cli_context).expect("a configured review.model must resolve");
@@ -640,12 +673,17 @@ mod tests {
         );
     }
 
+    // Reproduces production: an unconfigured project, with the defaulted prompt
+    // variable `model = "claude"` present in the template context (via
+    // `set_default_variables`), must STILL resolve the review scope to the
+    // baked-in `claude-code-haiku` (`--model haiku`). The defaulted `model`
+    // template var must not leak into selection.
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_review_model_config_defaults_to_haiku_when_unset() {
         use swissarmyhammer_config::model::{ModelExecutorConfig, ModelExecutorType};
 
-        let (cli_context, _env, _cwd) = cli_context_with_review_model(None).await;
+        let (cli_context, _env, _cwd) = cli_context_with_sah_config(None).await;
 
         let resolved = review_model_config(&cli_context)
             .expect("an unset review.model must resolve to the baked-in claude-code-haiku default");
@@ -662,27 +700,140 @@ mod tests {
         }
     }
 
+    // Regression guard for the root cause: the prompt-rendering `model` template
+    // variable must NEVER be consulted for review-model SELECTION. Setting it to a
+    // bogus value (here, an unresolvable model name) must not change the resolved
+    // review ModelConfig — it must remain the config-file-driven haiku default.
     #[tokio::test]
     #[serial_test::serial(cwd)]
-    async fn test_review_model_config_unknown_falls_back_to_haiku() {
+    async fn test_review_model_config_ignores_template_model_var() {
+        use serde_json::json;
         use swissarmyhammer_config::model::{ModelExecutorConfig, ModelExecutorType};
 
-        let (cli_context, _env, _cwd) =
-            cli_context_with_review_model(Some("definitely-not-a-real-model")).await;
+        let (mut cli_context, _env, _cwd) = cli_context_with_sah_config(None).await;
+        // Overwrite the template `model` var with a bogus value. If selection
+        // consulted template vars, this would make resolution fail (None) instead
+        // of yielding the haiku default.
+        cli_context
+            .template_context
+            .set("model".to_string(), json!("definitely-not-a-real-model"));
 
-        let resolved = review_model_config(&cli_context)
-            .expect("an unresolvable review.model must fall back to claude-code-haiku, not panic");
+        let resolved = review_model_config(&cli_context).expect(
+            "a bogus template `model` var must not affect selection; haiku default must hold",
+        );
         assert_eq!(resolved.executor_type(), ModelExecutorType::ClaudeCode);
         match resolved.executor() {
             ModelExecutorConfig::ClaudeCode(claude_config) => {
                 assert_eq!(
                     claude_config.args,
                     vec!["--model".to_string(), "haiku".to_string()],
-                    "an invalid review.model must warn and fall back to claude-code-haiku"
+                    "template `model` var must not be consulted for selection"
                 );
             }
             _ => panic!("Should be Claude Code config"),
         }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_review_model_config_unknown_returns_none_for_global_fallback() {
+        // An unresolvable review.model (and no overall model) cannot be honored,
+        // so this returns None and `wire_review_factories` falls back to the
+        // global agent_config — it must not panic.
+        let (cli_context, _env, _cwd) =
+            cli_context_with_sah_config(Some("review:\n  model: definitely-not-a-real-model\n"))
+                .await;
+
+        assert!(
+            review_model_config(&cli_context).is_none(),
+            "an unresolvable review.model must return None (global fallback), not the haiku default"
+        );
+    }
+
+    // When an overall model: is set but review.model is not, the review scope
+    // follows the overall default rather than the baked-in claude-code-haiku.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_review_model_config_inherits_overall_default() {
+        use swissarmyhammer_config::model::ModelExecutorType;
+
+        let (cli_context, _env, _cwd) =
+            cli_context_with_sah_config(Some("model: qwen-0.6b-test\n")).await;
+
+        let resolved = review_model_config(&cli_context)
+            .expect("review should inherit the explicit overall model");
+        assert_eq!(
+            resolved.executor_type(),
+            ModelExecutorType::LlamaAgent,
+            "an overall model: must drive the review scope when review.model is unset"
+        );
+    }
+
+    // An explicit review.model overrides the overall model: for review only.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_review_model_config_review_overrides_overall() {
+        use swissarmyhammer_config::model::{ModelExecutorConfig, ModelExecutorType};
+
+        let (cli_context, _env, _cwd) = cli_context_with_sah_config(Some(
+            "model: qwen-0.6b-test\nreview:\n  model: claude-code\n",
+        ))
+        .await;
+
+        let resolved =
+            review_model_config(&cli_context).expect("explicit review.model must resolve");
+        assert_eq!(resolved.executor_type(), ModelExecutorType::ClaudeCode);
+        match resolved.executor() {
+            ModelExecutorConfig::ClaudeCode(claude_config) => {
+                assert!(
+                    claude_config.args.is_empty(),
+                    "explicit review.model: claude-code must win over the overall model"
+                );
+            }
+            _ => panic!("Should be Claude Code config"),
+        }
+    }
+
+    // Decision-point logging: resolving an explicit `claude-code-haiku` review
+    // model must record the resolved name + executor in the logs, so the tier a
+    // review run used is provable in the `.sah` logs.
+    #[tokio::test]
+    #[traced_test]
+    #[serial_test::serial(cwd)]
+    async fn test_review_model_config_logs_resolved_name_and_executor() {
+        let (cli_context, _env, _cwd) =
+            cli_context_with_sah_config(Some("review:\n  model: claude-code-haiku\n")).await;
+
+        review_model_config(&cli_context).expect("claude-code-haiku must resolve");
+
+        assert!(
+            logs_contain("review scope → claude-code-haiku"),
+            "resolving a review model must log the decision point with the resolved name"
+        );
+        assert!(
+            logs_contain("ClaudeCode"),
+            "resolving a review model must log the executor type"
+        );
+    }
+
+    // When the review model is unresolvable, the global-fallback path must be
+    // logged (not silent), so operators can see why no review tier was applied.
+    #[tokio::test]
+    #[traced_test]
+    #[serial_test::serial(cwd)]
+    async fn test_review_model_config_logs_global_fallback() {
+        let (cli_context, _env, _cwd) =
+            cli_context_with_sah_config(Some("review:\n  model: definitely-not-a-real-model\n"))
+                .await;
+
+        assert!(
+            review_model_config(&cli_context).is_none(),
+            "an unresolvable review.model must return None"
+        );
+        assert!(
+            logs_contain("global agent config"),
+            "the global-fallback case must be logged"
+        );
     }
 
     #[tokio::test]

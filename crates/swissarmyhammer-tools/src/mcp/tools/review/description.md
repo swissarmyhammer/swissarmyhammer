@@ -10,6 +10,13 @@ scope; the scope target is the noun:
 Each returns a `ReviewReport { markdown, counts }` and accepts the shared
 `validators?[]` and `backend?` (`session` | `local`) modifiers.
 
+`review working` is **incremental** once it has run: each reviewed file's
+content+rules hash is recorded under `.validators/.hashes/`, and a later pass
+subtracts files unchanged since their last review (a no-op pass short-circuits to
+a clean report). Pass `force` (alias `all`) to ignore tracking and review the
+whole change set; clearing `.validators/.hashes/` has the same effect. A rule
+edit invalidates every entry and re-sweeps the full set.
+
 The loader-read ops introspect what is plugged in (no agent, fast):
 
 - `list validators` — one summary row per loaded RuleSet, filterable by `source`

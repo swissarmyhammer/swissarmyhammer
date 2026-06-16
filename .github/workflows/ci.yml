@@ -64,8 +64,10 @@ jobs:
           node-version: 22
       - name: Install dependencies
         working-directory: ${{ matrix.app }}/ui
+        # `npm ci` installs the exact committed lockfile — deterministic, immune
+        # to a freshly-published transitive dep breaking a green build.
         run: |
-          npm install
+          npm ci
           rm -rf node_modules/.vite
       - name: Install Playwright browsers
         working-directory: ${{ matrix.app }}/ui

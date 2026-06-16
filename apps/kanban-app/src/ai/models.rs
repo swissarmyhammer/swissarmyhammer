@@ -138,6 +138,24 @@ fn agent_executor_type(info: &ModelInfo) -> Option<ModelExecutorType> {
     Some(config.executor_type())
 }
 
+/// Turn a discovered `claude-code` variant agent into a selectable [`Model`].
+///
+/// The canonical `claude-code` entry is synthesized separately by
+/// [`claude_code_model`]; this handles the *other* `claude-code`-executor
+/// agents that opt into the panel — e.g. `claude-code-haiku`, which pins the
+/// CLI to a faster/cheaper model. Like the canonical entry, these are always
+/// `available`: the agent spawns the `claude` CLI lazily at use time, so the
+/// entry must not be pre-gated on a separate `which("claude")` probe.
+fn claude_code_variant_model(info: &ModelInfo) -> Model {
+    Model {
+        id: info.name.clone(),
+        label: info.name.clone(),
+        kind: ModelKind::ClaudeCode,
+        available: true,
+        hint: info.description.clone(),
+    }
+}
+
 /// Turn a discovered local-llama agent into a selectable [`Model`].
 fn local_llama_model(info: &ModelInfo) -> Model {
     Model {
@@ -197,10 +215,16 @@ pub fn ai_list_models() -> Result<Vec<Model>, String> {
         if !agent.tags.iter().any(|t| t == KANBAN_TAG) {
             continue;
         }
-        // Only `llama-agent` executors back a chat agent. `claude-code` is
-        // handled above; embedding executors cannot be used as agents.
-        if agent_executor_type(agent) == Some(ModelExecutorType::LlamaAgent) {
-            models.push(local_llama_model(agent));
+        // Surface each chat-capable executor. `llama-agent` models run
+        // in-process; other `claude-code` variants (e.g. `claude-code-haiku`)
+        // shell out to the CLI like the canonical entry synthesized above.
+        // Embedding executors cannot back a chat agent and are dropped.
+        match agent_executor_type(agent) {
+            Some(ModelExecutorType::LlamaAgent) => models.push(local_llama_model(agent)),
+            Some(ModelExecutorType::ClaudeCode) => models.push(claude_code_variant_model(agent)),
+            // Embedding executors (`llama-embedding`, `ane-embedding`) cannot
+            // back a chat agent; unparseable agents resolve to `None`. Drop both.
+            _ => {}
         }
     }
 

@@ -13,8 +13,6 @@ metadata:
 
 Create a git commit with a well-crafted conventional commit message.
 
-{% include "_partials/delegate-to-subagent" %}
-
 ## Guidelines
 
 - Never commit scratch or temporary files — only intentional source

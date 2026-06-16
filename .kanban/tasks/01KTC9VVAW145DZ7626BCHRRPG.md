@@ -69,7 +69,30 @@ title: 'Kanban search tasks op: filter-scoped corpus + ranked query via swissarm
 ## What
 Add a NEW `search tasks` operation to the kanban crate. Do NOT modify `list tasks`. `search tasks` takes an optional DSL `filter` to SCOPE the corpus (reuse the exact same filter path as `list tasks`) plus a `query` string for relevance ranking: filter narrows, search ranks within. Returns ranked `Hit`s mapped back to enriched task JSON.
 
-Implemented in `crates/swissarmyhammer-kanban/src/task/search.rs`, registered with `mod search;` + `pub use search::SearchTasks;` in `task/mod.rs`, following the `#[operation]` macro pattern of `ListTasks`. Made dispatchable by adding `Verb::Search` (types/operation.rs), a `Search` arm in `execute_task_query_operation` (dispatch.rs), and registration in `KANBAN_OPERATIONS` (schema.rs). Process-lifetime embedder via `static OnceCell<Arc<Embedder>>`, EmbeddingCache lazy-fill, NO lexical-only fallback. Used the builder API (`Query::new(..).with_embedding(..).with_top_k(..)`, `SignalWeights::default()`) since the search types are now encapsulated.
+**Implemented** in `crates/swissarmyhammer-kanban/src/task/search.rs`, registered with `mod search;` + `pub use search::SearchTasks;` in `task/mod.rs`, following the `#[operation]` macro pattern of `ListTasks`. Made dispatchable by adding `Verb::Search` (types/operation.rs), a `Search` arm in `execute_task_query_operation` (dispatch.rs), and registration in `KANBAN_OPERATIONS` (schema.rs). Process-lifetime embedder via `static OnceCell<Arc<Embedder>>`, EmbeddingCache lazy-fill, NO lexical-only fallback. Used the builder API (`Query::new(..).with_embedding(..).with_top_k(..)`, `SignalWeights::default()`) since the search types are now encapsulated.
+
+### Original spec
+New file: `crates/swissarmyhammer-kanban/src/task/search.rs`, registered with `mod search;` + `pub use search::SearchTasks;` in `crates/swissarmyhammer-kanban/src/task/mod.rs`. Follow the `#[operation]` macro pattern of `crates/swissarmyhammer-kanban/src/task/list.rs` (`ListTasks`):
+- `#[operation(verb = "search", noun = "tasks", description = "Search tasks by relevance, optionally scoped by a DSL filter")]` on `pub struct SearchTasks { pub query: String, pub filter: Option<String>, pub top_k: Option<usize> }`.
+- `impl Execute<KanbanContext, KanbanError> for SearchTasks` — `async fn execute` (the `#[operation]` path already uses `async_trait`).
+
+Corpus build (mirror `ListTasks::execute` for the scoping half — reuse `enrich_all_task_entities`, `EntitySlugRegistry`, `TaskFilterAdapter`, `parse_filter_expr` from `crate::task::shared` / `crate::task_helpers`; exclude the terminal/done column the same way `list tasks` does unless a column is implied by the filter): produce the in-scope set of enriched task entities. Keep this scoping + Doc-build + map-back logic in small helper fns that are testable WITHOUT embedding.
+- For each in-scope task build a `swissarmyhammer_search::Doc`: `id` = task id; `fields` = `[ Field { weight: <high>, text: title }, Field { weight: <low>, text: description }, Field { weight: <mid>, text: tags joined } ]`; `embedding` = the task's cached vector. NOTE: tags are a lexical Doc field (BM25/trigram) but are NOT part of the embedded text (see below).
+
+Embeddings (real model, always — lazy-fill via the cache card's store):
+- The embedder is ALWAYS used; there is NO lexical-only fallback. Obtain a PROCESS-LIFETIME embedder loaded at most once (a `OnceCell`/shared handle), NOT `Embedder::default().await.load().await` per call — reloading the qwen-embedding model on every search is a multi-second cliff that makes interactive search unusable. If the embedder cannot load, return a `KanbanError` (do not silently degrade). Log via `tracing`, never `eprintln!`.
+- Open `EmbeddingCache` at `ctx.search_cache_path()` keyed by the embedder's `model_name()` + dim.
+- For each in-scope task compute the embed text via the cache card's single canonical builder `embedding_cache::task_embedding_text(title, description)` (tags excluded), and `content_hash` of that SAME string. On cache MISS, embed via `embedder.embed_text(text).await` and `put` it; on HIT, use the cached vector. Lazy-fill: only misses pay the embed cost; the store self-heals on model/dim change.
+- Embed the `query` string once for the query embedding.
+
+Rank + map back:
+- Build `Query { text: query, embedding: Some(query_vec), weights: SignalWeights::default(), top_k: top_k.unwrap_or(10), min_score: None }` and call `swissarmyhammer_search::search(&docs, &query)`. (Default top_k 10 to match `list tasks`' `DEFAULT_PAGE_SIZE` — keep AI tool results lean.)
+- Map each `Hit` back to task JSON and attach the hit's `score` + `signals`. Return `{ "tasks": [ {<task>, "score": .., "signals": {..}} , ... ], "count": N }` (shape consistent with `list tasks` plus score/signals). **See Revision below: use the SLIM task shape, not the full enriched JSON.**
+
+Right-sizing: if op + cache wiring + corpus build exceeds ~5 subtasks or 500 LOC, split the lazy-fill embedding loop into a helper module under `task/` and link with depends_on. Keep this card focused on: op struct + corpus scoping + Doc build + embed-or-cache loop + map-back.
+
+## Revision (2026-06-10) — slim map-back
+`list tasks` is gaining a `detail: slim|full` param with SLIM as default (card `624prsf` / 01KTRYRC9DSWX5X5X11624PRSF in `card-comments`): an allowlist projection (id, short_id, title, position, project, tags, filter/virtual tags, assignees, progress, dependency fields, ready, dates) that EXCLUDES description/comments/attachments. `search tasks` results must use that SAME slim projection (`slim_task_json`) + `score`/`signals` — this SUPERSEDES the "enriched task JSON via task_entity_to_rich_json" wording above. The full enriched corpus entities are still what you scope/build Docs from internally; only the RESPONSE shape is slim. The agent follows up with `get task` (always full) on the hit it cares about.
 
 ## Acceptance Criteria
 - [x] `SearchTasks` op exists with `query` (required), optional `filter`, optional `top_k`, and is exported from `task/mod.rs`.
@@ -82,6 +105,8 @@ Implemented in `crates/swissarmyhammer-kanban/src/task/search.rs`, registered wi
 ## Tests
 - [x] Unit tests in `search.rs` `#[cfg(test)] mod tests` using a `TempDir` board (`InitBoard` + `AddTask`) for the NON-embedding logic — no model required: filter-scoping (`#bug` narrows; no filter = whole non-done board), Doc construction (right fields/weights, `task_embedding_text` excludes tags), map-back (`Vec<Hit>` → `{tasks:[{..,score,signals}], count}`). Plus `dispatch_search_tasks_wiring` proving end-to-end dispatch.
 - [x] `cargo test -p swissarmyhammer-kanban search` passes (10 passed, 0 failed; no real model needed). Full real-embedder embed+rank proven in the kanban search e2e card.
+
+> NOTE (merge with main): the `## Revision (2026-06-10) — slim map-back` above supersedes the "enriched task JSON" response wording — `search tasks` should ultimately return the SLIM `slim_task_json` projection. The shipped implementation returns the enriched shape; switching the response to slim is tracked as follow-up.
 
 ## Workflow
 - Used `/tdd` — wrote failing tests first (RED-verified by breaking the terminal-column exclusion and watching the scoping test fail), then implemented to pass.
