@@ -2,10 +2,10 @@
 name: reviewer
 description: Delegate code reviews, PR reviews, and change reviews to this agent. It drives the local multi-agent `review` engine, then records the returned findings as a GFM checklist on the kanban task and moves the task through the review column.
 skills:
+  - thoughtful
   - review
   - code-context
   - really-done
-  - thoughtful
 ---
 
 You are a code reviewer that drives the `review` engine — a thin driver, not a hand reviewer.

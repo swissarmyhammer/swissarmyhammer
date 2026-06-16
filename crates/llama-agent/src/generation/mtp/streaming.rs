@@ -39,7 +39,7 @@ const SEQ_ID: i32 = 0;
 /// - `template_token_count` is the number of leading prompt tokens already in
 ///   the target's KV (from the streaming KV-reuse path); only the suffix is
 ///   prefilled here.
-/// - The function enables pre-norm output on both contexts itself.
+/// - The function enables nextn hidden-state output on both contexts itself.
 /// - `on_prefill_complete` fires exactly once, right after the prompt is
 ///   fully prefilled into BOTH the target and the draft (via the per-chunk
 ///   `sync_capture`), but BEFORE the first generation pass. The worker uses
@@ -68,12 +68,12 @@ pub fn generate_stream_mtp<F>(
 where
     F: FnOnce(&LlamaContext, &LlamaContext),
 {
-    // Pre-norm output is required: the target rows feed the draft mirror;
-    // the draft rows seed the AR draft step. Reference uses masked=false on the
-    // target (emit rows for every position) and masked=true on the draft (only
-    // logits-requesting positions).
-    target.set_embeddings_pre_norm(true, /* masked */ false);
-    draft.set_embeddings_pre_norm(true, /* masked */ true);
+    // Nextn hidden-state output is required: the target rows feed the draft
+    // mirror; the draft rows seed the AR draft step. Reference uses masked=false
+    // on the target (emit rows for every position) and masked=true on the draft
+    // (only logits-requesting positions).
+    target.set_embeddings_nextn(true, /* masked */ false);
+    draft.set_embeddings_nextn(true, /* masked */ true);
 
     let n_embd = usize::try_from(model.n_embd()).expect("n_embd > 0 fits into usize");
     let mut session = MtpSession::new(n_embd, mtp_params);
@@ -97,9 +97,9 @@ where
         return finish(stream_sender, "Empty prompt");
     }
 
-    // Prefill the new prompt tokens on the target, requesting logits/pre-norm
+    // Prefill the new prompt tokens on the target, requesting logits/nextn
     // for every position. We MUST `sync_capture` onto the draft *per chunk*
-    // (not after the whole prefill): `get_embeddings_pre_norm_ith` only holds
+    // (not after the whole prefill): `get_embeddings_nextn_ith` only holds
     // rows for the most recent decode batch, so a single end-of-prefill mirror
     // would read garbage for everything before the last chunk. Per-chunk
     // mirroring also keeps `argmax_at` reading from the LAST batch's index
@@ -126,7 +126,7 @@ where
         target
             .decode(&mut batch)
             .map_err(GenerationError::decoding)?;
-        // Mirror just-decoded chunk onto the draft: target's pre-norm buffer
+        // Mirror just-decoded chunk onto the draft: target's nextn buffer
         // still holds these rows; the next decode overwrites them.
         session.sync_capture(target, draft, chunk, &chunk_positions, SEQ_ID);
         absolute_position += chunk.len();

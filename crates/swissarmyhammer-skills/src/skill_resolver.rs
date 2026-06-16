@@ -229,6 +229,16 @@ impl SkillResolver {
         }
 
         for (skill_name, files) in &skill_groups {
+            // Skip groups that don't contain a SKILL.md — they are resource
+            // files/directories (the discovery README.md, partials, supporting
+            // docs) rather than skills. Mirrors `validate_builtins`.
+            let has_skill_md = files
+                .iter()
+                .any(|(name, _)| name.ends_with("/SKILL.md") || *name == "SKILL.md");
+            if !has_skill_md {
+                continue;
+            }
+
             match load_skill_from_builtin(skill_name, files) {
                 Ok(skill) => {
                     tracing::debug!("Loaded builtin skill: {}", skill.name);
@@ -319,6 +329,29 @@ impl Default for SkillResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_test::traced_test;
+
+    #[traced_test]
+    #[test]
+    fn test_load_builtins_does_not_warn_on_readme() {
+        // The discovery README.md deployed into the builtin skills store is a
+        // resource file, not a skill. Loading builtins must skip it silently
+        // rather than warning that it has no SKILL.md.
+        let resolver = SkillResolver::new();
+        let skills = resolver.resolve_builtins();
+
+        // Sanity: real skills still load.
+        assert!(skills.contains_key("plan"));
+        // The README is never registered as a skill.
+        assert!(!skills.contains_key("README.md"));
+        assert!(!skills.contains_key("README"));
+
+        // No warning should have been emitted about a missing SKILL.md.
+        assert!(
+            !logs_contain("no SKILL.md found in builtin files"),
+            "loading builtins must not warn about the discovery README"
+        );
+    }
 
     #[test]
     fn test_resolve_builtins() {
