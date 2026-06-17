@@ -1,8 +1,58 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a480
+comments:
+- actor: claude-code
+  id: 01kvbxt50760n5pj8t6xjcyj61
+  text: Picked up by /finish (card 5/5, final). The crm896p real-model run already observed 'skipping MTP this turn' fired 0 times on sibling turns — the cross-session donor carried aligned draft KV state, so MTP was retained. Strong signal this is measure-and-confirm, not a fix. Starting /implement to promote that observation to a hard assertion and document the conclusion.
+  timestamp: 2026-06-17T23:14:10.567768+00:00
+- actor: wballard
+  id: 01kvbxx1qkfq8zjpqdjpgxzb3j
+  text: |-
+    MECHANISM CONFIRMED (code trace) — MTP is retained for free on sibling turns; no production behavior change needed.
+
+    1. Draft bytes ride WITH the chosen donor in one PrefixMatch. `find_best_prefix_match` (crates/llama-agent/src/queue.rs, fn at ~303) clones `state_bytes` AND `draft_state_bytes` from the SAME selected `entry` into one PrefixMatch (queue.rs:330-331), with a single `lcp` (queue.rs:327,332). The draft cannot be matched to a different donor than the target.
+
+    2. One offset trims both. `prepare_streaming_kv_cache` destructures that match (queue.rs:2644-2651), computes `offset = lcp` once (streaming_reuse_decision, queue.rs:2714), trims the TARGET to `offset` (queue.rs:2727), and passes `(template_offset: Some(offset), draft_state_bytes)` through (queue.rs:2760-2763). `apply_draft_kv_state` (queue.rs:2794) restores the donor draft bytes and trims the draft to the SAME `offset` (queue.rs:2843).
+
+    3. The prime's draft snapshot ends at the PROMPT boundary. In MTP streaming, `on_prefill_complete(target, draft)` fires after prompt prefill and BEFORE the generation loop (crates/llama-agent/src/generation/mtp/streaming.rs:136-140). It calls `save_prompt_boundary_state`, which snapshots `draft_ctx.state_seq_get_data(0)` (queue.rs:2210) into the same entry as the target bytes (queue.rs:2219-2225). So the prime's saved draft KV length == prime prompt length == donor_len — NOT end-of-generation.
+
+    4. Therefore the draft rollback == the target rollback == `donor_len - lcp` (the prime's short divergent tail PRIME_TAIL + gen-suffix), well under n_rs_seq=64. If the target trim succeeds (it does — the keystone fix picks the zero-/tiny-rollback pinned prime), the draft trim to the identical offset succeeds too. `skipping MTP this turn` cannot fire. This matches the crm896p real-model observation of 0 skips.
+
+    STALE COMMENT FOUND: the doc comment at apply_draft_kv_state (queue.rs ~2837-2842) still says the draft rollback distance is "the prior turn's generation length." That was true pre-boundary-snapshot; it is now the same small donor_len-lcp as the target. Will correct the comment (doc-only, no behavior change).
+
+    CONCLUSION: This card is MEASURE-AND-CONFIRM. No production fix to apply_draft_kv_state. Promoting the test's existing skip-count observation to a HARD ASSERTION (0 skips on sibling turns) + fixing the stale comment.
+  timestamp: 2026-06-17T23:15:45.523541+00:00
+- actor: wballard
+  id: 01kvbz465h65gnjd62nc6j88hd
+  text: |-
+    VERIFICATION (real model, Metal GPU, plain `cargo test` — not nextest):
+
+    cargo fmt -p llama-agent: clean.
+    cargo clippy -p llama-agent --tests -- -D warnings: clean (Finished, exit 0).
+    cargo test -p llama-agent --test agent_tests --no-run: compiles.
+
+    Real-model run (cmd 170, ~461s):
+      kv_prefix_reuse_recurrent observation: prefix_tokens=389, siblings=2, 'skipping MTP this turn' fired 0 time(s) on this run.
+      test integration::kv_prefix_reuse_recurrent::sibling_turns_reuse_pinned_prefix_without_rollback_on_recurrent_model ... ok
+      test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 109 filtered out; finished in 460.61s
+
+    The new HARD ASSERTION (`skipping MTP this turn` fires 0 times on sibling turns) passes against the live recurrent MTP model.
+
+    ADVERSARIAL DOUBLE-CHECK → REVISE, addressed: the double-check flagged that a pure-negative zero-skip assertion could pass VACUOUSLY if MTP silently stopped running (lost NextN head / failed draft build → use_mtp=false → skip line can never fire, while the MTP-independent target-reuse assertions still pass). Closed the hole with a POSITIVE per-sibling guard asserting each sibling logged 'MTP: restored N bytes of draft KV state for session {sibling_id}' (apply_draft_kv_state success INFO, captured by the llama_agent::queue=info filter). Now the zero-skip claim means "MTP ran, restored the prime's draft, and was retained" — not "MTP never ran." Re-ran the real model (cmd 170) with the positive guard in place: still passes.
+
+    PRODUCTION CHANGE: none to behavior. Doc-only fix in apply_draft_kv_state (corrected the stale "prior turn's generation length" comment to "donor_len - offset, same as the target — prompt-boundary snapshot"). The mechanism analysis proved MTP is retained for free; no rollback-awareness needed on the draft path.
+  timestamp: 2026-06-17T23:37:08.017574+00:00
+- actor: claude-code
+  id: 01kvbzkwd07gqefvfkw31e05pv
+  text: |-
+    Review triage (engine: 1/15 failed/INCOMPLETE; 1 blocker, 1 warning) — both dismissed, no in-scope defects:
+    - BLOCKER 'test passes vacuously via early return' — FALSE. The gate (lines 124-140) is the established real-model convention: under nextest (the GPU CI runner) the subscriber always installs and PANICS if it can't ('refusing to pass vacuously'); it only skips under local shared-process cargo test. Verified the implementer ran it for real (~461s, assertions fired, 0 MTP skips). The engine's suggested #[ignore] would make it never run in CI — strictly worse. Matches session_fork_real_model.rs.
+    - WARNING 'mechanism doc duplicated across queue.rs docstring + test docstring + kanban card' — benign; code-site doc and test doc serve different readers, and a kanban card isn't a code-dup. Won't-fix.
+    Conclusion: MTP retained for free on sibling turns (measure-and-confirm); only production change was a stale-comment correction in apply_draft_kv_state. → done.
+  timestamp: 2026-06-17T23:45:42.304743+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffc180
 project: kv-prefix-reuse
 title: Cover MTP draft-KV reuse on the prime donor (no per-turn MTP skip on recurrent)
 ---

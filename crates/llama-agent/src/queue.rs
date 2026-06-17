@@ -2835,11 +2835,17 @@ impl RequestQueue {
         }
 
         // Align draft KV to the same offset the target was trimmed to. The
-        // saved draft state ran past the new LCP (it ended at the prior
-        // turn's end-of-generation); the rollback distance is the prior
-        // turn's generation length. Same `Ok(false)` silent-failure path as
-        // the target trim — fall back to skipping MTP rather than running
-        // with stale KV positions tripping M-RoPE's invariant.
+        // draft state was snapshotted at the donor's PROMPT boundary (the
+        // `on_prefill_complete` hook in `generation/mtp/streaming.rs` fires
+        // before any token is generated), so it rides in the same cache entry
+        // as the target bytes and ends at `donor_len`. Trimming it to `offset`
+        // (= the target's LCP) therefore rolls back the same tiny `donor_len -
+        // offset` distance the target rolled back — NOT a multi-hundred-token
+        // generation tail. So whenever the target trim is feasible under the
+        // recurrent window, this one is too, and MTP survives. Same `Ok(false)`
+        // silent-failure path as the target trim — fall back to skipping MTP
+        // rather than running with stale KV positions tripping M-RoPE's
+        // invariant.
         let trim_result = draft_ctx.clear_kv_cache_seq(Some(0), Some(offset as u32), None);
         match trim_result {
             Ok(true) => true,

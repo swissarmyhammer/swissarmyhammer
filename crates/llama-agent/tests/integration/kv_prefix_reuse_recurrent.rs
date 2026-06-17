@@ -38,8 +38,11 @@
 //!    decode logged `streaming reusing N cached tokens` (a warm cross-session
 //!    restore, not a cold prefill) with N == the prime's shared-prefix length,
 //!    and that ZERO `KV trim … returned false` WARN lines fired across the run.
-//! 4. Observe (log, not assert) whether `skipping MTP this turn` fired on the
-//!    sibling turns — this feeds the follow-up MTP draft-KV card.
+//! 4. Assert that `skipping MTP this turn` fired ZERO times on the sibling
+//!    turns (card evhk399): the prime's draft KV is snapshotted at the prompt
+//!    boundary and packaged in the SAME donor entry as the target, so the draft
+//!    trims to the same tiny-rollback offset as the target and MTP is retained
+//!    "for free" on every sibling turn that reuses the pinned prime.
 //!
 //! The worker logs from another thread, so the global tracing subscriber is
 //! installed with the shared in-memory `CaptureWriter`, exactly like
@@ -262,6 +265,30 @@ async fn sibling_turns_reuse_pinned_prefix_without_rollback_on_recurrent_model()
              A reuse far below this is a degraded/cold restore, or the prime was rejected \
              as an infeasible-rollback donor. Captured logs:\n{logs}"
         );
+
+        // Positive MTP guard (card evhk399): the `skipping MTP this turn` WARN
+        // can only fire when the draft path actually runs, which is gated on
+        // `use_mtp = detect_nextn_predict_layers(model) > 0`. Without this
+        // guard, a regression that silently disables MTP (lost NextN head,
+        // failed draft-context build) would make the skip line impossible and
+        // the zero-skip assertion below pass VACUOUSLY while the target-side
+        // reuse assertions above (independent of MTP) still hold. Pin that the
+        // sibling actually restored the pinned prime's draft KV — the
+        // `apply_draft_kv_state` success INFO names this sibling's session id —
+        // so the zero-skip claim means "MTP ran and was retained," not "MTP
+        // never ran." This line is captured by the `llama_agent::queue=info`
+        // filter.
+        assert!(
+            logs.lines().any(|line| {
+                line.contains("MTP: restored")
+                    && line.contains("bytes of draft KV state")
+                    && line.contains(&format!("for session {sibling_id}"))
+            }),
+            "sibling {sibling_id} must run MTP and restore the pinned prime's draft KV state \
+             (a 'MTP: restored N bytes of draft KV state for session {sibling_id}' INFO). \
+             Without it the zero-skip assertion below would pass vacuously — MTP may not have \
+             run at all. Captured logs:\n{logs}"
+        );
     }
 
     // The core acceptance criterion: the recurrent rollback fallback must NEVER
@@ -273,13 +300,23 @@ async fn sibling_turns_reuse_pinned_prefix_without_rollback_on_recurrent_model()
          recurrent-model rollback fallback (the trim must succeed). Captured logs:\n{logs}"
     );
 
-    // Observe (do not assert) the MTP draft-KV fallback. The streaming-MTP path
-    // can `skip MTP this turn` when the target KV was reused but no aligned
-    // draft state exists for a fresh cross-session sibling — this is the
-    // residual the follow-up MTP draft-KV card measures. Record it so it is
-    // never silently shipped. Printed to stdout (not `tracing`, which the
-    // capture subscriber swallows into `logs`) so the observation is visible
-    // under `--nocapture` and feeds the next card.
+    // MTP draft-KV reuse on the prime donor (card evhk399). The prime turn ran
+    // MTP and saved its draft KV at the PROMPT boundary, packaged in the SAME
+    // cache entry as the target bytes (`save_prompt_boundary_state` snapshots
+    // `draft_ctx.state_seq_get_data(0)` via the `on_prefill_complete` hook in
+    // `generation/mtp/streaming.rs`). When a sibling selects that pinned prime as
+    // its donor, the draft bytes travel WITH the target in one `PrefixMatch`
+    // (`find_best_prefix_match`), and `apply_draft_kv_state` trims the draft to
+    // the SAME offset (= target LCP) the target was trimmed to. Because the
+    // prime's draft snapshot ends at the prompt boundary, the draft's rollback
+    // distance == `donor_len - lcp` == the target's rollback (the prime's short
+    // divergent tail, well under the 64-token recurrent window). So if the
+    // target trim succeeds — and the prior assertion proves it does — the draft
+    // trim to the identical offset succeeds too, and MTP is retained "for free":
+    // `skipping MTP this turn` must NOT fire on any sibling turn.
+    //
+    // Printed to stdout (not `tracing`, which the capture subscriber swallows
+    // into `logs`) so the count is visible under `--nocapture`.
     let skipped_mtp_lines: Vec<&str> = logs
         .lines()
         .filter(|line| line.contains("skipping MTP this turn"))
@@ -293,4 +330,13 @@ async fn sibling_turns_reuse_pinned_prefix_without_rollback_on_recurrent_model()
     for line in &skipped_mtp_lines {
         println!("  MTP-skip: {line}");
     }
+    assert!(
+        skipped_mtp_lines.is_empty(),
+        "MTP must be retained on every sibling turn that reuses the pinned prime: the prime's \
+         draft KV was snapshotted at the prompt boundary and rides with the target in the same \
+         donor, so the draft trims to the same tiny-rollback offset as the target and \
+         'skipping MTP this turn' must never fire. It fired {} time(s):\n{}\nCaptured logs:\n{logs}",
+        skipped_mtp_lines.len(),
+        skipped_mtp_lines.join("\n")
+    );
 }
