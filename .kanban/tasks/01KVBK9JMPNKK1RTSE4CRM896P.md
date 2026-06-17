@@ -1,8 +1,50 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a380
+comments:
+- actor: claude-code
+  id: 01kvbt2xew0rz74364dx3rk42g
+  text: 'Picked up by /finish (card 4/5). All three deps are done + committed: keystone selector (0abcb1aaa), model window wiring (44f55ca56), deterministic tool order (44776f8cc). Now the real-model proof. Starting /implement.'
+  timestamp: 2026-06-17T22:09:03.452465+00:00
+- actor: claude-code
+  id: 01kvbtx3qy05gf07pycf030zsa
+  text: |-
+    Test written + registered (crates/llama-agent/tests/integration/kv_prefix_reuse_recurrent.rs, in agent_tests.rs's integration mod). Compiles clean, clippy clean, fmt clean. Model + Metal GPU ARE available in this env (Qwen3.5-0.8B-MTP cached), so I ran it for real.
+
+    First run RED, but revealed a real behavior, NOT a test bug: the siblings logged 'streaming: no usable cached prefix ... across N cached donors, processing full prompt' — i.e. cross-session LCP donor match returned 0 for BOTH siblings against the pinned prime. The prime saved 385 then 597 prompt tokens; siblings saved 551 each. So fresh sibling sessions are NOT reusing the pinned prime as a cross-session donor at all (LCP=0), meaning something session-specific sits at the very start of the rendered prompt (the queue.rs diagnostic warns about exactly this: session ULID / cwd / timestamp / non-deterministic tool order). Investigating what breaks the shared prefix. Also note: the prime ran an agentic loop (3 messages, two saves) which is unexpected for a single-turn 'reply ok' prompt.
+  timestamp: 2026-06-17T22:23:21.854117+00:00
+- actor: claude-code
+  id: 01kvbtzqqscznxdv7gt0tk9wqh
+  text: |-
+    ROOT CAUSE of RED found (and it is the recurrent constraint working correctly, not a donor-match bug): the prime turn saved its prefix TWICE — first at 385 tokens (1 message), then again at 597 tokens (3 messages) — because the prime ran an agentic loop (assistant reply + another user/tool turn). So by the time siblings query, the pinned prime donor's saved prompt_tokens = 597. Each sibling's LCP with the prime is the shared ~382-token header, giving rollback = 597 - 382 = ~215 tokens, which EXCEEDS the finite 64-token recurrent window — so find_best_prefix_match correctly REJECTS the prime as an infeasible-rollback donor (the very mechanism this card proves). Result: 'no usable cached prefix' and a cold full reprocess.
+
+    Fix: the prime's SAVED prefix must equal (≈) the shared prefix the siblings extend, so its trim-to-LCP rollback is ~0 (just the gen-prompt suffix), NOT a multi-turn conversation tail. Need the prime to be a single short turn whose saved prompt_tokens ≈ the shared header. Investigating why the prime ran 3 messages (agentic loop) and constraining it.
+  timestamp: 2026-06-17T22:24:47.865409+00:00
+- actor: claude-code
+  id: 01kvbwzf742j3adybdwe21dhxm
+  text: "GREEN. Fixed the scenario: prime prompt = VALIDATOR_HEADER + a tiny self-contained file (PRIME_TAIL='fn ok() {}') so the prime is a single terminal turn whose saved prefix (389 tokens) is essentially the shared header; siblings = VALIDATOR_HEADER + a long (>64-token) divergent file tail. Now each sibling's LCP with the prime is the shared header and the prime's trim-to-LCP rollback is just PRIME_TAIL+gen-suffix (well under the finite 64-token recurrent window), so the pinned prime is selected as the feasible cross-session donor.\n\nVerification (model + Metal GPU present in this env; ran for real via `cargo test -p llama-agent --test agent_tests`, ~462s, NOT nextest — nextest's 300s slow-timeout kills this real-model test):\n- test result: ok. 1 passed; 0 failed.\n- Test stdout: `prefix_tokens=389, siblings=2, 'skipping MTP this turn' fired 0 time(s) on this run.`\n- Assertions that passed: (1) each sibling logs `... as prefix donor from session <prime> for session <sibling> ... donor_pinned=true` (binds the donor to the PINNED prime, not a cold/sibling donor); (2) each sibling logs `streaming reusing N cached tokens` with N >= prefix_tokens-32 (=357), i.e. the full shared header; (3) ZERO `KV trim to common prefix returned false` WARN lines across the run.\n- MTP observation (feeds evhk399): `skipping MTP this turn` fired 0 times on this run — the cross-session donor carried aligned draft KV, so MTP was NOT skipped here.\n\nGates: `cargo test -p llama-agent --test agent_tests --no-run` clean; `cargo clippy -p llama-agent --tests` clean (0 warnings); `cargo fmt --check -p llama-agent` clean. NO production code changed — only the new test file + the one-line mod registration. Adversarial double-check: PASS (verified non-vacuous, assertions bind to live queue.rs log formats, floor logic fails loud). \n\nNB: pre-existing stray dirty files (builtin/validators/rust/rules/*.md, crates/mirdan/src/status.rs) were dirty at session start and are NOT part of this task — keep them out of the commit. Moving to review."
+  timestamp: 2026-06-17T22:59:36.292859+00:00
+- actor: claude-code
+  id: 01kvbxbebjsfp05dsvapm6e2n8
+  text: 'Review (engine: 0 failed, 0 blockers, 1 warning). One GENUINE in-scope finding: `prompt_turn` in the new kv_prefix_reuse_recurrent.rs duplicates an identical helper in session_fork_real_model.rs; a shared real_model_helpers.rs already exists. Bouncing back to extract it. Stays in review.'
+  timestamp: 2026-06-17T23:06:08.626771+00:00
+- actor: wballard
+  id: 01kvbxrnrz5hxankv2fv2hmdpk
+  text: |-
+    Review finding RESOLVED (DRY, test-only): the duplicated `prompt_turn` helper is now a single canonical `pub async fn prompt_turn(server, session_id, text, budget: Duration)` in crates/llama-agent/tests/integration/real_model_helpers.rs. Both local copies deleted; both files import the shared one. The two copies were byte-identical bodies that each referenced a file-local NO_HANG_BUDGET (180s recurrent, 120s fork), so the canonical version takes the budget as a Duration param and each call site passes its own NO_HANG_BUDGET — observable behavior (timeouts, double-expect, panic messages) unchanged. Dropped the now-dead `AcpServer`/`text_prompt`/`SessionId` imports from the two test files; updated the helpers module doc to list kv_prefix_reuse_recurrent.rs.
+
+    NO production code changed (git diff on crates/*/src empty; pre-existing stray builtin/validators/*.md + crates/mirdan/src/status.rs are NOT part of this task and left untouched).
+
+    Verification (per task instructions — expensive ~462s real-model test NOT re-run; behavior unchanged, test is gated):
+    - `cargo fmt -p llama-agent` — exit 0
+    - `cargo clippy -p llama-agent --tests -- -D warnings` — exit 0, 0 warnings
+    - `cargo test -p llama-agent --test agent_tests --no-run` — exit 0; BOTH test files build against the shared helper
+    - Adversarial double-check: PASS (timeouts preserved per call site, no production touch, semantics byte-identical, no dead imports, new file registered in integration/mod.rs).
+
+    No Review Findings checkbox section in the description, so recording resolution here. Moving back to review.
+  timestamp: 2026-06-17T23:13:22.207861+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffc080
 project: kv-prefix-reuse
 title: 'Real-model integration test: sibling review turns reuse the pinned prefix (no full reprocess)'
 ---

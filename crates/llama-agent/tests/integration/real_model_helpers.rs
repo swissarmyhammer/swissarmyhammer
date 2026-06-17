@@ -1,14 +1,16 @@
 //! Shared helpers for the real-model (Qwen3-0.6B) integration tests.
 //!
 //! Centralizes the canonical real-model `AgentConfig`, the server bootstrap
-//! with its environmental-failure skip heuristic, and the plain-text
-//! `PromptRequest` constructor, so the sibling real-model tests
-//! (`acp_agentic_loop.rs`, `acp_hooks_real_model.rs`,
-//! `session_fork_real_model.rs`) cannot drift apart.
+//! with its environmental-failure skip heuristic, the plain-text
+//! `PromptRequest` constructor, and the per-turn prompt driver, so the sibling
+//! real-model tests (`acp_agentic_loop.rs`, `acp_hooks_real_model.rs`,
+//! `session_fork_real_model.rs`, `kv_prefix_reuse_recurrent.rs`) cannot drift
+//! apart.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use agent_client_protocol::schema::SessionNotification;
+use agent_client_protocol::schema::{SessionId, SessionNotification};
 use llama_agent::acp::config::AcpConfig;
 use llama_agent::acp::AcpServer;
 use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
@@ -166,6 +168,21 @@ pub async fn try_init_real_model_agent(config: AgentConfig) -> Option<AgentServe
 /// the in-crate [`llama_agent::acp::test_utils::text_prompt`] so the real-model
 /// integration tests and the `server.rs` unit tests share one definition.
 pub use llama_agent::acp::test_utils::text_prompt;
+
+/// Run one prompt turn under a per-turn hang guard, panicking on error.
+///
+/// `budget` is the per-prompt timeout each caller chooses for its own scenario
+/// (a longer recurrent prefix-reuse turn needs more headroom than a short fork
+/// turn). A turn that exceeds `budget` or returns an error fails loudly — these
+/// real-model tests treat a hung or failing prompt as a regression, never a
+/// skip. Shared by the real-model tests so the turn-driving boilerplate has a
+/// single definition.
+pub async fn prompt_turn(server: &AcpServer, session_id: &SessionId, text: &str, budget: Duration) {
+    tokio::time::timeout(budget, server.prompt(text_prompt(session_id.clone(), text)))
+        .await
+        .expect("prompt must not hang")
+        .expect("prompt must succeed against a healthy model");
+}
 
 /// The skip heuristic must stay narrow: rate-limit/network failures are
 /// environmental (skip), but a `LoadingFailed` from a corrupt model or broken
