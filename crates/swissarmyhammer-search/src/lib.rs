@@ -113,7 +113,12 @@ pub fn search(docs: &[Doc], q: &Query) -> Vec<Hit> {
 
     // Determine which signals carry data for this query.
     let bm25_present = !query_tokens.is_empty();
-    let trigram_present = !tokenize::char_trigrams(q.text()).is_empty();
+    // Detect presence on the *canonical* trigram set — the same form
+    // `trigram_dice` scores against — so presence and scoring share one
+    // definition. Using raw `char_trigrams(q.text())` here would disagree on
+    // degenerate queries (e.g. delimiter-only "_-_" has raw trigrams but no
+    // canonical ones), marking a signal "present" that always scores 0.
+    let trigram_present = !score::canonical_trigram_set(q.text()).is_empty();
     let cosine_present = q.embedding().is_some() && docs.iter().any(|d| d.embedding().is_some());
 
     // Pass 1: corpus statistics over the query terms.
@@ -157,6 +162,10 @@ pub fn search(docs: &[Doc], q: &Query) -> Vec<Hit> {
 
 /// Compute the raw [`Signals`] for one document.
 ///
+/// The trigram value is the field-weighted aggregate
+/// `Σ field.weight * trigram_dice(query, field.text)`, so it ranges over
+/// `[0, Σ field weights]` and can exceed 1.0 — see [`Signals::trigram`].
+///
 /// The cosine value is `0.0` unless both the query and the document carry an
 /// embedding. When the cosine signal is absent from fusion overall, this raw
 /// value is simply never used as a ranked list.
@@ -188,6 +197,13 @@ fn score_doc(
 
 /// Fuse the present signals with RRF, normalize, sort, filter, and truncate.
 fn fuse_and_rank(docs: &[Doc], signals: &[Signals], specs: &[SignalSpec], q: &Query) -> Vec<Hit> {
+    // No present signal means nothing to rank by: every doc would tie at score
+    // 0.0, yielding arbitrary index-ordered hits. Honor the documented contract
+    // ("a query with no present signals yields an empty Vec") instead.
+    if specs.is_empty() {
+        return Vec::new();
+    }
+
     // A stable-sorted ranked list of doc indices for each present signal.
     let ranked_lists: Vec<Vec<usize>> = specs
         .iter()
@@ -459,13 +475,30 @@ impl Query {
 }
 
 /// The per-signal raw scores that contributed to a [`Hit`].
+///
+/// These are the *raw* per-doc signal values, before RRF fusion and the
+/// rank-based normalization that produces [`Hit::score`]. They are kept on the
+/// hit so a consumer can threshold on a raw value directly — but each field has
+/// a **different range**, and none of the three is the same `[0,1]` scale. A
+/// raw-threshold consumer must pick the field it means and use that field's
+/// documented range; do not assume a common `[0,1]` scale across them.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct Signals {
-    /// BM25 lexical score.
+    /// BM25 lexical score. **Unbounded** non-negative (`>= 0.0`): a higher value
+    /// means a stronger lexical match, but there is no fixed upper bound — it
+    /// grows with term frequency and field weighting. `0.0` when no query term
+    /// matches or the corpus is empty.
     pub bm25: f32,
-    /// Character-trigram (fuzzy) score.
+    /// Character-trigram (fuzzy) score: a **field-weighted aggregate**, the sum
+    /// `Σ field.weight * trigram_dice(query, field.text)` over the doc's fields.
+    /// Although [`crate::score::trigram_dice`] itself returns `[0,1]`, this
+    /// aggregate ranges over `[0, Σ field weights]` and so **can exceed 1.0**
+    /// when fields carry weight > 1 or several fields match. It is NOT the
+    /// `[0,1]` Dice range.
     pub trigram: f32,
-    /// Embedding cosine-similarity score.
+    /// Embedding cosine-similarity score, in **`[-1.0, 1.0]`** (not `[0,1]`):
+    /// `1.0` is identical direction, `-1.0` opposite, `0.0` orthogonal or when
+    /// either the query or the doc lacks an embedding.
     pub cosine: f32,
 }
 
@@ -592,6 +625,44 @@ mod tests {
     }
 
     #[test]
+    fn no_present_signal_yields_empty_vec() {
+        // Docs exist, but the query carries no usable signal: empty text (no
+        // BM25 tokens, no trigrams) and no embedding (cosine absent). Per the
+        // documented contract, a query with no present signals yields an empty
+        // Vec rather than arbitrary zero-score hits.
+        let docs = vec![
+            Doc::new("a", vec![field(1.0, "parse config")], None),
+            Doc::new("b", vec![field(1.0, "unrelated text here")], None),
+        ];
+        let hits = search(&docs, &Query::new(""));
+        assert!(hits.is_empty(), "expected empty Vec, got {hits:?}");
+    }
+
+    #[test]
+    fn degenerate_short_query_trigram_presence_matches_canonical_scoring() {
+        // A delimiter-only query ("_-_") has raw character trigrams
+        // (`char_trigrams` sees the literal chars), but canonicalizing through
+        // `tokenize().join(" ")` strips the punctuation, leaving no canonical
+        // trigrams. Since `trigram_dice` always scores 0 for such a query, the
+        // trigram signal carries no data and must NOT be treated as present.
+        //
+        // Presence detection must agree with the scoring definition: with no
+        // BM25 tokens, no canonical trigrams, and no embedding, there is no
+        // present signal, so the contract demands an empty Vec.
+        let docs = vec![
+            Doc::new("a", vec![field(1.0, "parse config")], None),
+            Doc::new("b", vec![field(1.0, "unrelated text here")], None),
+        ];
+        let hits = search(&docs, &Query::new("_-_"));
+        assert!(
+            hits.is_empty(),
+            "delimiter-only query has no canonical trigrams; trigram signal \
+             scores 0 everywhere, so no signal is present and the result must \
+             be empty, got {hits:?}"
+        );
+    }
+
+    #[test]
     fn rank_zero_everywhere_normalizes_to_one() {
         // One doc dominates every present signal -> normalized score == 1.0.
         let docs = vec![
@@ -664,5 +735,27 @@ mod tests {
         ];
         let q = default_query("config").with_top_k(2);
         assert_eq!(search(&docs, &q).len(), 2);
+    }
+
+    #[test]
+    fn trigram_signal_is_field_weighted_aggregate_exceeding_one() {
+        // The raw `Signals::trigram` is `Σ field.weight * trigram_dice(...)`, a
+        // field-weighted aggregate in `[0, Σ field weights]` — NOT the `[0,1]`
+        // Dice range. A doc with two weight-5 fields, each identical to the
+        // query, scores `5*1.0 + 5*1.0 = 10.0`, far above 1.0. This locks in the
+        // documented contract so raw-threshold consumers reading
+        // `Hit::signals.trigram` know it is not bounded by 1.0.
+        let docs = vec![Doc::new(
+            "multi",
+            vec![field(5.0, "parse config"), field(5.0, "parse config")],
+            None,
+        )];
+        let hits = search(&docs, &default_query("parse config"));
+        let trigram = hits[0].signals.trigram;
+        assert!(
+            trigram > 1.0,
+            "field-weighted trigram aggregate should exceed 1.0 under \
+             multi-field weighting, got {trigram}"
+        );
     }
 }

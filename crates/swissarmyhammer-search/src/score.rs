@@ -158,12 +158,17 @@ pub fn trigram_dice(query: &str, target: &str) -> f32 {
 
 /// Canonicalize `s` (tokenize, re-join with spaces) and return its trigram set.
 ///
+/// This is the single authority for "does this string have trigrams?": the
+/// trigram signal in [`crate::search`] both detects presence and scores
+/// ([`trigram_dice`]) through this canonical form, so a string with an empty
+/// canonical trigram set can never contribute a non-zero trigram score.
+///
 /// # Parameters
 /// - `s`: the string to canonicalize and trigram.
 ///
 /// # Returns
 /// The deduplicated set of length-3 character windows of the canonical form.
-fn canonical_trigram_set(s: &str) -> HashSet<[char; 3]> {
+pub(crate) fn canonical_trigram_set(s: &str) -> HashSet<[char; 3]> {
     let canonical = crate::tokenize::tokenize(s).join(" ");
     crate::tokenize::char_trigrams(&canonical)
         .into_iter()
