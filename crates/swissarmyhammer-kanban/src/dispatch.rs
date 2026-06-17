@@ -156,26 +156,63 @@ async fn resolve_opt_placement_ref(
     }
 }
 
-/// Normalize a `depends_on` JSON array of forgiving task refs to full ULIDs.
+/// Normalize a forgiving `depends_on` param to canonical full ULIDs.
 ///
-/// Each entry may be a short id, `^<short>`, prefix, or full ULID; every one
-/// is resolved through [`resolve_task_ref`] so the stored value is always the
-/// canonical 26-char ULID. Returns `Ok(None)` when the param is absent.
+/// Mirrors the single-value-or-array tolerance of [`resolve_assignees`] so
+/// clients that serialize `depends_on` as a scalar — common because the slim
+/// wire schema gives no array type-hint — are not silently dropped. Accepts:
+/// - a JSON array of refs;
+/// - a single JSON string holding one ref;
+/// - a stringified JSON array (`"[\"01K…\"]"`), which is parsed back into its
+///   elements; a string that does not parse as a JSON array is treated as one
+///   ref.
+///
+/// Every element routes through [`resolve_task_ref`], so a short id,
+/// `^<short>`, unique prefix, lowercase, or full ULID all resolve to the
+/// canonical 26-char ULID. An unresolvable ref is an error (consistent with
+/// `resolve_task_ref`), never a silent drop. Returns `Ok(None)` when the param
+/// is absent.
 async fn resolve_depends_on(
     ctx: &KanbanContext,
     op: &KanbanOperation,
 ) -> Result<Option<Vec<TaskId>>, KanbanError> {
-    let Some(deps) = op.get_param("depends_on").and_then(|v| v.as_array()) else {
+    let Some(value) = op.get_param("depends_on") else {
         return Ok(None);
     };
-    let mut resolved = Vec::with_capacity(deps.len());
-    for v in deps {
-        if let Some(s) = v.as_str() {
-            let full = resolve_task_ref(ctx, s).await?;
-            resolved.push(TaskId::from_string(full));
-        }
+    let refs = depends_on_refs(value)?;
+    let mut resolved = Vec::with_capacity(refs.len());
+    for raw in refs {
+        let full = resolve_task_ref(ctx, &raw).await?;
+        resolved.push(TaskId::from_string(full));
     }
     Ok(Some(resolved))
+}
+
+/// Extract the list of raw task refs from a forgiving `depends_on` value.
+///
+/// See [`resolve_depends_on`] for the accepted shapes. Resolution to canonical
+/// ULIDs is the caller's job; this only normalizes the wire shape to a flat
+/// list of ref strings. A value that is neither a JSON array nor a string is
+/// malformed and errors — never silently dropped (which on update would clear
+/// existing deps, the exact silent-drop bug this helper exists to prevent).
+fn depends_on_refs(value: &Value) -> Result<Vec<String>, KanbanError> {
+    if let Some(arr) = value.as_array() {
+        return Ok(arr
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect());
+    }
+    if let Some(s) = value.as_str() {
+        // A stringified JSON array (`"[\"01K…\"]"`) parses into its elements;
+        // anything else is a single ref.
+        if let Ok(parsed) = serde_json::from_str::<Vec<String>>(s) {
+            return Ok(parsed);
+        }
+        return Ok(vec![s.to_string()]);
+    }
+    Err(KanbanError::parse(format!(
+        "depends_on must be a task ref string or an array of refs, got: {value}"
+    )))
 }
 
 /// Dispatch board operations (init, get, update).
@@ -3141,6 +3178,130 @@ mod tests {
         // The ack carries the resolved full ULID; the persisted dependency
         // is asserted via `get task`.
         assert_eq!(updated["id"].as_str().unwrap(), task_id);
+        let task = get_task(&ctx, &task_id).await;
+        let deps = task["depends_on"].as_array().unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].as_str().unwrap(), dep_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_depends_on_single_string_persists() {
+        // A bare id string (not wrapped in an array) must persist — the
+        // forgiving shape real clients frequently serialize, previously
+        // silently dropped by the `.as_array()` gate.
+        let (_temp, ctx) = setup().await;
+        let dep_id = add_one_task(&ctx, "Dep target").await;
+        let task_id = add_one_task(&ctx, "Will depend").await;
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": dep_id,
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let task = get_task(&ctx, &task_id).await;
+        let deps = task["depends_on"].as_array().unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].as_str().unwrap(), dep_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_depends_on_stringified_array_persists() {
+        // A stringified JSON array (`"[\"01K…\"]"`) must parse and persist.
+        let (_temp, ctx) = setup().await;
+        let dep_id = add_one_task(&ctx, "Dep target").await;
+        let task_id = add_one_task(&ctx, "Will depend").await;
+        let stringified = serde_json::to_string(&vec![dep_id.clone()]).unwrap();
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": stringified,
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let task = get_task(&ctx, &task_id).await;
+        let deps = task["depends_on"].as_array().unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].as_str().unwrap(), dep_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_depends_on_caret_single_string_persists_full_ulid() {
+        // A `^`-prefixed single string must resolve to the canonical ULID.
+        let (_temp, ctx) = setup().await;
+        let dep_id = add_one_task(&ctx, "Dep target").await;
+        let task_id = add_one_task(&ctx, "Will depend").await;
+        let caret_short = format!("^{}", crate::types::short_id(&dep_id));
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": caret_short,
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let task = get_task(&ctx, &task_id).await;
+        let deps = task["depends_on"].as_array().unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].as_str().unwrap(), dep_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_depends_on_unresolvable_ref_errors() {
+        // An unresolvable ref must error, not silently drop to an empty list.
+        let (_temp, ctx) = setup().await;
+        let task_id = add_one_task(&ctx, "Will depend").await;
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": "nosuch7",
+        }))
+        .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await;
+        assert!(
+            result.is_err(),
+            "an unresolvable depends_on ref must error, not silently drop"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_depends_on_malformed_scalar_errors_without_clearing() {
+        // A non-string, non-array value (e.g. a number) is malformed. It must
+        // error — never silently clear existing deps, which is exactly the
+        // silent-drop anti-pattern this fix exists to kill.
+        let (_temp, ctx) = setup().await;
+        let dep_id = add_one_task(&ctx, "Dep target").await;
+        let task_id = add_one_task(&ctx, "Will depend").await;
+
+        // Seed a real dependency first.
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": dep_id,
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // A malformed scalar must error, not wipe the seeded dependency.
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": 42,
+        }))
+        .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await;
+        assert!(
+            result.is_err(),
+            "a malformed (non-string, non-array) depends_on must error"
+        );
+
+        // The pre-existing dependency must survive the rejected update.
         let task = get_task(&ctx, &task_id).await;
         let deps = task["depends_on"].as_array().unwrap();
         assert_eq!(deps.len(), 1);
