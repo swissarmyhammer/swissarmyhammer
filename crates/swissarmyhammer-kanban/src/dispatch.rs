@@ -547,8 +547,21 @@ async fn execute_task_query_operation(
             if let Some(column) = op.get_string("column") {
                 cmd = cmd.with_column(column);
             }
-            if let Some(filter) = op.get_string("filter") {
-                cmd = cmd.with_filter(filter);
+            // `project` is forgiving sugar for the `$<project>` filter atom:
+            // resolution by id or name-slug (case-insensitive) happens inside
+            // `ListTasks::execute` via the slug registry, so we only need to
+            // fold it into the DSL here. Alone it becomes `$<project>`; with an
+            // explicit `filter` the two are AND-ed (`<filter> && $<project>`).
+            let filter = op.get_string("filter");
+            let project = op.get_string("project");
+            let effective_filter = match (filter, project) {
+                (Some(filter), Some(project)) => Some(format!("{filter} && ${project}")),
+                (Some(filter), None) => Some(filter.to_string()),
+                (None, Some(project)) => Some(format!("${project}")),
+                (None, None) => None,
+            };
+            if let Some(effective_filter) = effective_filter {
+                cmd = cmd.with_filter(effective_filter);
             }
             // Pagination — MCP callers pass `page` / `page_size` directly.
             // Anything that doesn't fit in `usize` is treated as unset (the
@@ -2415,6 +2428,102 @@ mod tests {
         assert!(
             !titles.contains(&"Blocked"),
             "Blocked task should not be ready"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Dispatch: list tasks `project` param folds into the `$<project>`
+    // filter. Regression for the silent-ignore bug where `project` was
+    // dropped and the whole board was returned.
+    // ------------------------------------------------------------------
+
+    /// `{"op": "list tasks", "project": "<id>"}` must return ONLY that
+    /// project's tasks. Before the fix the `project` param was silently
+    /// ignored and the whole board (both tasks) came back.
+    #[tokio::test]
+    async fn dispatch_list_tasks_project_param_scopes_to_project() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add project", "id": "myproj", "name": "My Project"}))
+            .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops =
+            parse_input(json!({"op": "add task", "title": "In project", "project": "myproj"}))
+                .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+        let ops = parse_input(json!({"op": "add task", "title": "Out of project"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "list tasks", "project": "myproj"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(
+            result["count"], 1,
+            "project param must scope the listing to the in-project task only"
+        );
+        assert_eq!(result["tasks"][0]["title"], "In project");
+    }
+
+    /// `project` + an explicit `filter` apply both (AND semantics): only a
+    /// task that is BOTH in the project AND carries the tag is returned.
+    #[tokio::test]
+    async fn dispatch_list_tasks_project_param_intersects_with_filter() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add project", "id": "myproj", "name": "My Project"}))
+            .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // In project AND tagged #bug — the only match.
+        let ops =
+            parse_input(json!({"op": "add task", "title": "Bug in project", "project": "myproj"}))
+                .unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let bug_id = r["id"].as_str().unwrap().to_string();
+        let ops = parse_input(json!({"op": "tag task", "id": bug_id, "tag": "bug"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // In project but NOT tagged — excluded by the filter.
+        let ops = parse_input(
+            json!({"op": "add task", "title": "Plain in project", "project": "myproj"}),
+        )
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // Tagged #bug but NOT in project — excluded by the project.
+        let ops = parse_input(json!({"op": "add task", "title": "Bug outside"})).unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let outside_id = r["id"].as_str().unwrap().to_string();
+        let ops = parse_input(json!({"op": "tag task", "id": outside_id, "tag": "bug"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "list tasks", "project": "myproj", "filter": "#bug"}))
+            .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(
+            result["count"], 1,
+            "project + filter must intersect (AND), matching only the in-project tagged task"
+        );
+        assert_eq!(result["tasks"][0]["title"], "Bug in project");
+    }
+
+    /// A `project` value naming no existing project yields an empty listing
+    /// (normal `$` filter semantics), not the whole board.
+    #[tokio::test]
+    async fn dispatch_list_tasks_unknown_project_returns_empty() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Some task"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "list tasks", "project": "nonexistent"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(
+            result["count"], 0,
+            "an unknown project must yield an empty list, not the whole board"
         );
     }
 
