@@ -93,7 +93,8 @@ mod tests {
 
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["op"].is_object());
-        assert!(schema["x-op-signatures"].is_object());
+        // `x-op-signatures` is full-only; the wire surface omits it along with
+        // every other heavy CLI-facing key.
         for key in WIRE_DROPPED_KEYS {
             assert!(!obj.contains_key(key), "wire schema must omit {key:?}");
         }
@@ -108,6 +109,7 @@ mod tests {
         assert!(schema["properties"]["op"].is_object());
         assert!(schema["x-operation-schemas"].is_array());
         assert!(schema["x-operation-groups"].is_object());
+        assert!(schema["x-op-signatures"].is_object());
     }
 
     #[test]

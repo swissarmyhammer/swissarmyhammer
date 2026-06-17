@@ -37,6 +37,12 @@ pub struct ListTasks {
     pub column: Option<ColumnId>,
     /// Filter DSL expression (e.g. `#bug && @alice`).
     pub filter: Option<String>,
+    /// Scope the listing to a single project, by project id or by the slug of
+    /// its display name (case-insensitive). Sugar for the `$<project>` filter
+    /// atom: it is folded into `filter` at dispatch (`<filter> && $<project>`
+    /// when both are given), so resolution is the same as any `$` predicate. A
+    /// value naming no project yields an empty listing.
+    pub project: Option<String>,
     /// 1-indexed page number. Defaults to 1 when unset; values < 1 are
     /// treated as 1.
     pub page: Option<usize>,
