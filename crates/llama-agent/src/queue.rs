@@ -1294,13 +1294,16 @@ impl RequestQueue {
         let model_identifier =
             crate::agent::model_identifier_for_strategy(model_manager.get_config());
         let chat_template = Arc::new(ChatTemplateEngine::with_model_strategy(&model_identifier));
+        // Donor-rollback budget: a hybrid attention+recurrent model can only
+        // trim a donor's KV back as far as its `n_rs_seq` snapshot window, so
+        // the store must reject donors whose trim-to-LCP rollback exceeds it.
+        // Derived from the same model identifier the chat template uses; pure
+        // attention models stay `usize::MAX` (any rollback feasible).
+        let max_rollback = crate::agent::recurrent_rollback_window(&model_identifier);
         let session_state_cache: SessionStateCache = Arc::new(Mutex::new(SessionStateStore::new(
             default_max_cache_entries(),
             default_max_cache_bytes(),
-            // Pure-attention default: any rollback is feasible. The real
-            // model-derived recurrent window (n_rs_seq) is wired in a
-            // separate task.
-            usize::MAX,
+            max_rollback,
         )));
 
         let executor: Arc<dyn QueueExecutor> = Arc::new(ModelManagerExecutor::new(
