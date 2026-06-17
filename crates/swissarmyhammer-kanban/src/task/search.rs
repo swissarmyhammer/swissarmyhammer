@@ -10,8 +10,10 @@
 //! weight), description (low weight), and joined tags (mid weight) are lexical
 //! fields, while the task's cached embedding feeds the cosine signal. The query
 //! is embedded once and ranked against the corpus via
-//! [`swissarmyhammer_search::search`]; each [`Hit`] maps back to the enriched
-//! task JSON carrying its `score` and per-signal `signals`.
+//! [`swissarmyhammer_search::search`]; each [`Hit`] maps back to the SLIM task
+//! JSON (the same allowlist projection as `list tasks`) carrying its `score` and
+//! per-signal `signals`. The heavy payload (`description`/`attachments`/
+//! `comments`) stays one `get task` away.
 //!
 //! Embeddings are never optional. The embedder is a process-lifetime singleton
 //! loaded at most once (see [`shared_embedder`]); if it cannot load, the op
@@ -24,8 +26,8 @@ use crate::error::KanbanError;
 use crate::task::embedding_cache::{content_hash, task_embedding_text, EmbeddingCache};
 use crate::task::shared::parse_filter_expr;
 use crate::task_helpers::{
-    enrich_all_task_entities, task_entity_to_rich_json, task_tags, EntitySlugRegistry,
-    TaskFilterAdapter,
+    enrich_all_task_entities, slim_task_json, task_entity_to_rich_json, task_tags,
+    EntitySlugRegistry, TaskFilterAdapter,
 };
 use crate::virtual_tags::default_virtual_tag_registry;
 use serde::Deserialize;
@@ -181,15 +183,35 @@ fn build_doc(entity: &Entity, embedding: Option<Vec<f32>>) -> Doc {
     )
 }
 
+/// Project an enriched task entity to the SLIM JSON surfaced in search results.
+///
+/// `search tasks` returns the SAME slim shape as `list tasks` — the
+/// [`slim_task_json`] allowlist over the enriched task ([`task_entity_to_rich_json`]),
+/// which keeps identity/position/readiness/`filter_tags` but drops the heavy
+/// payload (`description`, `attachments`, and any future `comments`). The agent
+/// follows up with `get task` (always full) on the hit it cares about, so the
+/// per-hit payload stays lean across `top_k` results. Entities must already be
+/// enriched (see [`enrich_all_task_entities`]) so the rich fields are present.
+///
+/// This is the single projection policy for the surfaced result objects; the
+/// internal corpus/Doc build (embedding text, lexical fields) is built from the
+/// full entity and is unaffected.
+fn surfaced_task_json(entity: &Entity) -> Value {
+    slim_task_json(&task_entity_to_rich_json(entity))
+}
+
 /// Build the searchable corpus for `scoped`, lazy-filling the embedding cache.
 ///
 /// For each in-scope task this embeds-or-reuses its vector — a cache hit on
 /// `task_embedding_text(title, description)` reuses the stored vector, a miss
 /// embeds via `embedder` and writes the vector back through `cache` — then turns
-/// the task into a weighted [`Doc`] (see [`build_doc`]) and records its enriched
-/// JSON. Returns the `Doc` corpus parallel to a `id → enriched JSON` map for the
-/// later map-back. An embed failure propagates as a [`KanbanError`]; a cache
-/// write failure is logged but non-fatal.
+/// the task into a weighted [`Doc`] (see [`build_doc`]) and records its SLIM
+/// surfaced JSON (see [`surfaced_task_json`]). Returns the `Doc` corpus parallel
+/// to a `id → slim JSON` map for the later map-back. An embed failure propagates
+/// as a [`KanbanError`]; a cache write failure is logged but non-fatal.
+///
+/// NOTE: the `Doc` lexical fields and embedding text are built from the FULL
+/// entity (unchanged); only the surfaced map-back JSON is slimmed.
 ///
 /// Isolated from [`SearchTasks::run`] so the embedding/cache machinery reads as a
 /// single step and `run` stays a clear sequence. Takes `cache` by value because
@@ -226,18 +248,18 @@ async fn build_docs_with_embeddings(
         };
 
         docs.push(build_doc(entity, Some(vector)));
-        enriched_by_id.insert(id.to_string(), task_entity_to_rich_json(entity));
+        enriched_by_id.insert(id.to_string(), surfaced_task_json(entity));
     }
     Ok((docs, enriched_by_id))
 }
 
 /// Map ranked [`Hit`]s back to the `{ tasks, count }` response shape.
 ///
-/// Each hit's id selects its enriched task JSON from `enriched_by_id`; the
+/// Each hit's id selects its SLIM surfaced task JSON from `enriched_by_id`; the
 /// hit's `score` and per-signal `signals` are attached to that JSON object.
 /// Hits whose id is absent from the map are skipped (a task removed between
-/// corpus build and map-back). The response mirrors `list tasks` plus the
-/// per-hit `score`/`signals`.
+/// corpus build and map-back). The response mirrors `list tasks`' slim shape
+/// plus the per-hit `score`/`signals`.
 ///
 /// Kept free of any embedding so the map-back is unit-testable without a model.
 fn map_hits_to_response(
@@ -508,14 +530,16 @@ mod tests {
     // --- Map-back --------------------------------------------------------
 
     #[tokio::test]
-    async fn map_hits_to_response_shape_carries_score_and_signals() {
+    async fn map_hits_to_response_shape_is_slim_with_score_and_signals() {
         let (_temp, ctx) = setup().await;
         let r1 = AddTask::new("First")
+            .with_description("First task body that must NOT leak into search results")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
         let r2 = AddTask::new("Second")
+            .with_description("Second task body")
             .execute(&ctx)
             .await
             .into_result()
@@ -523,10 +547,12 @@ mod tests {
         let id1 = r1["id"].as_str().unwrap().to_string();
         let id2 = r2["id"].as_str().unwrap().to_string();
 
+        // Build the surfaced map exactly as `build_docs_with_embeddings` does:
+        // the SLIM projection of the enriched task, mirroring `list tasks`.
         let scoped = scoped_corpus(&ctx, None).await;
         let mut enriched_by_id: HashMap<String, Value> = HashMap::new();
         for e in &scoped {
-            enriched_by_id.insert(e.id.as_str().to_string(), task_entity_to_rich_json(e));
+            enriched_by_id.insert(e.id.as_str().to_string(), surfaced_task_json(e));
         }
 
         let hits = vec![
@@ -555,14 +581,29 @@ mod tests {
         let tasks = response["tasks"].as_array().unwrap();
         assert_eq!(tasks.len(), 2);
 
-        // First hit ranked first, carries its enriched fields plus score/signals.
+        // First hit ranked first, carries its slim fields plus score/signals.
         assert_eq!(tasks[0]["id"].as_str().unwrap(), id1);
         assert_eq!(tasks[0]["title"], "First");
         assert!((tasks[0]["score"].as_f64().unwrap() - 0.9).abs() < 1e-6);
         assert!((tasks[0]["signals"]["cosine"].as_f64().unwrap() - 0.8).abs() < 1e-6);
-        // Enriched fields from task_entity_to_rich_json are preserved.
+        // Slim allowlist fields from the enriched entity are preserved.
         assert!(tasks[0].get("ready").is_some());
         assert!(tasks[0].get("filter_tags").is_some());
+
+        // Heavy payload keys are projected OUT of the surfaced result — the
+        // agent follows up with `get task` for the full card.
+        assert!(
+            tasks[0].get("description").is_none(),
+            "search results must be slim — no `description` key"
+        );
+        assert!(
+            tasks[0].get("comments").is_none(),
+            "search results must be slim — no `comments` key"
+        );
+        assert!(
+            tasks[0].get("attachments").is_none(),
+            "search results must be slim — no `attachments` key"
+        );
 
         assert_eq!(tasks[1]["id"].as_str().unwrap(), id2);
     }
