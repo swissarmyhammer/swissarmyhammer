@@ -310,15 +310,33 @@ pub async fn run_review(
 
     // Stage 2: fan out across the shared pool; awaiting drains every fan-out task.
     // The fleet outcome carries the task tally (attempted/failed) alongside the
-    // findings so synthesis can flag an incomplete run.
+    // findings, plus the run's shared primed-prefix pin guard (the change + all
+    // diffs, primed once) so the verify stage can reuse the same prime.
     let fleet = run_fleet(&work, loader, pool, fleet_config).await;
     let tally = FleetTally::from(&fleet);
+    // Destructure so verify can fork the prime while it is still pinned, then the
+    // guard is released once verify has drained (below).
+    let FleetOutcome {
+        findings: fleet_findings,
+        prime,
+        ..
+    } = fleet;
 
     // Stage 3: pair each candidate with its file's ground-truth context, then
-    // verify on the SAME pool; awaiting drains every verify task. Once this
-    // returns, the shared pool has fully drained — the single barrier.
-    let candidates = build_candidates(&work, fleet.findings);
-    let outcome = verify_findings(candidates, pool).await;
+    // verify on the SAME pool — each verify task FORKS the run's shared prime
+    // (reusing the cached change + diffs) while it stays pinned. Awaiting drains
+    // every verify task. Once this returns, the shared pool has fully drained —
+    // the single barrier.
+    let candidates = build_candidates(&work, fleet_findings);
+    let prime_session = prime.as_ref().map(|g| g.session_id());
+    let outcome = verify_findings(candidates, pool, prime_session).await;
+
+    // The whole run (fan-out AND verify) has drained: release the shared prime's
+    // pin so the pinned cache entry does not outlive the run. A run future
+    // dropped before this point releases it from the guard's `Drop` instead.
+    if let Some(guard) = prime {
+        crate::review::fleet::unpin_prefix_session(guard).await;
+    }
 
     // Stage 4: synthesize the deduped, severity-ranked, dated report. The tally
     // rides into the report so the tool boundary can flag/fail an incomplete run;

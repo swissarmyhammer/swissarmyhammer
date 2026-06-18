@@ -344,14 +344,17 @@ pub fn record_baseline_if_working(
 /// The deduped, sorted set of files that appeared in the work-list — the files a
 /// validator actually reviewed this pass. This is the set the incremental
 /// tracking baseline is recorded for.
+///
+/// Shares the work-list's [`WorkList::distinct_files`](crate::review::WorkList::distinct_files)
+/// dedup (the same one the fan-out prime builds its file set from); the baseline
+/// only needs the paths, sorted for a deterministic on-disk tracking layout, so
+/// it re-collects them through a [`BTreeSet`].
 fn reviewed_files(work: &WorkList) -> Vec<String> {
-    let mut files: BTreeSet<String> = BTreeSet::new();
-    for validator in &work.validators {
-        for file in &validator.files {
-            files.insert(file.path.clone());
-        }
-    }
-    files.into_iter().collect()
+    work.distinct_files()
+        .map(|file| file.path.clone())
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect()
 }
 
 /// Subtract files whose tracking entry's `context_hash` matches their current
