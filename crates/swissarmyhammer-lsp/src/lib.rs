@@ -39,7 +39,9 @@ pub mod yaml_loader;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use client::{parse_document_symbols, LspJsonRpcClient, LspTransport, SharedLspClient};
+pub use client::{
+    count_recorded_method, parse_document_symbols, LspJsonRpcClient, LspTransport, SharedLspClient,
+};
 pub use daemon::LspDaemon;
 pub use diagnostics::{parse_diagnostics_from_result, parse_publish_diagnostics, DiagnosticUpdate};
 pub use error::LspError;

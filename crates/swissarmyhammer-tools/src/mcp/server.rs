@@ -388,6 +388,10 @@ impl McpServer {
                     "code-context: follower for {} — not spawning LSP server; polling for promotion",
                     workspace_root.display()
                 );
+                // A follower owns no LSP session, so it subscribes to the
+                // leader's diagnostics broadcast to receive per-uri updates the
+                // leader publishes (the cross-process fan-out's receive half).
+                Self::spawn_follower_diagnostics_subscriber(&ws);
                 Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone());
             }
         }
@@ -478,6 +482,48 @@ impl McpServer {
     /// One-shot promotion: if leadership is lost after promotion there is no
     /// automatic recovery, but the LeaderGuard is held for the process lifetime
     /// via the Arc kept by `spawn_lsp_health_loop`.
+    /// Subscribe a follower to the leader's diagnostics broadcast.
+    ///
+    /// A follower spawns no LSP server, so it cannot observe diagnostics
+    /// in-process; instead it rides the leader's existing pub/sub proxy (the
+    /// same one the leader re-publishes onto) via the public `Subscriber::open`
+    /// seam and receives each per-uri [`DiagnosticsBusMessage`]. The subscriber's
+    /// `recv` blocks, so it runs on a blocking task. The received updates are
+    /// traced today; folding them into a follower-served diagnostics view is the
+    /// documented application seam (`on_update`).
+    fn spawn_follower_diagnostics_subscriber(
+        ws: &Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
+    ) {
+        let backend = ws
+            .lock()
+            .expect("workspace mutex poisoned")
+            .bus_addresses()
+            .map(|a| a.backend);
+        let Some(backend) = backend else {
+            return;
+        };
+        tokio::task::spawn_blocking(move || {
+            let result =
+                swissarmyhammer_diagnostics::subscribe_diagnostics_over_bus(&backend, |msg| {
+                    // Application seam: a follower-served diagnostics cache would
+                    // fold `msg` in here, keyed by `msg.uri`. For now the receipt
+                    // is traced so the cross-process fan-out is observable.
+                    tracing::debug!(
+                        uri = %msg.uri,
+                        count = msg.diagnostics.len(),
+                        "diagnostics: follower received bus update"
+                    );
+                });
+            if let Err(e) = result {
+                tracing::warn!(
+                    error = %e,
+                    "diagnostics: follower could not subscribe to the diagnostics bus"
+                );
+            }
+        });
+        tracing::info!("diagnostics: follower subscribed to the diagnostics bus");
+    }
+
     fn spawn_reelection_loop(
         ws: Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
         workspace_root: std::path::PathBuf,
@@ -486,7 +532,7 @@ impl McpServer {
             loop {
                 tokio::time::sleep(Self::REELECTION_POLL_INTERVAL).await;
                 let promoted = try_promote_workspace(&ws);
-                if handle_promotion_result(promoted, &workspace_root) {
+                if handle_promotion_result(promoted, &ws, &workspace_root) {
                     break;
                 }
             }
@@ -604,6 +650,7 @@ impl McpServer {
     fn start_indexing_workers_after_promotion(
         workspace_root: std::path::PathBuf,
         shared_db: swissarmyhammer_code_context::SharedDb,
+        bus_frontend: Option<String>,
     ) {
         Self::spawn_ts_and_watcher_workers(
             workspace_root.clone(),
@@ -618,7 +665,13 @@ impl McpServer {
         let lsp_db = std::sync::Arc::clone(&shared_db);
         let lsp_handle = Self::spawn_lsp_supervisor(workspace_root.clone());
         Self::spawn_drain_supervisor_and_health_loop(lsp_handle, move |clients| {
-            spawn_lsp_workers_for_clients(&workspace_root, &lsp_db, clients, " (after promotion)");
+            spawn_lsp_workers_for_clients(
+                &workspace_root,
+                &lsp_db,
+                clients,
+                " (after promotion)",
+                bus_frontend.as_deref(),
+            );
         });
     }
 
@@ -1554,14 +1607,20 @@ fn lsp_client_if_running(
     }
 }
 
-/// Spawn an `spawn_lsp_indexing_worker` per running LSP session. `log_suffix`
-/// is appended to the startup log so callers can distinguish fresh startup
-/// from post-promotion startup (e.g. `" (after promotion)"` or `""`).
+/// Spawn an `spawn_lsp_indexing_worker` per running LSP session, plus the
+/// leader-owned diagnostics file watcher and cross-process bus fan-out.
+///
+/// `log_suffix` is appended to the startup log so callers can distinguish fresh
+/// startup from post-promotion startup (e.g. `" (after promotion)"` or `""`).
+/// `bus_frontend` is the leader's bus frontend address (from
+/// [`CodeContextWorkspace::bus_addresses`]); `None` skips the cross-process
+/// fan-out (the in-process diagnostics fan-out is unaffected).
 fn spawn_lsp_workers_for_clients(
     workspace_root: &std::path::Path,
     shared_db: &swissarmyhammer_code_context::SharedDb,
     clients: &[(String, swissarmyhammer_code_context::SharedLspSession)],
     log_suffix: &str,
+    bus_frontend: Option<&str>,
 ) {
     if clients.is_empty() {
         return;
@@ -1585,7 +1644,93 @@ fn spawn_lsp_workers_for_clients(
             log_suffix,
             server_name,
         );
+
+        // Each session has its own in-process diagnostics fan-out, so the
+        // cross-process re-publisher is per session.
+        spawn_diagnostics_fan_out(server_name, session, bus_frontend);
     }
+
+    // Exactly ONE diagnostics file watcher per workdir (not per session): it
+    // watches the tree once and routes each changed file to the session whose
+    // server handles that extension, so a multi-language workspace does not run
+    // N watchers and a `.py` edit is never fed into the rust session. The watch
+    // root is canonicalized so the watcher's `didChange` uris match the
+    // canonical paths the sessions open documents under (on macOS `/var`
+    // resolves to `/private/var`); a mismatch would split a file into two
+    // documents from the server's view.
+    let routes = build_diagnostics_routes(clients);
+    if !routes.is_empty() {
+        let watch_root =
+            std::fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
+        swissarmyhammer_diagnostics::start_diagnostics_watcher(watch_root, routes);
+        tracing::info!(
+            "diagnostics: file watcher started for {}{}",
+            workspace_root.display(),
+            log_suffix,
+        );
+    }
+}
+
+/// Build the diagnostics watcher's per-server routing table from the running
+/// clients, resolving each server's file extensions from the supervisor.
+///
+/// A server whose extensions cannot be resolved (supervisor lock contended, or
+/// daemon gone) is dropped from the table — its files simply will not be
+/// re-diagnosed by the watcher until the next startup, which is safe.
+fn build_diagnostics_routes(
+    clients: &[(String, swissarmyhammer_code_context::SharedLspSession)],
+) -> Vec<swissarmyhammer_diagnostics::SessionRoute> {
+    use super::tools::code_context::LSP_SUPERVISOR;
+
+    let extensions_for = |server_name: &str| -> Option<Vec<String>> {
+        let sup = LSP_SUPERVISOR.get()?;
+        let guard = sup.try_lock().ok()?;
+        let daemon = guard.get_daemon(server_name)?;
+        Some(daemon.file_extensions().to_vec())
+    };
+
+    clients
+        .iter()
+        .filter_map(|(server_name, session)| {
+            let extensions = extensions_for(server_name)?;
+            Some(swissarmyhammer_diagnostics::SessionRoute::new(
+                extensions,
+                session.clone(),
+            ))
+        })
+        .collect()
+}
+
+/// Tee one session's in-process diagnostics fan-out onto the leader's existing
+/// pub/sub proxy.
+///
+/// Builds a typed [`Publisher`](swissarmyhammer_leader_election::Publisher) with
+/// the public `open` seam over the leader's own bus frontend — reusing the one
+/// proxy, not starting a second — and runs
+/// [`fan_out_to_bus`](swissarmyhammer_diagnostics::fan_out_to_bus). A follower
+/// (no `bus_frontend`) or a publisher that fails to connect is skipped: the
+/// in-process fan-out still works, only the cross-process mirror is absent.
+fn spawn_diagnostics_fan_out(
+    server_name: &str,
+    session: &swissarmyhammer_code_context::SharedLspSession,
+    bus_frontend: Option<&str>,
+) {
+    let Some(frontend) = bus_frontend else {
+        return;
+    };
+    let frontend = frontend.to_string();
+    let rx = session.subscribe();
+    let server = server_name.to_string();
+    tokio::spawn(async move {
+        if let Err(e) = swissarmyhammer_diagnostics::fan_out_over_bus(&frontend, rx).await {
+            tracing::warn!(
+                server = %server,
+                error = %e,
+                "diagnostics: could not open bus publisher; cross-process fan-out absent"
+            );
+        }
+    });
+    tracing::info!("diagnostics: cross-process fan-out started (server: {server_name})");
 }
 
 /// Try to promote the workspace to leader. Returns `Ok(Some(db))` on success,
@@ -1615,7 +1760,11 @@ fn try_promote_workspace(
 /// Handle the outcome of `try_promote_workspace`. Returns `true` when the
 /// re-election loop should stop (either because we're already leader or the
 /// promotion succeeded).
-fn handle_promotion_result(state: PromotionState, workspace_root: &std::path::Path) -> bool {
+fn handle_promotion_result(
+    state: PromotionState,
+    ws: &Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
+    workspace_root: &std::path::Path,
+) -> bool {
     match state {
         PromotionState::AlreadyLeader => true,
         PromotionState::Outcome(Ok(Some(shared_db))) => {
@@ -1623,9 +1772,17 @@ fn handle_promotion_result(state: PromotionState, workspace_root: &std::path::Pa
                 "code-context: promoted to leader for {}, starting indexing workers",
                 workspace_root.display()
             );
+            // After promotion this process owns the proxy; surface its bus
+            // frontend so the cold re-spawn also wires the cross-process fan-out.
+            let bus_frontend = ws
+                .lock()
+                .expect("workspace mutex poisoned")
+                .bus_addresses()
+                .map(|a| a.frontend);
             McpServer::start_indexing_workers_after_promotion(
                 workspace_root.to_path_buf(),
                 shared_db,
+                bus_frontend,
             );
             true
         }
@@ -1649,7 +1806,16 @@ fn start_lsp_workers_if_leader(
     let Some(shared_db) = ws_lock.shared_db() else {
         return;
     };
-    spawn_lsp_workers_for_clients(workspace_root, &shared_db, clients, log_suffix);
+    // The leader's bus frontend, for re-publishing diagnostics across processes.
+    let bus_frontend = ws_lock.bus_addresses().map(|a| a.frontend);
+    drop(ws_lock);
+    spawn_lsp_workers_for_clients(
+        workspace_root,
+        &shared_db,
+        clients,
+        log_suffix,
+        bus_frontend.as_deref(),
+    );
 }
 
 /// Run the LSP supervisor health-check loop forever, polling on the

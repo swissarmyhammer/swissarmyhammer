@@ -51,6 +51,19 @@ pub trait LspTransport {
     fn read_message(&mut self) -> Result<Value, LspError>;
 }
 
+/// Count how many recorded `(method, params)` entries match `method`.
+///
+/// The one counting path shared by the in-memory test transports, which each
+/// record the wire traffic they are handed as a `Vec<(String, Value)>` and need
+/// to assert how many requests or notifications of a given method were emitted.
+/// Kept here, next to [`LspTransport`], so the test doubles in both this crate
+/// (`FakeTransport`) and `swissarmyhammer-diagnostics` (`RecordingTransport`)
+/// interpret the same data the same way rather than each re-implementing the
+/// filter.
+pub fn count_recorded_method(records: &[(String, Value)], method: &str) -> usize {
+    records.iter().filter(|(m, _)| m == method).count()
+}
+
 /// JSON-RPC request/response handler for LSP communication.
 ///
 /// Communicates with an LSP server process over stdin/stdout pipes using

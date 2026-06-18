@@ -89,3 +89,66 @@ impl LspTransport for NullTransport {
         Err(LspError::NotRunning)
     }
 }
+
+/// A recording [`LspTransport`] that captures the wire traffic a flow emits and
+/// answers `textDocument/diagnostic` with a scripted full report.
+///
+/// Used to assert what the leader watcher pushes (`didOpen`/`didChange`) and
+/// that it pulls diagnostics, without a real language server. Every request and
+/// notification is recorded in order; a `textDocument/diagnostic` request
+/// returns [`diagnostic_response`](Self::diagnostic_response) (default: one
+/// scripted error), any other request returns an empty object.
+#[derive(Default)]
+pub struct RecordingTransport {
+    /// `(method, params)` of every request, in order.
+    pub requests: Vec<(String, Value)>,
+    /// `(method, params)` of every notification, in order.
+    pub notifications: Vec<(String, Value)>,
+    /// The result returned for a `textDocument/diagnostic` request. Defaults to
+    /// a one-item "full" report carrying a single error.
+    pub diagnostic_response: Option<Value>,
+}
+
+impl RecordingTransport {
+    /// Count notifications recorded for `method`.
+    pub fn notification_count(&self, method: &str) -> usize {
+        swissarmyhammer_lsp::count_recorded_method(&self.notifications, method)
+    }
+
+    /// Count requests recorded for `method`.
+    pub fn request_count(&self, method: &str) -> usize {
+        swissarmyhammer_lsp::count_recorded_method(&self.requests, method)
+    }
+}
+
+impl LspTransport for RecordingTransport {
+    fn send_request(&mut self, method: &str, params: Value) -> Result<Value, LspError> {
+        self.requests.push((method.to_string(), params));
+        if method == "textDocument/diagnostic" {
+            Ok(self.diagnostic_response.clone().unwrap_or_else(|| {
+                serde_json::json!({
+                    "kind": "full",
+                    "items": [{
+                        "range": {
+                            "start": { "line": 0, "character": 0 },
+                            "end": { "line": 0, "character": 5 }
+                        },
+                        "severity": 1,
+                        "message": "scripted error"
+                    }]
+                })
+            }))
+        } else {
+            Ok(serde_json::json!({}))
+        }
+    }
+
+    fn send_notification(&mut self, method: &str, params: Value) -> Result<(), LspError> {
+        self.notifications.push((method.to_string(), params));
+        Ok(())
+    }
+
+    fn read_message(&mut self) -> Result<Value, LspError> {
+        Err(LspError::NotRunning)
+    }
+}

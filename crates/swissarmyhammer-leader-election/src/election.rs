@@ -546,6 +546,15 @@ impl<M: BusMessage> FollowerGuard<M> {
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
     }
+
+    /// Get the bus addresses (for subscribing to the leader's proxy).
+    ///
+    /// A follower owns no proxy, but it knows where the leader's proxy binds, so
+    /// it can connect a [`Subscriber`](crate::Subscriber) to `backend` (via the
+    /// public `open` seam) and receive whatever the leader broadcasts.
+    pub fn bus_addresses(&self) -> &BusAddresses {
+        &self.bus_addresses
+    }
 }
 
 // Compile-time assertions: these types are held in Arc<Mutex<>> and sent

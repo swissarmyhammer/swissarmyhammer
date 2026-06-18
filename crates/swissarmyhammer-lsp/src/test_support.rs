@@ -53,10 +53,7 @@ impl FakeTransport {
 
     /// Count notifications recorded for the given method.
     pub fn notification_count(&self, method: &str) -> usize {
-        self.sent_notifications
-            .iter()
-            .filter(|(m, _)| m == method)
-            .count()
+        crate::client::count_recorded_method(&self.sent_notifications, method)
     }
 }
 

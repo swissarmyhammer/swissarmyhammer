@@ -246,6 +246,26 @@ impl CodeContextWorkspace {
         }
     }
 
+    /// The bus addresses for riding the leader's existing pub/sub proxy.
+    ///
+    /// Returns the leader's XPUB/XSUB proxy addresses for **both** roles: a
+    /// leader (which owns the proxy) and a follower (which knows where the
+    /// leader's proxy binds). A consumer builds a typed
+    /// [`Publisher`](swissarmyhammer_leader_election::Publisher) (leader,
+    /// connect to `frontend`) or [`Subscriber`](swissarmyhammer_leader_election::Subscriber)
+    /// (follower, connect to `backend`) over the **same** proxy via their public
+    /// `open` constructors, rather than starting a second proxy — so the
+    /// diagnostics fan-out a leader publishes is exactly what a follower
+    /// subscribes to.
+    pub fn bus_addresses(
+        &self,
+    ) -> Option<swissarmyhammer_leader_election::discovery::BusAddresses> {
+        match &self.mode {
+            WorkspaceMode::Leader { _guard, .. } => Some(_guard.bus_addresses().clone()),
+            WorkspaceMode::Follower { follower, .. } => Some(follower.bus_addresses().clone()),
+        }
+    }
+
     /// Re-contest the election. Call this periodically on follower workspaces.
     ///
     /// If the current leader has exited (flock released), this process takes

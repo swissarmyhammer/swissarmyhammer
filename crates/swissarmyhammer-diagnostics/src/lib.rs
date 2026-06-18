@@ -19,16 +19,24 @@
 //! [`swissarmyhammer_lsp`] and re-exported here so this crate and
 //! `swissarmyhammer-code-context` share a single severity type.
 
+/// Cross-process diagnostics fan-out over the leader-election pub/sub bus.
+pub mod bus;
 pub mod config;
 pub mod diagnose;
 pub mod language;
 pub mod record;
 pub mod request_api;
 pub mod settle;
+/// The leader-owned diagnostics file watcher (one per workdir).
+pub mod watcher;
 
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use bus::{
+    fan_out_over_bus, fan_out_to_bus, message_from_update, subscribe_diagnostics_over_bus,
+    DiagnosticsBusMessage, DIAGNOSTICS_TOPIC,
+};
 pub use config::{
     DiagnosticsConfig, DEFAULT_PER_REPORT_CAP, DEFAULT_SETTLE_HARD_TIMEOUT, DEFAULT_SETTLE_WINDOW,
 };
@@ -43,3 +51,7 @@ pub use request_api::{
 };
 pub use settle::{settle, settle_stream, SettleOutcome, Timer, TokioTimer};
 pub use swissarmyhammer_lsp::DiagnosticSeverity;
+pub use watcher::{
+    refresh_changed_files, refresh_file, start_diagnostics_watcher, SessionRoute,
+    DIAGNOSTICS_WATCH_DEBOUNCE,
+};

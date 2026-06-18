@@ -8216,6 +8216,7 @@ dependencies = [
 name = "swissarmyhammer-diagnostics"
 version = "0.15.0"
 dependencies = [
+ "async-watcher",
  "lsp-types",
  "rusqlite",
  "serde",
@@ -8225,6 +8226,7 @@ dependencies = [
  "swissarmyhammer-lsp",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
