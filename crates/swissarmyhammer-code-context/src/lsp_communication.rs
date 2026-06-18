@@ -787,6 +787,7 @@ mod tests {
         assert_eq!(info.symbol_count, 1, "should have found 1 symbol");
         assert!(info.error.is_none());
 
+        let _ = child.kill();
         let _ = child.wait();
     }
 
@@ -815,6 +816,7 @@ mod tests {
         assert!(count.is_ok(), "should succeed with empty symbols");
         assert_eq!(count.unwrap(), 0, "no edges for empty file");
 
+        let _ = child.kill();
         let _ = child.wait();
     }
 
@@ -849,6 +851,7 @@ mod tests {
         assert_eq!(info.symbol_count, 1);
         assert!(info.error.is_none());
 
+        let _ = child.kill();
         let _ = child.wait();
     }
 
@@ -873,6 +876,7 @@ mod tests {
         assert_eq!(info.symbol_count, 0);
         assert!(info.error.is_some(), "error field should be populated");
 
+        let _ = child.kill();
         let _ = child.wait();
     }
 
@@ -905,6 +909,7 @@ mod tests {
         assert_eq!(info.symbol_count, 0);
         assert!(info.error.is_some());
 
+        let _ = child.kill();
         let _ = child.wait();
     }
 

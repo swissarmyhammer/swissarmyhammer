@@ -316,9 +316,13 @@ mod tests {
         // connected), lsp_multi_request_with_document returns Ok(None) and
         // the unwrap_or_else path produces can_rename: false.
         let conn = test_db();
-        let shared: crate::lsp_worker::SharedLspClient =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
 
         let opts = GetRenameEditsOptions {
             file_path: "src/main.rs".to_string(),

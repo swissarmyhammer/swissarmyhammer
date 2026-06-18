@@ -34,8 +34,9 @@ fn unwrap_lsp_result(response: Value) -> Result<Value, CodeContextError> {
 
 /// Send a single LSP request, log the outcome, and unwrap the result envelope.
 ///
-/// Factored out of `lsp_request_with_document` so the didOpen/didClose lifecycle
-/// can be handled by `lsp_multi_request_with_document`.
+/// Factored out of `lsp_request_with_document` so the multi-request closure
+/// path (`lsp_multi_request_with_document`) and the single-request path share
+/// one send-and-unwrap implementation.
 fn send_and_unwrap_lsp_request(
     rpc: &mut LspJsonRpcClient,
     method: &str,
@@ -52,9 +53,32 @@ fn send_and_unwrap_lsp_request(
     unwrap_lsp_result(response?)
 }
 
+/// Map a transport-level [`LspError`] from the session into the graceful
+/// degradation contract the layered ops expect.
+///
+/// [`LspError::NotRunning`] means the daemon has no live client — for the
+/// layered ops that is not an error but a signal to fall back to the index
+/// layers, so it maps to `Ok(None)`. Every other transport error is a genuine
+/// failure and propagates as [`CodeContextError::LspError`].
+fn not_running_is_none<T>(result: Result<T, LspError>) -> Result<Option<T>, CodeContextError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(LspError::NotRunning) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
 use crate::lsp_communication::LspJsonRpcClient;
-use crate::lsp_worker::SharedLspClient;
-use crate::ops::lsp_helpers::{file_path_to_uri, language_id_from_path};
+use swissarmyhammer_lsp::{LspError, LspSession};
+
+/// The concrete session handle the layered context consumes.
+///
+/// `LayeredContext` is a pure *consumer* of the shared [`LspSession`]: it never
+/// spawns a client or opens/closes documents on its own lifecycle. The session
+/// (owned by the daemon) keeps documents open across requests, so the layered
+/// ops just `open` the document they touch and issue their request — the
+/// open-document set and didClose lifecycle belong to the session, not here.
+pub type SharedLspSession = LspSession<LspJsonRpcClient>;
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -145,11 +169,15 @@ pub struct EnrichmentResult {
 
 /// Single access point for all three data layers.
 ///
-/// Private `conn` and `lsp_client` fields ensure callers use typed methods
-/// rather than reaching into the raw database or LSP client directly.
+/// Private `conn` and `session` fields ensure callers use typed methods rather
+/// than reaching into the raw database or LSP client directly. The optional
+/// [`SharedLspSession`] is a cheap clone of the daemon-owned session: every
+/// live request routes through it, so this context shares the one open-document
+/// set with the indexing worker and the diagnostics path and never spawns a
+/// client of its own.
 pub struct LayeredContext<'a> {
     conn: &'a Connection,
-    lsp_client: Option<&'a SharedLspClient>,
+    session: Option<SharedLspSession>,
 }
 
 impl<'a> LayeredContext<'a> {
@@ -157,25 +185,19 @@ impl<'a> LayeredContext<'a> {
     ///
     /// # Arguments
     /// * `conn` - Reference to the SQLite connection for index queries.
-    /// * `lsp_client` - Optional shared LSP client for live requests.
-    pub fn new(conn: &'a Connection, lsp_client: Option<&'a SharedLspClient>) -> Self {
-        Self { conn, lsp_client }
+    /// * `session` - Optional shared LSP session for live requests. `None`
+    ///   means no live layer; the context degrades gracefully to the index
+    ///   layers. The session is cloned (a cheap `Arc` bump) and shared with the
+    ///   daemon and every other in-process consumer.
+    pub fn new(conn: &'a Connection, session: Option<SharedLspSession>) -> Self {
+        Self { conn, session }
     }
 
     // === Layer availability ===
 
-    /// Returns true if a live LSP client is available and contains a connected client.
+    /// Returns true if a live LSP session is available and currently running.
     pub fn has_live_lsp(&self) -> bool {
-        match self.lsp_client {
-            Some(client) => {
-                if let Ok(guard) = client.try_lock() {
-                    guard.is_some()
-                } else {
-                    false
-                }
-            }
-            None => false,
-        }
+        self.session.as_ref().is_some_and(|s| s.is_running())
     }
 
     /// Returns true if the given file has been indexed by LSP.
@@ -204,58 +226,52 @@ impl<'a> LayeredContext<'a> {
 
     // === Layer 1: Live LSP ===
 
-    /// Send an arbitrary LSP request. Returns `Ok(None)` if no live client is available.
+    /// Send an arbitrary LSP request through the shared session. Returns
+    /// `Ok(None)` if no live session is available.
     ///
     /// This is a graceful degradation -- callers should fall back to index layers
-    /// when the live client is absent.
+    /// when the live session is absent.
     pub fn lsp_request(
         &self,
         method: &str,
         params: Value,
     ) -> Result<Option<Value>, CodeContextError> {
-        let client = match self.lsp_client {
-            Some(c) => c,
+        let session = match &self.session {
+            Some(s) => s,
             None => return Ok(None),
         };
-        let mut guard = client
-            .lock()
-            .map_err(|e| CodeContextError::LspError(format!("failed to lock LSP client: {}", e)))?;
-        match guard.as_mut() {
-            Some(rpc) => {
-                let response = rpc.send_request(method, params)?;
-                Ok(Some(unwrap_lsp_result(response)?))
-            }
+        match not_running_is_none(session.request(method, params))? {
+            Some(response) => Ok(Some(unwrap_lsp_result(response)?)),
             None => Ok(None),
         }
     }
 
-    /// Send an LSP notification. No-op if no live client is available.
+    /// Send an LSP notification through the shared session. No-op if no live
+    /// session is available.
     pub fn lsp_notify(&self, method: &str, params: Value) -> Result<(), CodeContextError> {
-        // Notifications are fire-and-forget. If no client, silently succeed.
-        let client = match self.lsp_client {
-            Some(c) => c,
+        // Notifications are fire-and-forget. If no session, silently succeed.
+        let session = match &self.session {
+            Some(s) => s,
             None => return Ok(()),
         };
-        let mut guard = client
-            .lock()
-            .map_err(|e| CodeContextError::LspError(format!("failed to lock LSP client: {}", e)))?;
-        if let Some(rpc) = guard.as_mut() {
-            rpc.send_notification(method, params)?;
-        }
+        // A missing client is the same "no live layer" signal as a missing
+        // session — drop the notification rather than surfacing an error.
+        not_running_is_none(session.notify(method, params))?;
         Ok(())
     }
 
-    /// Send a single LSP request wrapped in didOpen/didClose, holding the mutex
-    /// for the entire sequence.
+    /// Open the document on the shared session, then issue a single LSP request
+    /// against it.
     ///
-    /// This prevents the indexing worker from interleaving its own requests
-    /// between the didOpen, the request, and the didClose. Without this, the
-    /// worker can steal responses or corrupt the pipe.
+    /// Documents are opened (and kept open) by the session, which owns the
+    /// shared open-document set; this context never sends `didClose` — the
+    /// session keeps the document open across requests instead of the old
+    /// `didOpen -> request -> didClose` churn.
     ///
-    /// Returns `Ok(None)` if no live LSP client is available (graceful degradation).
+    /// Returns `Ok(None)` if no live LSP session is available (graceful degradation).
     ///
     /// # Arguments
-    /// * `file_path` - Path to the file to open/close around the request.
+    /// * `file_path` - Path to the file to open before the request.
     /// * `method` - The LSP method to call (e.g. `"textDocument/hover"`).
     /// * `params` - The JSON parameters for the request.
     pub fn lsp_request_with_document(
@@ -264,25 +280,28 @@ impl<'a> LayeredContext<'a> {
         method: &str,
         params: Value,
     ) -> Result<Option<Value>, CodeContextError> {
-        // Delegate to lsp_multi_request_with_document so the
-        // lock/didOpen/didClose lifecycle is handled in one place.
+        // Delegate to lsp_multi_request_with_document so the open-document
+        // lifecycle is handled in one place.
         let method = method.to_owned();
         self.lsp_multi_request_with_document(file_path, |rpc| {
             send_and_unwrap_lsp_request(rpc, &method, params)
         })
     }
 
-    /// Execute multiple LSP requests wrapped in a single didOpen/didClose sequence,
-    /// holding the mutex for the entire duration.
+    /// Open the document on the shared session, then run a closure that issues
+    /// one or more LSP requests against the client, holding the client lock for
+    /// the whole closure.
     ///
-    /// The closure receives the RPC client directly and can send as many
-    /// requests/notifications as needed. The didOpen is sent before the closure
-    /// runs, and didClose is sent after (even if the closure returns an error).
+    /// Holding the lock across the closure keeps a multi-step exchange (e.g.
+    /// `prepareCallHierarchy` then `incomingCalls`) atomic so no other consumer
+    /// interleaves a request and steals a response off the shared pipe. The
+    /// document is opened via the session before the closure runs; the session
+    /// owns the open-document set, so there is no per-request `didClose` here.
     ///
-    /// Returns `Ok(None)` if no live LSP client is available.
+    /// Returns `Ok(None)` if no live LSP session is available.
     ///
     /// # Arguments
-    /// * `file_path` - Path to the file to open/close around the requests.
+    /// * `file_path` - Path to the file to open before the requests.
     /// * `f` - Closure that receives the RPC client and performs the requests.
     pub fn lsp_multi_request_with_document<F, T>(
         &self,
@@ -292,47 +311,102 @@ impl<'a> LayeredContext<'a> {
     where
         F: FnOnce(&mut LspJsonRpcClient) -> Result<T, CodeContextError>,
     {
-        let client = match self.lsp_client {
-            Some(c) => c,
-            None => return Ok(None),
-        };
-        let mut guard = client
-            .lock()
-            .map_err(|e| CodeContextError::LspError(format!("failed to lock LSP client: {}", e)))?;
-        let rpc = match guard.as_mut() {
-            Some(rpc) => rpc,
+        let session = match &self.session {
+            Some(s) => s,
             None => return Ok(None),
         };
 
-        let uri = file_path_to_uri(file_path);
-        let text = std::fs::read_to_string(file_path).unwrap_or_default();
-        let lang = language_id_from_path(file_path);
+        // Sync the document to the session (open, then refresh the buffer with a
+        // `didChange` if it was already open with stale text). The session owns
+        // the open-document set and the didClose lifecycle.
+        match self.sync_document(session, file_path)? {
+            Some(()) => {}
+            None => return Ok(None),
+        }
 
-        // didOpen
-        rpc.send_notification(
-            "textDocument/didOpen",
-            serde_json::json!({
-                "textDocument": {
-                    "uri": uri,
-                    "languageId": lang,
-                    "version": 1,
-                    "text": text
-                }
-            }),
-        )?;
+        // Run the caller's requests against the locked client. The closure
+        // returns `Result<T, CodeContextError>`; we wrap it in `Ok(..)` so the
+        // transport-level `with_client` cannot conflate a closure failure with
+        // a transport failure, then flatten: a missing client maps to None.
+        match session.with_client(|rpc| Ok(f(rpc)))? {
+            Some(closure_result) => closure_result.map(Some),
+            None => Ok(None),
+        }
+    }
 
-        // Run the caller's requests
-        let result = f(rpc);
+    /// Pull diagnostics for a file through the shared session's unified
+    /// diagnostics path.
+    ///
+    /// This is the single diagnostics entry point for the layered ops: it syncs
+    /// the document to the session (open, then push the current on-disk text via
+    /// `didChange` if the server's buffer is stale), issues a
+    /// `textDocument/diagnostic` pull through [`LspSession::pull_diagnostics`],
+    /// and returns the parsed [`lsp_types::Diagnostic`] records. The pull result
+    /// is also fed into the session's latest-per-uri cache and fan-out, so push
+    /// (`publishDiagnostics`) and pull consumers observe one unified stream.
+    ///
+    /// Returns `Ok(None)` when there is no diagnostics layer to consult: no live
+    /// session, or the pull could not run because the client is gone
+    /// ([`LspError::NotRunning`]) or hit a transport failure. The caller then
+    /// reports `SourceLayer::None`. `Ok(Some(..))` means a live server *answered*
+    /// the pull — `Some(vec![])` for a clean report (the session also collapses a
+    /// JSON-RPC error envelope such as method-not-found into an empty answered
+    /// pull), `Some(diagnostics)` otherwise — and the caller reports
+    /// `SourceLayer::LiveLsp`.
+    pub fn lsp_diagnostics(
+        &self,
+        file_path: &str,
+    ) -> Result<Option<Vec<lsp_types::Diagnostic>>, CodeContextError> {
+        let session = match &self.session {
+            Some(s) => s,
+            None => return Ok(None),
+        };
 
-        // didClose -- always sent, even if the closure failed
-        let _ = rpc.send_notification(
-            "textDocument/didClose",
-            serde_json::json!({
-                "textDocument": { "uri": uri }
-            }),
-        );
+        // Sync the document to the session so the server analyzes the *current*
+        // content; the session owns the open-document lifecycle (no didClose).
+        let path = std::path::Path::new(file_path);
+        match self.sync_document(session, file_path)? {
+            Some(()) => {}
+            None => return Ok(None),
+        }
 
-        result.map(Some)
+        // A successful pull (including a valid empty report) is the live layer.
+        // A server that does not support pull diagnostics — or any other
+        // transport error — is "no diagnostics layer" (`Ok(None)`), matching the
+        // pre-session path which reported `SourceLayer::None` for an
+        // unsupported/failed pull rather than a misleading live-but-empty result.
+        match session.pull_diagnostics(path) {
+            Ok(diagnostics) => Ok(Some(diagnostics)),
+            Err(LspError::NotRunning) => Ok(None),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Sync a document to the shared session so a following request analyzes its
+    /// current on-disk content.
+    ///
+    /// Thin wrapper over [`LspSession::sync_open`] (the one place that opens or
+    /// refreshes the server buffer) that reads the file and maps
+    /// [`LspError::NotRunning`] to `Ok(None)` for graceful degradation.
+    ///
+    /// LSP-unavailability is checked *first*, before touching the filesystem: if
+    /// the session has no live client the document can never be synced, so this
+    /// short-circuits to `Ok(None)` (fall back to the index layers) without
+    /// reading the file. When a live client *is* present, a failure to read the
+    /// file (deleted, inaccessible, non-UTF-8) is a *real* error and propagates —
+    /// syncing empty content on a read failure would feed stale/empty text into
+    /// LSP state and silently corrupt later requests.
+    fn sync_document(
+        &self,
+        session: &SharedLspSession,
+        file_path: &str,
+    ) -> Result<Option<()>, CodeContextError> {
+        if !session.is_running() {
+            return Ok(None);
+        }
+        let path = std::path::Path::new(file_path);
+        let text = std::fs::read_to_string(file_path)?;
+        not_running_is_none(session.sync_open(path, &text))
     }
 
     // === Layer 2: LSP index (lsp_symbols, lsp_call_edges tables) ===
@@ -748,7 +822,10 @@ fn parse_from_ranges(json: &str) -> Vec<LspRange> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_fixtures::{insert_call_edge, insert_file, insert_ts_chunk, test_db};
+    use crate::test_fixtures::{
+        insert_call_edge, insert_file, insert_ts_chunk, mock_lsp_session, none_session,
+        spawn_mock_lsp, test_db,
+    };
 
     /// Insert an LSP symbol (without detail, for layered_context tests).
     #[allow(clippy::too_many_arguments)]
@@ -780,8 +857,7 @@ mod tests {
     #[test]
     fn test_has_live_lsp_returns_false_when_client_is_none() {
         let conn = test_db();
-        let shared: SharedLspClient = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(none_session()));
         assert!(!ctx.has_live_lsp());
     }
 
@@ -824,8 +900,7 @@ mod tests {
     #[test]
     fn test_lsp_request_returns_ok_none_when_client_is_none() {
         let conn = test_db();
-        let shared: SharedLspClient = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(none_session()));
         let result = ctx
             .lsp_request("textDocument/hover", serde_json::json!({}))
             .unwrap();
@@ -2167,66 +2242,8 @@ mod tests {
     }
 
     // --- Mock LSP helpers for live-path tests ---
-
-    /// Spawn a Python process that acts as a mock LSP server.
-    ///
-    /// The script reads JSON-RPC messages from stdin and sends back canned
-    /// responses loaded from a JSON file. Each entry in the responses array is
-    /// either `null` (read a notification, no reply) or a JSON-RPC response
-    /// object (read a request, reply with this object).
-    fn spawn_mock_lsp(responses: &[serde_json::Value]) -> std::process::Child {
-        let temp_dir = tempfile::tempdir().expect("failed to create temp dir for mock LSP");
-        let response_file = temp_dir.path().join("mock_responses.json");
-        std::fs::write(&response_file, serde_json::to_string(responses).unwrap())
-            .expect("failed to write mock responses file");
-
-        let script = "\
-            import sys, json, os\n\
-            def read_msg():\n\
-            \tcl = None\n\
-            \twhile True:\n\
-            \t\tline = sys.stdin.readline()\n\
-            \t\tif not line: return None\n\
-            \t\tline = line.strip()\n\
-            \t\tif not line: break\n\
-            \t\tif line.startswith('Content-Length:'):\n\
-            \t\t\tcl = int(line.split(':', 1)[1].strip())\n\
-            \tif cl is None: return None\n\
-            \tbody = sys.stdin.read(cl)\n\
-            \treturn json.loads(body)\n\
-            def send_msg(obj):\n\
-            \ts = json.dumps(obj)\n\
-            \tsys.stdout.write(f'Content-Length: {len(s)}\\r\\n\\r\\n{s}')\n\
-            \tsys.stdout.flush()\n\
-            with open(os.environ['MOCK_RESPONSE_FILE']) as f:\n\
-            \tresponses = json.load(f)\n\
-            for resp in responses:\n\
-            \tread_msg()\n\
-            \tif resp is not None:\n\
-            \t\tsend_msg(resp)\n";
-
-        // Keep the tempdir alive for the lifetime of the child process.
-        std::mem::forget(temp_dir);
-
-        std::process::Command::new("python3")
-            .arg("-c")
-            .arg(script)
-            .env("MOCK_RESPONSE_FILE", &response_file)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("failed to spawn mock LSP python3 process")
-    }
-
-    /// Create a `SharedLspClient` from a mock LSP child process.
-    fn mock_lsp_client(child: &mut std::process::Child) -> SharedLspClient {
-        use crate::lsp_communication::LspJsonRpcClient;
-        let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let client = LspJsonRpcClient::new(stdin, stdout);
-        std::sync::Arc::new(std::sync::Mutex::new(Some(client)))
-    }
+    // `spawn_mock_lsp` / `mock_lsp_session` are the shared
+    // `crate::test_fixtures` helpers, imported above.
 
     /// Create a temp directory with a `test.rs` file so that
     /// `lsp_request_with_document` / `lsp_multi_request_with_document` can
@@ -2253,10 +2270,10 @@ mod tests {
         let responses = vec![hover_response];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let result = ctx
             .lsp_request("textDocument/hover", serde_json::json!({}))
             .unwrap();
@@ -2272,10 +2289,10 @@ mod tests {
         let responses = vec![serde_json::Value::Null];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         ctx.lsp_notify("textDocument/didOpen", serde_json::json!({}))
             .unwrap();
     }
@@ -2283,8 +2300,7 @@ mod tests {
     #[test]
     fn test_lsp_notify_returns_ok_when_inner_client_is_none() {
         let conn = test_db();
-        let shared: SharedLspClient = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(none_session()));
         ctx.lsp_notify("textDocument/didOpen", serde_json::json!({}))
             .unwrap();
     }
@@ -2304,13 +2320,13 @@ mod tests {
         ];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let temp_dir = create_temp_source_file();
         let file_path = temp_dir.path().join("test.rs");
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let result = ctx
             .lsp_request_with_document(
                 file_path.to_str().unwrap(),
@@ -2337,8 +2353,7 @@ mod tests {
     #[test]
     fn test_lsp_request_with_document_returns_none_when_inner_client_is_none() {
         let conn = test_db();
-        let shared: SharedLspClient = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(none_session()));
         let result = ctx
             .lsp_request_with_document("src/main.rs", "textDocument/hover", serde_json::json!({}))
             .unwrap();
@@ -2360,13 +2375,13 @@ mod tests {
         ];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let temp_dir = create_temp_source_file();
         let file_path = temp_dir.path().join("test.rs");
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let result = ctx
             .lsp_multi_request_with_document(file_path.to_str().unwrap(), |rpc| {
                 let resp = rpc.send_request("textDocument/references", serde_json::json!({}))?;
@@ -2393,8 +2408,7 @@ mod tests {
     #[test]
     fn test_lsp_multi_request_with_document_returns_none_when_inner_client_is_none() {
         let conn = test_db();
-        let shared: SharedLspClient = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(none_session()));
         let result: Result<Option<Value>, _> =
             ctx.lsp_multi_request_with_document("src/main.rs", |_rpc| {
                 panic!("closure should not be called when inner client is None");

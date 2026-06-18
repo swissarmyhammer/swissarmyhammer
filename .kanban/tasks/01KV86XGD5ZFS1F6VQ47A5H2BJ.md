@@ -1,6 +1,33 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kvdehjbzc0syk73x3q47e6te
+  text: |-
+    Refinement from owner (2026-06-18): leadership/root resolution must resolve to the **outermost** workspace — the *first `sah` walking up from the working directory* — not merely the nearest workspace root. Subagents and worktrees that run in subdirectories must elect/join the SAME top-level leader and call UP to it (via the `^ref6nj4` follower→leader request API), rather than each electing a local leader and spawning their own rust-analyzer. This is the explicit intent behind "analyzers start at the root / first sah; subagents call back up." Confirm the election key derives from this outermost root and coincides with the index-DB leadership key.
+
+    Also: the orphaned-rust-analyzer cleanup is tracked separately in ^x6m3jpz (probe leak + kill-on-exit). This task owns only the leader-handoff orphan case (try_promote re-spawn); coordinate the "no orphans" acceptance with that task and don't duplicate the lifecycle fix here.
+  timestamp: 2026-06-18T13:25:49.567520+00:00
+- actor: claude-code
+  id: 01kvdnj7f2pmtknwqh47ksd29g
+  text: |-
+    ROOT CAUSE PINNED (2026-06-18, verified against the *running* binary = main @389362, `~/.cargo/bin/sah` built Jun 17):
+
+    The exact defect is in `swissarmyhammer-tools/src/mcp/server.rs::do_initialize_code_context` (main line 363; identical on the diagnostic branch — NOT yet fixed there). Order of operations:
+    1. `let lsp_handle = Self::spawn_lsp_supervisor(workspace_root)` ← spawns rust-analyzer (LspSupervisorManager::start → LspDaemon) **unconditionally**
+    2. `let ws = open_workspace(...)` ← leadership is only DETERMINED here, AFTER the supervisor was already spawned
+    3. `start_workers_if_leader(...)` / `start_lsp_workers_if_leader(...)` ← `is_leader()` gates ONLY the indexing/symbol-collection workers, never the LSP server process
+
+    So leader election already works (it gates indexing) but the LSP **server spawn sits before and outside the gate**. Every `sah serve` process therefore launches its own rust-analyzer. Because `sah` is a stdio MCP server, every Claude agent AND every headless `claude --print` subagent spawns its own `sah serve`, so a subagent fan-out → N `sah serve` → N rust-analyzers over the same tree + shared cargo `target/` → resource thrash. Observed live: one interactive session fanned out ~27 subagents, producing ~20 rust-analyzers in minutes; this is what regenerates the orphan pile (cross-ref `^x6m3jpz`). The subagents' apparent "hang" is downstream — they complete MCP init (proven: each had already spawned its RA) and then stall on their turn/API; the sah-side bug is the unconditional spawn, not a sah deadlock.
+
+    FIX (this task), make the ordering correct:
+    - Determine leadership FIRST, then spawn the supervisor/rust-analyzer ONLY if leader. Move the spawn from the unconditional position to inside the leader branch + the promotion path (the reelection loop already re-runs worker startup on promotion — the supervisor spawn must join it).
+    - Followers spawn NOTHING and route live LSP requests up to the leader via `^ref6nj4`.
+    - Combine with the outermost-root keying (prior comment) so nested subagents/worktrees share ONE leader.
+
+    DEPLOY NOTE: the running `sah` is from main, so this only takes effect after the fix lands AND `just sah` + redeploy. Verifying against a stale binary will mislead.
+  timestamp: 2026-06-18T15:28:31.202458+00:00
 position_column: todo
 position_ordinal: a980
 project: diagnostics

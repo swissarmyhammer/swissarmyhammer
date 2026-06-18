@@ -8217,9 +8217,12 @@ name = "swissarmyhammer-diagnostics"
 version = "0.14.0"
 dependencies = [
  "lsp-types",
+ "rusqlite",
  "serde",
  "serde_json",
+ "swissarmyhammer-code-context",
  "swissarmyhammer-lsp",
+ "tokio",
 ]
 
 [[package]]
@@ -8728,6 +8731,7 @@ dependencies = [
  "swissarmyhammer-code-context",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
+ "swissarmyhammer-diagnostics",
  "swissarmyhammer-directory",
  "swissarmyhammer-embedding",
  "swissarmyhammer-git",

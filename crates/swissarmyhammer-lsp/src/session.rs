@@ -223,6 +223,28 @@ impl<C: LspTransport> LspSession<C> {
         Ok(())
     }
 
+    /// Make the server's buffer for `path` match `text`, opening the document if
+    /// needed.
+    ///
+    /// This is the "sync to current content" entry point every in-process
+    /// consumer should use before a request that depends on the document's text
+    /// (query ops, the diagnostics pull, the indexing worker): a document the
+    /// session has never seen is opened with `text` (one `didOpen`); a document
+    /// already open has its buffer refreshed with `text` via `didChange` only
+    /// when the text actually differs. Because the session keeps documents open
+    /// across requests, without this an edited-then-re-touched file would be
+    /// analyzed against the stale buffer the server still holds from the first
+    /// open. Both underlying steps are no-ops when nothing changed, so an
+    /// unchanged re-sync costs nothing on the wire.
+    pub fn sync_open(&self, path: &Path, text: &str) -> Result<(), LspError> {
+        if self.is_open(path) {
+            // Already open — refresh the buffer (no-op when text is unchanged).
+            self.change(path, text)
+        } else {
+            self.open(path, text)
+        }
+    }
+
     /// Notify the server that an open document was saved.
     ///
     /// Sends `textDocument/didSave`. Saving a document that is not open is a
@@ -295,6 +317,48 @@ impl<C: LspTransport> LspSession<C> {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let client = guard.as_mut().ok_or(LspError::NotRunning)?;
         client.send_notification(method, params)
+    }
+
+    /// Whether the session currently has a live client.
+    ///
+    /// Returns `false` while the daemon is not running (starting or restarting),
+    /// in which case [`request`](Self::request) / [`notify`](Self::notify) would
+    /// fail with [`LspError::NotRunning`]. In-process consumers that degrade
+    /// gracefully (e.g. code-context's layered ops) check this before issuing
+    /// live requests.
+    pub fn is_running(&self) -> bool {
+        self.inner
+            .client
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+    }
+
+    /// Run a closure against the one client, holding the client lock for the
+    /// whole sequence.
+    ///
+    /// This is the multi-request seam: a caller that needs to issue several
+    /// requests as an atomic unit (e.g. `prepareCallHierarchy` then
+    /// `incomingCalls`, or `prepareRename` then `rename`) gets the client
+    /// directly and the lock is held across every call, so no other consumer
+    /// can interleave a request and steal a response off the shared pipe.
+    ///
+    /// Returns `Ok(None)` when there is no live client (graceful degradation,
+    /// matching the request/notify contract from the caller's perspective);
+    /// the closure is not run in that case.
+    pub fn with_client<F, T>(&self, f: F) -> Result<Option<T>, LspError>
+    where
+        F: FnOnce(&mut C) -> Result<T, LspError>,
+    {
+        let mut guard = self
+            .inner
+            .client
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match guard.as_mut() {
+            Some(client) => f(client).map(Some),
+            None => Ok(None),
+        }
     }
 
     /// Subscribe to the in-process diagnostics fan-out.
@@ -557,6 +621,93 @@ mod tests {
             .request("textDocument/documentSymbol", json!({}))
             .expect_err("request without a live client should fail");
         assert!(matches!(err, LspError::NotRunning));
+    }
+
+    #[test]
+    fn is_running_reflects_client_presence() {
+        let (session, _client) = session_with_fake();
+        assert!(session.is_running(), "a present client should be running");
+
+        let absent: Arc<Mutex<Option<FakeTransport>>> = Arc::new(Mutex::new(None));
+        let session = LspSession::new(absent, "rust");
+        assert!(
+            !session.is_running(),
+            "an absent client should not be running"
+        );
+    }
+
+    #[test]
+    fn with_client_runs_closure_against_live_client() {
+        // The closure can drive several requests against the one client; the
+        // shared fake records each, proving the lock is held across the unit.
+        let client = Arc::new(Mutex::new(Some(
+            FakeTransport::default()
+                .with_response(json!({"jsonrpc": "2.0", "id": 1, "result": "a"}))
+                .with_response(json!({"jsonrpc": "2.0", "id": 2, "result": "b"})),
+        )));
+        let session = LspSession::new(Arc::clone(&client), "rust");
+
+        let out = session
+            .with_client(|c| {
+                let _ = c.send_request("textDocument/prepareCallHierarchy", json!({}))?;
+                c.send_request("callHierarchy/incomingCalls", json!({}))
+            })
+            .expect("with_client should succeed");
+
+        assert_eq!(out.unwrap()["result"], "b");
+        let guard = client.lock().unwrap();
+        assert_eq!(guard.as_ref().unwrap().sent_requests.len(), 2);
+    }
+
+    #[test]
+    fn with_client_returns_none_and_skips_closure_when_absent() {
+        let absent: Arc<Mutex<Option<FakeTransport>>> = Arc::new(Mutex::new(None));
+        let session = LspSession::new(absent, "rust");
+
+        let out: Option<()> = session
+            .with_client(|_c| panic!("closure must not run without a live client"))
+            .expect("with_client should be Ok when absent");
+        assert!(out.is_none(), "absent client yields Ok(None)");
+    }
+
+    #[test]
+    fn sync_open_opens_then_refreshes_with_did_change_on_edited_content() {
+        // Models a re-index of an edited file: first sync opens (didOpen), a
+        // sync with NEW content refreshes the buffer (didChange), and a sync with
+        // the SAME content is a no-op. This is what keeps the server's buffer
+        // current when the session keeps the document open across requests.
+        let (session, client) = session_with_fake();
+        let path = PathBuf::from("/tmp/edited.rs");
+
+        // First sync: never seen -> didOpen, no didChange.
+        session.sync_open(&path, "fn a() {}").expect("first sync");
+        assert_eq!(notification_count(&client, "textDocument/didOpen"), 1);
+        assert_eq!(notification_count(&client, "textDocument/didChange"), 0);
+
+        // Re-sync with edited content: already open -> didChange (no 2nd didOpen).
+        session
+            .sync_open(&path, "fn a() { b(); }")
+            .expect("edited re-sync");
+        assert_eq!(
+            notification_count(&client, "textDocument/didOpen"),
+            1,
+            "re-sync must not re-open the document"
+        );
+        assert_eq!(
+            notification_count(&client, "textDocument/didChange"),
+            1,
+            "edited content must push a didChange so the server buffer is fresh"
+        );
+
+        // Re-sync with identical content: no wire traffic at all.
+        session
+            .sync_open(&path, "fn a() { b(); }")
+            .expect("unchanged re-sync");
+        assert_eq!(
+            notification_count(&client, "textDocument/didChange"),
+            1,
+            "an unchanged re-sync must not emit a second didChange"
+        );
     }
 
     #[test]

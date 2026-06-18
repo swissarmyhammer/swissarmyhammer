@@ -151,6 +151,46 @@ where
     T: Timer,
     D: Dependents,
 {
+    diagnose_with_outcome(session, paths, config, dependents, timer)
+        .await
+        .report
+}
+
+/// A diagnostics report together with whether the underlying analysis settled.
+///
+/// [`diagnose`] collapses a never-quiescing settle to an empty report, which is
+/// indistinguishable from "clean". A consumer that must tell "still analyzing"
+/// apart from "clean" — notably the inline-on-edit fold-in, which surfaces a
+/// `pending` marker so the model knows the report is provisional — calls
+/// [`diagnose_with_outcome`] instead and reads [`pending`](Self::pending).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnoseOutcome {
+    /// The sharp report (queried files plus broken capped dependents).
+    pub report: DiagnosticsReport,
+    /// `true` when the diagnostics stream never quiesced within the hard
+    /// timeout, so `report` reflects only what had been published so far.
+    pub pending: bool,
+}
+
+/// Produce a sharp diagnostics report for `paths`, reporting whether the
+/// analysis settled.
+///
+/// Identical to [`diagnose`] except it preserves the [`SettleOutcome::Pending`]
+/// signal: when the diagnostics stream never quiesced within the hard timeout,
+/// the returned [`DiagnoseOutcome::pending`] is `true`. [`diagnose`] is a thin
+/// wrapper that discards that flag.
+pub async fn diagnose_with_outcome<C, T, D>(
+    session: &LspSession<C>,
+    paths: &[String],
+    config: &DiagnosticsConfig,
+    dependents: &D,
+    timer: &T,
+) -> DiagnoseOutcome
+where
+    C: LspTransport,
+    T: Timer,
+    D: Dependents,
+{
     let targets = dedup_preserving_order(paths);
     let target_set: HashSet<&str> = targets.iter().map(String::as_str).collect();
 
@@ -190,12 +230,15 @@ where
         per_report_cap: usize::MAX,
         ..config.clone()
     };
-    let records = match settle(session, &watched_uris, &settle_config, timer).await {
-        SettleOutcome::Settled(records) => records,
-        SettleOutcome::Pending => Vec::new(),
+    let (records, pending) = match settle(session, &watched_uris, &settle_config, timer).await {
+        SettleOutcome::Settled(records) => (records, false),
+        SettleOutcome::Pending => (Vec::new(), true),
     };
 
-    build_report(records, &targets, &dependent_files, config)
+    DiagnoseOutcome {
+        report: build_report(records, &targets, &dependent_files, config),
+        pending,
+    }
 }
 
 /// Assemble the final report: queried files always present, broken dependents
@@ -579,5 +622,34 @@ mod tests {
             .map(|r| r.message.as_str())
             .collect();
         assert_eq!(messages, vec!["A"], "info-only dependent is not broken");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn outcome_reports_not_pending_when_settled() {
+        // A normal settle (advance past the debounce window) yields the report
+        // with `pending == false` — the inline fold-in relies on this flag to
+        // tell "clean" apart from "still analyzing".
+        let session = not_running_session();
+        seed(
+            &session,
+            "src/a.rs",
+            vec![lsp_diag(LspSeverity::ERROR, "A broke")],
+        );
+
+        let timer = ManualTimer::default();
+        let driver = timer.clone();
+        let config = DiagnosticsConfig::default();
+        let window = config.settle_window;
+        let paths = vec!["src/a.rs".to_string()];
+        let deps = stub(&[]);
+        let handle = tokio::spawn(async move {
+            diagnose_with_outcome(&session, &paths, &config, &deps, &timer).await
+        });
+        tokio::task::yield_now().await;
+        driver.advance(window);
+        let outcome = handle.await.unwrap();
+
+        assert!(!outcome.pending, "a settled run is not pending");
+        assert_eq!(outcome.report.counts.errors, 1);
     }
 }

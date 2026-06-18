@@ -1,13 +1,15 @@
 //! Background LSP indexing worker.
 //!
 //! Spawns a blocking thread that queries `lsp_indexed = 0` files from the database,
-//! sends `textDocument/didOpen` and `textDocument/documentSymbol` requests through
-//! a shared [`LspJsonRpcClient`], persists the resulting symbols, and marks files
-//! as `lsp_indexed = 1`.
+//! opens documents and requests `textDocument/documentSymbol` through the shared
+//! [`LspSession`], persists the resulting symbols, and marks files as
+//! `lsp_indexed = 1`.
 //!
-//! The worker receives the client via `Arc<Mutex<Option<LspJsonRpcClient>>>`. The
-//! outer `Option` allows the daemon to be absent (not yet started or restarting).
-//! When `None`, the worker sleeps and retries.
+//! The worker is a pure *consumer* of the daemon-owned [`LspSession`]: it never
+//! spawns a client, and it never sends `didClose` — the session owns the shared
+//! open-document set and keeps documents open across requests. When the session
+//! has no live client (the daemon is not yet started or is restarting), the
+//! worker sleeps and retries, leaving files unindexed until the client returns.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,6 +28,7 @@ pub use swissarmyhammer_lsp::SharedLspClient;
 
 use crate::error::CodeContextError;
 use crate::invalidation::InvalidationAction;
+use crate::layered_context::SharedLspSession;
 use crate::lsp_communication::{collect_and_persist_call_edges, collect_and_persist_file_symbols};
 use crate::lsp_indexer::mark_lsp_indexed;
 use crate::workspace::SharedDb;
@@ -61,27 +64,27 @@ pub fn new_shutdown_flag() -> ShutdownFlag {
     Arc::new(AtomicBool::new(false))
 }
 
-/// Spawn a background thread that indexes files via LSP.
+/// Spawn a background thread that indexes files via the shared LSP session.
 ///
 /// The thread loops until `shutdown` is set to `true`:
-/// 1. Lock the shared client; if `None`, sleep and retry.
-/// 2. Query `lsp_indexed = 0` files from the database.
-/// 3. For each file: read content, send `didOpen`, request `documentSymbol`,
-///    persist symbols, mark `lsp_indexed = 1`.
+/// 1. Query `lsp_indexed = 0` files from the database.
+/// 2. If the session has no live client, sleep and retry (files stay dirty).
+/// 3. For each file: read content, open the document on the session, request
+///    `documentSymbol`, persist symbols, mark `lsp_indexed = 1`.
 /// 4. On per-file failure, log the error and still mark `lsp_indexed = 1`
 ///    to avoid infinite retry loops.
 ///
 /// # Arguments
 /// * `workspace_root` - Absolute path to the workspace root.
 /// * `db` - Shared write connection from the leader workspace.
-/// * `client` - Shared handle to the LSP JSON-RPC client.
+/// * `session` - Cheap-clone handle to the daemon-owned LSP session.
 /// * `config` - Worker configuration.
 /// * `server_name` - Command name of the LSP server (used in log messages).
 /// * `shutdown` - Shared flag; set to `true` to request graceful shutdown.
 pub fn spawn_lsp_indexing_worker(
     workspace_root: PathBuf,
     db: SharedDb,
-    client: SharedLspClient,
+    session: SharedLspSession,
     config: LspWorkerConfig,
     server_name: String,
     shutdown: ShutdownFlag,
@@ -93,7 +96,7 @@ pub fn spawn_lsp_indexing_worker(
             match run_lsp_indexing_loop(
                 &workspace_root,
                 &db,
-                &client,
+                &session,
                 &config,
                 &server_name,
                 &shutdown,
@@ -113,7 +116,7 @@ pub fn spawn_lsp_indexing_worker(
 fn run_lsp_indexing_loop(
     workspace_root: &Path,
     db: &SharedDb,
-    client: &SharedLspClient,
+    session: &SharedLspSession,
     config: &LspWorkerConfig,
     server_name: &str,
     shutdown: &AtomicBool,
@@ -135,13 +138,12 @@ fn run_lsp_indexing_loop(
             continue;
         }
 
-        let Some(mut guard) = acquire_lsp_client(client, config, server_name) else {
+        if !session_available(session, config, server_name) {
             continue;
-        };
-        let lsp_client = guard.as_mut().unwrap();
+        }
 
         info!(server = %server_name, "LSP indexing: processing {} dirty files", dirty_files.len());
-        total_indexed += process_lsp_batch(lsp_client, db, workspace_root, &dirty_files);
+        total_indexed += process_lsp_batch(session, db, workspace_root, &dirty_files);
 
         info!(
             server = %server_name,
@@ -180,39 +182,33 @@ fn query_lsp_dirty_batch<S: AsRef<str>>(
     query_lsp_dirty_files(&conn, config.batch_size, extensions)
 }
 
-/// Attempt to acquire the shared LSP client.
+/// Check whether the shared session currently has a live client.
 ///
-/// Returns `Some(guard)` when the client is available and the inner `Option`
-/// is `Some`. Returns `None` (after sleeping) when the client is absent,
-/// signaling the caller to retry on the next loop iteration.
-fn acquire_lsp_client<'a>(
-    client: &'a SharedLspClient,
+/// Returns `true` when the session is running and the batch can be processed.
+/// Returns `false` (after sleeping) when there is no live client, signaling the
+/// caller to retry on the next loop iteration — the dirty files stay dirty.
+fn session_available(
+    session: &SharedLspSession,
     config: &LspWorkerConfig,
     server_name: &str,
-) -> Option<std::sync::MutexGuard<'a, Option<LspJsonRpcClient>>> {
-    let guard = match client.lock() {
-        Ok(g) => g,
-        Err(poisoned) => {
-            warn!(server = %server_name, "LSP client mutex poisoned, recovering");
-            poisoned.into_inner()
-        }
-    };
-
-    if guard.is_none() {
-        drop(guard);
-        debug!(server = %server_name, "LSP client not available, sleeping");
-        thread::sleep(config.client_unavailable_sleep);
-        return None;
+) -> bool {
+    if session.is_running() {
+        return true;
     }
 
-    Some(guard)
+    debug!(server = %server_name, "LSP client not available, sleeping");
+    thread::sleep(config.client_unavailable_sleep);
+    false
 }
 
-/// Process a batch of files through the LSP client, returning the count indexed.
+/// Process a batch of files through the shared LSP session, returning the count
+/// indexed.
 ///
 /// Files that fail are still marked as indexed to prevent infinite retry loops.
+/// A file skipped because the client vanished mid-batch is left unindexed so a
+/// later pass retries it once the client returns.
 fn process_lsp_batch(
-    lsp_client: &mut LspJsonRpcClient,
+    session: &SharedLspSession,
     db: &SharedDb,
     workspace_root: &Path,
     dirty_files: &[String],
@@ -222,16 +218,28 @@ fn process_lsp_batch(
     for relative_path in dirty_files {
         let full_path = workspace_root.join(relative_path);
 
-        match index_single_file(lsp_client, db, &full_path, relative_path) {
-            Ok(symbol_count) => debug!(
-                "LSP indexed {} ({} symbols, {} total in batch)",
-                relative_path,
-                symbol_count,
-                count + 1
+        match index_single_file(session, db, &full_path, relative_path) {
+            Ok(Some(symbol_count)) => {
+                debug!(
+                    "LSP indexed {} ({} symbols, {} total in batch)",
+                    relative_path,
+                    symbol_count,
+                    count + 1
+                );
+                count += 1;
+            }
+            // The client vanished between the availability check and the work —
+            // leave the file unindexed so a later pass retries it. Do NOT count
+            // it or mark it indexed.
+            Ok(None) => debug!(
+                "LSP client unavailable while indexing {}, leaving unindexed",
+                relative_path
             ),
-            Err(e) => mark_failed_file_indexed(db, relative_path, &e),
+            Err(e) => {
+                mark_failed_file_indexed(db, relative_path, &e);
+                count += 1;
+            }
         }
-        count += 1;
     }
 
     count
@@ -254,13 +262,18 @@ fn mark_failed_file_indexed(db: &SharedDb, relative_path: &str, error: &CodeCont
     }
 }
 
-/// Index a single file via LSP: didOpen, documentSymbol, call hierarchy,
-/// persist, mark indexed.
+/// Index a single file via the shared session: open, documentSymbol, call
+/// hierarchy, persist, mark indexed.
 ///
-/// Locks the shared DB only for the persist steps — LSP I/O happens without
-/// holding the mutex so other writers aren't blocked during network waits.
+/// The document is opened through the session, which owns the shared
+/// open-document set and keeps documents open across requests — there is no
+/// `didClose` here. Both LSP-collection phases run inside a single
+/// [`LspSession::with_client`] closure, so the client lock is held across the
+/// whole symbol+edge exchange and no other consumer can interleave a request
+/// and steal a response off the shared pipe. The DB mutex is locked only for
+/// the persist writes inside that closure.
 ///
-/// Two persist phases run under the DB lock:
+/// Two persist phases run inside the closure:
 /// 1. **Symbol phase** — `collect_and_persist_file_symbols` runs the
 ///    invalidation-aware symbol re-extract and returns any
 ///    [`InvalidationAction`]s for dependents.
@@ -276,22 +289,72 @@ fn mark_failed_file_indexed(db: &SharedDb, relative_path: &str, error: &CodeCont
 /// Any [`InvalidationAction`] is applied after both phases complete by
 /// marking the affected dependent file as `lsp_indexed = 0`.
 ///
-/// Returns the number of symbols persisted on success. Edge-collection
-/// failures are logged but do not fail the whole index pass — a file without
-/// edges is still useful, and the next pass will try again.
+/// Returns:
+/// * `Ok(Some(count))` — the file was indexed; `count` symbols were persisted.
+/// * `Ok(None)` — the session had no live client (it vanished between the
+///   availability check and the work); the file is left unindexed for a retry.
+/// * `Err(_)` — a genuine collection failure; the caller still marks the file
+///   indexed to avoid an infinite retry loop.
+///
+/// Edge-collection failures are logged but do not fail the whole index pass — a
+/// file without edges is still useful, and the next pass will try again.
 fn index_single_file(
+    session: &SharedLspSession,
+    db: &SharedDb,
+    full_path: &Path,
+    relative_path: &str,
+) -> Result<Option<usize>, CodeContextError> {
+    // Read file content
+    let content = std::fs::read_to_string(full_path)?;
+
+    // Sync the document to the session (no DB lock needed). The session owns the
+    // open-document lifecycle; no didClose is sent here. `sync_open` opens a
+    // never-seen file and, crucially, refreshes the buffer with `didChange` for
+    // a file that was edited and re-enqueued (cleanup flips `lsp_indexed = 0` on
+    // a content-hash change) — otherwise `documentSymbol`/call-hierarchy would
+    // run against the stale buffer the server still holds from the first open. A
+    // client that vanished after the availability check surfaces as NotRunning —
+    // treat that as "skip, leave unindexed", not a hard error.
+    match session.sync_open(full_path, &content) {
+        Ok(()) => {}
+        Err(swissarmyhammer_lsp::LspError::NotRunning) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    }
+
+    // Run both collection phases inside a single client-lock hold. The closure
+    // returns `Result<_, CodeContextError>`; we wrap it in `Ok(..)` so the
+    // transport-level `with_client` cannot conflate a closure failure with a
+    // transport failure, then flatten — a missing client maps to `Ok(None)`.
+    let phase_result = session
+        .with_client(|client| Ok(run_collection_phases(client, db, full_path, relative_path)))?;
+    let result = match phase_result {
+        Some(inner) => inner?,
+        // Client vanished between `open` and here: leave the file unindexed.
+        None => return Ok(None),
+    };
+
+    // Apply invalidation propagation: any file whose outgoing edges pointed
+    // at symbols that no longer exist in `relative_path` must have its edge
+    // set refreshed on the next worker pass.
+    if !result.pending_actions.is_empty() {
+        apply_invalidation_actions(db, relative_path, &result.pending_actions);
+    }
+
+    Ok(Some(result.symbol_count))
+}
+
+/// Run the symbol and edge collection phases against the locked client.
+///
+/// Factored out of [`index_single_file`] so the whole symbol+edge exchange runs
+/// inside one [`LspSession::with_client`] hold. The DB mutex is locked only for
+/// each persist write. Returns the symbol-phase result (symbol count + pending
+/// invalidation actions); edge-collection failures are logged, not propagated.
+fn run_collection_phases(
     client: &mut LspJsonRpcClient,
     db: &SharedDb,
     full_path: &Path,
     relative_path: &str,
-) -> Result<usize, CodeContextError> {
-    // Read file content
-    let content = std::fs::read_to_string(full_path)?;
-    let language_id = extension_to_language_id(full_path);
-
-    // Send didOpen notification (no DB lock needed)
-    client.send_did_open(full_path, language_id, &content)?;
-
+) -> Result<crate::lsp_communication::LspCollectionResult, CodeContextError> {
     // Symbol phase — lock DB for the write.
     let result = {
         let conn = db.lock().unwrap_or_else(|p| p.into_inner());
@@ -332,19 +395,7 @@ fn index_single_file(
         ),
     }
 
-    // Close the document so re-indexing won't trigger "duplicate didOpen"
-    if let Err(e) = client.send_did_close(full_path) {
-        debug!("Failed to send didClose for {}: {}", relative_path, e);
-    }
-
-    // Apply invalidation propagation: any file whose outgoing edges pointed
-    // at symbols that no longer exist in `relative_path` must have its edge
-    // set refreshed on the next worker pass.
-    if !result.pending_actions.is_empty() {
-        apply_invalidation_actions(db, relative_path, &result.pending_actions);
-    }
-
-    Ok(result.symbol_count)
+    Ok(result)
 }
 
 /// Apply [`InvalidationAction`]s by marking affected files as `lsp_indexed = 0`.
@@ -462,44 +513,88 @@ fn query_lsp_dirty_files<S: AsRef<str>>(
     Ok(files)
 }
 
+/// Canonical extension → LSP language-identifier table.
+///
+/// Each entry maps one file extension (lowercase, no dot) to the language ID
+/// used in `textDocument/didOpen`. Expressed as data so the mapping is a single
+/// table rather than parallel `match` arms a human must keep in lockstep.
+const EXTENSION_LANGUAGE_IDS: &[(&str, &str)] = &[
+    ("rs", "rust"),
+    ("py", "python"),
+    ("js", "javascript"),
+    ("jsx", "javascriptreact"),
+    ("ts", "typescript"),
+    ("tsx", "typescriptreact"),
+    ("go", "go"),
+    ("java", "java"),
+    ("c", "c"),
+    ("cpp", "cpp"),
+    ("cc", "cpp"),
+    ("cxx", "cpp"),
+    ("h", "c"),
+    ("hpp", "cpp"),
+    ("hxx", "cpp"),
+    ("rb", "ruby"),
+    ("swift", "swift"),
+    ("kt", "kotlin"),
+    ("kts", "kotlin"),
+    ("lua", "lua"),
+    ("sh", "shellscript"),
+    ("bash", "shellscript"),
+    ("toml", "toml"),
+    ("yaml", "yaml"),
+    ("yml", "yaml"),
+    ("json", "json"),
+    ("md", "markdown"),
+    ("html", "html"),
+    ("css", "css"),
+];
+
+/// Language ID returned for any extension not in [`EXTENSION_LANGUAGE_IDS`].
+const DEFAULT_LANGUAGE_ID: &str = "plaintext";
+
 /// Map a file extension to an LSP language identifier.
 ///
-/// Returns a best-effort language ID for the `textDocument/didOpen` notification.
-/// Unknown extensions default to `"plaintext"`.
+/// Returns a best-effort language ID for `textDocument/didOpen`. The indexing
+/// worker no longer calls this directly — the shared [`LspSession`] carries the
+/// per-server `language_id` and emits `didOpen` itself, so this mapping is
+/// retained as the canonical extension→language-id table (still unit-tested
+/// below) for callers that need it outside the session's single-language scope.
+#[allow(dead_code)]
 fn extension_to_language_id(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("rs") => "rust",
-        Some("py") => "python",
-        Some("js") => "javascript",
-        Some("jsx") => "javascriptreact",
-        Some("ts") => "typescript",
-        Some("tsx") => "typescriptreact",
-        Some("go") => "go",
-        Some("java") => "java",
-        Some("c") => "c",
-        Some("cpp" | "cc" | "cxx") => "cpp",
-        Some("h") => "c",
-        Some("hpp" | "hxx") => "cpp",
-        Some("rb") => "ruby",
-        Some("swift") => "swift",
-        Some("kt" | "kts") => "kotlin",
-        Some("lua") => "lua",
-        Some("sh" | "bash") => "shellscript",
-        Some("toml") => "toml",
-        Some("yaml" | "yml") => "yaml",
-        Some("json") => "json",
-        Some("md") => "markdown",
-        Some("html") => "html",
-        Some("css") => "css",
-        _ => "plaintext",
-    }
+    let ext = match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => ext,
+        None => return DEFAULT_LANGUAGE_ID,
+    };
+    EXTENSION_LANGUAGE_IDS
+        .iter()
+        .find(|(extension, _)| *extension == ext)
+        .map(|(_, language_id)| *language_id)
+        .unwrap_or(DEFAULT_LANGUAGE_ID)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::none_session;
     use rusqlite::Connection;
     use std::sync::Mutex;
+    use swissarmyhammer_lsp::LspSession;
+
+    /// Batch size used by the worker-loop tests (small so a single pass drains
+    /// the fixture's dirty files).
+    const TEST_BATCH_SIZE: usize = 10;
+    /// Minimal worker sleep — keeps the loop hot so tests finish quickly.
+    const TEST_SLEEP_MINIMAL: Duration = Duration::from_millis(1);
+    /// Short worker sleep used where a slightly longer cadence is needed.
+    const TEST_SLEEP_SHORT: Duration = Duration::from_millis(5);
+    /// Synthetic file size written into `indexed_files` test rows.
+    const TEST_FILE_SIZE: u32 = 1024;
+
+    /// Wrap a live [`LspJsonRpcClient`] (e.g. from a mock child) in a session.
+    fn session_with_client(client: LspJsonRpcClient) -> SharedLspSession {
+        LspSession::new(Arc::new(Mutex::new(Some(client))), "rust")
+    }
 
     /// Create an in-memory DB with the required schema.
     fn create_test_db() -> Connection {
@@ -513,8 +608,8 @@ mod tests {
     fn insert_test_file(conn: &Connection, file_path: &str) {
         conn.execute(
             "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed)
-             VALUES (?, X'00112233', 1024, 1000, 1, 0)",
-            [file_path],
+             VALUES (?1, X'00112233', ?2, 1000, 1, 0)",
+            rusqlite::params![file_path, TEST_FILE_SIZE],
         )
         .unwrap();
     }
@@ -773,11 +868,11 @@ mod tests {
         // exits cleanly without touching the DB or client.
         let workspace_root = std::env::temp_dir();
         let db = create_shared_test_db();
-        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let session = none_session();
         let config = LspWorkerConfig {
-            batch_size: 10,
-            client_unavailable_sleep: Duration::from_millis(1),
-            idle_sleep: Duration::from_millis(1),
+            batch_size: TEST_BATCH_SIZE,
+            client_unavailable_sleep: TEST_SLEEP_MINIMAL,
+            idle_sleep: TEST_SLEEP_MINIMAL,
         };
         let shutdown = new_shutdown_flag();
         shutdown.store(true, Ordering::Relaxed);
@@ -785,7 +880,7 @@ mod tests {
         let result = run_lsp_indexing_loop(
             &workspace_root,
             &db,
-            &client,
+            &session,
             &config,
             "rust-analyzer",
             &shutdown,
@@ -801,11 +896,11 @@ mod tests {
         let workspace_root = std::env::temp_dir();
         let db = create_shared_test_db();
         // No files inserted — dirty list will always be empty.
-        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let session = none_session();
         let config = LspWorkerConfig {
-            batch_size: 10,
-            client_unavailable_sleep: Duration::from_millis(1),
-            idle_sleep: Duration::from_millis(1),
+            batch_size: TEST_BATCH_SIZE,
+            client_unavailable_sleep: TEST_SLEEP_MINIMAL,
+            idle_sleep: TEST_SLEEP_MINIMAL,
         };
         let shutdown = new_shutdown_flag();
         let shutdown_clone = Arc::clone(&shutdown);
@@ -815,7 +910,7 @@ mod tests {
             run_lsp_indexing_loop(
                 &workspace_root,
                 &db,
-                &client,
+                &session,
                 &config,
                 "rust-analyzer",
                 &shutdown,
@@ -843,11 +938,11 @@ mod tests {
             insert_test_file(&conn, "src/main.rs");
         }
 
-        let client: SharedLspClient = Arc::new(Mutex::new(None)); // client unavailable
+        let session = none_session(); // client unavailable
         let config = LspWorkerConfig {
-            batch_size: 10,
-            client_unavailable_sleep: Duration::from_millis(5),
-            idle_sleep: Duration::from_millis(5),
+            batch_size: TEST_BATCH_SIZE,
+            client_unavailable_sleep: TEST_SLEEP_SHORT,
+            idle_sleep: TEST_SLEEP_SHORT,
         };
         let shutdown = new_shutdown_flag();
         let shutdown_clone = Arc::clone(&shutdown);
@@ -856,7 +951,7 @@ mod tests {
             run_lsp_indexing_loop(
                 &workspace_root,
                 &db,
-                &client,
+                &session,
                 &config,
                 "rust-analyzer",
                 &shutdown,
@@ -885,11 +980,11 @@ mod tests {
             insert_test_file(&conn, "src/main.rs");
         }
 
-        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let session = none_session();
         let config = LspWorkerConfig {
-            batch_size: 10,
-            client_unavailable_sleep: Duration::from_millis(1),
-            idle_sleep: Duration::from_millis(1),
+            batch_size: TEST_BATCH_SIZE,
+            client_unavailable_sleep: TEST_SLEEP_MINIMAL,
+            idle_sleep: TEST_SLEEP_MINIMAL,
         };
         let shutdown = new_shutdown_flag();
         let shutdown_clone = Arc::clone(&shutdown);
@@ -898,7 +993,7 @@ mod tests {
             run_lsp_indexing_loop(
                 &workspace_root,
                 &db,
-                &client,
+                &session,
                 &config,
                 "unknown-server", // triggers empty extensions warning
                 &shutdown,
@@ -923,11 +1018,11 @@ mod tests {
         // cleanly when the shutdown flag is set.
         let workspace_root = std::env::temp_dir();
         let db = create_shared_test_db();
-        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let session = none_session();
         let config = LspWorkerConfig {
-            batch_size: 10,
-            client_unavailable_sleep: Duration::from_millis(1),
-            idle_sleep: Duration::from_millis(1),
+            batch_size: TEST_BATCH_SIZE,
+            client_unavailable_sleep: TEST_SLEEP_MINIMAL,
+            idle_sleep: TEST_SLEEP_MINIMAL,
         };
         let shutdown = new_shutdown_flag();
         let shutdown_clone = Arc::clone(&shutdown);
@@ -935,7 +1030,7 @@ mod tests {
         let handle = spawn_lsp_indexing_worker(
             workspace_root,
             db,
-            client,
+            session,
             config,
             "rust-analyzer".to_string(),
             shutdown,
@@ -959,11 +1054,11 @@ mod tests {
             insert_test_file(&conn, "src/lib.rs");
         }
 
-        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let session = none_session();
         let config = LspWorkerConfig {
-            batch_size: 10,
-            client_unavailable_sleep: Duration::from_millis(5),
-            idle_sleep: Duration::from_millis(5),
+            batch_size: TEST_BATCH_SIZE,
+            client_unavailable_sleep: TEST_SLEEP_SHORT,
+            idle_sleep: TEST_SLEEP_SHORT,
         };
         let shutdown = new_shutdown_flag();
         let shutdown_clone = Arc::clone(&shutdown);
@@ -971,7 +1066,7 @@ mod tests {
         let handle = spawn_lsp_indexing_worker(
             workspace_root,
             db,
-            client,
+            session,
             config,
             "rust-analyzer".to_string(),
             shutdown,
@@ -996,11 +1091,11 @@ mod tests {
             insert_test_file(&conn, "src/beta.rs");
         }
 
-        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let session = none_session();
         let config = LspWorkerConfig {
-            batch_size: 10,
-            client_unavailable_sleep: Duration::from_millis(5),
-            idle_sleep: Duration::from_millis(5),
+            batch_size: TEST_BATCH_SIZE,
+            client_unavailable_sleep: TEST_SLEEP_SHORT,
+            idle_sleep: TEST_SLEEP_SHORT,
         };
         let shutdown = new_shutdown_flag();
         let shutdown_clone = Arc::clone(&shutdown);
@@ -1010,7 +1105,7 @@ mod tests {
             run_lsp_indexing_loop(
                 &workspace_root,
                 &db,
-                &client,
+                &session,
                 &config,
                 "rust-analyzer",
                 &shutdown,
@@ -1051,11 +1146,11 @@ mod tests {
     fn test_lsp_worker_config_custom() {
         // Verify custom configuration works.
         let config = LspWorkerConfig {
-            batch_size: 10,
+            batch_size: TEST_BATCH_SIZE,
             client_unavailable_sleep: Duration::from_millis(100),
             idle_sleep: Duration::from_millis(50),
         };
-        assert_eq!(config.batch_size, 10);
+        assert_eq!(config.batch_size, TEST_BATCH_SIZE);
         assert_eq!(config.client_unavailable_sleep, Duration::from_millis(100));
         assert_eq!(config.idle_sleep, Duration::from_millis(50));
     }
@@ -1343,11 +1438,11 @@ mod tests {
         }
         let db_check = Arc::clone(&db);
 
-        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let session = none_session();
         let config = LspWorkerConfig {
-            batch_size: 10,
-            client_unavailable_sleep: Duration::from_millis(1),
-            idle_sleep: Duration::from_millis(1),
+            batch_size: TEST_BATCH_SIZE,
+            client_unavailable_sleep: TEST_SLEEP_MINIMAL,
+            idle_sleep: TEST_SLEEP_MINIMAL,
         };
         let shutdown = new_shutdown_flag();
         // Set shutdown before spawning so the worker exits as soon as possible
@@ -1356,7 +1451,7 @@ mod tests {
         let handle = spawn_lsp_indexing_worker(
             workspace_root,
             db,
-            client,
+            session,
             config,
             "rust-analyzer".to_string(),
             shutdown,
@@ -1474,15 +1569,18 @@ mod tests {
         let mut child = spawn_mock_lsp_for_index_single_file(symbol_response, &response_file);
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
-        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let client = LspJsonRpcClient::new(stdin, stdout);
+        let session = session_with_client(client);
 
-        let result = index_single_file(&mut client, &shared_db, &file_path, relative_path);
+        let result = index_single_file(&session, &shared_db, &file_path, relative_path);
         assert!(
             result.is_ok(),
             "index_single_file should succeed: {:?}",
             result
         );
-        let symbol_count = result.unwrap();
+        let symbol_count = result
+            .unwrap()
+            .expect("client was live, so the file should be indexed");
         assert_eq!(symbol_count, 1, "should have persisted 1 symbol");
 
         // Verify lsp_indexed was marked
@@ -1506,6 +1604,7 @@ mod tests {
             .unwrap();
         assert_eq!(sym_count, 1, "1 symbol should be persisted in lsp_symbols");
 
+        let _ = child.kill();
         let _ = child.wait();
     }
 
@@ -1581,9 +1680,10 @@ mod tests {
         let mut child = spawn_mock_lsp_for_index_single_file(symbol_response, &response_file);
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
-        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let client = LspJsonRpcClient::new(stdin, stdout);
+        let session = session_with_client(client);
 
-        let result = index_single_file(&mut client, &shared_db, &f_path, "src/f.rs");
+        let result = index_single_file(&session, &shared_db, &f_path, "src/f.rs");
         assert!(
             result.is_ok(),
             "index_single_file should succeed: {:?}",
@@ -1619,6 +1719,7 @@ mod tests {
         );
 
         drop(conn);
+        let _ = child.kill();
         let _ = child.wait();
     }
 
@@ -1642,14 +1743,15 @@ mod tests {
         let mut child = spawn_mock_lsp_for_index_single_file(symbol_response, &response_file);
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
-        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let client = LspJsonRpcClient::new(stdin, stdout);
+        let session = session_with_client(client);
 
         let db = create_test_db();
         insert_test_file(&db, "nonexistent.rs");
         let shared_db: SharedDb = Arc::new(Mutex::new(db));
 
         let result = index_single_file(
-            &mut client,
+            &session,
             &shared_db,
             Path::new("/definitely/nonexistent/path/demo.rs"),
             "nonexistent.rs",
@@ -1679,7 +1781,10 @@ mod tests {
             insert_test_file(&conn, "src/poison_test.rs");
         }
 
+        // Build the session over a client handle we retain a clone of, so we
+        // can poison the underlying client mutex out from under the session.
         let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let session = LspSession::new(Arc::clone(&client), "rust");
 
         // Poison the mutex by panicking in a thread that holds the lock
         let client_clone = Arc::clone(&client);
@@ -1697,9 +1802,9 @@ mod tests {
         );
 
         let config = LspWorkerConfig {
-            batch_size: 10,
-            client_unavailable_sleep: Duration::from_millis(5),
-            idle_sleep: Duration::from_millis(5),
+            batch_size: TEST_BATCH_SIZE,
+            client_unavailable_sleep: TEST_SLEEP_SHORT,
+            idle_sleep: TEST_SLEEP_SHORT,
         };
         let shutdown = new_shutdown_flag();
         let shutdown_clone = Arc::clone(&shutdown);
@@ -1708,7 +1813,7 @@ mod tests {
             run_lsp_indexing_loop(
                 &workspace_root,
                 &db,
-                &client,
+                &session,
                 &config,
                 "rust-analyzer",
                 &shutdown,
@@ -1756,11 +1861,11 @@ mod tests {
             "DB mutex should be poisoned after thread panic"
         );
 
-        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let session = none_session();
         let config = LspWorkerConfig {
-            batch_size: 10,
-            client_unavailable_sleep: Duration::from_millis(5),
-            idle_sleep: Duration::from_millis(5),
+            batch_size: TEST_BATCH_SIZE,
+            client_unavailable_sleep: TEST_SLEEP_SHORT,
+            idle_sleep: TEST_SLEEP_SHORT,
         };
         let shutdown = new_shutdown_flag();
         let shutdown_clone = Arc::clone(&shutdown);
@@ -1769,7 +1874,7 @@ mod tests {
             run_lsp_indexing_loop(
                 &workspace_root,
                 &db,
-                &client,
+                &session,
                 &config,
                 "rust-analyzer",
                 &shutdown,

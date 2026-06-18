@@ -387,11 +387,12 @@ impl McpServer {
 
     /// Spawn the LSP supervisor task. Starts every configured LSP daemon,
     /// installs the supervisor into `LSP_SUPERVISOR`, and returns the list of
-    /// successfully-running `(server_name, shared_client)` pairs via the
-    /// task's join handle.
+    /// successfully-running `(server_name, session)` pairs via the task's join
+    /// handle.
     fn spawn_lsp_supervisor(
         workspace_root: std::path::PathBuf,
-    ) -> tokio::task::JoinHandle<Vec<(String, swissarmyhammer_code_context::SharedLspClient)>> {
+    ) -> tokio::task::JoinHandle<Vec<(String, swissarmyhammer_code_context::SharedLspSession)>>
+    {
         tokio::spawn(async move {
             // Build the LSP-server stderr-noise filter from code-context's
             // stacked config and inject it into the supervisor. The filter
@@ -460,13 +461,19 @@ impl McpServer {
     /// we're the leader, then runs the 60s LSP health-check loop forever.
     fn spawn_lsp_health_loop(
         lsp_handle: tokio::task::JoinHandle<
-            Vec<(String, swissarmyhammer_code_context::SharedLspClient)>,
+            Vec<(String, swissarmyhammer_code_context::SharedLspSession)>,
         >,
         ws: Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
         workspace_root: std::path::PathBuf,
     ) {
         tokio::spawn(async move {
-            let clients = lsp_handle.await.unwrap_or_default();
+            let clients = match lsp_handle.await {
+                Ok(clients) => clients,
+                Err(e) => {
+                    tracing::error!("code-context: LSP supervisor task failed: {e}");
+                    Vec::new()
+                }
+            };
             if clients.is_empty() {
                 tracing::info!("code-context: no LSP clients available, skipping LSP indexing");
             } else {
@@ -1036,7 +1043,13 @@ impl McpServer {
                 serde_json::Value::Object(map) => map,
                 _ => serde_json::Map::new(), // Use empty map if not an object
             };
-            tool.execute(arguments_map, &self.tool_context).await
+            // Install a per-call mutated-paths sink so a mutator's recorded
+            // paths are scoped to this call (the shared `self.tool_context`
+            // would otherwise accumulate across calls), then fold inline
+            // diagnostics in via the same shared helper `call_tool` uses.
+            let tool_context = (*self.tool_context).clone().with_fresh_mutated_paths();
+            let result = tool.execute(arguments_map, &tool_context).await;
+            crate::mcp::inline_diagnostics::fold_in_diagnostics(result, &tool_context).await
         } else {
             Err(rmcp::ErrorData::invalid_request(
                 format!("Unknown tool: {}", name),
@@ -1451,11 +1464,15 @@ fn open_workspace(
     }
 }
 
-/// Collect every running daemon's `(server_name, shared_client)` pair from
-/// the supervisor. Daemons that are not in the `Running` state are skipped.
+/// Collect every running daemon's `(server_name, session)` pair from the
+/// supervisor. Daemons that are not in the `Running` state are skipped.
+///
+/// The worker consumes the daemon-owned [`LspSession`](swissarmyhammer_lsp::LspSession),
+/// so it shares the one open-document set with the query ops and the
+/// diagnostics path rather than driving its own client lifecycle.
 fn collect_running_lsp_clients(
     supervisor: &swissarmyhammer_lsp::LspSupervisorManager,
-) -> Vec<(String, swissarmyhammer_code_context::SharedLspClient)> {
+) -> Vec<(String, swissarmyhammer_code_context::SharedLspSession)> {
     supervisor
         .daemon_names()
         .into_iter()
@@ -1463,25 +1480,25 @@ fn collect_running_lsp_clients(
         .collect()
 }
 
-/// Return `(name, client)` for the daemon if it's in the `Running` state.
+/// Return `(name, session)` for the daemon if it's in the `Running` state.
 fn lsp_client_if_running(
     supervisor: &swissarmyhammer_lsp::LspSupervisorManager,
     name: String,
-) -> Option<(String, swissarmyhammer_code_context::SharedLspClient)> {
+) -> Option<(String, swissarmyhammer_code_context::SharedLspSession)> {
     let daemon = supervisor.get_daemon(&name)?;
     match daemon.state() {
-        swissarmyhammer_lsp::LspDaemonState::Running { .. } => Some((name, daemon.shared_client())),
+        swissarmyhammer_lsp::LspDaemonState::Running { .. } => Some((name, daemon.session())),
         _ => None,
     }
 }
 
-/// Spawn an `spawn_lsp_indexing_worker` per running LSP client. `log_suffix`
+/// Spawn an `spawn_lsp_indexing_worker` per running LSP session. `log_suffix`
 /// is appended to the startup log so callers can distinguish fresh startup
 /// from post-promotion startup (e.g. `" (after promotion)"` or `""`).
 fn spawn_lsp_workers_for_clients(
     workspace_root: &std::path::Path,
     shared_db: &swissarmyhammer_code_context::SharedDb,
-    clients: &[(String, swissarmyhammer_code_context::SharedLspClient)],
+    clients: &[(String, swissarmyhammer_code_context::SharedLspSession)],
     log_suffix: &str,
 ) {
     if clients.is_empty() {
@@ -1490,12 +1507,12 @@ fn spawn_lsp_workers_for_clients(
     use swissarmyhammer_code_context::{
         new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig,
     };
-    for (server_name, shared_client) in clients {
+    for (server_name, session) in clients {
         let worker_db = std::sync::Arc::clone(shared_db);
         spawn_lsp_indexing_worker(
             workspace_root.to_path_buf(),
             worker_db,
-            std::sync::Arc::clone(shared_client),
+            session.clone(),
             LspWorkerConfig::default(),
             server_name.clone(),
             new_shutdown_flag(),
@@ -1559,11 +1576,11 @@ fn handle_promotion_result(state: PromotionState, workspace_root: &std::path::Pa
 }
 
 /// If the workspace is currently leader, spawn LSP indexing workers for the
-/// supplied clients. No-op if the workspace has no shared DB.
+/// supplied sessions. No-op if the workspace has no shared DB.
 fn start_lsp_workers_if_leader(
     ws: &Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
     workspace_root: &std::path::Path,
-    clients: &[(String, swissarmyhammer_code_context::SharedLspClient)],
+    clients: &[(String, swissarmyhammer_code_context::SharedLspSession)],
     log_suffix: &str,
 ) {
     let ws_lock = ws.lock().expect("workspace mutex poisoned");
@@ -1891,7 +1908,9 @@ impl ServerHandler for McpServer {
                 .meta
                 .get_progress_token()
                 .or_else(|| request.meta.as_ref().and_then(|m| m.get_progress_token()));
-            let mut tool_context_with_peer = self.prepare_tool_context(context.peer.clone());
+            let mut tool_context_with_peer = self
+                .prepare_tool_context(context.peer.clone())
+                .with_fresh_mutated_paths();
             if let Some(token) = progress_token {
                 tool_context_with_peer = tool_context_with_peer.with_progress_token(token);
             }
@@ -1899,7 +1918,15 @@ impl ServerHandler for McpServer {
             let dispatch_ms = dispatch_start.elapsed().as_millis() as u64;
 
             let handler_start = std::time::Instant::now();
-            let result = tool.execute(arguments, &tool_context_with_peer).await;
+            let raw_result = tool.execute(arguments, &tool_context_with_peer).await;
+            // Fold inline diagnostics into a mutating tool's own result via the
+            // shared helper (the same one `execute_tool` uses), reading the typed
+            // `mutated_paths` channel rather than parsing the result content.
+            let result = crate::mcp::inline_diagnostics::fold_in_diagnostics(
+                raw_result,
+                &tool_context_with_peer,
+            )
+            .await;
             let handler_ms = handler_start.elapsed().as_millis() as u64;
 
             let is_error = match &result {

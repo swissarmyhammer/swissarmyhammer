@@ -31,8 +31,8 @@ use once_cell::sync::Lazy;
 use rmcp::model::{CallToolResult, Content};
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_diagnostics::{
-    diagnose, is_diagnosable, BlastRadiusDependents, Dependents, DiagnosticSeverity,
-    DiagnosticsConfig, DiagnosticsReport, PrecomputedDependents, TokioTimer,
+    diagnose_with_outcome, is_diagnosable, BlastRadiusDependents, Dependents, DiagnoseOutcome,
+    DiagnosticSeverity, DiagnosticsConfig, DiagnosticsReport, PrecomputedDependents, TokioTimer,
 };
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_operations::{
@@ -300,54 +300,75 @@ impl DiagnosticsTool {
         let repo = self.repo_root(context);
         let paths = self.resolve_paths(scope, &repo)?;
 
-        // Nothing diagnosable in scope, or no language server is available for
-        // these files — an empty report, not an error.
-        if paths.is_empty() {
-            return json_result(&DiagnosticsReport::new(Vec::new()));
-        }
-        let session = paths
-            .iter()
-            .find_map(|p| lsp_session_for_file(p))
-            .or_else(any_lsp_session);
-        let Some(session) = session else {
-            return json_result(&DiagnosticsReport::new(Vec::new()));
-        };
+        let outcome = produce_outcome(&paths, &repo, context, &config).await;
+        json_result(&outcome.report)
+    }
+}
 
-        // Resolve the blast radius up front and drop the DB handle before the
-        // await: a `rusqlite::Connection` is `!Sync` and must not be held across
-        // an `.await`. When dependents are disabled (or the index is missing)
-        // there is nothing to resolve.
-        //
-        // The code-context index keys symbols by **repo-relative** path, while
-        // `diagnose` works in the **absolute** path space (above). So the query
-        // bridges the two: relativise each target for the blast-radius lookup,
-        // then absolutise the dependents it returns.
-        let dependents = if config.include_dependents {
-            match open_workspace(context) {
-                Ok(workspace) => {
-                    let db = workspace.db();
-                    let resolver = BlastRadiusDependents::new(&db);
-                    let map = paths
-                        .iter()
-                        .map(|abs| {
-                            let deps = resolver
-                                .one_hop(&relativize(abs, &repo))
-                                .iter()
-                                .map(|rel| absolutize(rel, &repo))
-                                .collect();
-                            (abs.clone(), deps)
-                        })
-                        .collect();
-                    PrecomputedDependents::new(map)
-                }
-                Err(_) => PrecomputedDependents::default(),
+/// Resolve the live session and blast-radius dependents for `paths`, then drive
+/// [`diagnose_with_outcome`] — the shared report-producing core used by both the
+/// `diagnostics` tool's `check` ops and the inline-on-edit fold-in.
+///
+/// `paths` must already be **absolute** diagnosable paths (the caller does the
+/// scope resolution / `is_diagnosable` filtering). `repo` is the repository root
+/// the code-context index keys symbols against. When nothing is diagnosable or no
+/// language server is available, returns a settled empty outcome rather than an
+/// error.
+///
+/// The blast radius is resolved up front and its DB handle dropped before the
+/// `.await`: a `rusqlite::Connection` is `!Sync` and must not be held across an
+/// await. The code-context index keys symbols by **repo-relative** path while
+/// `diagnose` works in **absolute** space, so each target is relativised for the
+/// lookup and the returned dependents absolutised back.
+pub(crate) async fn produce_outcome(
+    paths: &[String],
+    repo: &Path,
+    context: &ToolContext,
+    config: &DiagnosticsConfig,
+) -> DiagnoseOutcome {
+    if paths.is_empty() {
+        return settled_empty();
+    }
+    let session = paths
+        .iter()
+        .find_map(|p| lsp_session_for_file(p))
+        .or_else(any_lsp_session);
+    let Some(session) = session else {
+        return settled_empty();
+    };
+
+    let dependents = if config.include_dependents {
+        match open_workspace(context) {
+            Ok(workspace) => {
+                let db = workspace.db();
+                let resolver = BlastRadiusDependents::new(&db);
+                let map = paths
+                    .iter()
+                    .map(|abs| {
+                        let deps = resolver
+                            .one_hop(&relativize(abs, repo))
+                            .iter()
+                            .map(|rel| absolutize(rel, repo))
+                            .collect();
+                        (abs.clone(), deps)
+                    })
+                    .collect();
+                PrecomputedDependents::new(map)
             }
-        } else {
-            PrecomputedDependents::default()
-        };
+            Err(_) => PrecomputedDependents::default(),
+        }
+    } else {
+        PrecomputedDependents::default()
+    };
 
-        let report = diagnose(&session, &paths, &config, &dependents, &TokioTimer).await;
-        json_result(&report)
+    diagnose_with_outcome(&session, paths, config, &dependents, &TokioTimer).await
+}
+
+/// A settled outcome carrying an empty report (nothing diagnosable / no server).
+fn settled_empty() -> DiagnoseOutcome {
+    DiagnoseOutcome {
+        report: DiagnosticsReport::new(Vec::new()),
+        pending: false,
     }
 }
 

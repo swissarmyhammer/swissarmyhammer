@@ -392,6 +392,22 @@ pub struct ToolContext {
     /// tools use a `NoopReporter` and emit no progress notifications.
     pub progress_token: Option<ProgressToken>,
 
+    /// Typed side-channel by which a file-mutating tool declares the paths it
+    /// changed, so the dispatch chokepoint can fold inline diagnostics into the
+    /// tool's own result without parsing its `CallToolResult` content.
+    ///
+    /// A mutator (e.g. `files` `write`/`edit`) calls
+    /// [`record_mutated_path`](Self::record_mutated_path) after a successful
+    /// mutation; the chokepoint drains the list with
+    /// [`take_mutated_paths`](Self::take_mutated_paths) and runs the shared
+    /// diagnostics fold-in over the diagnosable subset. The field is
+    /// interior-mutable (the same pattern as `session_actor`/`peer`) because
+    /// `execute` takes `&ToolContext`, and per-call so accumulation cannot leak
+    /// across calls: the chokepoint installs a fresh sink with
+    /// [`with_fresh_mutated_paths`](Self::with_fresh_mutated_paths) before each
+    /// dispatch.
+    pub mutated_paths: Arc<std::sync::Mutex<Vec<PathBuf>>>,
+
     /// Optional in-process sink for `ProgressNotificationParam` events.
     ///
     /// Used by in-process callers (e.g. the `code-context` CLI) that invoke
@@ -435,7 +451,49 @@ impl ToolContext {
             prompt_library: None,
             progress_token: None,
             progress_sink: None,
+            mutated_paths: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    /// Record a path mutated by the current tool call.
+    ///
+    /// File-mutating tools (`files` `write`/`edit`, and any future mutator) call
+    /// this with the **absolute** path they changed after the mutation succeeds.
+    /// The dispatch chokepoint later drains these via
+    /// [`take_mutated_paths`](Self::take_mutated_paths) and folds inline
+    /// diagnostics for the diagnosable subset into the tool's own result.
+    ///
+    /// This is the typed side-channel: the chokepoint never parses the tool's
+    /// `CallToolResult` content to learn what changed.
+    pub fn record_mutated_path(&self, path: impl Into<PathBuf>) {
+        self.mutated_paths
+            .lock()
+            .expect("mutated_paths mutex poisoned")
+            .push(path.into());
+    }
+
+    /// Drain and return the paths recorded by [`record_mutated_path`] during the
+    /// current tool call, leaving the sink empty.
+    ///
+    /// Called once by the dispatch chokepoint after `execute` returns.
+    pub fn take_mutated_paths(&self) -> Vec<PathBuf> {
+        std::mem::take(
+            &mut self
+                .mutated_paths
+                .lock()
+                .expect("mutated_paths mutex poisoned"),
+        )
+    }
+
+    /// Install a fresh, empty `mutated_paths` sink on a clone of this context.
+    ///
+    /// The dispatch chokepoint calls this before each tool dispatch so the
+    /// recorded paths are scoped to exactly one call and cannot leak across the
+    /// long-lived shared context (the `execute_tool` in-process path passes the
+    /// server's single shared context, which would otherwise accumulate).
+    pub fn with_fresh_mutated_paths(mut self) -> Self {
+        self.mutated_paths = Arc::new(std::sync::Mutex::new(Vec::new()));
+        self
     }
 
     /// Set the prompt library for template rendering
@@ -701,8 +759,14 @@ impl ToolContext {
                 }
             };
 
+            // Isolate the inner call's mutated-paths channel so a delegated
+            // mutation does not bleed into the *outer* call's sink (which the
+            // dispatch chokepoint drains to fold inline diagnostics into the
+            // outer tool's own result). Inline diagnostics are a property of the
+            // top-level dispatch, not of internal tool composition.
+            let inner_context = self.clone().with_fresh_mutated_paths();
             let start = std::time::Instant::now();
-            let result = tool.execute(params_map, self).await;
+            let result = tool.execute(params_map, &inner_context).await;
             let elapsed = start.elapsed();
 
             let is_error = match &result {

@@ -48,7 +48,7 @@ pub use hints::hint_for_operation;
 pub use invalidation::InvalidationAction;
 pub use layered_context::{
     CallEdgeInfo, ChunkInfo, DefinitionLocation, EnrichmentResult, FileEdit, LayeredContext,
-    LspRange, SourceLayer, SymbolInfo, TextEdit,
+    LspRange, SharedLspSession, SourceLayer, SymbolInfo, TextEdit,
 };
 pub use lsp_communication::{
     collect_and_persist_call_edges, collect_and_persist_file_symbols, collect_and_persist_symbols,

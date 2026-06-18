@@ -44,12 +44,18 @@ pub(crate) static LSP_SUPERVISOR: std::sync::OnceLock<
     std::sync::Arc<tokio::sync::Mutex<swissarmyhammer_lsp::LspSupervisorManager>>,
 > = std::sync::OnceLock::new();
 
-/// Look up the `SharedLspClient` for a file by matching its extension against
-/// the running LSP daemons in the global supervisor.
+/// Look up the shared [`SharedLspSession`](swissarmyhammer_code_context::SharedLspSession)
+/// for a file by matching its extension against the running LSP daemons in the
+/// global supervisor.
 ///
-/// Returns `None` when the supervisor is not initialised, no daemon handles the
-/// file's extension, or the supervisor lock cannot be acquired (e.g. contention).
-fn lsp_client_for_file(file_path: &str) -> Option<swissarmyhammer_code_context::SharedLspClient> {
+/// Returns the daemon-owned session (not a fresh wrapper), so the layered ops
+/// share the one open-document set with the indexing worker and the diagnostics
+/// path. Returns `None` when the supervisor is not initialised, no daemon
+/// handles the file's extension, or the supervisor lock cannot be acquired
+/// (e.g. contention).
+pub(crate) fn lsp_session_for_file(
+    file_path: &str,
+) -> Option<swissarmyhammer_code_context::SharedLspSession> {
     let ext = std::path::Path::new(file_path)
         .extension()
         .and_then(|e| e.to_str())?;
@@ -62,18 +68,18 @@ fn lsp_client_for_file(file_path: &str) -> Option<swissarmyhammer_code_context::
                 .iter()
                 .any(|e| e.eq_ignore_ascii_case(ext))
             {
-                return Some(daemon.shared_client());
+                return Some(daemon.session());
             }
         }
     }
     None
 }
 
-/// Return the first available `SharedLspClient` from any running daemon.
+/// Return the shared session of the first running daemon.
 ///
 /// Useful for workspace-wide LSP requests (e.g. `workspace/symbol`) that are
 /// not scoped to a single file extension.
-fn any_lsp_client() -> Option<swissarmyhammer_code_context::SharedLspClient> {
+pub(crate) fn any_lsp_session() -> Option<swissarmyhammer_code_context::SharedLspSession> {
     let sup = LSP_SUPERVISOR.get()?;
     let guard = sup.try_lock().ok()?;
     for name in guard.daemon_names() {
@@ -82,7 +88,7 @@ fn any_lsp_client() -> Option<swissarmyhammer_code_context::SharedLspClient> {
                 daemon.state(),
                 swissarmyhammer_lsp::LspDaemonState::Running { .. }
             ) {
-                return Some(daemon.shared_client());
+                return Some(daemon.session());
             }
         }
     }
@@ -1205,7 +1211,7 @@ impl McpTool for CodeContextTool {
 /// Open a CodeContextWorkspace from the tool context's working directory.
 ///
 /// Falls back to the current directory if no working_dir is set.
-fn open_workspace(context: &ToolContext) -> Result<CodeContextWorkspace, McpError> {
+pub(crate) fn open_workspace(context: &ToolContext) -> Result<CodeContextWorkspace, McpError> {
     let working_dir = context
         .working_dir
         .clone()
@@ -2665,8 +2671,8 @@ fn execute_get_rename_edits(
 
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = swissarmyhammer_code_context::LayeredContext::new(&db, client.as_ref());
+    let session = lsp_session_for_file(file_path);
+    let ctx = swissarmyhammer_code_context::LayeredContext::new(&db, session);
 
     let result =
         swissarmyhammer_code_context::get_rename_edits(&ctx, &opts).map_err(context_err)?;
@@ -2704,8 +2710,8 @@ fn execute_get_diagnostics(
 
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let session = lsp_session_for_file(file_path);
+    let ctx = LayeredContext::new(&db, session);
 
     let result = swissarmyhammer_code_context::get_diagnostics(&ctx, &opts).map_err(context_err)?;
     json_result(&result)
@@ -2747,8 +2753,8 @@ fn execute_get_inbound_calls(
 
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let session = lsp_session_for_file(file_path);
+    let ctx = LayeredContext::new(&db, session);
 
     let result =
         swissarmyhammer_code_context::get_inbound_calls(&ctx, &opts).map_err(context_err)?;
@@ -2780,8 +2786,8 @@ fn execute_workspace_symbol_live(
 
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = any_lsp_client();
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let session = any_lsp_session();
+    let ctx = LayeredContext::new(&db, session);
 
     let result =
         swissarmyhammer_code_context::workspace_symbol_live(&ctx, &opts).map_err(context_err)?;
@@ -2826,8 +2832,8 @@ fn execute_get_definition(
 
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let session = lsp_session_for_file(file_path);
+    let ctx = LayeredContext::new(&db, session);
 
     let result = swissarmyhammer_code_context::get_definition(&ctx, &opts).map_err(context_err)?;
     json_result(&result)
@@ -2871,8 +2877,8 @@ fn execute_get_type_definition(
 
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let session = lsp_session_for_file(file_path);
+    let ctx = LayeredContext::new(&db, session);
 
     let result =
         swissarmyhammer_code_context::get_type_definition(&ctx, &opts).map_err(context_err)?;
@@ -2911,9 +2917,9 @@ fn execute_get_hover(
 
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    tracing::debug!(file_path = %file_path, client = client.is_some(), "get_hover: client lookup");
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let session = lsp_session_for_file(file_path);
+    tracing::debug!(file_path = %file_path, client = session.is_some(), "get_hover: session lookup");
+    let ctx = LayeredContext::new(&db, session);
     tracing::debug!(
         has_live_lsp = ctx.has_live_lsp(),
         "get_hover: context created"
@@ -2968,8 +2974,8 @@ fn execute_get_references(
 
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let session = lsp_session_for_file(file_path);
+    let ctx = LayeredContext::new(&db, session);
 
     let result = swissarmyhammer_code_context::get_references(&ctx, &opts).map_err(context_err)?;
     json_result(&result)
@@ -3013,8 +3019,8 @@ fn execute_get_implementations(
 
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let session = lsp_session_for_file(file_path);
+    let ctx = LayeredContext::new(&db, session);
 
     let result =
         swissarmyhammer_code_context::get_implementations(&ctx, &opts).map_err(context_err)?;
@@ -3079,8 +3085,8 @@ fn execute_get_code_actions(
 
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let session = lsp_session_for_file(file_path);
+    let ctx = LayeredContext::new(&db, session);
 
     let result =
         swissarmyhammer_code_context::get_code_actions(&ctx, &opts).map_err(context_err)?;

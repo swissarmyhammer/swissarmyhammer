@@ -60,6 +60,7 @@
 pub mod error_handling;
 pub mod file_watcher;
 pub mod host;
+pub mod inline_diagnostics;
 pub mod notify_types;
 pub mod plan_notifications;
 pub mod progress;
