@@ -10,7 +10,9 @@ homepage.workspace = true
 
 [dependencies]
 swissarmyhammer-lsp = { workspace = true }
+swissarmyhammer-code-context = { workspace = true }
 lsp-types = { workspace = true }
+rusqlite = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 

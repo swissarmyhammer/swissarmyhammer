@@ -243,90 +243,15 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use lsp_types::{DiagnosticSeverity as LspSeverity, Position, Range};
-    use serde_json::{json, Value};
-    use swissarmyhammer_lsp::LspError;
-    use tokio::sync::oneshot;
+    use serde_json::json;
 
     use crate::config::DEFAULT_SETTLE_HARD_TIMEOUT;
+    use crate::test_support::{ManualTimer, NullTransport};
 
     /// Capacity for the test diagnostics broadcast — comfortably larger than any
     /// burst a single test sends, so `recv()` never lags except where a test
     /// deliberately uses a smaller capacity to force `RecvError::Lagged`.
     const TEST_BROADCAST_CAPACITY: usize = 256;
-
-    /// A do-nothing [`LspTransport`] for tests that drive an [`LspSession`]
-    /// purely through its diagnostics cache/fan-out (via
-    /// `handle_publish_diagnostics`) with no live server. The session is built
-    /// with a `None` client, so these methods are never actually called.
-    struct NullTransport;
-
-    impl LspTransport for NullTransport {
-        fn send_request(&mut self, _method: &str, _params: Value) -> Result<Value, LspError> {
-            Err(LspError::NotRunning)
-        }
-
-        fn send_notification(&mut self, _method: &str, _params: Value) -> Result<(), LspError> {
-            Err(LspError::NotRunning)
-        }
-
-        fn read_message(&mut self) -> Result<Value, LspError> {
-            Err(LspError::NotRunning)
-        }
-    }
-
-    /// A deterministic virtual clock for tests.
-    ///
-    /// `sleep(dur)` registers a waiter at `now + dur`; [`advance`](Self::advance)
-    /// moves the virtual `now` forward and completes every waiter whose deadline
-    /// has passed. No real time elapses, so a whole settle scenario runs in
-    /// microseconds and is fully reproducible. Cloneable so the test keeps one
-    /// handle to drive time while the engine holds another to register sleeps.
-    #[derive(Clone, Default)]
-    struct ManualTimer {
-        inner: Arc<Mutex<ManualInner>>,
-    }
-
-    #[derive(Default)]
-    struct ManualInner {
-        now: Duration,
-        waiters: Vec<(Duration, oneshot::Sender<()>)>,
-    }
-
-    impl Timer for ManualTimer {
-        fn sleep(&self, dur: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> {
-            let (tx, rx) = oneshot::channel();
-            {
-                let mut inner = self.inner.lock().unwrap();
-                let deadline = inner.now + dur;
-                if deadline <= inner.now {
-                    let _ = tx.send(());
-                } else {
-                    inner.waiters.push((deadline, tx));
-                }
-            }
-            Box::pin(async move {
-                let _ = rx.await;
-            })
-        }
-    }
-
-    impl ManualTimer {
-        /// Advance the virtual clock and fire every waiter now due.
-        fn advance(&self, dur: Duration) {
-            let mut inner = self.inner.lock().unwrap();
-            inner.now += dur;
-            let now = inner.now;
-            let mut still_waiting = Vec::new();
-            for (deadline, tx) in std::mem::take(&mut inner.waiters) {
-                if deadline <= now {
-                    let _ = tx.send(());
-                } else {
-                    still_waiting.push((deadline, tx));
-                }
-            }
-            inner.waiters = still_waiting;
-        }
-    }
 
     fn diag(severity: LspSeverity, message: &str) -> Diagnostic {
         Diagnostic {

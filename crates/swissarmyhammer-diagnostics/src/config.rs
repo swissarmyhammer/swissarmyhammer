@@ -42,6 +42,11 @@ pub struct DiagnosticsConfig {
     pub settle_hard_timeout: Duration,
     /// Maximum number of records per report.
     pub per_report_cap: usize,
+    /// Whether to fold broken one-hop dependents into a report (the `dependents?`
+    /// toggle). When `false`, a report covers only the queried/edited files
+    /// themselves; when `true` (default), files that *broke* because a queried
+    /// file changed are included too.
+    pub include_dependents: bool,
     /// Per-language enable/disable overrides, keyed by LSP language id.
     ///
     /// A language absent from the map is enabled (the default is "all detected
@@ -57,6 +62,7 @@ impl Default for DiagnosticsConfig {
             settle_window: DEFAULT_SETTLE_WINDOW,
             settle_hard_timeout: DEFAULT_SETTLE_HARD_TIMEOUT,
             per_report_cap: DEFAULT_PER_REPORT_CAP,
+            include_dependents: true,
             per_language_enabled: BTreeMap::new(),
         }
     }
@@ -115,6 +121,11 @@ mod tests {
         let config = DiagnosticsConfig::default();
         assert_eq!(config.per_report_cap, DEFAULT_PER_REPORT_CAP);
         assert!(config.per_report_cap > 0);
+    }
+
+    #[test]
+    fn default_includes_dependents() {
+        assert!(DiagnosticsConfig::default().include_dependents);
     }
 
     #[test]

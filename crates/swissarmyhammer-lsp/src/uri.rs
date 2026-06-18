@@ -14,6 +14,16 @@ pub fn file_path_from_uri(uri: &str) -> String {
     uri.strip_prefix("file://").unwrap_or(uri).to_string()
 }
 
+/// Convert a filesystem path to a `file://` URI.
+///
+/// Prefixes the path with the `file://` scheme, matching the wire format the
+/// [`LspSession`](crate::session::LspSession) uses when it opens documents, so a
+/// uri built here keys into the session's per-uri diagnostics the same way.
+/// This is the inverse of [`file_path_from_uri`].
+pub fn file_uri_from_path(path: &str) -> String {
+    format!("file://{path}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -34,5 +44,16 @@ mod tests {
     #[test]
     fn passes_through_plain_path() {
         assert_eq!(file_path_from_uri("/already/a/path"), "/already/a/path");
+    }
+
+    #[test]
+    fn path_to_uri_adds_file_scheme() {
+        assert_eq!(file_uri_from_path("/src/main.rs"), "file:///src/main.rs");
+    }
+
+    #[test]
+    fn path_and_uri_round_trip() {
+        let path = "/src/lib.rs";
+        assert_eq!(file_path_from_uri(&file_uri_from_path(path)), path);
     }
 }
