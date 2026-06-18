@@ -405,18 +405,8 @@ fn content_block_text(block: &ContentBlock) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::centralized_test_utils::msg;
     use crate::types::ids::ToolCallId;
-
-    /// Build a text [`Message`] with the given role.
-    fn msg(role: MessageRole, content: &str) -> Message {
-        Message {
-            role,
-            content: content.to_string(),
-            tool_call_id: None,
-            tool_name: None,
-            timestamp: SystemTime::now(),
-        }
-    }
 
     /// Build a [`MessageRole::Tool`] result message.
     fn tool_msg(content: &str, id: ToolCallId, name: &str) -> Message {
