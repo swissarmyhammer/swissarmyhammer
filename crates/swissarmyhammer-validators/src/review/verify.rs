@@ -30,28 +30,32 @@
 //! verdict, not a "was refuted" flag — so synthesis can report confirmed/refuted
 //! counts and reasons.
 //!
-//! # Why verify does NOT use primed prefix sessions
+//! # Verify reuses the run's shared prime
 //!
-//! The fleet stage primes each validator's shared prompt prefix once and forks
-//! it per batch (see [`fleet`](crate::review::fleet)) because the shared
-//! sections dominate its prompts (~80–90% of the bytes). Verify prompts do not
-//! have that shape: the only shared text is the adversary header (~280 bytes
-//! before the first per-candidate byte) and the output contract (~420 bytes,
-//! at the END of the prompt, so not even a shared prefix without reordering).
-//! The dominant content — the finding, the file's bounded `source_slice`, and
-//! the probe evidence — is per-candidate. Even with the contract reordered to
-//! the front, the shared prefix is ~700 bytes (~175 tokens) of a typically
-//! multi-thousand-token prompt: under ~10% prefix share. A prime turn plus
-//! fork/status/pin round-trips per review would cost more than the reuse
-//! saves, so verify keeps fresh-session prompts.
+//! The fleet stage primes the run's large shared content — the change purpose
+//! and every file's diff/source/probe evidence — into ONE session and forks it
+//! per validator (see [`fleet`](crate::review::fleet)). That same change+diffs
+//! context is also the bulk of what a verify prompt needs, so verify forks the
+//! SAME primed prefix: each verify task runs on a `session/fork` of the run
+//! prime and sends only its per-candidate tail (the adversary header, the claim
+//! under test, the candidate's `source_slice`, the probe evidence, the verdict
+//! contract). The cached change/diff prefix is reused across fan-out AND verify,
+//! maximizing fork reuse on qwen and the hosted prefix cache on Claude.
+//!
+//! When the run has no prime (priming failed, or there is none to fork), or when
+//! an individual fork fails, the verify task falls back to a fresh-session
+//! prompt — correct, just cold. The prime's pin is held by
+//! [`run_review`](crate::review::run_review) across both stages and released
+//! once verify has drained.
 
 use std::fmt::Write as _;
 
+use agent_client_protocol::schema::SessionId;
 use serde::Deserialize;
 
 use crate::review::probes::{render_probe_evidence, ProbeKind, ProbeResult};
 use crate::review::types::{extract_json_value, Finding, RefutingLayer, VerifiedFinding};
-use crate::validators::AgentPool;
+use crate::validators::{AgentPool, PoolError};
 
 /// One candidate finding plus the ground-truth context the verify stage checks
 /// it against.
@@ -258,23 +262,35 @@ impl VerifyOutcome {
 ///
 /// The returned [`VerifyOutcome`] carries every candidate's verdict with the
 /// [layer](RefutingLayer) that decided it.
-pub async fn verify_findings(candidates: Vec<Candidate>, pool: &AgentPool) -> VerifyOutcome {
+///
+/// `prime` is the run's shared primed-prefix session (the change + all diffs),
+/// when fan-out primed one. Each verify task forks it and sends only its
+/// per-candidate tail, reusing the cached change/diff prefix; a verify task with
+/// no prime — or one whose fork fails — falls back to a fresh-session prompt.
+pub async fn verify_findings(
+    candidates: Vec<Candidate>,
+    pool: &AgentPool,
+    prime: Option<&SessionId>,
+) -> VerifyOutcome {
     let GuardOutcome { survivors, refuted } = run_guard(&candidates);
 
     // Submit every guard survivor to the shared pool up front, so the verify
     // tasks pipeline (they queue alongside any fan-out tasks still in flight).
+    // With a run prime, each task forks it (warm reuse of the cached change +
+    // diffs); without one, each is a fresh-session prompt.
     struct Pending {
-        finding: Finding,
-        rx: tokio::sync::oneshot::Receiver<crate::validators::PromptResult>,
+        candidate: Candidate,
+        rx: Submitted,
     }
     let pending: Vec<Pending> = survivors
         .into_iter()
         .map(|candidate| {
             let prompt = render_verify_prompt(&candidate);
-            Pending {
-                finding: candidate.finding,
-                rx: pool.submit(prompt),
-            }
+            let rx = match prime {
+                Some(parent) => Submitted::Forked(pool.submit_forked(parent, prompt)),
+                None => Submitted::Fresh(pool.submit(prompt)),
+            };
+            Pending { candidate, rx }
         })
         .collect();
 
@@ -285,16 +301,17 @@ pub async fn verify_findings(candidates: Vec<Candidate>, pool: &AgentPool) -> Ve
 
     // Collect each verify task, refuting by default on any failure.
     for task in pending {
-        let verdict = collect_verdict(task.rx.await);
+        let verdict = collect_verify(task.rx, &task.candidate, pool).await;
+        let finding = task.candidate.finding;
         tracing::debug!(
-            file = %task.finding.file,
-            validator = %task.finding.validator,
-            rule = ?task.finding.rule,
+            file = %finding.file,
+            validator = %finding.validator,
+            rule = ?finding.rule,
             confirmed = verdict.confirmed,
             "verify: agent verdict"
         );
         verified.push(VerifiedFinding {
-            finding: task.finding,
+            finding,
             confirmed: verdict.confirmed,
             reason: verdict.reason,
             decided_by: Some(RefutingLayer::Agent),
@@ -311,6 +328,71 @@ pub async fn verify_findings(candidates: Vec<Candidate>, pool: &AgentPool) -> Ve
     );
 
     VerifyOutcome { verified }
+}
+
+/// How one verify task was submitted: a fork of the run's shared prime (the warm
+/// path, reusing the cached change + diffs), or a fresh-session prompt (when
+/// there is no prime to fork).
+enum Submitted {
+    Forked(tokio::sync::oneshot::Receiver<crate::validators::SessionTurnResult>),
+    Fresh(tokio::sync::oneshot::Receiver<crate::validators::PromptResult>),
+}
+
+/// Resolve one verify task into a [`Verdict`], whichever way it was submitted.
+///
+/// A forked task logs whether the fork was warm (parent state attached, with the
+/// reused token count) or degraded (cold), then parses the verdict like the
+/// fresh path. A fork that FAILED outright re-submits the same verify prompt on a
+/// fresh session — correct, just cold — never a lost verdict. Every other failure
+/// refutes by default, exactly as the fresh path does.
+async fn collect_verify(rx: Submitted, candidate: &Candidate, pool: &AgentPool) -> Verdict {
+    match rx {
+        Submitted::Fresh(rx) => collect_verdict(rx.await),
+        Submitted::Forked(rx) => match rx.await {
+            Ok(Ok(turn)) => {
+                match turn.fork {
+                    Some(fork) if fork.state_attached => tracing::debug!(
+                        file = %candidate.finding.file,
+                        session = %turn.session_id,
+                        reused_tokens = ?fork.prefix_tokens,
+                        "verify task ran on a warm fork of the run prime"
+                    ),
+                    _ => tracing::debug!(
+                        file = %candidate.finding.file,
+                        session = %turn.session_id,
+                        "verify task fork was degraded (no parent state attached); proceeding cold"
+                    ),
+                }
+                parse_verdict(&turn.content)
+            }
+            Ok(Err(PoolError::ForkFailed {
+                parent_session_id,
+                message,
+            })) => {
+                tracing::warn!(
+                    file = %candidate.finding.file,
+                    parent = %parent_session_id,
+                    error = %message,
+                    "verify task fork failed; falling back to a fresh-session verify prompt"
+                );
+                collect_verdict(pool.submit(render_verify_prompt(candidate)).await)
+            }
+            Ok(Err(err)) => {
+                tracing::warn!(error = %err, "verify task failed; refuting by default");
+                Verdict {
+                    confirmed: false,
+                    reason: format!("verify task failed; refuted by default ({err})"),
+                }
+            }
+            Err(_) => {
+                tracing::warn!("verify task result was dropped; refuting by default");
+                Verdict {
+                    confirmed: false,
+                    reason: "verify task result was dropped; refuted by default".to_string(),
+                }
+            }
+        },
+    }
 }
 
 /// One verify task's resolved verdict.
@@ -731,7 +813,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::review::test_support::{
-        verdict_json, with_pool, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
+        verdict_json, with_pool, ForkMode, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
+        MOCK_PREFIX_TOKENS,
     };
     use crate::validators::PoolConfig;
 
@@ -742,6 +825,19 @@ mod tests {
             script,
             ScriptedAgentConfig {
                 default_response: "no verdict here".to_string(),
+                ..ScriptedAgentConfig::default()
+            },
+        )
+    }
+
+    /// A fork-capable scripted verifier agent — used to prove the verify stage
+    /// forks the run's shared prime rather than minting fresh sessions.
+    fn forking_verifier_agent(script: Vec<(String, ScriptedReply)>) -> Arc<ScriptedAgent> {
+        ScriptedAgent::with_config(
+            script,
+            ScriptedAgentConfig {
+                default_response: "no verdict here".to_string(),
+                fork_mode: ForkMode::Supported,
                 ..ScriptedAgentConfig::default()
             },
         )
@@ -799,7 +895,7 @@ mod tests {
         ]);
 
         let outcome = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-            verify_findings(candidates, &pool).await
+            verify_findings(candidates, &pool, None).await
         })
         .await;
 
@@ -852,7 +948,7 @@ mod tests {
             let fanout_rx = pool.submit("FANOUT_MARKER: a still-running fan-out task");
             // Verify submits to the SAME pool; its task queues behind the fan-out
             // one and is drained by the same single worker.
-            let outcome = verify_findings(vec![candidate], &pool).await;
+            let outcome = verify_findings(vec![candidate], &pool, None).await;
             // The fan-out task also completed on the shared pool.
             let fanout = fanout_rx
                 .await
@@ -881,5 +977,85 @@ mod tests {
             seen.iter().any(|p| p.contains("Adversarial verification")),
             "the SAME shared pool ran the verify task, got: {seen:?}"
         );
+    }
+
+    /// Verify-stage sessions FORK the run's shared prime (the change + all diffs)
+    /// rather than minting fresh sessions, so the cached change/diff prefix is
+    /// reused across both fan-out and verify. This primes a session the way the
+    /// fleet stage does, then drives `verify_findings` with that prime and proves
+    /// the verify task ran on a `session/fork` of it (warm, parent state
+    /// attached) — not a fresh session.
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn verify_tasks_fork_the_run_prime() {
+        use crate::review::fleet::PRIME_HANDOFF;
+        use agent_client_protocol::schema::SessionId;
+
+        let candidate = survivor("forked");
+
+        // The prime turn replies OK (the scripted agent recognizes the handoff);
+        // the verify fork's reply is keyed on the candidate's claim.
+        let agent = forking_verifier_agent(vec![(
+            "CLAIM[forked]".to_string(),
+            ScriptedReply::Text(verdict_json(true, "confirmed on a warm fork")),
+        )]);
+        let agent_probe = Arc::clone(&agent);
+
+        let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
+            // Prime a session the way fan-out does: a born-pinned prefix turn
+            // ending in the handoff, which the scripted agent saves as forkable
+            // state.
+            let prime = pool
+                .submit_primed(format!(
+                    "# Change purpose\n\nshared diffs here\n\n{PRIME_HANDOFF}"
+                ))
+                .await
+                .expect("prime delivered")
+                .expect("prime ok");
+            let prime_session: SessionId = prime.session_id;
+
+            verify_findings(vec![candidate], &pool, Some(&prime_session)).await
+        })
+        .await;
+
+        // The verify verdict came back confirmed — through the forked session.
+        assert_eq!(outcome.confirmed_count(), 1, "the forked verify confirmed");
+
+        // Exactly one fork was taken: the verify task forked the run prime.
+        assert_eq!(
+            agent_probe.fork_count(),
+            1,
+            "the verify task must fork the run prime, not mint a fresh session"
+        );
+        // The fork was warm — the run prime's saved state attached, with the
+        // reused token count logged.
+        assert!(logs_contain(
+            "verify task ran on a warm fork of the run prime"
+        ));
+        assert!(logs_contain(&format!(
+            "reused_tokens=Some({MOCK_PREFIX_TOKENS})"
+        )));
+
+        // The verify prompt ran on a CHILD session of the prime, never the prime
+        // itself — proof it forked rather than re-priming or running fresh. The
+        // scripted agent pairs each prompt with the session it ran on.
+        let prime_session = session_of(&agent_probe, PRIME_HANDOFF);
+        let verify_session = session_of(&agent_probe, "Adversarial verification");
+        assert_ne!(
+            verify_session, prime_session,
+            "the verify task ran on a forked child session, not the prime session"
+        );
+    }
+
+    /// The session id the scripted agent ran the first prompt containing `needle`
+    /// on — pairs each seen prompt with its session.
+    fn session_of(agent: &ScriptedAgent, needle: &str) -> String {
+        agent
+            .prompted_sessions()
+            .into_iter()
+            .zip(agent.seen_prompts())
+            .find(|(_, prompt)| prompt.contains(needle))
+            .map(|(session, _)| session)
+            .unwrap_or_else(|| panic!("no prompt contained {needle:?}"))
     }
 }

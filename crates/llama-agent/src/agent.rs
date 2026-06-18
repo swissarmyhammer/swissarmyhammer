@@ -97,6 +97,48 @@ pub(crate) fn model_identifier_for_strategy(model: &crate::types::ModelConfig) -
     }
 }
 
+/// Maximum feasible recurrent-state donor-rollback distance (in tokens) for the
+/// model named by `identifier`, used as the `SessionStateStore`'s `max_rollback`
+/// budget.
+///
+/// Returns the finite recurrent-state snapshot window
+/// ([`crate::model::N_RS_SEQ`], 64) for hybrid attention+recurrent models, and
+/// [`usize::MAX`] for pure-attention models (where any rollback is feasible, so
+/// donor selection reduces to plain max-LCP).
+///
+/// Detection signal: the model identifier string (repo/filename, as produced by
+/// [`model_identifier_for_strategy`]). The live capability bit
+/// `LlamaModel::is_recurrent()` (which the llama-cpp-rs fork exposes) requires a
+/// loaded model, which is not available when the store is constructed in
+/// `RequestQueue::new`, so we key on the name instead. The recurrent/hybrid
+/// family is Qwen with a gated delta net — Qwen3.5, Qwen3.6 and newer
+/// (e.g. `unsloth/Qwen3.6-35B-A3B-MTP-GGUF`). Plain Qwen3 / Qwen3-Coder (3.0,
+/// e.g. `unsloth/Qwen3-0.6B-GGUF`) are pure attention and stay unbounded.
+pub(crate) fn recurrent_rollback_window(identifier: &str) -> usize {
+    if is_recurrent_model_identifier(identifier) {
+        crate::model::N_RS_SEQ as usize
+    } else {
+        usize::MAX
+    }
+}
+
+/// Whether `identifier` names a hybrid attention+recurrent model (gated delta
+/// net), keyed on the Qwen version embedded in the repo/filename string.
+///
+/// `qwen3.5`, `qwen3.6` (and any later `qwen3.<n>` for n >= 5) are recurrent;
+/// plain `qwen3` (3.0) is attention-only. Matching is case-insensitive.
+fn is_recurrent_model_identifier(identifier: &str) -> bool {
+    let lower = identifier.to_lowercase();
+    // `qwen3.5` / `qwen3.6` and successors carry the gated delta net. Match the
+    // `qwen3.<minor>` token and treat minor >= 5 as recurrent. Parse the full
+    // numeric run after the dot (not just the first digit) so a future
+    // `qwen3.10` is read as minor 10, not 1.
+    lower.split("qwen3.").skip(1).any(|rest| {
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse::<u32>().is_ok_and(|minor| minor >= 5)
+    })
+}
+
 /// The MCP backends attached to one ACP session, with a precomputed
 /// tool-name -> client index for routing.
 ///
@@ -2730,6 +2772,44 @@ mod tests {
             parallel_execution_config: ParallelConfig::default(),
             tool_execution_config: ToolExecutionConfig::default(),
         }
+    }
+
+    #[test]
+    fn recurrent_rollback_window_finite_for_hybrid_recurrent_models() {
+        // Qwen3.5/3.6 (gated delta net) are hybrid attention+recurrent: their
+        // donor rollback is bounded by the n_rs_seq snapshot window.
+        assert_eq!(
+            recurrent_rollback_window("unsloth/Qwen3.6-35B-A3B-MTP-GGUF"),
+            crate::model::N_RS_SEQ as usize,
+            "production Qwen3.6 hybrid MoE must use the finite recurrent window"
+        );
+        assert_eq!(
+            recurrent_rollback_window("unsloth/Qwen3.5-0.8B-MTP-GGUF/Qwen3.5-0.8B-IQ4_NL.gguf"),
+            crate::model::N_RS_SEQ as usize,
+            "Qwen3.5 hybrid test model must use the finite recurrent window"
+        );
+        // Multi-digit minor: the full numeric run is parsed (10, not 1), so a
+        // future Qwen3.10 stays >= 5 and recurrent.
+        assert_eq!(
+            recurrent_rollback_window("Qwen3.10-42B"),
+            crate::model::N_RS_SEQ as usize,
+            "multi-digit minor version >= 5 must use the finite recurrent window"
+        );
+    }
+
+    #[test]
+    fn recurrent_rollback_window_unbounded_for_attention_only_models() {
+        // Plain Qwen3 (3.0) is pure attention: any rollback is feasible.
+        assert_eq!(
+            recurrent_rollback_window("unsloth/Qwen3-0.6B-GGUF"),
+            usize::MAX,
+            "attention-only Qwen3 must keep an unbounded rollback window"
+        );
+        assert_eq!(
+            recurrent_rollback_window("gpt-3.5-turbo"),
+            usize::MAX,
+            "non-recurrent model must keep an unbounded rollback window"
+        );
     }
 
     #[tokio::test]
