@@ -13,7 +13,7 @@
 //! is abstracted behind the [`Dependents`] trait so the core selection logic is
 //! unit-testable with a stub, with no index or LSP server.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use rusqlite::Connection;
@@ -75,6 +75,43 @@ impl Dependents for BlastRadiusDependents<'_> {
         files.sort();
         files.dedup();
         files
+    }
+}
+
+/// A [`Dependents`] backed by a precomputed map of file → its one-hop
+/// dependents.
+///
+/// Resolving the blast radius hits a `rusqlite::Connection`, which is `!Sync`
+/// and so cannot be held across an `.await`. An async caller therefore resolves
+/// every path's dependents up front — via [`PrecomputedDependents::resolve`]
+/// over a [`BlastRadiusDependents`] — drops the DB connection, and hands this
+/// `Send` map to [`diagnose`].
+#[derive(Debug, Clone, Default)]
+pub struct PrecomputedDependents {
+    map: HashMap<String, Vec<String>>,
+}
+
+impl PrecomputedDependents {
+    /// Build from an explicit `file → dependents` map.
+    pub fn new(map: HashMap<String, Vec<String>>) -> Self {
+        Self { map }
+    }
+
+    /// Eagerly resolve the one-hop dependents of every path with `resolver`,
+    /// capturing the result so it can outlive the resolver (and any DB handle
+    /// it borrows).
+    pub fn resolve(resolver: &impl Dependents, paths: &[String]) -> Self {
+        let map = paths
+            .iter()
+            .map(|path| (path.clone(), resolver.one_hop(path)))
+            .collect();
+        Self { map }
+    }
+}
+
+impl Dependents for PrecomputedDependents {
+    fn one_hop(&self, file_path: &str) -> Vec<String> {
+        self.map.get(file_path).cloned().unwrap_or_default()
     }
 }
 
@@ -238,7 +275,6 @@ fn dedup_preserving_order(paths: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
     use lsp_types::{DiagnosticSeverity as LspSeverity, Position, Range};
@@ -246,16 +282,9 @@ mod tests {
 
     use crate::test_support::{ManualTimer, NullTransport};
 
-    /// A canned [`Dependents`]: maps a file to its one-hop dependents.
-    struct StubDependents(HashMap<String, Vec<String>>);
-    impl Dependents for StubDependents {
-        fn one_hop(&self, file_path: &str) -> Vec<String> {
-            self.0.get(file_path).cloned().unwrap_or_default()
-        }
-    }
-
-    fn stub(map: &[(&str, &[&str])]) -> StubDependents {
-        StubDependents(
+    /// Build a [`PrecomputedDependents`] from a terse literal map.
+    fn stub(map: &[(&str, &[&str])]) -> PrecomputedDependents {
+        PrecomputedDependents::new(
             map.iter()
                 .map(|(k, v)| {
                     (
@@ -330,7 +359,7 @@ mod tests {
         session: LspSession<NullTransport>,
         paths: Vec<String>,
         config: DiagnosticsConfig,
-        deps: StubDependents,
+        deps: PrecomputedDependents,
         timer: ManualTimer,
     ) -> DiagnosticsReport {
         let driver = timer.clone();

@@ -1,6 +1,14 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kvdfan4eb5b2j3fyasm8rdat
+  text: |-
+    Additional scope from na6cvh0 double-check: this e2e must also validate the diagnostics MCP tool's path-space handling end to end. The tool feeds `diagnose` ABSOLUTE paths (LSP side) while querying the code-context blast-radius index in REPO-RELATIVE space (see diagnostics/mod.rs absolutize/relativize). Two things to verify here that unit tests cannot:
+    1. A working-tree edit under a repo whose root != process CWD is actually reported (catches relative-vs-absolute path bugs in `check working`/`check sha`).
+    2. Symlink canonicalization: rust-analyzer may emit canonicalized URIs (e.g. macOS /var -> /private/var). If the tool's `repo.join(rel)` absolute paths don't match the server's canonicalized URIs, diagnostics won't be found — confirm/repair (likely canonicalize the repo root in the tool's repo_root()).
+  timestamp: 2026-06-18T13:39:31.598259+00:00
 position_column: todo
 position_ordinal: af80
 project: diagnostics

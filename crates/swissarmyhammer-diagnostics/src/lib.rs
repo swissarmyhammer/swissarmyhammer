@@ -31,7 +31,7 @@ pub(crate) mod test_support;
 pub use config::{
     DiagnosticsConfig, DEFAULT_PER_REPORT_CAP, DEFAULT_SETTLE_HARD_TIMEOUT, DEFAULT_SETTLE_WINDOW,
 };
-pub use diagnose::{diagnose, BlastRadiusDependents, Dependents};
+pub use diagnose::{diagnose, BlastRadiusDependents, Dependents, PrecomputedDependents};
 pub use language::is_diagnosable;
 pub use record::{map, Counts, DiagnosticRecord, DiagnosticsReport, Range};
 pub use settle::{settle, settle_stream, SettleOutcome, Timer, TokioTimer};

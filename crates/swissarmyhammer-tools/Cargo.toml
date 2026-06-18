@@ -107,6 +107,9 @@ tree-sitter = { workspace = true }
 # LSP server lifecycle management
 swissarmyhammer-lsp = { workspace = true }
 
+# Model-free diagnostics core (settle engine + sharp report) for the diagnostics tool
+swissarmyhammer-diagnostics = { workspace = true }
+
 # Operations pattern
 swissarmyhammer-operations = { workspace = true }
 

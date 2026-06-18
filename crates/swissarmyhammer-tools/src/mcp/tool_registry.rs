@@ -2080,6 +2080,11 @@ register_tool_category!(
     review,
     "Register the operation-based review tool with the registry"
 );
+register_tool_category!(
+    register_diagnostics_tools,
+    diagnostics,
+    "Register the operation-based diagnostics tool with the registry"
+);
 
 /// Create a fully registered tool registry with all available tools
 ///
@@ -2103,6 +2108,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_web_tools(&mut registry);
     register_ralph_tools(&mut registry);
     register_review_tools(&mut registry);
+    register_diagnostics_tools(&mut registry);
 
     registry
 }

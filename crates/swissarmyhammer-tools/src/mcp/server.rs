@@ -21,9 +21,9 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
-    register_code_context_tools, register_file_tools, register_git_tools, register_kanban_tools,
-    register_questions_tools, register_ralph_tools, register_review_tools, register_shell_tools,
-    register_web_tools, ToolContext, ToolRegistry,
+    register_code_context_tools, register_diagnostics_tools, register_file_tools,
+    register_git_tools, register_kanban_tools, register_questions_tools, register_ralph_tools,
+    register_review_tools, register_shell_tools, register_web_tools, ToolContext, ToolRegistry,
 };
 use super::tools::agent::register_agent_tools;
 use super::tools::skill::register_skill_tools;
@@ -693,6 +693,7 @@ impl McpServer {
         register_agent_tools(tool_registry, agent_library, prompt_library.clone());
         register_file_tools(tool_registry);
         register_review_tools(tool_registry);
+        register_diagnostics_tools(tool_registry);
         register_skill_tools(tool_registry, skill_library, prompt_library);
 
         // Apply tool enable/disable config from tools.yaml (global + project layers)
