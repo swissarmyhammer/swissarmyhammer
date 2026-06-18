@@ -51,8 +51,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use agent_client_protocol::schema::NewSessionRequest;
-use agent_client_protocol_extras::{SessionPinRequest, SessionStateStatusRequest};
+use agent_client_protocol::schema::{NewSessionRequest, SessionId};
+use agent_client_protocol_extras::{
+    SessionForkRequest, SessionPinRequest, SessionStateStatusRequest,
+};
 use serial_test::serial;
 use tracing::warn;
 
@@ -339,4 +341,273 @@ async fn sibling_turns_reuse_pinned_prefix_without_rollback_on_recurrent_model()
         skipped_mtp_lines.len(),
         skipped_mtp_lines.join("\n")
     );
+}
+
+/// Read the prime session's draft byte count out of its prompt-boundary save
+/// line (`cached T bytes of target + D bytes of draft state ... for session
+/// <id>`), so a test can branch on whether the prime turn ACTUALLY ran MTP.
+///
+/// A prime that ran MTP saves `D > 0` draft bytes; a prime that did not run MTP
+/// (no NextN head detected, or the draft context failed to build) saves `D ==
+/// 0` and there is no draft for a fork to restore — so its first fork
+/// legitimately cold-starts the draft and `skipping MTP this turn` fires once,
+/// which is correct behaviour, not a regression. The zero-skip assertion is
+/// therefore gated on this signal: `None` (no save line found at all) or
+/// `Some(0)` means "the prime ran no MTP" and the strict zero-skip claim does
+/// not apply.
+fn prime_draft_bytes(logs: &str, prime_id: &str) -> Option<u64> {
+    logs.lines()
+        .find(|line| {
+            line.contains("bytes of draft state at prompt boundary")
+                && line.contains(&format!("for session {prime_id}"))
+        })
+        .and_then(|line| {
+            // "... cached T bytes of target + D bytes of draft state ..."
+            line.split("+ ")
+                .nth(1)?
+                .split(' ')
+                .next()?
+                .parse::<u64>()
+                .ok()
+        })
+}
+
+/// Real-model proof that an ACTUAL `session/fork` CHAIN reuses the parent's
+/// full saved prefix at zero rollback on the **recurrent** (MTP) model — the
+/// integration counterpart to the model-free unit test
+/// `fork_chain_each_generation_reuses_own_donor_at_zero_rollback`
+/// (`crates/llama-agent/src/queue.rs`).
+///
+/// The sibling test above proves CROSS-SESSION donor reuse (fresh sessions that
+/// merely share a prefix). This test proves the FORK path specifically, and on
+/// a chain: a fork's first prompt strictly EXTENDS its parent's saved tokens,
+/// so the restore trims an empty range — zero rollback — even though the
+/// divergent continuation is well over the 64-token recurrent window. The
+/// existing `session_fork_real_model.rs` fork test runs on the plain-attention
+/// model (`real_model_config`), where the window is `usize::MAX` and the
+/// recurrent constraint never fires; this runs on `mtp_model_config` so the
+/// finite window is the binding constraint, exactly as production Qwen.
+///
+/// Chain: prime parent → fork child off parent → fork grandchild off child.
+/// Each link's first decode must log `streaming reusing N` for its OWN session
+/// with N >= its donor's full saved prefix, and ZERO `KV trim … returned false`
+/// fallbacks must fire across the whole chain.
+///
+/// MTP assertion (corrected, NON-over-strict per card): `skipping MTP this
+/// turn` must NOT fire on the fork turns ONLY WHEN the prime turn actually ran
+/// MTP (its prompt-boundary save carries `> 0` draft bytes). A prime that ran
+/// no MTP saves no draft, so the first fork legitimately cold-starts the draft
+/// — asserting zero skips in that case would be wrong.
+#[tokio::test]
+#[serial]
+async fn fork_chain_reuses_full_parent_prefix_without_rollback_on_recurrent_model() {
+    let capture = swissarmyhammer_common::test_utils::CaptureWriter::default();
+    let installed = tracing_subscriber::fmt()
+        .with_env_filter("warn,llama_agent::queue=info")
+        .with_ansi(false)
+        .with_writer(capture.clone())
+        .try_init()
+        .is_ok();
+    if !installed {
+        if std::env::var_os("NEXTEST").is_some() {
+            panic!(
+                "could not install the capturing tracing subscriber under nextest — \
+                 the fork-chain prefix-reuse assertions cannot run, refusing to pass vacuously"
+            );
+        }
+        warn!(
+            "Skipping recurrent fork-chain test: a global tracing subscriber is already \
+             installed (shared-process cargo test). Run under nextest to assert."
+        );
+        return;
+    }
+
+    // The recurrent (MTP) model is what makes the finite 64-token rollback
+    // window apply — the whole point of running the fork chain here rather than
+    // on the plain-attention model.
+    let Some((server, _rx)) = build_real_model_server(mtp_model_config()).await else {
+        return;
+    };
+
+    // --- 1. Prime the parent with a real turn (the shared validator prefix). ---
+    let parent = server
+        .new_session(NewSessionRequest::new(PathBuf::from("/tmp")))
+        .await
+        .expect("new_session")
+        .session_id;
+    prompt_turn(
+        &server,
+        &parent,
+        &format!("{VALIDATOR_HEADER}{PRIME_TAIL}"),
+        NO_HANG_BUDGET,
+    )
+    .await;
+
+    // --- 2. Confirm the parent's state is saved (never fork blind), pin it. ---
+    let status = server
+        .session_state_status(SessionStateStatusRequest {
+            session_id: parent.0.to_string(),
+        })
+        .await
+        .expect("state_status");
+    assert!(
+        status.saved,
+        "the prime turn must leave a saved KV snapshot for the parent"
+    );
+    let prefix_tokens = status
+        .prompt_tokens
+        .expect("saved state must report its prompt-token count");
+    assert!(prefix_tokens > 0, "saved prefix must cover real tokens");
+    let pinned = server
+        .pin_session(SessionPinRequest {
+            session_id: parent.0.to_string(),
+            pinned: true,
+        })
+        .await
+        .expect("pin");
+    assert!(pinned.pinned, "the parent's saved state must be pinned");
+
+    // --- 3. Fork a CHAIN: child off parent, then grandchild off child. Each
+    // fork gets a different divergent continuation (> 64 tokens), so each link's
+    // reuse must rest on a strict-prefix (rollback-0) restore of its OWN donor,
+    // never an infeasible-rollback foreign donor. ---
+    let child_fork = server
+        .fork_session(SessionForkRequest {
+            parent_session_id: parent.0.to_string(),
+        })
+        .await
+        .expect("fork of a confirmed-saved parent must succeed");
+    assert!(
+        child_fork.state_attached,
+        "the child fork must attach the parent's state"
+    );
+    assert_eq!(
+        child_fork.prefix_tokens,
+        Some(prefix_tokens),
+        "the child fork must report the parent's full saved token count"
+    );
+    let child_id = child_fork.session_id.clone();
+    prompt_turn(
+        &server,
+        &SessionId::new(child_id.clone()),
+        &format!("{VALIDATOR_HEADER}{}", SIBLING_TAILS[0]),
+        NO_HANG_BUDGET,
+    )
+    .await;
+
+    // The grandchild forks off the CHILD (now carrying its own end-of-turn save
+    // that strictly extends the parent's), proving reuse compounds down a chain.
+    let grandchild_fork = server
+        .fork_session(SessionForkRequest {
+            parent_session_id: child_id.clone(),
+        })
+        .await
+        .expect("fork of the child must succeed");
+    assert!(
+        grandchild_fork.state_attached,
+        "the grandchild fork must attach the child's state"
+    );
+    let grandchild_prefix = grandchild_fork
+        .prefix_tokens
+        .expect("the grandchild fork must report the child's saved token count");
+    assert!(
+        grandchild_prefix >= prefix_tokens,
+        "the grandchild inherits at least the parent's prefix (the child's save \
+         strictly extends it): grandchild prefix {grandchild_prefix} >= parent {prefix_tokens}"
+    );
+    let grandchild_id = grandchild_fork.session_id.clone();
+    prompt_turn(
+        &server,
+        &SessionId::new(grandchild_id.clone()),
+        &format!("{VALIDATOR_HEADER}{}", SIBLING_TAILS[1]),
+        NO_HANG_BUDGET,
+    )
+    .await;
+
+    // --- 4. Worker-log assertions: each link reused its donor's full prefix. ---
+    let logs = capture.contents();
+
+    // (child reuses the parent's full prefix; grandchild reuses the child's.)
+    for (fork_id, donor_floor) in [
+        (&child_id, prefix_tokens),
+        (&grandchild_id, grandchild_prefix),
+    ] {
+        let reused_tokens = logs
+            .lines()
+            .find(|line| {
+                line.contains("streaming reusing")
+                    && line.contains(&format!("for session {fork_id}"))
+            })
+            .and_then(|line| {
+                line.split("streaming reusing ")
+                    .nth(1)?
+                    .split(' ')
+                    .next()?
+                    .parse::<u64>()
+                    .ok()
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "fork {fork_id}'s first decode must log 'streaming reusing N cached \
+                     tokens' (a warm strict-prefix restore, not a cold prefill). \
+                     Captured logs:\n{logs}"
+                )
+            });
+        assert!(
+            reused_tokens >= donor_floor,
+            "fork {fork_id}'s first decode reused only {reused_tokens} cached tokens — \
+             a strict-prefix fork must reuse at least its donor's full saved prefix of \
+             {donor_floor} tokens. Captured logs:\n{logs}"
+        );
+    }
+
+    // The core acceptance criterion: a strict-prefix fork's empty-range trim
+    // must succeed on the live recurrent context — the rollback fallback must
+    // NEVER fire anywhere in the chain.
+    assert!(
+        !logs.contains("KV trim to common prefix returned false"),
+        "a strict-prefix fork chain must never hit the hybrid-model rollback fallback \
+         (the empty-range trim must succeed). Captured logs:\n{logs}"
+    );
+
+    // MTP retention (corrected, non-over-strict). Only assert zero MTP skips on
+    // the fork turns when the PRIME turn actually ran MTP — i.e. its
+    // prompt-boundary save carried draft bytes. A prime that ran no MTP saves no
+    // draft, so the first fork legitimately cold-starts the draft and one skip
+    // is correct, not a regression.
+    let parent_id = parent.0.to_string();
+    let prime_draft = prime_draft_bytes(&logs, &parent_id);
+    let skipped_mtp_lines: Vec<&str> = logs
+        .lines()
+        .filter(|line| line.contains("skipping MTP this turn"))
+        .collect();
+    println!(
+        "fork_chain_recurrent observation: prefix_tokens={prefix_tokens}, \
+         prime_draft_bytes={prime_draft:?}, 'skipping MTP this turn' fired {} time(s).",
+        skipped_mtp_lines.len()
+    );
+    for line in &skipped_mtp_lines {
+        println!("  MTP-skip: {line}");
+    }
+    if matches!(prime_draft, Some(d) if d > 0) {
+        assert!(
+            skipped_mtp_lines.is_empty(),
+            "the prime ran MTP (saved {prime_draft:?} draft bytes), so every fork in the \
+             chain that reuses it must retain MTP: the prime's draft rides with the target \
+             in the same donor and trims to the same zero-rollback offset, so \
+             'skipping MTP this turn' must never fire. It fired {} time(s):\n{}\n\
+             Captured logs:\n{logs}",
+            skipped_mtp_lines.len(),
+            skipped_mtp_lines.join("\n")
+        );
+    } else {
+        // Prime ran no MTP — the strict zero-skip claim does not apply. The
+        // target-side reuse + zero-rollback assertions above still hold and are
+        // the real acceptance criteria; MTP retention is only asserted when
+        // there is a prime draft to retain.
+        println!(
+            "fork_chain_recurrent: prime ran no MTP (draft bytes {prime_draft:?}); \
+             skipping the strict zero-MTP-skip assertion (a cold draft start is correct here)."
+        );
+    }
 }

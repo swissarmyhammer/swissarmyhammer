@@ -5760,5 +5760,186 @@ mod tests {
                 "the LRU entry was the eviction victim"
             );
         }
+
+        /// Recurrent snapshot window (in tokens) for the fork-chain selection
+        /// test: a donor trim that rolls the recurrent state back further than
+        /// this is infeasible (`seq_rm` → `Ok(false)`). The production hybrid
+        /// Qwen window is 64; reused here so the test exercises the SAME finite
+        /// constraint the model runs under, not the unbounded pure-attention
+        /// default.
+        const FORK_CHAIN_WINDOW: usize = 64;
+
+        /// The model-free reproduction of the production "no usable cached
+        /// prefix across N donors" symptom for a FORK CHAIN, under the finite
+        /// recurrent rollback window the live Qwen model runs with.
+        ///
+        /// This drives the REAL [`SessionStateStore::fork`] entrypoint (not a
+        /// hand-built aliased entry) twice in a chain — parent → child →
+        /// grandchild — then asks the selector for each forked generation's own
+        /// turn the way the worker does ([`find_best_prefix_match`] keyed on the
+        /// caller's own session id, with `new_tokens` = the donor's saved tokens
+        /// plus a long divergent suffix well over the window). Each generation
+        /// MUST select its OWN parent-derived donor at `rollback == 0` so the
+        /// restore is forward-only and never trips the recurrent fallback —
+        /// regardless of the suffix length, which is the whole point of forking
+        /// over a cross-session LCP match.
+        ///
+        /// Why this is the production reproduction: if `fork` failed to carry
+        /// the parent's prompt-token fingerprint onto the child (the suspected
+        /// failure class), the child's entry would have `prompt_tokens == None`,
+        /// `Candidate::evaluate` would reject it, the scan would find NO usable
+        /// donor, and the child would cold-reprocess its full prompt — exactly
+        /// the live symptom. Under a finite window a non-strict-prefix reuse
+        /// (e.g. selecting a sibling whose deep-rollback trim is infeasible)
+        /// would also be excluded, so a rollback-0 hit on the OWN donor is the
+        /// only way every link in the chain reuses its full prefix.
+        #[test]
+        fn fork_chain_each_generation_reuses_own_donor_at_zero_rollback() {
+            let mut store = SessionStateStore::new(8, usize::MAX, FORK_CHAIN_WINDOW);
+
+            // A long shared header — the validator system+tools prefix — far
+            // longer than the window, so a non-strict-prefix donor selection
+            // would roll back past the window and be rejected.
+            let parent_tokens: Vec<i32> = (0..300).collect();
+            store.insert(
+                "parent".into(),
+                state(1, 128),
+                Some(parent_tokens.clone()),
+                None,
+            );
+
+            // --- Link 1: fork the child off the parent via the REAL entrypoint.
+            let child_info = store
+                .fork("parent", "child".to_string())
+                .expect("fork of a saved parent must succeed");
+            assert_eq!(
+                child_info.prefix_tokens,
+                parent_tokens.len(),
+                "fork must report the parent's full saved token count"
+            );
+
+            // The child's own turn renders parent_tokens ++ a long divergent
+            // suffix (a different reviewed file), well over the window.
+            let child_suffix: Vec<i32> = (10_000..10_200).collect();
+            let mut child_tokens = parent_tokens.clone();
+            child_tokens.extend_from_slice(&child_suffix);
+            assert!(
+                child_tokens.len() - parent_tokens.len() > FORK_CHAIN_WINDOW,
+                "the child's divergent suffix must exceed the recurrent window so \
+                 only a strict-prefix (rollback-0) donor can serve it"
+            );
+
+            let child_match = store
+                .find_best_prefix_match("child", &child_tokens)
+                .expect("the child's own parent-derived donor must be selected");
+            assert_eq!(
+                child_match.source_session_id, "child",
+                "the child must reuse its OWN aliased entry, not a foreign donor"
+            );
+            assert_eq!(
+                child_match.lcp,
+                parent_tokens.len(),
+                "the child's reuse must cover the parent's full saved prefix"
+            );
+            assert_eq!(
+                child_match.donor_len - child_match.lcp,
+                0,
+                "the child's restore must be a zero-rollback forward-only decode \
+                 (the donor IS a strict prefix of the child's prompt)"
+            );
+            assert_eq!(
+                streaming_reuse_decision(child_match.lcp, child_tokens.len()),
+                Some(parent_tokens.len()),
+                "the streaming decision must resume at exactly the donor length"
+            );
+
+            // The child takes its own end-of-turn boundary save (copy-on-write):
+            // its entry now carries child_tokens. This is the donor the
+            // grandchild's fork aliases — proving reuse compounds down a chain,
+            // not just one level.
+            store.insert(
+                "child".into(),
+                state(2, 160),
+                Some(child_tokens.clone()),
+                None,
+            );
+
+            // --- Link 2: fork a grandchild off the (now-saved) child.
+            let grandchild_info = store
+                .fork("child", "grandchild".to_string())
+                .expect("fork of a saved child must succeed");
+            assert_eq!(
+                grandchild_info.prefix_tokens,
+                child_tokens.len(),
+                "the grandchild inherits the child's full saved token count"
+            );
+
+            let grandchild_suffix: Vec<i32> = (20_000..20_200).collect();
+            let mut grandchild_tokens = child_tokens.clone();
+            grandchild_tokens.extend_from_slice(&grandchild_suffix);
+
+            let grandchild_match = store
+                .find_best_prefix_match("grandchild", &grandchild_tokens)
+                .expect("the grandchild's own child-derived donor must be selected");
+            assert_eq!(
+                grandchild_match.source_session_id, "grandchild",
+                "the grandchild must reuse its OWN aliased entry"
+            );
+            assert_eq!(
+                grandchild_match.lcp,
+                child_tokens.len(),
+                "the grandchild's reuse must cover the child's full saved prefix \
+                 (the parent header + the child's whole first-turn suffix)"
+            );
+            assert_eq!(
+                grandchild_match.donor_len - grandchild_match.lcp,
+                0,
+                "the grandchild's restore must also be a zero-rollback forward-only decode"
+            );
+        }
+
+        /// Edge case from the card: a forked child whose own turn renders to
+        /// EXACTLY the parent's saved tokens (a zero-length divergent suffix)
+        /// must be treated as "fully cached, decode nothing new," never a cold
+        /// reprocess. The donor selection still names the child's own entry with
+        /// `lcp == donor_len`; only `streaming_reuse_decision` then returns
+        /// `None` because there is nothing new to decode (`lcp >= new_len`) —
+        /// which the worker handles as "skip prefill," NOT a cache miss.
+        #[test]
+        fn fork_empty_suffix_is_fully_cached_not_a_cold_reprocess() {
+            let mut store = SessionStateStore::new(8, usize::MAX, FORK_CHAIN_WINDOW);
+            let parent_tokens: Vec<i32> = (0..120).collect();
+            store.insert(
+                "parent".into(),
+                state(1, 64),
+                Some(parent_tokens.clone()),
+                None,
+            );
+            store.fork("parent", "child".to_string()).expect("fork");
+
+            // The child's prompt renders to EXACTLY the parent's saved tokens.
+            let m = store
+                .find_best_prefix_match("child", &parent_tokens)
+                .expect("the child's own donor must still be FOUND for an empty suffix");
+            assert_eq!(m.source_session_id, "child");
+            assert_eq!(
+                m.lcp,
+                parent_tokens.len(),
+                "the empty-suffix child shares its entire prompt with the donor"
+            );
+            assert_eq!(
+                m.donor_len - m.lcp,
+                0,
+                "an empty suffix is the ultimate zero-rollback case"
+            );
+            // The whole prompt is cached: there is nothing new to decode. This
+            // is a "fully cached" hit, distinguished from a `lcp == 0` cache
+            // MISS — the worker decodes zero new tokens, never a cold reprocess.
+            assert_eq!(
+                streaming_reuse_decision(m.lcp, parent_tokens.len()),
+                None,
+                "a fully-cached fork decodes nothing new — NOT a cold reprocess"
+            );
+        }
     }
 }
