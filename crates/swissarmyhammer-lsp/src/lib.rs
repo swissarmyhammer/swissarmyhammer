@@ -33,6 +33,7 @@ pub mod session;
 pub mod severity;
 pub mod supervisor;
 pub mod types;
+pub mod uri;
 pub mod yaml_loader;
 
 #[cfg(test)]
@@ -51,3 +52,4 @@ pub use session::LspSession;
 pub use severity::DiagnosticSeverity;
 pub use supervisor::LspSupervisorManager;
 pub use types::{DaemonStatus, LspDaemonState, LspServerSpec, OwnedLspServerSpec};
+pub use uri::file_path_from_uri;

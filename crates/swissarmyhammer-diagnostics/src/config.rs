@@ -17,6 +17,12 @@ use swissarmyhammer_lsp::DiagnosticSeverity;
 /// responsiveness.
 pub const DEFAULT_SETTLE_WINDOW: Duration = Duration::from_millis(300);
 
+/// Hard backstop: how long to keep waiting for diagnostics to settle before
+/// giving up and reporting `Pending`. Generous on purpose — a few seconds spent
+/// settling in-tool beats forcing the model to take another turn — but bounded
+/// so a pathologically never-quiescing server cannot block forever.
+pub const DEFAULT_SETTLE_HARD_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Default cap on the number of diagnostic records included in a single report.
 pub const DEFAULT_PER_REPORT_CAP: usize = 100;
 
@@ -31,6 +37,9 @@ pub struct DiagnosticsConfig {
     pub severities: Vec<DiagnosticSeverity>,
     /// How long to let diagnostics settle before reporting.
     pub settle_window: Duration,
+    /// Hard backstop after which an un-settled stream reports `Pending` instead
+    /// of blocking indefinitely.
+    pub settle_hard_timeout: Duration,
     /// Maximum number of records per report.
     pub per_report_cap: usize,
     /// Per-language enable/disable overrides, keyed by LSP language id.
@@ -46,6 +55,7 @@ impl Default for DiagnosticsConfig {
         DiagnosticsConfig {
             severities: vec![DiagnosticSeverity::Error, DiagnosticSeverity::Warning],
             settle_window: DEFAULT_SETTLE_WINDOW,
+            settle_hard_timeout: DEFAULT_SETTLE_HARD_TIMEOUT,
             per_report_cap: DEFAULT_PER_REPORT_CAP,
             per_language_enabled: BTreeMap::new(),
         }
@@ -88,6 +98,16 @@ mod tests {
         let config = DiagnosticsConfig::default();
         assert_eq!(config.settle_window, DEFAULT_SETTLE_WINDOW);
         assert!(config.settle_window <= Duration::from_secs(1));
+    }
+
+    #[test]
+    fn default_hard_timeout_is_a_generous_backstop() {
+        let config = DiagnosticsConfig::default();
+        assert_eq!(config.settle_hard_timeout, DEFAULT_SETTLE_HARD_TIMEOUT);
+        // Generous backstop: comfortably longer than the (short) settle window,
+        // but still bounded.
+        assert!(config.settle_hard_timeout > config.settle_window);
+        assert!(config.settle_hard_timeout >= Duration::from_secs(1));
     }
 
     #[test]

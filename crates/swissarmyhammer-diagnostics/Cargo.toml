@@ -12,6 +12,7 @@ homepage.workspace = true
 swissarmyhammer-lsp = { workspace = true }
 lsp-types = { workspace = true }
 serde = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
