@@ -52,9 +52,11 @@ pub mod discovery;
 mod election;
 mod error;
 pub mod proxy;
+pub mod request_ipc;
 
 pub use bus::{BusMessage, NullMessage, Publisher, Subscriber};
 pub use election::{
     peek_leader_pid, ElectionConfig, ElectionOutcome, FollowerGuard, LeaderElection, LeaderGuard,
 };
 pub use error::{ElectionError, Result};
+pub use request_ipc::{IpcError, RequestClient, RequestEnvelope, RequestServer, ResponseEnvelope};
