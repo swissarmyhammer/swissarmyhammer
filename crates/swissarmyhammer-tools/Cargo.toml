@@ -149,3 +149,6 @@ agent-client-protocol-extras = { workspace = true }
 # Captures `tracing` output to assert the review engine's observability traces
 # fire on the real tool path (through spawn_blocking).
 tracing-test = { workspace = true }
+# `test-helpers` exposes `cli_gen::test_support` (build_commands_from_schema /
+# collect_verb_noun_pairs) used by the review tool's CLI command-tree coverage test.
+swissarmyhammer-operations = { workspace = true, features = ["test-helpers"] }

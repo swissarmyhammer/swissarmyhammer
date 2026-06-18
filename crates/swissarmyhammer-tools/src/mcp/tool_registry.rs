@@ -863,6 +863,16 @@ pub trait McpTool:
     /// and validation rules for the tool's arguments. Include detailed
     /// descriptions for all parameters.
     ///
+    /// # Operation-based tools: return the WIRE surface here
+    ///
+    /// This is the model-facing schema advertised over MCP `tools/list`. For
+    /// operation-based tools (those that implement [`McpTool::operations`]) it
+    /// MUST be the slim wire surface — `generate_mcp_schema_wire(...)`, which
+    /// drops the heavy CLI-facing keys. The full surface (with
+    /// `x-operation-schemas` / `x-operation-groups` / `x-op-signatures`) belongs
+    /// on the [`McpTool::schema_full`] override, NOT here. See
+    /// [`swissarmyhammer_operations::generate_mcp_schema`] for the steering note.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -885,10 +895,11 @@ pub trait McpTool:
     /// Get the tool's FULL JSON schema for in-process CLI generation.
     ///
     /// Operation-based tools return a slim, model-facing schema from
-    /// [`McpTool::schema`] over the MCP wire — it carries only the `op` enum and
-    /// per-op required-field signatures, dropping the heavy `x-operation-schemas`
-    /// / `x-operation-groups` / `x-forgiving-input` / `examples` keys and the
-    /// flat per-parameter properties.
+    /// [`McpTool::schema`] over the MCP wire — it carries only the `op` enum,
+    /// dropping the heavy `x-operation-schemas` / `x-operation-groups` /
+    /// `x-forgiving-input` / `examples` keys, the per-op required-field
+    /// signatures (`x-op-signatures`, full-only), and the flat per-parameter
+    /// properties.
     ///
     /// The in-process CLI generator and argument extractor, however, build the
     /// noun/verb command tree and map clap matches back to JSON arguments from

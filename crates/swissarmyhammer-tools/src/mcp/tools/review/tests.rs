@@ -60,6 +60,86 @@ fn review_tool_is_registered_with_its_ops() {
 }
 
 // ---------------------------------------------------------------------------
+// wire / full schema split
+// ---------------------------------------------------------------------------
+
+/// The FULL schema carries the heavy CLI-generation keys; the WIRE schema drops
+/// every one of them. Mirrors the post-`^4ez75dw` pattern used by
+/// `web/mod.rs` and `shell/mod.rs`.
+#[test]
+fn review_full_schema_carries_heavy_keys_wire_omits_them() {
+    let tool = ReviewTool::new();
+
+    // Full (in-process CLI) surface: the per-op detail the command tree needs.
+    let full = tool.schema_full();
+    assert!(
+        full["x-op-signatures"].is_object(),
+        "full schema x-op-signatures must be an object"
+    );
+    assert!(
+        full["x-operation-schemas"].is_array(),
+        "full schema x-operation-schemas must be an array"
+    );
+
+    // Wire (model-facing) surface: the full-only keys must be absent.
+    let wire = tool.schema();
+    assert!(
+        wire.get("x-op-signatures").is_none(),
+        "wire schema must omit x-op-signatures"
+    );
+    assert!(
+        wire.get("x-operation-schemas").is_none(),
+        "wire schema must omit x-operation-schemas"
+    );
+
+    // And mechanically: the wire surface drops every WIRE_DROPPED_KEYS key.
+    let wire_obj = wire.as_object().unwrap();
+    for key in swissarmyhammer_operations::WIRE_DROPPED_KEYS {
+        assert!(!wire_obj.contains_key(key), "wire schema must omit {key:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CLI command tree coverage
+// ---------------------------------------------------------------------------
+
+/// Every `REVIEW_OPERATIONS` op must surface as a `noun → verb` pair in the
+/// command tree the shared generator builds from review's FULL schema. The
+/// expected set is DERIVED from the canonical op table, so adding an op is
+/// covered mechanically without editing this test.
+#[test]
+fn review_command_tree_covers_all_operations() {
+    use std::collections::HashSet;
+    use swissarmyhammer_operations::cli_gen::build_commands_from_schema;
+    use swissarmyhammer_operations::cli_gen::test_support::collect_verb_noun_pairs;
+
+    let schema = ReviewTool::new().schema_full();
+    let commands = build_commands_from_schema(&schema);
+    let generated = collect_verb_noun_pairs(&commands);
+
+    let expected: HashSet<String> = REVIEW_OPERATIONS.iter().map(|op| op.op_string()).collect();
+    assert_eq!(
+        generated, expected,
+        "generated command tree and REVIEW_OPERATIONS diverge"
+    );
+
+    // Spot-check the documented verbs still resolve.
+    for op in [
+        "review file",
+        "review working",
+        "review sha",
+        "list validators",
+        "get validator",
+        "check validators",
+    ] {
+        assert!(
+            generated.contains(op),
+            "verb `{op}` missing from review command tree: {generated:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // fixtures
 // ---------------------------------------------------------------------------
 

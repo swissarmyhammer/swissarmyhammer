@@ -19,7 +19,7 @@ hooks:
 
 Drive kanban tasks all the way to `done` — orchestrating `/implement`, `/test`, and `/review` in a loop until each task lands in `done` or is reported stuck.
 
-**Orchestrator only** — does not pick tasks, write code, or run tests. Delegates to `/implement`, `/review`, `/test`; uses `ralph` to stay alive between iterations.
+**Orchestrator only** — does not pick tasks, write code, run tests, or commit. Delegates to `/implement`, `/review`, `/test`, `/commit`; uses `ralph` to stay alive between iterations.
 
 Pipeline: `todo → doing → review → done`. `/implement` lands tasks in `review`; `/review` drives them to `done` (clean) or back to `review` with fresh findings.
 
@@ -79,8 +79,9 @@ Pin `<TASK_ID>` for the entire loop — never `next task`, never switch tasks.
    - **clean** → task moves to `done`. Step 5.
    - **findings** → fresh dated `## Review Findings` checklist appended, task stays in `review`. Step 2 — `/implement <TASK_ID>` works the unchecked items, flips them to `- [x]`, moves back to `review`.
 5. **Verify done**: `op: "get task"`. Not in `done` → step 2.
-6. **Guardrail**: same finding (file:line + message) across 3 iterations → stop, clear ralph, report what persists.
-7. **Clear ralph** and report: task id, iterations, final test status, persistent findings.
+6. **Commit the rollback point** (only once step 5 confirms `done`): invoke `/commit` to create a **local** commit of the verified-good state — green tests + clean review. This is a rollback point, not a publish: **commit only, NEVER push.** Pushing is the user's explicit, separate step; pushing per task would spam CI in batch mode. `/commit` reviews `git status` and stages all changes, so if the task produced no changes it is a no-op — "nothing to commit" is not an error, just skip ahead.
+7. **Guardrail**: same finding (file:line + message) across 3 iterations → stop, clear ralph, report what persists.
+8. **Clear ralph** and report: task id, iterations, final test status, persistent findings.
 
 ### Scoped-batch mode
 
@@ -96,7 +97,7 @@ Pin `<TASK_ID>` for the entire loop — never `next task`, never switch tasks.
 
    Tasks in `doing` are already being worked — leave them. Take the **first** task from `review` if any, otherwise the first ready `todo` task. Pin its id as `<TASK_ID>`.
 
-2. **Drive it to done.** Run the **single-task mode loop** (steps 2–6 above) on `<TASK_ID>`: `/implement` → `/test` → `/review`, looping on findings, with the same 3-iteration guardrail. Do not switch tasks mid-loop. A task that hits the guardrail is reported as stuck and skipped.
+2. **Drive it to done.** Run the **single-task mode loop** (steps 2–8 above) on `<TASK_ID>`: `/implement` → `/test` → `/review`, looping on findings, with the same 3-iteration guardrail. Reusing the loop means each finished task is committed locally via step 6 — one rollback-point commit per task, automatically — before the next is picked. Do not switch tasks mid-loop. A task that hits the guardrail is reported as stuck and skipped.
 
 3. **Pick the next.** Return to step 1.
 
@@ -113,13 +114,14 @@ Pin `<TASK_ID>` for the entire loop — never `next task`, never switch tasks.
 5. `/review <id>` → 1 blocker (missing auth check on `/admin`). Fresh `## Review Findings` appended; task stays in `review`.
 6. `/implement <id>` again → reads unchecked findings, addresses them, flips checkboxes, moves back to `review`.
 7. `/test` → `/review` again — clean. Task → `done`.
-8. Clear ralph. Report: 2 iterations, tests green.
+8. `/commit` → local commit of the verified-good state (rollback point). Not pushed.
+9. Clear ralph. Report: 2 iterations, tests green.
 
 **Scoped-batch:** `/finish #bug`.
 
 1. Not a ULID → scoped-batch, `<SCOPE_FILTER> = #bug`. Set ralph.
 2. `list tasks column: "review" filter: "#bug"` → empty. `list tasks column: "todo" filter: "#READY && (#bug)"` → 3 ready bugs.
-3. Pin the first bug. Drive it through the single-task loop: `/implement` → `/test` → `/review` → `done`.
+3. Pin the first bug. Drive it through the single-task loop: `/implement` → `/test` → `/review` → `done` → `/commit` (local rollback point, not pushed).
 4. Back to step 1: pick the next bug. Drive it to `done`. Then the third.
 5. Both queries empty → clear ralph, report all three finished + test results. Tasks outside `#bug` untouched.
 
@@ -129,8 +131,9 @@ Pin `<TASK_ID>` for the entire loop — never `next task`, never switch tasks.
 - `/implement` per task — owns implementation and the move to `review`. **Always sequential**, in both modes.
 - `/review` after each implement drives `review → done` or back with fresh findings.
 - `/test` after each implement verifies green.
-- Don't pick tasks, write code, run tests, or review yourself.
-- Stuck task → the step 6 guardrail handles it; in scoped-batch, report it stuck and move to the next task.
+- `/commit` after a task is confirmed in `done` — creates the **local** rollback-point commit. **Commit only, NEVER push**; pushing is the user's separate step (avoids per-task CI runs in batch mode). "Nothing to commit" is a no-op, not an error.
+- Don't pick tasks, write code, run tests, review, or run git yourself — delegate the commit to `/commit`.
+- Stuck task → the step 7 guardrail handles it; in scoped-batch, report it stuck and move to the next task.
 
 ### Sequential safety (both modes)
 - **One task at a time.** Never spawn parallel `Agent` subagents, never run concurrent `/implement` or `/review`. Scoped-batch picks one task, drives it to `done`, then picks the next.

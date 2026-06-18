@@ -28,4 +28,6 @@ $ARGUMENTS
 
 {% include "_partials/task-standards" %}
 
+{% include "_partials/task-double-check" %}
+
 {% include "_partials/short-ids" %}

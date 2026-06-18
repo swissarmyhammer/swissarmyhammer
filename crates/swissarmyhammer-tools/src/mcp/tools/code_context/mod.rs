@@ -3193,6 +3193,9 @@ mod tests {
             .as_array()
             .expect("should have x-operation-schemas");
         assert_eq!(op_schemas.len(), 24);
+
+        // The per-op signature map is carried on the full schema.
+        assert!(schema["x-op-signatures"].is_object());
     }
 
     #[test]
@@ -3204,7 +3207,11 @@ mod tests {
             schema.get("x-operation-schemas").is_none(),
             "wire schema must omit x-operation-schemas"
         );
-        assert!(schema["x-op-signatures"].is_object());
+        // `x-op-signatures` is full-only; the wire surface omits it.
+        assert!(
+            schema.get("x-op-signatures").is_none(),
+            "wire schema must omit x-op-signatures"
+        );
     }
 
     #[tokio::test]

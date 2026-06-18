@@ -31,7 +31,8 @@ use once_cell::sync::Lazy;
 use rmcp::model::{CallToolResult, Content};
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_operations::{
-    generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig,
+    generate_mcp_schema_full, generate_mcp_schema_wire, Operation, ParamMeta, ParamType,
+    SchemaConfig,
 };
 use swissarmyhammer_validators::review::Scope;
 
@@ -401,6 +402,14 @@ impl swissarmyhammer_common::health::Doctorable for ReviewTool {
 
 crate::impl_empty_initializable!(ReviewTool);
 
+/// Shared schema config for the review tool, so the wire and full generators
+/// stay in lockstep on the description.
+fn review_schema_config() -> SchemaConfig {
+    SchemaConfig::new(
+        "Local multi-agent code review and validator introspection, dispatched by `op`.",
+    )
+}
+
 #[async_trait]
 impl McpTool for ReviewTool {
     fn name(&self) -> &'static str {
@@ -411,11 +420,17 @@ impl McpTool for ReviewTool {
         include_str!("description.md")
     }
 
+    /// The slim WIRE schema advertised over MCP: only the `op` enum, dropping the
+    /// heavy CLI-facing keys (`x-operation-schemas` / `x-operation-groups` /
+    /// `x-op-signatures` / …). The in-process CLI tree consumes [`Self::schema_full`].
     fn schema(&self) -> serde_json::Value {
-        let config = SchemaConfig::new(
-            "Local multi-agent code review and validator introspection, dispatched by `op`.",
-        );
-        generate_mcp_schema(&REVIEW_OPERATIONS, config)
+        generate_mcp_schema_wire(&REVIEW_OPERATIONS, review_schema_config())
+    }
+
+    /// The FULL in-process schema: carries `x-operation-schemas`,
+    /// `x-operation-groups`, and `x-op-signatures` for noun/verb CLI generation.
+    fn schema_full(&self) -> serde_json::Value {
+        generate_mcp_schema_full(&REVIEW_OPERATIONS, review_schema_config())
     }
 
     fn cli_category(&self) -> Option<&'static str> {

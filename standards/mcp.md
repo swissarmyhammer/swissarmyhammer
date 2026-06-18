@@ -26,8 +26,14 @@ impl McpTool for MyTool {
     // --- Required ---
     fn name(&self) -> &'static str { "my_tool" }
     fn description(&self) -> &'static str { include_str!("description.md") }
-    fn schema(&self) -> Value { generate_mcp_schema(&MY_OPERATIONS, config) }
+    // The slim model-facing WIRE schema (op enum only) goes over MCP `tools/list`.
+    fn schema(&self) -> Value { generate_mcp_schema_wire(&MY_OPERATIONS, my_schema_config()) }
     async fn execute(&self, arguments: Map<String, Value>, context: &ToolContext) -> Result<CallToolResult, McpError>;
+
+    // --- Required for operation-based tools: the FULL in-process schema ---
+    // Carries x-operation-schemas / x-operation-groups / x-op-signatures for CLI
+    // generation. NEVER let these heavy keys ship over the wire.
+    fn schema_full(&self) -> Value { generate_mcp_schema_full(&MY_OPERATIONS, my_schema_config()) }
 
     // --- Required for CLI discovery ---
     fn cli_category(&self) -> Option<&'static str> { Some("my_tool") }
@@ -188,24 +194,71 @@ Use these verbs consistently across all tools:
 
 ## Schema Generation
 
-Use `generate_mcp_schema()` — never build schemas by hand:
+Never build schemas by hand. Operation-based tools generate TWO surfaces from the
+same operation metadata and expose them through TWO trait methods:
+
+- `schema()` returns the slim **WIRE** schema (`generate_mcp_schema_wire`) — the
+  model-facing surface sent over MCP `tools/list`. It carries only the `op` enum.
+- `schema_full()` returns the **FULL** schema (`generate_mcp_schema_full`) — the
+  in-process surface the CLI generator consumes. It carries the heavy keys.
+
+Factor the `SchemaConfig` into one private helper so both methods stay in lockstep
+(the `*_schema_config()` pattern used by `shell`, `git`, `web`, `kanban`, `review`):
 
 ```rust
-use swissarmyhammer_operations::{generate_mcp_schema, SchemaConfig};
+use swissarmyhammer_operations::{
+    generate_mcp_schema_full, generate_mcp_schema_wire, SchemaConfig,
+};
+
+/// Shared config so the wire and full generators agree on the description.
+fn my_schema_config() -> SchemaConfig {
+    SchemaConfig::new("My tool description for the LLM agent")
+}
 
 fn schema(&self) -> Value {
-    let config = SchemaConfig::new("My tool description for the LLM agent");
-    generate_mcp_schema(&MY_OPERATIONS, config)
+    generate_mcp_schema_wire(&MY_OPERATIONS, my_schema_config())
+}
+
+fn schema_full(&self) -> Value {
+    generate_mcp_schema_full(&MY_OPERATIONS, my_schema_config())
 }
 ```
 
-The generated schema:
+> **Never put the FULL schema on the wire.** Returning `generate_mcp_schema_full`
+> (or its `generate_mcp_schema` alias) from `schema()` ships the heavy
+> `x-operation-schemas` / `x-operation-groups` / `x-op-signatures` keys to the model
+> on every prompt — the exact bloat the split exists to prevent. The
+> `generate_mcp_schema` alias is for in-process / non-wire callers only. A
+> workspace-wide guard test
+> (`mcp_tools_registration::test_operation_tools_split_wire_and_full_schemas`)
+> fails if any operation tool's `schema()` leaks a `WIRE_DROPPED_KEYS` key.
+
+The two surfaces:
+
+**WIRE schema** (`generate_mcp_schema_wire`) — the model-facing surface sent over
+MCP `tools/list`. Deliberately minimal so it does not bloat every prompt:
+- `op` enum field listing all operation strings (the only property)
+- `required: ["op"]`
+- `additionalProperties: true` — forgiving input
+- A tool description
+- NO `oneOf`/`anyOf`/`allOf` (Claude API restriction)
+- Omits every heavy key (see below), including `x-op-signatures`
+
+**FULL schema** (`generate_mcp_schema_full`, aliased `generate_mcp_schema`) —
+in-process only, consumed by the CLI generator and documentation. Carries
+everything the wire schema drops:
 - Flat `properties` — all params from all operations merged
 - `op` enum field listing all operation strings
 - `x-operation-schemas` — per-operation required fields and docs
 - `x-operation-groups` — operations grouped by noun
+- `x-op-signatures` — per-op map of required parameter names (declaration order)
+- `x-forgiving-input` / `examples` when configured
 - `additionalProperties: true` — forgiving input
 - NO `oneOf`/`anyOf`/`allOf` (Claude API restriction)
+
+`WIRE_DROPPED_KEYS` is the single source of truth for the keys the full schema
+carries but the wire schema omits: `x-operation-schemas`, `x-operation-groups`,
+`x-forgiving-input`, `examples`, and `x-op-signatures`.
 
 ### Supported Parameter Types
 
@@ -444,10 +497,21 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_has_operations() {
+    fn test_schema_split_wire_and_full() {
         let tool = MyTool::new();
-        let schema = tool.schema();
-        assert!(schema["properties"]["op"]["enum"].is_array());
+
+        // Wire schema: op enum present, heavy keys absent.
+        let wire = tool.schema();
+        assert!(wire["properties"]["op"]["enum"].is_array());
+        let wire_obj = wire.as_object().unwrap();
+        for key in swissarmyhammer_operations::WIRE_DROPPED_KEYS {
+            assert!(!wire_obj.contains_key(key), "wire must omit {key:?}");
+        }
+
+        // Full schema: the in-process CLI-generation keys are present.
+        let full = tool.schema_full();
+        assert!(full["x-operation-schemas"].is_array());
+        assert!(full["x-op-signatures"].is_object());
     }
 
     #[test]
@@ -573,7 +637,7 @@ For tools that may produce large output (shell, grep), implement output bufferin
 - [ ] Implement `Doctorable` (macro or custom)
 - [ ] Implement `Initializable` (macro or custom)
 - [ ] Define operations with `Operation` trait, `ParamMeta`, and static `Lazy` instances
-- [ ] Generate schema via `generate_mcp_schema()`
+- [ ] Implement BOTH schema methods: `schema()` = `generate_mcp_schema_wire` (wire) and `schema_full()` = `generate_mcp_schema_full` (full), sharing one `*_schema_config()` helper — the heavy keys must never ship over the wire
 - [ ] Implement `execute()` with `match op_str` dispatch
 - [ ] Add `register_{name}_tools()` function
 - [ ] Call from `register_all_tools()` in `server.rs`

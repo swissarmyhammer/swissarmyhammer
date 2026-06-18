@@ -15,6 +15,32 @@ use crate::error::LspError;
 use crate::registry::servers_for_project;
 use crate::types::{DaemonStatus, LspDaemonState, OwnedLspServerSpec};
 
+/// Outcome of a leader-gated supervisor start.
+///
+/// LSP servers (rust-analyzer, sourcekit-lsp, clangd) speak stdio only — one
+/// client, no listener — so exactly one process per workspace may own the
+/// stdio child. Leadership for a workspace is arbitrated by the code-context
+/// leader election (flock keyed on the workspace root). Only the elected
+/// leader spawns the LSP child; every follower declines and surfaces
+/// [`SupervisorStartOutcome::NotLeader`] instead, spawning nothing.
+#[derive(Debug)]
+pub enum SupervisorStartOutcome {
+    /// This process is the workspace leader. The LSP daemons were spawned;
+    /// the vector holds one start result per unique server command.
+    Leader(Vec<Result<(), LspError>>),
+    /// This process is a follower. No LSP child was spawned. Live LSP
+    /// requests must be routed to the leader (tracked separately); for now
+    /// the follower simply owns no session.
+    NotLeader,
+}
+
+impl SupervisorStartOutcome {
+    /// Whether this outcome reflects the elected leader (which spawned daemons).
+    pub fn is_leader(&self) -> bool {
+        matches!(self, SupervisorStartOutcome::Leader(_))
+    }
+}
+
 /// Manages all LSP daemons for a single workspace.
 pub struct LspSupervisorManager {
     /// Workspace root path.
@@ -110,6 +136,28 @@ impl LspSupervisorManager {
         results
     }
 
+    /// Leader-gated start: spawn the LSP daemons **only** if this process is
+    /// the workspace leader.
+    ///
+    /// `is_leader` is the leadership decision already made by the code-context
+    /// election for this same workspace root (so LSP-session ownership and
+    /// index-DB ownership coincide on the same leader). When `true`, this
+    /// delegates to [`Self::start`] and returns
+    /// [`SupervisorStartOutcome::Leader`] with the per-server start results.
+    /// When `false`, it spawns nothing and returns
+    /// [`SupervisorStartOutcome::NotLeader`] — followers never touch the
+    /// stdio LSP child.
+    pub async fn start_if_leader(&mut self, is_leader: bool) -> SupervisorStartOutcome {
+        if !is_leader {
+            info!(
+                workspace = %self.workspace_root.display(),
+                "Not workspace leader — declining to spawn LSP session"
+            );
+            return SupervisorStartOutcome::NotLeader;
+        }
+        SupervisorStartOutcome::Leader(self.start().await)
+    }
+
     /// Return the status of all managed daemons.
     pub fn status(&self) -> Vec<DaemonStatus> {
         self.daemons
@@ -147,16 +195,15 @@ impl LspSupervisorManager {
     ///
     /// This is intended to be called periodically (e.g. from a tokio task).
     pub async fn health_check_all(&mut self) {
-        let commands: Vec<String> = self.daemons.keys().cloned().collect();
+        let commands = self.daemon_names();
         for cmd in commands {
-            if let Some(daemon) = self.daemons.get_mut(&cmd) {
-                if !daemon.health_check() {
-                    // Only attempt restart if state is Failed (not NotFound, NotStarted, etc.)
-                    if matches!(daemon.state(), LspDaemonState::Failed { .. }) {
-                        let _ = daemon.restart_with_backoff().await;
-                    }
-                }
+            let Some(daemon) = self.daemons.get_mut(&cmd) else {
+                continue;
+            };
+            if !should_attempt_restart(daemon) {
+                continue;
             }
+            let _ = daemon.restart_with_backoff().await;
         }
     }
 
@@ -166,7 +213,7 @@ impl LspSupervisorManager {
     }
 
     /// Get a mutable reference to a specific daemon by command name.
-    pub fn get_daemon_mut(&mut self, command: &str) -> Option<&mut LspDaemon> {
+    pub fn daemon_mut(&mut self, command: &str) -> Option<&mut LspDaemon> {
         self.daemons.get_mut(command)
     }
 
@@ -174,6 +221,16 @@ impl LspSupervisorManager {
     pub fn daemon_names(&self) -> Vec<String> {
         self.daemons.keys().cloned().collect()
     }
+}
+
+/// Decide whether a daemon should be restarted during a health-check sweep.
+///
+/// A restart is attempted only when the daemon has died (its `health_check`
+/// reports unhealthy) **and** it landed in the `Failed` state — not
+/// `NotFound`, `NotStarted`, or any other terminal/transient state. Runs the
+/// `health_check` first so the daemon's state is refreshed before it is read.
+fn should_attempt_restart(daemon: &mut LspDaemon) -> bool {
+    !daemon.health_check() && matches!(daemon.state(), LspDaemonState::Failed { .. })
 }
 
 #[cfg(test)]
@@ -217,6 +274,10 @@ mod tests {
 
     use crate::types::OwnedLspServerSpec;
 
+    /// Startup timeout (seconds) used by test specs — short so failing
+    /// handshakes resolve quickly.
+    const TEST_STARTUP_TIMEOUT_SECS: u64 = 1;
+
     /// Build a minimal OwnedLspServerSpec with a nonexistent binary.
     fn fake_spec(command: &str) -> OwnedLspServerSpec {
         OwnedLspServerSpec {
@@ -225,7 +286,7 @@ mod tests {
             args: vec![],
             language_ids: vec!["test".to_string()],
             file_extensions: vec![],
-            startup_timeout_secs: 1,
+            startup_timeout_secs: TEST_STARTUP_TIMEOUT_SECS,
             health_check_interval_secs: 1,
             install_hint: String::new(),
             icon: None,
@@ -545,11 +606,11 @@ mod tests {
     }
 
     #[test]
-    fn test_get_daemon_mut_returns_mutable_ref() {
+    fn test_daemon_mut_returns_mutable_ref() {
         let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
         insert_daemon(&mut mgr, fake_spec("mutable-lsp"));
 
-        let daemon = mgr.get_daemon_mut("mutable-lsp");
+        let daemon = mgr.daemon_mut("mutable-lsp");
         assert!(daemon.is_some());
         // Verify we can access daemon methods through the mutable ref
         assert_eq!(daemon.unwrap().command(), "mutable-lsp");
@@ -592,6 +653,96 @@ mod tests {
         );
     }
 
+    // -- leader-gated start (start_if_leader) tests -----------------------
+
+    use swissarmyhammer_leader_election::{ElectionConfig, ElectionOutcome, LeaderElection};
+
+    /// A unique election key per test run so concurrent tests on the machine
+    /// never share a lock file. The election keys on the workspace-root path,
+    /// so a fresh temp dir per test is sufficient isolation.
+    fn election_for(root: &std::path::Path) -> LeaderElection {
+        LeaderElection::with_config(root, ElectionConfig::new().with_prefix("lsp-leader-test"))
+    }
+
+    /// Acceptance: two in-process elections on the same workspace root elect
+    /// exactly one leader. Only the leader's supervisor spawns a daemon; the
+    /// follower's supervisor spawns nothing and reports `NotLeader`. After the
+    /// leader drops its guard, the follower can `try_promote` and then its
+    /// supervisor spawns.
+    #[tokio::test]
+    async fn test_only_leader_spawns_lsp_session() {
+        // A Rust project so the supervisor has a server spec to (attempt to) spawn.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let root = tmp.path().to_path_buf();
+
+        // Two competing elections on the SAME workspace root.
+        let first = election_for(&root).elect().unwrap();
+        let second = election_for(&root).elect().unwrap();
+
+        // Exactly one leader, one follower.
+        let (leader_guard, follower) = match (first, second) {
+            (ElectionOutcome::Leader(g), ElectionOutcome::Follower(f)) => (g, f),
+            (ElectionOutcome::Follower(_), ElectionOutcome::Leader(_)) => {
+                panic!("second election should be the follower when first won")
+            }
+            (ElectionOutcome::Leader(_), ElectionOutcome::Leader(_)) => {
+                panic!("two leaders on the same root — election invariant violated")
+            }
+            (ElectionOutcome::Follower(_), ElectionOutcome::Follower(_)) => {
+                panic!("no leader elected on the same root")
+            }
+        };
+
+        // The follower's supervisor must spawn NOTHING.
+        let mut follower_sup = LspSupervisorManager::new(root.clone());
+        let follower_outcome = follower_sup.start_if_leader(false).await;
+        assert!(
+            matches!(follower_outcome, SupervisorStartOutcome::NotLeader),
+            "follower should decline to spawn, got {follower_outcome:?}"
+        );
+        assert!(
+            follower_sup.daemon_names().is_empty(),
+            "follower supervisor must own no daemons"
+        );
+
+        // The leader's supervisor spawns its session.
+        let mut leader_sup = LspSupervisorManager::new(root.clone());
+        let leader_outcome = leader_sup.start_if_leader(true).await;
+        assert!(
+            leader_outcome.is_leader(),
+            "leader should spawn, got {leader_outcome:?}"
+        );
+        assert!(
+            !leader_sup.daemon_names().is_empty(),
+            "leader supervisor should own a daemon entry for the Rust project"
+        );
+
+        // Handoff: leader exits, follower promotes, then its supervisor spawns.
+        drop(leader_guard);
+        let promoted = follower
+            .try_promote()
+            .expect("try_promote should not error after leader exit");
+        assert!(
+            promoted.is_some(),
+            "follower must win promotion once the leader has released the lock"
+        );
+
+        let promoted_outcome = follower_sup.start_if_leader(true).await;
+        assert!(
+            promoted_outcome.is_leader(),
+            "promoted follower should now spawn, got {promoted_outcome:?}"
+        );
+        assert!(
+            !follower_sup.daemon_names().is_empty(),
+            "promoted follower supervisor should own a daemon entry"
+        );
+    }
+
     #[tokio::test]
     async fn test_health_check_all_with_failed_daemon_attempts_restart() {
         let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
@@ -603,7 +754,7 @@ mod tests {
             args: vec![],
             language_ids: vec!["test".to_string()],
             file_extensions: vec![],
-            startup_timeout_secs: 1,
+            startup_timeout_secs: TEST_STARTUP_TIMEOUT_SECS,
             health_check_interval_secs: 1,
             install_hint: String::new(),
             icon: None,

@@ -50,6 +50,6 @@ pub use server_spec::{
 };
 pub use session::LspSession;
 pub use severity::DiagnosticSeverity;
-pub use supervisor::LspSupervisorManager;
+pub use supervisor::{LspSupervisorManager, SupervisorStartOutcome};
 pub use types::{DaemonStatus, LspDaemonState, LspServerSpec, OwnedLspServerSpec};
 pub use uri::{file_path_from_uri, file_uri_from_path};

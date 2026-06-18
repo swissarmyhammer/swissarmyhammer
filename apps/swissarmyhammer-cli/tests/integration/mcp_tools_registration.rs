@@ -2,9 +2,11 @@
 //!
 //! This test validates that the MCP server actually registers tools and they are accessible
 
+use swissarmyhammer_operations::WIRE_DROPPED_KEYS;
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
-    register_file_tools, register_kanban_tools, register_shell_tools, register_web_tools,
+    create_fully_registered_tool_registry, register_file_tools, register_kanban_tools,
+    register_shell_tools, register_web_tools,
 };
 
 /// Test that verifies all expected MCP tools are registered
@@ -279,4 +281,93 @@ async fn test_kanban_schema_has_all_operations() {
     }
 
     println!("✅ Kanban schema has all {EXPECTED_KANBAN_OP_COUNT} operations");
+}
+
+/// The full FULL-only schema keys every operation tool's `schema_full()` must
+/// carry (and which the slim wire `schema()` must never leak).
+///
+/// These are the in-process CLI-generation keys the noun/verb command tree is
+/// built from. They are a subset of [`WIRE_DROPPED_KEYS`] — the ones whose
+/// *presence* on the full surface we positively assert.
+const FULL_ONLY_KEYS: [&str; 3] = [
+    "x-operation-schemas",
+    "x-operation-groups",
+    "x-op-signatures",
+];
+
+/// Workspace-wide guard for the wire/full schema split.
+///
+/// Builds the real, fully-registered tool registry (the same single source of
+/// truth the MCP server uses) and, for every tool that exposes operations,
+/// mechanically enforces the contract:
+///
+/// - `schema()` (the WIRE surface advertised over MCP `tools/list`) omits ALL of
+///   [`swissarmyhammer_operations::WIRE_DROPPED_KEYS`] — the heavy CLI-facing keys
+///   must never ship over the wire on every prompt.
+/// - `schema_full()` (the in-process CLI surface) carries
+///   `x-operation-schemas` + `x-operation-groups` + `x-op-signatures`.
+///
+/// This fails the moment a new operation tool forgets to override
+/// `schema_full()` (so `schema()` would leak the full keys) — the gap that let
+/// `review` ship the heavy schema over the wire. The dropped-key list is
+/// imported from the operations crate rather than re-listed here, so adding a
+/// key keeps this guard in lockstep automatically.
+#[tokio::test]
+async fn test_operation_tools_split_wire_and_full_schemas() {
+    let registry = create_fully_registered_tool_registry().await;
+
+    let mut checked = Vec::new();
+    for tool in registry.iter_tools() {
+        // Only operation-based tools participate in the wire/full split.
+        if tool.operations().is_empty() {
+            continue;
+        }
+        let name = swissarmyhammer_tools::mcp::tool_registry::McpTool::name(tool);
+        checked.push(name);
+
+        // WIRE schema must drop every heavy CLI-facing key.
+        let wire = tool.schema();
+        let wire_obj = wire
+            .as_object()
+            .unwrap_or_else(|| panic!("`{name}` wire schema must be a JSON object"));
+        for key in WIRE_DROPPED_KEYS {
+            assert!(
+                !wire_obj.contains_key(key),
+                "`{name}` wire schema (schema()) must omit full-only key {key:?}; \
+                 it likely returns the FULL schema — override schema_full() and have \
+                 schema() return generate_mcp_schema_wire(...)",
+            );
+        }
+
+        // FULL schema must carry the CLI-generation keys.
+        let full = tool.schema_full();
+        for key in FULL_ONLY_KEYS {
+            assert!(
+                full.get(key).is_some(),
+                "`{name}` full schema (schema_full()) must contain {key:?}",
+            );
+        }
+        assert!(
+            full["x-operation-schemas"].is_array(),
+            "`{name}` full schema x-operation-schemas must be an array",
+        );
+        assert!(
+            full["x-operation-groups"].is_object(),
+            "`{name}` full schema x-operation-groups must be an object",
+        );
+        assert!(
+            full["x-op-signatures"].is_object(),
+            "`{name}` full schema x-op-signatures must be an object",
+        );
+    }
+
+    assert!(
+        !checked.is_empty(),
+        "expected at least one operation-based tool in the registry",
+    );
+    assert!(
+        checked.contains(&"review"),
+        "the `review` tool must be covered by the wire/full guard; got {checked:?}",
+    );
+    println!("✅ wire/full split holds for operation tools: {checked:?}");
 }
