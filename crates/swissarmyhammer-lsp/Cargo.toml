@@ -23,6 +23,7 @@ once_cell = { workspace = true }
 include_dir = { workspace = true }
 
 [dev-dependencies]
+swissarmyhammer-leader-election = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = { workspace = true }
 tracing-test = { workspace = true }

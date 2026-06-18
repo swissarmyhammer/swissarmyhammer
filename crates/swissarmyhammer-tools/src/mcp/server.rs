@@ -327,12 +327,6 @@ impl McpServer {
     /// How often the LSP supervisor is polled for daemon health.
     const LSP_HEALTH_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
-    /// Poll interval when waiting for the LSP supervisor OnceCell to be set.
-    const LSP_SUPERVISOR_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
-
-    /// Maximum total time to wait for the LSP supervisor after a promotion.
-    const LSP_SUPERVISOR_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
     /// Initialize code-context workspace and start indexing at MCP startup.
     ///
     /// Finds the git repository root from the working directory, opens a
@@ -360,18 +354,60 @@ impl McpServer {
             workspace_root.display()
         );
 
-        let lsp_handle = Self::spawn_lsp_supervisor(workspace_root.clone());
-
+        // Decide leadership FIRST. The LSP server (rust-analyzer, sourcekit-lsp,
+        // clangd) speaks stdio only — one client, no listener — so only the
+        // elected leader may spawn it. Spawning the supervisor before leadership
+        // is decided made every `sah serve` (and every stdio-MCP subagent) launch
+        // its own rust-analyzer over the same tree, thrashing the shared cargo
+        // `target/`. Gating the spawn on `ws.is_leader()` keys LSP-session
+        // ownership on the same code-context election (same workspace root), so
+        // LSP and index leadership coincide.
         let Some(ws) = open_workspace(&workspace_root) else {
             return;
         };
 
-        // If we're already leader, start TS indexing + file watcher immediately.
-        // If follower, the re-election loop below will start workers on promotion.
-        Self::start_workers_if_leader(&ws, &workspace_root);
+        let is_leader = ws.lock().expect("workspace mutex poisoned").is_leader();
 
-        Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone());
-        Self::spawn_lsp_health_loop(lsp_handle, ws, workspace_root);
+        // Single gate: only the leader gets a supervisor handle; a follower gets
+        // `None` and spawns no LSP server at all.
+        match Self::spawn_lsp_supervisor_if_leader(is_leader, &workspace_root) {
+            Some(lsp_handle) => {
+                // Leader: supervisor spawned. Start TS indexing + file watcher
+                // and run the LSP health/indexing loop.
+                Self::start_workers_if_leader(&ws, &workspace_root);
+                Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone());
+                Self::spawn_lsp_health_loop(lsp_handle, ws, workspace_root);
+            }
+            None => {
+                // Follower: spawned NOTHING (no rust-analyzer, no indexing).
+                // Only poll for promotion. On a successful promotion (the leader
+                // exited), the re-election loop performs a cold re-spawn of the
+                // supervisor and workers via
+                // `start_indexing_workers_after_promotion`.
+                tracing::info!(
+                    "code-context: follower for {} — not spawning LSP server; polling for promotion",
+                    workspace_root.display()
+                );
+                Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone());
+            }
+        }
+    }
+
+    /// Leader-gated LSP supervisor spawn — the single decision point that keys
+    /// LSP-session ownership on the code-context leadership election.
+    ///
+    /// Returns the supervisor task handle when `is_leader` is `true` (the leader
+    /// spawns the one stdio LSP child for the workspace), and `None` when
+    /// `is_leader` is `false` (a follower spawns nothing). Keeping this the only
+    /// place the startup path spawns the supervisor ensures a follower can never
+    /// launch its own rust-analyzer over the shared tree.
+    fn spawn_lsp_supervisor_if_leader(
+        is_leader: bool,
+        workspace_root: &std::path::Path,
+    ) -> Option<
+        tokio::task::JoinHandle<Vec<(String, swissarmyhammer_code_context::SharedLspSession)>>,
+    > {
+        is_leader.then(|| Self::spawn_lsp_supervisor(workspace_root.to_path_buf()))
     }
 
     /// If the workspace is already leader, start TS indexing + watcher workers.
@@ -466,6 +502,26 @@ impl McpServer {
         ws: Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
         workspace_root: std::path::PathBuf,
     ) {
+        Self::spawn_drain_supervisor_and_health_loop(lsp_handle, move |clients| {
+            start_lsp_workers_if_leader(&ws, &workspace_root, clients, "");
+        });
+    }
+
+    /// Await the LSP supervisor's startup task, hand its running clients to
+    /// `start_workers` (skipped when none are available), then run the LSP
+    /// health-check loop for the rest of the process's lifetime.
+    ///
+    /// Shared by initial-leader startup and the post-promotion cold re-spawn;
+    /// the two differ only in how they start workers (the `start_workers`
+    /// closure), so the await/drain/health-loop shell lives here once.
+    fn spawn_drain_supervisor_and_health_loop<F>(
+        lsp_handle: tokio::task::JoinHandle<
+            Vec<(String, swissarmyhammer_code_context::SharedLspSession)>,
+        >,
+        start_workers: F,
+    ) where
+        F: FnOnce(&[(String, swissarmyhammer_code_context::SharedLspSession)]) + Send + 'static,
+    {
         tokio::spawn(async move {
             let clients = match lsp_handle.await {
                 Ok(clients) => clients,
@@ -477,7 +533,7 @@ impl McpServer {
             if clients.is_empty() {
                 tracing::info!("code-context: no LSP clients available, skipping LSP indexing");
             } else {
-                start_lsp_workers_if_leader(&ws, &workspace_root, &clients, "");
+                start_workers(&clients);
             }
             run_lsp_health_check_loop().await;
         });
@@ -538,7 +594,13 @@ impl McpServer {
     }
 
     /// Start indexing workers after a follower-to-leader promotion.
-    /// LSP workers are started separately once the LSP supervisor is ready.
+    ///
+    /// A process that started as a follower spawned no LSP server, so promotion
+    /// performs a **cold re-spawn**: it starts the supervisor (rust-analyzer et
+    /// al.) for the first time in this process, then starts the LSP indexing
+    /// workers off it and runs the health loop. This is the handoff path — only
+    /// reached once the prior leader has exited and released its flock — so a
+    /// cold start (re-spawn + re-index) is acceptable.
     fn start_indexing_workers_after_promotion(
         workspace_root: std::path::PathBuf,
         shared_db: swissarmyhammer_code_context::SharedDb,
@@ -549,14 +611,14 @@ impl McpServer {
             " (after promotion)",
         );
 
-        // LSP workers: wait for the supervisor to become available, then start them.
+        // LSP workers: cold-spawn the supervisor (followers never spawned one),
+        // then start indexing workers off its running sessions and run the
+        // health loop. Leadership is already established by the time we reach
+        // here, so workers start directly (no further is_leader gate).
         let lsp_db = std::sync::Arc::clone(&shared_db);
-        tokio::spawn(async move {
-            let Some(sup) = wait_for_lsp_supervisor(&workspace_root).await else {
-                return;
-            };
-            let clients = collect_running_lsp_clients(&*sup.lock().await);
-            spawn_lsp_workers_for_clients(&workspace_root, &lsp_db, &clients, " (after promotion)");
+        let lsp_handle = Self::spawn_lsp_supervisor(workspace_root.clone());
+        Self::spawn_drain_supervisor_and_health_loop(lsp_handle, move |clients| {
+            spawn_lsp_workers_for_clients(&workspace_root, &lsp_db, clients, " (after promotion)");
         });
     }
 
@@ -1602,32 +1664,6 @@ async fn run_lsp_health_check_loop() -> ! {
     }
 }
 
-/// Wait for the `LSP_SUPERVISOR` OnceCell to be initialized, polling on the
-/// `McpServer::LSP_SUPERVISOR_POLL_INTERVAL` cadence up to
-/// `McpServer::LSP_SUPERVISOR_WAIT_TIMEOUT`. Returns `None` and logs a
-/// warning if it never appears.
-async fn wait_for_lsp_supervisor(
-    workspace_root: &std::path::Path,
-) -> Option<Arc<tokio::sync::Mutex<swissarmyhammer_lsp::LspSupervisorManager>>> {
-    use super::tools::code_context::LSP_SUPERVISOR;
-    let poll = McpServer::LSP_SUPERVISOR_POLL_INTERVAL;
-    let max_attempts =
-        (McpServer::LSP_SUPERVISOR_WAIT_TIMEOUT.as_millis() / poll.as_millis().max(1)) as u32;
-    for _ in 0..max_attempts {
-        if let Some(s) = LSP_SUPERVISOR.get() {
-            return Some(Arc::clone(s));
-        }
-        tokio::time::sleep(poll).await;
-    }
-    tracing::warn!(
-        "code-context: LSP supervisor not available after {:?} post-promotion for {}; \
-         LSP indexing will not run until next restart",
-        McpServer::LSP_SUPERVISOR_WAIT_TIMEOUT,
-        workspace_root.display(),
-    );
-    None
-}
-
 /// Extract the MCP session id from a [`RequestContext`].
 ///
 /// For HTTP transports (the in-process validator MCP server), `rmcp` injects
@@ -1983,6 +2019,32 @@ impl ServerHandler for McpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The leader-gated supervisor spawn is the single decision point that
+    /// stops a follower from launching its own rust-analyzer. A follower
+    /// (`is_leader == false`) must get no supervisor handle; a leader must get
+    /// one. This guards the exact regression this task fixed: spawning the
+    /// supervisor regardless of leadership.
+    #[tokio::test]
+    async fn test_lsp_supervisor_spawn_is_leader_gated() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Follower: no handle, spawns nothing.
+        let follower_handle = McpServer::spawn_lsp_supervisor_if_leader(false, tmp.path());
+        assert!(
+            follower_handle.is_none(),
+            "a follower must not spawn the LSP supervisor"
+        );
+
+        // Leader: a supervisor task handle is returned.
+        let leader_handle = McpServer::spawn_lsp_supervisor_if_leader(true, tmp.path());
+        assert!(
+            leader_handle.is_some(),
+            "the leader must spawn the LSP supervisor"
+        );
+        // Drive the spawned task to completion so it does not outlive the test.
+        let _ = leader_handle.unwrap().await;
+    }
 
     #[test]
     fn test_slugify() {
