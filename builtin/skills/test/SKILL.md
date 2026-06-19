@@ -50,6 +50,10 @@ metadata:
 
 ## Troubleshooting
 
+### No Tests
+
+Make one to get started. 
+
 ### A single test hangs and the suite never finishes
 
 Test waits on something CI can't deliver (network, child process, file watcher, deadlock). Run with a hard per-test timeout and isolate the offender via the `shell` tool's `timeout`:
