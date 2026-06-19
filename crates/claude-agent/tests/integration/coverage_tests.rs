@@ -2316,6 +2316,7 @@ fn test_collected_response_debug() {
     let resp = claude_agent::CollectedResponse {
         content: "hello".to_string(),
         stop_reason: agent_client_protocol::schema::StopReason::EndTurn,
+        cache_usage: None,
     };
     let debug = format!("{:?}", resp);
     assert!(debug.contains("hello"));

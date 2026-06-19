@@ -326,12 +326,28 @@ mod tests {
         let config = parse_shell_config(BUILTIN_CONFIG_YAML)
             .expect("builtin config.yaml should parse successfully");
 
-        // Should have all the deny patterns from security.rs defaults
+        // Should have the catastrophic-mistake guard deny patterns.
+        // The list was deliberately pruned of false-positive substring magnets
+        // (eval, sed, format, exec, ssh, /etc/passwd, ...); only low-FP
+        // mistake guards remain.
         assert!(
-            config.deny.len() >= 19,
-            "expected at least 19 deny patterns, got {}",
-            config.deny.len()
+            !config.deny.is_empty(),
+            "expected builtin deny patterns, got none"
         );
+        // The eliminated false-positive magnets must NOT be present.
+        for eliminated in [
+            r"eval\s+",
+            r"format\s+",
+            r"exec\s+/bin/",
+            r"ssh\s+.*@",
+            "/etc/passwd",
+            "/etc/shadow",
+        ] {
+            assert!(
+                !config.deny.iter().any(|r| r.pattern == eliminated),
+                "deny pattern {eliminated:?} should have been eliminated"
+            );
+        }
 
         // Permit should be empty in builtin
         assert!(

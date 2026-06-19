@@ -53,6 +53,7 @@ use std::fmt::Write as _;
 use agent_client_protocol::schema::SessionId;
 use serde::Deserialize;
 
+use crate::review::fleet::{classify_reuse, PrefixReuse};
 use crate::review::probes::{render_probe_evidence, ProbeKind, ProbeResult};
 use crate::review::types::{extract_json_value, Finding, RefutingLayer, VerifiedFinding};
 use crate::validators::{AgentPool, PoolError};
@@ -350,18 +351,22 @@ async fn collect_verify(rx: Submitted, candidate: &Candidate, pool: &AgentPool) 
         Submitted::Fresh(rx) => collect_verdict(rx.await),
         Submitted::Forked(rx) => match rx.await {
             Ok(Ok(turn)) => {
-                match turn.fork {
-                    Some(fork) if fork.state_attached => tracing::debug!(
+                let reuse = classify_reuse(turn.fork, turn.cache_usage);
+                tracing::info!(
+                    file = %candidate.finding.file,
+                    session = %turn.session_id,
+                    reuse = reuse.label(),
+                    reused_tokens = ?reuse.reused_tokens(),
+                    cache_read_input_tokens = ?reuse.cache_read(),
+                    cache_creation_input_tokens = ?reuse.cache_created(),
+                    "verify task prefix reuse"
+                );
+                if matches!(reuse, PrefixReuse::Cold) {
+                    tracing::debug!(
                         file = %candidate.finding.file,
                         session = %turn.session_id,
-                        reused_tokens = ?fork.prefix_tokens,
-                        "verify task ran on a warm fork of the run prime"
-                    ),
-                    _ => tracing::debug!(
-                        file = %candidate.finding.file,
-                        session = %turn.session_id,
-                        "verify task fork was degraded (no parent state attached); proceeding cold"
-                    ),
+                        "verify task fork was degraded (no warm prefix reuse); proceeding cold"
+                    );
                 }
                 parse_verdict(&turn.content)
             }
@@ -1027,11 +1032,10 @@ mod tests {
             1,
             "the verify task must fork the run prime, not mint a fresh session"
         );
-        // The fork was warm — the run prime's saved state attached, with the
-        // reused token count logged.
-        assert!(logs_contain(
-            "verify task ran on a warm fork of the run prime"
-        ));
+        // The fork was warm — the run prime's saved state attached, classified
+        // as a warm KV fork with the reused token count logged.
+        assert!(logs_contain("verify task prefix reuse"));
+        assert!(logs_contain("reuse=\"warm KV fork\""));
         assert!(logs_contain(&format!(
             "reused_tokens=Some({MOCK_PREFIX_TOKENS})"
         )));
