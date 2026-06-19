@@ -11,25 +11,33 @@
 #   1. Permit patterns checked first — a match allows the command immediately
 #   2. Deny patterns checked second — a match blocks the command
 #   3. No match — command is allowed (default-allow)
+#
+# NOTE: These deny patterns are NOT a security boundary. The shell tool runs
+# AI-generated commands, and substring regex deny patterns are trivially evadable
+# (quoting, $IFS, base64, here-strings, ...). Their only purpose is to be
+# low-false-positive guards against catastrophic *mistakes* (wiping a disk,
+# `rm -rf /`). Substring patterns that constantly false-positive on legit dev
+# commands (eval, sed, format, exec, /etc/passwd in a doc grep, ...) impose cost
+# with ~zero security benefit and are deliberately NOT included.
 
 deny:
-  # Dangerous file operations
+  # Catastrophic-mistake guards — destructive, low false-positive
   - pattern: 'rm\s+-rf\s+/'
     reason: "Destructive recursive delete from root"
   - pattern: 'rm\s+-rf\s+\*'
     reason: "Destructive recursive delete of all files"
-  - pattern: 'format\s+'
-    reason: "Disk formatting command"
-  - pattern: 'mkfs\s+'
-    reason: "Filesystem creation command"
   - pattern: 'dd\s+if=.*of=/dev/'
     reason: "Raw disk write via dd"
-
-  # System modification commands
+  - pattern: 'mkfs\s+'
+    reason: "Filesystem creation command"
   - pattern: 'fdisk\s+'
     reason: "Disk partitioning command"
   - pattern: 'parted\s+'
     reason: "Disk partitioning command"
+  - pattern: 'chmod\s+\+s\s+'
+    reason: "Set SUID/SGID bit"
+
+  # System-state mistake guards (override per-project via permit if needed)
   - pattern: 'shutdown\s+'
     reason: "System shutdown command"
   - pattern: 'reboot\s+'
@@ -40,30 +48,14 @@ deny:
     reason: "System service management"
   - pattern: 'crontab\s+'
     reason: "Cron job modification"
-  - pattern: 'chmod\s+\+s\s+'
-    reason: "Set SUID/SGID bit"
 
-  # Network-based attacks
+  # Download-and-execute mistake guards (advisory, not a boundary)
   - pattern: 'wget.*http.*\|.*sh'
     reason: "Download and execute pattern"
   - pattern: 'curl.*http.*\|.*sh'
     reason: "Download and execute pattern"
   - pattern: 'nc\s+-l\s+'
     reason: "Netcat listener (reverse shell vector)"
-  - pattern: 'ssh\s+.*@'
-    reason: "SSH remote connection"
-
-  # Code execution patterns
-  - pattern: 'eval\s+'
-    reason: "Dynamic code evaluation"
-  - pattern: 'exec\s+/bin/'
-    reason: "Direct binary execution"
-
-  # Sensitive file access
-  - pattern: "/etc/passwd"
-    reason: "Access to system password file"
-  - pattern: "/etc/shadow"
-    reason: "Access to system shadow password file"
 
 permit: []
 
