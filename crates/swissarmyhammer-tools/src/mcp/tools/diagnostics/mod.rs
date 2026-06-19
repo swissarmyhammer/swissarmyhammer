@@ -48,6 +48,24 @@ use crate::mcp::tools::code_context::{
 // Shared modifier parameters (spliced into each `check` op's parameter list).
 // ---------------------------------------------------------------------------
 
+/// Severity level names, ordered most-severe first. The single source of truth
+/// for the floor names: `SEVERITY_PARAM`'s `allowed_values` enum and the test
+/// assertion both derive from this, and `SEVERITY_FLOOR_ORDER` pairs each of
+/// these names with its [`DiagnosticSeverity`]. Adding or removing a level is a
+/// one-line edit here (plus the matching `SEVERITY_FLOOR_ORDER` row).
+const SEVERITY_ERROR: &str = "error";
+const SEVERITY_WARNING: &str = "warning";
+const SEVERITY_INFO: &str = "info";
+const SEVERITY_HINT: &str = "hint";
+
+/// The closed set of severity floor names, derived from the per-level constants.
+const SEVERITY_LEVELS: &[&str] = &[
+    SEVERITY_ERROR,
+    SEVERITY_WARNING,
+    SEVERITY_INFO,
+    SEVERITY_HINT,
+];
+
 /// `severity?` — the minimum-severity floor, the enum param that carries
 /// `allowed_values`.
 const SEVERITY_PARAM: ParamMeta = ParamMeta::new("severity")
@@ -55,7 +73,7 @@ const SEVERITY_PARAM: ParamMeta = ParamMeta::new("severity")
         "Minimum severity to report (floor): everything at this level or worse. Defaults to `warning`.",
     )
     .param_type(ParamType::String)
-    .allowed_values(&["error", "warning", "info", "hint"]);
+    .allowed_values(SEVERITY_LEVELS);
 
 /// `settle_ms?` — override the quiescence window in milliseconds.
 const SETTLE_MS_PARAM: ParamMeta = ParamMeta::new("settle_ms")
@@ -237,12 +255,23 @@ impl DiagnosticsTool {
 
     /// Resolve the repository root from the session work-dir (never a stray
     /// `current_dir()` when a work-dir is set), matching the `review` tool.
+    ///
+    /// The result is **canonicalized** (symlinks resolved). The absolute paths
+    /// this root produces (via `absolutize`) are keyed against the diagnostics
+    /// the LSP server publishes, and a server like `rust-analyzer` canonicalizes
+    /// its `file://` uris (on macOS `/var` → `/private/var`). If the root were the
+    /// raw symlink path, `repo.join(rel)` would not match the server's canonical
+    /// uri and a target file's own diagnostics would silently never be folded in.
+    /// Canonicalizing here keeps both path spaces in the server's canonical form.
+    /// Falls back to the non-canonical root if canonicalization fails (e.g. the
+    /// path does not exist).
     fn repo_root(&self, context: &ToolContext) -> PathBuf {
         let working_dir = context
             .working_dir
             .clone()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-        find_git_repository_root_from(&working_dir).unwrap_or(working_dir)
+        let root = find_git_repository_root_from(&working_dir).unwrap_or(working_dir);
+        std::fs::canonicalize(&root).unwrap_or(root)
     }
 
     /// Resolve a scope to the **absolute** diagnosable files it covers (deduped,
@@ -578,10 +607,10 @@ fn config_from_args(args: &serde_json::Map<String, serde_json::Value>) -> Diagno
 /// severity above it — i.e. the prefix of this table up to and including the
 /// named floor — so the "what does this floor include" rule is data, not branches.
 const SEVERITY_FLOOR_ORDER: &[(&str, DiagnosticSeverity)] = &[
-    ("error", DiagnosticSeverity::Error),
-    ("warning", DiagnosticSeverity::Warning),
-    ("info", DiagnosticSeverity::Info),
-    ("hint", DiagnosticSeverity::Hint),
+    (SEVERITY_ERROR, DiagnosticSeverity::Error),
+    (SEVERITY_WARNING, DiagnosticSeverity::Warning),
+    (SEVERITY_INFO, DiagnosticSeverity::Info),
+    (SEVERITY_HINT, DiagnosticSeverity::Hint),
 ];
 
 /// The floor used when the requested one is unrecognised (`warning`).
@@ -642,6 +671,50 @@ mod tests {
 
     fn args(pairs: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
         pairs.as_object().unwrap().clone()
+    }
+
+    /// A context whose `working_dir` is `dir`.
+    fn context_in(dir: PathBuf) -> ToolContext {
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let agent_config = Arc::new(swissarmyhammer_config::ModelConfig::default());
+        ToolContext::new(tool_handlers, git_ops, agent_config).with_working_dir(dir)
+    }
+
+    #[test]
+    fn repo_root_canonicalizes_a_symlinked_working_dir() {
+        // The diagnostics tool keys blast-radius absolutes against the LSP
+        // server's canonicalized `file://` uris. A repo root reached through a
+        // symlink (the macOS tempdir case: `/var` -> `/private/var`) would make
+        // `repo.join(rel)` mismatch the server's canonical uri and silently drop
+        // a target's own diagnostics. `repo_root` must therefore canonicalize.
+        let real = tempfile::tempdir().expect("real repo dir");
+        let real_root = real.path();
+        // Mark it a git repo root so find_git_repository_root_from stops here.
+        std::fs::create_dir_all(real_root.join(".git")).unwrap();
+
+        // A symlink that points at the real repo root, standing in for a
+        // non-canonical path the server would resolve through.
+        let link_parent = tempfile::tempdir().expect("link parent");
+        let link = link_parent.path().join("repo-link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(real_root, &link).unwrap();
+        #[cfg(not(unix))]
+        std::os::windows::fs::symlink_dir(real_root, &link).unwrap();
+
+        let resolved = tool().repo_root(&context_in(link.clone()));
+
+        // The resolved root must be the canonical (symlink-free) path — equal to
+        // canonicalizing the real root, and never the raw symlink path.
+        assert_eq!(
+            resolved,
+            std::fs::canonicalize(real_root).unwrap(),
+            "repo_root must resolve symlinks to the server's canonical form"
+        );
+        assert_ne!(
+            resolved, link,
+            "repo_root must not return the raw symlink path"
+        );
     }
 
     #[test]
@@ -729,10 +802,14 @@ mod tests {
         ] {
             assert!(ops.iter().any(|v| v == expected), "missing op {expected}");
         }
-        // The severity modifier carries the allowed_values enum.
+        // The severity modifier carries the allowed_values enum — derived from
+        // the floor-order table so this assertion can never drift from the
+        // single source of truth for the level names.
+        let expected_levels: Vec<&str> =
+            SEVERITY_FLOOR_ORDER.iter().map(|(name, _)| *name).collect();
         assert_eq!(
             schema["properties"]["severity"]["enum"],
-            serde_json::json!(["error", "warning", "info", "hint"])
+            serde_json::json!(expected_levels)
         );
     }
 
@@ -752,9 +829,12 @@ mod tests {
 
     #[test]
     fn config_from_args_applies_overrides() {
+        // The settle override fed as input and asserted as the expected
+        // `Duration` — one constant keeps the two synchronized.
+        const TEST_SETTLE_MS: u64 = 1500;
         let args = serde_json::json!({
             "severity": "error",
-            "settle_ms": 1500,
+            "settle_ms": TEST_SETTLE_MS,
             "dependents": false
         })
         .as_object()
@@ -762,7 +842,7 @@ mod tests {
         .clone();
         let config = config_from_args(&args);
         assert_eq!(config.severities, vec![DiagnosticSeverity::Error]);
-        assert_eq!(config.settle_window, Duration::from_millis(1500));
+        assert_eq!(config.settle_window, Duration::from_millis(TEST_SETTLE_MS));
         assert!(!config.include_dependents);
     }
 
