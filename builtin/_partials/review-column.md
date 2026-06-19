@@ -6,9 +6,8 @@ partial: true
 
 ## Ensure the Review Column Exists
 
-The review workflow needs a column `id: "review"`, `name: "Review"` ordered **after `doing` and immediately before the terminal column** (conventionally `done`) — the board reads `todo → doing → review → done`. Column position is set by the integer `order` field: `review` must have an `order` greater than `doing`'s and less than `done`'s. Both `implement` and `review` must ensure it exists before moving tasks.
+The review workflow needs a column `id: "review"`, `name: "Review"` ordered **after `doing` and immediately before the terminal column** (conventionally `done`) — the board reads `todo → doing → review → done`. Column position is set by the integer `order` field: `review` must have an `order` greater than `doing`'s and less than `done`'s. 
 
-**Idempotent** — run every time; a no-op when already in place.
 
 ### Procedure
 
