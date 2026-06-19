@@ -164,31 +164,50 @@ pub async fn fan_out_over_bus(
 /// must run this on a dedicated thread (e.g. `tokio::task::spawn_blocking` or a
 /// `std::thread`), not directly on an async runtime worker.
 ///
+/// **Cooperative cancellation**: `cancel` is checked once per loop iteration. A
+/// `spawn_blocking` task cannot be force-aborted mid-`recv`, so a caller that
+/// needs to stop this loop (e.g. a follower being promoted to leader — the
+/// proxy address is deterministic by workspace hash, so an orphaned subscriber
+/// would otherwise silently reconnect to its own proxy) sets the flag and the
+/// loop exits at its next wake. The loop already wakes every ≤500ms on
+/// `recv_timeout`, so the flag is observed within one interval. A plain
+/// `Arc<AtomicBool>` checked with [`Ordering::Relaxed`](std::sync::atomic::Ordering::Relaxed)
+/// is sufficient: it is the existing cancellation primitive in the tree (neither
+/// this crate nor the tools crate depends on `tokio-util`), and the visibility
+/// guarantee of a single store→load across threads is all that is required.
+///
 /// Returns `Err` only when the subscriber cannot connect; otherwise it runs
-/// until the channel disconnects (the leader's proxy is gone).
+/// until the channel disconnects (the leader's proxy is gone) or `cancel` is set.
 pub fn subscribe_diagnostics_over_bus<F>(
     backend_addr: &str,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
     mut on_update: F,
 ) -> swissarmyhammer_leader_election::Result<()>
 where
     F: FnMut(DiagnosticsBusMessage),
 {
+    use std::sync::atomic::Ordering;
+
     let subscriber: swissarmyhammer_leader_election::Subscriber<DiagnosticsBusMessage> =
         swissarmyhammer_leader_election::Subscriber::open(backend_addr, &[DIAGNOSTICS_TOPIC])?;
     loop {
+        // Cooperative cancel: checked at every wake. This is the only reliable
+        // way to stop a follower's subscriber on promotion — an ipc disconnect
+        // surfaces as EAGAIN, not the "disconnected" string the recv arm below
+        // breaks on, so without this flag the loop would run until teardown.
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         match subscriber.recv_timeout(std::time::Duration::from_millis(500)) {
             Some(Ok(msg)) => on_update(msg),
-            // A timeout is normal quiet — keep waiting.
+            // A timeout is normal quiet — loop back and re-check the cancel flag.
             None => continue,
             Some(Err(e)) => {
                 // A disconnect ends the loop (the leader's proxy went away);
-                // any other recv error is logged and skipped.
-                //
-                // The fragility of distinguishing a disconnect by string-match
-                // here is the SAME mechanism tracked in the accepted follow-up
-                // ^343hrm0 (an ipc disconnect surfaces as EAGAIN, not
-                // "disconnected", so this loop only ends at teardown).
-                // Intentionally not fixed here — see ^343hrm0.
+                // any other recv error is logged and skipped. An ipc disconnect
+                // surfaces as EAGAIN rather than "disconnected", which is exactly
+                // why the cooperative `cancel` flag above exists — it is the
+                // dependable stop signal, this string-match is best-effort.
                 if e.to_string().contains("disconnected") {
                     break;
                 }

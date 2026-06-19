@@ -382,7 +382,9 @@ impl McpServer {
                 // Leader: supervisor spawned. Start TS indexing + file watcher
                 // and run the LSP health/indexing loop.
                 Self::start_workers_if_leader(&ws, &workspace_root);
-                Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone());
+                // The leader runs no follower diagnostics subscriber, so there is
+                // nothing to cancel on (a no-op) re-election.
+                Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone(), None);
                 Self::spawn_lsp_health_loop(lsp_handle, ws, workspace_root);
             }
             None => {
@@ -398,8 +400,12 @@ impl McpServer {
                 // A follower owns no LSP session, so it subscribes to the
                 // leader's diagnostics broadcast to receive per-uri updates the
                 // leader publishes (the cross-process fan-out's receive half).
-                Self::spawn_follower_diagnostics_subscriber(&ws);
-                Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone());
+                // The returned cancel handle is threaded into the re-election
+                // loop so the subscriber is stopped on promotion, BEFORE this
+                // process becomes the publisher (otherwise the orphaned
+                // subscriber reconnects to its own proxy and self-logs).
+                let sub_cancel = Self::spawn_follower_diagnostics_subscriber(&ws);
+                Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone(), sub_cancel);
             }
         }
     }
@@ -498,20 +504,29 @@ impl McpServer {
     /// `recv` blocks, so it runs on a blocking task. The received updates are
     /// traced today; folding them into a follower-served diagnostics view is the
     /// documented application seam (`on_update`).
+    ///
+    /// Returns the cooperative cancel handle for the spawned subscriber loop
+    /// (`None` when no bus is available, so nothing was spawned). The re-election
+    /// loop sets this flag on promotion so the orphaned follower subscriber stops
+    /// before this process becomes the leader/publisher — a `spawn_blocking` task
+    /// cannot be force-aborted mid-`recv`, so the subscriber must observe the flag
+    /// on its next ≤500ms wake (see `subscribe_diagnostics_over_bus`).
     fn spawn_follower_diagnostics_subscriber(
         ws: &Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
-    ) {
+    ) -> Option<Arc<std::sync::atomic::AtomicBool>> {
         let backend = ws
             .lock()
             .expect("workspace mutex poisoned")
             .bus_addresses()
             .map(|a| a.backend);
-        let Some(backend) = backend else {
-            return;
-        };
+        let backend = backend?;
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let loop_cancel = Arc::clone(&cancel);
         tokio::task::spawn_blocking(move || {
-            let result =
-                swissarmyhammer_diagnostics::subscribe_diagnostics_over_bus(&backend, |msg| {
+            let result = swissarmyhammer_diagnostics::subscribe_diagnostics_over_bus(
+                &backend,
+                &loop_cancel,
+                |msg| {
                     // Application seam: a follower-served diagnostics cache would
                     // fold `msg` in here, keyed by `msg.uri`. For now the receipt
                     // is traced so the cross-process fan-out is observable.
@@ -520,7 +535,8 @@ impl McpServer {
                         count = msg.diagnostics.len(),
                         "diagnostics: follower received bus update"
                     );
-                });
+                },
+            );
             if let Err(e) = result {
                 tracing::warn!(
                     error = %e,
@@ -529,17 +545,29 @@ impl McpServer {
             }
         });
         tracing::info!("diagnostics: follower subscribed to the diagnostics bus");
+        Some(cancel)
     }
 
+    /// Poll for promotion. `follower_subscriber_cancel`, when present, is the
+    /// cancel handle for this follower's diagnostics-bus subscriber; on a
+    /// successful promotion it is signaled before the leader-side publish path
+    /// starts (see `handle_promotion_result`). The leader path passes `None` (it
+    /// never started a follower subscriber).
     fn spawn_reelection_loop(
         ws: Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
         workspace_root: std::path::PathBuf,
+        follower_subscriber_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     ) {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Self::REELECTION_POLL_INTERVAL).await;
                 let promoted = try_promote_workspace(&ws);
-                if handle_promotion_result(promoted, &ws, &workspace_root) {
+                if handle_promotion_result(
+                    promoted,
+                    &ws,
+                    &workspace_root,
+                    follower_subscriber_cancel.as_ref(),
+                ) {
                     break;
                 }
             }
@@ -1895,6 +1923,7 @@ fn handle_promotion_result(
     state: PromotionState,
     ws: &Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
     workspace_root: &std::path::Path,
+    follower_subscriber_cancel: Option<&Arc<std::sync::atomic::AtomicBool>>,
 ) -> bool {
     match state {
         PromotionState::AlreadyLeader => true,
@@ -1903,6 +1932,16 @@ fn handle_promotion_result(
                 "code-context: promoted to leader for {}, starting indexing workers",
                 workspace_root.display()
             );
+            // This process is now the leader and is about to start the
+            // leader-side publish path. Stop the orphaned follower diagnostics
+            // subscriber FIRST: the bus address is deterministic by workspace
+            // hash, so a still-running subscriber would reconnect to this
+            // process's own proxy and self-log the leader's diagnostics. The
+            // subscriber loop observes this flag on its next ≤500ms wake.
+            if let Some(cancel) = follower_subscriber_cancel {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                tracing::debug!("diagnostics: signaled follower subscriber to stop on promotion");
+            }
             // After promotion this process owns the proxy; surface its bus
             // frontend so the cold re-spawn also wires the cross-process fan-out,
             // and its election request socket so the new leader serves followers.
