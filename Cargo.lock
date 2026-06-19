@@ -8435,6 +8435,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "swissarmyhammer-code-context",
+ "swissarmyhammer-leader-election",
  "swissarmyhammer-project-detection",
  "tempfile",
  "thiserror 2.0.18",

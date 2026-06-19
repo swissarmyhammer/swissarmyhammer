@@ -33,5 +33,5 @@ pub mod yaml_loader;
 pub use daemon::LspDaemon;
 pub use error::LspError;
 pub use registry::{all_servers, servers_for_extensions, servers_for_project, SERVERS};
-pub use supervisor::LspSupervisorManager;
+pub use supervisor::{LspSupervisorManager, SupervisorStartOutcome};
 pub use types::{DaemonStatus, LspDaemonState, LspServerSpec, OwnedLspServerSpec};

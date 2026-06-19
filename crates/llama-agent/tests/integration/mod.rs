@@ -14,6 +14,7 @@ mod agent_tools_mount;
 mod backward_compatibility;
 mod dual_source_shell_dedup;
 mod incremental_processing;
+mod kv_prefix_reuse_recurrent;
 mod long_conversation;
 mod long_conversation_unit;
 mod metal_gpu;

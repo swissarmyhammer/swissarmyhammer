@@ -154,6 +154,26 @@ pub struct WorkList {
     pub validators: Vec<ValidatorWork>,
 }
 
+impl WorkList {
+    /// The distinct files under review across every validator, in first-seen
+    /// order, de-duplicated by path.
+    ///
+    /// Several validators can match the same file; this yields each file once,
+    /// the first time its path appears. It is the single dedup the fan-out prime
+    /// ([`render_run_prime`](crate::review::fleet::render_run_prime)) and the
+    /// incremental-tracking baseline
+    /// ([`record_baseline_if_working`](crate::review::tracking::record_baseline_if_working))
+    /// both build their file set from. First-seen order keeps the rendered prime
+    /// byte-stable across calls.
+    pub fn distinct_files(&self) -> impl Iterator<Item = &FileWork> {
+        let mut seen = std::collections::BTreeSet::new();
+        self.validators
+            .iter()
+            .flat_map(|validator| validator.files.iter())
+            .filter(move |file| seen.insert(file.path.clone()))
+    }
+}
+
 /// One matched validator's slice of the work-list.
 #[derive(Debug, Clone, Serialize)]
 pub struct ValidatorWork {
@@ -1128,6 +1148,51 @@ mod tests {
                 .iter()
                 .map(|f| f.path.as_str())
                 .collect::<Vec<_>>()
+        );
+    }
+
+    // ---- WorkList::distinct_files ----------------------------------------
+
+    /// A minimal `FileWork` carrying only a path — enough to assert the
+    /// dedup/order semantics of [`WorkList::distinct_files`].
+    fn file_at(path: &str) -> FileWork {
+        FileWork {
+            path: path.to_string(),
+            semantic_diff: vec![],
+            changed_symbols: vec![],
+            source_slice: String::new(),
+            inlined_full: true,
+            probe_results: vec![],
+        }
+    }
+
+    fn validator_over(name: &str, paths: &[&str]) -> ValidatorWork {
+        ValidatorWork {
+            validator_name: name.to_string(),
+            severity: Severity::Warn,
+            rules: vec![],
+            probes: vec![],
+            files: paths.iter().map(|p| file_at(p)).collect(),
+        }
+    }
+
+    #[test]
+    fn distinct_files_dedups_by_path_in_first_seen_order() {
+        // Three validators; `src/shared.rs` is matched by two of them, and the
+        // overall first-seen order is b, shared, a.
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![
+                validator_over("v1", &["src/b.rs", "src/shared.rs"]),
+                validator_over("v2", &["src/shared.rs", "src/a.rs"]),
+            ],
+        };
+
+        let distinct: Vec<&str> = work.distinct_files().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            distinct,
+            vec!["src/b.rs", "src/shared.rs", "src/a.rs"],
+            "distinct_files dedups by path and preserves first-seen order"
         );
     }
 

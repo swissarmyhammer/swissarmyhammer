@@ -114,6 +114,75 @@ pub enum SessionStateForkError {
     ParentStateUnusable(String),
 }
 
+/// A scored donor candidate for [`SessionStateStore::find_best_prefix_match`].
+///
+/// A donor's value is not its raw LCP but its *effective reuse*: the KV trim
+/// removes positions `[lcp, donor_len)`, i.e. a recurrent rollback of
+/// `donor_len - lcp`. On a recurrent/hybrid model that rollback is infeasible
+/// once it exceeds the `n_rs_seq` snapshot window — `seq_rm` returns
+/// `Ok(false)` and the whole donor is discarded — so such a donor contributes
+/// zero usable prefix and is excluded entirely (see [`Candidate::evaluate`]).
+///
+/// Ordering is the full preference key (see [`Candidate::key`]) so selection is
+/// a single max over `(effective_reuse, pinned, is_current, -rollback)`:
+///   1. larger effective_reuse (more prefill skipped),
+///   2. then a pinned donor (stable, won't be evicted mid-flight),
+///   3. then the caller's own session (avoids a foreign-state copy on the warm-
+///      continuation case),
+///   4. then a smaller rollback distance (cheaper trim, safer margin).
+struct Candidate<'a> {
+    id: &'a str,
+    effective_reuse: usize,
+    pinned: bool,
+    is_current: bool,
+    // Smaller is better; compared as `Reverse` so a larger tuple wins.
+    rollback: usize,
+}
+
+impl<'a> Candidate<'a> {
+    /// Score one cached entry against `new_tokens`, returning a `Candidate`
+    /// only when it is a usable donor: it must share a non-empty prefix, carry
+    /// a prompt fingerprint, and roll back at most `max_rollback` positions.
+    /// Returns `None` for unusable donors (no fingerprint, zero LCP, or an
+    /// infeasible recurrent rollback).
+    fn evaluate(
+        id: &'a str,
+        entry: &CachedSession,
+        new_tokens: &[i32],
+        target_session_id: &str,
+        max_rollback: usize,
+    ) -> Option<Self> {
+        let cached_tokens = entry.prompt_tokens.as_ref()?;
+        let lcp = common_prefix_len(cached_tokens, new_tokens);
+        if lcp == 0 {
+            return None;
+        }
+        let rollback = cached_tokens.len() - lcp;
+        // Infeasible recurrent rollback → zero usable reuse → skip.
+        if rollback > max_rollback {
+            return None;
+        }
+        Some(Candidate {
+            id,
+            effective_reuse: lcp,
+            pinned: entry.pinned,
+            is_current: id == target_session_id,
+            rollback,
+        })
+    }
+
+    /// Preference key: larger tuple is the better donor. Rollback is inverted
+    /// so that *smaller* rollback ranks higher.
+    fn key(&self) -> (usize, bool, bool, std::cmp::Reverse<usize>) {
+        (
+            self.effective_reuse,
+            self.pinned,
+            self.is_current,
+            std::cmp::Reverse(self.rollback),
+        )
+    }
+}
+
 /// LRU, byte-bounded in-memory store of per-session llama.cpp context state for
 /// efficient multi-turn conversations (restore without disk I/O).
 ///
@@ -130,6 +199,15 @@ struct SessionStateStore {
     lru: VecDeque<String>,
     max_entries: usize,
     max_bytes: usize,
+    /// Maximum feasible recurrent-state rollback distance (in tokens) for a
+    /// donor reuse. A donor is only usable if trimming its KV to the common
+    /// prefix rolls back at most this many positions — on a recurrent/hybrid
+    /// model, `seq_rm` returns `Ok(false)` (and the whole donor is discarded)
+    /// when the rollback exceeds the context's `n_rs_seq` snapshot window.
+    /// `usize::MAX` is the pure-attention default: any rollback is feasible, so
+    /// selection reduces to plain max-LCP. The real model-derived window is
+    /// wired in a separate task.
+    max_rollback: usize,
     /// Count of budget-driven evictions ([`evict`](Self::evict)) since
     /// construction. Each increment is also emitted as a `warn!` so a
     /// pin-failure cluster is diagnosable from the log; the counter is the
@@ -140,12 +218,13 @@ struct SessionStateStore {
 }
 
 impl SessionStateStore {
-    fn new(max_entries: usize, max_bytes: usize) -> Self {
+    fn new(max_entries: usize, max_bytes: usize, max_rollback: usize) -> Self {
         Self {
             entries: HashMap::new(),
             lru: VecDeque::new(),
             max_entries: max_entries.max(1),
             max_bytes,
+            max_rollback,
             evictions: 0,
         }
     }
@@ -226,48 +305,33 @@ impl SessionStateStore {
         target_session_id: &str,
         new_tokens: &[i32],
     ) -> Option<PrefixMatch> {
-        // Pass 1: scan immutably to identify the best (id, lcp). Two-pass so
-        // we can `touch(id)` after, which mutably borrows.
-        let mut best: Option<(String, usize)> = None;
-        for (id, entry) in &self.entries {
-            let Some(cached_tokens) = entry.prompt_tokens.as_ref() else {
-                continue;
-            };
-            let lcp = common_prefix_len(cached_tokens, new_tokens);
-            if lcp == 0 {
-                continue;
-            }
-            let is_current = id == target_session_id;
-            let take = match &best {
-                None => true,
-                Some((_, best_lcp)) if lcp > *best_lcp => true,
-                // Tie-breaker: prefer the caller's own session id. Reusing
-                // own state avoids a foreign-state set_state_data copy on
-                // the typical warm-continuation case where the caller's
-                // prior turn IS the longest-matching prefix.
-                Some((best_id, best_lcp))
-                    if lcp == *best_lcp && is_current && best_id != target_session_id =>
-                {
-                    true
-                }
-                _ => false,
-            };
-            if take {
-                best = Some((id.clone(), lcp));
-            }
-        }
+        // Pass 1: scan immutably to identify the best donor. Two-pass so we
+        // can `touch(id)` after, which mutably borrows. Each entry is scored by
+        // `Candidate::evaluate` (which excludes unusable donors); the winner is
+        // a single max over the preference key (see `Candidate`).
+        let best = self
+            .entries
+            .iter()
+            .filter_map(|(id, entry)| {
+                Candidate::evaluate(id, entry, new_tokens, target_session_id, self.max_rollback)
+            })
+            .max_by_key(|c| c.key());
 
-        let (source_id, lcp) = best?;
+        let source_id = best?.id.to_string();
         self.touch(&source_id);
         let entry = self
             .entries
             .get(&source_id)
             .expect("just-touched id exists");
+        let donor_len = entry.prompt_tokens.as_ref().map_or(0, |t| t.len());
+        let lcp = common_prefix_len(entry.prompt_tokens.as_deref().unwrap_or(&[]), new_tokens);
         Some(PrefixMatch {
             source_session_id: source_id.clone(),
             state_bytes: entry.state_bytes.clone(),
             draft_state_bytes: entry.draft_state_bytes.clone(),
             lcp,
+            donor_pinned: entry.pinned,
+            donor_len,
         })
     }
 
@@ -500,6 +564,14 @@ struct PrefixMatch {
     draft_state_bytes: Option<Arc<[u8]>>,
     /// Number of leading tokens that matched the new prompt.
     lcp: usize,
+    /// Whether the selected donor entry is pinned against budget eviction.
+    /// Logged so a reuse decision is diagnosable (pinned primes are the
+    /// preferred zero-rollback donors).
+    donor_pinned: bool,
+    /// The donor's stored prompt-token length. The KV trim removes positions
+    /// `[lcp, donor_len)`, so `donor_len - lcp` is the recurrent rollback
+    /// distance the reuse incurs — logged alongside `lcp`.
+    donor_len: usize,
 }
 
 /// Floor for the session-state cache entry ceiling: enough slots to hold a
@@ -1222,9 +1294,16 @@ impl RequestQueue {
         let model_identifier =
             crate::agent::model_identifier_for_strategy(model_manager.get_config());
         let chat_template = Arc::new(ChatTemplateEngine::with_model_strategy(&model_identifier));
+        // Donor-rollback budget: a hybrid attention+recurrent model can only
+        // trim a donor's KV back as far as its `n_rs_seq` snapshot window, so
+        // the store must reject donors whose trim-to-LCP rollback exceeds it.
+        // Derived from the same model identifier the chat template uses; pure
+        // attention models stay `usize::MAX` (any rollback feasible).
+        let max_rollback = crate::agent::recurrent_rollback_window(&model_identifier);
         let session_state_cache: SessionStateCache = Arc::new(Mutex::new(SessionStateStore::new(
             default_max_cache_entries(),
             default_max_cache_bytes(),
+            max_rollback,
         )));
 
         let executor: Arc<dyn QueueExecutor> = Arc::new(ModelManagerExecutor::new(
@@ -1347,6 +1426,8 @@ impl RequestQueue {
         let session_state_cache: SessionStateCache = Arc::new(Mutex::new(SessionStateStore::new(
             default_max_cache_entries(),
             default_max_cache_bytes(),
+            // Test-harness executor mirrors production's pure-attention default.
+            usize::MAX,
         )));
         let session_config = crate::types::SessionConfig::default();
 
@@ -2565,17 +2646,22 @@ impl RequestQueue {
             state_bytes: bytes,
             draft_state_bytes,
             lcp,
+            donor_pinned,
+            donor_len,
         } = prefix_match;
 
         let is_cross_session = source_session_id != session.id.to_string();
         if is_cross_session {
             info!(
-                "Worker {} streaming: reusing cached state from session {} as prefix donor for session {} (lcp={} of {} new tokens)",
+                "Worker {} streaming: reusing cached state from session {} as prefix donor for session {} (lcp={} of {} new tokens, donor_pinned={}, donor_len={}, rollback={})",
                 worker_id,
                 source_session_id,
                 session.id,
                 lcp,
-                new_tokens.len()
+                new_tokens.len(),
+                donor_pinned,
+                donor_len,
+                donor_len - lcp
             );
         }
 
@@ -2749,11 +2835,17 @@ impl RequestQueue {
         }
 
         // Align draft KV to the same offset the target was trimmed to. The
-        // saved draft state ran past the new LCP (it ended at the prior
-        // turn's end-of-generation); the rollback distance is the prior
-        // turn's generation length. Same `Ok(false)` silent-failure path as
-        // the target trim — fall back to skipping MTP rather than running
-        // with stale KV positions tripping M-RoPE's invariant.
+        // draft state was snapshotted at the donor's PROMPT boundary (the
+        // `on_prefill_complete` hook in `generation/mtp/streaming.rs` fires
+        // before any token is generated), so it rides in the same cache entry
+        // as the target bytes and ends at `donor_len`. Trimming it to `offset`
+        // (= the target's LCP) therefore rolls back the same tiny `donor_len -
+        // offset` distance the target rolled back — NOT a multi-hundred-token
+        // generation tail. So whenever the target trim is feasible under the
+        // recurrent window, this one is too, and MTP survives. Same `Ok(false)`
+        // silent-failure path as the target trim — fall back to skipping MTP
+        // rather than running with stale KV positions tripping M-RoPE's
+        // invariant.
         let trim_result = draft_ctx.clear_kv_cache_seq(Some(0), Some(offset as u32), None);
         match trim_result {
             Ok(true) => true,
@@ -4929,11 +5021,16 @@ mod tests {
     mod free_fn_unit_tests {
         use super::*;
 
+        /// Recurrent-state snapshot window (in tokens) used by the
+        /// rollback-feasibility donor-selection tests: a donor trim that rolls
+        /// the recurrent state back further than this is infeasible.
+        const RECURRENT_WINDOW_SIZE: usize = 64;
+
         #[test]
         fn store_evicts_lru_first_keeping_the_active_session() {
             // entry budget of 2; insert A, B, touch A (now MRU), insert C.
             // The least-recently-used (B) must be evicted, NOT the active A.
-            let mut store = SessionStateStore::new(2, usize::MAX);
+            let mut store = SessionStateStore::new(2, usize::MAX, usize::MAX);
             store.insert("A".into(), state(1, 10), None, None);
             store.insert("B".into(), state(2, 10), None, None);
             assert!(store.get("A").is_some(), "touch A → most-recently-used");
@@ -4949,7 +5046,7 @@ mod tests {
         fn store_evicts_to_stay_within_byte_budget() {
             // Byte budget of 25 with 10-byte entries: only 2 fit; a 3rd evicts the
             // LRU even though the entry count (3) would otherwise be allowed.
-            let mut store = SessionStateStore::new(100, 25);
+            let mut store = SessionStateStore::new(100, 25, usize::MAX);
             store.insert("A".into(), state(1, 10), None, None);
             store.insert("B".into(), state(2, 10), None, None);
             store.insert("C".into(), state(3, 10), None, None);
@@ -4964,7 +5061,7 @@ mod tests {
         fn store_always_keeps_at_least_one_entry() {
             // Even a single entry larger than the byte budget is retained — we
             // never evict the only (most-recently-used) entry.
-            let mut store = SessionStateStore::new(4, 8);
+            let mut store = SessionStateStore::new(4, 8, usize::MAX);
             store.insert("solo".into(), state(1, 100), None, None);
             assert_eq!(store.len(), 1, "the only entry is never evicted");
             assert!(store.contains("solo"));
@@ -4974,7 +5071,7 @@ mod tests {
         fn store_remove_frees_one_session_and_its_bytes() {
             // Lifecycle-driven reclamation: removing a single ended session drops
             // exactly its entry, its bytes, and its LRU slot, leaving the rest.
-            let mut store = SessionStateStore::new(4, usize::MAX);
+            let mut store = SessionStateStore::new(4, usize::MAX, usize::MAX);
             store.insert("A".into(), state(1, 10), None, None);
             store.insert("B".into(), state(2, 20), None, None);
             assert_eq!(store.cur_bytes(), 30);
@@ -4995,7 +5092,7 @@ mod tests {
             // Unlike budget eviction (which always keeps the MRU entry), explicit
             // reclamation of a known-dead session must be able to empty the store
             // — otherwise the last ended session's KV would stay pinned forever.
-            let mut store = SessionStateStore::new(4, usize::MAX);
+            let mut store = SessionStateStore::new(4, usize::MAX, usize::MAX);
             store.insert("only".into(), state(1, 10), None, None);
             assert!(store.remove("only"));
             assert_eq!(store.len(), 0, "remove is not subject to keep-at-least-one");
@@ -5004,7 +5101,7 @@ mod tests {
 
         #[test]
         fn store_remove_absent_session_is_a_noop() {
-            let mut store = SessionStateStore::new(4, usize::MAX);
+            let mut store = SessionStateStore::new(4, usize::MAX, usize::MAX);
             store.insert("A".into(), state(1, 10), None, None);
             assert!(
                 !store.remove("missing"),
@@ -5016,7 +5113,7 @@ mod tests {
 
         #[test]
         fn store_insert_replaces_and_tracks_bytes() {
-            let mut store = SessionStateStore::new(4, usize::MAX);
+            let mut store = SessionStateStore::new(4, usize::MAX, usize::MAX);
             store.insert("A".into(), state(1, 10), None, None);
             store.insert("A".into(), state(1, 30), None, None); // replace, larger
             assert_eq!(store.len(), 1, "replacing an id does not add an entry");
@@ -5025,7 +5122,7 @@ mod tests {
 
         #[test]
         fn store_get_returns_bytes_and_fingerprint() {
-            let mut store = SessionStateStore::new(4, usize::MAX);
+            let mut store = SessionStateStore::new(4, usize::MAX, usize::MAX);
             store.insert(
                 "A".into(),
                 state(7, 3),
@@ -5046,7 +5143,7 @@ mod tests {
         /// the same agent each pay a full cold 28k-token prefill.
         #[test]
         fn find_best_prefix_match_returns_cross_session_donor() {
-            let mut store = SessionStateStore::new(8, usize::MAX);
+            let mut store = SessionStateStore::new(8, usize::MAX, usize::MAX);
             // Session A has a long cached prefix.
             store.insert(
                 "A".into(),
@@ -5064,13 +5161,120 @@ mod tests {
             assert_eq!(m.lcp, 3);
         }
 
+        /// Rollback-aware selection: under a finite recurrent window, a pinned
+        /// prime donor whose KV trim costs ZERO rollback (the donor IS the
+        /// shared prefix) must win over a sibling whose marginally-longer LCP
+        /// requires a rollback that exceeds the window. A pure max-LCP selector
+        /// picks the sibling (longer LCP) — this asserts the prime instead.
+        #[test]
+        fn find_best_prefix_match_prefers_zero_rollback_prime_under_recurrent_window() {
+            // Recurrent snapshot window of RECURRENT_WINDOW_SIZE tokens.
+            let mut store = SessionStateStore::new(8, usize::MAX, RECURRENT_WINDOW_SIZE);
+
+            // The shared prime prefix: a system+tools header.
+            let prefix: Vec<i32> = (0..200).collect();
+
+            // Pinned prime donor: tokens == the prefix exactly (len P). Reusing
+            // it against a prompt that extends the prefix costs zero rollback —
+            // its whole cache is a strict prefix of the new prompt.
+            store.insert_pinned("prime".into(), state(1, 4), Some(prefix.clone()));
+
+            // Unpinned sibling donor: prefix + a divergent middle + fileA. Its
+            // LCP with the new prompt is longer (it shares prefix + the common
+            // "extra" middle), but trimming its KV back to that LCP rolls the
+            // recurrent state back by ~670 tokens — far beyond the
+            // RECURRENT_WINDOW_SIZE window,
+            // so it is infeasible.
+            let extra: Vec<i32> = (1000..1100).collect();
+            let file_a: Vec<i32> = (5000..5670).collect();
+            let mut sibling_tokens = prefix.clone();
+            sibling_tokens.extend_from_slice(&extra);
+            sibling_tokens.extend_from_slice(&file_a);
+            store.insert(
+                "sibling".into(),
+                state(2, 4),
+                Some(sibling_tokens.clone()),
+                None,
+            );
+
+            // New prompt for a fresh session: prefix + the same extra middle +
+            // a DIFFERENT file (fileB). It shares (prefix + extra) with the
+            // sibling — a long LCP — but diverges at fileB.
+            let file_b: Vec<i32> = (6000..6670).collect();
+            let mut new_prompt = prefix.clone();
+            new_prompt.extend_from_slice(&extra);
+            new_prompt.extend_from_slice(&file_b);
+
+            // Sanity: the sibling's raw LCP genuinely exceeds the prime's.
+            let sibling_lcp = common_prefix_len(&sibling_tokens, &new_prompt);
+            assert!(
+                sibling_lcp > prefix.len(),
+                "sibling must have the longer raw LCP for this test to mean anything (got {} vs prime {})",
+                sibling_lcp,
+                prefix.len()
+            );
+            // And the sibling's rollback (donor_len - lcp) must exceed the window.
+            assert!(
+                sibling_tokens.len() - sibling_lcp > RECURRENT_WINDOW_SIZE,
+                "sibling rollback must exceed the recurrent window"
+            );
+
+            let m = store
+                .find_best_prefix_match("fresh", &new_prompt)
+                .expect("must return a feasible donor");
+            assert_eq!(
+                m.source_session_id, "prime",
+                "zero-rollback pinned prime must win over the infeasible-rollback sibling"
+            );
+            assert_eq!(m.lcp, prefix.len(), "prime donates its full prefix");
+        }
+
+        /// No regression: with `max_rollback == usize::MAX` (pure-attention
+        /// default), every rollback is feasible, so selection is plain max-LCP
+        /// and the deepest donor still wins — even an unpinned one over a pinned
+        /// shorter-LCP donor.
+        #[test]
+        fn find_best_prefix_match_unbounded_rollback_keeps_max_lcp() {
+            let mut store = SessionStateStore::new(8, usize::MAX, usize::MAX);
+
+            let prefix: Vec<i32> = (0..200).collect();
+            store.insert_pinned("prime".into(), state(1, 4), Some(prefix.clone()));
+
+            let extra: Vec<i32> = (1000..1100).collect();
+            let file_a: Vec<i32> = (5000..5670).collect();
+            let mut sibling_tokens = prefix.clone();
+            sibling_tokens.extend_from_slice(&extra);
+            sibling_tokens.extend_from_slice(&file_a);
+            store.insert(
+                "sibling".into(),
+                state(2, 4),
+                Some(sibling_tokens.clone()),
+                None,
+            );
+
+            let file_b: Vec<i32> = (6000..6670).collect();
+            let mut new_prompt = prefix.clone();
+            new_prompt.extend_from_slice(&extra);
+            new_prompt.extend_from_slice(&file_b);
+
+            let expected_lcp = common_prefix_len(&sibling_tokens, &new_prompt);
+            let m = store
+                .find_best_prefix_match("fresh", &new_prompt)
+                .expect("must return a donor");
+            assert_eq!(
+                m.source_session_id, "sibling",
+                "unbounded rollback preserves max-LCP selection (the sibling wins)"
+            );
+            assert_eq!(m.lcp, expected_lcp);
+        }
+
         /// Tie-break: when both the caller's own session AND another session
         /// share the same lcp, pick the caller's own — avoids an unnecessary
         /// foreign-state copy on the typical warm-continuation case where
         /// the session's own prior turn IS the longest match.
         #[test]
         fn find_best_prefix_match_prefers_current_session_on_tie() {
-            let mut store = SessionStateStore::new(8, usize::MAX);
+            let mut store = SessionStateStore::new(8, usize::MAX, usize::MAX);
             store.insert("A".into(), state(1, 4), Some(vec![10, 20, 30]), None);
             store.insert("B".into(), state(2, 4), Some(vec![10, 20, 30]), None);
             let m = store
@@ -5084,7 +5288,7 @@ mod tests {
         /// the prefill we can skip.
         #[test]
         fn find_best_prefix_match_picks_deepest_lcp_across_sessions() {
-            let mut store = SessionStateStore::new(8, usize::MAX);
+            let mut store = SessionStateStore::new(8, usize::MAX, usize::MAX);
             // Session A: full 5-token prefix.
             store.insert(
                 "A".into(),
@@ -5108,7 +5312,7 @@ mod tests {
         /// No cached entry shares ANY prefix → no donor.
         #[test]
         fn find_best_prefix_match_returns_none_without_overlap() {
-            let mut store = SessionStateStore::new(8, usize::MAX);
+            let mut store = SessionStateStore::new(8, usize::MAX, usize::MAX);
             store.insert("A".into(), state(1, 4), Some(vec![10, 20]), None);
             assert!(store.find_best_prefix_match("B", &[99, 100, 101]).is_none());
         }
@@ -5118,7 +5322,7 @@ mod tests {
         /// we cannot verify their prefix.
         #[test]
         fn find_best_prefix_match_skips_unfingerprinted_entries() {
-            let mut store = SessionStateStore::new(8, usize::MAX);
+            let mut store = SessionStateStore::new(8, usize::MAX, usize::MAX);
             store.insert("batch-only".into(), state(1, 4), None, None);
             assert!(store.find_best_prefix_match("B", &[10, 20, 30]).is_none());
         }
@@ -5128,7 +5332,7 @@ mod tests {
             // Both target and draft bytes count against the byte budget so a
             // large pair of (target, draft) snapshots is correctly accounted
             // for under LRU pressure.
-            let mut store = SessionStateStore::new(100, 30);
+            let mut store = SessionStateStore::new(100, 30, usize::MAX);
             store.insert("A".into(), state(1, 10), None, Some(state(2, 10))); // 20
             store.insert("B".into(), state(3, 10), None, Some(state(4, 10))); // 40 total
                                                                               // budget 30 < 40 → LRU 'A' evicted, only 'B' remains
@@ -5199,7 +5403,7 @@ mod tests {
         /// and the restore needs zero rollback.
         #[test]
         fn fork_aliases_parent_state_with_parent_fingerprint() {
-            let mut store = SessionStateStore::new(8, usize::MAX);
+            let mut store = SessionStateStore::new(8, usize::MAX, usize::MAX);
             store.insert("parent".into(), state(1, 100), Some(vec![10, 20, 30]), None);
 
             let info = store
@@ -5227,7 +5431,7 @@ mod tests {
         /// (new) bytes.
         #[test]
         fn fork_shares_blob_bytes_counted_once() {
-            let mut store = SessionStateStore::new(8, usize::MAX);
+            let mut store = SessionStateStore::new(8, usize::MAX, usize::MAX);
             store.insert(
                 "parent".into(),
                 state(1, 100),
@@ -5253,7 +5457,7 @@ mod tests {
         /// A forked child's own save must not mutate the parent's entry.
         #[test]
         fn forked_child_save_leaves_parent_untouched() {
-            let mut store = SessionStateStore::new(8, usize::MAX);
+            let mut store = SessionStateStore::new(8, usize::MAX, usize::MAX);
             store.insert("parent".into(), state(1, 100), Some(vec![10, 20, 30]), None);
             store.fork("parent", "child".to_string()).expect("fork");
 
@@ -5275,7 +5479,7 @@ mod tests {
         /// snapshot has no prompt fingerprint (not strict-prefix restorable).
         #[test]
         fn fork_failures_are_distinguishable() {
-            let mut store = SessionStateStore::new(8, usize::MAX);
+            let mut store = SessionStateStore::new(8, usize::MAX, usize::MAX);
             assert!(matches!(
                 store.fork("missing", "child".to_string()),
                 Err(SessionStateForkError::ParentStateNotFound(_))
@@ -5292,7 +5496,7 @@ mod tests {
         /// for sessions with no snapshot.
         #[test]
         fn status_reports_saved_pinned_and_token_count() {
-            let mut store = SessionStateStore::new(8, usize::MAX);
+            let mut store = SessionStateStore::new(8, usize::MAX, usize::MAX);
             assert!(store.status("missing").is_none());
 
             store.insert("a".into(), state(1, 25), Some(vec![10, 20]), None);
@@ -5315,7 +5519,7 @@ mod tests {
         /// Pinned entries survive cache pressure that evicts unpinned ones.
         #[test]
         fn pinned_entry_survives_eviction_pressure() {
-            let mut store = SessionStateStore::new(2, usize::MAX);
+            let mut store = SessionStateStore::new(2, usize::MAX, usize::MAX);
             store.insert("pinned".into(), state(1, 10), Some(vec![1]), None);
             assert!(store.set_pinned("pinned", true));
 
@@ -5332,7 +5536,7 @@ mod tests {
         /// Unpinning re-exposes the entry to eviction on the next pressure.
         #[test]
         fn unpinned_entry_is_evicted_after_unpin() {
-            let mut store = SessionStateStore::new(2, usize::MAX);
+            let mut store = SessionStateStore::new(2, usize::MAX, usize::MAX);
             store.insert("a".into(), state(1, 10), Some(vec![1]), None);
             assert!(store.set_pinned("a", true));
             store.insert("b".into(), state(2, 10), None, None);
@@ -5350,7 +5554,7 @@ mod tests {
         /// deadlocks or evicts the active insert.
         #[test]
         fn eviction_terminates_when_everything_is_pinned() {
-            let mut store = SessionStateStore::new(8, 25);
+            let mut store = SessionStateStore::new(8, 25, usize::MAX);
             store.insert("a".into(), state(1, 20), Some(vec![1]), None);
             assert!(store.set_pinned("a", true));
 
@@ -5371,7 +5575,7 @@ mod tests {
         /// the caller knows the session is gone, which trumps the pin.
         #[test]
         fn lifecycle_remove_reclaims_pinned_entries() {
-            let mut store = SessionStateStore::new(8, usize::MAX);
+            let mut store = SessionStateStore::new(8, usize::MAX, usize::MAX);
             store.insert("a".into(), state(1, 10), Some(vec![1]), None);
             assert!(store.set_pinned("a", true));
             assert!(store.remove("a"));
@@ -5450,7 +5654,7 @@ mod tests {
             let n = 15usize;
             let entry_bytes = 100usize;
             let budget = 3 * entry_bytes;
-            let mut store = SessionStateStore::new(n + 5, budget);
+            let mut store = SessionStateStore::new(n + 5, budget, usize::MAX);
 
             for i in 0..n {
                 let id = format!("validator-{i}");
@@ -5483,7 +5687,7 @@ mod tests {
             let n = 15usize;
             let entry_bytes = 100usize;
             let budget = 3 * entry_bytes;
-            let mut store = SessionStateStore::new(n + 5, budget);
+            let mut store = SessionStateStore::new(n + 5, budget, usize::MAX);
 
             // All saves first (the GPU-serialized prime turns), then all pins —
             // the production prime→status→pin protocol's window.
@@ -5509,7 +5713,7 @@ mod tests {
         /// would itself exceed the whole byte budget.
         #[test]
         fn pinned_entry_survives_a_single_oversized_save() {
-            let mut store = SessionStateStore::new(8, 50);
+            let mut store = SessionStateStore::new(8, 50, usize::MAX);
             store.insert_pinned("prefix".into(), state(1, 40), Some(vec![1]));
             assert!(store.status("prefix").unwrap().pinned);
 
@@ -5534,7 +5738,7 @@ mod tests {
             // counter is the deterministic in-process observable (a `warn!`
             // only reaches whichever tracing subscriber is installed, which is
             // racy to capture under the concurrent test harness).
-            let mut store = SessionStateStore::new(100, 25);
+            let mut store = SessionStateStore::new(100, 25, usize::MAX);
             store.insert("a".into(), state(1, 10), None, None);
             store.insert("b".into(), state(2, 10), None, None);
             assert_eq!(
@@ -5554,6 +5758,187 @@ mod tests {
             assert!(
                 !store.contains("a"),
                 "the LRU entry was the eviction victim"
+            );
+        }
+
+        /// Recurrent snapshot window (in tokens) for the fork-chain selection
+        /// test: a donor trim that rolls the recurrent state back further than
+        /// this is infeasible (`seq_rm` → `Ok(false)`). The production hybrid
+        /// Qwen window is 64; reused here so the test exercises the SAME finite
+        /// constraint the model runs under, not the unbounded pure-attention
+        /// default.
+        const FORK_CHAIN_WINDOW: usize = 64;
+
+        /// The model-free reproduction of the production "no usable cached
+        /// prefix across N donors" symptom for a FORK CHAIN, under the finite
+        /// recurrent rollback window the live Qwen model runs with.
+        ///
+        /// This drives the REAL [`SessionStateStore::fork`] entrypoint (not a
+        /// hand-built aliased entry) twice in a chain — parent → child →
+        /// grandchild — then asks the selector for each forked generation's own
+        /// turn the way the worker does ([`find_best_prefix_match`] keyed on the
+        /// caller's own session id, with `new_tokens` = the donor's saved tokens
+        /// plus a long divergent suffix well over the window). Each generation
+        /// MUST select its OWN parent-derived donor at `rollback == 0` so the
+        /// restore is forward-only and never trips the recurrent fallback —
+        /// regardless of the suffix length, which is the whole point of forking
+        /// over a cross-session LCP match.
+        ///
+        /// Why this is the production reproduction: if `fork` failed to carry
+        /// the parent's prompt-token fingerprint onto the child (the suspected
+        /// failure class), the child's entry would have `prompt_tokens == None`,
+        /// `Candidate::evaluate` would reject it, the scan would find NO usable
+        /// donor, and the child would cold-reprocess its full prompt — exactly
+        /// the live symptom. Under a finite window a non-strict-prefix reuse
+        /// (e.g. selecting a sibling whose deep-rollback trim is infeasible)
+        /// would also be excluded, so a rollback-0 hit on the OWN donor is the
+        /// only way every link in the chain reuses its full prefix.
+        #[test]
+        fn fork_chain_each_generation_reuses_own_donor_at_zero_rollback() {
+            let mut store = SessionStateStore::new(8, usize::MAX, FORK_CHAIN_WINDOW);
+
+            // A long shared header — the validator system+tools prefix — far
+            // longer than the window, so a non-strict-prefix donor selection
+            // would roll back past the window and be rejected.
+            let parent_tokens: Vec<i32> = (0..300).collect();
+            store.insert(
+                "parent".into(),
+                state(1, 128),
+                Some(parent_tokens.clone()),
+                None,
+            );
+
+            // --- Link 1: fork the child off the parent via the REAL entrypoint.
+            let child_info = store
+                .fork("parent", "child".to_string())
+                .expect("fork of a saved parent must succeed");
+            assert_eq!(
+                child_info.prefix_tokens,
+                parent_tokens.len(),
+                "fork must report the parent's full saved token count"
+            );
+
+            // The child's own turn renders parent_tokens ++ a long divergent
+            // suffix (a different reviewed file), well over the window.
+            let child_suffix: Vec<i32> = (10_000..10_200).collect();
+            let mut child_tokens = parent_tokens.clone();
+            child_tokens.extend_from_slice(&child_suffix);
+            assert!(
+                child_tokens.len() - parent_tokens.len() > FORK_CHAIN_WINDOW,
+                "the child's divergent suffix must exceed the recurrent window so \
+                 only a strict-prefix (rollback-0) donor can serve it"
+            );
+
+            let child_match = store
+                .find_best_prefix_match("child", &child_tokens)
+                .expect("the child's own parent-derived donor must be selected");
+            assert_eq!(
+                child_match.source_session_id, "child",
+                "the child must reuse its OWN aliased entry, not a foreign donor"
+            );
+            assert_eq!(
+                child_match.lcp,
+                parent_tokens.len(),
+                "the child's reuse must cover the parent's full saved prefix"
+            );
+            assert_eq!(
+                child_match.donor_len - child_match.lcp,
+                0,
+                "the child's restore must be a zero-rollback forward-only decode \
+                 (the donor IS a strict prefix of the child's prompt)"
+            );
+            assert_eq!(
+                streaming_reuse_decision(child_match.lcp, child_tokens.len()),
+                Some(parent_tokens.len()),
+                "the streaming decision must resume at exactly the donor length"
+            );
+
+            // The child takes its own end-of-turn boundary save (copy-on-write):
+            // its entry now carries child_tokens. This is the donor the
+            // grandchild's fork aliases — proving reuse compounds down a chain,
+            // not just one level.
+            store.insert(
+                "child".into(),
+                state(2, 160),
+                Some(child_tokens.clone()),
+                None,
+            );
+
+            // --- Link 2: fork a grandchild off the (now-saved) child.
+            let grandchild_info = store
+                .fork("child", "grandchild".to_string())
+                .expect("fork of a saved child must succeed");
+            assert_eq!(
+                grandchild_info.prefix_tokens,
+                child_tokens.len(),
+                "the grandchild inherits the child's full saved token count"
+            );
+
+            let grandchild_suffix: Vec<i32> = (20_000..20_200).collect();
+            let mut grandchild_tokens = child_tokens.clone();
+            grandchild_tokens.extend_from_slice(&grandchild_suffix);
+
+            let grandchild_match = store
+                .find_best_prefix_match("grandchild", &grandchild_tokens)
+                .expect("the grandchild's own child-derived donor must be selected");
+            assert_eq!(
+                grandchild_match.source_session_id, "grandchild",
+                "the grandchild must reuse its OWN aliased entry"
+            );
+            assert_eq!(
+                grandchild_match.lcp,
+                child_tokens.len(),
+                "the grandchild's reuse must cover the child's full saved prefix \
+                 (the parent header + the child's whole first-turn suffix)"
+            );
+            assert_eq!(
+                grandchild_match.donor_len - grandchild_match.lcp,
+                0,
+                "the grandchild's restore must also be a zero-rollback forward-only decode"
+            );
+        }
+
+        /// Edge case from the card: a forked child whose own turn renders to
+        /// EXACTLY the parent's saved tokens (a zero-length divergent suffix)
+        /// must be treated as "fully cached, decode nothing new," never a cold
+        /// reprocess. The donor selection still names the child's own entry with
+        /// `lcp == donor_len`; only `streaming_reuse_decision` then returns
+        /// `None` because there is nothing new to decode (`lcp >= new_len`) —
+        /// which the worker handles as "skip prefill," NOT a cache miss.
+        #[test]
+        fn fork_empty_suffix_is_fully_cached_not_a_cold_reprocess() {
+            let mut store = SessionStateStore::new(8, usize::MAX, FORK_CHAIN_WINDOW);
+            let parent_tokens: Vec<i32> = (0..120).collect();
+            store.insert(
+                "parent".into(),
+                state(1, 64),
+                Some(parent_tokens.clone()),
+                None,
+            );
+            store.fork("parent", "child".to_string()).expect("fork");
+
+            // The child's prompt renders to EXACTLY the parent's saved tokens.
+            let m = store
+                .find_best_prefix_match("child", &parent_tokens)
+                .expect("the child's own donor must still be FOUND for an empty suffix");
+            assert_eq!(m.source_session_id, "child");
+            assert_eq!(
+                m.lcp,
+                parent_tokens.len(),
+                "the empty-suffix child shares its entire prompt with the donor"
+            );
+            assert_eq!(
+                m.donor_len - m.lcp,
+                0,
+                "an empty suffix is the ultimate zero-rollback case"
+            );
+            // The whole prompt is cached: there is nothing new to decode. This
+            // is a "fully cached" hit, distinguished from a `lcp == 0` cache
+            // MISS — the worker decodes zero new tokens, never a cold reprocess.
+            assert_eq!(
+                streaming_reuse_decision(m.lcp, parent_tokens.len()),
+                None,
+                "a fully-cached fork decodes nothing new — NOT a cold reprocess"
             );
         }
     }
