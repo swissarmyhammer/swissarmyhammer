@@ -54,6 +54,18 @@ impl fmt::Debug for WorkspaceMode {
     }
 }
 
+/// The leader-election file paths a [`CodeContextWorkspace`] caches.
+///
+/// Bundles the lock and request-socket paths so the two role constructors take
+/// one argument instead of two; both are read off the [`LeaderElection`] before
+/// the election runs and outlive the guard.
+struct ElectionPaths {
+    /// The leader-election lock file (peeked for the leader PID).
+    lock_path: PathBuf,
+    /// The leader-election request socket the leader binds / a follower dials.
+    socket_path: PathBuf,
+}
+
 /// Manages the `.code-context/` directory and database lifecycle
 pub struct CodeContextWorkspace {
     /// The mode (leader or follower)
@@ -65,6 +77,12 @@ pub struct CodeContextWorkspace {
     /// Path to the leader-election lock file (used by followers to identify
     /// the leader PID for diagnostic messages).
     lock_path: PathBuf,
+    /// Path to the leader-election request socket. The leader binds a
+    /// `RequestServer` here and serves the SAH request API; a follower connects
+    /// a `SessionRequestClient` to it to route diagnose/LSP queries to the
+    /// leader. Surfaced (alongside [`Self::lock_path`]) so the tool layer can
+    /// build that client without re-deriving the election paths.
+    socket_path: PathBuf,
 }
 
 impl fmt::Debug for CodeContextWorkspace {
@@ -100,15 +118,20 @@ impl CodeContextWorkspace {
         let election_config = ElectionConfig::new().with_prefix("code-context");
         let election = LeaderElection::with_config(workspace_root, election_config);
         let lock_path = election.lock_path().to_path_buf();
+        let socket_path = election.socket_path().to_path_buf();
 
         let db_path = context_dir.join(DB_NAME);
 
+        let paths = ElectionPaths {
+            lock_path,
+            socket_path,
+        };
         match election.elect().map_err(CodeContextError::Election)? {
             ElectionOutcome::Leader(guard) => {
-                Self::open_as_leader(workspace_root, context_dir, lock_path, &db_path, guard)
+                Self::open_as_leader(workspace_root, context_dir, paths, &db_path, guard)
             }
             ElectionOutcome::Follower(follower) => {
-                Self::open_as_follower(workspace_root, context_dir, lock_path, &db_path, follower)
+                Self::open_as_follower(workspace_root, context_dir, paths, &db_path, follower)
             }
         }
     }
@@ -118,7 +141,7 @@ impl CodeContextWorkspace {
     fn open_as_leader(
         workspace_root: &Path,
         context_dir: PathBuf,
-        lock_path: PathBuf,
+        paths: ElectionPaths,
         db_path: &Path,
         guard: LeaderGuard,
     ) -> Result<Self, CodeContextError> {
@@ -141,7 +164,8 @@ impl CodeContextWorkspace {
             mode: WorkspaceMode::Leader { db, _guard: guard },
             workspace_root: workspace_root.to_path_buf(),
             context_dir,
-            lock_path,
+            lock_path: paths.lock_path,
+            socket_path: paths.socket_path,
         })
     }
 
@@ -165,7 +189,7 @@ impl CodeContextWorkspace {
     fn open_as_follower(
         workspace_root: &Path,
         context_dir: PathBuf,
-        lock_path: PathBuf,
+        paths: ElectionPaths,
         db_path: &Path,
         follower: FollowerGuard,
     ) -> Result<Self, CodeContextError> {
@@ -187,7 +211,8 @@ impl CodeContextWorkspace {
             mode: WorkspaceMode::Follower { db, follower },
             workspace_root: workspace_root.to_path_buf(),
             context_dir,
-            lock_path,
+            lock_path: paths.lock_path,
+            socket_path: paths.socket_path,
         })
     }
 
@@ -317,6 +342,24 @@ impl CodeContextWorkspace {
     pub fn context_dir(&self) -> &Path {
         &self.context_dir
     }
+
+    /// Path to the leader-election request socket.
+    ///
+    /// The leader binds a request server here (serving the SAH request API onto
+    /// its single LSP session); a follower dials this socket to route a
+    /// `diagnose` / LSP query to the leader. Paired with [`Self::lock_path`] to
+    /// construct the follower-side client.
+    pub fn socket_path(&self) -> &Path {
+        &self.socket_path
+    }
+
+    /// Path to the leader-election lock file.
+    ///
+    /// Peeked (via [`peek_leader_pid`](swissarmyhammer_leader_election::peek_leader_pid))
+    /// to attribute a "no leader bound" connect failure to the leader PID.
+    pub fn lock_path(&self) -> &Path {
+        &self.lock_path
+    }
 }
 
 /// Best-effort attempt to bring a legacy on-disk schema up to the current
@@ -428,6 +471,28 @@ mod tests {
 
         let gitignore = fs::read_to_string(ws.context_dir().join(".gitignore")).unwrap();
         assert_eq!(gitignore, "*\n");
+    }
+
+    #[test]
+    fn test_socket_and_lock_paths_are_exposed() {
+        // The tool layer constructs a SessionRequestClient from these two paths
+        // (the election socket the leader binds, and the lock file the follower
+        // peeks for the leader PID), so the workspace must surface both.
+        let dir = tempfile::tempdir().unwrap();
+        let ws = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        // Both paths live under the same election prefix and are siblings.
+        let socket = ws.socket_path();
+        let lock = ws.lock_path();
+        assert_eq!(socket.parent(), lock.parent());
+        assert!(
+            socket.extension().is_some_and(|e| e == "sock"),
+            "socket path should be a .sock: {}",
+            socket.display()
+        );
+        // The lock path matches the one the workspace already uses for the
+        // follower read-only diagnostic.
+        assert_eq!(lock, ws.lock_path());
     }
 
     #[test]

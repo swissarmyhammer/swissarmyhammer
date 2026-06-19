@@ -50,6 +50,12 @@ pub use request_api::{
     dispatch, serve_session_requests, SessionRequestClient, METHOD_DIAGNOSE, METHOD_LSP_REQUEST,
 };
 pub use settle::{settle, settle_stream, SettleOutcome, Timer, TokioTimer};
+/// The request-IPC error type and the leader-side request server, re-exported so
+/// consumers can serve / route the SAH request API without depending on the
+/// leader-election crate directly. [`IpcError`] carries the typed not-leader
+/// (leader-pid) failure a follower surfaces; [`RequestServer`] is what the leader
+/// binds at the election socket and hands to [`serve_session_requests`].
+pub use swissarmyhammer_leader_election::request_ipc::{IpcError, RequestServer};
 pub use swissarmyhammer_lsp::DiagnosticSeverity;
 pub use watcher::{
     refresh_changed_files, refresh_changed_files_notified, refresh_file, start_diagnostics_watcher,

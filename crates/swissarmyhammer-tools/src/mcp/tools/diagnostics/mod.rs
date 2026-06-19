@@ -32,7 +32,8 @@ use rmcp::model::CallToolResult;
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_diagnostics::{
     diagnose_with_outcome, is_diagnosable, BlastRadiusDependents, Dependents, DiagnoseOutcome,
-    DiagnosticSeverity, DiagnosticsConfig, DiagnosticsReport, PrecomputedDependents, TokioTimer,
+    DiagnosticSeverity, DiagnosticsConfig, DiagnosticsReport, IpcError, PrecomputedDependents,
+    SessionRequestClient, TokioTimer,
 };
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_operations::{
@@ -330,7 +331,17 @@ impl DiagnosticsTool {
         let repo = self.repo_root(context);
         let paths = self.resolve_paths(scope, &repo)?;
 
-        let outcome = produce_outcome(&paths, &repo, context, &config).await;
+        // A follower with no in-process session routes to the leader; a failure
+        // to reach it is the typed not-leader / leader-pid error, surfaced to the
+        // caller rather than reported as an empty (and misleadingly clean) report.
+        let outcome = produce_outcome(&paths, &repo, context, &config)
+            .await
+            .map_err(|e| {
+                rmcp::ErrorData::internal_error(
+                    format!("diagnostics could not reach the LSP leader: {e}"),
+                    None,
+                )
+            })?;
         json_result(&outcome.report)
     }
 }
@@ -355,16 +366,20 @@ pub(crate) async fn produce_outcome(
     repo: &Path,
     context: &ToolContext,
     config: &DiagnosticsConfig,
-) -> DiagnoseOutcome {
+) -> Result<DiagnoseOutcome, IpcError> {
     if paths.is_empty() {
-        return settled_empty();
+        return Ok(settled_empty());
     }
     let session = paths
         .iter()
         .find_map(|p| lsp_session_for_file(p))
         .or_else(any_lsp_session);
     let Some(session) = session else {
-        return settled_empty();
+        // No in-process LSP session — this is a follower. Instead of silently
+        // returning an empty report, route the diagnose to the elected leader's
+        // single session over the election request socket. A failure to reach
+        // the leader surfaces as the typed not-leader / leader-pid error.
+        return diagnose_via_leader(paths, context).await;
     };
 
     let dependents = if config.include_dependents {
@@ -391,7 +406,39 @@ pub(crate) async fn produce_outcome(
         PrecomputedDependents::default()
     };
 
-    diagnose_with_outcome(&session, paths, config, &dependents, &TokioTimer).await
+    Ok(diagnose_with_outcome(&session, paths, config, &dependents, &TokioTimer).await)
+}
+
+/// Route a follower's `diagnose` to the elected leader over the election request
+/// socket and wrap the leader's report in a settled outcome.
+///
+/// A follower process spawns no LSP server of its own (the leader owns the single
+/// one), so it has no in-process session. Rather than report nothing, it connects
+/// a [`SessionRequestClient`] to the leader's request socket — surfaced on the
+/// [`CodeContextWorkspace`](swissarmyhammer_code_context::CodeContextWorkspace)
+/// alongside the lock path — and round-trips the diagnose. The leader multiplexes
+/// the call onto its one session and returns the report.
+///
+/// Both failure modes surface the typed error rather than an empty report:
+/// the workspace failing to open is mapped to an [`IpcError::Io`], and a connect
+/// failure (no leader bound) is the [`IpcError::NotLeader`] carrying the leader
+/// PID from the lock file.
+async fn diagnose_via_leader(
+    paths: &[String],
+    context: &ToolContext,
+) -> Result<DiagnoseOutcome, IpcError> {
+    let workspace = open_workspace(context).map_err(|e| {
+        IpcError::Io(std::io::Error::other(format!(
+            "failed to open workspace to reach the diagnostics leader: {e}"
+        )))
+    })?;
+    let client =
+        SessionRequestClient::connect(workspace.socket_path(), workspace.lock_path()).await?;
+    let report = client.diagnose(paths).await?;
+    Ok(DiagnoseOutcome {
+        report,
+        pending: false,
+    })
 }
 
 /// A settled outcome carrying an empty report (nothing diagnosable / no server).
@@ -923,5 +970,45 @@ mod tests {
         // No supervisor initialised in a bare test process → empty, not an error.
         let statuses = server_statuses().await;
         assert!(statuses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn produce_outcome_empty_paths_is_a_settled_empty_outcome() {
+        // The no-files fast path stays infallible: nothing to diagnose, no
+        // follower round-trip, a settled empty report.
+        let repo = Path::new("/repo");
+        let outcome = produce_outcome(&[], repo, &context(), &DiagnosticsConfig::default())
+            .await
+            .expect("empty paths must not error");
+        assert!(outcome.report.diagnostics.is_empty());
+        assert!(!outcome.pending);
+    }
+
+    #[tokio::test]
+    async fn produce_outcome_without_a_session_surfaces_the_typed_not_leader_error() {
+        // A follower (no in-process LSP session — LSP_SUPERVISOR is unset in this
+        // bare test process) must NOT silently return an empty report. It routes
+        // to the leader over the election socket; with nothing serving that
+        // socket, connect fails with the typed not-leader / leader-pid error,
+        // which produce_outcome propagates rather than swallowing.
+        let dir = tempfile::tempdir().expect("workspace dir");
+        // Make it a git repo root so the workspace resolves here.
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        let repo = std::fs::canonicalize(dir.path()).unwrap();
+
+        let err = produce_outcome(
+            &[repo.join("src/main.rs").to_string_lossy().into_owned()],
+            &repo,
+            &context_in(dir.path().to_path_buf()),
+            &DiagnosticsConfig::default(),
+        )
+        .await
+        .expect_err("no session + no leader bound must surface a typed error, not empty");
+
+        let rendered = err.to_string().to_lowercase();
+        assert!(
+            rendered.contains("leader"),
+            "the error must attribute the missing leader: {rendered}"
+        );
     }
 }

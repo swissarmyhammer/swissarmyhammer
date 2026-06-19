@@ -658,6 +658,7 @@ impl McpServer {
         workspace_root: std::path::PathBuf,
         shared_db: swissarmyhammer_code_context::SharedDb,
         bus_frontend: Option<String>,
+        socket_path: std::path::PathBuf,
     ) {
         Self::spawn_ts_and_watcher_workers(
             workspace_root.clone(),
@@ -678,6 +679,7 @@ impl McpServer {
                 clients,
                 " (after promotion)",
                 bus_frontend.as_deref(),
+                &socket_path,
             );
         });
     }
@@ -1628,10 +1630,18 @@ fn spawn_lsp_workers_for_clients(
     clients: &[(String, swissarmyhammer_code_context::SharedLspSession)],
     log_suffix: &str,
     bus_frontend: Option<&str>,
+    socket_path: &std::path::Path,
 ) {
     if clients.is_empty() {
         return;
     }
+
+    // The leader binds the election request socket and serves the SAH request
+    // API over its single session, so followers (which spawn no LSP server) can
+    // route diagnose/query calls to this one server. Done here — the single
+    // chokepoint both initial-leader and post-promotion startup pass through —
+    // right where the running sessions first become available.
+    spawn_request_server_for_leader(socket_path, clients);
     use swissarmyhammer_code_context::{
         new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig,
     };
@@ -1693,6 +1703,60 @@ fn spawn_lsp_workers_for_clients(
             log_suffix,
         );
     }
+}
+
+/// Bind the leader-election request socket and serve the SAH request API onto
+/// the leader's single LSP session, so out-of-process followers can route a
+/// `diagnose` (or LSP query) to the one server the leader owns.
+///
+/// `socket_path` is the election socket surfaced on
+/// [`CodeContextWorkspace::socket_path`](swissarmyhammer_code_context::CodeContextWorkspace::socket_path);
+/// the leader binds a [`RequestServer`](swissarmyhammer_leader_election::request_ipc::RequestServer)
+/// there. The request API is served over the first running session in `clients`
+/// (the diagnose/lsp_request methods carry no language selector, so the
+/// multiplexer serves one session — the common single-language case; multi-server
+/// follower routing is deferred). The serve task runs for the process lifetime.
+///
+/// Best-effort: a bind failure (e.g. a live socket from another leader) is logged
+/// and skipped — it must not take down the leader's indexing/diagnostics workers.
+/// A follower that then cannot connect surfaces the typed not-leader error on its
+/// own side.
+fn spawn_request_server_for_leader(
+    socket_path: &std::path::Path,
+    clients: &[(String, swissarmyhammer_code_context::SharedLspSession)],
+) {
+    let Some((server_name, session)) = clients.first() else {
+        return;
+    };
+    let server = match swissarmyhammer_diagnostics::RequestServer::bind(socket_path) {
+        Ok(server) => server,
+        Err(e) => {
+            tracing::warn!(
+                socket = %socket_path.display(),
+                error = %e,
+                "diagnostics: leader could not bind the request socket; followers cannot route to it",
+            );
+            return;
+        }
+    };
+    tracing::info!(
+        socket = %socket_path.display(),
+        server = %server_name,
+        "diagnostics: leader serving the request socket for follower diagnose/query",
+    );
+    let session = session.clone();
+    tokio::spawn(async move {
+        let result = swissarmyhammer_diagnostics::serve_session_requests(
+            server,
+            session,
+            swissarmyhammer_diagnostics::PrecomputedDependents::default(),
+            swissarmyhammer_diagnostics::DiagnosticsConfig::default(),
+        )
+        .await;
+        if let Err(e) = result {
+            tracing::warn!(error = %e, "diagnostics: request socket serve loop ended with error");
+        }
+    });
 }
 
 /// Build the diagnostics watcher's per-server routing table from the running
@@ -1840,16 +1904,20 @@ fn handle_promotion_result(
                 workspace_root.display()
             );
             // After promotion this process owns the proxy; surface its bus
-            // frontend so the cold re-spawn also wires the cross-process fan-out.
-            let bus_frontend = ws
-                .lock()
-                .expect("workspace mutex poisoned")
-                .bus_addresses()
-                .map(|a| a.frontend);
+            // frontend so the cold re-spawn also wires the cross-process fan-out,
+            // and its election request socket so the new leader serves followers.
+            let (bus_frontend, socket_path) = {
+                let ws_lock = ws.lock().expect("workspace mutex poisoned");
+                (
+                    ws_lock.bus_addresses().map(|a| a.frontend),
+                    ws_lock.socket_path().to_path_buf(),
+                )
+            };
             McpServer::start_indexing_workers_after_promotion(
                 workspace_root.to_path_buf(),
                 shared_db,
                 bus_frontend,
+                socket_path,
             );
             true
         }
@@ -1875,6 +1943,8 @@ fn start_lsp_workers_if_leader(
     };
     // The leader's bus frontend, for re-publishing diagnostics across processes.
     let bus_frontend = ws_lock.bus_addresses().map(|a| a.frontend);
+    // The election request socket the leader binds so followers can route to it.
+    let socket_path = ws_lock.socket_path().to_path_buf();
     drop(ws_lock);
     spawn_lsp_workers_for_clients(
         workspace_root,
@@ -1882,6 +1952,7 @@ fn start_lsp_workers_if_leader(
         clients,
         log_suffix,
         bus_frontend.as_deref(),
+        &socket_path,
     );
 }
 

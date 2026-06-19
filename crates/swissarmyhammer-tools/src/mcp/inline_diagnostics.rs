@@ -53,7 +53,24 @@ pub struct LiveDiagnoser;
 impl MutationDiagnoser for LiveDiagnoser {
     async fn diagnose(&self, paths: &[String], context: &ToolContext) -> DiagnoseOutcome {
         let repo = repo_root(context);
-        produce_outcome(paths, &repo, context, &DiagnosticsConfig::default()).await
+        // The fold-in is best-effort: it decorates a mutating tool's result and
+        // must never fail the underlying edit. If a follower cannot reach the
+        // leader (no session in-process, leader unbound), log the typed error and
+        // fall back to an empty outcome — the edit still succeeds, just without an
+        // inline diagnostics view.
+        match produce_outcome(paths, &repo, context, &DiagnosticsConfig::default()).await {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "inline diagnostics: could not reach the LSP leader; skipping fold-in"
+                );
+                DiagnoseOutcome {
+                    report: swissarmyhammer_diagnostics::DiagnosticsReport::new(Vec::new()),
+                    pending: false,
+                }
+            }
+        }
     }
 }
 

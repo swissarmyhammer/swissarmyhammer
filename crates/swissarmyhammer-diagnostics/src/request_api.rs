@@ -67,7 +67,7 @@ pub async fn dispatch<C, D, T>(
     params: Value,
 ) -> Result<Value, String>
 where
-    C: LspTransport,
+    C: LspTransport + Send + Sync + 'static,
     D: Dependents,
     T: Timer,
 {
@@ -79,12 +79,34 @@ where
         }
         METHOD_LSP_REQUEST => {
             let (lsp_method, lsp_params) = parse_lsp_request(&params)?;
-            session
-                .request(&lsp_method, lsp_params)
-                .map_err(|e| format!("lsp request failed: {e}"))
+            lsp_request_blocking(session, lsp_method, lsp_params).await
         }
         other => Err(format!("unknown request method: {other}")),
     }
+}
+
+/// Run one synchronous LSP round-trip off the async runtime.
+///
+/// [`LspSession::request`] blocks the calling thread for the whole stdio
+/// request/response cycle (it locks a `std::sync::Mutex` and waits on the pipe).
+/// The leader's serve loop dispatches this on the tokio runtime, where a blocking
+/// call would pin a worker thread and starve concurrent follower requests and the
+/// leader's own async work. The session is cheap to clone (`Arc`-backed), so the
+/// blocking call is moved onto [`tokio::task::spawn_blocking`]; the runtime thread
+/// stays free to drive every other task while the round-trip is in flight.
+async fn lsp_request_blocking<C>(
+    session: &LspSession<C>,
+    lsp_method: String,
+    lsp_params: Value,
+) -> Result<Value, String>
+where
+    C: LspTransport + Send + Sync + 'static,
+{
+    let session = session.clone();
+    tokio::task::spawn_blocking(move || session.request(&lsp_method, lsp_params))
+        .await
+        .map_err(|e| format!("lsp request task failed: {e}"))?
+        .map_err(|e| format!("lsp request failed: {e}"))
 }
 
 /// Extract and validate the `paths` array from a `"diagnose"` request's params.
@@ -248,6 +270,7 @@ mod tests {
     use std::sync::Mutex;
 
     use serde_json::json;
+    use swissarmyhammer_lsp::LspError;
 
     use crate::test_support::{ManualTimer, NullTransport};
     use crate::PrecomputedDependents;
@@ -314,6 +337,74 @@ mod tests {
         .await
         .expect_err("unknown method must error");
         assert!(err.contains("unknown request method"), "got: {err}");
+    }
+
+    /// A transport whose `send_request` blocks the calling thread for a fixed
+    /// span, so a test can observe whether the leader-side dispatch offloads the
+    /// synchronous LSP round-trip off the async runtime.
+    struct BlockingTransport {
+        block: std::time::Duration,
+    }
+
+    impl LspTransport for BlockingTransport {
+        fn send_request(&mut self, _method: &str, _params: Value) -> Result<Value, LspError> {
+            std::thread::sleep(self.block);
+            Ok(json!({ "ok": true }))
+        }
+        fn send_notification(&mut self, _method: &str, _params: Value) -> Result<(), LspError> {
+            Ok(())
+        }
+        fn read_message(&mut self) -> Result<Value, LspError> {
+            Err(LspError::NotRunning)
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_lsp_request_does_not_block_the_runtime_thread() {
+        // The single owned LspSession's `request` is a SYNCHRONOUS, blocking
+        // stdio round-trip. On the leader's serve path the dispatch handler runs
+        // on the async runtime, so calling `request` inline would pin a worker
+        // thread for the whole round-trip and starve concurrent work. The
+        // dispatch must therefore offload the blocking call (spawn_blocking).
+        //
+        // Proof on a current_thread runtime: if dispatch blocked the only thread,
+        // a concurrently-spawned async task could not advance until dispatch
+        // returned. With the call offloaded, the runtime stays free and the async
+        // task completes FIRST despite the long block.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex as StdMutex;
+
+        let block = std::time::Duration::from_millis(200);
+        let client: BlockingTransport = BlockingTransport { block };
+        let session = LspSession::new(Arc::new(StdMutex::new(Some(client))), "rust");
+
+        let async_done = Arc::new(AtomicBool::new(false));
+        let async_done_for_task = Arc::clone(&async_done);
+        // A short async sleep that, on a free runtime, finishes well before the
+        // 200ms blocking request.
+        let pinger = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            async_done_for_task.store(true, Ordering::SeqCst);
+        });
+
+        let dispatched = dispatch(
+            &session,
+            &PrecomputedDependents::default(),
+            &ManualTimer::default(),
+            &DiagnosticsConfig::default(),
+            METHOD_LSP_REQUEST,
+            json!({ "method": "textDocument/definition", "params": {} }),
+        )
+        .await
+        .expect("blocking lsp request should still resolve");
+
+        assert_eq!(dispatched, json!({ "ok": true }));
+        assert!(
+            async_done.load(Ordering::SeqCst),
+            "the concurrent async task must finish during the blocking request — \
+             dispatch must offload the blocking LSP round-trip, not pin the runtime thread",
+        );
+        pinger.await.unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
