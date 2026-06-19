@@ -230,6 +230,13 @@ pub struct SessionTurn {
     pub stop_reason: agent_client_protocol::schema::StopReason,
     /// `Some` when the turn ran on a forked session — what the fork attached.
     pub fork: Option<ForkAttachment>,
+    /// Per-turn Anthropic prompt-cache usage, parsed from the prompt response's
+    /// `_meta` (`cache_usage` key) when the backend reported it. `None` for
+    /// backends that report no cache metrics (e.g. the native KV/llama path,
+    /// which signals reuse via [`ForkAttachment::prefix_tokens`] instead). On
+    /// the claude backend this is the only signal of warm (cache read) vs cold
+    /// (cache write) prefix reuse, since the fork attaches no token counts.
+    pub cache_usage: Option<claude_agent::protocol_translator::CacheUsage>,
 }
 
 /// What a `session/fork` actually attached, per the fork response — lets a
@@ -276,9 +283,7 @@ impl Respond {
                 let _ = tx.send(result.map(|turn| claude_agent::CollectedResponse {
                     content: turn.content,
                     stop_reason: turn.stop_reason,
-                    // The pool's SessionTurn carries no cache data; threading
-                    // cache_usage through here is the dependent follow-up task.
-                    cache_usage: None,
+                    cache_usage: turn.cache_usage,
                 }));
             }
             Respond::Turn(tx) => {
@@ -851,11 +856,24 @@ async fn run_prompt(
         content
     );
 
+    // Parse per-turn prompt-cache usage from the response `_meta` (the
+    // `cache_usage` key the claude agent attaches via
+    // `agent_prompt_handling::build_streaming_response`), mirroring
+    // `claude_agent::execute_prompt_with_agent`. `None` for backends that report
+    // no usage. This is the only warm/cold reuse signal on the claude backend,
+    // whose fork attaches no native token counts.
+    let cache_usage = prompt_response
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get("cache_usage"))
+        .and_then(claude_agent::protocol_translator::CacheUsage::from_meta_json);
+
     Ok(SessionTurn {
         session_id: session_label,
         content,
         stop_reason: prompt_response.stop_reason,
         fork,
+        cache_usage,
     })
 }
 
@@ -1122,6 +1140,47 @@ mod tests {
                 Ok(PromptResponse::new(
                     agent_client_protocol::schema::StopReason::EndTurn,
                 ))
+            })
+        }
+    }
+
+    /// Returns a passing response whose `_meta` carries a fixed prompt-cache
+    /// `cache_usage` object — the wire shape a real claude agent attaches — so a
+    /// test can prove the pool threads it onto [`SessionTurn::cache_usage`].
+    struct CacheUsageAgent {
+        next_session: AtomicUsize,
+        usage: claude_agent::protocol_translator::CacheUsage,
+    }
+
+    impl CacheUsageAgent {
+        fn new(usage: claude_agent::protocol_translator::CacheUsage) -> Self {
+            Self {
+                next_session: AtomicUsize::new(0),
+                usage,
+            }
+        }
+    }
+
+    impl MockAgent for CacheUsageAgent {
+        fn new_session<'a>(
+            &'a self,
+            _request: NewSessionRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+            numbered_session_response(&self.next_session, "cache-sess")
+        }
+
+        fn prompt<'a>(
+            &'a self,
+            _request: PromptRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
+            let usage = self.usage;
+            Box::pin(async move {
+                let mut meta = serde_json::Map::new();
+                meta.insert("cache_usage".to_string(), usage.to_meta_json());
+                Ok(
+                    PromptResponse::new(agent_client_protocol::schema::StopReason::EndTurn)
+                        .meta(meta),
+                )
             })
         }
     }
@@ -2029,6 +2088,42 @@ mod tests {
                 .expect("prime turn should succeed");
             assert_eq!(turn.session_id, SessionId::new("pass-sess-0"));
             assert!(turn.fork.is_none(), "a primed turn is not a fork");
+            assert!(
+                turn.cache_usage.is_none(),
+                "a turn whose response carried no usage reports no cache_usage"
+            );
+        })
+        .await;
+    }
+
+    /// A turn whose `PromptResponse._meta` carries a `cache_usage` object —
+    /// exactly what a real claude agent attaches — propagates it onto
+    /// [`SessionTurn::cache_usage`], so the fleet can log warm vs cold reuse on
+    /// the claude backend.
+    #[tokio::test]
+    async fn test_pool_turn_propagates_cache_usage_from_response() {
+        let usage = claude_agent::protocol_translator::CacheUsage {
+            cache_read_input_tokens: Some(1500),
+            cache_creation_input_tokens: Some(60),
+            input_tokens: Some(1560),
+            output_tokens: Some(30),
+        };
+        let agent = Arc::new(CacheUsageAgent::new(usage));
+        let notifier = new_notifier();
+        let notifier_body = Arc::clone(&notifier);
+
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let pool = AgentPool::new(conn, notifier_body, PoolConfig::local());
+            let turn = pool
+                .submit_primed("the shared prefix")
+                .await
+                .expect("result")
+                .expect("prime turn should succeed");
+            assert_eq!(
+                turn.cache_usage,
+                Some(usage),
+                "the turn must carry the response's cache usage"
+            );
         })
         .await;
     }
