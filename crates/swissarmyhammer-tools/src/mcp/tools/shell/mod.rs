@@ -3,7 +3,9 @@
 //! ## Operations
 //!
 //! Dispatches between five operations:
-//! - `execute command`: Run a shell command with timeout and output capture
+//! - `execute command`: Run a shell command with timeout and output capture.
+//!   The response includes the last 32 output lines (or the full output when
+//!   it is 32 lines or fewer); use `get lines` to retrieve the rest.
 //! - `list processes`: Show all commands with status, timing, exit codes
 //! - `kill process`: Stop a running command by ID
 //! - `grep history`: Regex pattern match across command output

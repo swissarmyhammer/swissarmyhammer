@@ -70,7 +70,7 @@ syntax once code_context has already given you the location.
 {"op": "get symbol", "query": "MyStruct::new", "max_results": 5}
 ```
 
-Jump to definition with source context. Multi-tier fuzzy matching, supports qualified paths.
+Jump to definition with source context. Multi-tier fuzzy matching, supports qualified paths. Use this to avoid whole file reads.
 
 ### search symbol
 
@@ -78,7 +78,7 @@ Jump to definition with source context. Multi-tier fuzzy matching, supports qual
 {"op": "search symbol", "query": "handler", "kind": "function", "max_results": 10}
 ```
 
-Fuzzy by partial name. Kinds: function, method, struct, class, interface, module, etc.
+Fuzzy by partial name. Kinds: function, method, struct, class, interface, module, etc. Use this to avoid whole file reads.
 
 ### list symbols
 
@@ -94,7 +94,7 @@ File overview before reading. Lets you target specific symbols with `get symbol`
 {"op": "grep code", "pattern": "unsafe\\s*\\{", "language": ["rs"], "max_results": 20}
 ```
 
-Regex over indexed chunks. Filter by language extensions or specific paths.
+Regex over indexed chunks. Filter by language extensions or specific paths. Use this instead of built in Grep tools or using any kind of bash or shell.
 
 ### search code
 
