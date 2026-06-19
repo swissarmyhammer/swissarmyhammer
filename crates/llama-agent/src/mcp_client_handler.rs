@@ -134,6 +134,56 @@ impl NotifyingClientHandler {
             .unwrap_or(false)
     }
 
+    /// Relay an MCP `notifications/message` (logging) notification to the ACP
+    /// client as an `AgentMessageChunk`, if a session context is set.
+    ///
+    /// This is the testable core of the [`ClientHandler::on_logging_message`]
+    /// hook, factored out so it can be exercised without constructing an rmcp
+    /// `NotificationContext` (mirroring [`Self::relay_elicitation`]). It is the
+    /// path the diagnostics watcher's best-effort push rides: the leader emits a
+    /// plain MCP `notifications/message` when it detects a native edit, and in
+    /// llama-agent that notification is converted here into a broadcast
+    /// `SessionNotification` the ACP bridge forwards to the connected client.
+    ///
+    /// Notifications below `Info` are dropped to avoid spam, and notifications
+    /// received without a session context are dropped (best-effort: a courtesy
+    /// channel that never blocks the model).
+    pub async fn relay_logging_message(&self, params: LoggingMessageNotificationParam) {
+        // Only forward Info and higher level messages to avoid spam.
+        if !matches!(
+            params.level,
+            rmcp::model::LoggingLevel::Info
+                | rmcp::model::LoggingLevel::Warning
+                | rmcp::model::LoggingLevel::Error
+                | rmcp::model::LoggingLevel::Critical
+        ) {
+            return;
+        }
+
+        let Some(session_id) = self.current_session.lock().await.clone() else {
+            tracing::warn!("Received MCP logging notification but no session context available");
+            return;
+        };
+
+        // `params.data` is a `serde_json::Value`; pull the `message` field when
+        // present, otherwise stringify the whole payload.
+        let message = if let Some(msg) = params.data.get("message") {
+            msg.as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| params.data.to_string())
+        } else {
+            params.data.to_string()
+        };
+
+        let text = format!("[MCP] {}", message);
+        let text_content = agent_client_protocol::schema::TextContent::new(text);
+        let update =
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+                agent_client_protocol::schema::ContentBlock::Text(text_content),
+            ));
+        self.broadcast_acp_notification(session_id, update);
+    }
+
     /// Broadcast an ACP notification if we have a session context
     fn broadcast_acp_notification(&self, session_id: SessionId, update: SessionUpdate) {
         let notification = SessionNotification::new(session_id, update);
@@ -229,38 +279,9 @@ impl ClientHandler for NotifyingClientHandler {
             params.logger,
             params.data
         );
-
-        // Get current session if available
-        if let Some(session_id) = self.current_session.lock().await.clone() {
-            // Convert logging message to AgentMessageChunk
-            let message = if let Some(msg) = params.data.get("message") {
-                msg.as_str()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| params.data.to_string())
-            } else {
-                params.data.to_string()
-            };
-
-            // Only forward Info and higher level messages to avoid spam
-            if matches!(
-                params.level,
-                rmcp::model::LoggingLevel::Info
-                    | rmcp::model::LoggingLevel::Warning
-                    | rmcp::model::LoggingLevel::Error
-                    | rmcp::model::LoggingLevel::Critical
-            ) {
-                let text = format!("[MCP] {}", message);
-                let text_content = agent_client_protocol::schema::TextContent::new(text);
-                let update = SessionUpdate::AgentMessageChunk(
-                    agent_client_protocol::schema::ContentChunk::new(
-                        agent_client_protocol::schema::ContentBlock::Text(text_content),
-                    ),
-                );
-                self.broadcast_acp_notification(session_id, update);
-            }
-        } else {
-            tracing::warn!("Received MCP logging notification but no session context available");
-        }
+        // Delegate to the context-free core so the relay is unit-testable
+        // without constructing an rmcp `NotificationContext`.
+        self.relay_logging_message(params).await;
     }
 }
 
@@ -436,6 +457,89 @@ mod tests {
         assert!(
             received.lock().await.is_empty(),
             "no ACP request should be emitted without a session context"
+        );
+    }
+
+    /// Build a `notifications/message` param at the given level carrying a
+    /// `{ "message": <text> }` data payload — what the diagnostics watcher push
+    /// emits for a foreign-host native edit.
+    fn logging_params(
+        level: rmcp::model::LoggingLevel,
+        text: &str,
+    ) -> LoggingMessageNotificationParam {
+        LoggingMessageNotificationParam {
+            level,
+            logger: Some("diagnostics".to_string()),
+            data: serde_json::json!({ "message": text }),
+        }
+    }
+
+    #[tokio::test]
+    async fn relay_logging_message_broadcasts_one_acp_notification() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let handler = NotifyingClientHandler::new(tx);
+        handler.set_session(SessionId::new("sess_1")).await;
+
+        handler
+            .relay_logging_message(logging_params(
+                rmcp::model::LoggingLevel::Info,
+                "src/main.rs changed on disk",
+            ))
+            .await;
+
+        let notification = rx.try_recv().expect("one ACP notification expected");
+        assert_eq!(notification.session_id, SessionId::new("sess_1"));
+        match notification.update {
+            SessionUpdate::AgentMessageChunk(chunk) => match chunk.content {
+                agent_client_protocol::schema::ContentBlock::Text(text) => {
+                    assert!(
+                        text.text.contains("src/main.rs changed on disk"),
+                        "relayed text should carry the watcher message, got {:?}",
+                        text.text
+                    );
+                }
+                other => panic!("expected text content block, got {other:?}"),
+            },
+            other => panic!("expected AgentMessageChunk, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "exactly one ACP notification expected, no second emission"
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_logging_message_without_session_broadcasts_nothing() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let handler = NotifyingClientHandler::new(tx);
+        // No set_session call: no session context.
+
+        handler
+            .relay_logging_message(logging_params(rmcp::model::LoggingLevel::Info, "ignored"))
+            .await;
+
+        assert!(
+            rx.try_recv().is_err(),
+            "no ACP notification should be broadcast without a session context"
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_logging_message_below_info_is_dropped() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let handler = NotifyingClientHandler::new(tx);
+        handler.set_session(SessionId::new("sess_1")).await;
+
+        handler
+            .relay_logging_message(logging_params(
+                rmcp::model::LoggingLevel::Debug,
+                "too chatty",
+            ))
+            .await;
+
+        assert!(
+            rx.try_recv().is_err(),
+            "Debug-level logging notifications are filtered out to avoid spam"
         );
     }
 }

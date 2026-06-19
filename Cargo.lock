@@ -8717,6 +8717,7 @@ dependencies = [
  "hyper",
  "ignore",
  "libc",
+ "lsp-types",
  "md5",
  "mirdan",
  "model-embedding",

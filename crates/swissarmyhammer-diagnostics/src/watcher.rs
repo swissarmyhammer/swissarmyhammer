@@ -27,6 +27,7 @@
 //! duplicate watcher.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_watcher::{notify::RecursiveMode, AsyncDebouncer};
@@ -35,6 +36,22 @@ use swissarmyhammer_lsp::client::LspTransport;
 use swissarmyhammer_lsp::LspSession;
 
 use crate::language::is_diagnosable;
+
+/// Best-effort, transport-agnostic callback the watcher invokes once per
+/// refreshed file so a host can be told a native edit was seen.
+///
+/// This is the watcher-push courtesy channel for the hardest case — a foreign
+/// host doing a native edit where the tool's closed write surface never ran. The
+/// watcher still detects the change but can only reach the host, not wake an idle
+/// model, so this is explicitly *not* load-bearing: a `None` notifier (or a panic
+/// inside one) must never change whether the file is re-diagnosed.
+///
+/// The diagnostics crate stays free of any MCP/rmcp dependency by taking this
+/// abstract callback; the `swissarmyhammer-tools` server wires it to a plain MCP
+/// `notifications/message` (`peer.notify_logging_message`), which in llama-agent
+/// relays through the existing
+/// `NotifyingClientHandler::relay_logging_message` into an ACP `SessionUpdate`.
+pub type WatcherNotifier = Arc<dyn Fn(&Path) + Send + Sync>;
 
 /// One language server's session plus the file extensions it handles.
 ///
@@ -136,11 +153,32 @@ pub fn refresh_changed_files<C: LspTransport>(
     routes: &[SessionRoute<C>],
     paths: &[PathBuf],
 ) -> usize {
+    refresh_changed_files_notified(routes, paths, None)
+}
+
+/// [`refresh_changed_files`] plus a best-effort push: when `notifier` is set, it
+/// is invoked once for each file that was actually refreshed, after the refresh.
+///
+/// The push is the watcher-push courtesy channel (see [`WatcherNotifier`]). It is
+/// driven off the refresh result, not the raw event, so an unrouted or skipped
+/// file is never pushed. The notifier fires *after* the refresh so the session's
+/// per-uri cache already holds the fresh diagnostics by the time the host is
+/// told. A `None` notifier yields exactly [`refresh_changed_files`]'s behavior.
+pub fn refresh_changed_files_notified<C: LspTransport>(
+    routes: &[SessionRoute<C>],
+    paths: &[PathBuf],
+    notifier: Option<&WatcherNotifier>,
+) -> usize {
     paths
         .iter()
         .filter(|p| match route_for(routes, p) {
-            Some(session) => refresh_file(session, p),
-            None => false,
+            Some(session) if refresh_file(session, p) => {
+                if let Some(notify) = notifier {
+                    notify(p);
+                }
+                true
+            }
+            _ => false,
         })
         .count()
 }
@@ -161,8 +199,25 @@ pub fn start_diagnostics_watcher<C>(
 where
     C: LspTransport + Send + 'static,
 {
+    start_diagnostics_watcher_with_notifier(workspace_root, routes, None)
+}
+
+/// [`start_diagnostics_watcher`] plus a best-effort watcher-push notifier.
+///
+/// The `notifier` (see [`WatcherNotifier`]) is invoked once per refreshed file as
+/// each debounced batch is processed. Passing `None` is exactly
+/// [`start_diagnostics_watcher`]. The push is a courtesy channel and never gates
+/// the re-diagnose path.
+pub fn start_diagnostics_watcher_with_notifier<C>(
+    workspace_root: PathBuf,
+    routes: Vec<SessionRoute<C>>,
+    notifier: Option<WatcherNotifier>,
+) -> tokio::task::JoinHandle<()>
+where
+    C: LspTransport + Send + 'static,
+{
     tokio::spawn(async move {
-        if let Err(e) = run_diagnostics_watcher(&workspace_root, &routes).await {
+        if let Err(e) = run_diagnostics_watcher(&workspace_root, &routes, notifier.as_ref()).await {
             tracing::error!("diagnostics watcher failed: {}", e);
         }
     })
@@ -172,6 +227,7 @@ where
 async fn run_diagnostics_watcher<C: LspTransport>(
     workspace_root: &Path,
     routes: &[SessionRoute<C>],
+    notifier: Option<&WatcherNotifier>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut debouncer, mut event_rx) =
         AsyncDebouncer::new_with_channel(DIAGNOSTICS_WATCH_DEBOUNCE, None).await?;
@@ -192,7 +248,7 @@ async fn run_diagnostics_watcher<C: LspTransport>(
                 if paths.is_empty() {
                     continue;
                 }
-                let refreshed = refresh_changed_files(routes, &paths);
+                let refreshed = refresh_changed_files_notified(routes, &paths, notifier);
                 if refreshed > 0 {
                     tracing::info!("diagnostics: re-diagnosed {} changed file(s)", refreshed);
                 }
@@ -361,5 +417,51 @@ mod tests {
         let client: Arc<Mutex<Option<NullTransport>>> = Arc::new(Mutex::new(None));
         let session = LspSession::new(client, "rust");
         assert!(!refresh_file(&session, &rs));
+    }
+
+    /// Collect the paths a notifier is invoked for, so a test can assert the
+    /// best-effort push fires once per refreshed file.
+    fn recording_notifier() -> (WatcherNotifier, Arc<Mutex<Vec<PathBuf>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_clone = Arc::clone(&seen);
+        let notifier: WatcherNotifier =
+            Arc::new(move |path: &Path| seen_clone.lock().unwrap().push(path.to_path_buf()));
+        (notifier, seen)
+    }
+
+    #[test]
+    fn refresh_changed_files_notified_pushes_once_per_refreshed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let rs = dir.path().join("a.rs");
+        let md = dir.path().join("b.md");
+        std::fs::write(&rs, "fn a() {}\n").unwrap();
+        std::fs::write(&md, "# b").unwrap();
+
+        let (session, _client) = recording_session();
+        let routes = vec![SessionRoute::new(vec!["rs".to_string()], session)];
+        let (notifier, seen) = recording_notifier();
+
+        let n = refresh_changed_files_notified(&routes, &[rs.clone(), md.clone()], Some(&notifier));
+
+        assert_eq!(n, 1, "only the .rs file routes to a session");
+        // The push fires for the refreshed .rs file only — the unrouted .md is
+        // never pushed because it was never refreshed.
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.as_slice(), &[rs], "push once per refreshed file");
+    }
+
+    #[test]
+    fn refresh_changed_files_with_no_notifier_still_refreshes() {
+        let dir = tempfile::tempdir().unwrap();
+        let rs = dir.path().join("a.rs");
+        std::fs::write(&rs, "fn a() {}\n").unwrap();
+
+        let (session, _client) = recording_session();
+        let routes = vec![SessionRoute::new(vec!["rs".to_string()], session)];
+
+        // No notifier (foreign host with no relay) must not change the refresh
+        // outcome — the push is a courtesy, never load-bearing.
+        let n = refresh_changed_files_notified(&routes, std::slice::from_ref(&rs), None);
+        assert_eq!(n, 1);
     }
 }

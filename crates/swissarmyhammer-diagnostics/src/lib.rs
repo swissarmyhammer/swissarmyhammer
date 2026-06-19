@@ -52,6 +52,7 @@ pub use request_api::{
 pub use settle::{settle, settle_stream, SettleOutcome, Timer, TokioTimer};
 pub use swissarmyhammer_lsp::DiagnosticSeverity;
 pub use watcher::{
-    refresh_changed_files, refresh_file, start_diagnostics_watcher, SessionRoute,
+    refresh_changed_files, refresh_changed_files_notified, refresh_file, start_diagnostics_watcher,
+    start_diagnostics_watcher_with_notifier, SessionRoute, WatcherNotifier,
     DIAGNOSTICS_WATCH_DEBOUNCE,
 };

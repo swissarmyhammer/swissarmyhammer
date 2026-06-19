@@ -216,6 +216,13 @@ fn create_server_capabilities() -> ServerCapabilities {
     caps.tools = Some(ToolsCapability {
         list_changed: Some(true),
     });
+    // Advertise the subscribable diagnostics resource so a host can subscribe and
+    // receive `notifications/resources/updated` on every diagnostics change —
+    // diagnostics without a tool call (see `mcp::diagnostics_resource`).
+    caps.resources = Some(ResourcesCapability {
+        subscribe: Some(true),
+        list_changed: Some(false),
+    });
     caps
 }
 
@@ -1648,6 +1655,12 @@ fn spawn_lsp_workers_for_clients(
         // Each session has its own in-process diagnostics fan-out, so the
         // cross-process re-publisher is per session.
         spawn_diagnostics_fan_out(server_name, session, bus_frontend);
+
+        // A third consumer of the same in-process fan-out: feed each per-uri
+        // update into the subscribable diagnostics MCP resource so a host that
+        // subscribed gets `notifications/resources/updated` without a tool call.
+        // Runs regardless of `bus_frontend` — the resource lives in-process.
+        spawn_diagnostics_resource_feed(server_name, session);
     }
 
     // Exactly ONE diagnostics file watcher per workdir (not per session): it
@@ -1662,7 +1675,18 @@ fn spawn_lsp_workers_for_clients(
     if !routes.is_empty() {
         let watch_root =
             std::fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
-        swissarmyhammer_diagnostics::start_diagnostics_watcher(watch_root, routes);
+        // Best-effort watcher-push: tell a connected host (via a plain MCP
+        // `notifications/message`) when a native edit is seen. The notifier is a
+        // courtesy channel — a `None`/absent peer never gates the re-diagnose.
+        let notifier: swissarmyhammer_diagnostics::WatcherNotifier =
+            std::sync::Arc::new(|path: &std::path::Path| {
+                crate::mcp::diagnostics_resource::watcher_push_log(path);
+            });
+        swissarmyhammer_diagnostics::start_diagnostics_watcher_with_notifier(
+            watch_root,
+            routes,
+            Some(notifier),
+        );
         tracing::info!(
             "diagnostics: file watcher started for {}{}",
             workspace_root.display(),
@@ -1731,6 +1755,49 @@ fn spawn_diagnostics_fan_out(
         }
     });
     tracing::info!("diagnostics: cross-process fan-out started (server: {server_name})");
+}
+
+/// Feed one session's in-process diagnostics fan-out into the subscribable
+/// diagnostics MCP resource.
+///
+/// Subscribes to the same `session.subscribe()` broadcast the cross-process bus
+/// tee consumes (a third consumer, not a second mechanism) and forwards each
+/// per-uri [`DiagnosticUpdate`](swissarmyhammer_lsp::diagnostics::DiagnosticUpdate)
+/// into the process-wide diagnostics resource via
+/// [`publish_diagnostics_update`](crate::mcp::diagnostics_resource::publish_diagnostics_update),
+/// which folds the view and pushes `notifications/resources/updated` to a
+/// subscribing host (best-effort). A `Lagged` receiver skips ahead — diagnostics
+/// are full per-uri replacements, so missing an intermediate update only delays
+/// the host one tick.
+fn spawn_diagnostics_resource_feed(
+    server_name: &str,
+    session: &swissarmyhammer_code_context::SharedLspSession,
+) {
+    use tokio::sync::broadcast::error::RecvError;
+
+    let mut rx = session.subscribe();
+    let server = server_name.to_string();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(update) => {
+                    crate::mcp::diagnostics_resource::publish_diagnostics_update(
+                        &update.uri,
+                        update.diagnostics,
+                    );
+                }
+                Err(RecvError::Lagged(skipped)) => {
+                    tracing::debug!(
+                        server = %server,
+                        skipped,
+                        "diagnostics resource feed lagged; continuing"
+                    );
+                }
+                Err(RecvError::Closed) => break,
+            }
+        }
+    });
+    tracing::info!("diagnostics: resource feed started (server: {server_name})");
 }
 
 /// Try to promote the workspace to leader. Returns `Ok(Some(db))` on success,
@@ -1935,6 +2002,14 @@ impl ServerHandler for McpServer {
             "🚀 MCP client connecting (initialize received)"
         );
 
+        // Install the peer on the process-wide diagnostics resource so the
+        // diagnostics fan-out can push `notifications/resources/updated` to this
+        // connected client. Best-effort: a foreign host that never subscribes
+        // simply ignores the notifications.
+        crate::mcp::diagnostics_resource::diagnostics_resources()
+            .set_peer(context.peer.clone())
+            .await;
+
         self.spawn_background_file_watcher(context.peer);
 
         // Auto-create agent actor for the connecting MCP client
@@ -2021,6 +2096,58 @@ impl ServerHandler for McpServer {
             next_cursor: None,
             meta: None,
         })
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> std::result::Result<ListResourcesResult, McpError> {
+        Ok(crate::mcp::diagnostics_resource::diagnostics_resources().list())
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> std::result::Result<ReadResourceResult, McpError> {
+        crate::mcp::diagnostics_resource::diagnostics_resources()
+            .read(&request.uri)
+            .await
+            .ok_or_else(|| {
+                McpError::resource_not_found(
+                    format!("no resource with uri '{}'", request.uri),
+                    None,
+                )
+            })
+    }
+
+    async fn subscribe(
+        &self,
+        request: SubscribeRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> std::result::Result<(), McpError> {
+        // The diagnostics resource pushes to the connected peer unconditionally
+        // (best-effort), so a subscribe is acknowledged for the known resource
+        // and rejected for any other uri. There is no per-uri subscriber set to
+        // maintain: the one aggregate resource notifies the captured peer.
+        if request.uri == crate::mcp::diagnostics_resource::DIAGNOSTICS_RESOURCE_URI {
+            Ok(())
+        } else {
+            Err(McpError::resource_not_found(
+                format!("cannot subscribe to unknown resource '{}'", request.uri),
+                None,
+            ))
+        }
+    }
+
+    async fn unsubscribe(
+        &self,
+        _request: UnsubscribeRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> std::result::Result<(), McpError> {
+        // Symmetric with `subscribe`: nothing per-uri to tear down.
+        Ok(())
     }
 
     async fn call_tool(
@@ -3110,6 +3237,17 @@ mod tests {
             caps.tools.as_ref().unwrap().list_changed,
             Some(true),
             "Tools should support list_changed"
+        );
+        // The subscribable diagnostics resource requires the resources capability
+        // with `subscribe: true` so a host may `resources/subscribe`.
+        let resources = caps
+            .resources
+            .as_ref()
+            .expect("Should advertise the resources capability for diagnostics");
+        assert_eq!(
+            resources.subscribe,
+            Some(true),
+            "Resources must support subscribe for the diagnostics resource"
         );
     }
 

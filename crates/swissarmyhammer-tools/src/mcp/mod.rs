@@ -57,6 +57,7 @@
 //! ```
 //!
 // Module declarations
+pub mod diagnostics_resource;
 pub mod error_handling;
 pub mod file_watcher;
 pub mod host;
