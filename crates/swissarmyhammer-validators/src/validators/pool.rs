@@ -276,6 +276,9 @@ impl Respond {
                 let _ = tx.send(result.map(|turn| claude_agent::CollectedResponse {
                     content: turn.content,
                     stop_reason: turn.stop_reason,
+                    // The pool's SessionTurn carries no cache data; threading
+                    // cache_usage through here is the dependent follow-up task.
+                    cache_usage: None,
                 }));
             }
             Respond::Turn(tx) => {
