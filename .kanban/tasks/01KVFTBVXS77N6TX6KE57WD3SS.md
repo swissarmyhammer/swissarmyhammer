@@ -21,8 +21,20 @@ comments:
 
     Verification: cargo nextest run -p swissarmyhammer-tools execute_command = 37 passed, 0 failed (incl. the 3 tail tests + test_output_metadata_in_response). cargo clippy -p swissarmyhammer-tools --all-targets -- -D warnings = exit 0, clean. cargo fmt -p swissarmyhammer-tools --check = clean. No diff to production code — changes are test-only.
   timestamp: 2026-06-19T12:12:42.778764+00:00
-position_column: review
-position_ordinal: '80'
+- actor: wballard
+  id: 01kvfxef0hzmxw46a0s0vd76a8
+  text: |-
+    Worked the two test-only nits from Review Findings (2026-06-19 07:13), both in execute_command/mod.rs tests:
+
+    1. test_command_length_limits: introduced fn-local `const TEST_MAX_COMMAND_LENGTH: usize = 100;`. Now drives `max_command_length`, the exactly-at-limit `"a".repeat(TEST_MAX_COMMAND_LENGTH)`, the one-over `"a".repeat(TEST_MAX_COMMAND_LENGTH + 1)`, and both `assert_eq!`s (`length == TEST_MAX_COMMAND_LENGTH + 1`, `limit == TEST_MAX_COMMAND_LENGTH`).
+    2. test_environment_variable_validation: introduced fn-local `const TEST_MAX_ENV_VALUE_LENGTH: usize = 100;`. Drives `max_env_value_length` and the too-long value `"a".repeat(TEST_MAX_ENV_VALUE_LENGTH + 1)`.
+
+    Used the constant names from the implement instructions (TEST_MAX_COMMAND_LENGTH / TEST_MAX_ENV_VALUE_LENGTH) and fn-local scope since each constant is used by a single test. Changes are test-only; no production code touched.
+
+    Verification: cargo nextest run -p swissarmyhammer-tools execute_command = 37 passed, 0 failed. cargo clippy -p swissarmyhammer-tools --all-targets -- -D warnings = exit 0, clean. Both findings checked off; task back in review.
+  timestamp: 2026-06-19T12:24:45.329252+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffc580
 title: 'shell execute command: include last 32 output lines in default response'
 ---
 ## What
@@ -102,3 +114,13 @@ output (3 lines):
 - [x] Windows `timeout /t 1` duration `1` → named const `WINDOWS_SHORT_SLEEP_SECS` (cfg(windows)) with a comment on the whole-second granularity vs the sub-second Unix `sleep 0.5`.
 
 > Note: all nits were test-only magic numbers (none in the production tail-append change). The original acceptance criteria are unaffected by these cleanups.
+
+## Review Findings (2026-06-19 07:13)
+
+> Scope: `review working` on `execute_command/mod.rs` (the file this task tracks). The engine's working-tree pass also surfaced findings in `files/grep/mod.rs` and other files that belong to unrelated changes in the working tree — those are out of scope for this task and were not recorded here. The engine again flagged a "duplicate / third test-module" blocker; re-verified as the same FALSE POSITIVE as the prior round (`execute_command/mod.rs` has exactly one `#[cfg(test)] mod tests` block) — refuted, not recorded.
+
+### Nits
+- [x] `test_command_length_limits`: policy limit `100` (`max_command_length: 100`) is a bare magic number, and the dependent boundary values `"a".repeat(100)` (exactly-at-limit) and `"a".repeat(101)` / `assert_eq!(length, 101)` / `assert_eq!(limit, 100)` (one-over) are hardcoded rather than derived. Extract a module-level `const TEST_COMMAND_LIMIT: usize = 100;` and reference it: `max_command_length: TEST_COMMAND_LIMIT`, `"a".repeat(TEST_COMMAND_LIMIT)`, `"a".repeat(TEST_COMMAND_LIMIT + 1)`, so the boundary stays coordinated with the limit. RESOLVED: introduced fn-local `const TEST_MAX_COMMAND_LENGTH: usize = 100;`; policy, exact-at-limit `repeat(TEST_MAX_COMMAND_LENGTH)`, one-over `repeat(TEST_MAX_COMMAND_LENGTH + 1)`, and both `assert_eq!`s now derive from it.
+- [x] `test_environment_variable_validation`: policy limit `100` (`max_env_value_length: 100`) and the dependent one-over value `"a".repeat(101)` in the `new_value_too_long("LONG_VAR", ...)` case are hardcoded. Extract a named `TEST_ENV_VALUE_LIMIT` constant and use `max_env_value_length: TEST_ENV_VALUE_LIMIT` and `"a".repeat(TEST_ENV_VALUE_LIMIT + 1)` to make the boundary-crossing intent explicit and coordinated. RESOLVED: introduced fn-local `const TEST_MAX_ENV_VALUE_LENGTH: usize = 100;`; policy uses it and the too-long value is `repeat(TEST_MAX_ENV_VALUE_LENGTH + 1)`.
+
+> Note: both findings are test-only clarity nits in security-validation tests; neither affects the production tail-append change or the acceptance criteria. No blockers or warnings in scope for this task.

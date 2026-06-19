@@ -1146,8 +1146,11 @@ mod tests {
         // Test command length validation
         use swissarmyhammer_shell::{ShellSecurityPolicy, ShellSecurityValidator};
 
+        /// Command-length limit for this test; boundary values are derived from it.
+        const TEST_MAX_COMMAND_LENGTH: usize = 100;
+
         let policy = ShellSecurityPolicy {
-            max_command_length: 100,
+            max_command_length: TEST_MAX_COMMAND_LENGTH,
             ..ShellSecurityPolicy::default()
         };
 
@@ -1158,18 +1161,18 @@ mod tests {
         assert!(validator.validate_command(short_command).is_ok());
 
         // Command exactly at limit should pass
-        let exact_command = "a".repeat(100);
+        let exact_command = "a".repeat(TEST_MAX_COMMAND_LENGTH);
         assert!(validator.validate_command(&exact_command).is_ok());
 
         // Command exceeding limit should fail
-        let long_command = "a".repeat(101);
+        let long_command = "a".repeat(TEST_MAX_COMMAND_LENGTH + 1);
         let result = validator.validate_command(&long_command);
         assert!(result.is_err());
 
         match result.unwrap_err() {
             swissarmyhammer_shell::ShellSecurityError::CommandTooLong { length, limit } => {
-                assert_eq!(length, 101);
-                assert_eq!(limit, 100);
+                assert_eq!(length, TEST_MAX_COMMAND_LENGTH + 1);
+                assert_eq!(limit, TEST_MAX_COMMAND_LENGTH);
             }
             other_error => panic!("Expected command too long error, got: {other_error:?}"),
         }
@@ -1344,8 +1347,11 @@ mod tests {
         use std::collections::HashMap;
         use swissarmyhammer_shell::{ShellSecurityPolicy, ShellSecurityValidator};
 
+        /// Env-value length limit for this test; the too-long case is derived from it.
+        const TEST_MAX_ENV_VALUE_LENGTH: usize = 100;
+
         let policy = ShellSecurityPolicy {
-            max_env_value_length: 100,
+            max_env_value_length: TEST_MAX_ENV_VALUE_LENGTH,
             ..ShellSecurityPolicy::default()
         };
 
@@ -1383,7 +1389,11 @@ mod tests {
                 "Contains carriage return",
             ),
             // Value too long
-            EnvVarTestCase::new_value_too_long("LONG_VAR", "a".repeat(101), "Value too long"),
+            EnvVarTestCase::new_value_too_long(
+                "LONG_VAR",
+                "a".repeat(TEST_MAX_ENV_VALUE_LENGTH + 1),
+                "Value too long",
+            ),
         ];
 
         // Execute all test cases in a single loop
