@@ -24,3 +24,11 @@ ground-truth. An **empty inbound callgraph** on an added symbol that is not an
 entry point, exported public API, or test is the dead-code signal — a fact,
 delivered on the finding, that you confirm against the carve-outs before
 reporting. A confirmed finding is a **blocker**.
+
+One carve-out deserves emphasis: **forward-staged scaffolding**. In an
+incremental, multi-step plan, a task routinely adds infrastructure — a field,
+parameter, or helper — *ahead of* the task that consumes it, so its inbound
+callgraph is legitimately empty until the follow-up lands. When the diff makes
+that intent legible (a placeholder default a later change replaces, a value
+plumbed through in preparation, or an explicit forward marker), it is
+work-in-process, not dead code; do not block it. See the rule's carve-outs.

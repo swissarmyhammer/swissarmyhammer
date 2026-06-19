@@ -54,7 +54,7 @@ metadata:
 
 Test waits on something CI can't deliver (network, child process, file watcher, deadlock). Run with a hard per-test timeout and isolate the offender via the `shell` tool's `timeout`:
 
-- Rust: `cargo nextest run --test-threads=1 --timeout 60`
+- Rust: `timeout 60 cargo nextest run --test-threads=1 <test_name>` — nextest has no `--timeout` flag; its per-test budget is config-only via `slow-timeout`/`terminate-after` in `.config/nextest.toml`, so wrap the invocation with the shell `timeout` to bound a single suspect test
 - Python: `pytest --timeout=60` (needs `pytest-timeout`)
 - Node: `jest --testTimeout=60000`
 

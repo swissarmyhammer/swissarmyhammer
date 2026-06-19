@@ -1,7 +1,7 @@
 ---
 name: future-proofing
 description: Private fields, bounds on impl blocks, additive features, no_std support
-severity: warn
+severity: error
 ---
 
 # Rust Future-Proofing

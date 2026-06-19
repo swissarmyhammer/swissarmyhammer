@@ -6,7 +6,7 @@ partial: true
 
 ### Rust Project Guidelines
 
-**Testing — always use `cargo nextest`** (faster, more reliable than `cargo test`):
+**Testing — always use `cargo nextest`; `cargo test` is forbidden.** Plain `cargo test` has no per-test timeout, so a deadlocked or hung test hangs the entire run forever. `cargo nextest` enforces the `slow-timeout` / `terminate-after` budgets in `.config/nextest.toml` — it warns on a slow test and hard-kills it at a deadline, so one hang can't wedge the suite.
 - All tests: `cargo nextest run --workspace`
 - Package: `cargo nextest run --package <name>`
 - Single test: `cargo nextest run <test_name>`

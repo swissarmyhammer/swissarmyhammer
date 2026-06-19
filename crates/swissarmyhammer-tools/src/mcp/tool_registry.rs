@@ -1328,14 +1328,30 @@ impl ToolRegistry {
     /// Build the MCP `Tool` objects for every enabled tool that satisfies
     /// `keep`, sharing the schema/meta construction across the unfiltered and
     /// host-filtered entry points.
+    ///
+    /// Tools are emitted **sorted by name**. The backing store is a `HashMap`
+    /// (for O(1) routing lookup), whose iteration order is non-deterministic
+    /// under hash randomization — so the list is sorted here, at the emission
+    /// boundary, to guarantee a stable order across repeated calls and process
+    /// restarts. This keeps the rendered system+tools prefix byte-identical
+    /// across sibling agent sessions, a precondition for KV prefix reuse (a
+    /// non-deterministic order shrinks the shared-prefix LCP below the full
+    /// prefix). Routing/dispatch is unaffected — only the rendered LIST order.
     fn list_tools_filtered<F>(&self, keep: F) -> Vec<Tool>
     where
         F: Fn(&dyn McpTool) -> bool,
     {
-        self.tools
+        let mut tools: Vec<&dyn McpTool> = self
+            .tools
             .values()
-            .filter(|tool| !self.disabled_tools.contains(McpTool::name(tool.as_ref())))
-            .filter(|tool| keep(tool.as_ref()))
+            .map(|tool| tool.as_ref())
+            .filter(|tool| !self.disabled_tools.contains(McpTool::name(*tool)))
+            .filter(|tool| keep(*tool))
+            .collect();
+        tools.sort_unstable_by_key(|tool| McpTool::name(*tool));
+
+        tools
+            .into_iter()
             .map(|tool| {
                 let schema = tool.schema();
                 let schema_map = if let serde_json::Value::Object(map) = schema {
@@ -1344,9 +1360,8 @@ impl ToolRegistry {
                     serde_json::Map::new()
                 };
 
-                let mut mcp_tool =
-                    Tool::new(McpTool::name(tool.as_ref()), tool.description(), schema_map)
-                        .with_title(McpTool::name(tool.as_ref()));
+                let mut mcp_tool = Tool::new(McpTool::name(tool), tool.description(), schema_map)
+                    .with_title(McpTool::name(tool));
                 let mut meta = Meta::new();
                 meta.0.insert(
                     "anthropic/alwaysLoad".to_string(),
@@ -2986,6 +3001,75 @@ mod tests {
                 tool.name
             );
         }
+    }
+
+    #[test]
+    fn test_list_tools_deterministic_sorted_order() {
+        // The rendered tools/list must be byte-identical across sibling
+        // sessions so the KV prefix-reuse donor's LCP stays full. The registry
+        // is HashMap-backed, so the emission point must sort by tool name to be
+        // deterministic. Register in deliberately non-sorted insertion order;
+        // assert the emitted order is sorted by name and stable across calls.
+        //
+        // Asserts exact ordered equality (not set-equality) so it fails under
+        // HashMap iteration order / hash randomization.
+        let names_in = [
+            "shell",
+            "kanban",
+            "git",
+            "web",
+            "files",
+            "code_context",
+            "review",
+            "ralph",
+            "question",
+            "skill",
+            "agent",
+        ];
+        let mut registry = ToolRegistry::new();
+        for name in names_in {
+            registry.register(MockTool {
+                name,
+                description: "tool",
+            });
+        }
+
+        let mut expected = names_in.to_vec();
+        expected.sort_unstable();
+
+        let first: Vec<String> = registry
+            .list_tools()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        let second: Vec<String> = registry
+            .list_tools()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        // Two successive calls return an identical ordered sequence.
+        assert_eq!(
+            first, second,
+            "successive list_tools() calls returned different orders"
+        );
+        // And the order is the expected stable ordering (sorted by name).
+        assert_eq!(
+            first, expected,
+            "list_tools() order is not sorted by tool name"
+        );
+
+        // list_tools_filtered's other entry point (host composition) must be
+        // sorted too — share the same emission guarantee.
+        let for_host: Vec<String> = registry
+            .list_tools_for_host(crate::mcp::host::Host::Claude)
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        assert_eq!(
+            for_host, expected,
+            "list_tools_for_host() order is not sorted by tool name"
+        );
     }
 
     // --- ToolContext builder method tests ---

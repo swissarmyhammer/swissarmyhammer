@@ -5940,7 +5940,8 @@ mod profile_consistency_tests {
     }
 
     /// sah's profile — the "bigger profile": all builtin skills + all builtin
-    /// agents + statusline + preamble (`apps/swissarmyhammer-cli/.../profile.rs`).
+    /// agents + statusline, but NOT the CLAUDE.md preamble
+    /// (`apps/swissarmyhammer-cli/.../profile.rs`).
     fn sah_profile(_scope: InitScope) -> Profile {
         Profile {
             mcp_server: Some(ProfileMcpServer::serve("sah")),
@@ -5948,7 +5949,7 @@ mod profile_consistency_tests {
             agents: Some(Selector::All),
             validators: Some(Selector::All),
             statusline: true,
-            preamble: true,
+            preamble: false,
             edit_redirect: true,
         }
     }
