@@ -1756,10 +1756,26 @@ mod tests {
         let cache = meta
             .get("cache_usage")
             .expect("meta must carry cache_usage when the final chunk reported usage");
-        assert_eq!(cache.get("cache_read_input_tokens").and_then(|v| v.as_u64()), Some(1234));
-        assert_eq!(cache.get("cache_creation_input_tokens").and_then(|v| v.as_u64()), Some(56));
-        assert_eq!(cache.get("input_tokens").and_then(|v| v.as_u64()), Some(1290));
-        assert_eq!(cache.get("output_tokens").and_then(|v| v.as_u64()), Some(42));
+        assert_eq!(
+            cache
+                .get("cache_read_input_tokens")
+                .and_then(|v| v.as_u64()),
+            Some(1234)
+        );
+        assert_eq!(
+            cache
+                .get("cache_creation_input_tokens")
+                .and_then(|v| v.as_u64()),
+            Some(56)
+        );
+        assert_eq!(
+            cache.get("input_tokens").and_then(|v| v.as_u64()),
+            Some(1290)
+        );
+        assert_eq!(
+            cache.get("output_tokens").and_then(|v| v.as_u64()),
+            Some(42)
+        );
     }
 
     // =========================================================================

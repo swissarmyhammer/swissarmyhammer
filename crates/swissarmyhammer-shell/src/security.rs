@@ -127,11 +127,7 @@ impl Default for ShellSecurityPolicy {
 
         Self {
             enable_validation: true,
-            blocked_commands: config
-                .deny
-                .into_iter()
-                .map(|rule| rule.pattern)
-                .collect(),
+            blocked_commands: config.deny.into_iter().map(|rule| rule.pattern).collect(),
             allowed_directories: None, // No directory restrictions by default
             max_command_length: MAX_COMMAND_LENGTH,
             enable_audit_logging: true,

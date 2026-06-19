@@ -11,9 +11,7 @@
 //! Everything is exercised through the live builtin config (the same path the
 //! production shell tool uses), not a hand-built policy, so drift is impossible.
 
-use swissarmyhammer_shell::{
-    parse_shell_config, CompiledShellConfig, BUILTIN_CONFIG_YAML,
-};
+use swissarmyhammer_shell::{parse_shell_config, CompiledShellConfig, BUILTIN_CONFIG_YAML};
 
 /// Compile the builtin config exactly as the live tool loads it.
 fn builtin_compiled() -> CompiledShellConfig {
