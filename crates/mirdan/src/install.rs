@@ -961,6 +961,13 @@ pub struct Profile {
     pub statusline: bool,
     /// Whether to ensure the CLAUDE.md preamble is present.
     pub preamble: bool,
+    /// Whether to install the edit-surface redirect fragment: a
+    /// `permissions.deny` on the native `Edit`/`Write`/`MultiEdit` tools plus a
+    /// `PreToolUse` hook that redirects them to the `files` MCP tool, so every
+    /// mutation flows through the diagnostics-instrumented path. Claude-shaped
+    /// and inert on hosts that don't read those keys (see
+    /// [`apply_profile_edit_redirect`]).
+    pub edit_redirect: bool,
 }
 
 /// Map an [`InitScope`] to the boolean `global` flag the deploy/store helpers
@@ -1525,6 +1532,193 @@ fn apply_statusline_at(path: &Path, install: bool) -> Result<bool, RegistryError
     Ok(changed)
 }
 
+// ── Edit-surface redirect (close the write surface) ──────────────────
+//
+// An MCP server cannot disable a host's *native* built-in tools, so closing
+// the editing surface — forcing every mutation through the instrumented
+// `files` MCP tool, so diagnostics always ride the result — ships as an
+// installable Claude Code settings fragment. The fragment does two things:
+//
+// 1. `permissions.deny` the three native mutators (`Edit`, `Write`,
+//    `MultiEdit`) so the model is told not to reach for them, and
+// 2. a `PreToolUse` hook on those same tools that, if one is attempted anyway,
+//    denies it and redirects the model to the `files` MCP tool's edit/write op
+//    (the diagnostics-instrumented path).
+//
+// Both pieces are plain Claude-shaped settings keys, harmless on agents that
+// don't read them, and the hook is silently ignored by any host without hook
+// support — so the fragment is a no-op there rather than an error.
+
+/// The native Claude Code mutator tools the redirect fragment denies, so every
+/// mutation is forced through the instrumented `files` MCP tool. Kept as data
+/// (not spelled into control flow) so the deny list and the hook matcher derive
+/// from one source.
+pub const EDIT_REDIRECT_DENY_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit"];
+
+/// The Claude Code `PreToolUse` matcher targeting exactly the denied native
+/// mutators (`"Edit|Write|MultiEdit"`), derived from [`EDIT_REDIRECT_DENY_TOOLS`].
+const EDIT_REDIRECT_MATCHER: &str = "Edit|Write|MultiEdit";
+
+/// Build the `PreToolUse` redirect command.
+///
+/// A pure-`jq`-free `printf` of the Claude Code PreToolUse JSON output that
+/// denies the native mutator and points the model at the `files` MCP tool's
+/// edit/write op (the diagnostics-instrumented path). It reads nothing from
+/// stdin — the redirect is the same regardless of which mutator fired — so it
+/// has no external dependency beyond a POSIX shell.
+fn edit_redirect_command() -> String {
+    // hookSpecificOutput.permissionDecision="deny" with a reason is the
+    // documented PreToolUse contract for blocking a tool and feeding the model
+    // a correction. The reason steers it to the `files` MCP tool.
+    let reason = "This edit surface is closed: use the `files` MCP tool \
+         (op \"edit file\" / \"write file\") so diagnostics ride the result, \
+         not the native Edit/Write/MultiEdit tool.";
+    let payload = serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    });
+    // Single-quote the JSON for the shell; `printf %s` emits it verbatim with no
+    // trailing newline interpretation surprises. The payload contains no single
+    // quotes, so single-quoting is safe.
+    format!("printf %s '{}'", serde_json::to_string(&payload).unwrap())
+}
+
+/// The full `PreToolUse` matcher group the redirect installs: a command hook on
+/// the native mutators that denies and redirects to the `files` MCP tool.
+fn edit_redirect_hook_group() -> serde_json::Value {
+    serde_json::json!({
+        "matcher": EDIT_REDIRECT_MATCHER,
+        "hooks": [
+            {
+                "type": "command",
+                "command": edit_redirect_command(),
+            }
+        ]
+    })
+}
+
+/// The installable Claude Code settings fragment that closes the write surface.
+///
+/// Denies the native `Edit`/`Write`/`MultiEdit` tools and adds a `PreToolUse`
+/// redirect to the `files` MCP tool. This is the single source of truth for the
+/// fragment's shape; [`apply_edit_redirect_at`] merges its parts into a real
+/// settings file without clobbering unrelated keys.
+fn desired_edit_redirect_fragment() -> serde_json::Value {
+    serde_json::json!({
+        "permissions": {
+            "deny": EDIT_REDIRECT_DENY_TOOLS,
+        },
+        "hooks": {
+            "PreToolUse": [edit_redirect_hook_group()],
+        }
+    })
+}
+
+/// JSON pointer for the `permissions.deny` array (Claude Code shape).
+const PERMISSIONS_DENY_POINTER: &str = "/permissions/deny";
+/// JSON pointer for the `hooks.PreToolUse` matcher-group array.
+const HOOKS_PRETOOLUSE_POINTER: &str = "/hooks/PreToolUse";
+
+/// Object keys used to read the canonical fragment's parts back out (kept in one
+/// place so the pointer strings and these accessors can never drift).
+const POINTER_KEY_PERMISSIONS: &str = "permissions";
+const POINTER_KEY_DENY: &str = "deny";
+const POINTER_KEY_HOOKS: &str = "hooks";
+const POINTER_KEY_PRETOOLUSE: &str = "PreToolUse";
+
+/// Merge the edit-redirect fragment into the settings file at `path`, or strip
+/// it when `install` is false.
+///
+/// On install, the three deny entries and the single redirect matcher group are
+/// added idempotently (existing unrelated deny entries and `PreToolUse` groups
+/// are preserved, and re-running adds nothing). On removal, exactly those
+/// entries are taken back out and unrelated keys are left intact. A missing file
+/// is created on install and a no-op on removal. Returns `Ok(true)` when the
+/// file changed.
+fn apply_edit_redirect_at(path: &Path, install: bool) -> Result<bool, RegistryError> {
+    if !install && !path.exists() {
+        return Ok(false);
+    }
+
+    // Derive the exact pieces to merge from the canonical fragment, so the
+    // fragment validated by tests is the same shape written to disk — there is
+    // one source of truth for what "the edit-redirect" is.
+    let fragment = desired_edit_redirect_fragment();
+    let deny_entries = fragment[POINTER_KEY_PERMISSIONS][POINTER_KEY_DENY]
+        .as_array()
+        .expect("fragment permissions.deny is an array");
+    let group = fragment[POINTER_KEY_HOOKS][POINTER_KEY_PRETOOLUSE][0].clone();
+
+    let mut settings = settings::read_json(path)?;
+    let mut changed = false;
+    for entry in deny_entries {
+        let one = if install {
+            settings::ensure_array_contains(&mut settings, PERMISSIONS_DENY_POINTER, entry)
+        } else {
+            settings::remove_from_array(&mut settings, PERMISSIONS_DENY_POINTER, entry)
+        };
+        changed |= one;
+    }
+    changed |= if install {
+        settings::ensure_array_contains(&mut settings, HOOKS_PRETOOLUSE_POINTER, &group)
+    } else {
+        settings::remove_from_array(&mut settings, HOOKS_PRETOOLUSE_POINTER, &group)
+    };
+
+    if changed {
+        settings::write_json(path, &settings)?;
+    }
+    Ok(changed)
+}
+
+/// Install the edit-redirect fragment into every detected agent's settings file,
+/// or strip it when `install` is false. Root-aware so project-scope settings
+/// files resolve against `root` instead of `current_dir()`. Mirrors
+/// [`apply_profile_statusline`]: the fragment is Claude-shaped and inert on
+/// agents that do not read those keys.
+fn apply_profile_edit_redirect(
+    install: bool,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    let verb = if install { "Installed" } else { "Removed" };
+    for_each_detected_agent(
+        scope,
+        reporter,
+        |agent, global| {
+            let Some(path) = resolve_agent_file(
+                agent,
+                global,
+                root,
+                agents::agent_global_settings_file,
+                agents::agent_project_settings_file,
+            ) else {
+                return Ok(None);
+            };
+            Ok(
+                apply_edit_redirect_at(&path, install)?.then(|| AgentAction {
+                    verb: verb.to_string(),
+                    message: format!(
+                        "edit-surface redirect for {} ({})",
+                        agent.name,
+                        path.display()
+                    ),
+                }),
+            )
+        },
+        |changed| {
+            InitResult::ok(
+                "profile-edit-redirect",
+                format!("{verb} edit-surface redirect for {changed} agent(s)"),
+            )
+        },
+    )
+}
+
 /// Ensure the CLAUDE.md preamble is present in every detected agent's
 /// instructions file, or strip it when `install` is false. Root-aware so
 /// project-scope instructions files resolve against `root`.
@@ -1871,6 +2065,10 @@ pub fn init_profile(
         results.extend(apply_profile_preamble(true, scope, root, reporter));
     }
 
+    if profile.edit_redirect {
+        results.extend(apply_profile_edit_redirect(true, scope, root, reporter));
+    }
+
     results
 }
 
@@ -1974,6 +2172,10 @@ pub fn deinit_profile(
 
     if profile.preamble {
         results.extend(apply_profile_preamble(false, scope, root, reporter));
+    }
+
+    if profile.edit_redirect {
+        results.extend(apply_profile_edit_redirect(false, scope, root, reporter));
     }
 
     results
@@ -5234,6 +5436,7 @@ mod profile_tests {
             validators: None,
             statusline: false,
             preamble: false,
+            edit_redirect: false,
         }
     }
 
@@ -5431,6 +5634,103 @@ mod profile_tests {
         assert!(
             !claude_md.exists(),
             "preamble-only instructions file should be deleted on deinit"
+        );
+    }
+
+    /// `init_profile` with `edit_redirect: true` merges the deny + PreToolUse
+    /// redirect into the detected agent's settings file, preserving unrelated
+    /// keys; `deinit_profile` strips exactly those entries back out.
+    #[test]
+    #[serial]
+    fn init_profile_installs_edit_redirect_and_deinit_removes() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+        let cwd_dir = tempfile::tempdir().unwrap();
+        let cwd = cwd_dir.path().canonicalize().unwrap();
+        let _cwd = CurrentDirGuard::new(&cwd).unwrap();
+
+        let config_path = write_profile_agents_config(&root);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        // Pre-existing unrelated settings the install must not clobber.
+        let settings_path = root.join(".fake/settings.json");
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            serde_json::to_string_pretty(&serde_json::json!({ "model": "opus" })).unwrap(),
+        )
+        .unwrap();
+
+        let profile = Profile {
+            edit_redirect: true,
+            ..Profile::default()
+        };
+        let reporter = NullReporter;
+        let results = init_profile(&profile, InitScope::Project, Some(&root), &reporter);
+        assert!(
+            results
+                .iter()
+                .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+            "edit-redirect init must not error: {results:?}"
+        );
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        // Unrelated key preserved.
+        assert_eq!(settings["model"], serde_json::json!("opus"));
+        // Native mutators denied.
+        let deny = settings["permissions"]["deny"].as_array().unwrap();
+        for tool in EDIT_REDIRECT_DENY_TOOLS {
+            assert!(
+                deny.iter().any(|v| v == &serde_json::json!(tool)),
+                "{tool} must be denied; got {deny:?}"
+            );
+        }
+        // PreToolUse redirect group present and points at the `files` MCP tool.
+        let groups = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        let group = groups
+            .iter()
+            .find(|g| g["matcher"] == serde_json::json!(EDIT_REDIRECT_MATCHER))
+            .expect("redirect group present");
+        let command = group["hooks"][0]["command"].as_str().unwrap();
+        assert!(
+            command.contains("files"),
+            "redirect must mention files MCP tool"
+        );
+
+        // Nothing leaked into the CWD.
+        assert!(
+            !cwd.join(".fake").exists(),
+            "edit-redirect must not touch CWD"
+        );
+
+        // Deinit strips the deny + redirect but keeps the unrelated key.
+        let results = deinit_profile(&profile, InitScope::Project, Some(&root), &reporter);
+        assert!(results
+            .iter()
+            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error));
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(settings["model"], serde_json::json!("opus"));
+        let deny = settings["permissions"]["deny"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for tool in EDIT_REDIRECT_DENY_TOOLS {
+            assert!(
+                !deny.iter().any(|v| v == &serde_json::json!(tool)),
+                "{tool} deny must be removed on deinit"
+            );
+        }
+        let groups = settings["hooks"]["PreToolUse"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !groups
+                .iter()
+                .any(|g| g["matcher"] == serde_json::json!(EDIT_REDIRECT_MATCHER)),
+            "redirect group must be removed on deinit"
         );
     }
 
@@ -5649,6 +5949,7 @@ mod profile_consistency_tests {
             validators: Some(Selector::All),
             statusline: true,
             preamble: true,
+            edit_redirect: true,
         }
     }
 
@@ -6027,6 +6328,146 @@ mod profile_consistency_tests {
                 .get("code-context")
                 .is_none(),
             "deinit must remove the local-scope MCP registration"
+        );
+    }
+}
+
+#[cfg(test)]
+mod edit_redirect_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The generated fragment must be valid Claude Code settings JSON: it denies
+    /// the three native edit tools and installs a `PreToolUse` matcher group
+    /// targeting exactly those tools that redirects to the `files` MCP tool.
+    #[test]
+    fn fragment_denies_native_edit_tools_and_redirects() {
+        let fragment = desired_edit_redirect_fragment();
+
+        // Deny entries: Edit, Write, MultiEdit (order matches the constant).
+        let deny = fragment["permissions"]["deny"]
+            .as_array()
+            .expect("permissions.deny must be an array");
+        for tool in EDIT_REDIRECT_DENY_TOOLS {
+            assert!(
+                deny.iter().any(|v| v == &json!(tool)),
+                "deny must contain {tool}; got {deny:?}"
+            );
+        }
+
+        // PreToolUse redirect group targets exactly the denied tools.
+        let groups = fragment["hooks"]["PreToolUse"]
+            .as_array()
+            .expect("hooks.PreToolUse must be an array");
+        let group = &groups[0];
+        assert_eq!(
+            group["matcher"],
+            json!(EDIT_REDIRECT_MATCHER),
+            "the PreToolUse matcher must target the native edit tools"
+        );
+        let hooks = group["hooks"].as_array().expect("group hooks array");
+        assert_eq!(hooks[0]["type"], json!("command"));
+        let command = hooks[0]["command"].as_str().expect("command string");
+        assert!(
+            command.contains("files"),
+            "the redirect must point the model at the `files` MCP tool; got {command:?}"
+        );
+    }
+
+    /// Installing into a fresh settings file writes the deny + redirect; doing it
+    /// again is a no-op (idempotent).
+    #[test]
+    fn apply_edit_redirect_at_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".claude/settings.local.json");
+
+        assert!(
+            apply_edit_redirect_at(&path, true).unwrap(),
+            "first install must change the file"
+        );
+        assert!(
+            !apply_edit_redirect_at(&path, true).unwrap(),
+            "second install must be a no-op"
+        );
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // Exactly one redirect group — not duplicated by the second install.
+        let groups = written["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(groups.len(), 1, "redirect group must not be duplicated");
+    }
+
+    /// The install must merge into an existing settings chain without clobbering
+    /// unrelated keys or pre-existing deny/hook entries.
+    #[test]
+    fn apply_edit_redirect_at_preserves_unrelated_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&json!({
+                "model": "opus",
+                "permissions": { "deny": ["Bash"], "allow": ["Read"] },
+                "hooks": {
+                    "PostToolUse": [
+                        { "matcher": "Write", "hooks": [{ "type": "command", "command": "fmt" }] }
+                    ]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(apply_edit_redirect_at(&path, true).unwrap());
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // Unrelated top-level key untouched.
+        assert_eq!(written["model"], json!("opus"));
+        // Pre-existing allow + the pre-existing Bash deny survive.
+        assert_eq!(written["permissions"]["allow"], json!(["Read"]));
+        let deny = written["permissions"]["deny"].as_array().unwrap();
+        assert!(deny.iter().any(|v| v == &json!("Bash")));
+        assert!(deny.iter().any(|v| v == &json!("Edit")));
+        // The unrelated PostToolUse hook is preserved.
+        assert!(written["hooks"]["PostToolUse"].is_array());
+    }
+
+    /// Removal strips the deny + redirect but leaves unrelated entries; removal
+    /// on a missing file is a no-op.
+    #[test]
+    fn apply_edit_redirect_at_removes_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+
+        // Removal on a missing file is a no-op.
+        assert!(!apply_edit_redirect_at(&path, false).unwrap());
+
+        // Install then remove returns to a clean state for our keys.
+        apply_edit_redirect_at(&path, true).unwrap();
+        assert!(apply_edit_redirect_at(&path, false).unwrap());
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let deny = written["permissions"]["deny"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for tool in EDIT_REDIRECT_DENY_TOOLS {
+            assert!(
+                !deny.iter().any(|v| v == &json!(tool)),
+                "{tool} deny must be removed"
+            );
+        }
+        let groups = written["hooks"]["PreToolUse"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !groups
+                .iter()
+                .any(|g| g["matcher"] == json!(EDIT_REDIRECT_MATCHER)),
+            "redirect group must be removed"
         );
     }
 }

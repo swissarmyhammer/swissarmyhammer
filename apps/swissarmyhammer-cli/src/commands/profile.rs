@@ -22,6 +22,9 @@ use mirdan::install::{Profile, ProfileMcpServer, Selector};
 /// - `agents`: every builtin agent ([`Selector::All`]).
 /// - `statusline`: install the `sah statusline` block.
 /// - `preamble`: ensure the CLAUDE.md preamble is present.
+/// - `edit_redirect`: deny the native `Edit`/`Write`/`MultiEdit` tools and add a
+///   `PreToolUse` redirect to the `files` MCP tool, closing the write surface so
+///   diagnostics ride every mutation.
 ///
 /// Kept in sync with mirdan's cross-CLI consistency tests
 /// (`mirdan::install::profile_consistency_tests::sah_profile`), which
@@ -36,6 +39,7 @@ pub fn sah_profile() -> Profile {
         validators: Some(Selector::All),
         statusline: true,
         preamble: true,
+        edit_redirect: true,
     }
 }
 
@@ -61,5 +65,6 @@ mod tests {
         assert_eq!(profile.validators, Some(Selector::All));
         assert!(profile.statusline);
         assert!(profile.preamble);
+        assert!(profile.edit_redirect);
     }
 }
