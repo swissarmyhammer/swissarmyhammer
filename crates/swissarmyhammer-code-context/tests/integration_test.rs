@@ -1968,12 +1968,17 @@ pub fn greet(config: &Config) -> String {
     println!("Created test project at {}", root.display());
 
     // -- Step 2: Spawn rust-analyzer ----------------------------------------
-    let mut child = Command::new("rust-analyzer")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn rust-analyzer");
+    // Wrap the child in the crate's kill-on-drop guard so a panicking assertion
+    // (or skipped cleanup) can never leak the real rust-analyzer as a PPID=1
+    // orphan — see `swissarmyhammer_code_context::testing::KillOnDrop`.
+    let mut child = swissarmyhammer_code_context::testing::KillOnDrop::new(
+        Command::new("rust-analyzer")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to spawn rust-analyzer"),
+    );
 
     let stdin = child.stdin.take().expect("Failed to take stdin");
     let stdout = child.stdout.take().expect("Failed to take stdout");
@@ -2280,13 +2285,15 @@ edition = "2021"
     let conn = ws.db();
     let conn = &*conn;
 
-    // Step 3: Spawn rust-analyzer.
-    let mut child = Command::new("rust-analyzer")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn rust-analyzer");
+    // Step 3: Spawn rust-analyzer (kill-on-drop guarded so a panic can't leak it).
+    let mut child = swissarmyhammer_code_context::testing::KillOnDrop::new(
+        Command::new("rust-analyzer")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to spawn rust-analyzer"),
+    );
 
     let stdin = child.stdin.take().expect("Failed to take stdin");
     let stdout = child.stdout.take().expect("Failed to take stdout");
@@ -2526,13 +2533,15 @@ pub fn greet(name: &str) -> String {
         rel_path
     );
 
-    // -- Step 4: Spawn rust-analyzer ----------------------------------------
-    let mut child = Command::new("rust-analyzer")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn rust-analyzer");
+    // -- Step 4: Spawn rust-analyzer (kill-on-drop guarded) -----------------
+    let mut child = swissarmyhammer_code_context::testing::KillOnDrop::new(
+        Command::new("rust-analyzer")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to spawn rust-analyzer"),
+    );
 
     let stdin = child.stdin.take().expect("Failed to take stdin");
     let stdout = child.stdout.take().expect("Failed to take stdout");

@@ -28,43 +28,10 @@ pub fn none_session() -> SharedLspSession {
 
 /// A spawned mock LSP child that is killed and reaped when it goes out of scope.
 ///
-/// The mock server (see [`spawn_mock_lsp`]) blocks on `stdin.readline()` until it
-/// has read exactly as many messages as it was scripted with. If the code under
-/// test sends fewer messages than the script expects — which happens whenever the
-/// live-LSP wire protocol changes (e.g. dropping a per-request `didClose`) — the
-/// child parks on that read forever. A test that then *blocks* on the child (the
-/// old `child.wait()` pattern) deadlocks, and because libtest waits for every
-/// spawned test thread to report completion, one parked test hangs the entire
-/// `cargo test` run indefinitely.
-///
-/// This guard removes that whole failure class: tests never wait on the child.
-/// On drop it sends `SIGKILL` (which cannot block) and then reaps the zombie, so
-/// a message-count mismatch surfaces as a normal test assertion instead of a hang,
-/// and no mock process is ever leaked.
-pub struct MockLsp(std::process::Child);
-
-impl std::ops::Deref for MockLsp {
-    type Target = std::process::Child;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for MockLsp {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Drop for MockLsp {
-    fn drop(&mut self) {
-        // kill() is non-blocking; the following wait() only reaps the
-        // already-terminating process, so neither call can deadlock the way a
-        // bare wait() on a parked mock would.
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
+/// This is the crate's single kill-on-drop guard, [`crate::testing::KillOnDrop`],
+/// under a name that reads well at mock-LSP call sites. See that type for why a
+/// guard is required (parked-mock deadlock + orphaned-server avoidance).
+pub use crate::testing::KillOnDrop as MockLsp;
 
 /// Spawn a Python mock LSP server driven by scripted `responses`.
 ///

@@ -29,6 +29,7 @@ pub mod lsp_indexer;
 pub mod lsp_worker;
 pub mod ops;
 pub mod progress;
+pub mod testing;
 pub mod ts_callgraph;
 pub mod watcher;
 pub mod workspace;

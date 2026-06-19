@@ -1475,63 +1475,12 @@ mod tests {
     }
 
     // -- index_single_file with mock LSP client tests --
-
-    /// Spawn a mock LSP process that reads a notification (didOpen), responds
-    /// to a request (documentSymbol), then reads a notification (didClose).
-    ///
-    /// The mock expects exactly this sequence:
-    /// 1. Read one message (didOpen notification) — no reply
-    /// 2. Read one message (documentSymbol request) — reply with `response`
-    /// 3. Read one message (didClose notification) — no reply
-    ///
-    /// The response JSON is written to a temp file. The file path is passed
-    /// via the `MOCK_RESPONSE_FILE` environment variable so neither JSON nor
-    /// the path is ever interpolated into the Python source code.
-    fn spawn_mock_lsp_for_index_single_file(
-        response: serde_json::Value,
-        response_file: &std::path::Path,
-    ) -> std::process::Child {
-        // Write the response JSON to a file the Python script will read
-        std::fs::write(response_file, response.to_string())
-            .expect("failed to write mock response file");
-
-        // The script reads the response file path from an env var, avoiding
-        // any interpolation of untrusted data into Python source code.
-        let script = "\
-            import sys, json, os\n\
-            def read_msg():\n\
-            \tcl = None\n\
-            \twhile True:\n\
-            \t\tline = sys.stdin.readline()\n\
-            \t\tif not line: return None\n\
-            \t\tline = line.strip()\n\
-            \t\tif not line: break\n\
-            \t\tif line.startswith('Content-Length:'):\n\
-            \t\t\tcl = int(line.split(':', 1)[1].strip())\n\
-            \tif cl is None: return None\n\
-            \tbody = sys.stdin.read(cl)\n\
-            \treturn json.loads(body)\n\
-            def send_msg(obj):\n\
-            \ts = json.dumps(obj)\n\
-            \tsys.stdout.write(f'Content-Length: {len(s)}\\r\\n\\r\\n{s}')\n\
-            \tsys.stdout.flush()\n\
-            with open(os.environ['MOCK_RESPONSE_FILE']) as f:\n\
-            \tresponse = json.load(f)\n\
-            read_msg()\n\
-            read_msg()\n\
-            send_msg(response)\n\
-            read_msg()\n";
-
-        std::process::Command::new("python3")
-            .arg("-c")
-            .arg(script)
-            .env("MOCK_RESPONSE_FILE", response_file)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("failed to spawn mock LSP python3 process for index_single_file")
-    }
+    //
+    // These tests drive `index_single_file` against the crate's single mock-LSP
+    // spawn path, `test_fixtures::spawn_mock_lsp`, which returns a kill-on-drop
+    // `MockLsp` guard. The scripted message sequence is
+    // `[Null, <documentSymbol response>, Null]` — read didOpen (no reply),
+    // reply to documentSymbol, read didClose (no reply).
 
     #[test]
     fn test_index_single_file_with_mock_lsp_persists_symbols() {
@@ -1559,14 +1508,17 @@ mod tests {
             let mut f = std::fs::File::create(&file_path).unwrap();
             writeln!(f, "fn my_function() {{}}").unwrap();
         }
-        let response_file = temp_dir.path().join("mock_response.json");
-
         let db = create_test_db();
         let relative_path = "src/demo.rs";
         insert_test_file(&db, relative_path);
         let shared_db: SharedDb = Arc::new(Mutex::new(db));
 
-        let mut child = spawn_mock_lsp_for_index_single_file(symbol_response, &response_file);
+        // didOpen (no reply), documentSymbol (reply), didClose (no reply).
+        let mut child = crate::test_fixtures::spawn_mock_lsp(&[
+            serde_json::Value::Null,
+            symbol_response,
+            serde_json::Value::Null,
+        ]);
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let client = LspJsonRpcClient::new(stdin, stdout);
@@ -1603,9 +1555,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(sym_count, 1, "1 symbol should be persisted in lsp_symbols");
-
-        let _ = child.kill();
-        let _ = child.wait();
+        // `child` (a MockLsp/KillOnDrop guard) is killed and reaped on drop.
     }
 
     #[test]
@@ -1638,8 +1588,6 @@ mod tests {
             let mut f = std::fs::File::create(&f_path).unwrap();
             writeln!(f, "fn new_symbol() {{}}").unwrap();
         }
-        let response_file = temp_dir.path().join("mock_response.json");
-
         // Seed the DB with both files, an old symbol on F, and a G→F edge.
         let db = create_test_db();
         insert_test_file(&db, "src/f.rs");
@@ -1677,7 +1625,12 @@ mod tests {
         let shared_db: SharedDb = Arc::new(Mutex::new(db));
 
         // Run the worker on F.
-        let mut child = spawn_mock_lsp_for_index_single_file(symbol_response, &response_file);
+        // didOpen (no reply), documentSymbol (reply), didClose (no reply).
+        let mut child = crate::test_fixtures::spawn_mock_lsp(&[
+            serde_json::Value::Null,
+            symbol_response,
+            serde_json::Value::Null,
+        ]);
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let client = LspJsonRpcClient::new(stdin, stdout);
@@ -1719,8 +1672,7 @@ mod tests {
         );
 
         drop(conn);
-        let _ = child.kill();
-        let _ = child.wait();
+        // `child` (a MockLsp/KillOnDrop guard) is killed and reaped on drop.
     }
 
     #[test]
@@ -1728,9 +1680,6 @@ mod tests {
         // When the file doesn't exist on disk, index_single_file should return
         // an I/O error before any LSP interaction occurs.
         use serde_json::json;
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let response_file = temp_dir.path().join("mock_response.json");
 
         // The mock won't be used because the file read fails first,
         // but we still need a valid LspJsonRpcClient.
@@ -1740,7 +1689,12 @@ mod tests {
             "result": []
         });
 
-        let mut child = spawn_mock_lsp_for_index_single_file(symbol_response, &response_file);
+        // didOpen (no reply), documentSymbol (reply), didClose (no reply).
+        let mut child = crate::test_fixtures::spawn_mock_lsp(&[
+            serde_json::Value::Null,
+            symbol_response,
+            serde_json::Value::Null,
+        ]);
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let client = LspJsonRpcClient::new(stdin, stdout);
@@ -1760,9 +1714,7 @@ mod tests {
             result.is_err(),
             "index_single_file should fail with I/O error for missing file"
         );
-
-        let _ = child.kill();
-        let _ = child.wait();
+        // `child` (a MockLsp/KillOnDrop guard) is killed and reaped on drop.
     }
 
     // -- Poison recovery tests --

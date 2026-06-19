@@ -373,48 +373,15 @@ mod tests {
     use super::*;
     use lsp_types::{Position, Range, SymbolKind};
 
-    /// Spawn a mock LSP server using Python3.
+    /// Spawn the crate's single mock LSP server, scripted to read a request and
+    /// reply with `response`.
     ///
-    /// The server reads a single JSON-RPC request and writes back the
-    /// given `response` JSON, then exits. This lets us exercise the
-    /// collection free functions against an actual stdio round-trip.
-    fn spawn_mock_lsp(responses: Vec<Value>) -> std::process::Child {
-        let mut script = String::from(
-            "import sys, json\n\
-             def read_msg():\n\
-             \tcl = None\n\
-             \twhile True:\n\
-             \t\tline = sys.stdin.readline()\n\
-             \t\tif not line: return None\n\
-             \t\tline = line.strip()\n\
-             \t\tif not line: break\n\
-             \t\tif line.startswith('Content-Length:'):\n\
-             \t\t\tcl = int(line.split(':', 1)[1].strip())\n\
-             \tif cl is None: return None\n\
-             \tbody = sys.stdin.read(cl)\n\
-             \treturn json.loads(body)\n\
-             def send_msg(obj):\n\
-             \ts = json.dumps(obj)\n\
-             \tsys.stdout.write(f'Content-Length: {len(s)}\\r\\n\\r\\n{s}')\n\
-             \tsys.stdout.flush()\n",
-        );
-
-        for resp in &responses {
-            let resp_json = resp.to_string().replace('\'', "\\'");
-            script.push_str(&format!(
-                "read_msg()\nsend_msg(json.loads('{}'))\n",
-                resp_json
-            ));
-        }
-
-        std::process::Command::new("python3")
-            .arg("-c")
-            .arg(&script)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("failed to spawn mock LSP python3 process")
+    /// Delegates to [`crate::test_fixtures::spawn_mock_lsp`] (read-a-request /
+    /// send-`response`) so there is one mock-LSP spawn path and one kill-on-drop
+    /// guard ([`crate::testing::KillOnDrop`]) crate-wide. Returns the guard, so
+    /// callers must never block on the child themselves.
+    fn spawn_mock_lsp(response: Value) -> crate::testing::KillOnDrop {
+        crate::test_fixtures::spawn_mock_lsp(&[response])
     }
 
     /// Open an in-memory SQLite DB with the code-context schema.
@@ -769,7 +736,7 @@ mod tests {
             ]
         });
 
-        let mut child = spawn_mock_lsp(vec![symbol_response]);
+        let mut child = spawn_mock_lsp(symbol_response);
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
 
@@ -786,9 +753,7 @@ mod tests {
         let info = result.unwrap();
         assert_eq!(info.symbol_count, 1, "should have found 1 symbol");
         assert!(info.error.is_none());
-
-        let _ = child.kill();
-        let _ = child.wait();
+        // `child` (a KillOnDrop guard) is killed and reaped on drop.
     }
 
     #[test]
@@ -804,7 +769,7 @@ mod tests {
             "result": []
         });
 
-        let mut child = spawn_mock_lsp(vec![empty_response]);
+        let mut child = spawn_mock_lsp(empty_response);
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
 
@@ -815,9 +780,7 @@ mod tests {
         let count = collect_and_persist_call_edges(&mut client, &conn, file_path, relative_path);
         assert!(count.is_ok(), "should succeed with empty symbols");
         assert_eq!(count.unwrap(), 0, "no edges for empty file");
-
-        let _ = child.kill();
-        let _ = child.wait();
+        // `child` (a KillOnDrop guard) is killed and reaped on drop.
     }
 
     #[test]
@@ -836,7 +799,7 @@ mod tests {
             ]
         });
 
-        let mut child = spawn_mock_lsp(vec![symbol_response]);
+        let mut child = spawn_mock_lsp(symbol_response);
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
 
@@ -850,9 +813,7 @@ mod tests {
         let info = result.unwrap();
         assert_eq!(info.symbol_count, 1);
         assert!(info.error.is_none());
-
-        let _ = child.kill();
-        let _ = child.wait();
+        // `child` (a KillOnDrop guard) is killed and reaped on drop.
     }
 
     #[test]
@@ -865,7 +826,7 @@ mod tests {
             "error": {"code": -32600, "message": "Invalid Request"}
         });
 
-        let mut child = spawn_mock_lsp(vec![error_response]);
+        let mut child = spawn_mock_lsp(error_response);
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
 
@@ -875,9 +836,7 @@ mod tests {
         let info = result.unwrap();
         assert_eq!(info.symbol_count, 0);
         assert!(info.error.is_some(), "error field should be populated");
-
-        let _ = child.kill();
-        let _ = child.wait();
+        // `child` (a KillOnDrop guard) is killed and reaped on drop.
     }
 
     #[test]
@@ -890,7 +849,7 @@ mod tests {
             "error": {"code": -32601, "message": "Method not found"}
         });
 
-        let mut child = spawn_mock_lsp(vec![error_response]);
+        let mut child = spawn_mock_lsp(error_response);
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
 
@@ -908,9 +867,7 @@ mod tests {
         let info = result.unwrap();
         assert_eq!(info.symbol_count, 0);
         assert!(info.error.is_some());
-
-        let _ = child.kill();
-        let _ = child.wait();
+        // `child` (a KillOnDrop guard) is killed and reaped on drop.
     }
 
     #[test]

@@ -557,12 +557,17 @@ fn drive_lsp_persistence(root: &Path, db: &SharedDb) -> i64 {
 
     let main_rs_path = root.join(LSP_MAIN_RS);
 
-    let mut child = Command::new("rust-analyzer")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn rust-analyzer");
+    // Kill-on-drop guarded so the assertions below can never leak the real
+    // rust-analyzer as a PPID=1 orphan on panic — see
+    // `swissarmyhammer_code_context::testing::KillOnDrop`.
+    let mut child = swissarmyhammer_code_context::testing::KillOnDrop::new(
+        Command::new("rust-analyzer")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn rust-analyzer"),
+    );
 
     let stdin = child.stdin.take().expect("take rust-analyzer stdin");
     let stdout = child.stdout.take().expect("take rust-analyzer stdout");
