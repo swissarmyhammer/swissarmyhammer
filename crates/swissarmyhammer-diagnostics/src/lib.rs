@@ -47,7 +47,8 @@ pub use diagnose::{
 pub use language::is_diagnosable;
 pub use record::{map, Counts, DiagnosticRecord, DiagnosticsReport, Range};
 pub use request_api::{
-    dispatch, serve_session_requests, SessionRequestClient, METHOD_DIAGNOSE, METHOD_LSP_REQUEST,
+    dispatch, serve_session_requests, SessionRequestClient, METHOD_DIAGNOSE,
+    METHOD_LSP_MULTI_REQUEST, METHOD_LSP_REQUEST,
 };
 pub use settle::{settle, settle_stream, SettleOutcome, Timer, TokioTimer};
 /// The request-IPC error type and the leader-side request server, re-exported so

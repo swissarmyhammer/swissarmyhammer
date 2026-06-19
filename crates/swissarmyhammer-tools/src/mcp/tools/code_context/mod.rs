@@ -40,6 +40,11 @@ use swissarmyhammer_code_context::{
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
+/// Default cap on result count for ops that take an optional `max_results`
+/// (`query ast`, `search workspace_symbol`) when the caller omits it. Surfaced
+/// in those ops' `max_results` parameter descriptions ("default: 50").
+const DEFAULT_MAX_RESULTS: usize = 50;
+
 /// Global LSP supervisor handle, initialized once at MCP startup.
 /// Used by `get status` to report LSP server state and by `server.rs` for init.
 pub(crate) static LSP_SUPERVISOR: std::sync::OnceLock<
@@ -1172,9 +1177,9 @@ impl McpTool for CodeContextTool {
             "clear status" => execute_clear_status(context),
             "lsp status" => execute_lsp_status(context),
             "detect projects" => detect::execute_detect(&arguments, context).await,
-            "get rename_edits" => execute_get_rename_edits(&arguments, context),
+            "get rename_edits" => execute_get_rename_edits(&arguments, context).await,
             "get diagnostics" => execute_get_diagnostics(&arguments, context),
-            "get inbound_calls" => execute_get_inbound_calls(&arguments, context),
+            "get inbound_calls" => execute_get_inbound_calls(&arguments, context).await,
             "search workspace_symbol" => {
                 execute_workspace_symbol_live(&arguments, context).await
             }
@@ -1183,7 +1188,7 @@ impl McpTool for CodeContextTool {
             "get hover" => execute_get_hover(&arguments, context).await,
             "get references" => execute_get_references(&arguments, context).await,
             "get implementations" => execute_get_implementations(&arguments, context).await,
-            "get code_actions" => execute_get_code_actions(&arguments, context),
+            "get code_actions" => execute_get_code_actions(&arguments, context).await,
             "" => Err(McpError::invalid_params(
                 "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'.",
                 None,
@@ -1688,7 +1693,7 @@ fn execute_query_ast(
         .get("max_results")
         .and_then(|v| v.as_u64())
         .map(|n| n as usize)
-        .unwrap_or(50);
+        .unwrap_or(DEFAULT_MAX_RESULTS);
 
     let options = QueryAstOptions { max_results };
 
@@ -2629,7 +2634,7 @@ fn execute_lsp_status(context: &ToolContext) -> Result<CallToolResult, McpError>
 ///
 /// Previews a rename at the given position without applying edits.
 /// Returns `can_rename: false` when no live LSP is available.
-fn execute_get_rename_edits(
+async fn execute_get_rename_edits(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2662,10 +2667,11 @@ fn execute_get_rename_edits(
         new_name: new_name.to_string(),
     };
 
+    let session = lsp_session_for_file(file_path);
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let session = lsp_session_for_file(file_path);
-    let ctx = swissarmyhammer_code_context::LayeredContext::new(&db, session);
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result =
         swissarmyhammer_code_context::get_rename_edits(&ctx, &opts).map_err(context_err)?;
@@ -2714,7 +2720,7 @@ fn execute_get_diagnostics(
 ///
 /// Finds all callers of a function at the given position using layered
 /// resolution (live LSP call hierarchy, then LSP index, then tree-sitter).
-fn execute_get_inbound_calls(
+async fn execute_get_inbound_calls(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2744,10 +2750,11 @@ fn execute_get_inbound_calls(
         depth,
     };
 
+    let session = lsp_session_for_file(file_path);
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let session = lsp_session_for_file(file_path);
-    let ctx = LayeredContext::new(&db, session);
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result =
         swissarmyhammer_code_context::get_inbound_calls(&ctx, &opts).map_err(context_err)?;
@@ -2770,7 +2777,8 @@ async fn execute_workspace_symbol_live(
     let max_results = args
         .get("max_results")
         .and_then(|v| v.as_u64())
-        .unwrap_or(50) as usize;
+        .map(|n| n as usize)
+        .unwrap_or(DEFAULT_MAX_RESULTS);
 
     let opts = WorkspaceSymbolLiveOptions {
         query: query.to_string(),
@@ -2778,10 +2786,10 @@ async fn execute_workspace_symbol_live(
     };
 
     let session = any_lsp_session();
-    let router = leader_route::follower_route_for_op(&session, context).await;
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let ctx = leader_route::build_layered_context(&db, session, router);
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result =
         swissarmyhammer_code_context::workspace_symbol_live(&ctx, &opts).map_err(context_err)?;
@@ -2825,10 +2833,10 @@ async fn execute_get_definition(
     };
 
     let session = lsp_session_for_file(file_path);
-    let router = leader_route::follower_route_for_op(&session, context).await;
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let ctx = leader_route::build_layered_context(&db, session, router);
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result = swissarmyhammer_code_context::get_definition(&ctx, &opts).map_err(context_err)?;
     json_result(&result)
@@ -2871,10 +2879,10 @@ async fn execute_get_type_definition(
     };
 
     let session = lsp_session_for_file(file_path);
-    let router = leader_route::follower_route_for_op(&session, context).await;
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let ctx = leader_route::build_layered_context(&db, session, router);
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result =
         swissarmyhammer_code_context::get_type_definition(&ctx, &opts).map_err(context_err)?;
@@ -2913,10 +2921,10 @@ async fn execute_get_hover(
 
     let session = lsp_session_for_file(file_path);
     tracing::debug!(file_path = %file_path, client = session.is_some(), "get_hover: session lookup");
-    let router = leader_route::follower_route_for_op(&session, context).await;
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let ctx = leader_route::build_layered_context(&db, session, router);
+    let ctx = leader_route::build_layered_context(&db, session, routers);
     tracing::debug!(
         has_live_lsp = ctx.has_live_lsp(),
         "get_hover: context created"
@@ -2970,10 +2978,10 @@ async fn execute_get_references(
     };
 
     let session = lsp_session_for_file(file_path);
-    let router = leader_route::follower_route_for_op(&session, context).await;
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let ctx = leader_route::build_layered_context(&db, session, router);
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result = swissarmyhammer_code_context::get_references(&ctx, &opts).map_err(context_err)?;
     json_result(&result)
@@ -3016,10 +3024,10 @@ async fn execute_get_implementations(
     };
 
     let session = lsp_session_for_file(file_path);
-    let router = leader_route::follower_route_for_op(&session, context).await;
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let ctx = leader_route::build_layered_context(&db, session, router);
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result =
         swissarmyhammer_code_context::get_implementations(&ctx, &opts).map_err(context_err)?;
@@ -3030,7 +3038,7 @@ async fn execute_get_implementations(
 ///
 /// Returns code actions (quickfixes, refactors) for a range via live LSP.
 /// Returns empty when no LSP is available.
-fn execute_get_code_actions(
+async fn execute_get_code_actions(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -3082,10 +3090,11 @@ fn execute_get_code_actions(
         filter_kind,
     };
 
+    let session = lsp_session_for_file(file_path);
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let session = lsp_session_for_file(file_path);
-    let ctx = LayeredContext::new(&db, session);
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result =
         swissarmyhammer_code_context::get_code_actions(&ctx, &opts).map_err(context_err)?;

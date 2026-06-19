@@ -83,48 +83,61 @@ pub fn get_rename_edits(
         files_affected: 0,
     };
 
-    // Hold the mutex for the entire prepareRename + rename + didClose sequence
-    let result = ctx.lsp_multi_request_with_document(&opts.file_path, |rpc| {
-        // Phase 1: prepareRename -- validate the position is renameable
-        let prepare_response = rpc.send_request(
-            "textDocument/prepareRename",
+    // The two-phase prepareRename + rename sequence is an ordered batch run as
+    // ONE atomic exchange under a single client lock — locally on an in-process
+    // session, or routed to the leader's session on a follower
+    // (`lsp_multi_request_batch` picks the path). Both phases are sent
+    // unconditionally; a position that is not renameable makes prepareRename
+    // return null and rename return null/empty edits, which the parsing below
+    // collapses to `can_rename: false` — the same observable result as skipping
+    // rename, with the whole exchange kept atomic and routable.
+    let position = json!({ "line": opts.line, "character": opts.character });
+    let steps = vec![
+        (
+            "textDocument/prepareRename".to_string(),
+            json!({ "textDocument": { "uri": uri }, "position": position }),
+        ),
+        (
+            "textDocument/rename".to_string(),
             json!({
                 "textDocument": { "uri": uri },
-                "position": { "line": opts.line, "character": opts.character }
-            }),
-        )?;
-
-        // null means the position is not renameable
-        if prepare_response.is_null() || prepare_response.get("result").is_some_and(|v| v.is_null())
-        {
-            return Ok(not_renameable());
-        }
-
-        // Phase 2: rename -- compute the edits
-        let rename_response = rpc.send_request(
-            "textDocument/rename",
-            json!({
-                "textDocument": { "uri": uri },
-                "position": { "line": opts.line, "character": opts.character },
+                "position": position,
                 "newName": opts.new_name
             }),
-        )?;
+        ),
+    ];
 
-        if rename_response.is_null() {
-            return Ok(not_renameable());
-        }
+    let responses = match ctx.lsp_multi_request_batch(&opts.file_path, steps)? {
+        Some(responses) => responses,
+        // No live layer (no session, no router): degrade to not renameable.
+        None => return Ok(not_renameable()),
+    };
 
-        let edits = parse_workspace_edit(&rename_response);
-        let files_affected = edits.len();
+    // Phase 1: prepareRename — a null result means the position is not
+    // renameable. The batch results are the bare (already-unwrapped) LSP
+    // results, in step order.
+    let prepare_response = responses
+        .first()
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    if prepare_response.is_null() {
+        return Ok(not_renameable());
+    }
 
-        Ok(RenameEditsResult {
-            can_rename: !edits.is_empty(),
-            edits,
-            files_affected,
-        })
-    })?;
+    // Phase 2: rename — compute the edits from the second step's result.
+    let rename_response = responses.get(1).cloned().unwrap_or(serde_json::Value::Null);
+    if rename_response.is_null() {
+        return Ok(not_renameable());
+    }
 
-    Ok(result.unwrap_or_else(not_renameable))
+    let edits = parse_workspace_edit(&rename_response);
+    let files_affected = edits.len();
+
+    Ok(RenameEditsResult {
+        can_rename: !edits.is_empty(),
+        edits,
+        files_affected,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +149,102 @@ mod tests {
     use super::*;
     use crate::layered_context::{LspRange, TextEdit};
     use crate::test_fixtures::test_db;
+
+    // --- Follower multi-step router path ---
+
+    #[test]
+    fn test_follower_multi_router_returns_real_rename_edits() {
+        // A follower (no in-process session) is wired with a MultiLspRouter that
+        // stands in for the leader: it runs prepareRename + rename under one lock
+        // and returns the leader's ordered envelopes. get_rename_edits must route
+        // its batch through it (not short-circuit to can_rename:false) and parse
+        // the rename edits — proving the multi-step seam carries the live result.
+        use std::sync::{Arc, Mutex};
+        let conn = test_db();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_for_router = Arc::clone(&seen);
+        let ctx = LayeredContext::with_multi_lsp_router(
+            &conn,
+            Box::new(move |_file_path, steps| {
+                *seen_for_router.lock().unwrap() = steps.iter().map(|(m, _)| m.clone()).collect();
+                // Step 0: prepareRename → a renameable range. Step 1: rename →
+                // workspace edits. Both wrapped in JSON-RPC envelopes, as a real
+                // leader returns.
+                Ok(Some(vec![
+                    serde_json::json!({
+                        "jsonrpc": "2.0", "id": 1,
+                        "result": {
+                            "start": { "line": 5, "character": 4 },
+                            "end": { "line": 5, "character": 12 }
+                        }
+                    }),
+                    serde_json::json!({
+                        "jsonrpc": "2.0", "id": 2,
+                        "result": {
+                            "changes": {
+                                "file:///src/main.rs": [{
+                                    "range": {
+                                        "start": { "line": 5, "character": 4 },
+                                        "end": { "line": 5, "character": 12 }
+                                    },
+                                    "newText": "renamed"
+                                }]
+                            }
+                        }
+                    }),
+                ]))
+            }),
+        );
+
+        let opts = GetRenameEditsOptions {
+            file_path: "src/main.rs".to_string(),
+            line: 5,
+            character: 4,
+            new_name: "renamed".to_string(),
+        };
+
+        let result = get_rename_edits(&ctx, &opts).unwrap();
+        assert!(
+            result.can_rename,
+            "follower must get the leader's live rename"
+        );
+        assert_eq!(result.files_affected, 1);
+        assert_eq!(result.edits[0].file_path, "/src/main.rs");
+        assert_eq!(result.edits[0].text_edits[0].new_text, "renamed");
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                "textDocument/prepareRename".to_string(),
+                "textDocument/rename".to_string()
+            ],
+            "the batch must carry prepareRename then rename, in order"
+        );
+    }
+
+    #[test]
+    fn test_follower_multi_router_null_prepare_is_not_renameable() {
+        // prepareRename returns null → not renameable; the op must report
+        // can_rename:false even though a router was present.
+        let conn = test_db();
+        let ctx = LayeredContext::with_multi_lsp_router(
+            &conn,
+            Box::new(|_file_path, _steps| {
+                Ok(Some(vec![
+                    serde_json::json!({ "jsonrpc": "2.0", "id": 1, "result": null }),
+                    serde_json::json!({ "jsonrpc": "2.0", "id": 2, "result": null }),
+                ]))
+            }),
+        );
+        let opts = GetRenameEditsOptions {
+            file_path: "src/main.rs".to_string(),
+            line: 5,
+            character: 4,
+            new_name: "renamed".to_string(),
+        };
+        let result = get_rename_edits(&ctx, &opts).unwrap();
+        assert!(!result.can_rename);
+        assert!(result.edits.is_empty());
+    }
 
     // --- can_rename: false when no live LSP ---
 

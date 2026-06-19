@@ -52,6 +52,15 @@ pub const METHOD_DIAGNOSE: &str = "diagnose";
 /// Method name for a raw single-shot LSP request op.
 pub const METHOD_LSP_REQUEST: &str = "lsp_request";
 
+/// Method name for an atomic *multi-step* LSP request op.
+///
+/// Unlike [`METHOD_LSP_REQUEST`] (one round-trip), this runs an ordered batch of
+/// LSP requests under ONE `with_client` lock on the leader's session, so a
+/// multi-step exchange (e.g. `prepareRename` then `rename`) stays atomic and no
+/// other consumer interleaves a request and steals a response off the shared
+/// stdio pipe. The document is synced once before the batch.
+pub const METHOD_LSP_MULTI_REQUEST: &str = "lsp_multi_request";
+
 /// Dispatch one SAH request `(method, params)` against `session`, returning the
 /// JSON result or an error message.
 ///
@@ -84,6 +93,10 @@ where
         METHOD_LSP_REQUEST => {
             let (lsp_method, lsp_params, file_path) = parse_lsp_request(&params)?;
             lsp_request_blocking(session, lsp_method, lsp_params, file_path).await
+        }
+        METHOD_LSP_MULTI_REQUEST => {
+            let (file_path, steps) = parse_lsp_multi_request(&params)?;
+            lsp_multi_request_blocking(session, file_path, steps).await
         }
         other => Err(format!("unknown request method: {other}")),
     }
@@ -137,18 +150,92 @@ where
     .map_err(|e| format!("lsp request task failed: {e}"))?
 }
 
+/// Run an ordered batch of LSP requests as ONE atomic exchange off the async
+/// runtime, syncing the document first, and return one raw response per step.
+///
+/// This is the leader-side handler for [`METHOD_LSP_MULTI_REQUEST`]. The whole
+/// batch runs under a single [`LspSession::with_client`] lock so the multi-step
+/// exchange (e.g. `prepareRename` then `rename`) cannot be interleaved by another
+/// follower's request — holding the lock across every `send_request` is exactly
+/// what keeps a response from being stolen off the shared stdio pipe (a separate
+/// `session.request` per step would re-lock between steps and lose that
+/// guarantee).
+///
+/// `file_path` syncs the document onto the leader's single session before the
+/// batch (mirroring the local open-then-request contract); when absent no
+/// document is synced. As with [`lsp_request_blocking`], the blocking round-trips
+/// are moved onto [`tokio::task::spawn_blocking`] so the serve runtime stays free.
+///
+/// Returns a JSON array of the raw step responses, in step order. A
+/// [`LspError::NotRunning`] (no live client) or a transport error surfaces as an
+/// error string — never a silent empty.
+async fn lsp_multi_request_blocking<C>(
+    session: &LspSession<C>,
+    file_path: Option<String>,
+    steps: Vec<(String, Value)>,
+) -> Result<Value, String>
+where
+    C: LspTransport + Send + Sync + 'static,
+{
+    let session = session.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Some(path) = &file_path {
+            let path = std::path::PathBuf::from(path);
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| format!("lsp multi request failed to read {}: {e}", path.display()))?;
+            session
+                .sync_open(&path, &text)
+                .map_err(|e| format!("lsp multi request failed to sync document: {e}"))?;
+        }
+        // Hold the client lock across the WHOLE batch so no other consumer
+        // interleaves a request and steals a step's response off the pipe.
+        let responses = session
+            .with_client(|client| {
+                let mut out = Vec::with_capacity(steps.len());
+                for (method, params) in &steps {
+                    out.push(client.send_request(method, params.clone())?);
+                }
+                Ok(out)
+            })
+            .map_err(|e| format!("lsp multi request failed: {e}"))?
+            .ok_or_else(|| "lsp multi request failed: no live LSP client".to_string())?;
+        Ok(Value::Array(responses))
+    })
+    .await
+    .map_err(|e| format!("lsp multi request task failed: {e}"))?
+}
+
+/// Reject a follower-supplied path that contains a `..` parent-dir component.
+///
+/// Every path the leader reads or syncs arrives from untrusted follower JSON
+/// over the request socket. A `..` component is the directory-traversal vector
+/// that would let a follower walk out of the workspace and have the leader read
+/// or open an arbitrary file (e.g. `src/../../etc/passwd`). All three leader
+/// read paths (`diagnose`'s [`parse_paths`], the single-request
+/// [`parse_lsp_request`], and the multi-request [`parse_lsp_multi_request`])
+/// share this one guard so the contract cannot drift between them.
+///
+/// Absolute paths are *not* rejected: the leader read surface is contractually
+/// **absolute-space** ([`diagnose`] and the document-sync `file_path` are both
+/// handed absolute repo paths), so rejecting absolute paths here would reject
+/// every legitimate follower call. The escape risk is `..` traversal, which is
+/// what we block. `context` names the op for the error message.
+fn reject_parent_dir_traversal(path_str: &str, context: &str) -> Result<(), String> {
+    if std::path::Path::new(path_str)
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "{context}: path must not contain a `..` parent-dir component: {path_str}"
+        ));
+    }
+    Ok(())
+}
+
 /// Extract and validate the `paths` array from a `"diagnose"` request's params.
 ///
-/// Paths arrive from untrusted follower JSON, so each is hardened before it is
-/// handed to [`diagnose`]: a path is rejected if it contains a `..` parent-dir
-/// component, the directory-traversal vector that would let a follower walk out
-/// of the workspace and probe arbitrary files (e.g. `src/../../etc/passwd`).
-///
-/// Absolute paths are *not* rejected: [`diagnose`] is contractually an
-/// **absolute-space** API (the diagnostics tool and the `files edit` fold-in
-/// both relativise/absolutise around it and hand it absolute repo paths), so
-/// rejecting absolute paths here would reject every legitimate follower call.
-/// The escape risk is `..` traversal, which is what we block.
+/// Paths arrive from untrusted follower JSON, so each is hardened via
+/// [`reject_parent_dir_traversal`] before it is handed to [`diagnose`].
 fn parse_paths(params: &Value) -> Result<Vec<String>, String> {
     let paths = params
         .get("paths")
@@ -160,14 +247,7 @@ fn parse_paths(params: &Value) -> Result<Vec<String>, String> {
             let path_str = p
                 .as_str()
                 .ok_or_else(|| "diagnose: every path must be a string".to_string())?;
-            if std::path::Path::new(path_str)
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
-            {
-                return Err(format!(
-                    "diagnose: path must not contain a `..` parent-dir component: {path_str}"
-                ));
-            }
+            reject_parent_dir_traversal(path_str, "diagnose")?;
             Ok(path_str.to_string())
         })
         .collect()
@@ -178,7 +258,10 @@ fn parse_paths(params: &Value) -> Result<Vec<String>, String> {
 /// `file_path` is optional: when present, the leader syncs that document onto its
 /// session before issuing the request (mirroring the local
 /// `lsp_request_with_document` open-then-request contract); when absent, the op
-/// is workspace-wide (e.g. `workspace/symbol`) and no document is synced.
+/// is workspace-wide (e.g. `workspace/symbol`) and no document is synced. A
+/// present `file_path` is hardened via [`reject_parent_dir_traversal`] — the
+/// leader reads and `sync_open`s it, so a `..` traversal would otherwise let a
+/// follower open an arbitrary file on the leader's session.
 fn parse_lsp_request(params: &Value) -> Result<(String, Value, Option<String>), String> {
     let method = params
         .get("method")
@@ -190,7 +273,52 @@ fn parse_lsp_request(params: &Value) -> Result<(String, Value, Option<String>), 
         .get("file_path")
         .and_then(Value::as_str)
         .map(str::to_string);
+    if let Some(path) = &file_path {
+        reject_parent_dir_traversal(path, "lsp_request")?;
+    }
     Ok((method, inner, file_path))
+}
+
+/// Extract `(file_path, steps)` from an `"lsp_multi_request"` request's params.
+///
+/// `file_path` is optional: when present the leader syncs that document onto its
+/// session once before the batch; when absent the batch is document-less. A
+/// present `file_path` is hardened via [`reject_parent_dir_traversal`] — the
+/// leader reads and `sync_open`s it, so a `..` traversal would otherwise let a
+/// follower open an arbitrary file on the leader's session. `steps` is the
+/// ordered list of `{ method, params }` objects to run under one lock; an empty
+/// or malformed list is an error rather than a silent no-op.
+#[allow(clippy::type_complexity)]
+fn parse_lsp_multi_request(
+    params: &Value,
+) -> Result<(Option<String>, Vec<(String, Value)>), String> {
+    let file_path = params
+        .get("file_path")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if let Some(path) = &file_path {
+        reject_parent_dir_traversal(path, "lsp_multi_request")?;
+    }
+    let steps_json = params
+        .get("steps")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "lsp_multi_request: missing `steps` array".to_string())?;
+    if steps_json.is_empty() {
+        return Err("lsp_multi_request: `steps` must not be empty".to_string());
+    }
+    let steps = steps_json
+        .iter()
+        .map(|step| {
+            let method = step
+                .get("method")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "lsp_multi_request: every step needs a `method` string".to_string())?
+                .to_string();
+            let inner = step.get("params").cloned().unwrap_or(Value::Null);
+            Ok((method, inner))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((file_path, steps))
 }
 
 /// Serve the SAH request API on `server`, routing every follower request onto
@@ -328,6 +456,37 @@ impl SessionRequestClient {
             )
             .await
     }
+
+    /// Round-trip an ordered batch of LSP requests to the leader, to be run as
+    /// ONE atomic exchange under a single client lock on the leader's session.
+    ///
+    /// This is the multi-step sibling of [`lsp_request_with_document`](Self::lsp_request_with_document):
+    /// a follower's multi-step code-context op (rename: `prepareRename` then
+    /// `rename`) cannot be expressed as separate single requests without risking
+    /// another consumer interleaving and stealing a response off the leader's
+    /// shared stdio pipe. Sending the whole `steps` list in one call lets the
+    /// leader hold its `with_client` lock across every step. `file_path` is synced
+    /// once before the batch. Returns the ordered raw step responses (a JSON
+    /// array), which the caller unwraps per step.
+    pub async fn lsp_multi_request_with_document(
+        &self,
+        file_path: &str,
+        steps: Vec<(String, Value)>,
+    ) -> Result<Vec<Value>, IpcError> {
+        let result = self
+            .client
+            .call(
+                METHOD_LSP_MULTI_REQUEST,
+                lsp_multi_request_envelope(file_path, steps),
+            )
+            .await?;
+        match result {
+            Value::Array(responses) => Ok(responses),
+            other => Err(IpcError::Decode(serde::de::Error::custom(format!(
+                "lsp_multi_request expected an array of step responses, got: {other}"
+            )))),
+        }
+    }
 }
 
 /// Build the `lsp_request` request envelope `{ method, params, file_path? }`.
@@ -339,6 +498,23 @@ fn lsp_request_envelope(method: &str, params: Value, file_path: Option<&str>) ->
     let mut envelope = json!({ "method": method, "params": params });
     if let Some(path) = file_path {
         envelope["file_path"] = Value::String(path.to_string());
+    }
+    envelope
+}
+
+/// Build the `lsp_multi_request` request envelope `{ file_path?, steps: [{ method, params }] }`.
+///
+/// The leader-side [`parse_lsp_multi_request`] reads `steps` back out and runs
+/// them under one lock; `file_path` is the single document synced before the
+/// batch. An empty `file_path` is treated as document-less and omitted.
+fn lsp_multi_request_envelope(file_path: &str, steps: Vec<(String, Value)>) -> Value {
+    let steps_json: Vec<Value> = steps
+        .into_iter()
+        .map(|(method, params)| json!({ "method": method, "params": params }))
+        .collect();
+    let mut envelope = json!({ "steps": steps_json });
+    if !file_path.is_empty() {
+        envelope["file_path"] = Value::String(file_path.to_string());
     }
     envelope
 }
@@ -611,6 +787,109 @@ mod tests {
         assert_eq!(file_path, None);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dispatch_lsp_multi_request_runs_steps_in_order_under_one_lock() {
+        // The multi-request op runs an ordered batch of LSP requests as ONE
+        // atomic exchange on the leader's single session. dispatch must sync the
+        // document (didOpen) first, then issue each step in order, and return one
+        // raw envelope per step. The recording transport logs the wire order so
+        // we can assert didOpen precedes the steps and the steps keep their order.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let transport = SharedRecordingTransport {
+            log: Arc::clone(&log),
+        };
+        let session = LspSession::new(Arc::new(Mutex::new(Some(transport))), "rust");
+
+        let uri = format!("file://{}", file.display());
+        let result = dispatch(
+            &session,
+            &PrecomputedDependents::default(),
+            &ManualTimer::default(),
+            &DiagnosticsConfig::default(),
+            METHOD_LSP_MULTI_REQUEST,
+            json!({
+                "file_path": file.to_string_lossy(),
+                "steps": [
+                    { "method": "textDocument/prepareRename",
+                      "params": { "textDocument": { "uri": uri }, "position": { "line": 0, "character": 3 } } },
+                    { "method": "textDocument/rename",
+                      "params": { "textDocument": { "uri": uri }, "position": { "line": 0, "character": 3 }, "newName": "x" } }
+                ]
+            }),
+        )
+        .await
+        .expect("multi request should dispatch");
+
+        // The result is an ordered list of raw step responses (one per step).
+        let steps_out = result.as_array().expect("multi result is an array");
+        assert_eq!(steps_out.len(), 2, "one response per step");
+
+        let recorded = log.lock().unwrap().clone();
+        let methods: Vec<&str> = recorded.iter().map(|(m, _)| m.as_str()).collect();
+        let open_idx = methods
+            .iter()
+            .position(|m| *m == "textDocument/didOpen")
+            .expect("a didOpen must sync the document on the leader first");
+        let prepare_idx = methods
+            .iter()
+            .position(|m| *m == "textDocument/prepareRename")
+            .expect("prepareRename must be issued");
+        let rename_idx = methods
+            .iter()
+            .position(|m| *m == "textDocument/rename")
+            .expect("rename must be issued");
+        assert!(
+            open_idx < prepare_idx,
+            "didOpen before the first step: {methods:?}"
+        );
+        assert!(
+            prepare_idx < rename_idx,
+            "steps must run in order: {methods:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_lsp_multi_request_against_dead_session_reports_error() {
+        // No live client → with_client yields no client; the multi-request op
+        // must surface an error string (not a panic, not a silent empty).
+        let session = seeded_session();
+        let err = dispatch(
+            &session,
+            &PrecomputedDependents::default(),
+            &ManualTimer::default(),
+            &DiagnosticsConfig::default(),
+            METHOD_LSP_MULTI_REQUEST,
+            json!({
+                "file_path": "/does/not/matter.rs",
+                "steps": [ { "method": "textDocument/prepareRename", "params": {} } ]
+            }),
+        )
+        .await
+        .expect_err("multi request without a live client must error");
+        assert!(err.contains("lsp"), "got: {err}");
+    }
+
+    #[test]
+    fn lsp_multi_request_envelope_roundtrips_through_parse() {
+        // The client builds the multi-request envelope; the leader parses it.
+        let envelope = lsp_multi_request_envelope(
+            "/repo/src/a.rs",
+            vec![
+                ("textDocument/prepareRename".to_string(), json!({ "a": 1 })),
+                ("textDocument/rename".to_string(), json!({ "b": 2 })),
+            ],
+        );
+        let (file_path, steps) = parse_lsp_multi_request(&envelope).expect("envelope must parse");
+        assert_eq!(file_path.as_deref(), Some("/repo/src/a.rs"));
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].0, "textDocument/prepareRename");
+        assert_eq!(steps[1].1["b"], 2);
+    }
+
     #[test]
     fn parse_paths_rejects_non_string_entries() {
         let err = parse_paths(&json!({ "paths": [1, 2] })).expect_err("non-string must reject");
@@ -622,6 +901,56 @@ mod tests {
         let err = parse_paths(&json!({ "paths": ["src/../../etc/passwd"] }))
             .expect_err("a `..` traversal component must be rejected");
         assert!(err.contains("parent-dir"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_lsp_request_rejects_parent_dir_traversal() {
+        // The leader reads + sync_opens `file_path` on its session, so a
+        // follower-supplied `..` traversal would let it open an arbitrary file.
+        // The single-request seam must reject it like parse_paths does.
+        let err = parse_lsp_request(&json!({
+            "method": "textDocument/definition",
+            "params": {},
+            "file_path": "src/../../etc/passwd"
+        }))
+        .expect_err("a `..` traversal in file_path must be rejected");
+        assert!(err.contains("parent-dir"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_lsp_request_accepts_absolute_file_path() {
+        // The leader read surface is absolute-space, so a `..`-free absolute
+        // file_path is a legitimate follower request and must be accepted.
+        let (_method, _params, file_path) = parse_lsp_request(&json!({
+            "method": "textDocument/definition",
+            "params": {},
+            "file_path": "/repo/src/a.rs"
+        }))
+        .expect("a `..`-free absolute file_path must be accepted");
+        assert_eq!(file_path.as_deref(), Some("/repo/src/a.rs"));
+    }
+
+    #[test]
+    fn parse_lsp_multi_request_rejects_parent_dir_traversal() {
+        // The multi-request seam reads + sync_opens `file_path` on the leader's
+        // session too, so it must reject `..` traversal like parse_paths does.
+        let err = parse_lsp_multi_request(&json!({
+            "file_path": "src/../../etc/passwd",
+            "steps": [ { "method": "textDocument/prepareRename", "params": {} } ]
+        }))
+        .expect_err("a `..` traversal in file_path must be rejected");
+        assert!(err.contains("parent-dir"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_lsp_multi_request_accepts_absolute_file_path() {
+        // A `..`-free absolute file_path is a legitimate follower batch request.
+        let (file_path, _steps) = parse_lsp_multi_request(&json!({
+            "file_path": "/repo/src/a.rs",
+            "steps": [ { "method": "textDocument/prepareRename", "params": {} } ]
+        }))
+        .expect("a `..`-free absolute file_path must be accepted");
+        assert_eq!(file_path.as_deref(), Some("/repo/src/a.rs"));
     }
 
     #[test]

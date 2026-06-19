@@ -18,48 +18,70 @@
 //! cycle: the routing lives at the tool layer (which depends on both
 //! `code-context` and `diagnostics`), never inside `code-context`.
 //!
-//! ## Single-request ops only
+//! ## Two seams: single-request and multi-step
 //!
-//! The router serves the *single-request* live ops (definition, type-definition,
-//! hover, references, implementations, workspace-symbol): each bottoms out in one
-//! `session.request(method, params)` the leader can multiplex. The multi-step
-//! call-hierarchy / code-action / rename ops hold the client lock across several
-//! requests (`prepareCallHierarchy` then `incomingCalls`, etc.) and cannot be
-//! reproduced by a single round-trip; on a follower they fall back to their
-//! documented index / tree-sitter best-effort, which is unchanged here.
+//! Two routers are built for a follower, both over the SAME multiplexer:
+//!
+//! - A [`LiveLspRouter`] for the *single-request* live ops (definition,
+//!   type-definition, hover, references, implementations, workspace-symbol, and
+//!   the individual requests of the call-hierarchy / code-action ops): each
+//!   bottoms out in one `session.request(method, params)` the leader multiplexes.
+//! - A [`MultiLspRouter`] for the *multi-step* rename op, whose
+//!   `prepareRename`+`rename` exchange must hold the leader's client lock across
+//!   both requests so no other consumer interleaves and steals a response off the
+//!   shared pipe. It routes the whole ordered batch in one IPC round-trip
+//!   (`METHOD_LSP_MULTI_REQUEST`), which the leader runs under one `with_client`
+//!   lock.
+//!
+//! On a follower with no leader reachable, both seams degrade to the op's
+//! documented index / tree-sitter best-effort (rename → `can_rename:false`).
 
 use rusqlite::Connection;
 use serde_json::Value;
 
 use swissarmyhammer_code_context::{
-    CodeContextError, LayeredContext, LiveLspRouter, SharedLspSession,
+    CodeContextError, LayeredContext, LiveLspRouter, MultiLspRouter, SharedLspSession,
 };
 use swissarmyhammer_diagnostics::{IpcError, SessionRequestClient};
 
 use super::open_workspace;
 use crate::mcp::tool_registry::ToolContext;
 
-/// Resolve the follower leader-route for a live code-context op, *before* the
+/// The pair of follower routers resolved for a code-context op: the
+/// single-request [`LiveLspRouter`] and the multi-step [`MultiLspRouter`], both
+/// backed by the same leader connection.
+///
+/// Both are `None` when this process owns an in-process session (a leader) or no
+/// leader is reachable; otherwise both are `Some`, sharing one
+/// [`SessionRequestClient`].
+#[derive(Default)]
+pub(crate) struct FollowerRouters {
+    pub(crate) single: Option<LiveLspRouter>,
+    pub(crate) multi: Option<MultiLspRouter>,
+}
+
+/// Resolve the follower leader-route(s) for a live code-context op, *before* the
 /// workspace DB handle is opened.
 ///
-/// Returns `Some(router)` only when this process owns no in-process `session`
+/// Returns wired routers only when this process owns no in-process `session`
 /// (it is a follower) *and* a [`SessionRequestClient`] connects to the elected
-/// leader; otherwise `None` (leader/in-process session present, or no leader
-/// reachable → the op degrades to the index / tree-sitter layers as before).
+/// leader; otherwise empty routers (leader/in-process session present, or no
+/// leader reachable → the op degrades to the index / tree-sitter layers as
+/// before).
 ///
 /// This is split from [`build_layered_context`] because connecting the client is
 /// `async` while the workspace DB handle (`rusqlite::Connection`) is `!Send` and
 /// must not be held across an `.await` — exactly the constraint the diagnose
-/// leader-route observes. The caller resolves the router first (no DB held),
+/// leader-route observes. The caller resolves the routers first (no DB held),
 /// then opens the DB and builds the context synchronously.
 pub(crate) async fn follower_route_for_op(
     session: &Option<SharedLspSession>,
     context: &ToolContext,
-) -> Option<LiveLspRouter> {
+) -> FollowerRouters {
     if session.is_some() {
-        return None;
+        return FollowerRouters::default();
     }
-    build_follower_router(context).await
+    build_follower_routers(context).await
 }
 
 /// Build the [`LayeredContext`] for a live code-context op from the (possibly
@@ -75,15 +97,15 @@ pub(crate) async fn follower_route_for_op(
 pub(crate) fn build_layered_context<'a>(
     db: &'a Connection,
     session: Option<SharedLspSession>,
-    router: Option<LiveLspRouter>,
+    routers: FollowerRouters,
 ) -> LayeredContext<'a> {
     if session.is_some() {
         return LayeredContext::new(db, session);
     }
-    match router {
-        Some(router) => LayeredContext::with_live_lsp_router(db, router),
-        None => LayeredContext::new(db, None),
+    if routers.single.is_none() && routers.multi.is_none() {
+        return LayeredContext::new(db, None);
     }
+    LayeredContext::with_live_lsp_routers(db, routers.single, routers.multi)
 }
 
 /// Map an [`IpcError`] from the leader round-trip into the layered ops'
@@ -137,6 +159,27 @@ async fn route_one(
     result.map(Some).map_err(ipc_err_to_code_context)
 }
 
+/// Round-trip an ordered multi-step LSP batch to the leader over `client`.
+///
+/// The whole `steps` list goes in one IPC call (`METHOD_LSP_MULTI_REQUEST`) so
+/// the leader runs it under one `with_client` lock — the atomicity the
+/// single-request seam cannot give a multi-step op. `file_path` is the document
+/// the leader syncs once before the batch. Returns `Ok(Some(responses))` with the
+/// leader's ordered raw step envelopes (the op's existing per-step parser then
+/// unwraps them), or an error mapped through [`ipc_err_to_code_context`] — never a
+/// silent empty.
+async fn route_multi(
+    client: &SessionRequestClient,
+    file_path: &str,
+    steps: Vec<(String, Value)>,
+) -> Result<Option<Vec<Value>>, CodeContextError> {
+    client
+        .lsp_multi_request_with_document(file_path, steps)
+        .await
+        .map(Some)
+        .map_err(ipc_err_to_code_context)
+}
+
 /// Build a [`LiveLspRouter`] for a follower, connecting a [`SessionRequestClient`]
 /// to the elected leader's request socket.
 ///
@@ -165,41 +208,59 @@ async fn route_one(
 /// ever called from a current-thread runtime we return `None` (degrade to the
 /// index / tree-sitter layers) rather than hand back a router that would panic on
 /// first use.
-pub(crate) async fn build_follower_router(context: &ToolContext) -> Option<LiveLspRouter> {
+pub(crate) async fn build_follower_routers(context: &ToolContext) -> FollowerRouters {
     // block_in_place panics on a current-thread runtime. Degrade rather than
-    // build a router that would panic on its first request.
+    // build routers that would panic on their first request.
     if !current_runtime_supports_block_in_place() {
         tracing::debug!(
             "follower leader-route disabled on a current-thread runtime; degrading to index layers"
         );
-        return None;
+        return FollowerRouters::default();
     }
 
-    let workspace = open_workspace(context).ok()?;
+    let Some(workspace) = open_workspace(context).ok() else {
+        return FollowerRouters::default();
+    };
     let socket_path = workspace.socket_path().to_path_buf();
     let lock_path = workspace.lock_path().to_path_buf();
 
     let client = match SessionRequestClient::connect(&socket_path, &lock_path).await {
         Ok(client) => client,
-        // No leader bound right now → no live layer; the read op falls back to
-        // its index / tree-sitter layers (documented best-effort).
+        // No leader bound right now → no live layer; the op falls back to its
+        // index / tree-sitter layers (documented best-effort).
         Err(err) => {
             tracing::debug!(error = %err, "follower could not connect to the diagnostics leader");
-            return None;
+            return FollowerRouters::default();
         }
     };
 
     let handle = tokio::runtime::Handle::current();
-    Some(Box::new(
-        move |file_path: &str, method: &str, params: Value| {
-            let client = client.clone();
-            let file_path = file_path.to_string();
-            let method = method.to_string();
-            tokio::task::block_in_place(|| {
-                handle.block_on(route_one(&client, &file_path, &method, params))
-            })
-        },
-    ))
+
+    // Single-request seam: one round-trip per request, run on the current
+    // multi-thread runtime via block_in_place + block_on.
+    let single_client = client.clone();
+    let single_handle = handle.clone();
+    let single: LiveLspRouter = Box::new(move |file_path: &str, method: &str, params: Value| {
+        let client = single_client.clone();
+        let file_path = file_path.to_string();
+        let method = method.to_string();
+        tokio::task::block_in_place(|| {
+            single_handle.block_on(route_one(&client, &file_path, &method, params))
+        })
+    });
+
+    // Multi-step seam: the whole ordered batch in one round-trip, run under the
+    // leader's single with_client lock. Same block_in_place bridge.
+    let multi: MultiLspRouter = Box::new(move |file_path: &str, steps: Vec<(String, Value)>| {
+        let client = client.clone();
+        let file_path = file_path.to_string();
+        tokio::task::block_in_place(|| handle.block_on(route_multi(&client, &file_path, steps)))
+    });
+
+    FollowerRouters {
+        single: Some(single),
+        multi: Some(multi),
+    }
 }
 
 #[cfg(test)]
@@ -234,6 +295,25 @@ mod tests {
         // The production MCP server runtime: block_in_place is supported, so the
         // router can be built.
         assert!(current_runtime_supports_block_in_place());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn route_multi_surfaces_typed_not_leader_on_connect_failure() {
+        // The multi-step routing helper, like the single-request one, must
+        // propagate the typed not-leader error (with the leader PID) when the
+        // leader is unreachable — never swallow it into a wrong-empty.
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("missing.sock");
+        let lock_path = dir.path().join("leader.lock");
+        std::fs::write(&lock_path, "5566\n").unwrap();
+
+        let connect = SessionRequestClient::connect(&socket_path, &lock_path).await;
+        let err = connect.expect_err("connect to unbound socket must fail");
+        let mapped = ipc_err_to_code_context(err);
+        assert!(
+            format!("{mapped}").contains("5566"),
+            "the typed not-leader error must carry the leader pid"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

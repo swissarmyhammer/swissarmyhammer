@@ -179,6 +179,7 @@ pub struct LayeredContext<'a> {
     conn: &'a Connection,
     session: Option<SharedLspSession>,
     live_lsp_router: Option<LiveLspRouter>,
+    multi_lsp_router: Option<MultiLspRouter>,
 }
 
 /// A follower's live-LSP override: routes a single LSP request to a live server
@@ -203,6 +204,33 @@ pub struct LayeredContext<'a> {
 pub type LiveLspRouter =
     Box<dyn Fn(&str, &str, Value) -> Result<Option<Value>, CodeContextError> + Send + Sync>;
 
+/// A follower's *multi-step* live-LSP override: routes an ordered batch of LSP
+/// requests to a live server the consuming crate reaches out-of-process (the
+/// elected leader's session), to be run as ONE atomic exchange.
+///
+/// This is the multi-step sibling of [`LiveLspRouter`]. The single-request seam
+/// cannot express an op that must hold the server's client lock across several
+/// requests (e.g. `prepareRename` then `rename`): each routed single request is
+/// a separate round-trip and the leader does not keep its lock between them, so
+/// another consumer could interleave a request and steal a response off the
+/// shared stdio pipe. This seam routes the *whole* ordered step list in ONE call
+/// so the consuming crate (the tools layer) can run them under one leader-side
+/// `with_client` lock and return the ordered results.
+///
+/// The arguments mirror [`LayeredContext::lsp_multi_request_batch`]: `file_path`
+/// is the single document the leader must sync before the batch (empty for a
+/// document-less batch), and `steps` is the ordered `(method, params)` list. The
+/// result follows the same graceful contract as a live session: `Ok(None)` means
+/// "no live layer reachable, fall back" (so an op like rename degrades to
+/// `can_rename: false`), `Ok(Some(results))` is one bare LSP result per step in
+/// order, and `Err` is a genuine failure that must not be masked as a silent
+/// empty.
+pub type MultiLspRouter = Box<
+    dyn Fn(&str, Vec<(String, Value)>) -> Result<Option<Vec<Value>>, CodeContextError>
+        + Send
+        + Sync,
+>;
+
 impl<'a> LayeredContext<'a> {
     /// Create a new layered context.
     ///
@@ -217,6 +245,7 @@ impl<'a> LayeredContext<'a> {
             conn,
             session,
             live_lsp_router: None,
+            multi_lsp_router: None,
         }
     }
 
@@ -236,6 +265,46 @@ impl<'a> LayeredContext<'a> {
             conn,
             session: None,
             live_lsp_router: Some(router),
+            multi_lsp_router: None,
+        }
+    }
+
+    /// Create a follower layered context whose *multi-step* live-LSP layer is
+    /// served by a [`MultiLspRouter`].
+    ///
+    /// The multi-step sibling of [`with_live_lsp_router`](Self::with_live_lsp_router):
+    /// the process owns no [`SharedLspSession`], so a multi-step op
+    /// ([`lsp_multi_request_batch`](Self::lsp_multi_request_batch), used by the
+    /// rename op) routes its whole ordered batch through `router` to be run under
+    /// one leader-side lock.
+    pub fn with_multi_lsp_router(conn: &'a Connection, router: MultiLspRouter) -> Self {
+        Self {
+            conn,
+            session: None,
+            live_lsp_router: None,
+            multi_lsp_router: Some(router),
+        }
+    }
+
+    /// Create a follower layered context wired with BOTH the single-request and
+    /// the multi-step live-LSP routers.
+    ///
+    /// This is the production follower constructor: a follower has no in-process
+    /// session, and its layered ops span both seams — single-request ops
+    /// (definition/hover/inbound-calls' individual requests/…) route through
+    /// `single`, while a multi-step op that must run atomically under one leader
+    /// lock (rename's prepare+rename) routes its batch through `multi`. Either may
+    /// be `None` (e.g. no leader reachable for one seam).
+    pub fn with_live_lsp_routers(
+        conn: &'a Connection,
+        single: Option<LiveLspRouter>,
+        multi: Option<MultiLspRouter>,
+    ) -> Self {
+        Self {
+            conn,
+            session: None,
+            live_lsp_router: single,
+            multi_lsp_router: multi,
         }
     }
 
@@ -248,7 +317,9 @@ impl<'a> LayeredContext<'a> {
     /// leader). The op functions gate their live-LSP branch on this, so both the
     /// in-process and the routed follower path take the live layer.
     pub fn has_live_lsp(&self) -> bool {
-        self.session.as_ref().is_some_and(|s| s.is_running()) || self.live_lsp_router.is_some()
+        self.session.as_ref().is_some_and(|s| s.is_running())
+            || self.live_lsp_router.is_some()
+            || self.multi_lsp_router.is_some()
     }
 
     /// Returns true if the given file has been indexed by LSP.
@@ -423,6 +494,65 @@ impl<'a> LayeredContext<'a> {
             Some(closure_result) => closure_result.map(Some),
             None => Ok(None),
         }
+    }
+
+    /// Run an ordered batch of LSP requests as ONE atomic exchange, syncing the
+    /// document once first, and return one bare LSP result per step.
+    ///
+    /// This is the *data-driven* multi-step seam: instead of a closure that
+    /// issues requests against a live client (which cannot cross a process
+    /// boundary), the caller hands an ordered `(method, params)` list. The whole
+    /// batch runs under one client lock — locally via [`LspSession::with_client`]
+    /// on the in-process session, or, on a follower with no session, routed
+    /// through a [`MultiLspRouter`] so the consuming crate runs it under the
+    /// leader's single `with_client` lock. Holding the lock across the batch keeps
+    /// the exchange atomic so no other consumer interleaves a request and steals a
+    /// response off the shared pipe.
+    ///
+    /// Each step's result is unwrapped from its JSON-RPC envelope (so the op
+    /// parser always receives the bare `result`, and a JSON-RPC `error` envelope
+    /// surfaces as a [`CodeContextError`] rather than a silently-empty parse) —
+    /// the same contract as the single-request seam.
+    ///
+    /// Returns `Ok(None)` when there is no live LSP layer (no session and no
+    /// router), so multi-step ops degrade to their documented best-effort.
+    ///
+    /// # Arguments
+    /// * `file_path` - Path to the document to sync before the batch.
+    /// * `steps` - The ordered `(method, params)` requests to run under one lock.
+    pub fn lsp_multi_request_batch(
+        &self,
+        file_path: &str,
+        steps: Vec<(String, Value)>,
+    ) -> Result<Option<Vec<Value>>, CodeContextError> {
+        // No in-process session but a multi-step router is wired (a follower):
+        // route the whole batch to the leader, which runs it under one
+        // with_client lock and returns one envelope per step. Unwrap each here so
+        // the op parser receives bare results — exactly like route_via_router.
+        if self.session.is_none() {
+            return match &self.multi_lsp_router {
+                Some(router) => match router(file_path, steps)? {
+                    Some(responses) => Ok(Some(
+                        responses
+                            .into_iter()
+                            .map(unwrap_lsp_result)
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )),
+                    None => Ok(None),
+                },
+                None => Ok(None),
+            };
+        }
+
+        // In-process session: run the batch under one with_client lock, syncing
+        // the document first, so the local path is atomic exactly like the
+        // routed one. send_and_unwrap_lsp_request unwraps each step's envelope.
+        self.lsp_multi_request_with_document(file_path, |rpc| {
+            steps
+                .into_iter()
+                .map(|(method, params)| send_and_unwrap_lsp_request(rpc, &method, params))
+                .collect::<Result<Vec<_>, _>>()
+        })
     }
 
     /// Pull diagnostics for a file through the shared session's unified
@@ -1134,6 +1264,186 @@ mod tests {
         let ctx = LayeredContext::new(&conn, None);
         ctx.lsp_notify("textDocument/didOpen", serde_json::json!({}))
             .unwrap();
+    }
+
+    // --- Multi-step router (lsp_multi_request_batch) ---
+
+    #[test]
+    fn test_multi_router_routes_ordered_steps_when_no_session() {
+        // A follower has no in-process session but is given a multi-step router
+        // (the leader-routing closure supplied by the tools layer).
+        // lsp_multi_request_batch must route the WHOLE ordered batch through the
+        // router (one IPC round-trip) instead of short-circuiting to Ok(None),
+        // hand it the file_path to sync, and the steps in order.
+        use std::sync::{Arc, Mutex};
+        let conn = test_db();
+        let seen: Arc<Mutex<(String, Vec<String>)>> =
+            Arc::new(Mutex::new((String::new(), Vec::new())));
+        let seen_for_router = Arc::clone(&seen);
+        let ctx = LayeredContext::with_multi_lsp_router(
+            &conn,
+            Box::new(move |file_path, steps| {
+                let mut g = seen_for_router.lock().unwrap();
+                g.0 = file_path.to_string();
+                g.1 = steps.iter().map(|(m, _)| m.clone()).collect();
+                // Return one bare result per step, in order.
+                Ok(Some(
+                    steps
+                        .iter()
+                        .map(|(m, _)| serde_json::json!({ "echo": m }))
+                        .collect(),
+                ))
+            }),
+        );
+        assert!(
+            ctx.has_live_lsp(),
+            "a multi router makes the live layer available"
+        );
+        let results = ctx
+            .lsp_multi_request_batch(
+                "src/main.rs",
+                vec![
+                    (
+                        "textDocument/prepareRename".to_string(),
+                        serde_json::json!({}),
+                    ),
+                    ("textDocument/rename".to_string(), serde_json::json!({})),
+                ],
+            )
+            .unwrap()
+            .expect("router present → Some");
+        let g = seen.lock().unwrap();
+        assert_eq!(g.0, "src/main.rs", "must hand the router the file_path");
+        assert_eq!(
+            g.1,
+            vec![
+                "textDocument/prepareRename".to_string(),
+                "textDocument/rename".to_string()
+            ],
+            "steps must be routed in order"
+        );
+        assert_eq!(results.len(), 2, "one result per step");
+        assert_eq!(
+            results[0],
+            serde_json::json!({ "echo": "textDocument/prepareRename" })
+        );
+    }
+
+    #[test]
+    fn test_multi_router_unwraps_each_step_jsonrpc_envelope() {
+        // The leader returns the FULL JSON-RPC envelope per step
+        // ({jsonrpc,id,result}). The routed multi-step path MUST unwrap each
+        // step's envelope to the bare result — exactly like the single-request
+        // seam — or the op parsers get an enveloped value and wrong-empty.
+        let conn = test_db();
+        let ctx = LayeredContext::with_multi_lsp_router(
+            &conn,
+            Box::new(|_file_path, steps| {
+                Ok(Some(
+                    steps
+                        .iter()
+                        .enumerate()
+                        .map(|(i, _)| {
+                            serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": i,
+                                "result": { "step": i }
+                            })
+                        })
+                        .collect(),
+                ))
+            }),
+        );
+        let results = ctx
+            .lsp_multi_request_batch(
+                "src/main.rs",
+                vec![
+                    (
+                        "textDocument/prepareRename".to_string(),
+                        serde_json::json!({}),
+                    ),
+                    ("textDocument/rename".to_string(), serde_json::json!({})),
+                ],
+            )
+            .unwrap()
+            .expect("router present");
+        assert_eq!(
+            results,
+            vec![
+                serde_json::json!({ "step": 0 }),
+                serde_json::json!({ "step": 1 })
+            ],
+            "each step's JSON-RPC `result` envelope must be unwrapped to the bare result"
+        );
+    }
+
+    #[test]
+    fn test_multi_router_surfaces_step_jsonrpc_error_envelope() {
+        // A step response carrying a JSON-RPC `error` envelope must become a
+        // CodeContextError, exactly as the single-request seam does — never a
+        // silently-returned error object the parser treats as empty.
+        let conn = test_db();
+        let ctx = LayeredContext::with_multi_lsp_router(
+            &conn,
+            Box::new(|_file_path, _steps| {
+                Ok(Some(vec![serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": { "code": -32601, "message": "method not found" }
+                })]))
+            }),
+        );
+        let err = ctx
+            .lsp_multi_request_batch(
+                "src/main.rs",
+                vec![(
+                    "textDocument/prepareRename".to_string(),
+                    serde_json::json!({}),
+                )],
+            )
+            .expect_err("a JSON-RPC error envelope in a step must surface as an error");
+        assert!(format!("{err}").contains("method not found"));
+    }
+
+    #[test]
+    fn test_multi_router_error_propagates_not_silent_empty() {
+        // A router error (leader connect/serve failed) must surface as a
+        // CodeContextError, not a silent Ok(None) wrong-empty.
+        let conn = test_db();
+        let ctx = LayeredContext::with_multi_lsp_router(
+            &conn,
+            Box::new(|_file_path, _steps| {
+                Err(CodeContextError::LspError("leader unreachable".to_string()))
+            }),
+        );
+        let err = ctx
+            .lsp_multi_request_batch(
+                "src/main.rs",
+                vec![(
+                    "textDocument/prepareRename".to_string(),
+                    serde_json::json!({}),
+                )],
+            )
+            .expect_err("router error must propagate");
+        assert!(format!("{err}").contains("leader unreachable"));
+    }
+
+    #[test]
+    fn test_multi_request_batch_returns_none_when_no_session_and_no_router() {
+        // Neither an in-process session nor a multi router: the batch seam
+        // reports no live layer (Ok(None)), so the op degrades.
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, None);
+        let result = ctx
+            .lsp_multi_request_batch(
+                "src/main.rs",
+                vec![(
+                    "textDocument/prepareRename".to_string(),
+                    serde_json::json!({}),
+                )],
+            )
+            .unwrap();
+        assert!(result.is_none());
     }
 
     // --- Layer 2: LSP index ---
