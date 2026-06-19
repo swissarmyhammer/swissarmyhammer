@@ -44,14 +44,6 @@ impl McpTool for GrepFilesTool {
     }
 
     fn schema(&self) -> serde_json::Value {
-        // NOTE: `context_lines` is intentionally omitted here even though the
-        // underlying `GrepRequest` accepts it. The handler does not honor it
-        // (see the `#[allow(dead_code)]` on `GrepRequest::context_lines` in
-        // `grep/mod.rs`), and advertising an unimplemented capability would
-        // mislead Hermes-trained validator models into emitting calls that
-        // silently produce no context lines with no error to recover from.
-        // Re-add this field only after `execute_grep` actually returns
-        // surrounding context lines.
         json!({
             "type": "object",
             "description": "Search file contents with a regular expression.",
@@ -75,6 +67,10 @@ impl McpTool for GrepFilesTool {
                 "case_insensitive": {
                     "type": "boolean",
                     "description": "Case-insensitive search"
+                },
+                "context_lines": {
+                    "type": "integer",
+                    "description": "Lines of context before and after each match in 'content' mode. Defaults to 2 (like ripgrep -C2); pass 0 for one line per match."
                 },
                 "output_mode": {
                     "type": "string",
@@ -174,18 +170,16 @@ mod tests {
         assert!(schema["properties"].get("op").is_none());
     }
 
-    /// `context_lines` must not appear in the schema. The underlying
-    /// `execute_grep` does not honor it (the field on `GrepRequest` is marked
-    /// `#[allow(dead_code)]`), so advertising it would mislead validator models
-    /// that pass `{"context_lines": N}` and silently get no surrounding context.
+    /// `context_lines` is advertised now that `execute_grep` honors it (returning
+    /// surrounding context lines in `content` mode, defaulting to ripgrep -C2).
     #[test]
-    fn test_schema_does_not_have_context_lines() {
+    fn test_schema_advertises_context_lines() {
         let tool = GrepFilesTool::new();
         let schema = tool.schema();
-        assert!(
-            schema["properties"].get("context_lines").is_none(),
-            "context_lines must not be advertised until execute_grep honors it"
-        );
+        let field = schema["properties"]
+            .get("context_lines")
+            .expect("context_lines must be advertised now that execute_grep honors it");
+        assert_eq!(field["type"], "integer");
     }
 
     #[tokio::test]
