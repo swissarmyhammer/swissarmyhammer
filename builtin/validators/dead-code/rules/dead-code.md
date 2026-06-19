@@ -46,6 +46,22 @@ it is any of:
 - **Tests**: test functions and test-only helpers (identified by attribute or
   framework convention — `#[test]`, `#[tokio::test]`, `it(...)`, `def test_foo`,
   `func TestFoo(t *testing.T)`), and items gated by `#[cfg(test)]` / `mod tests`.
+- **Work-in-process scaffolding**: a symbol, struct field, or parameter newly
+  added as infrastructure that a *subsequent task* will consume — introduced
+  ahead of its caller as part of an incremental, multi-step plan. An empty
+  inbound callgraph here means "the consumer hasn't landed yet," not "dead."
+  Treat it as exempt when the change makes that intent legible, by any of:
+  a placeholder default that a later change replaces (e.g. a field set to
+  `usize::MAX` / `None` / a no-op until it is wired up); a parameter or field
+  plumbed through call sites in preparation for a consumer; or an explicit
+  forward marker — a code comment naming the follow-up work that will use it,
+  or `#[allow(dead_code)]` (or the language equivalent) with a reason.
+  This carve-out covers only forward staging. It does **not** cover code with
+  no plausible future consumer: leftovers stranded *after* an edit, unreachable
+  branches, orphaned modules never wired into the build, and commented-out
+  code remain blockers. When in doubt whether a consumer is genuinely coming,
+  report it as a warning ("confirm a later task consumes this, or delete"),
+  not a blocker.
 
 Note: identify entry points / tests from the structural marker at the definition
 (attribute, export modifier, registration), not from the file name. When the

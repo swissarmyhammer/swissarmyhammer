@@ -78,6 +78,11 @@ pub fn rendered_builtin_instructions(name: &str) -> String {
 ///
 /// This is the single source of truth for the "guidance lives in exactly one
 /// partial" check shared by every `*_guidance.rs` test.
+// Shared `tests/common` helper: each integration test compiles as its own crate
+// that includes this module, so a helper used by some `*_guidance.rs` binaries
+// (e.g. `task_double_check_guidance`, `skill_comment_guidance`) is legitimately
+// unused in others (e.g. `finish_commit_guidance`) — not dead code.
+#[allow(dead_code)]
 pub fn assert_guidance_single_source(canonical_text: &str, expected_rel_path: &Path) {
     let builtin = builtin_dir();
     let mut hits: Vec<PathBuf> = Vec::new();
