@@ -81,7 +81,7 @@ Name the board for the workspace/repository, not the feature being planned.
 
 ### Double-check the board
 
-Once the board is built and before you remind the user to `/finish` or `/implement`, adversarially double-check it. Launch the `double-check` agent via the Task tool (`subagent_type: double-check`) against the just-created tasks and ask it to try to prove the plan is wrong or incomplete:
+Once the board is built and before you remind the user to `/finish` or `/implement`, adversarially double-check it. Launch the `double-check` subagent against the just-created tasks and ask it to try to prove the plan is wrong or incomplete:
 
 - Are tasks **right-sized** — each one focused, independently implementable and verifiable?
 - Are the **acceptance criteria verifiable** — concrete, machine-checkable, not vague?
