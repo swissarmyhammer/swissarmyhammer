@@ -18,6 +18,7 @@
 
 pub mod detect;
 pub mod doctor;
+pub(crate) mod leader_route;
 pub mod schema;
 pub mod watcher;
 
@@ -1175,13 +1176,13 @@ impl McpTool for CodeContextTool {
             "get diagnostics" => execute_get_diagnostics(&arguments, context),
             "get inbound_calls" => execute_get_inbound_calls(&arguments, context),
             "search workspace_symbol" => {
-                execute_workspace_symbol_live(&arguments, context)
+                execute_workspace_symbol_live(&arguments, context).await
             }
-            "get definition" => execute_get_definition(&arguments, context),
-            "get type_definition" => execute_get_type_definition(&arguments, context),
-            "get hover" => execute_get_hover(&arguments, context),
-            "get references" => execute_get_references(&arguments, context),
-            "get implementations" => execute_get_implementations(&arguments, context),
+            "get definition" => execute_get_definition(&arguments, context).await,
+            "get type_definition" => execute_get_type_definition(&arguments, context).await,
+            "get hover" => execute_get_hover(&arguments, context).await,
+            "get references" => execute_get_references(&arguments, context).await,
+            "get implementations" => execute_get_implementations(&arguments, context).await,
             "get code_actions" => execute_get_code_actions(&arguments, context),
             "" => Err(McpError::invalid_params(
                 "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'.",
@@ -2757,7 +2758,7 @@ fn execute_get_inbound_calls(
 ///
 /// Live workspace symbol search with layered resolution: live LSP
 /// workspace/symbol, then LSP index, then tree-sitter chunks.
-fn execute_workspace_symbol_live(
+async fn execute_workspace_symbol_live(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2776,10 +2777,11 @@ fn execute_workspace_symbol_live(
         max_results,
     };
 
+    let session = any_lsp_session();
+    let router = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let session = any_lsp_session();
-    let ctx = LayeredContext::new(&db, session);
+    let ctx = leader_route::build_layered_context(&db, session, router);
 
     let result =
         swissarmyhammer_code_context::workspace_symbol_live(&ctx, &opts).map_err(context_err)?;
@@ -2789,7 +2791,7 @@ fn execute_workspace_symbol_live(
 /// Execute the "get definition" operation.
 ///
 /// Go-to-definition with layered resolution: live LSP, LSP index, tree-sitter.
-fn execute_get_definition(
+async fn execute_get_definition(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2822,10 +2824,11 @@ fn execute_get_definition(
         include_source,
     };
 
+    let session = lsp_session_for_file(file_path);
+    let router = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let session = lsp_session_for_file(file_path);
-    let ctx = LayeredContext::new(&db, session);
+    let ctx = leader_route::build_layered_context(&db, session, router);
 
     let result = swissarmyhammer_code_context::get_definition(&ctx, &opts).map_err(context_err)?;
     json_result(&result)
@@ -2834,7 +2837,7 @@ fn execute_get_definition(
 /// Execute the "get type_definition" operation.
 ///
 /// Go-to-type-definition via live LSP only. Returns empty when no LSP is available.
-fn execute_get_type_definition(
+async fn execute_get_type_definition(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2867,10 +2870,11 @@ fn execute_get_type_definition(
         include_source,
     };
 
+    let session = lsp_session_for_file(file_path);
+    let router = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let session = lsp_session_for_file(file_path);
-    let ctx = LayeredContext::new(&db, session);
+    let ctx = leader_route::build_layered_context(&db, session, router);
 
     let result =
         swissarmyhammer_code_context::get_type_definition(&ctx, &opts).map_err(context_err)?;
@@ -2880,7 +2884,7 @@ fn execute_get_type_definition(
 /// Execute the "get hover" operation.
 ///
 /// Returns hover information (type signature, docs) with layered resolution.
-fn execute_get_hover(
+async fn execute_get_hover(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2907,11 +2911,12 @@ fn execute_get_hover(
         character,
     };
 
-    let ws = open_workspace(context)?;
-    let db = ws.db();
     let session = lsp_session_for_file(file_path);
     tracing::debug!(file_path = %file_path, client = session.is_some(), "get_hover: session lookup");
-    let ctx = LayeredContext::new(&db, session);
+    let router = leader_route::follower_route_for_op(&session, context).await;
+    let ws = open_workspace(context)?;
+    let db = ws.db();
+    let ctx = leader_route::build_layered_context(&db, session, router);
     tracing::debug!(
         has_live_lsp = ctx.has_live_lsp(),
         "get_hover: context created"
@@ -2925,7 +2930,7 @@ fn execute_get_hover(
 /// Execute the "get references" operation.
 ///
 /// Finds all references to a symbol with layered resolution.
-fn execute_get_references(
+async fn execute_get_references(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2964,10 +2969,11 @@ fn execute_get_references(
         max_results,
     };
 
+    let session = lsp_session_for_file(file_path);
+    let router = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let session = lsp_session_for_file(file_path);
-    let ctx = LayeredContext::new(&db, session);
+    let ctx = leader_route::build_layered_context(&db, session, router);
 
     let result = swissarmyhammer_code_context::get_references(&ctx, &opts).map_err(context_err)?;
     json_result(&result)
@@ -2976,7 +2982,7 @@ fn execute_get_references(
 /// Execute the "get implementations" operation.
 ///
 /// Finds implementations of a trait/interface with layered resolution.
-fn execute_get_implementations(
+async fn execute_get_implementations(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -3009,10 +3015,11 @@ fn execute_get_implementations(
         max_results,
     };
 
+    let session = lsp_session_for_file(file_path);
+    let router = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let session = lsp_session_for_file(file_path);
-    let ctx = LayeredContext::new(&db, session);
+    let ctx = leader_route::build_layered_context(&db, session, router);
 
     let result =
         swissarmyhammer_code_context::get_implementations(&ctx, &opts).map_err(context_err)?;

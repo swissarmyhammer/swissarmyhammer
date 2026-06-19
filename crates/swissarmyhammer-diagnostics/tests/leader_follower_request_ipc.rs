@@ -177,6 +177,139 @@ async fn leader_serves_concurrent_follower_diagnose_and_definition_calls() {
     daemon.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn follower_request_with_document_gets_real_definition_without_leader_preopen() {
+    // A follower's code-context op (get definition / get hover / get references)
+    // routes through lsp_request_with_document. Unlike the raw lsp_request test
+    // above, the LEADER does NOT pre-open the document — the follower's request
+    // carries the file_path and the leader must sync_open it on its single
+    // session before the request, or rust-analyzer answers against a buffer it
+    // never saw. We assert the follower gets a REAL definition for the helper()
+    // call site, with only the leader's one rust-analyzer running.
+    if !rust_analyzer_available() {
+        eprintln!("skipping: rust-analyzer not installed");
+        return;
+    }
+
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let main_rs = seed_rust_project(workspace.path());
+
+    let mut daemon = LspDaemon::new(rust_analyzer_spec(), workspace.path().to_path_buf());
+    daemon
+        .start()
+        .await
+        .expect("rust-analyzer handshake should complete");
+    let session = daemon.session();
+
+    let sock_dir = tempfile::tempdir().expect("socket tempdir");
+    let socket_path = sock_dir.path().join("leader.sock");
+    let lock_path = sock_dir.path().join("leader.lock");
+
+    let server = RequestServer::bind(&socket_path).expect("bind request server");
+    let serve_session = session.clone();
+    let server_task = tokio::spawn(async move {
+        let _ = swissarmyhammer_diagnostics::serve_session_requests(
+            server,
+            serve_session,
+            swissarmyhammer_diagnostics::PrecomputedDependents::default(),
+            swissarmyhammer_diagnostics::DiagnosticsConfig::default(),
+        )
+        .await;
+    });
+
+    // Give rust-analyzer time to load the workspace. Note: the leader does NOT
+    // open the document — the document-sync must come from the follower request.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let client = SessionRequestClient::connect(&socket_path, &lock_path)
+        .await
+        .expect("follower should connect to the leader socket");
+
+    // Drive the REAL code-context op (get_definition) through a LiveLspRouter
+    // backed by this follower's SessionRequestClient — exactly the production
+    // wiring (build_follower_router → route_one → lsp_request_with_document).
+    // This proves the END-TO-END consumer contract, not just the wire: the op's
+    // parser (parse_definition_locations) must receive the *bare* LSP result
+    // (the router/layered-context must unwrap the JSON-RPC envelope), or it
+    // silently degrades to the index/tree-sitter layer. We assert
+    // SourceLayer::LiveLsp with a real location, which fails on an un-unwrapped
+    // envelope.
+    let ws_for_router = workspace.path().to_path_buf();
+
+    let opts = swissarmyhammer_code_context::GetDefinitionOptions {
+        file_path: main_rs.to_string_lossy().to_string(),
+        line: 3,
+        character: 12,
+        include_source: false,
+    };
+
+    // rust-analyzer may still be analyzing right after the first didOpen
+    // (returning null or a transient server-initiated message), so poll with a
+    // bounded retry until the real cross-reference resolves.
+    let mut last = String::new();
+    let mut resolved = false;
+    for _ in 0..20 {
+        // The DB handle (DbRef) is !Send, so the synchronous op call — open
+        // workspace, build the routed context, run get_definition — is scoped in
+        // its own block so ws/db/ctx all drop BEFORE the await below. The router
+        // closure itself bridges to the async client via block_in_place.
+        let result = {
+            let ws = swissarmyhammer_code_context::CodeContextWorkspace::open(&ws_for_router)
+                .expect("open code-context workspace");
+            let db = ws.db();
+            let router_client = client.clone();
+            let handle = tokio::runtime::Handle::current();
+            let router_attempt: swissarmyhammer_code_context::LiveLspRouter = Box::new(
+                move |file_path: &str, method: &str, params: serde_json::Value| {
+                    let router_client = router_client.clone();
+                    let file_path = file_path.to_string();
+                    let method = method.to_string();
+                    tokio::task::block_in_place(|| {
+                        handle.block_on(async {
+                            router_client
+                                .lsp_request_with_document(&file_path, &method, params)
+                                .await
+                                .map(Some)
+                                .map_err(|e| {
+                                    swissarmyhammer_code_context::CodeContextError::LspError(
+                                        format!("leader LSP request failed: {e}"),
+                                    )
+                                })
+                        })
+                    })
+                },
+            );
+            let ctx = swissarmyhammer_code_context::LayeredContext::with_live_lsp_router(
+                &db,
+                router_attempt,
+            );
+            swissarmyhammer_code_context::get_definition(&ctx, &opts)
+                .expect("get_definition via leader router")
+        };
+        last = format!("{result:?}");
+        if result.source_layer == swissarmyhammer_code_context::SourceLayer::LiveLsp
+            && result
+                .locations
+                .iter()
+                .any(|l| l.file_path.contains("main.rs") && l.range.start_line == 0)
+        {
+            resolved = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(
+        resolved,
+        "follower's get_definition must resolve via SourceLayer::LiveLsp to helper() on line 0 \
+         of main.rs once rust-analyzer is warm — proving the leader-routed result is parsed, not \
+         a silently-degraded index/tree-sitter empty: last={last}"
+    );
+
+    drop(client);
+    server_task.abort();
+    daemon.shutdown().await;
+}
+
 #[tokio::test]
 async fn follower_connect_to_absent_leader_is_typed_not_leader() {
     // No server is bound. A follower's connect must fail with a typed

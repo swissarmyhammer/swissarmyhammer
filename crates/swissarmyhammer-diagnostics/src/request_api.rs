@@ -12,10 +12,14 @@
 //!
 //! - `"diagnose"` — params `{ "paths": [String] }` → a [`DiagnosticsReport`]
 //!   (the [`diagnose`] core API). This is the diagnostics request surface.
-//! - `"lsp_request"` — params `{ "method": String, "params": <json> }` → the raw
-//!   LSP result of `session.request(method, params)`. This covers code-context
-//!   query ops that bottom out in a single LSP request (e.g.
-//!   `textDocument/definition`, `textDocument/hover`, `textDocument/references`).
+//! - `"lsp_request"` — params `{ "method": String, "params": <json>,
+//!   "file_path"?: String }` → the LSP result of `session.request(method,
+//!   params)`. When `file_path` is present the leader `sync_open`s that document
+//!   on its session before the request (mirroring the local
+//!   `lsp_request_with_document` open-then-request contract); when absent the op
+//!   is workspace-wide and no document is synced. This covers code-context query
+//!   ops that bottom out in a single LSP request (e.g. `textDocument/definition`,
+//!   `textDocument/hover`, `textDocument/references`, `workspace/symbol`).
 //!
 //! ## Leader vs follower vs in-process subagent
 //!
@@ -78,14 +82,15 @@ where
             serde_json::to_value(&report).map_err(|e| format!("failed to encode report: {e}"))
         }
         METHOD_LSP_REQUEST => {
-            let (lsp_method, lsp_params) = parse_lsp_request(&params)?;
-            lsp_request_blocking(session, lsp_method, lsp_params).await
+            let (lsp_method, lsp_params, file_path) = parse_lsp_request(&params)?;
+            lsp_request_blocking(session, lsp_method, lsp_params, file_path).await
         }
         other => Err(format!("unknown request method: {other}")),
     }
 }
 
-/// Run one synchronous LSP round-trip off the async runtime.
+/// Run one synchronous LSP round-trip off the async runtime, syncing the
+/// document first when a `file_path` is supplied.
 ///
 /// [`LspSession::request`] blocks the calling thread for the whole stdio
 /// request/response cycle (it locks a `std::sync::Mutex` and waits on the pipe).
@@ -94,19 +99,42 @@ where
 /// leader's own async work. The session is cheap to clone (`Arc`-backed), so the
 /// blocking call is moved onto [`tokio::task::spawn_blocking`]; the runtime thread
 /// stays free to drive every other task while the round-trip is in flight.
+///
+/// `file_path` mirrors the local
+/// [`lsp_request_with_document`](swissarmyhammer_code_context::LayeredContext::lsp_request_with_document)
+/// contract: a follower's code-context op (definition/hover/references/…) opens
+/// or refreshes the document on its session before the request so the server
+/// analyzes the *current* on-disk content. Routed to the leader, the same sync
+/// must happen on the leader's single session, or the server answers against a
+/// buffer it has never opened. When `file_path` is absent (a workspace-wide op
+/// such as `workspace/symbol`), no document is synced. A sync failure (file gone
+/// / unreadable) surfaces as the request error rather than silently querying a
+/// stale buffer.
 async fn lsp_request_blocking<C>(
     session: &LspSession<C>,
     lsp_method: String,
     lsp_params: Value,
+    file_path: Option<String>,
 ) -> Result<Value, String>
 where
     C: LspTransport + Send + Sync + 'static,
 {
     let session = session.clone();
-    tokio::task::spawn_blocking(move || session.request(&lsp_method, lsp_params))
-        .await
-        .map_err(|e| format!("lsp request task failed: {e}"))?
-        .map_err(|e| format!("lsp request failed: {e}"))
+    tokio::task::spawn_blocking(move || {
+        if let Some(path) = file_path {
+            let path = std::path::PathBuf::from(&path);
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| format!("lsp request failed to read {}: {e}", path.display()))?;
+            session
+                .sync_open(&path, &text)
+                .map_err(|e| format!("lsp request failed to sync document: {e}"))?;
+        }
+        session
+            .request(&lsp_method, lsp_params)
+            .map_err(|e| format!("lsp request failed: {e}"))
+    })
+    .await
+    .map_err(|e| format!("lsp request task failed: {e}"))?
 }
 
 /// Extract and validate the `paths` array from a `"diagnose"` request's params.
@@ -145,15 +173,24 @@ fn parse_paths(params: &Value) -> Result<Vec<String>, String> {
         .collect()
 }
 
-/// Extract `(method, params)` from an `"lsp_request"` request's params.
-fn parse_lsp_request(params: &Value) -> Result<(String, Value), String> {
+/// Extract `(method, params, file_path)` from an `"lsp_request"` request's params.
+///
+/// `file_path` is optional: when present, the leader syncs that document onto its
+/// session before issuing the request (mirroring the local
+/// `lsp_request_with_document` open-then-request contract); when absent, the op
+/// is workspace-wide (e.g. `workspace/symbol`) and no document is synced.
+fn parse_lsp_request(params: &Value) -> Result<(String, Value, Option<String>), String> {
     let method = params
         .get("method")
         .and_then(Value::as_str)
         .ok_or_else(|| "lsp_request: missing `method` string".to_string())?
         .to_string();
     let inner = params.get("params").cloned().unwrap_or(Value::Null);
-    Ok((method, inner))
+    let file_path = params
+        .get("file_path")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Ok((method, inner, file_path))
 }
 
 /// Serve the SAH request API on `server`, routing every follower request onto
@@ -254,14 +291,56 @@ impl SessionRequestClient {
 
     /// Round-trip one raw LSP request `(method, params)` to the leader's session
     /// and return its result.
+    ///
+    /// Use this for workspace-wide ops that are not scoped to a document the
+    /// leader must first open (e.g. `workspace/symbol`). For a document-scoped op
+    /// use [`lsp_request_with_document`](Self::lsp_request_with_document) so the
+    /// leader syncs the file before the request.
     pub async fn lsp_request(&self, method: &str, params: Value) -> Result<Value, IpcError> {
         self.client
             .call(
                 METHOD_LSP_REQUEST,
-                json!({ "method": method, "params": params }),
+                lsp_request_envelope(method, params, None),
             )
             .await
     }
+
+    /// Round-trip a document-scoped LSP request to the leader, asking it to sync
+    /// `file_path` onto its session before issuing the request.
+    ///
+    /// This mirrors the in-process
+    /// [`LayeredContext::lsp_request_with_document`](swissarmyhammer_code_context::LayeredContext::lsp_request_with_document)
+    /// contract: a follower's code-context op (definition/hover/references/…)
+    /// would locally open or refresh the document before the request so the
+    /// server analyzes the current on-disk content; routed to the leader, the
+    /// `file_path` makes the leader do that same `sync_open` on its single
+    /// session before the request.
+    pub async fn lsp_request_with_document(
+        &self,
+        file_path: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, IpcError> {
+        self.client
+            .call(
+                METHOD_LSP_REQUEST,
+                lsp_request_envelope(method, params, Some(file_path)),
+            )
+            .await
+    }
+}
+
+/// Build the `lsp_request` request envelope `{ method, params, file_path? }`.
+///
+/// The leader-side [`parse_lsp_request`] reads `file_path` back out and syncs
+/// that document before the request; an absent `file_path` is omitted from the
+/// envelope so a workspace-wide op carries no document scope.
+fn lsp_request_envelope(method: &str, params: Value, file_path: Option<&str>) -> Value {
+    let mut envelope = json!({ "method": method, "params": params });
+    if let Some(path) = file_path {
+        envelope["file_path"] = Value::String(path.to_string());
+    }
+    envelope
 }
 
 #[cfg(test)]
@@ -407,6 +486,83 @@ mod tests {
         pinger.await.unwrap();
     }
 
+    /// A recording transport that logs every `(method, params)` it is handed
+    /// into a shared `Arc<Mutex<Vec<..>>>`, so a test can read the wire order
+    /// back after the session has been consumed. `send_request` answers any
+    /// method with a benign empty object.
+    #[derive(Clone)]
+    struct SharedRecordingTransport {
+        log: Arc<Mutex<Vec<(String, Value)>>>,
+    }
+
+    impl LspTransport for SharedRecordingTransport {
+        fn send_request(&mut self, method: &str, params: Value) -> Result<Value, LspError> {
+            self.log.lock().unwrap().push((method.to_string(), params));
+            Ok(json!({}))
+        }
+        fn send_notification(&mut self, method: &str, params: Value) -> Result<(), LspError> {
+            self.log.lock().unwrap().push((method.to_string(), params));
+            Ok(())
+        }
+        fn read_message(&mut self) -> Result<Value, LspError> {
+            Err(LspError::NotRunning)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dispatch_lsp_request_syncs_the_document_before_the_request() {
+        // A follower's code-context op (e.g. textDocument/definition) goes
+        // through the local lsp_request_with_document, which opens/syncs the
+        // document before issuing the request so the server analyzes the
+        // current on-disk content. Routed to the leader, the same contract must
+        // hold: when the request carries a `file_path`, dispatch must sync the
+        // document (didOpen) on the leader's session before the request, or the
+        // server answers against a buffer it has never seen.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let transport = SharedRecordingTransport {
+            log: Arc::clone(&log),
+        };
+        let session = LspSession::new(Arc::new(Mutex::new(Some(transport))), "rust");
+
+        let uri = format!("file://{}", file.display());
+        dispatch(
+            &session,
+            &PrecomputedDependents::default(),
+            &ManualTimer::default(),
+            &DiagnosticsConfig::default(),
+            METHOD_LSP_REQUEST,
+            json!({
+                "method": "textDocument/definition",
+                "params": {
+                    "textDocument": { "uri": uri },
+                    "position": { "line": 0, "character": 3 }
+                },
+                "file_path": file.to_string_lossy(),
+            }),
+        )
+        .await
+        .expect("lsp request with a file_path should route");
+
+        let recorded = log.lock().unwrap().clone();
+        let methods: Vec<&str> = recorded.iter().map(|(m, _)| m.as_str()).collect();
+        let open_idx = methods
+            .iter()
+            .position(|m| *m == "textDocument/didOpen")
+            .expect("a didOpen must be emitted to sync the document on the leader");
+        let req_idx = methods
+            .iter()
+            .position(|m| *m == "textDocument/definition")
+            .expect("the routed request must be issued");
+        assert!(
+            open_idx < req_idx,
+            "the document must be synced BEFORE the request: {methods:?}"
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_lsp_request_against_dead_session_reports_error() {
         // No live client → session.request fails with NotRunning, surfaced as a
@@ -423,6 +579,36 @@ mod tests {
         .await
         .expect_err("lsp request without a live client must error");
         assert!(err.contains("lsp request failed"), "got: {err}");
+    }
+
+    #[test]
+    fn lsp_request_envelope_roundtrips_through_parse_with_document() {
+        // The client builds the envelope; the leader parses it. A document-scoped
+        // request must carry the file_path end to end so the leader syncs it.
+        let envelope = lsp_request_envelope(
+            "textDocument/hover",
+            json!({ "position": { "line": 1, "character": 2 } }),
+            Some("/repo/src/a.rs"),
+        );
+        let (method, params, file_path) =
+            parse_lsp_request(&envelope).expect("envelope must parse");
+        assert_eq!(method, "textDocument/hover");
+        assert_eq!(params["position"]["line"], 1);
+        assert_eq!(file_path.as_deref(), Some("/repo/src/a.rs"));
+    }
+
+    #[test]
+    fn lsp_request_envelope_without_document_carries_no_file_path() {
+        // A workspace-wide op (workspace/symbol) carries no document scope, so the
+        // leader must not try to sync any file.
+        let envelope = lsp_request_envelope("workspace/symbol", json!({ "query": "foo" }), None);
+        assert!(
+            envelope.get("file_path").is_none(),
+            "no file_path key when document-less"
+        );
+        let (_method, _params, file_path) =
+            parse_lsp_request(&envelope).expect("envelope must parse");
+        assert_eq!(file_path, None);
     }
 
     #[test]
