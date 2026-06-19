@@ -21,6 +21,7 @@ pub mod doctor;
 pub mod schema;
 pub mod watcher;
 
+use crate::mcp::op_tool_helpers::json_result;
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -1226,15 +1227,6 @@ pub(crate) fn open_workspace(context: &ToolContext) -> Result<CodeContextWorkspa
             None,
         )
     })
-}
-
-/// Format a serializable result into a CallToolResult with JSON text content.
-fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpError> {
-    let text = serde_json::to_string_pretty(value).map_err(|e| {
-        McpError::internal_error(format!("Failed to serialize result: {}", e), None)
-    })?;
-
-    Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
 /// Convert a CodeContextError into an McpError.

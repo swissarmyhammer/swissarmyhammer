@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_diagnostics::{
     diagnose_with_outcome, is_diagnosable, BlastRadiusDependents, Dependents, DiagnoseOutcome,
@@ -39,6 +39,7 @@ use swissarmyhammer_operations::{
     generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig,
 };
 
+use crate::mcp::op_tool_helpers::{json_result, string_arg};
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use crate::mcp::tools::code_context::{
     any_lsp_session, lsp_session_for_file, open_workspace, LSP_SUPERVISOR,
@@ -629,18 +630,6 @@ fn severities_at_or_above(floor: &str) -> Vec<DiagnosticSeverity> {
         .iter()
         .map(|(_, severity)| *severity)
         .collect()
-}
-
-/// Read an optional string argument.
-fn string_arg(args: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
-    args.get(key).and_then(|v| v.as_str()).map(str::to_string)
-}
-
-/// Serialize a value into a JSON-text `CallToolResult`.
-fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, rmcp::ErrorData> {
-    let text = serde_json::to_string_pretty(value)
-        .map_err(|e| rmcp::ErrorData::internal_error(format!("failed to serialize: {e}"), None))?;
-    Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
 /// Register the operation-based `diagnostics` tool with the registry.

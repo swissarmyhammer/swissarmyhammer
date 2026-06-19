@@ -28,7 +28,7 @@ pub mod validators;
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_operations::{
     generate_mcp_schema_full, generate_mcp_schema_wire, Operation, ParamMeta, ParamType,
@@ -36,6 +36,7 @@ use swissarmyhammer_operations::{
 };
 use swissarmyhammer_validators::review::Scope;
 
+use crate::mcp::op_tool_helpers::{bool_arg, json_result, string_arg, string_array_arg};
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use review_op::{AgentFactory, EmbedderFactory, ReviewRequest, ReviewResponse};
 
@@ -521,43 +522,6 @@ fn scope_for_path(target: &str) -> Scope {
     } else {
         Scope::File(target.to_string())
     }
-}
-
-/// Read an optional string argument.
-fn string_arg(args: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
-    args.get(key)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}
-
-/// Read an optional boolean flag (`false` when absent or wrong-typed). Accepts a
-/// real JSON `true`/`false` or the strings `"true"`/`"false"` so a forgiving
-/// caller can pass either shape.
-fn bool_arg(args: &serde_json::Map<String, serde_json::Value>, key: &str) -> bool {
-    match args.get(key) {
-        Some(serde_json::Value::Bool(b)) => *b,
-        Some(serde_json::Value::String(s)) => s.eq_ignore_ascii_case("true"),
-        _ => false,
-    }
-}
-
-/// Read an optional string-array argument (empty when absent or wrong-typed).
-fn string_array_arg(args: &serde_json::Map<String, serde_json::Value>, key: &str) -> Vec<String> {
-    args.get(key)
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Serialize a value into a JSON-text `CallToolResult`.
-fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, rmcp::ErrorData> {
-    let text = serde_json::to_string_pretty(value)
-        .map_err(|e| rmcp::ErrorData::internal_error(format!("failed to serialize: {e}"), None))?;
-    Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
 /// Register the operation-based `review` tool with the registry.
