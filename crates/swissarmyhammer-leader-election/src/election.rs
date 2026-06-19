@@ -210,8 +210,27 @@ impl<M: BusMessage> LeaderElection<M> {
     }
 
     /// Create a new election coordinator with custom configuration
+    ///
+    /// The workspace root is **canonicalized** (symlinks resolved) before the
+    /// election key is derived, so two processes that reach the SAME physical
+    /// directory via different string forms — e.g. the macOS `/var` vs
+    /// `/private/var` (or `/tmp` vs `/private/tmp`) symlink forms, or any
+    /// relative/symlinked path — agree on one lock/socket and elect a single
+    /// leader (one rust-analyzer / index per workspace root). This is the one
+    /// chokepoint every election consumer flows through, so they all agree.
+    ///
+    /// Canonicalization is idempotent, so a caller that already canonicalized
+    /// its root (e.g. the diagnostics tool's `repo_root()`) derives the same
+    /// key as one that passed a raw symlink path. Distinct checkouts (git
+    /// worktrees) stay distinct canonical dirs, so they correctly keep
+    /// separate leaders.
+    ///
+    /// If canonicalization fails (e.g. the path does not yet exist), the raw
+    /// path is used unchanged — the workspace dir normally exists, and this
+    /// never panics.
     pub fn with_config(workspace_root: impl AsRef<Path>, config: ElectionConfig) -> Self {
-        let workspace_root = workspace_root.as_ref().to_path_buf();
+        let raw = workspace_root.as_ref().to_path_buf();
+        let workspace_root = fs::canonicalize(&raw).unwrap_or(raw);
         let hash = hash_path(&workspace_root);
         let base = config.base_dir();
 
@@ -627,6 +646,83 @@ mod tests {
         let hash1 = hash_path(Path::new("/workspace/a"));
         let hash2 = hash_path(Path::new("/workspace/b"));
         assert_ne!(hash1, hash2);
+    }
+
+    /// Two elections opened against symlink-equivalent forms of the *same*
+    /// physical directory must derive the SAME lock_path/socket_path so they
+    /// elect a single leader (one rust-analyzer / index per workspace root).
+    ///
+    /// On macOS the canonical tempdir lives under `/private/var/...` but is
+    /// reachable through the `/var/...` symlink; a symlink we create here
+    /// reproduces the same split (`/var` vs `/private/var`, `/tmp` vs
+    /// `/private/tmp`). Before the fix the raw string forms hashed differently
+    /// and elected two leaders.
+    #[test]
+    fn test_symlink_equivalent_roots_derive_same_lock_path() {
+        let real = TempDir::new().unwrap();
+        let real_root = real.path();
+
+        // A symlink pointing at the same physical directory.
+        let link = real
+            .path()
+            .parent()
+            .unwrap()
+            .join(format!("leader-election-symlink-{}", std::process::id()));
+        let _ = fs::remove_file(&link);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(real_root, &link).unwrap();
+        #[cfg(not(unix))]
+        std::os::windows::fs::symlink_dir(real_root, &link).unwrap();
+
+        let canonical: LeaderElection = LeaderElection::new(real_root);
+        let via_link: LeaderElection = LeaderElection::new(&link);
+
+        assert_eq!(
+            canonical.lock_path(),
+            via_link.lock_path(),
+            "symlink-equivalent roots must share one lock_path"
+        );
+        assert_eq!(
+            canonical.socket_path(),
+            via_link.socket_path(),
+            "symlink-equivalent roots must share one socket_path"
+        );
+
+        // And exactly one of them wins the flock; the other is a follower.
+        let first = canonical.elect().unwrap();
+        assert!(matches!(first, ElectionOutcome::Leader(_)));
+        let second = via_link.elect().unwrap();
+        assert!(
+            matches!(second, ElectionOutcome::Follower(_)),
+            "the second election against the same physical dir must be a follower"
+        );
+
+        let _ = fs::remove_file(&link);
+    }
+
+    /// Canonicalization must NOT over-collapse: two genuinely-distinct
+    /// directories (the git-worktree case — each is a distinct checkout that
+    /// needs its own rust-analyzer) keep distinct lock_paths and elect
+    /// distinct leaders.
+    #[test]
+    fn test_distinct_dirs_derive_distinct_lock_paths() {
+        let dir_a = TempDir::new().unwrap();
+        let dir_b = TempDir::new().unwrap();
+
+        let election_a: LeaderElection = LeaderElection::new(dir_a.path());
+        let election_b: LeaderElection = LeaderElection::new(dir_b.path());
+
+        assert_ne!(
+            election_a.lock_path(),
+            election_b.lock_path(),
+            "distinct directories must not collapse to one lock_path"
+        );
+
+        // Both win their own election — two separate leaders.
+        let a = election_a.elect().unwrap();
+        let b = election_b.elect().unwrap();
+        assert!(matches!(a, ElectionOutcome::Leader(_)));
+        assert!(matches!(b, ElectionOutcome::Leader(_)));
     }
 
     #[test]
