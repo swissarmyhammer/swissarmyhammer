@@ -22,9 +22,10 @@ use mirdan::install::{Profile, ProfileMcpServer, Selector};
 /// - `skills`: every builtin skill ([`Selector::All`]).
 /// - `agents`: every builtin agent ([`Selector::All`]).
 /// - `statusline`: install the `sah statusline` block.
-/// - `edit_redirect`: deny the native `Edit`/`Write`/`MultiEdit` tools and add a
-///   `PreToolUse` redirect to the `files` MCP tool, closing the write surface so
-///   diagnostics ride every mutation.
+/// - `edit_redirect`: deny the native `Edit`/`Write`/`MultiEdit` tools so every
+///   mutation flows through the served `files` MCP replacement; the deny alone
+///   closes the write surface (no `PreToolUse` hook), so diagnostics ride every
+///   mutation.
 ///
 /// Does NOT manage the CLAUDE.md preamble (`preamble: false`); `sah init`
 /// no longer writes the preamble.

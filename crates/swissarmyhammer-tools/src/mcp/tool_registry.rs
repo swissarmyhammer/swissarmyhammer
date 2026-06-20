@@ -1306,12 +1306,13 @@ impl ToolRegistry {
     /// [`ToolCategory::Replacement`] tools.
     ///
     /// Each `Replacement { native }` tool declares the native host tool it
-    /// supersedes (e.g. `shell` supersedes `"Bash"`). This returns those
-    /// `native` names — the single source of truth for which native tools the
-    /// serve boundary should suppress on a host that receives the replacements.
-    /// Today that is exactly `["Bash"]` (from `shell`), but deriving it from the
-    /// category metadata keeps the suppression tied to the served set rather than
-    /// a hardcoded list. Names are deduplicated; order is unspecified.
+    /// supersedes (e.g. `shell` supersedes `"Bash"`, `files` supersedes
+    /// `"Edit"`). This returns those `native` names — the single source of truth
+    /// for which native tools the serve boundary should suppress on a host that
+    /// receives the replacements. Deriving it from the category metadata keeps
+    /// the suppression tied to the served set rather than a hardcoded list, so it
+    /// grows automatically as more `Replacement` tools register. Names are
+    /// deduplicated; order is unspecified.
     pub fn replacement_natives(&self) -> Vec<&'static str> {
         let mut natives: Vec<&'static str> = self
             .iter_tools()
@@ -3069,6 +3070,42 @@ mod tests {
         assert_eq!(
             for_host, expected,
             "list_tools_for_host() order is not sorted by tool name"
+        );
+    }
+
+    /// The unified `files` tool is a `Replacement` for the native edit surface,
+    /// so the primary per-client serve advertises it to Claude (which gets
+    /// `Shared` + `Replacement`) but not to llama or unknown clients (which get
+    /// `Shared` only and mount their own file tools in-process). Regression for
+    /// the bug where `files` was `Agent`-category and therefore stripped from
+    /// every host — including Claude — leaving Claude with its native edit
+    /// surface denied and no served replacement.
+    #[test]
+    fn files_replacement_served_to_claude_not_llama() {
+        use crate::mcp::host::Host;
+
+        let mut registry = ToolRegistry::new();
+        super::register_file_tools(&mut registry);
+
+        let names_for = |host: Host| -> Vec<String> {
+            registry
+                .list_tools_for_host(host)
+                .iter()
+                .map(|t| t.name.to_string())
+                .collect()
+        };
+
+        assert!(
+            names_for(Host::Claude).iter().any(|n| n == "files"),
+            "Claude must be served the `files` replacement"
+        );
+        assert!(
+            !names_for(Host::Llama).iter().any(|n| n == "files"),
+            "llama must not be served `files` via the primary serve"
+        );
+        assert!(
+            !names_for(Host::Other).iter().any(|n| n == "files"),
+            "unknown clients must not be served `files` via the primary serve"
         );
     }
 
