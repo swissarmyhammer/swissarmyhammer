@@ -224,6 +224,111 @@ async fn process_ok_events(
     .await;
 }
 
+/// How often the leader re-walks the filesystem to reconcile the index.
+///
+/// The live watcher's per-event path is the low-latency fast path, but it has
+/// no correctness floor: any missed `notify` event (event storms, editors that
+/// write via rename/replace, files materialized before the watcher attached,
+/// bulk regeneration) leaves rows the event path never revisits, and a leader
+/// alive for hours or days drifts permanently. This timer gives the leader a
+/// periodic FS-walk reconcile so it always converges on disk truth without a
+/// restart or a hand-run `rebuild index`.
+///
+/// Five minutes balances staleness against cost. The reconcile diffs by
+/// content-hash/mtime and only marks genuinely-changed rows dirty, so a
+/// steady-state pass over an unchanged tree is a bounded hash-and-compare with
+/// no re-indexing -- cheap enough to run often, infrequent enough not to compete
+/// with the event fast path that already handles the common edit case in ~1s.
+const RECONCILE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// Periodic correctness floor for the leader's index.
+///
+/// Runs the [`startup_cleanup`](swissarmyhammer_code_context::startup_cleanup)
+/// FS-walk reconcile under the shared write lock, then drains the resulting
+/// dirty set (`WHERE ts_indexed = 0`) via the same indexer the watcher uses.
+/// This is the entrypoint the leader's [`run_periodic_reconcile`] timer calls,
+/// and the one a unit test drives directly with `embedder = None` to skip the
+/// model load.
+///
+/// `embedder` is threaded through to
+/// [`index_discovered_files_with_embedder`](super::index_discovered_files_with_embedder):
+/// `Some` embeds chunks, `None` writes chunks without embeddings (the test path,
+/// and the soft fallback when the model is unavailable).
+pub(crate) async fn reconcile_workspace_with_embedder(
+    workspace_root: &Path,
+    db: &SharedDb,
+    embedder: Option<std::sync::Arc<dyn model_embedding::TextEmbedder>>,
+    reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
+) {
+    // FS-walk reconcile under the write lock: deletes vanished files, marks
+    // hash-changed files dirty, and inserts new files with ts_indexed = 0.
+    {
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        match swissarmyhammer_code_context::startup_cleanup(&conn, workspace_root) {
+            Ok(stats) => tracing::info!(
+                "code-context periodic reconcile: {} added, {} removed, {} dirty, {} unchanged",
+                stats.files_added,
+                stats.files_removed,
+                stats.files_dirty,
+                stats.files_unchanged,
+            ),
+            Err(e) => {
+                tracing::warn!("code-context periodic reconcile: FS walk failed: {}", e);
+                return;
+            }
+        }
+    }
+
+    // Drain the dirty set the reconcile just produced.
+    super::index_discovered_files_with_embedder(
+        workspace_root,
+        std::sync::Arc::clone(db),
+        embedder,
+        reporter,
+    )
+    .await;
+}
+
+/// Run [`reconcile_workspace_with_embedder`] with the production embedder.
+///
+/// Builds the default chunk embedder (or `None` on load failure / opt-out) and
+/// uses the no-op progress reporter -- the periodic reconcile has no JSON-RPC
+/// progress channel, mirroring the watcher's own re-index path.
+async fn reconcile_workspace(workspace_root: &Path, db: &SharedDb) {
+    let embedder = super::build_default_embedder().await;
+    reconcile_workspace_with_embedder(
+        workspace_root,
+        db,
+        embedder,
+        swissarmyhammer_code_context::noop_reporter(),
+    )
+    .await;
+}
+
+/// Drive [`reconcile_workspace`] forever on a [`RECONCILE_INTERVAL`] timer.
+///
+/// This is the leader's self-heal loop. It MUST be spawned only on the leader --
+/// it holds and writes through the leader's shared write connection. Followers
+/// route to the leader and never run it. The caller (the leader-gated worker
+/// spawn in the MCP server) is responsible for that gating, exactly as it is for
+/// the watcher itself.
+pub fn run_periodic_reconcile(
+    workspace_root: impl AsRef<Path>,
+    db: SharedDb,
+) -> tokio::task::JoinHandle<()> {
+    let workspace_root = workspace_root.as_ref().to_path_buf();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(RECONCILE_INTERVAL);
+        // Skip the immediate first tick: startup already ran startup_cleanup, so
+        // the first periodic reconcile fires one interval later.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            reconcile_workspace(&workspace_root, &db).await;
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,6 +766,120 @@ mod tests {
             )
             .unwrap();
         assert!(chunks > 0, "new file must produce ts_chunks");
+    }
+
+    /// Regression: a long-lived leader must self-heal when filesystem changes
+    /// arrive with NO watcher event at all.
+    ///
+    /// This is the correctness floor underneath the watcher's event fast-path.
+    /// It mutates the filesystem the way a missed/never-delivered notify event
+    /// would leave it -- a brand-new file AND a delete+recreate of an existing
+    /// file, neither announced to the watcher -- then invokes the periodic
+    /// reconcile entrypoint directly (the function the leader's timer calls) and
+    /// asserts both files converge to the indexed state.
+    ///
+    /// As in [`watcher_indexes_file_created_after_startup`], the embedder is
+    /// `None` so no model loads -- the bug under test is the FS-walk reconcile,
+    /// orthogonal to embedding, which keeps the unit test deterministic and well
+    /// under the 10s budget.
+    ///
+    /// Before the periodic reconcile existed, nothing re-walked the filesystem
+    /// after startup, so the new and recreated files never re-entered the dirty
+    /// set and stayed absent/stale forever.
+    #[tokio::test]
+    async fn periodic_reconcile_indexes_files_changed_without_a_watcher_event() {
+        use std::sync::{Arc, Mutex};
+
+        // --- workspace indexed as the leader would leave it at startup ---
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/existing.rs"), "pub fn a() {}").unwrap();
+
+        let conn = Connection::open(dir.path().join("index.db")).unwrap();
+        configure_connection(&conn).unwrap();
+        create_schema(&conn).unwrap();
+        let db: swissarmyhammer_code_context::SharedDb = Arc::new(Mutex::new(conn));
+
+        // Initial reconcile populates indexed_files and drives the dirty set,
+        // exactly as the leader's startup pass does.
+        super::reconcile_workspace_with_embedder(
+            dir.path(),
+            &db,
+            None,
+            swissarmyhammer_code_context::noop_reporter(),
+        )
+        .await;
+        {
+            let conn = db.lock().unwrap();
+            assert_eq!(
+                get_ts_indexed(&conn, "src/existing.rs"),
+                Some(1),
+                "existing file should be indexed after the initial reconcile"
+            );
+        }
+
+        // --- mutate the FS with NO watcher event delivered ---
+        // 1. a brand-new file that was never announced
+        std::fs::write(
+            dir.path().join("src/never_announced.rs"),
+            "pub fn brand_new() -> i32 { 42 }",
+        )
+        .unwrap();
+        // 2. delete+recreate an existing file with different contents (the
+        //    rename/replace pattern editors use, whose event can be missed)
+        std::fs::remove_file(dir.path().join("src/existing.rs")).unwrap();
+        std::fs::write(
+            dir.path().join("src/existing.rs"),
+            "pub fn a() {}\npub fn b() {}",
+        )
+        .unwrap();
+
+        // --- invoke the periodic reconcile entrypoint directly ---
+        super::reconcile_workspace_with_embedder(
+            dir.path(),
+            &db,
+            None,
+            swissarmyhammer_code_context::noop_reporter(),
+        )
+        .await;
+
+        // --- ASSERT both files converged to indexed (ts_indexed 0 -> indexed) ---
+        let conn = db.lock().unwrap();
+
+        assert!(
+            file_exists(&conn, "src/never_announced.rs"),
+            "new file with no watcher event must be reconciled into indexed_files"
+        );
+        assert_eq!(
+            get_ts_indexed(&conn, "src/never_announced.rs"),
+            Some(1),
+            "new file must be tree-sitter indexed by the periodic reconcile"
+        );
+        let new_chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ts_chunks WHERE file_path = 'src/never_announced.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(new_chunks > 0, "new file must produce ts_chunks");
+
+        assert_eq!(
+            get_ts_indexed(&conn, "src/existing.rs"),
+            Some(1),
+            "recreated file must be re-indexed by the periodic reconcile"
+        );
+        let recreated_chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ts_chunks WHERE file_path = 'src/existing.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            recreated_chunks > 0,
+            "recreated file must produce ts_chunks"
+        );
     }
 
     #[test]

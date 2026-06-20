@@ -656,11 +656,26 @@ impl McpServer {
         });
 
         // Start file watcher
-        let watcher_root = workspace_root;
+        let watcher_root = workspace_root.clone();
         let watcher_db = std::sync::Arc::clone(&shared_db);
         tokio::spawn(async move {
             use super::tools::code_context::watcher::start_code_context_watcher;
             let _watcher_handle = start_code_context_watcher(watcher_root, watcher_db);
+            std::future::pending::<()>().await;
+        });
+
+        // Start the leader's periodic FS-walk reconcile (the index correctness
+        // floor beneath the watcher's event fast-path). This call site is only
+        // ever reached on the leader -- it is shared by initial-leader startup
+        // and the post-promotion cold re-spawn, both of which run after
+        // leadership is established -- so the leader-only invariant the reconcile
+        // loop requires holds by construction, exactly as it does for the
+        // watcher spawned just above.
+        let reconcile_root = workspace_root;
+        let reconcile_db = std::sync::Arc::clone(&shared_db);
+        tokio::spawn(async move {
+            use super::tools::code_context::watcher::run_periodic_reconcile;
+            let _reconcile_handle = run_periodic_reconcile(reconcile_root, reconcile_db);
             std::future::pending::<()>().await;
         });
     }
