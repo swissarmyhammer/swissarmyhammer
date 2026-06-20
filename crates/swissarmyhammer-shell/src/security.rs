@@ -11,11 +11,15 @@ use swissarmyhammer_common::{ErrorSeverity, Result, Severity, SwissArmyHammerErr
 use thiserror::Error;
 use tracing::{info, warn};
 
-/// Maximum allowed command length in characters
-const MAX_COMMAND_LENGTH: usize = 4096;
+/// Maximum allowed command length in characters (default-policy fallback).
+///
+/// Mirrors [`crate::config::DEFAULT_MAX_COMMAND_LENGTH`]. The operative limit at
+/// runtime comes from the stacked YAML config; this is only the in-code default
+/// used by [`ShellSecurityPolicy::default`].
+const MAX_COMMAND_LENGTH: usize = crate::config::DEFAULT_MAX_COMMAND_LENGTH;
 
 /// Maximum allowed environment variable value length in characters
-const MAX_ENV_VALUE_LENGTH: usize = 1024;
+const MAX_ENV_VALUE_LENGTH: usize = crate::config::DEFAULT_MAX_ENV_VALUE_LENGTH;
 
 /// Security validation errors that can occur during shell command processing
 #[derive(Debug, Error)]
@@ -127,11 +131,7 @@ impl Default for ShellSecurityPolicy {
 
         Self {
             enable_validation: true,
-            blocked_commands: config
-                .deny
-                .into_iter()
-                .map(|rule| rule.pattern)
-                .collect(),
+            blocked_commands: config.deny.into_iter().map(|rule| rule.pattern).collect(),
             allowed_directories: None, // No directory restrictions by default
             max_command_length: MAX_COMMAND_LENGTH,
             enable_audit_logging: true,

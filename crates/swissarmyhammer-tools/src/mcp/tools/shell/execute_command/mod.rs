@@ -423,12 +423,16 @@ mod tests {
     use crate::test_utils::create_test_context;
 
     /// Env-var value length that comfortably exceeds the default security policy's
-    /// `max_env_value_length` (1024), so the request is rejected for being too long.
-    const TEST_ENV_VALUE_EXCEEDS_LIMIT_LENGTH: usize = 2000;
+    /// `max_env_value_length`, so the request is rejected for being too long.
+    /// Derived from the canonical default so it tracks any change to the limit.
+    const TEST_ENV_VALUE_EXCEEDS_LIMIT_LENGTH: usize =
+        swissarmyhammer_shell::config::DEFAULT_MAX_ENV_VALUE_LENGTH * 2;
 
     /// Command length that comfortably exceeds the default security policy's
-    /// `max_command_length` (4096), so the request is rejected for being too long.
-    const TEST_COMMAND_EXCEEDS_LIMIT_LENGTH: usize = 5000;
+    /// `max_command_length`, so the request is rejected for being too long.
+    /// Derived from the canonical default so it tracks any change to the limit.
+    const TEST_COMMAND_EXCEEDS_LIMIT_LENGTH: usize =
+        swissarmyhammer_shell::config::DEFAULT_MAX_COMMAND_LENGTH + 1000;
 
     /// Line count for the truncated-tail test: large enough that the output
     /// exceeds [`DEFAULT_TAIL_LINES`] and only the tail window is returned.
