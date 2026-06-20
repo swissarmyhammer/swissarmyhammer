@@ -110,6 +110,18 @@ pub struct ProtocolTranslator {
     permission_engine: Arc<crate::permissions::PermissionPolicyEngine>,
 }
 
+/// Parsed Claude CLI `rate_limit_event` payload (throttling signal).
+///
+/// Defensive: `raw` retains the entire event so nothing is lost even when the
+/// CLI schema shifts; `status` is the lifted status string when present.
+#[derive(Debug, Clone, PartialEq)]
+struct RateLimitEvent {
+    /// Rate-limit status string when the payload carries one (e.g. allowed / allowed_warning / rejected).
+    status: Option<String>,
+    /// The complete event payload, retained verbatim.
+    raw: JsonValue,
+}
+
 impl ProtocolTranslator {
     /// Create a new protocol translator with a permission engine
     pub fn new(permission_engine: Arc<crate::permissions::PermissionPolicyEngine>) -> Self {
@@ -271,10 +283,55 @@ impl ProtocolTranslator {
                 Ok(None)
             }
             "stream_event" => self.handle_stream_event(&parsed, session_id),
+            "rate_limit_event" => self.handle_rate_limit_event(&parsed, session_id),
             _ => {
                 tracing::warn!("Unknown stream-json message type: {}", msg_type);
                 Ok(None)
             }
+        }
+    }
+
+    /// Handle the Claude CLI `rate_limit_event` stream-json message.
+    ///
+    /// These signal API throttling. We log the full payload at `info!` (never
+    /// truncated) so the signal is preserved and inspectable, and parse it
+    /// defensively. We intentionally do NOT emit a per-event ACP
+    /// `SessionNotification`: a single run can emit hundreds of these (one run
+    /// produced 294), and flooding the client message stream is worse than the
+    /// bug. Returns `Ok(None)` — but never falls through to the unknown-type
+    /// warning.
+    fn handle_rate_limit_event(
+        &self,
+        parsed: &JsonValue,
+        _session_id: &SessionId,
+    ) -> Result<Option<SessionNotification>> {
+        let event = Self::parse_rate_limit_event(parsed);
+        tracing::info!(
+            status = event.status.as_deref().unwrap_or("unknown"),
+            "Claude CLI rate_limit_event: {}",
+            parsed
+        );
+        Ok(None)
+    }
+
+    /// Defensively extract the fields of a `rate_limit_event` payload.
+    ///
+    /// The exact CLI schema is not pinned (the raw body is not captured in
+    /// existing logs), so this never hard-fails on missing/unknown fields: it
+    /// keeps the whole payload in `raw` and lifts a `status` string when present,
+    /// checking the common shapes (top-level `status`, or a nested
+    /// `rate_limit` / `rate_limit_info` object).
+    fn parse_rate_limit_event(parsed: &JsonValue) -> RateLimitEvent {
+        const STATUS_FIELD: &str = "status";
+        let status = parsed
+            .get(STATUS_FIELD)
+            .or_else(|| parsed.get("rate_limit").and_then(|r| r.get(STATUS_FIELD)))
+            .or_else(|| parsed.get("rate_limit_info").and_then(|r| r.get(STATUS_FIELD)))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        RateLimitEvent {
+            status,
+            raw: parsed.clone(),
         }
     }
 
@@ -1298,6 +1355,47 @@ mod tests {
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_stream_json_to_acp_rate_limit_event() {
+        // A rate_limit_event must be recognized (NOT the unknown-type warning arm)
+        // and must not inject anything into the message stream — Ok(None).
+        let translator = create_test_translator();
+        let line = r#"{"type":"rate_limit_event","rate_limit":{"status":"allowed_warning","resets_at":1750000000}}"#;
+        let session_id = SessionId::new("test_session");
+
+        let result = translator.stream_json_to_acp(line, &session_id).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_parse_rate_limit_event_nested_status() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            r#"{"type":"rate_limit_event","rate_limit":{"status":"rejected"}}"#,
+        )
+        .unwrap();
+        let event = ProtocolTranslator::parse_rate_limit_event(&parsed);
+        assert_eq!(event.status.as_deref(), Some("rejected"));
+        assert_eq!(event.raw, parsed);
+    }
+
+    #[test]
+    fn test_parse_rate_limit_event_top_level_status() {
+        let parsed: serde_json::Value =
+            serde_json::from_str(r#"{"type":"rate_limit_event","status":"allowed"}"#).unwrap();
+        let event = ProtocolTranslator::parse_rate_limit_event(&parsed);
+        assert_eq!(event.status.as_deref(), Some("allowed"));
+    }
+
+    #[test]
+    fn test_parse_rate_limit_event_missing_fields_no_panic() {
+        // Fieldless / malformed event must not panic and yields no status.
+        let parsed: serde_json::Value =
+            serde_json::from_str(r#"{"type":"rate_limit_event"}"#).unwrap();
+        let event = ProtocolTranslator::parse_rate_limit_event(&parsed);
+        assert_eq!(event.status, None);
     }
 
     #[test]
