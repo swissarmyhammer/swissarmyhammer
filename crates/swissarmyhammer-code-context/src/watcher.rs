@@ -4,7 +4,8 @@
 //! and fans out every [`FileEvent`] to all handlers. It also marks affected files
 //! dirty in the database so they are re-indexed.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 
@@ -21,9 +22,9 @@ pub enum FileEvent {
 
 impl FileEvent {
     /// Returns the path associated with this event.
-    pub fn path(&self) -> &PathBuf {
+    pub fn path(&self) -> &Path {
         match self {
-            FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => p,
+            FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => p.as_path(),
         }
     }
 }
@@ -43,7 +44,9 @@ pub trait WatcherHandler: Send + Sync {
 /// 1. Iterates all registered handlers and calls [`WatcherHandler::on_file_event`].
 /// 2. Updates the `indexed_files` table:
 ///    - For `Deleted` events: deletes the row (CASCADE cleans up chunks/symbols/edges).
-///    - For `Created`/`Modified` events: sets `ts_indexed = 0, lsp_indexed = 0`.
+///    - For `Created`/`Modified` events: upserts the row with
+///      `ts_indexed = 0, lsp_indexed = 0` so the file enters the dirty set,
+///      inserting a placeholder row when the file is not yet tracked.
 pub struct FanoutWatcher {
     handlers: Vec<Box<dyn WatcherHandler>>,
 }
@@ -63,10 +66,21 @@ impl FanoutWatcher {
 
     /// Broadcasts `event` to all handlers and updates the database.
     ///
-    /// - `Created` / `Modified`: sets `ts_indexed = 0, lsp_indexed = 0` on the file row.
+    /// - `Created` / `Modified`: upserts the file row with `ts_indexed = 0,
+    ///   lsp_indexed = 0` so the file enters the dirty set. A brand-new file
+    ///   (no existing row, e.g. created after the startup scan) is INSERTed;
+    ///   an existing row has its indexed flags cleared. Without the INSERT
+    ///   path an UPDATE matches 0 rows for a new file and it would never be
+    ///   indexed by the dirty-set indexer.
     /// - `Deleted`: deletes the file row (CASCADE removes chunks, symbols, edges).
     ///
     /// Returns the number of database rows affected.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`rusqlite::Error`] if the underlying `DELETE`/`INSERT ... ON
+    /// CONFLICT` statement fails to execute — for example when the `indexed_files`
+    /// schema is missing, the database is locked, or an I/O error occurs.
     pub fn notify(&self, conn: &Connection, event: &FileEvent) -> Result<usize, rusqlite::Error> {
         // Fan out to all handlers
         for handler in &self.handlers {
@@ -80,10 +94,24 @@ impl FanoutWatcher {
                 "DELETE FROM indexed_files WHERE file_path = ?1",
                 [&*path_str],
             ),
-            FileEvent::Created(_) | FileEvent::Modified(_) => conn.execute(
-                "UPDATE indexed_files SET ts_indexed = 0, lsp_indexed = 0 WHERE file_path = ?1",
-                [&*path_str],
-            ),
+            FileEvent::Created(_) | FileEvent::Modified(_) => {
+                // Upsert: insert a dirty placeholder row for a brand-new file
+                // (the dirty-set indexer reads the file fresh and computes the
+                // real content_hash/size when it indexes), or clear the indexed
+                // flags on an existing row. Either way the file lands in the
+                // `ts_indexed = 0` dirty set the incremental indexer drains.
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                conn.execute(
+                    "INSERT INTO indexed_files
+                         (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed)
+                     VALUES (?1, X'', 0, ?2, 0, 0)
+                     ON CONFLICT(file_path) DO UPDATE SET ts_indexed = 0, lsp_indexed = 0",
+                    rusqlite::params![&*path_str, now],
+                )
+            }
         }
     }
 }
@@ -169,6 +197,28 @@ mod tests {
         let (ts, lsp): (i64, i64) = conn
             .query_row(
                 "SELECT ts_indexed, lsp_indexed FROM indexed_files WHERE file_path = 'src/main.rs'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(ts, 0);
+        assert_eq!(lsp, 0);
+    }
+
+    #[test]
+    fn test_created_event_inserts_dirty_row_for_new_file() {
+        let conn = open_memory_db();
+
+        // No pre-existing row for this file.
+        let watcher = FanoutWatcher::new();
+        let event = FileEvent::Created(PathBuf::from("src/new.rs"));
+        let rows = watcher.notify(&conn, &event).unwrap();
+        assert_eq!(rows, 1, "a brand-new file must be inserted");
+
+        // The row now exists and is marked dirty so the indexer picks it up.
+        let (ts, lsp): (i64, i64) = conn
+            .query_row(
+                "SELECT ts_indexed, lsp_indexed FROM indexed_files WHERE file_path = 'src/new.rs'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )

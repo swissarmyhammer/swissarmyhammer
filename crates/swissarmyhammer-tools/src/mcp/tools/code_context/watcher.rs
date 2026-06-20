@@ -15,6 +15,13 @@ use async_watcher::{notify::RecursiveMode, AsyncDebouncer};
 use rusqlite::Connection;
 use swissarmyhammer_code_context::{FanoutWatcher, FileEvent, SharedDb};
 
+/// Debounce window for coalescing filesystem events before processing a batch.
+///
+/// `async-watcher` buffers raw `notify` events for this duration and emits them
+/// as a single debounced batch, so a burst of writes to the same file (e.g. an
+/// editor save) is collapsed into one re-index pass.
+const DEBOUNCE_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// Source file extensions worth tracking for code context indexing.
 const SOURCE_EXTENSIONS: &[&str] = &[
     "rs", "py", "js", "ts", "tsx", "jsx", "go", "java", "c", "cpp", "h", "hpp", "rb", "swift",
@@ -105,16 +112,17 @@ pub(crate) fn process_file_events(
 ///
 /// Uses the leader's shared write connection for all DB operations.
 /// Spawns a background tokio task that:
-/// 1. Watches `workspace_root` recursively with a 1-second debounce
+/// 1. Watches `workspace_root` recursively with a [`DEBOUNCE_TIMEOUT`] debounce
 /// 2. Converts notify events to `FileEvent`s
 /// 3. Calls [`process_file_events`] to mark DB rows dirty
 /// 4. Triggers re-indexing of dirty files
 ///
 /// Returns the `JoinHandle` for the watcher task.
 pub fn start_code_context_watcher(
-    workspace_root: PathBuf,
+    workspace_root: impl AsRef<Path>,
     db: SharedDb,
 ) -> tokio::task::JoinHandle<()> {
+    let workspace_root = workspace_root.as_ref().to_path_buf();
     tokio::spawn(async move {
         if let Err(e) = run_watcher(&workspace_root, &db).await {
             tracing::error!("code-context watcher failed: {}", e);
@@ -123,11 +131,12 @@ pub fn start_code_context_watcher(
 }
 
 async fn run_watcher(
-    workspace_root: &Path,
+    workspace_root: impl AsRef<Path>,
     db: &SharedDb,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let workspace_root = workspace_root.as_ref();
     let (mut debouncer, mut event_rx) =
-        AsyncDebouncer::new_with_channel(Duration::from_secs(1), None).await?;
+        AsyncDebouncer::new_with_channel(DEBOUNCE_TIMEOUT, None).await?;
 
     debouncer
         .watcher()
@@ -144,53 +153,7 @@ async fn run_watcher(
     while let Some(events_result) = event_rx.recv().await {
         match events_result {
             Ok(debounced_events) => {
-                // Collect file events from the batch
-                let mut file_events = Vec::new();
-                for debounced in &debounced_events {
-                    for path in &debounced.event.paths {
-                        if !is_source_file(path) {
-                            continue;
-                        }
-                        if let Some(event) =
-                            to_file_event(&debounced.event.kind, path.clone(), &ws_root)
-                        {
-                            file_events.push(event);
-                        }
-                    }
-                }
-
-                if file_events.is_empty() {
-                    continue;
-                }
-
-                tracing::info!(
-                    "code-context: {} file change(s) detected, marking dirty",
-                    file_events.len()
-                );
-
-                // Lock DB and process events
-                {
-                    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-                    let result = process_file_events(&conn, &fanout, &file_events);
-                    tracing::info!(
-                        "code-context watcher: {} dirty, {} deleted, {} errors",
-                        result.dirty_count,
-                        result.deleted_count,
-                        result.error_count,
-                    );
-                }
-
-                // Re-index dirty files using the shared connection. The
-                // watcher path has no progress channel of its own — pass
-                // the no-op reporter. Surfacing watcher progress to MCP
-                // clients is a separate piece of work (see the
-                // rebuild-index roadmap).
-                super::index_discovered_files_async(
-                    &ws_root,
-                    std::sync::Arc::clone(db),
-                    swissarmyhammer_code_context::noop_reporter(),
-                )
-                .await;
+                process_ok_events(db, &ws_root, &fanout, &debounced_events).await;
             }
             Err(errors) => {
                 for error in errors {
@@ -202,6 +165,63 @@ async fn run_watcher(
 
     tracing::info!("code-context: file watcher stopped");
     Ok(())
+}
+
+/// Handle one debounced batch of successful filesystem events.
+///
+/// Filters the batch to source-file [`FileEvent`]s, marks the affected DB rows
+/// dirty via [`process_file_events`], then drains the dirty set by re-indexing.
+/// A batch with no relevant source-file changes is a no-op.
+async fn process_ok_events(
+    db: &SharedDb,
+    ws_root: &Path,
+    fanout: &FanoutWatcher,
+    debounced_events: &[async_watcher::DebouncedEvent],
+) {
+    // Collect file events from the batch
+    let mut file_events = Vec::new();
+    for debounced in debounced_events {
+        for path in &debounced.event.paths {
+            if !is_source_file(path) {
+                continue;
+            }
+            if let Some(event) = to_file_event(&debounced.event.kind, path.clone(), ws_root) {
+                file_events.push(event);
+            }
+        }
+    }
+
+    if file_events.is_empty() {
+        return;
+    }
+
+    tracing::info!(
+        "code-context: {} file change(s) detected, marking dirty",
+        file_events.len()
+    );
+
+    // Lock DB and process events
+    {
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        let result = process_file_events(&conn, fanout, &file_events);
+        tracing::info!(
+            "code-context watcher: {} dirty, {} deleted, {} errors",
+            result.dirty_count,
+            result.deleted_count,
+            result.error_count,
+        );
+    }
+
+    // Re-index dirty files using the shared connection. The watcher path has
+    // no progress channel of its own — pass the no-op reporter. Surfacing
+    // watcher progress to MCP clients is a separate piece of work (see the
+    // rebuild-index roadmap).
+    super::index_discovered_files_async(
+        ws_root,
+        std::sync::Arc::clone(db),
+        swissarmyhammer_code_context::noop_reporter(),
+    )
+    .await;
 }
 
 #[cfg(test)]
@@ -425,18 +445,23 @@ mod tests {
     }
 
     #[test]
-    fn test_create_event_on_unknown_file_does_not_error() {
+    fn test_create_event_on_unknown_file_inserts_dirty_row() {
         let conn = test_db();
 
-        // Created event for a file not yet in the DB — should succeed with 0 rows
+        // Created event for a file not yet in the DB — the watcher upserts a
+        // dirty row so the file enters the `ts_indexed = 0` dirty set.
         let watcher = FanoutWatcher::new();
         let events = vec![FileEvent::Created(PathBuf::from("src/new_file.rs"))];
         let result = process_file_events(&conn, &watcher, &events);
 
-        // FanoutWatcher does UPDATE ... WHERE file_path = ?, which returns 0 rows
-        // for a file not in the DB — that's not an error
-        assert_eq!(result.dirty_count, 0);
+        // INSERT ... ON CONFLICT affects 1 row for a previously unknown file.
+        assert_eq!(result.dirty_count, 1);
         assert_eq!(result.error_count, 0);
+
+        // The row exists and is marked dirty.
+        assert!(file_exists(&conn, "src/new_file.rs"));
+        assert_eq!(get_ts_indexed(&conn, "src/new_file.rs"), Some(0));
+        assert_eq!(get_lsp_indexed(&conn, "src/new_file.rs"), Some(0));
     }
 
     #[test]
@@ -550,6 +575,92 @@ mod tests {
         assert_eq!(result.error_count, 2);
         assert_eq!(result.dirty_count, 0);
         assert_eq!(result.deleted_count, 0);
+    }
+
+    /// Regression: a file created AFTER the startup scan must get indexed.
+    ///
+    /// Drives the same dirty-set indexing path the live watcher runs — a
+    /// `Created` event through [`process_file_events`], then the dirty-set
+    /// indexer — and asserts the brand-new file (which has no pre-existing
+    /// `indexed_files` row) is inserted, tree-sitter indexed, and produces
+    /// chunks.
+    ///
+    /// The one deliberate divergence from production: production
+    /// [`process_ok_events`] calls [`super::index_discovered_files_async`],
+    /// which first builds the default embedder and then delegates to
+    /// [`super::super::index_discovered_files_with_embedder`]. This test calls
+    /// `index_discovered_files_with_embedder` directly with `embedder = None`,
+    /// skipping the model load so the test is deterministic and fast (no model
+    /// download/inference, no flakiness). Embedding is orthogonal to the bug
+    /// under test — the indexing/insert path exercised is identical.
+    ///
+    /// Before the fix, `Created` did UPDATE-only SQL that matched 0 rows for a
+    /// row-less file, so it never entered the dirty set and was never indexed.
+    #[tokio::test]
+    async fn watcher_indexes_file_created_after_startup() {
+        use std::sync::{Arc, Mutex};
+        use swissarmyhammer_code_context::{FanoutWatcher, FileEvent};
+
+        // --- workspace with ONE file already indexed at "startup" ---
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/existing.rs"), "pub fn a() {}").unwrap();
+
+        let conn = Connection::open(dir.path().join("index.db")).unwrap();
+        configure_connection(&conn).unwrap();
+        create_schema(&conn).unwrap();
+        // existing.rs is already in the index (as startup_cleanup would have left it)
+        conn.execute(
+            "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed)
+             VALUES ('src/existing.rs', X'00', 13, 1000, 1, 1)",
+            [],
+        )
+        .unwrap();
+        let db: swissarmyhammer_code_context::SharedDb = Arc::new(Mutex::new(conn));
+
+        // --- a NEW file is created AFTER startup (what /finish does) ---
+        std::fs::write(
+            dir.path().join("src/created_after_start.rs"),
+            "pub fn brand_new() -> i32 { 42 }",
+        )
+        .unwrap();
+
+        // --- exactly what run_watcher does on the resulting notify event ---
+        let fanout = FanoutWatcher::new();
+        let events = vec![FileEvent::Created(std::path::PathBuf::from(
+            "src/created_after_start.rs",
+        ))];
+        {
+            let conn = db.lock().unwrap();
+            super::process_file_events(&conn, &fanout, &events);
+        }
+        super::super::index_discovered_files_with_embedder(
+            dir.path(),
+            Arc::clone(&db),
+            None,
+            swissarmyhammer_code_context::noop_reporter(),
+        )
+        .await;
+
+        // --- ASSERT the new file is indexed ---
+        let conn = db.lock().unwrap();
+        assert!(
+            file_exists(&conn, "src/created_after_start.rs"),
+            "new file created after startup must be inserted into indexed_files"
+        );
+        assert_eq!(
+            get_ts_indexed(&conn, "src/created_after_start.rs"),
+            Some(1),
+            "new file must be tree-sitter indexed"
+        );
+        let chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ts_chunks WHERE file_path = 'src/created_after_start.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(chunks > 0, "new file must produce ts_chunks");
     }
 
     #[test]
