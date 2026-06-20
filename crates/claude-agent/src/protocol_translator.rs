@@ -25,10 +25,84 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
 
+/// Per-turn prompt-cache usage reported by the claude CLI in a stream-json
+/// `result` message's `usage` object.
+///
+/// These distinguish a warm cache read (`cache_read_input_tokens`) from a cold
+/// prefill write (`cache_creation_input_tokens`), alongside the raw input/output
+/// token counts. Each field is `Option` because the CLI may omit individual
+/// keys; an entirely empty `usage` object is represented as `None` at the
+/// [`StreamResult`] level rather than a zeroed `CacheUsage`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CacheUsage {
+    /// Tokens served from a warm prompt cache (reuse).
+    pub cache_read_input_tokens: Option<u64>,
+    /// Tokens written to the prompt cache on a cold prefill.
+    pub cache_creation_input_tokens: Option<u64>,
+    /// Total input tokens for the turn.
+    pub input_tokens: Option<u64>,
+    /// Total output tokens for the turn.
+    pub output_tokens: Option<u64>,
+}
+
+impl CacheUsage {
+    /// JSON object keys carrying each field across the `PromptResponse._meta`
+    /// boundary. Used by both [`Self::to_meta_json`] and [`Self::from_meta_json`]
+    /// so the wire format stays symmetric and single-sourced.
+    const META_KEYS: [&'static str; 4] = [
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "input_tokens",
+        "output_tokens",
+    ];
+
+    /// Borrow the four fields in [`Self::META_KEYS`] order.
+    fn fields(&self) -> [Option<u64>; 4] {
+        [
+            self.cache_read_input_tokens,
+            self.cache_creation_input_tokens,
+            self.input_tokens,
+            self.output_tokens,
+        ]
+    }
+
+    /// Serialize into a JSON object for the response `_meta` map. Only present
+    /// (`Some`) fields are emitted; a `None` field is omitted rather than
+    /// written as `null`.
+    pub fn to_meta_json(&self) -> JsonValue {
+        let mut obj = serde_json::Map::new();
+        for (key, value) in Self::META_KEYS.iter().zip(self.fields()) {
+            if let Some(v) = value {
+                obj.insert((*key).to_string(), JsonValue::from(v));
+            }
+        }
+        JsonValue::Object(obj)
+    }
+
+    /// Reconstruct from a JSON object previously written by [`Self::to_meta_json`].
+    ///
+    /// Returns `None` when the value is not an object or carries no recognized
+    /// numeric fields, mirroring the "empty `usage` → no cache info" rule.
+    pub fn from_meta_json(value: &JsonValue) -> Option<Self> {
+        let obj = value.as_object()?;
+        let field = |key: &str| obj.get(key).and_then(JsonValue::as_u64);
+        let usage = CacheUsage {
+            cache_read_input_tokens: field("cache_read_input_tokens"),
+            cache_creation_input_tokens: field("cache_creation_input_tokens"),
+            input_tokens: field("input_tokens"),
+            output_tokens: field("output_tokens"),
+        };
+        (usage != CacheUsage::default()).then_some(usage)
+    }
+}
+
 /// Result information from stream-json result messages
 #[derive(Debug, Clone)]
 pub struct StreamResult {
     pub stop_reason: Option<String>,
+    /// Prompt-cache usage parsed from the result message's `usage` object, if
+    /// any usage fields were present. `None` when `usage` is absent or empty.
+    pub cache_usage: Option<CacheUsage>,
 }
 
 /// Protocol translator for converting between ACP and stream-json formats
@@ -823,10 +897,24 @@ impl ProtocolTranslator {
                 .and_then(|s| s.as_str())
                 .map(|s| s.to_string());
 
-            return Ok(Some(StreamResult { stop_reason }));
+            let cache_usage = Self::parse_cache_usage(parsed.get("usage"));
+
+            return Ok(Some(StreamResult {
+                stop_reason,
+                cache_usage,
+            }));
         }
 
         Ok(None)
+    }
+
+    /// Parse the prompt-cache usage from a result message's `usage` object.
+    ///
+    /// Returns `None` when `usage` is absent or carries no recognized numeric
+    /// fields (e.g. an empty `"usage":{}`), so callers see "no cache info"
+    /// rather than a zeroed [`CacheUsage`].
+    fn parse_cache_usage(usage: Option<&JsonValue>) -> Option<CacheUsage> {
+        CacheUsage::from_meta_json(usage?)
     }
 
     /// Convert tool result to stream-json for claude stdin
@@ -1265,6 +1353,42 @@ mod tests {
         let result = translator.parse_result_message(line);
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_parse_result_message_extracts_cache_usage() {
+        // Test: Parse result message with a populated `usage` object into CacheUsage.
+        let translator = create_test_translator();
+        let line = r#"{"type":"result","subtype":"success","stop_reason":"end_turn","usage":{"cache_read_input_tokens":1234,"cache_creation_input_tokens":56,"input_tokens":1290,"output_tokens":42}}"#;
+        let stream_result = translator
+            .parse_result_message(line)
+            .expect("parse must succeed")
+            .expect("result message must parse to Some");
+
+        assert_eq!(stream_result.stop_reason, Some("end_turn".to_string()));
+        assert_eq!(
+            stream_result.cache_usage,
+            Some(CacheUsage {
+                cache_read_input_tokens: Some(1234),
+                cache_creation_input_tokens: Some(56),
+                input_tokens: Some(1290),
+                output_tokens: Some(42),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_result_message_empty_usage_is_none() {
+        // Test: An empty `usage` object yields no cache info (None), not a zeroed struct.
+        let translator = create_test_translator();
+        let line = r#"{"type":"result","subtype":"success","stop_reason":"end_turn","usage":{}}"#;
+        let stream_result = translator
+            .parse_result_message(line)
+            .expect("parse must succeed")
+            .expect("result message must parse to Some");
+
+        assert_eq!(stream_result.stop_reason, Some("end_turn".to_string()));
+        assert_eq!(stream_result.cache_usage, None);
     }
 
     #[tokio::test]

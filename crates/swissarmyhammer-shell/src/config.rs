@@ -41,12 +41,29 @@ pub struct ShellSettings {
     pub enable_audit_logging: bool,
 }
 
+/// Default maximum command length in characters (256 KiB).
+///
+/// This is a guard against runaway or garbled command strings, not a real system
+/// boundary. The actual ceiling is `ARG_MAX` (~1 MiB on macOS and Linux), since
+/// the command is ultimately handed to the shell via `execve`. 256 KiB sits
+/// comfortably under that while being large enough to never reject a
+/// legitimately authored command (e.g. a heredoc that writes a multi-hundred-line
+/// source file). The previous value of 4096 was far too low and rejected
+/// ordinary commands for no real system reason.
+pub const DEFAULT_MAX_COMMAND_LENGTH: usize = 256 * 1024;
+
 fn default_max_command_length() -> usize {
-    4096
+    DEFAULT_MAX_COMMAND_LENGTH
 }
 
+/// Default maximum environment-variable value length in characters.
+///
+/// Single-sourced like [`DEFAULT_MAX_COMMAND_LENGTH`] so the value cannot drift
+/// between the serde default here and the policy default in `security.rs`.
+pub const DEFAULT_MAX_ENV_VALUE_LENGTH: usize = 1024;
+
 fn default_max_env_value_length() -> usize {
-    1024
+    DEFAULT_MAX_ENV_VALUE_LENGTH
 }
 
 fn default_enable_audit_logging() -> bool {
@@ -326,12 +343,28 @@ mod tests {
         let config = parse_shell_config(BUILTIN_CONFIG_YAML)
             .expect("builtin config.yaml should parse successfully");
 
-        // Should have all the deny patterns from security.rs defaults
+        // Should have the catastrophic-mistake guard deny patterns.
+        // The list was deliberately pruned of false-positive substring magnets
+        // (eval, sed, format, exec, ssh, /etc/passwd, ...); only low-FP
+        // mistake guards remain.
         assert!(
-            config.deny.len() >= 19,
-            "expected at least 19 deny patterns, got {}",
-            config.deny.len()
+            !config.deny.is_empty(),
+            "expected builtin deny patterns, got none"
         );
+        // The eliminated false-positive magnets must NOT be present.
+        for eliminated in [
+            r"eval\s+",
+            r"format\s+",
+            r"exec\s+/bin/",
+            r"ssh\s+.*@",
+            "/etc/passwd",
+            "/etc/shadow",
+        ] {
+            assert!(
+                !config.deny.iter().any(|r| r.pattern == eliminated),
+                "deny pattern {eliminated:?} should have been eliminated"
+            );
+        }
 
         // Permit should be empty in builtin
         assert!(
@@ -340,8 +373,11 @@ mod tests {
         );
 
         // Settings should have defaults
-        assert_eq!(config.settings.max_command_length, 4096);
-        assert_eq!(config.settings.max_env_value_length, 1024);
+        assert_eq!(config.settings.max_command_length, DEFAULT_MAX_COMMAND_LENGTH);
+        assert_eq!(
+            config.settings.max_env_value_length,
+            DEFAULT_MAX_ENV_VALUE_LENGTH
+        );
         assert!(config.settings.enable_audit_logging);
     }
 
@@ -381,7 +417,7 @@ permit: []
         assert!(config.deny.is_empty());
         assert!(config.permit.is_empty());
         // Settings should use defaults
-        assert_eq!(config.settings.max_command_length, 4096);
+        assert_eq!(config.settings.max_command_length, DEFAULT_MAX_COMMAND_LENGTH);
     }
 
     #[test]
@@ -403,7 +439,10 @@ settings:
         assert_eq!(config.deny[0].reason, "Use edit tools instead");
         assert_eq!(config.settings.max_command_length, 8192);
         // Unset settings should use defaults
-        assert_eq!(config.settings.max_env_value_length, 1024);
+        assert_eq!(
+            config.settings.max_env_value_length,
+            DEFAULT_MAX_ENV_VALUE_LENGTH
+        );
     }
 
     #[test]
@@ -411,7 +450,7 @@ settings:
         let config = ShellSecurityConfig::default();
         assert!(config.permit.is_empty());
         assert!(config.deny.is_empty());
-        assert_eq!(config.settings.max_command_length, 4096);
+        assert_eq!(config.settings.max_command_length, DEFAULT_MAX_COMMAND_LENGTH);
     }
 
     #[test]
@@ -455,7 +494,7 @@ settings:
     #[test]
     fn test_merge_settings_from_later_layer_wins() {
         let mut base = parse_shell_config(BUILTIN_CONFIG_YAML).unwrap();
-        assert_eq!(base.settings.max_command_length, 4096);
+        assert_eq!(base.settings.max_command_length, DEFAULT_MAX_COMMAND_LENGTH);
 
         let overlay = ShellSecurityConfig {
             deny: vec![],

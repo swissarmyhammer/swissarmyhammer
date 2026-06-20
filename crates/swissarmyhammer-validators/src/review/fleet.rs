@@ -73,8 +73,8 @@ use crate::review::probes::render_probe_evidence;
 use crate::review::scope::{FileWork, ValidatorWork, WorkList};
 use crate::review::types::{parse_findings, Finding};
 use crate::validators::{
-    AgentPool, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult, Severity,
-    ValidatorLoader,
+    AgentPool, ForkAttachment, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult,
+    Severity, ValidatorLoader,
 };
 use agent_client_protocol_extras::SessionStateStatusResponse;
 
@@ -464,6 +464,104 @@ pub async fn unpin_prefix_session(guard: SessionPinGuard) {
     }
 }
 
+/// How a turn reused the shared file-context prefix, classified from the two
+/// reuse signals the two backends report.
+///
+/// The native KV (llama/qwen) backend reports reuse as a fork attaching the
+/// parent's saved generation state with a prefix token count
+/// ([`ForkAttachment::prefix_tokens`]); the claude backend's fork attaches no
+/// token counts and instead reports Anthropic prompt-cache reads/writes on the
+/// turn's [`SessionTurn::cache_usage`]. This enum unifies both so warm vs cold
+/// reuse is observable on either backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrefixReuse {
+    /// A native KV fork attached the parent's saved state, reusing
+    /// `reused_tokens` prompt tokens (the llama/qwen warm path).
+    WarmKv {
+        /// Prompt tokens the attached parent state covered.
+        reused_tokens: u64,
+    },
+    /// The Anthropic prompt cache served the prefix warm: `read` tokens came
+    /// from a cache read, `created` tokens were (re)written this turn.
+    WarmCache {
+        /// Tokens served from the warm prompt cache (`cache_read_input_tokens`).
+        read: u64,
+        /// Tokens written to the prompt cache this turn
+        /// (`cache_creation_input_tokens`).
+        created: u64,
+    },
+    /// No warm reuse observed: a cold prefill (cache write only, or native
+    /// degraded fork), or no reuse signal at all.
+    Cold,
+}
+
+/// Classify how a turn reused the primed prefix, from the fork attachment and
+/// the turn's prompt-cache usage. Pure so the warm/cold decision is unit-tested
+/// without asserting on log strings.
+///
+/// Precedence:
+/// 1. A native KV fork with a prefix token count → [`PrefixReuse::WarmKv`]
+///    (the llama/qwen path, whose `fork.prefix_tokens` is authoritative).
+/// 2. Otherwise a claude turn reporting `cache_read_input_tokens > 0` →
+///    [`PrefixReuse::WarmCache`] (the hosted prefix cache served it warm).
+/// 3. Otherwise [`PrefixReuse::Cold`] — a cold write (`cache_creation_input_tokens
+///    > 0` with no reads), a degraded fork, or no reuse signal at all.
+pub fn classify_reuse(
+    fork: Option<ForkAttachment>,
+    usage: Option<claude_agent::protocol_translator::CacheUsage>,
+) -> PrefixReuse {
+    if let Some(reused_tokens) = fork.and_then(|f| f.prefix_tokens) {
+        return PrefixReuse::WarmKv { reused_tokens };
+    }
+    if let Some(usage) = usage {
+        let read = usage.cache_read_input_tokens.unwrap_or(0);
+        if read > 0 {
+            return PrefixReuse::WarmCache {
+                read,
+                created: usage.cache_creation_input_tokens.unwrap_or(0),
+            };
+        }
+    }
+    PrefixReuse::Cold
+}
+
+impl PrefixReuse {
+    /// A short human label for the reuse outcome, for log messages.
+    pub fn label(&self) -> &'static str {
+        match self {
+            PrefixReuse::WarmKv { .. } => "warm KV fork",
+            PrefixReuse::WarmCache { .. } => "warm prompt cache",
+            PrefixReuse::Cold => "cold (no reuse)",
+        }
+    }
+
+    /// The native KV reused token count, when this is a [`PrefixReuse::WarmKv`].
+    pub fn reused_tokens(&self) -> Option<u64> {
+        match self {
+            PrefixReuse::WarmKv { reused_tokens } => Some(*reused_tokens),
+            _ => None,
+        }
+    }
+
+    /// The Anthropic prompt-cache read token count, when this is a
+    /// [`PrefixReuse::WarmCache`].
+    pub fn cache_read(&self) -> Option<u64> {
+        match self {
+            PrefixReuse::WarmCache { read, .. } => Some(*read),
+            _ => None,
+        }
+    }
+
+    /// The Anthropic prompt-cache created (cold write) token count, when this is
+    /// a [`PrefixReuse::WarmCache`].
+    pub fn cache_created(&self) -> Option<u64> {
+        match self {
+            PrefixReuse::WarmCache { created, .. } => Some(*created),
+            _ => None,
+        }
+    }
+}
+
 /// Resolve one forked validator task's delivered result into tagged findings.
 ///
 /// A delivered turn is parsed exactly like the monolithic path, after logging
@@ -484,20 +582,24 @@ async fn collect_forked_task(
     let name = validator.validator_name.as_str();
     match delivered {
         Ok(Ok(turn)) => {
-            match turn.fork {
-                Some(fork) if fork.state_attached => tracing::info!(
+            let reuse = classify_reuse(turn.fork, turn.cache_usage);
+            tracing::info!(
+                validator = %name,
+                files = ?files,
+                session = %turn.session_id,
+                reuse = reuse.label(),
+                reused_tokens = ?reuse.reused_tokens(),
+                cache_read_input_tokens = ?reuse.cache_read(),
+                cache_creation_input_tokens = ?reuse.cache_created(),
+                "fleet task prefix reuse"
+            );
+            if matches!(reuse, PrefixReuse::Cold) {
+                tracing::warn!(
                     validator = %name,
                     files = ?files,
                     session = %turn.session_id,
-                    reused_tokens = ?fork.prefix_tokens,
-                    "fleet task ran on a warm fork of the primed prefix session"
-                ),
-                _ => tracing::warn!(
-                    validator = %name,
-                    files = ?files,
-                    session = %turn.session_id,
-                    "fleet task fork was degraded (no parent state attached); proceeding cold"
-                ),
+                    "fleet task fork was degraded (no warm prefix reuse); proceeding cold"
+                );
             }
             parse_task_response(&turn.content, name, files)
         }
@@ -570,6 +672,18 @@ fn collect_task(
         }
     };
 
+    // A monolithic task runs on a fresh session (no fork), so any reuse is
+    // hosted-cache only; classify with `fork = None` and log it so the cold
+    // fallback path also reports cache usage.
+    let reuse = classify_reuse(None, response.cache_usage);
+    tracing::info!(
+        validator = %validator,
+        files = ?files,
+        reuse = reuse.label(),
+        cache_read_input_tokens = ?reuse.cache_read(),
+        cache_creation_input_tokens = ?reuse.cache_created(),
+        "fleet monolithic task prefix reuse"
+    );
     parse_task_response(&response.content, validator, files)
 }
 
@@ -863,6 +977,7 @@ mod tests {
         Rule, RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch,
     };
     use crate::validators::{PoolConfig, ValidatorLoader, ValidatorSource};
+    use claude_agent::protocol_translator::CacheUsage;
 
     // ---- fixtures --------------------------------------------------------
 
@@ -1609,8 +1724,10 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
             "pin the shared prime for the run, unpin when it drains"
         );
 
-        // Observability: each fork task logs the warm reuse and token count.
-        assert!(logs_contain("fleet task ran on a warm fork"));
+        // Observability: each fork task logs the warm reuse and token count,
+        // classified as a warm KV fork (the native llama/qwen path).
+        assert!(logs_contain("fleet task prefix reuse"));
+        assert!(logs_contain("reuse=\"warm KV fork\""));
         assert!(logs_contain(&format!(
             "reused_tokens=Some({MOCK_PREFIX_TOKENS})"
         )));
@@ -1819,6 +1936,69 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         assert_eq!(outcome.findings.len(), 1);
         assert_eq!(outcome.findings[0].claim, "cold but correct");
         assert!(logs_contain("fleet task fork was degraded"));
+    }
+
+    /// The claude backend shape: a fork that attaches no native KV state
+    /// (`fork.prefix_tokens == None`) but whose turn reports Anthropic
+    /// prompt-cache reads. The forked task must resolve through the real
+    /// `collect_forked_task` path without error AND log the warm-cache reuse
+    /// (`classify_reuse` → `WarmCache`), so warm/cold is observable on claude
+    /// even though the native KV reuse log is blind.
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn forked_task_with_claude_cache_usage_logs_warm_cache() {
+        let rs = ruleset("val", "mandate", &[("r", "body")]);
+        let loader = loader_with(vec![rs]);
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work(
+                "val",
+                vec![file_work("src/a.rs", "alpha", "src/x.rs")],
+            )],
+        };
+
+        // Forks succeed but attach no native parent state (claude shape:
+        // `prefix_tokens == None`); the turn's `_meta` reports a warm cache read,
+        // which is what makes the reuse observable on claude.
+        let agent = ScriptedAgent::with_config(
+            vec![(
+                "## File: src/a.rs".to_string(),
+                ScriptedReply::Text(findings_json(
+                    "src/a.rs",
+                    TEST_FINDING_LINE,
+                    "r",
+                    "warning",
+                    "warm on claude",
+                )),
+            )],
+            ScriptedAgentConfig {
+                fork_mode: ForkMode::DegradedAttach,
+                cache_usage: Some(CacheUsage {
+                    cache_read_input_tokens: Some(2048),
+                    cache_creation_input_tokens: Some(16),
+                    input_tokens: Some(2064),
+                    output_tokens: Some(40),
+                }),
+                ..ScriptedAgentConfig::default()
+            },
+        );
+
+        let outcome = with_pool(agent, PoolConfig::local(), move |pool| async move {
+            run_fleet_and_unpin(&work, &loader, &pool).await
+        })
+        .await;
+
+        assert_eq!(outcome.attempted, 1);
+        assert_eq!(
+            outcome.failed, 0,
+            "the forked task resolved through collect_forked_task without error"
+        );
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].claim, "warm on claude");
+        assert!(
+            logs_contain("warm prompt cache"),
+            "the warm-cache reuse must be logged so claude reuse is observable"
+        );
     }
 
     #[tokio::test]
@@ -2049,5 +2229,63 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
             agent_probe.seen_prompts().is_empty(),
             "no task is submitted for a validator missing from the loader"
         );
+    }
+
+    // ---- classify_reuse --------------------------------------------------
+
+    /// A native KV fork that attached its parent's saved state with a token
+    /// count classifies as `WarmKv` carrying that count — the llama/qwen path.
+    #[test]
+    fn test_classify_reuse_kv_fork_is_warm_kv() {
+        let fork = Some(ForkAttachment {
+            state_attached: true,
+            prefix_tokens: Some(MOCK_PREFIX_TOKENS),
+        });
+        assert_eq!(
+            classify_reuse(fork, None),
+            PrefixReuse::WarmKv {
+                reused_tokens: MOCK_PREFIX_TOKENS
+            }
+        );
+    }
+
+    /// A claude turn with `cache_read_input_tokens > 0` classifies as
+    /// `WarmCache` carrying the read/created split — even though the fork
+    /// attached no native KV token count (the production blind spot this task
+    /// closes).
+    #[test]
+    fn test_classify_reuse_claude_cache_read_is_warm_cache() {
+        let usage = Some(CacheUsage {
+            cache_read_input_tokens: Some(900),
+            cache_creation_input_tokens: Some(100),
+            input_tokens: Some(1000),
+            output_tokens: Some(20),
+        });
+        assert_eq!(
+            classify_reuse(None, usage),
+            PrefixReuse::WarmCache {
+                read: 900,
+                created: 100
+            }
+        );
+    }
+
+    /// A claude turn that only wrote the cache (`cache_creation_input_tokens >
+    /// 0`, no reads) is a cold prefill — `Cold` (no warm reuse to report).
+    #[test]
+    fn test_classify_reuse_claude_cold_write_is_cold() {
+        let usage = Some(CacheUsage {
+            cache_read_input_tokens: Some(0),
+            cache_creation_input_tokens: Some(1000),
+            input_tokens: Some(1000),
+            output_tokens: Some(20),
+        });
+        assert_eq!(classify_reuse(None, usage), PrefixReuse::Cold);
+    }
+
+    /// No fork and no usage is unknown/cold.
+    #[test]
+    fn test_classify_reuse_empty_is_cold() {
+        assert_eq!(classify_reuse(None, None), PrefixReuse::Cold);
     }
 }

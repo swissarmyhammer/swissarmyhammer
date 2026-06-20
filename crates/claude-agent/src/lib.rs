@@ -110,6 +110,10 @@ pub struct CollectedResponse {
     pub content: String,
     /// Why the agent stopped
     pub stop_reason: StopReason,
+    /// Per-turn Anthropic prompt-cache usage, when the underlying `result`
+    /// message reported a populated `usage` object. `None` when the turn
+    /// reported no cache metrics (e.g. an empty or absent `usage`).
+    pub cache_usage: Option<crate::protocol_translator::CacheUsage>,
 }
 
 /// Configuration for creating a ClaudeAgent.
@@ -221,9 +225,16 @@ pub async fn execute_prompt_with_agent(
     )
     .await;
 
+    let cache_usage = prompt_response
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get("cache_usage"))
+        .and_then(crate::protocol_translator::CacheUsage::from_meta_json);
+
     Ok(CollectedResponse {
         content,
         stop_reason: prompt_response.stop_reason,
+        cache_usage,
     })
 }
 

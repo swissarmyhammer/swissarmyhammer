@@ -1,12 +1,11 @@
 //! # SwissArmyHammer Shell Domain Crate
 //!
-//! This crate provides comprehensive shell command execution security, hardening, and performance
+//! This crate provides comprehensive shell command execution security and performance
 //! monitoring capabilities for the SwissArmyHammer ecosystem.
 //!
 //! ## Features
 //!
 //! - **Security Validation**: Command validation, blocked pattern detection, and security policies
-//! - **Advanced Hardening**: Threat detection, behavioral analysis, and security assessments
 //! - **Performance Monitoring**: Execution profiling, resource usage tracking, and performance metrics
 //! - **Audit Logging**: Comprehensive audit trails for all shell command executions
 //!
@@ -36,29 +35,21 @@ pub mod config;
 /// Shell command security validation and control system
 pub mod security;
 
-/// Advanced security hardening for shell command execution
-pub mod hardening;
-
 /// Performance monitoring and profiling for shell command execution
 pub mod performance;
 
 // Re-export config types
 pub use config::{
     evaluate_command, load_shell_config, load_shell_config_from_paths, parse_shell_config,
-    CompiledRule, CompiledShellConfig, PatternCompileError, PatternRule, ShellSecurityConfig,
-    ShellSettings, BUILTIN_CONFIG_YAML,
+    CompiledRule, CompiledShellConfig, DEFAULT_MAX_COMMAND_LENGTH, DEFAULT_MAX_ENV_VALUE_LENGTH,
+    PatternCompileError, PatternRule,
+    ShellSecurityConfig, ShellSettings, BUILTIN_CONFIG_YAML,
 };
 
 // Re-export core types for convenience
 pub use security::{
     load_validator, log_shell_completion, log_shell_execution, ShellAuditEvent, ShellSecurityError,
     ShellSecurityPolicy, ShellSecurityValidator,
-};
-
-pub use hardening::{
-    CommandContext, DetectedThreat, HardenedSecurityValidator, SecurityAssessment,
-    SecurityHardeningConfig, SecurityMeasure, SecurityStatistics, ThreatDetector, ThreatLevel,
-    ThreatType,
 };
 
 pub use performance::{
