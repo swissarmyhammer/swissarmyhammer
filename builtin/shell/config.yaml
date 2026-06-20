@@ -60,6 +60,8 @@ deny:
 permit: []
 
 settings:
-  max_command_length: 4096
+  # 256 KiB. Guard against runaway command strings, not a real system limit —
+  # ARG_MAX (~1 MiB) is the true ceiling since commands go to the shell via execve.
+  max_command_length: 262144
   max_env_value_length: 1024
   enable_audit_logging: true

@@ -93,7 +93,7 @@ settings:
 
     let config = load_shell_config_from_paths(&[project]);
 
-    // Settings from project layer should override builtin's 4096
+    // Settings from project layer should override the builtin default
     assert_eq!(config.settings.max_command_length, 8192);
 
     // A validator built from this config should allow a 5000-char command

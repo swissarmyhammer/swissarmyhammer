@@ -41,8 +41,9 @@ pub mod performance;
 // Re-export config types
 pub use config::{
     evaluate_command, load_shell_config, load_shell_config_from_paths, parse_shell_config,
-    CompiledRule, CompiledShellConfig, PatternCompileError, PatternRule, ShellSecurityConfig,
-    ShellSettings, BUILTIN_CONFIG_YAML,
+    CompiledRule, CompiledShellConfig, DEFAULT_MAX_COMMAND_LENGTH, DEFAULT_MAX_ENV_VALUE_LENGTH,
+    PatternCompileError, PatternRule,
+    ShellSecurityConfig, ShellSettings, BUILTIN_CONFIG_YAML,
 };
 
 // Re-export core types for convenience
