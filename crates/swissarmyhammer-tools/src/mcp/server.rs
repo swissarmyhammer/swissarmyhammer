@@ -379,6 +379,14 @@ impl McpServer {
         // `None` and spawns no LSP server at all.
         match Self::spawn_lsp_supervisor_if_leader(is_leader, &workspace_root) {
             Some(lsp_handle) => {
+                // Prove which build elected itself leader: this is the
+                // process actually indexing the workspace, so record its
+                // baked-in git SHA in its own log.
+                tracing::info!(
+                    git_sha = swissarmyhammer_common::build_info::GIT_SHA,
+                    workspace = %workspace_root.display(),
+                    "code-context: elected leader"
+                );
                 // Leader: supervisor spawned. Start TS indexing + file watcher
                 // and run the LSP health/indexing loop.
                 Self::start_workers_if_leader(&ws, &workspace_root);

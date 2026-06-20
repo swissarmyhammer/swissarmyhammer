@@ -222,6 +222,15 @@ async fn initialize_http_server(
 ) -> Result<McpServerHandle, i32> {
     use swissarmyhammer_tools::mcp::{start_mcp_server, McpServerMode};
 
+    // Prove which build this process is running. A running `sah serve`
+    // keeps its launch-time code even after the on-disk binary is rebuilt,
+    // so record the baked-in git SHA in this process's own log.
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        git_sha = swissarmyhammer_common::build_info::GIT_SHA,
+        "sah serve starting"
+    );
+
     let port: u16 = matches.get_one::<u16>("port").copied().unwrap_or(8000);
     let host = matches
         .get_one::<String>("host")
@@ -428,6 +437,15 @@ async fn start_stdio_server(
     model_override: Option<String>,
 ) -> Result<McpServerHandle, i32> {
     use swissarmyhammer_tools::mcp::{start_mcp_server, McpServerMode};
+
+    // Prove which build this process is running. A running `sah serve`
+    // keeps its launch-time code even after the on-disk binary is rebuilt,
+    // so record the baked-in git SHA in this process's own log.
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        git_sha = swissarmyhammer_common::build_info::GIT_SHA,
+        "sah serve starting"
+    );
 
     if cli_context.verbose {
         display_server_status(
