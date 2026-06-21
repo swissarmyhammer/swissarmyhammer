@@ -85,6 +85,33 @@ async fn wait_for_diagnostics<C: swissarmyhammer_lsp::client::LspTransport>(
     }
 }
 
+/// Drive [`refresh_file`] repeatedly until it populates diagnostics or the
+/// deadline passes, returning the captured set (possibly empty on timeout).
+///
+/// A single pull right after a write races rust-analyzer's async indexing of a
+/// fresh crate: the analyzer answers the first `textDocument/diagnostic` before
+/// it has computed anything, so one immediate `refresh_file` reliably observes
+/// an empty report and the cache then never changes (push is not wired into the
+/// daemon read loop). A real watcher re-fires `refresh_file` on every event;
+/// this mirrors that by re-pulling on a cadence so the test observes the
+/// eventual re-report instead of only the empty first pull.
+async fn refresh_until_diagnostics<C: swissarmyhammer_lsp::client::LspTransport>(
+    session: &swissarmyhammer_lsp::LspSession<C>,
+    path: &Path,
+    uri: &str,
+    deadline: Duration,
+) -> Vec<lsp_types::Diagnostic> {
+    let start = std::time::Instant::now();
+    loop {
+        refresh_file(session, path);
+        let diags = session.diagnostics_for(uri);
+        if !diags.is_empty() || start.elapsed() >= deadline {
+            return diags;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn watcher_redreport_on_direct_disk_write() {
     if !rust_analyzer_available() {
@@ -183,9 +210,13 @@ async fn refresh_file_direct_reports_error_against_real_server() {
     std::fs::write(&main_rs, "fn main() {\n    let _x: u32 = \"nope\";\n}\n").unwrap();
     assert!(refresh_file(&session, &main_rs), "rs file is diagnosable");
 
+    // Re-pull on a cadence: the first pull races rust-analyzer's indexing of the
+    // fresh crate and answers empty, so we keep driving `refresh_file` until the
+    // re-report lands (or the deadline passes).
     let uri = file_uri_from_path(&main_rs.to_string_lossy());
-    let diags = wait_for_diagnostics(
+    let diags = refresh_until_diagnostics(
         &session,
+        &main_rs,
         &uri,
         Duration::from_secs(CI_DIAGNOSTIC_WAIT_DEADLINE_SECS),
     )
