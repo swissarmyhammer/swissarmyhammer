@@ -8214,7 +8214,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-diagnostics"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "async-watcher",
  "lsp-types",
@@ -8433,6 +8433,7 @@ dependencies = [
 name = "swissarmyhammer-leader-election"
 version = "0.15.1"
 dependencies = [
+ "filetime",
  "fs2",
  "md5",
  "serde",
@@ -8557,7 +8558,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-search"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "convert_case",
  "serde",
