@@ -112,8 +112,10 @@ fn parse_op_string(s: &str) -> Option<(Verb, Noun)> {
 
 /// Infer operation from the data present
 fn infer_operation(obj: &Map<String, Value>) -> Option<(Verb, Noun)> {
-    let has_id =
-        obj.contains_key("id") || obj.contains_key("task_id") || obj.contains_key("taskId");
+    let has_id = obj.contains_key("id")
+        || obj.contains_key("task_id")
+        || obj.contains_key("taskId")
+        || obj.contains_key("task");
     let has_title = obj.contains_key("title");
     let has_column = obj.contains_key("column") || obj.contains_key("position");
 
@@ -134,7 +136,7 @@ fn infer_operation(obj: &Map<String, Value>) -> Option<(Verb, Noun)> {
     if has_id {
         let has_updates = obj
             .keys()
-            .any(|k| !matches!(k.as_str(), "id" | "task_id" | "taskId"));
+            .any(|k| !matches!(k.as_str(), "id" | "task_id" | "taskId" | "task"));
         if has_updates {
             return Some((Verb::Update, Noun::Task));
         }
@@ -194,16 +196,22 @@ fn is_member_noun(noun: Noun) -> bool {
 /// Normalize parameter keys (aliases, snake_case)
 fn normalize_params(noun: Noun, params: &mut Map<String, Value>) {
     // Key aliases. For task-level ops the task reference IS the entity `id`,
-    // so `task_id`/`taskId` alias to `id`. Member nouns keep `task_id` as a
-    // first-class key (camelCase still snake_cases below) — aliasing there
-    // would silently drop the owning-task reference.
-    let task_id_alias: (&[&str], &str) = (&["taskId", "task_id"], "id");
+    // so `task_id`/`taskId`/`task` alias to `id` — callers (notably the
+    // committer role) routinely pass the reference under `task`, which would
+    // otherwise fail with `missing required field: id`. Member nouns address
+    // BOTH the owning task and the member: there `task`/`task_id`/`taskId` name
+    // the owning task (→ `task_id`, kept first-class, camelCase snake_cased
+    // below) and must never collapse into the member's own `id`.
+    let task_id_alias: (&[&str], &str) = (&["taskId", "task_id", "task"], "id");
+    let member_task_alias: (&[&str], &str) = (&["task"], "task_id");
     let common_aliases: [(&[&str], &str); 2] = [
         (&["desc", "body", "content"], "description"),
         (&["col"], "column"),
     ];
     let aliases: Vec<(&[&str], &str)> = if is_member_noun(noun) {
-        common_aliases.to_vec()
+        std::iter::once(member_task_alias)
+            .chain(common_aliases)
+            .collect()
     } else {
         std::iter::once(task_id_alias)
             .chain(common_aliases)
@@ -327,6 +335,46 @@ mod tests {
         let input = json!({ "op": "get task", "taskId": "abc" });
         let ops = parse_input(input).unwrap();
         assert_eq!(ops[0].params.get("id").unwrap(), "abc");
+    }
+
+    /// Callers (notably the committer role) routinely pass the task reference
+    /// under `task` on task-level ops. It must alias to `id` so the op succeeds
+    /// instead of failing with `missing required field: id`.
+    #[test]
+    fn test_task_aliases_to_id_on_task_level_ops() {
+        let input = json!({ "op": "get task", "task": "^1hcfjkm" });
+        let ops = parse_input(input).unwrap();
+        assert_eq!(ops[0].verb, Verb::Get);
+        assert_eq!(ops[0].noun, Noun::Task);
+        assert_eq!(ops[0].params.get("id").unwrap(), "^1hcfjkm");
+        assert!(ops[0].params.get("task").is_none());
+
+        // An explicit `id` already present wins; `task` does not clobber it.
+        let input = json!({ "op": "get task", "id": "01REAL", "task": "01OTHER" });
+        let ops = parse_input(input).unwrap();
+        assert_eq!(ops[0].params.get("id").unwrap(), "01REAL");
+    }
+
+    /// A bare `{ "task": "..." }` with no `op` infers `get task`, mirroring how
+    /// a bare `id`/`task_id` does.
+    #[test]
+    fn test_bare_task_key_infers_get_task() {
+        let input = json!({ "task": "^1hcfjkm" });
+        let ops = parse_input(input).unwrap();
+        assert_eq!(ops[0].verb, Verb::Get);
+        assert_eq!(ops[0].noun, Noun::Task);
+        assert_eq!(ops[0].params.get("id").unwrap(), "^1hcfjkm");
+    }
+
+    /// On member ops `task` names the OWNING task (→ `task_id`), never the
+    /// member's own `id`.
+    #[test]
+    fn test_task_aliases_to_task_id_on_member_ops() {
+        let input = json!({ "op": "get comment", "task": "01T", "id": "01c" });
+        let ops = parse_input(input).unwrap();
+        assert_eq!(ops[0].params.get("task_id").unwrap(), "01T");
+        assert_eq!(ops[0].params.get("id").unwrap(), "01c");
+        assert!(ops[0].params.get("task").is_none());
     }
 
     /// Member ops (comments, attachments) address BOTH the owning task
