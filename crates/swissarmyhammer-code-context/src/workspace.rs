@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 use swissarmyhammer_leader_election::{
-    ElectionConfig, ElectionOutcome, FollowerGuard, LeaderElection, LeaderGuard,
+    may_contend_for_leadership, ElectionConfig, ElectionOutcome, FollowerGuard, LeaderElection,
+    LeaderGuard, SystemClock,
 };
 
 use crate::db;
@@ -35,6 +36,16 @@ pub enum WorkspaceMode {
         db: SharedDb,
         /// Guard that holds the leader lock; dropped when the workspace is dropped
         _guard: LeaderGuard,
+        /// Single-writer enforcement mechanism for this leadership tenure.
+        ///
+        /// Every worker this leader spawns (the tree-sitter indexer, the file
+        /// watcher, the periodic-reconcile loop, and the LSP indexing workers)
+        /// is handed a clone of this same `Arc<AtomicBool>` and checks it each
+        /// loop iteration. Setting it to `true` — on
+        /// [`CodeContextWorkspace::step_down`] or when the workspace is dropped
+        /// — tells those workers to stop writing, so the old leader releases the
+        /// DB before the new leader becomes the sole writer.
+        shutdown: crate::ShutdownFlag,
     },
     /// Follower: queries the DB read-only, can re-contest the election
     Follower {
@@ -115,8 +126,7 @@ impl CodeContextWorkspace {
         }
 
         // Leader election
-        let election_config = ElectionConfig::new().with_prefix("code-context");
-        let election = LeaderElection::with_config(workspace_root, election_config);
+        let election = Self::build_election(workspace_root);
         let lock_path = election.lock_path().to_path_buf();
         let socket_path = election.socket_path().to_path_buf();
 
@@ -126,7 +136,25 @@ impl CodeContextWorkspace {
             lock_path,
             socket_path,
         };
-        match election.elect().map_err(CodeContextError::Election)? {
+
+        // Subagent-gating policy seam: a process forbidden from contending for
+        // leadership (e.g. a subagent-spawned `sah serve`) must NEVER index, so
+        // it is elected follower-only — it never wins the flock even on an empty
+        // workspace. Default policy permits contention (see
+        // `may_contend_for_leadership`).
+        let outcome = if may_contend_for_leadership() {
+            election.elect()
+        } else {
+            tracing::info!(
+                "code-context: leadership contention disabled for this process \
+                 (SAH_SUBAGENT); joining as follower for {}",
+                workspace_root.display()
+            );
+            election.elect_as_follower_only()
+        }
+        .map_err(CodeContextError::Election)?;
+
+        match outcome {
             ElectionOutcome::Leader(guard) => {
                 Self::open_as_leader(workspace_root, context_dir, paths, &db_path, guard)
             }
@@ -134,6 +162,14 @@ impl CodeContextWorkspace {
                 Self::open_as_follower(workspace_root, context_dir, paths, &db_path, follower)
             }
         }
+    }
+
+    /// Construct the [`LeaderElection`] for a workspace. Single source of the
+    /// election config (the `code-context` prefix) so `open` and `step_down`
+    /// derive the same lock/socket paths.
+    fn build_election(workspace_root: &Path) -> LeaderElection {
+        let election_config = ElectionConfig::new().with_prefix("code-context");
+        LeaderElection::with_config(workspace_root, election_config)
     }
 
     /// Initialize a leader workspace: create the database, run schema
@@ -161,7 +197,11 @@ impl CodeContextWorkspace {
         let db = Arc::new(Mutex::new(conn));
 
         Ok(Self {
-            mode: WorkspaceMode::Leader { db, _guard: guard },
+            mode: WorkspaceMode::Leader {
+                db,
+                _guard: guard,
+                shutdown: crate::new_shutdown_flag(),
+            },
             workspace_root: workspace_root.to_path_buf(),
             context_dir,
             lock_path: paths.lock_path,
@@ -271,6 +311,20 @@ impl CodeContextWorkspace {
         }
     }
 
+    /// The shutdown flag for the current leadership tenure (leader only).
+    ///
+    /// Returns `Some(clone)` for a leader and `None` for a follower. The tools
+    /// layer hands this SAME flag to every worker it spawns (TS indexer, file
+    /// watcher, periodic reconcile, LSP indexing workers); [`Self::step_down`]
+    /// sets it, which is how the old leader's writers are stopped before this
+    /// process resumes as a follower / before the new leader is the sole writer.
+    pub fn leader_shutdown_flag(&self) -> Option<crate::ShutdownFlag> {
+        match &self.mode {
+            WorkspaceMode::Leader { shutdown, .. } => Some(std::sync::Arc::clone(shutdown)),
+            WorkspaceMode::Follower { .. } => None,
+        }
+    }
+
     /// The bus addresses for riding the leader's existing pub/sub proxy.
     ///
     /// Returns the leader's XPUB/XSUB proxy addresses for **both** roles: a
@@ -305,11 +359,32 @@ impl CodeContextWorkspace {
             WorkspaceMode::Follower { follower, .. } => follower,
         };
 
+        // First try the flock fast path (the old leader exited, releasing its
+        // flock). If that finds the flock still held, fall back to the LEASE
+        // takeover path: the holder may be alive but wedged (stopped
+        // heartbeating), in which case a stale lease lets us take over anyway.
         let guard = match follower.try_promote().map_err(CodeContextError::Election)? {
             Some(guard) => guard,
-            None => return Ok(None),
+            None => match follower
+                .try_promote_via_lease(&SystemClock)
+                .map_err(CodeContextError::Election)?
+            {
+                Some(guard) => guard,
+                None => return Ok(None),
+            },
         };
 
+        Ok(Some(self.become_leader_with_guard(guard)?))
+    }
+
+    /// Complete the transition into [`WorkspaceMode::Leader`] given a freshly
+    /// won [`LeaderGuard`]: open a read-write connection, run schema migrations
+    /// and startup cleanup, install the leader mode, and return the shared write
+    /// handle. Shared by both the flock and lease promotion paths.
+    fn become_leader_with_guard(
+        &mut self,
+        guard: LeaderGuard,
+    ) -> Result<SharedDb, CodeContextError> {
         tracing::info!(
             "Promoted to code-context leader for {}",
             self.workspace_root.display()
@@ -328,9 +403,87 @@ impl CodeContextWorkspace {
         self.mode = WorkspaceMode::Leader {
             db: new_db,
             _guard: guard,
+            shutdown: crate::new_shutdown_flag(),
         };
 
-        Ok(Some(shared))
+        Ok(shared)
+    }
+
+    /// Refresh the leader's lease heartbeat (production [`SystemClock`]).
+    ///
+    /// Returns `true` while this process is still the leader (heartbeat
+    /// refreshed under our nonce) and `false` if we were preempted — another
+    /// process claimed our stale lease — or if we are a follower. A `false`
+    /// return on a leader is the signal to [`Self::step_down`].
+    pub fn heartbeat_lease(&self) -> bool {
+        match &self.mode {
+            WorkspaceMode::Leader { _guard, .. } => _guard.heartbeat(&SystemClock),
+            WorkspaceMode::Follower { .. } => false,
+        }
+    }
+
+    /// Step down from leadership back to follower mode.
+    ///
+    /// Drops the [`LeaderGuard`] (releasing the flock if we held it) and re-runs
+    /// the election as a follower. Because the new leader now holds the lease,
+    /// this process lands in [`WorkspaceMode::Follower`] with a fresh read-only
+    /// connection and a [`FollowerGuard`] that can later re-contest. No-op when
+    /// already a follower.
+    ///
+    /// Stepping down is how the single-writer invariant is preserved after a
+    /// preemption: a leader whose [`Self::heartbeat_lease`] returned `false`
+    /// must stop being a writer before the new leader starts writing.
+    pub fn step_down(&mut self) {
+        if !self.is_leader() {
+            return;
+        }
+
+        // Enforce single-writer: signal the leader's workers to stop BEFORE we
+        // drop the leader guard / read-write connection. The workers each hold
+        // their own Arc to this AtomicBool and exit at their next loop check, so
+        // the old leader stops writing before this process resumes as a follower
+        // and before the new leader becomes the sole writer.
+        if let WorkspaceMode::Leader { shutdown, .. } = &self.mode {
+            shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        // Build a follower outcome FIRST (this does not touch the lock), then
+        // swap it into `mode` — dropping the old leader guard, which releases
+        // the flock (if held) and the read-write DB connection.
+        let election = Self::build_election(&self.workspace_root);
+        let outcome = election.elect_as_follower_only();
+        let db_path = self.context_dir.join(DB_NAME);
+
+        match outcome {
+            Ok(ElectionOutcome::Follower(follower)) => match open_readonly_with_retry(&db_path) {
+                Ok(db) => {
+                    let _ = db::configure_connection(&db);
+                    self.mode = WorkspaceMode::Follower { db, follower };
+                    tracing::warn!(
+                        "code-context: stepped down to follower for {}",
+                        self.workspace_root.display()
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "code-context: step_down could not re-open read-only DB; \
+                         using an in-memory placeholder until re-election"
+                    );
+                    self.mode = WorkspaceMode::Follower {
+                        db: Connection::open_in_memory()
+                            .expect("in-memory sqlite open cannot fail"),
+                        follower,
+                    };
+                }
+            },
+            Ok(ElectionOutcome::Leader(_)) => {
+                tracing::error!("code-context: step_down unexpectedly elected leader; ignoring");
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "code-context: step_down re-election failed");
+            }
+        }
     }
 
     /// Root of the workspace (parent of `.code-context/`)
@@ -359,6 +512,20 @@ impl CodeContextWorkspace {
     /// to attribute a "no leader bound" connect failure to the leader PID.
     pub fn lock_path(&self) -> &Path {
         &self.lock_path
+    }
+}
+
+impl Drop for CodeContextWorkspace {
+    /// Stop the leader's writers when the workspace is dropped wholesale.
+    ///
+    /// Setting the shutdown flag before the connection `Arc` is dropped lets the
+    /// workers — which each hold their own `Arc` to the `AtomicBool` — observe it
+    /// and exit cleanly, preserving the single-writer invariant even when the
+    /// workspace is torn down rather than stepped down.
+    fn drop(&mut self) {
+        if let WorkspaceMode::Leader { shutdown, .. } = &self.mode {
+            shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 }
 
@@ -1101,5 +1268,82 @@ mod tests {
             [],
         )
         .unwrap();
+    }
+
+    /// A process forbidden from contending (SAH_SUBAGENT=1) must NOT become the
+    /// leader even on an empty workspace where it would otherwise win. The env
+    /// var is set, the workspace opened, asserted, and the var removed all
+    /// inline so this does not leak global env state to parallel tests.
+    #[test]
+    fn test_subagent_opens_as_follower_only() {
+        let dir = tempfile::tempdir().unwrap();
+        // A normal (allowed) process is the real leader and creates the DB.
+        let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        let prior = std::env::var("SAH_SUBAGENT").ok();
+        std::env::set_var("SAH_SUBAGENT", "1");
+        let ws = CodeContextWorkspace::open(dir.path());
+        // Restore env before asserting so a panic does not leak it.
+        match prior {
+            Some(v) => std::env::set_var("SAH_SUBAGENT", v),
+            None => std::env::remove_var("SAH_SUBAGENT"),
+        }
+
+        let ws = ws.expect("follower-only open should still succeed");
+        assert!(
+            !ws.is_leader(),
+            "a SAH_SUBAGENT=1 process must never win leadership"
+        );
+    }
+
+    /// `heartbeat_lease` returns true for a live leader, and after `step_down`
+    /// the workspace is no longer the leader. This exercises the preemption
+    /// recovery path: a leader that lost its lease steps down to follower.
+    #[test]
+    fn test_step_down_transitions_leader_to_follower() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(ws.is_leader());
+        assert!(
+            ws.heartbeat_lease(),
+            "a live leader heartbeats successfully"
+        );
+
+        ws.step_down();
+        assert!(
+            !ws.is_leader(),
+            "after step_down the workspace is a follower"
+        );
+        assert!(
+            !ws.heartbeat_lease(),
+            "a follower never reports a successful heartbeat"
+        );
+    }
+
+    /// `heartbeat_lease` returns false for a follower (it owns no lease).
+    #[test]
+    fn test_heartbeat_lease_false_for_follower() {
+        let dir = tempfile::tempdir().unwrap();
+        let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+        assert!(!follower.heartbeat_lease());
+    }
+
+    #[test]
+    fn test_step_down_sets_shutdown_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(ws.is_leader());
+        let flag = ws
+            .leader_shutdown_flag()
+            .expect("leader has a shutdown flag");
+        assert!(!flag.load(std::sync::atomic::Ordering::Relaxed));
+        ws.step_down();
+        assert!(!ws.is_leader());
+        assert!(
+            flag.load(std::sync::atomic::Ordering::Relaxed),
+            "step_down must set the shutdown flag so the old leader's workers stop writing"
+        );
     }
 }

@@ -1,0 +1,155 @@
+---
+assignees:
+- claude-code
+comments:
+- actor: claude-code
+  id: 01kvkgqfxxc31ysz50bd2e4ypr
+  text: '/finish picked up (single-task mode). Iteration 1: dispatching /implement. Real bug, verified live: leadership is a pure flock held until process death (no lease/heartbeat/generation/takeover), decided once at init; a Jun-19 sah serve (PID 9852) still holds the calcutron flock 25h+ later (parent claude 8273 still alive), runs pre-fix code (0 reconcile lines in its log), and the live root session can only ever be a follower. The already-correct watcher UPSERT (^hdcwqk6) + periodic glob reconcile (^4ps51p9) are dead code behind it. Fix: make leadership reclaimable by a live process (lease+heartbeat+takeover) + subagents never lead. NOTE: the git-SHA build-info change just landed in commit 99a11eabb and added a leader-election INFO log in server.rs do_initialize_code_context — do NOT clobber it; build on top.'
+  timestamp: 2026-06-20T21:59:27.421330+00:00
+- actor: claude-code
+  id: 01kvkgze07qp4cypha5q1qqfeg
+  text: |-
+    Research done. Architecture confirmed: election.rs is a pure flock race keyed on canonicalized workspace-root hash; lock file holds only an informational PID; try_promote only succeeds when flock is FREE. workspace.rs WorkspaceMode::{Leader,Follower} wraps the guards; server.rs do_initialize_code_context snapshots is_leader once and gates LSP/worker spawn; spawn_reelection_loop polls try_promote every 5s and exits permanently after a successful promote (no loss detection on a leader).
+
+    SUBAGENT SIGNAL: a subagent dispatched the explore agent to find a reliable root-vs-subagent signal. CONCLUSION: there is NO reliable signal. mirdan mcp_config writes the sah-serve entry with an empty env map; nothing sets SAH_SUBAGENT/depth/etc; the worrying stdio `sah serve` children are spawned by Claude Code's OWN Task tool (outside this repo's control) reading a single shared .mcp.json, so env injection is not separable per-agent; PPID ancestry is fragile. Per the task's explicit instruction, I will NOT invent an unreliable heuristic — I'll implement lease/heartbeat/takeover fully and gate subagent-leadership behind a documented, wired seam (a `may_contend_for_leadership` policy hook, default allow) so when a real signal appears it's a one-line wire-up.
+
+    Plan: add a Lease (pid + epoch-millis heartbeat + nonce) written into the lock file as the takeover authority. Heartbeat const ~5s, TTL ~20s. Candidate that finds flock held reads lease: fresh -> follower; stale -> atomic rename-CAS claim (temp O_EXCL + rename + re-read confirm exactly-one-winner). Leader renews on heartbeat; a leader that finds the lease stolen (nonce changed) steps down. Inject a clock (TimeSource) for deterministic <10s unit tests. Wire step-down into server.rs re-election loop so the leader also runs a loop that observes loss and stops workers.
+  timestamp: 2026-06-20T22:03:47.591963+00:00
+- actor: claude-code
+  id: 01kvkh839gah8e0hm0z94pzs6f
+  text: 'Note: file-editing tools (Write/Edit) are not exposed in this orchestration context, so implementation was delegated to a default agent (all-tools) with a complete function-by-function spec: lease module (Clock/SystemClock/TestClock, Lease{pid,nonce,heartbeat_millis}, is_stale, read_lease w/ legacy bare-PID -> immediately-stale backcompat, write_lease_atomic temp+rename, try_claim_lease gated on an O_EXCL claim marker for exactly-one-winner, heartbeat returning false on nonce-mismatch = preemption signal, lease_held_by); HEARTBEAT_INTERVAL=5s, LEASE_TTL=20s, CLAIM_TTL=2s. election.rs: leader writes lease+nonce on flock win, FollowerGuard::try_promote_via_lease(clock) for live-stale takeover (leadership by LEASE not flock; holds_flock gates lock-file removal on drop), LeaderGuard::heartbeat/nonce, peek_leader_pid reads lease.pid w/ bare-int fallback. server.rs: new spawn_leader_heartbeat_loop -> on heartbeat()==false logs WARN, step_down, reverts to follower polling (no two writers); existing git_sha "code-context: elected leader" INFO log preserved. workspace.rs: heartbeat_lease/step_down, try_promote also attempts lease takeover, and the subagent seam may_contend_for_leadership() (default allow, SAH_SUBAGENT=1 opt-out) wired via elect_as_follower_only() — documented TODO since no reliable root-vs-subagent signal exists. Will review the actual lease.rs + diagnostics myself before moving to review (concurrency-critical).'
+  timestamp: 2026-06-20T22:08:31.536649+00:00
+- actor: claude-code
+  id: 01kvkk0r7t6455ee8enayb17h1
+  text: 'REVIEW FINDING (self-review of delegated impl, concurrency-critical): the first implementation''s lease::try_claim_lease was a plain read-stale-check-then-write with NO mutual exclusion and NO O_EXCL claim gate (the agent dropped that part of the design and omitted the concurrent-winner test). Two concurrent followers over a stale lease would BOTH pass the staleness check and BOTH write -> BOTH return Won (different nonces) -> BOTH bring up proxy/indexing = a two-writer window until the loser''s next heartbeat (~5s). That violates the task''s hard invariant "at most one leader, no two-writer window during takeover." The agent''s other deviation (in-place truncate+write instead of temp+rename, to preserve the flock''d inode) is a CORRECT insight and I''m keeping it. Dispatched a surgical fix: add CLAIM_TTL + an O_EXCL claim-marker gate (a SEPARATE <lock>.claim file, never the flock''d inode) inside try_claim_lease so exactly one concurrent candidate proceeds to write the lease, plus the missing test_concurrent_claims_yield_exactly_one_winner and test_stale_claim_marker_is_reclaimed. Verifying.'
+  timestamp: 2026-06-20T22:39:27.994226+00:00
+- actor: claude-code
+  id: 01kvkksyxevnfpvm1gdzk5nx6f
+  text: 'SECOND REVIEW FINDING (caught by running the full leader-election suite 6x myself — test_concurrent_claims_yield_exactly_one_winner FLAKED once under load): the O_EXCL claim gate had a real TOCTOU torn-read race. create_claim_marker did create_new (O_EXCL) THEN a separate write! of the stamp; between those steps the file exists but is empty, and claim_marker_is_stale treated an empty/unparseable marker as STALE -> a concurrent candidate would remove the live just-created marker and create its own -> TWO winners. That is exactly the two-writer window the task forbids. Fix dispatched: base claim-marker staleness on the file''s MTIME (set atomically by the OS at create) against real wall-clock, not on reading file content and not on the injected Clock — content becomes pid-only/informational. A just-created marker always has a recent mtime so concurrent candidates always see it FRESH and back off; only a marker with mtime older than CLAIM_TTL (a crashed claimer) is reclaimed. Reclaim test updated to age the marker mtime via filetime (already a workspace dep). Requiring a 30x robustness run to prove the gate is genuinely race-free, not just usually-green.'
+  timestamp: 2026-06-20T22:53:14.030958+00:00
+- actor: claude-code
+  id: 01kvkn0hst768n5613a49qbrbz
+  text: |-
+    Adversarial double-check returned REVISE with two HIGH findings that are CORRECT and break the hard invariants — fixing before claiming done:
+
+    FINDING 1 (HIGH, invariants 1&4): step_down only flips workspace mode Leader->Follower, but the leader's indexing workers (TS indexer, watcher, periodic-reconcile, LSP workers) are tokio::spawned each holding their OWN Arc<shared_db> clone and loop forever; their JoinHandles are discarded and none checks leadership. So a preempted leader KEEPS WRITING to index.db while the new leader also indexes = real two-writer window. The step_down test only asserts the mode flip (no workers exist at the workspace-crate layer), giving false confidence. FIX: thread a CancellationToken/shutdown flag created at promotion/startup; step_down (and the heartbeat loop on loss) cancels it and the workers stop writing before/as the process becomes follower. Enforce single-writer at the WRITER layer, not just the lease-role layer.
+
+    FINDING 2 (HIGH, invariant 2): FollowerGuard::try_promote flock fast-path calls write_fresh_lease() UNCONDITIONALLY. When leader B holds leadership purely by lease (holds_flock=false) and the old flock-holder exits, the flock goes free; follower C wins the free flock and stomps B's FRESH lease with no staleness check -> preempts a healthy leader (+ transient two-writer until B's next heartbeat). FIX: in the flock-win arm, read the existing lease; if present and !is_stale, release the flock and return Ok(None); only claim when no lease or stale.
+
+    FINDING 3 (LOW, invariant 2): non-atomic in-place write_lease_atomic (set_len(0) then write) exposes a sub-ms zero-length window; a candidate reading torn twice could preempt a healthy heartbeating leader. FIX: write-then-truncate (write_all at 0 then set_len(json.len())) so a reader never sees zero-length for valid JSON; treat empty-under-gate as retry-once.
+
+    Probes CLEAN: claim-gate single-winner (race-free, 40/40 mine), Drop-preserves-new-lease, subagent seam, elected-leader INFO log intact.
+  timestamp: 2026-06-20T23:14:18.554065+00:00
+- actor: claude-code
+  id: 01kvkpmbsbnw7wjxzthw516eah
+  text: 'ALL THREE REVISE findings fixed and re-verified. Adversarial double-check re-run returned PASS: all hard invariants now hold.\n\nFinal mechanism summary:\n- LEASE = JSON {pid, nonce, heartbeat_ms} written in-place into the flock''d lock file (in-place truncate-after-write preserves the flock inode; rename would orphan the per-inode flock). HEARTBEAT_INTERVAL=5s, LEASE_TTL=15s, CLAIM_TTL=2s.\n- TAKEOVER: candidate reads lease; FRESH -> follower (never preempt); STALE -> claim. Single-winner enforced by an O_EXCL <lock>.claim marker (separate file, never the flock''d inode), staleness keyed on the marker''s OS-stamped MTIME (not content, not injected clock) to avoid the torn-read race I caught; under-gate re-check before writing. Exactly-one-winner proven by an 8-thread test, 65/65 robustness runs clean.\n- HEARTBEAT: leader renews under its nonce; lease::heartbeat returns false on nonce-mismatch = preemption signal.\n- FLOCK FAST PATH now defers to a FRESH lease (Finding 2 fix): a free flock does not entitle takeover if a live lease-leader exists.\n- STEP-DOWN (single-writer enforcement, Finding 1 fix): WorkspaceMode::Leader owns a shared ShutdownFlag (reusing the existing crate ShutdownFlag/lsp_worker mechanism). step_down() and Drop set it BEFORE dropping the leader guard; the SAME flag is threaded into ALL leader writers — TS indexer (one-shot guard), file watcher (select! 500ms tick, checks at loop-top + before write), periodic reconcile (checks each tick), and LSP indexing workers (replacing the throwaway flag) — at all three entry points (initial-leader TS+LSP, post-promotion TS+LSP). A preempted leader stops writing before the new leader is sole writer; no two-writer window.\n- WIRING: server.rs spawn_leader_heartbeat_loop runs only on the leader; on heartbeat()==false -> WARN \"lost leadership lease, stepping down\" -> step_down -> start follower re-election loop. follower try_promote falls back to try_promote_via_lease so a live-but-stale leader is reclaimable. LeaderGuard::Drop only deletes the lock file when holds_flock AND lease still ours (nonce match) — a preempted old leader won''t wipe the new leader''s lease.\n- SUBAGENT GATING: may_contend_for_leadership() policy seam, default ALLOW, SAH_SUBAGENT=1 opt-out, wired via elect_as_follower_only(). DOCUMENTED TODO(^d8vae11): NO reliable root-vs-subagent signal exists in this codebase (verified — empty env on the sah-serve mcp entry; stdio children spawned by Claude Code''s own Task tool outside this repo via one shared .mcp.json; PPID fragile). Per the task instruction I did NOT invent a heuristic; the seam is a one-line wire-up when a real signal lands. THIS IS THE ONE PART NOT FULLY DELIVERED — the gate is built and tested but inert until the harness sets the signal.\n- Did NOT clobber the git_sha \"code-context: elected leader\" INFO log (commit 99a11eabb) — confirmed intact.\n- HARD CONSTRAINT from the task (unchanged): this cannot retroactively fix the currently-wedged PID 9852 (old code won''t honor the lease protocol); that one process must be cycled once. After that, the wedge never recurs.\n\nFiles changed: NEW crates/swissarmyhammer-leader-election/src/{lease.rs,policy.rs}; M election.rs, lib.rs, Cargo.toml (filetime dev-dep); M crates/swissarmyhammer-code-context/src/{workspace.rs,lib.rs}; M crates/swissarmyhammer-tools/src/mcp/server.rs + tools/code_context/watcher.rs. (The pre-existing unrelated working-tree edits in claude-agent/protocol_translator.rs and swissarmyhammer-shell/* were left untouched.)\n\nVERIFICATION (fresh, my own runs): cargo nextest run -p swissarmyhammer-leader-election -p swissarmyhammer-code-context -p swissarmyhammer-tools = 2099 passed, 1 failed (ONLY the pre-existing unrelated per_client_tool_composition::claude_client_gets_shared_plus_shell_not_agent_tools). clippy --all-targets -D warnings on the 3 crates = exit 0. cargo fmt --check = exit 0. Concurrent single-winner robustness: 65/65 runs clean. RED->GREEN honored (lease tests stubbed to unimplemented!() first, watched fail, then implemented).'
+  timestamp: 2026-06-20T23:42:36.331302+00:00
+- actor: claude-code
+  id: 01kvkppe3f8agpp8c2jjfvvwrk
+  text: 'Iteration 1 implement landed in review. Lease ({pid,nonce,heartbeat_ms} JSON written in-place into the flock''d lock file — in-place because rename swaps the inode and orphans the flock). Consts: HEARTBEAT 5s, LEASE_TTL 15s, CLAIM_TTL 2s. Takeover: candidate reads lease; fresh→stay follower (never preempt), stale→claim via O_EXCL <lock>.claim marker keyed on OS mtime (fixed a real TOCTOU torn-read race; 8-thread test, 65/65 clean). Step-down: Leader owns shared ShutdownFlag (reused crate::ShutdownFlag) set before dropping the guard and threaded into ALL leader writers (TS indexer, watcher, periodic reconcile, LSP workers) at both initial-leader and post-promotion entry points → no two-writer window; loss signal = heartbeat() nonce mismatch → WARN → step_down → follower re-election. LeaderGuard::Drop only deletes the lock when it still owns the lease (preempted old leader can''t wipe new leader''s lease). git_sha leader log (99a11eabb) intact. Tests 2099 pass / 1 pre-existing unrelated fail; clippy+fmt clean; double-check PASS after fixing 3 real findings (worker two-writer window, flock fast-path preempting fresh lease, torn read). PARTIAL: "subagents never lead" — NO reliable root-vs-subagent signal exists (sah serve MCP entry has empty env; Task-tool children spawned outside repo via shared .mcp.json; PPID fragile). Built as inert policy seam may_contend_for_leadership()/elect_as_follower_only() gated on SAH_SUBAGENT=1 with TODO(^d8vae11) — NOT active until the harness sets a signal. Lease mechanism makes this an optimization not a correctness req (a subagent leader steps down/exits, root takes over). Iteration 1: dispatching /review.'
+  timestamp: 2026-06-20T23:43:44.239848+00:00
+- actor: claude-code
+  id: 01kvkrjmx3yqaemyqj7yb7dhrg
+  text: 'Iteration 1 review: REVISE — 1 genuine BLOCKER (invariants 1,2,4,5,6 verified holding; only #3 violated). The two-writer window: index_discovered_files_with_embedder/index_discovered_files_async (code_context/mod.rs) take no ShutdownFlag — it''s checked only ONCE before the call, but a full TS pass runs minutes-to-tens-of-minutes and SharedDb''s mutex is per-process, so a preempted old leader keeps writing the DB for the rest of its in-flight pass (learns it lost only on next heartbeat, and the flag is never read inside the per-file loop). Fix: thread ShutdownFlag into both indexer fns + check at top of the `for relative_path in &dirty_files` loop (early return), mirroring run_lsp_indexing_loop''s per-iteration check; pass the flag from both call sites (server.rs spawn_ts_and_watcher_workers + watcher.rs periodic reconcile). Secondary (same root cause, defense-in-depth): configure_connection (db.rs) enables WAL with no busy_timeout → swallowed SQLITE_BUSY on overlap; add PRAGMA busy_timeout. Iteration 2: dispatching /implement for the blocker + busy_timeout (+ cheap doc comments on new public APIs to avoid re-raise).'
+  timestamp: 2026-06-21T00:16:37.283641+00:00
+- actor: claude-code
+  id: 01kvkrw4a1r2thfjfb6jbps6q9
+  text: 'Iteration 2 implement picked up the review BLOCKER. Research done: confirmed both indexer fns (index_discovered_files_async @ mod.rs ~1817, index_discovered_files_with_embedder @ ~1930) take no ShutdownFlag; the per-file write loop is `for relative_path in &dirty_files` @ ~2019. Cataloged ALL callers via grep: production = server.rs:712 (leader TS spawn, has ts_shutdown in scope), watcher.rs:244 (process_ok_events, threaded from run_watcher''s shutdown), watcher.rs:308 (reconcile_workspace_with_embedder, threaded run_periodic_reconcile->reconcile_workspace->_with_embedder); non-leader/one-shot/tests = mod.rs:2541 (rebuild index), mod.rs:3360 + ~7 _with_embedder unit tests, watcher.rs:772 test, integration semantic_search_e2e.rs:241 + code_context_ops_e2e.rs:249,702 — all get a fresh new_shutdown_flag(). Plan mirrors lsp_worker.rs run_lsp_indexing_loop''s per-iteration `if shutdown.load(Relaxed)` at loop top (break out, keep terminal Done/stats so a partial pass still returns valid IndexRunStats). Secondary: db.rs configure_connection gets PRAGMA busy_timeout=5000 (defense in depth). NOTE: the 6 public APIs flagged for doc comments (leader_shutdown_flag/heartbeat_lease/step_down/elect_as_follower_only/nonce/heartbeat) ALREADY have doc comments — that checklist item is already satisfied. RED test written first (test_indexer_stops_mid_pass_when_shutdown_flag_set: seed 5 dirty files, set flag, run with embedder=None, assert all 5 stay ts_indexed=0). File-edit tools not exposed in this context, so edits delegated to an all-tools agent with a function-by-function spec; will verify build/clippy/nextest myself.'
+  timestamp: 2026-06-21T00:21:47.969442+00:00
+- actor: claude-code
+  id: 01kvksrgcrc4y9jmk9py7avpzv
+  text: |-
+    Iteration 2 implement COMPLETE. Blocker fixed at the writer layer + secondary + cheap doc item.
+
+    SIGNATURE CHANGES (both gained a trailing `shutdown: swissarmyhammer_code_context::ShutdownFlag`):
+    - index_discovered_files_async(workspace_root, db, reporter, shutdown) — forwards shutdown to _with_embedder.
+    - index_discovered_files_with_embedder(workspace_root, db, embedder, reporter, shutdown) — checks `if shutdown.load(Relaxed) { info!; break; }` as the FIRST statement inside `for relative_path in &dirty_files`. break (not return) so the post-loop terminal Done event + partial IndexRunStats{files: indexed, ...} still emit.
+
+    CALL SITES UPDATED + which flag each got:
+    PRODUCTION (leader's flag):
+    - server.rs spawn_ts_and_watcher_workers (~712): Arc::clone(&ts_shutdown) — the leader's step-down flag. Pre-call `if ts_shutdown.load{return}` guard kept.
+    - watcher.rs process_ok_events (event re-index, ~245): Arc::clone(shutdown), threaded from run_watcher's &shutdown; caller updated.
+    - watcher.rs reconcile chain: run_periodic_reconcile(shutdown) -> reconcile_workspace(&shutdown) -> reconcile_workspace_with_embedder(&shutdown) -> Arc::clone(shutdown) into _with_embedder (~315). All links got the param + doc.
+    NON-LEADER / ONE-SHOT / TESTS (fresh new_shutdown_flag(), behavior unchanged):
+    - mod.rs execute_rebuild_index (~2541), mod.rs test helper (~3360), 7 _with_embedder unit-test calls, watcher.rs created-after-start test, integration semantic_search_e2e.rs + code_context_ops_e2e.rs (x2).
+
+    SECONDARY: db.rs configure_connection now emits `PRAGMA busy_timeout = 5000` via `const BUSY_TIMEOUT_MS: u32 = 5000` (documented defense-in-depth so residual cross-process overlap blocks-and-retries instead of swallowing SQLITE_BUSY).
+
+    CHEAP DOC ITEM: the 6 flagged public APIs (leader_shutdown_flag/heartbeat_lease/step_down/elect_as_follower_only/nonce/heartbeat) were ALREADY documented in the tree — verified each has a /// doc block; nothing to add. Flipping that warning checkbox.
+
+    TDD RED->GREEN (proven, not asserted): new test test_indexer_stops_mid_pass_when_shutdown_flag_set seeds 5 dirty files, sets the flag before the call, runs with embedder=None, asserts still_dirty==5. RED (check neutralized to `if false && ...`): FAIL `left: 0, right: 5` (all 5 indexed). GREEN (check restored): PASS. <10s, embedder=None.
+
+    VERIFICATION (my own fresh runs):
+    - cargo nextest run -p swissarmyhammer-leader-election -p swissarmyhammer-code-context -p swissarmyhammer-tools = 2101 run, 2100 passed, 1 failed — the ONLY failure is the pre-existing unrelated per_client_tool_composition::claude_client_gets_shared_plus_shell_not_agent_tools (allowed by the task). Integration e2e (semantic_search/code_context_ops) all green = new arity wired correctly.
+    - cargo clippy --all-targets -D warnings on the 3 crates = exit 0, clean.
+    - cargo fmt on the 3 crates applied (long call lines wrapped) + --check = clean.
+    - git_sha "code-context: elected leader" INFO log (99a11eabb) intact (server.rs:394). Unrelated working-tree edits (claude-agent/protocol_translator.rs, swissarmyhammer-shell/*) untouched.
+    - Adversarial double-check: PASS on all 6 points (break-not-return framing, every production caller passes the leader flag, non-leader callers fresh flag, no stale arity, Relaxed ordering + no move-after-use, test non-vacuous).
+
+    Flipping both Blocker checkboxes + the two doc-comment Warning checkboxes; leaving the non-required refactor warnings/nits (init_leader_db dedup, "workspace mutex poisoned" const, get_ prefix, magic-number consts) unchecked per the task. Moving back to review.
+  timestamp: 2026-06-21T00:37:17.848540+00:00
+- actor: claude-code
+  id: 01kvkt5n08cnwh9bdqzbpde2wy
+  text: |-
+    really-done adversarial double-check returned REVISE with 2 findings; both fixed, then re-verified GREEN.
+
+    Finding A: the leader-side synchronous `rebuild index` op was passing a FRESH flag — it's one-shot but leader-side and writes the shared DB, so it must use the leader's real step-down flag. FIXED: now `ws.leader_shutdown_flag().unwrap_or_else(new_shutdown_flag)`.
+
+    Finding B: the watcher test `periodic_reconcile_stops_writing_after_shutdown_flag_set` re-implemented the guard inline (`if !shutdown.load() { reconcile... }`) so it would pass even if the production break were removed — tested its own `if`, not production. FIXED: now calls `reconcile_workspace_with_embedder` UNCONDITIONALLY with the pre-set flag and asserts the real indexer break (file row inserted by startup_cleanup but ts_indexed stays 0 and zero ts_chunks). Genuinely exercises production.
+
+    Final verification (fresh):
+    - cargo nextest run -p swissarmyhammer-leader-election -p swissarmyhammer-code-context -p swissarmyhammer-tools = 2101 run, 2100 passed, 1 failed = ONLY the allowed pre-existing per_client_tool_composition::claude_client_gets_shared_plus_shell_not_agent_tools.
+    - Both targeted tests pass: test_indexer_stops_mid_pass_when_shutdown_flag_set + periodic_reconcile_stops_writing_after_shutdown_flag_set.
+    - cargo clippy --all-targets -D warnings (3 crates) = exit 0.
+    - cargo fmt --check (3 crates) = clean.
+    - git_sha "code-context: elected leader" log intact; unrelated working-tree files (claude-agent/protocol_translator.rs, swissarmyhammer-shell/*) untouched.
+
+    Checklist flipped: both Blockers + the two doc-comment Warnings (already-present docs, verified) → [x]. Left unchecked per the task: init_leader_db dedup, "workspace mutex poisoned" const + get_ rename, magic-number test consts. Moved to review.
+  timestamp: 2026-06-21T00:44:28.552915+00:00
+- actor: claude-code
+  id: 01kvkt6nv5exb3rrdt9rmmes2y
+  text: 'Iteration 2 implement: blocker fixed. Both index_discovered_files_* now take a ShutdownFlag and check it at the top of the `for relative_path in &dirty_files` loop (break, so terminal Done event + partial stats still emit), mirroring run_lsp_indexing_loop. Threaded through ALL call sites: leader TS spawn (server.rs ts_shutdown), watcher event path (process_ok_events ← run_watcher), reconcile chain (run_periodic_reconcile→reconcile_workspace→_with_embedder), leader rebuild-index op (ws.leader_shutdown_flag()); non-leader/one-shot/test callers get a fresh never-set flag (unchanged behavior). Secondary: db.rs configure_connection now sets PRAGMA busy_timeout=5000 (const BUSY_TIMEOUT_MS). RED→GREEN test test_indexer_stops_mid_pass_when_shutdown_flag_set (5 dirty files, flag set pre-pass → all stay ts_indexed=0; neutralized check → FAIL 0/5; restored → PASS); also rewrote periodic_reconcile_stops_writing_after_shutdown_flag_set to drive the real production path. nextest 2100 pass / 1 pre-existing unrelated fail; clippy+fmt clean. Iteration 2: dispatching /review (re-verify invariant #3 closed + no regression).'
+  timestamp: 2026-06-21T00:45:02.181814+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffd080
+project: diagnostics
+title: 'code-context: indexing leadership must belong to a live/current process (stale leader wedges the index forever; periodic poll is dead code behind it)'
+---
+# code-context: leadership is immortal — a stale leader wedges indexing forever
+
+## The real bug (verified live in calcutron, Jun 20 2026)
+
+The index fixes already shipped — ^hdcwqk6 (watcher Created/Modified UPSERT so new files enter the dirty set) and ^4ps51p9 (leader runs `startup_cleanup` glob re-walk every 5 min, then drains `WHERE ts_indexed = 0`) — are **correct and wired**. They are exactly the "file notifications + periodic glob double-check like at index start" design.
+
+But they are **dead code in practice**, because of a deeper bug they sit behind: leadership was acquired by the first process to grab an `flock` and held until that process died — no lease, heartbeat, generation, or takeover. The leadership-reclaim change (lease + heartbeat + takeover + step-down) addresses that; this card is the review pass over it.
+
+## Review Findings (2026-06-20 19:10)
+
+Scope: 6 files of the leadership-reclaim change (lease.rs, policy.rs, election.rs, workspace.rs, server.rs, watcher.rs). Concurrency invariants verified directly against the code, not taken from comments.
+
+### Blockers
+- [x] **Two-writer window on takeover — the TS indexer ignores the step-down flag (Invariant 3 VIOLATED).** FIXED (iteration 2): `index_discovered_files_async` / `index_discovered_files_with_embedder` now take a trailing `shutdown: ShutdownFlag` and check it at the top of the `for relative_path in &dirty_files` loop (`if shutdown.load(Relaxed) { break; }`, mirroring `run_lsp_indexing_loop`); a mid-pass stop still emits the terminal `Done` event and returns partial `IndexRunStats`. All production callers pass the leader's flag: `server.rs::spawn_ts_and_watcher_workers` (ts_shutdown), watcher event path (`process_ok_events` threaded from `run_watcher`), periodic reconcile (`run_periodic_reconcile`→`reconcile_workspace`→`reconcile_workspace_with_embedder`), and the leader-side synchronous `rebuild index` op (`ws.leader_shutdown_flag()`). Non-leader/one-shot/test callers pass a fresh `new_shutdown_flag()`. Deterministic unit test `test_indexer_stops_mid_pass_when_shutdown_flag_set` proves the stop (RED→GREEN verified).
+- [x] **No `PRAGMA busy_timeout` under WAL amplifies the overlap into silent corruption (secondary, same root cause).** FIXED (iteration 2): `configure_connection` (`crates/swissarmyhammer-code-context/src/db.rs`) now sets `PRAGMA busy_timeout = 5000` (`const BUSY_TIMEOUT_MS`), documented as defense-in-depth so a residual cross-process overlap blocks-and-retries instead of swallowing `SQLITE_BUSY`.
+
+### Invariants verified to HOLD (no action needed — recorded for the implementer)
+- [x] **Invariant 1 — at most one leader / takeover admits exactly one winner.** `try_claim_lease` gates the rewrite on `acquire_claim_marker` (O_EXCL), re-reads under the gate, staleness keyed on OS mtime. 8-thread test asserts exactly one win.
+- [x] **Invariant 2 — fresh-lease leader never preempted (incl. flock fast-path).** `try_claim_lease` returns `Lost` on a non-stale lease; `FollowerGuard::try_promote` drops the flock and returns `Ok(None)` on a fresh lease.
+- [x] **Invariant 4 — preempted old leader cannot delete/overwrite the new leader's lease.** `LeaderGuard::Drop` deletes only when `holds_flock && lease_held_by(nonce)`.
+- [x] **Invariant 5 — lease write is in-place (no rename).** `write_lease_atomic` writes in place; same inode preserves the per-inode flock.
+- [x] **Invariant 6 — heartbeat-loss (nonce mismatch) triggers step-down + re-election.** `lease::heartbeat` returns `false` on nonce mismatch; `spawn_leader_heartbeat_loop` steps down and re-elects.
+- [x] **git_sha INFO log intact.** `"code-context: elected leader"` present in server.rs (commit 99a11eabb).
+- [x] **Known partial NOT flagged.** The "subagents never lead" policy gate (`SAH_SUBAGENT=1` + TODO) is the documented, accepted inert follow-up.
+
+### Warnings (engine fleet — non-blocking)
+- [ ] `crates/swissarmyhammer-code-context/src/workspace.rs` — `open_as_leader` and `become_leader_with_guard` near-verbatim duplicate the open→configure→schema→startup-cleanup→`Arc<Mutex>` sequence. Extract a shared `init_leader_db`. (NOT required this pass.)
+- [x] `crates/swissarmyhammer-code-context/src/workspace.rs` — public `leader_shutdown_flag()`, `heartbeat_lease()`, `step_down()` doc comments. (Already present in the tree — verified.)
+- [x] `crates/swissarmyhammer-leader-election/src/election.rs` — public `elect_as_follower_only()`, `nonce()`, `heartbeat()` doc comments. (Already present in the tree — verified.)
+- [ ] `crates/swissarmyhammer-tools/src/mcp/server.rs` — `"workspace mutex poisoned"` literal repeated 4+ times; hoist to a `const`. Getter `get_tool_registry()` → `tool_registry()`. (NOT required this pass.)
+
+### Nits (engine fleet — non-blocking)
+- [ ] `crates/swissarmyhammer-leader-election/src/election.rs` — test magic numbers 4242 / 7777 should be named constants. (NOT required this pass.)
+
+## Hard constraint (unchanged)
+This change cannot retroactively fix the currently-wedged leader (PID 9852): old code will not honor the lease protocol, so that one process must be cycled once. After that, with new code everywhere, the wedge never recurs.
+
+#bug #code-context #leader #indexer #lsp-live

@@ -121,10 +121,11 @@ pub(crate) fn process_file_events(
 pub fn start_code_context_watcher(
     workspace_root: impl AsRef<Path>,
     db: SharedDb,
+    shutdown: swissarmyhammer_code_context::ShutdownFlag,
 ) -> tokio::task::JoinHandle<()> {
     let workspace_root = workspace_root.as_ref().to_path_buf();
     tokio::spawn(async move {
-        if let Err(e) = run_watcher(&workspace_root, &db).await {
+        if let Err(e) = run_watcher(&workspace_root, &db, &shutdown).await {
             tracing::error!("code-context watcher failed: {}", e);
         }
     })
@@ -133,6 +134,7 @@ pub fn start_code_context_watcher(
 async fn run_watcher(
     workspace_root: impl AsRef<Path>,
     db: &SharedDb,
+    shutdown: &swissarmyhammer_code_context::ShutdownFlag,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let workspace_root = workspace_root.as_ref();
     let (mut debouncer, mut event_rx) =
@@ -150,10 +152,33 @@ async fn run_watcher(
     let fanout = FanoutWatcher::new();
     let ws_root = workspace_root.to_path_buf();
 
-    while let Some(events_result) = event_rx.recv().await {
+    // Wake at least every 500ms even with no filesystem events so a step-down
+    // (which sets the shutdown flag) is observed promptly and the watcher stops
+    // writing before the new leader takes over.
+    let mut shutdown_tick = tokio::time::interval(Duration::from_millis(500));
+
+    loop {
+        if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+
+        let events_result = tokio::select! {
+            maybe = event_rx.recv() => match maybe {
+                Some(r) => r,
+                None => break,
+            },
+            _ = shutdown_tick.tick() => continue,
+        };
+
+        // Re-check immediately before the write path: a step-down may have
+        // landed while a debounced batch was in flight.
+        if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+
         match events_result {
             Ok(debounced_events) => {
-                process_ok_events(db, &ws_root, &fanout, &debounced_events).await;
+                process_ok_events(db, &ws_root, &fanout, &debounced_events, shutdown).await;
             }
             Err(errors) => {
                 for error in errors {
@@ -163,7 +188,7 @@ async fn run_watcher(
         }
     }
 
-    tracing::info!("code-context: file watcher stopped");
+    tracing::info!("code-context: file watcher stopping (stepped down)");
     Ok(())
 }
 
@@ -177,6 +202,7 @@ async fn process_ok_events(
     ws_root: &Path,
     fanout: &FanoutWatcher,
     debounced_events: &[async_watcher::DebouncedEvent],
+    shutdown: &swissarmyhammer_code_context::ShutdownFlag,
 ) {
     // Collect file events from the batch
     let mut file_events = Vec::new();
@@ -220,6 +246,7 @@ async fn process_ok_events(
         ws_root,
         std::sync::Arc::clone(db),
         swissarmyhammer_code_context::noop_reporter(),
+        std::sync::Arc::clone(shutdown),
     )
     .await;
 }
@@ -254,11 +281,16 @@ const RECONCILE_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// [`index_discovered_files_with_embedder`](super::index_discovered_files_with_embedder):
 /// `Some` embeds chunks, `None` writes chunks without embeddings (the test path,
 /// and the soft fallback when the model is unavailable).
+///
+/// `shutdown` is the leader's step-down flag, forwarded to the indexer so a
+/// reconcile pass stops writing the shared DB promptly once the leader has
+/// stepped down.
 pub(crate) async fn reconcile_workspace_with_embedder(
     workspace_root: &Path,
     db: &SharedDb,
     embedder: Option<std::sync::Arc<dyn model_embedding::TextEmbedder>>,
     reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
+    shutdown: &swissarmyhammer_code_context::ShutdownFlag,
 ) {
     // FS-walk reconcile under the write lock: deletes vanished files, marks
     // hash-changed files dirty, and inserts new files with ts_indexed = 0.
@@ -285,6 +317,7 @@ pub(crate) async fn reconcile_workspace_with_embedder(
         std::sync::Arc::clone(db),
         embedder,
         reporter,
+        std::sync::Arc::clone(shutdown),
     )
     .await;
 }
@@ -294,13 +327,18 @@ pub(crate) async fn reconcile_workspace_with_embedder(
 /// Builds the default chunk embedder (or `None` on load failure / opt-out) and
 /// uses the no-op progress reporter -- the periodic reconcile has no JSON-RPC
 /// progress channel, mirroring the watcher's own re-index path.
-async fn reconcile_workspace(workspace_root: &Path, db: &SharedDb) {
+async fn reconcile_workspace(
+    workspace_root: &Path,
+    db: &SharedDb,
+    shutdown: &swissarmyhammer_code_context::ShutdownFlag,
+) {
     let embedder = super::build_default_embedder().await;
     reconcile_workspace_with_embedder(
         workspace_root,
         db,
         embedder,
         swissarmyhammer_code_context::noop_reporter(),
+        shutdown,
     )
     .await;
 }
@@ -315,6 +353,7 @@ async fn reconcile_workspace(workspace_root: &Path, db: &SharedDb) {
 pub fn run_periodic_reconcile(
     workspace_root: impl AsRef<Path>,
     db: SharedDb,
+    shutdown: swissarmyhammer_code_context::ShutdownFlag,
 ) -> tokio::task::JoinHandle<()> {
     let workspace_root = workspace_root.as_ref().to_path_buf();
     tokio::spawn(async move {
@@ -324,7 +363,11 @@ pub fn run_periodic_reconcile(
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            reconcile_workspace(&workspace_root, &db).await;
+            // Stop before any reconcile write once the leader has stepped down.
+            if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            reconcile_workspace(&workspace_root, &db, &shutdown).await;
         }
     })
 }
@@ -744,6 +787,7 @@ mod tests {
             Arc::clone(&db),
             None,
             swissarmyhammer_code_context::noop_reporter(),
+            swissarmyhammer_code_context::new_shutdown_flag(),
         )
         .await;
 
@@ -799,6 +843,7 @@ mod tests {
         configure_connection(&conn).unwrap();
         create_schema(&conn).unwrap();
         let db: swissarmyhammer_code_context::SharedDb = Arc::new(Mutex::new(conn));
+        let sd = swissarmyhammer_code_context::new_shutdown_flag();
 
         // Initial reconcile populates indexed_files and drives the dirty set,
         // exactly as the leader's startup pass does.
@@ -807,6 +852,7 @@ mod tests {
             &db,
             None,
             swissarmyhammer_code_context::noop_reporter(),
+            &sd,
         )
         .await;
         {
@@ -840,6 +886,7 @@ mod tests {
             &db,
             None,
             swissarmyhammer_code_context::noop_reporter(),
+            &sd,
         )
         .await;
 
@@ -900,5 +947,75 @@ mod tests {
 
         assert_eq!(get_ts_indexed(&conn, "src/partial.rs"), Some(0));
         assert_eq!(get_lsp_indexed(&conn, "src/partial.rs"), Some(0));
+    }
+
+    /// Driving `reconcile_workspace_with_embedder` with the shutdown flag
+    /// already set must NOT index the file: the FS-walk reconcile inserts the
+    /// new file row (`ts_indexed = 0`), but the indexer it then calls hits its
+    /// top-of-loop `break` and writes no chunks and never flips `ts_indexed`.
+    /// This drives the real production code path (no inline guard), so it would
+    /// fail if the indexer's step-down break were removed.
+    #[tokio::test]
+    async fn periodic_reconcile_stops_writing_after_shutdown_flag_set() {
+        use std::sync::{Arc, Mutex};
+        use swissarmyhammer_code_context::new_shutdown_flag;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+
+        let conn = Connection::open(dir.path().join("index.db")).unwrap();
+        configure_connection(&conn).unwrap();
+        create_schema(&conn).unwrap();
+        let db: swissarmyhammer_code_context::SharedDb = Arc::new(Mutex::new(conn));
+
+        // A brand-new source file that a reconcile WOULD pick up and index.
+        std::fs::write(
+            dir.path().join("src/never_announced.rs"),
+            "pub fn brand_new() -> i32 { 42 }",
+        )
+        .unwrap();
+
+        // Step-down already happened: the flag is set before the pass.
+        let shutdown = new_shutdown_flag();
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        // Drive the REAL production path unconditionally. The reconcile inserts
+        // the file row, then the indexer breaks on the first iteration because
+        // the flag is set.
+        super::reconcile_workspace_with_embedder(
+            dir.path(),
+            &db,
+            None,
+            swissarmyhammer_code_context::noop_reporter(),
+            &shutdown,
+        )
+        .await;
+
+        let conn = db.lock().unwrap();
+        // The FS-walk reconcile inserted the row...
+        assert!(
+            file_exists(&conn, "src/never_announced.rs"),
+            "startup_cleanup should have inserted the new file row"
+        );
+        // ...but the indexer's step-down break must have left it un-indexed:
+        // ts_indexed still 0 and no chunks written.
+        assert_eq!(
+            get_ts_indexed(&conn, "src/never_announced.rs"),
+            Some(0),
+            "with the shutdown flag set, the indexer must break before flipping \
+             ts_indexed, leaving the file dirty"
+        );
+        let chunk_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ts_chunks WHERE file_path = ?1",
+                ["src/never_announced.rs"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            chunk_count, 0,
+            "with the shutdown flag set, the indexer must write zero chunks for \
+             the new file"
+        );
     }
 }

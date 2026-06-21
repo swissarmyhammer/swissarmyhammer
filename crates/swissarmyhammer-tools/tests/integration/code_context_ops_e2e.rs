@@ -250,6 +250,7 @@ async fn index_real_workspace() -> (IsolatedTestEnvironment, tempfile::TempDir, 
         &root,
         Arc::clone(&shared_db),
         swissarmyhammer_code_context::noop_reporter(),
+        swissarmyhammer_code_context::new_shutdown_flag(),
     )
     .await;
 
@@ -703,6 +704,7 @@ async fn qwen_embedding_lsp_layered_e2e() {
         root,
         Arc::clone(&shared_db),
         swissarmyhammer_code_context::noop_reporter(),
+        swissarmyhammer_code_context::new_shutdown_flag(),
     )
     .await;
 

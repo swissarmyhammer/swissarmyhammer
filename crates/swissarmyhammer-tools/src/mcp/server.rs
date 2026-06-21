@@ -331,6 +331,12 @@ impl McpServer {
     /// How often followers retry promotion to leader.
     const REELECTION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
+    /// How often the leader refreshes its leadership lease. Mirrors
+    /// [`swissarmyhammer_leader_election::HEARTBEAT_INTERVAL`] so the in-process
+    /// loop cadence matches the lease-freshness math (TTL is 3x this).
+    const LEADER_HEARTBEAT_INTERVAL: std::time::Duration =
+        swissarmyhammer_code_context::LEASE_HEARTBEAT_INTERVAL;
+
     /// How often the LSP supervisor is polled for daemon health.
     const LSP_HEALTH_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -393,6 +399,11 @@ impl McpServer {
                 // The leader runs no follower diagnostics subscriber, so there is
                 // nothing to cancel on (a no-op) re-election.
                 Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone(), None);
+                // The leader heartbeats its lease; if preempted (a live session
+                // took over a stale lease) it steps down to follower and starts
+                // polling for re-promotion — preserving the single-writer
+                // invariant (no two indexers).
+                Self::spawn_leader_heartbeat_loop(Arc::clone(&ws), workspace_root.clone());
                 Self::spawn_lsp_health_loop(lsp_handle, ws, workspace_root);
             }
             None => {
@@ -442,7 +453,10 @@ impl McpServer {
     ) {
         let ws_lock = ws.lock().expect("workspace mutex poisoned");
         if let Some(shared_db) = ws_lock.shared_db() {
-            Self::start_indexing_workers(workspace_root.to_path_buf(), shared_db);
+            let shutdown = ws_lock
+                .leader_shutdown_flag()
+                .expect("leader has a shutdown flag");
+            Self::start_indexing_workers(workspace_root.to_path_buf(), shared_db, shutdown);
         }
     }
 
@@ -582,6 +596,43 @@ impl McpServer {
         });
     }
 
+    /// Spawn the leader's lease-heartbeat loop.
+    ///
+    /// Only the leader runs this. Every `LEADER_HEARTBEAT_INTERVAL` it refreshes
+    /// its leadership lease via `ws.heartbeat_lease()`. A `true` return means we
+    /// are still the leader. A `false` return means we were PREEMPTED — a live
+    /// session took over our stale lease (e.g. this process was wedged long
+    /// enough for the lease to expire). On preemption the leader MUST stop being
+    /// a writer: it steps down to follower (releasing the flock and the
+    /// read-write DB connection), then starts the normal re-election poll so it
+    /// can reclaim leadership later. This is the single-writer invariant — a
+    /// preempted leader never keeps indexing alongside the new one.
+    fn spawn_leader_heartbeat_loop(
+        ws: Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
+        workspace_root: std::path::PathBuf,
+    ) {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Self::LEADER_HEARTBEAT_INTERVAL).await;
+                let still_leader = ws
+                    .lock()
+                    .expect("workspace mutex poisoned")
+                    .heartbeat_lease();
+                if still_leader {
+                    continue;
+                }
+                tracing::warn!(
+                    workspace = %workspace_root.display(),
+                    "code-context: lost leadership lease, stepping down"
+                );
+                ws.lock().expect("workspace mutex poisoned").step_down();
+                // Now a follower again — poll for re-promotion and stop this loop.
+                Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone(), None);
+                break;
+            }
+        });
+    }
+
     /// Waits for the LSP supervisor to finish, starts LSP indexing workers if
     /// we're the leader, then runs the 60s LSP health-check loop forever.
     fn spawn_lsp_health_loop(
@@ -636,13 +687,20 @@ impl McpServer {
     fn spawn_ts_and_watcher_workers(
         workspace_root: std::path::PathBuf,
         shared_db: swissarmyhammer_code_context::SharedDb,
+        shutdown: swissarmyhammer_code_context::ShutdownFlag,
         log_suffix: &'static str,
     ) {
         // Start tree-sitter indexing
         let ts_root = workspace_root.clone();
         let ts_db = std::sync::Arc::clone(&shared_db);
+        let ts_shutdown = std::sync::Arc::clone(&shutdown);
         tokio::spawn(async move {
             use super::tools::code_context::index_discovered_files_async;
+            // A step-down between spawn and execution must abort the one-shot
+            // index so the stepped-down leader does not write.
+            if ts_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
             tracing::info!(
                 "code-context: starting tree-sitter indexing for {}{}",
                 ts_root.display(),
@@ -655,6 +713,7 @@ impl McpServer {
                 &ts_root,
                 ts_db,
                 swissarmyhammer_code_context::noop_reporter(),
+                std::sync::Arc::clone(&ts_shutdown),
             )
             .await;
             tracing::info!(
@@ -666,9 +725,11 @@ impl McpServer {
         // Start file watcher
         let watcher_root = workspace_root.clone();
         let watcher_db = std::sync::Arc::clone(&shared_db);
+        let watcher_shutdown = std::sync::Arc::clone(&shutdown);
         tokio::spawn(async move {
             use super::tools::code_context::watcher::start_code_context_watcher;
-            let _watcher_handle = start_code_context_watcher(watcher_root, watcher_db);
+            let _watcher_handle =
+                start_code_context_watcher(watcher_root, watcher_db, watcher_shutdown);
             std::future::pending::<()>().await;
         });
 
@@ -681,9 +742,11 @@ impl McpServer {
         // watcher spawned just above.
         let reconcile_root = workspace_root;
         let reconcile_db = std::sync::Arc::clone(&shared_db);
+        let reconcile_shutdown = shutdown;
         tokio::spawn(async move {
             use super::tools::code_context::watcher::run_periodic_reconcile;
-            let _reconcile_handle = run_periodic_reconcile(reconcile_root, reconcile_db);
+            let _reconcile_handle =
+                run_periodic_reconcile(reconcile_root, reconcile_db, reconcile_shutdown);
             std::future::pending::<()>().await;
         });
     }
@@ -693,8 +756,9 @@ impl McpServer {
     fn start_indexing_workers(
         workspace_root: std::path::PathBuf,
         shared_db: swissarmyhammer_code_context::SharedDb,
+        shutdown: swissarmyhammer_code_context::ShutdownFlag,
     ) {
-        Self::spawn_ts_and_watcher_workers(workspace_root, shared_db, "");
+        Self::spawn_ts_and_watcher_workers(workspace_root, shared_db, shutdown, "");
     }
 
     /// Start indexing workers after a follower-to-leader promotion.
@@ -708,12 +772,14 @@ impl McpServer {
     fn start_indexing_workers_after_promotion(
         workspace_root: std::path::PathBuf,
         shared_db: swissarmyhammer_code_context::SharedDb,
+        shutdown: swissarmyhammer_code_context::ShutdownFlag,
         bus_frontend: Option<String>,
         socket_path: std::path::PathBuf,
     ) {
         Self::spawn_ts_and_watcher_workers(
             workspace_root.clone(),
             std::sync::Arc::clone(&shared_db),
+            std::sync::Arc::clone(&shutdown),
             " (after promotion)",
         );
 
@@ -731,6 +797,7 @@ impl McpServer {
                 " (after promotion)",
                 bus_frontend.as_deref(),
                 &socket_path,
+                std::sync::Arc::clone(&shutdown),
             );
         });
     }
@@ -1682,6 +1749,7 @@ fn spawn_lsp_workers_for_clients(
     log_suffix: &str,
     bus_frontend: Option<&str>,
     socket_path: &std::path::Path,
+    shutdown: swissarmyhammer_code_context::ShutdownFlag,
 ) {
     if clients.is_empty() {
         return;
@@ -1693,9 +1761,7 @@ fn spawn_lsp_workers_for_clients(
     // chokepoint both initial-leader and post-promotion startup pass through —
     // right where the running sessions first become available.
     spawn_request_server_for_leader(socket_path, clients);
-    use swissarmyhammer_code_context::{
-        new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig,
-    };
+    use swissarmyhammer_code_context::{spawn_lsp_indexing_worker, LspWorkerConfig};
     for (server_name, session) in clients {
         let worker_db = std::sync::Arc::clone(shared_db);
         spawn_lsp_indexing_worker(
@@ -1704,7 +1770,7 @@ fn spawn_lsp_workers_for_clients(
             session.clone(),
             LspWorkerConfig::default(),
             server_name.clone(),
-            new_shutdown_flag(),
+            shutdown.clone(),
         );
         tracing::info!(
             "code-context: LSP indexing worker started for {}{} (server: {})",
@@ -1968,16 +2034,20 @@ fn handle_promotion_result(
             // After promotion this process owns the proxy; surface its bus
             // frontend so the cold re-spawn also wires the cross-process fan-out,
             // and its election request socket so the new leader serves followers.
-            let (bus_frontend, socket_path) = {
+            let (bus_frontend, socket_path, shutdown) = {
                 let ws_lock = ws.lock().expect("workspace mutex poisoned");
                 (
                     ws_lock.bus_addresses().map(|a| a.frontend),
                     ws_lock.socket_path().to_path_buf(),
+                    ws_lock
+                        .leader_shutdown_flag()
+                        .expect("promoted leader has a shutdown flag"),
                 )
             };
             McpServer::start_indexing_workers_after_promotion(
                 workspace_root.to_path_buf(),
                 shared_db,
+                shutdown,
                 bus_frontend,
                 socket_path,
             );
@@ -2007,6 +2077,11 @@ fn start_lsp_workers_if_leader(
     let bus_frontend = ws_lock.bus_addresses().map(|a| a.frontend);
     // The election request socket the leader binds so followers can route to it.
     let socket_path = ws_lock.socket_path().to_path_buf();
+    // The same shutdown flag the workspace owns for this tenure, so these LSP
+    // workers stop on step-down alongside the TS/watcher/reconcile workers.
+    let shutdown = ws_lock
+        .leader_shutdown_flag()
+        .expect("leader has a shutdown flag");
     drop(ws_lock);
     spawn_lsp_workers_for_clients(
         workspace_root,
@@ -2015,6 +2090,7 @@ fn start_lsp_workers_if_leader(
         log_suffix,
         bus_frontend.as_deref(),
         &socket_path,
+        shutdown,
     );
 }
 

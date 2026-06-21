@@ -1810,6 +1810,11 @@ fn execute_get_blastradius(
 /// indexer over a temp workspace. The function is otherwise only called from
 /// within this crate (the MCP server bootstrap and the file watcher).
 ///
+/// The `shutdown` flag is the leader's step-down signal: when set, the indexer
+/// stops at the top of its per-file loop so a preempted old leader stops writing
+/// the shared DB promptly. One-shot/non-leader callers pass a fresh never-set
+/// flag (`new_shutdown_flag()`).
+///
 /// Returns an [`IndexRunStats`] summarising the run. Callers that drive the
 /// indexer purely for side effects (the bootstrap pass, the file watcher)
 /// may ignore the value; the synchronous `rebuild index` MCP op uses it to
@@ -1818,9 +1823,10 @@ pub async fn index_discovered_files_async(
     workspace_root: &Path,
     db: swissarmyhammer_code_context::SharedDb,
     reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
+    shutdown: swissarmyhammer_code_context::ShutdownFlag,
 ) -> swissarmyhammer_code_context::IndexRunStats {
     let embedder = build_default_embedder().await;
-    index_discovered_files_with_embedder(workspace_root, db, embedder, reporter).await
+    index_discovered_files_with_embedder(workspace_root, db, embedder, reporter, shutdown).await
 }
 
 /// Construct the default embedder and load it.
@@ -1927,11 +1933,17 @@ async fn build_default_embedder() -> Option<std::sync::Arc<dyn model_embedding::
 /// When `embedder` is `None` the indexer behaves as it did before chunk
 /// embeddings existed: chunks are written without an embedding blob and
 /// `embedded` stays at 0.
+///
+/// The `shutdown` flag is checked at the top of the per-file loop: when set
+/// (the leader has stepped down / been preempted), the pass stops early and
+/// returns the partial [`IndexRunStats`] so the old leader stops writing the
+/// shared DB before the new leader becomes the sole writer.
 pub(crate) async fn index_discovered_files_with_embedder(
     workspace_root: &Path,
     db: swissarmyhammer_code_context::SharedDb,
     embedder: Option<std::sync::Arc<dyn model_embedding::TextEmbedder>>,
     reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
+    shutdown: swissarmyhammer_code_context::ShutdownFlag,
 ) -> swissarmyhammer_code_context::IndexRunStats {
     use std::sync::Arc;
     use swissarmyhammer_code_context::{IndexProgress, IndexRunStats};
@@ -2017,6 +2029,21 @@ pub(crate) async fn index_discovered_files_with_embedder(
     let total_batches: u64 = total as u64;
 
     for relative_path in &dirty_files {
+        // Single-writer invariant: stop the pass promptly once the leader has
+        // stepped down. A preempted old leader must not keep writing the shared
+        // on-disk DB through its remaining dirty set while the new leader writes
+        // it too (the SharedDb mutex is per-process and does not serialize two
+        // processes). Mirrors the per-iteration check in `run_lsp_indexing_loop`.
+        if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::info!(
+                "code-context: tree-sitter indexer stopping mid-pass (stepped down) — \
+                 {} of {} dirty files indexed",
+                indexed,
+                total
+            );
+            break;
+        }
+
         let file_path = workspace_root.join(relative_path);
 
         // 1. Detect language (no DB needed)
@@ -2537,9 +2564,14 @@ async fn execute_rebuild_index(
             (swissarmyhammer_code_context::noop_reporter(), None)
         }
     };
-    let stats =
-        index_discovered_files_async(&workspace_root, shared_db, std::sync::Arc::clone(&reporter))
-            .await;
+    let stats = index_discovered_files_async(
+        &workspace_root,
+        shared_db,
+        std::sync::Arc::clone(&reporter),
+        ws.leader_shutdown_flag()
+            .unwrap_or_else(swissarmyhammer_code_context::new_shutdown_flag),
+    )
+    .await;
 
     // Drop the reporter so the mpsc channel closes; then await the
     // drain task so any buffered notifications (notably the terminal
@@ -3361,6 +3393,7 @@ impl Calculator {
                 root,
                 shared_db,
                 swissarmyhammer_code_context::noop_reporter(),
+                swissarmyhammer_code_context::new_shutdown_flag(),
             )
             .await;
         }
@@ -4018,6 +4051,7 @@ impl Calculator {
             shared_db.clone(),
             Some(embedder),
             swissarmyhammer_code_context::noop_reporter(),
+            swissarmyhammer_code_context::new_shutdown_flag(),
         )
         .await;
 
@@ -4054,6 +4088,7 @@ impl Calculator {
             shared_db.clone(),
             Some(embedder),
             swissarmyhammer_code_context::noop_reporter(),
+            swissarmyhammer_code_context::new_shutdown_flag(),
         )
         .await;
 
@@ -4105,6 +4140,7 @@ impl Calculator {
             shared_db.clone(),
             Some(embedder),
             swissarmyhammer_code_context::noop_reporter(),
+            swissarmyhammer_code_context::new_shutdown_flag(),
         )
         .await;
 
@@ -4159,6 +4195,7 @@ impl Calculator {
             shared_db.clone(),
             None,
             swissarmyhammer_code_context::noop_reporter(),
+            swissarmyhammer_code_context::new_shutdown_flag(),
         )
         .await;
 
@@ -4239,6 +4276,7 @@ impl Calculator {
             shared_db.clone(),
             Some(embedder),
             dyn_reporter,
+            swissarmyhammer_code_context::new_shutdown_flag(),
         )
         .await;
 
@@ -4400,7 +4438,14 @@ impl Calculator {
         let reporter = std::sync::Arc::new(VecReporter::new());
         let dyn_reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter> =
             reporter.clone();
-        index_discovered_files_with_embedder(&root, shared_db, None, dyn_reporter).await;
+        index_discovered_files_with_embedder(
+            &root,
+            shared_db,
+            None,
+            dyn_reporter,
+            swissarmyhammer_code_context::new_shutdown_flag(),
+        )
+        .await;
 
         let events = reporter.snapshot();
         assert_eq!(
@@ -4448,7 +4493,14 @@ impl Calculator {
         let reporter = std::sync::Arc::new(VecReporter::new());
         let dyn_reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter> =
             reporter.clone();
-        index_discovered_files_with_embedder(&root, shared_db, None, dyn_reporter).await;
+        index_discovered_files_with_embedder(
+            &root,
+            shared_db,
+            None,
+            dyn_reporter,
+            swissarmyhammer_code_context::new_shutdown_flag(),
+        )
+        .await;
 
         let events = reporter.snapshot();
         assert_eq!(
@@ -4466,6 +4518,83 @@ impl Calculator {
             } => {}
             other => panic!("final event must be Done(0, 0, _), got {other:?}"),
         }
+    }
+
+    /// Single-writer invariant: when the leader's `ShutdownFlag` is already set
+    /// before the indexing pass starts (the preemption / step-down case), the
+    /// tree-sitter indexer must stop at the top of the per-file loop and NOT
+    /// write the whole dirty set — otherwise a preempted old leader keeps
+    /// writing the shared on-disk DB while the new leader is also writing it.
+    ///
+    /// We seed several dirty files, set the flag, run the indexer with
+    /// `embedder = None`, and assert it left every file un-indexed
+    /// (`ts_indexed = 0`). A pre-set flag is the deterministic worst case: the
+    /// check at the top of the loop fires on the first iteration.
+    #[tokio::test]
+    async fn test_indexer_stops_mid_pass_when_shutdown_flag_set() {
+        use swissarmyhammer_code_context::CodeContextWorkspace;
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path().to_path_buf();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        // Seed several dirty source files so "stops early" is observable.
+        let files = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs"];
+        for name in files {
+            std::fs::write(
+                root.join("src").join(name),
+                format!("pub fn {}() {{}}\n", name.trim_end_matches(".rs")),
+            )
+            .unwrap();
+        }
+
+        let ws = CodeContextWorkspace::open(&root).expect("workspace open");
+        let shared_db = ws.shared_db().expect("leader has shared db");
+
+        // Sanity: startup_cleanup left all files dirty (ts_indexed = 0).
+        let dirty_before: i64 = {
+            let conn = shared_db.lock().unwrap_or_else(|p| p.into_inner());
+            conn.query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            dirty_before,
+            files.len() as i64,
+            "all seeded files should be dirty before indexing"
+        );
+
+        // Preempt before the pass: set the flag so the loop-top check fires on
+        // the first iteration.
+        let shutdown = swissarmyhammer_code_context::new_shutdown_flag();
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        index_discovered_files_with_embedder(
+            &root,
+            shared_db.clone(),
+            None,
+            swissarmyhammer_code_context::noop_reporter(),
+            shutdown,
+        )
+        .await;
+
+        let still_dirty: i64 = {
+            let conn = shared_db.lock().unwrap_or_else(|p| p.into_inner());
+            conn.query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            still_dirty,
+            files.len() as i64,
+            "a flag set before the pass should stop the indexer on the first \
+             iteration, leaving every file un-indexed (got {still_dirty} still dirty)"
+        );
     }
 
     // -----------------------------------------------------------------------

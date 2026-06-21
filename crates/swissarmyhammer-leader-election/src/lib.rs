@@ -51,6 +51,8 @@ mod bus;
 pub mod discovery;
 mod election;
 mod error;
+mod lease;
+mod policy;
 pub mod proxy;
 pub mod request_ipc;
 
@@ -59,4 +61,9 @@ pub use election::{
     peek_leader_pid, ElectionConfig, ElectionOutcome, FollowerGuard, LeaderElection, LeaderGuard,
 };
 pub use error::{ElectionError, Result};
+pub use lease::{
+    heartbeat, lease_held_by, new_nonce, read_lease, try_claim_lease, write_lease_atomic,
+    ClaimOutcome, Clock, Lease, SystemClock, TestClock, HEARTBEAT_INTERVAL, LEASE_TTL,
+};
+pub use policy::may_contend_for_leadership;
 pub use request_ipc::{IpcError, RequestClient, RequestEnvelope, RequestServer, ResponseEnvelope};

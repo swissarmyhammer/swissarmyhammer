@@ -59,6 +59,10 @@ pub use lsp_indexer::{
     build_qualified_path, build_symbol_id, flatten_symbols, mark_lsp_indexed, write_edges,
     write_symbols, CallEdge, FlatSymbol,
 };
+/// Re-export the leadership lease-heartbeat cadence so the MCP server can run
+/// its leader-heartbeat loop on the same interval as the lease math without
+/// taking a direct dependency on the leader-election crate.
+pub use swissarmyhammer_leader_election::HEARTBEAT_INTERVAL as LEASE_HEARTBEAT_INTERVAL;
 // The LSP client, server-spec types, and builtin registry now live in
 // `swissarmyhammer-lsp` (the dependency edge was inverted: this crate depends
 // on `swissarmyhammer-lsp`). Re-export them here so existing consumers of
