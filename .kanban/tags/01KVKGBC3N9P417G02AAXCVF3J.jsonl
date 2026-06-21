@@ -1,0 +1,1 @@
+{"id":"01KVKGBC3N67ASJZY55S947QJ5","timestamp":"2026-06-20T21:52:50.293732Z","op":"create","item_id":"01KVKGBC3N9P417G02AAXCVF3J","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 006b75\n+tag_name: leader\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 006b75\n-tag_name: leader\n","transaction_id":null}

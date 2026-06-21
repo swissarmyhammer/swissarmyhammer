@@ -29,6 +29,10 @@ pub struct ParamMeta {
     pub short: Option<char>,
     /// Alternative names
     pub aliases: &'static [&'static str],
+    /// Closed set of accepted values, emitted as a JSON Schema `enum` for this
+    /// parameter. `None` (the default) leaves the parameter unconstrained — so
+    /// existing parameters are unaffected.
+    pub allowed_values: Option<&'static [&'static str]>,
 }
 
 impl ParamMeta {
@@ -40,6 +44,7 @@ impl ParamMeta {
             required: false,
             short: None,
             aliases: &[],
+            allowed_values: None,
         }
     }
 
@@ -73,6 +78,13 @@ impl ParamMeta {
         self.short = c;
         self
     }
+
+    /// Constrain the parameter to a closed set of values (emitted as a JSON
+    /// Schema `enum`).
+    pub const fn allowed_values(mut self, values: &'static [&'static str]) -> Self {
+        self.allowed_values = Some(values);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -88,6 +100,14 @@ mod tests {
         assert!(!p.required);
         assert!(p.short.is_none());
         assert!(p.aliases.is_empty());
+        assert!(p.allowed_values.is_none());
+    }
+
+    #[test]
+    fn test_allowed_values_builder() {
+        static VALUES: &[&str] = &["error", "warning"];
+        let p = ParamMeta::new("severity").allowed_values(VALUES);
+        assert_eq!(p.allowed_values, Some(VALUES));
     }
 
     #[test]

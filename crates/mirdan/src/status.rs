@@ -28,7 +28,7 @@ use crate::table;
 ///
 /// This is the single source of truth for the marker; the CLI re-exports it as
 /// `CLAUDE_MD_PREAMBLE` so there is exactly one definition.
-pub const PREAMBLE_MARKER: &str = "MANDATORY: load the thoughtful skill";
+pub const PREAMBLE_MARKER: &str = "MANDATORY: load the thoughtful skill if not already loaded.";
 
 /// A sah-managed component that can be installed into an agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

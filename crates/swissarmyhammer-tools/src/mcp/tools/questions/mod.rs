@@ -179,14 +179,9 @@ mod tests {
         assert!(op_enum.contains(&serde_json::json!("ask question")));
         assert!(op_enum.contains(&serde_json::json!("summarize questions")));
 
-        // Wire schema carries per-op signatures and drops the heavy keys.
-        assert!(schema["x-op-signatures"].is_object());
-        for key in [
-            "x-operation-schemas",
-            "x-operation-groups",
-            "x-forgiving-input",
-            "examples",
-        ] {
+        // Wire schema drops every heavy key, including the per-op signature
+        // map `x-op-signatures` (now full-only).
+        for key in swissarmyhammer_operations::WIRE_DROPPED_KEYS {
             assert!(!obj.contains_key(key), "wire schema must omit {key:?}");
         }
     }
@@ -200,6 +195,9 @@ mod tests {
             .as_array()
             .expect("should have x-operation-schemas");
         assert_eq!(op_schemas.len(), 2);
+
+        // The per-op signature map is carried on the full schema.
+        assert!(schema["x-op-signatures"].is_object());
     }
 
     #[test]

@@ -41,6 +41,8 @@ members = [
     "crates/swissarmyhammer-kanban",
     "crates/swissarmyhammer-lsp",
     "crates/swissarmyhammer-code-context",
+    "crates/swissarmyhammer-diagnostics",
+    "crates/swissarmyhammer-search",
     "crates/swissarmyhammer-statusline",
     "crates/swissarmyhammer-operations",
     "crates/swissarmyhammer-operations-macros",
@@ -83,7 +85,7 @@ tag-name = "v{{version}}"      # Single tag for workspace
 consolidate-commits = true     # One commit for all version bumps
 
 [workspace.package]
-version = "0.15.0"
+version = "0.15.1"
 edition = "2021"
 rust-version = "1.92"
 authors = ["SwissArmyHammer Team"]
@@ -102,6 +104,8 @@ serde_yaml_ng = "0.10"
 serde_json = "1"
 jsonc-parser = { version = "0.32", features = ["serde", "serde_json"] }
 anyhow = "1"
+convert_case = "0.10"
+unicode-segmentation = "1"
 thiserror = "2"
 tracing = { version = "0.1", features = ["log"] }
 tracing-log = "0.2"
@@ -285,6 +289,7 @@ swissarmyhammer-command-options = { path = "crates/swissarmyhammer-command-optio
 swissarmyhammer-command-service = { path = "crates/swissarmyhammer-command-service" }
 swissarmyhammer-common = { path = "crates/swissarmyhammer-common" }
 swissarmyhammer-config = { path = "crates/swissarmyhammer-config" }
+swissarmyhammer-diagnostics = { path = "crates/swissarmyhammer-diagnostics" }
 swissarmyhammer-directory = { path = "crates/swissarmyhammer-directory" }
 swissarmyhammer-doctor = { path = "crates/swissarmyhammer-doctor" }
 swissarmyhammer-embedding = { path = "crates/swissarmyhammer-embedding" }
@@ -299,6 +304,7 @@ swissarmyhammer-js = { path = "crates/swissarmyhammer-js" }
 swissarmyhammer-kanban = { path = "crates/swissarmyhammer-kanban" }
 swissarmyhammer-mcp-proxy = { path = "crates/swissarmyhammer-mcp-proxy" }
 swissarmyhammer-merge = { path = "crates/swissarmyhammer-merge" }
+swissarmyhammer-search = { path = "crates/swissarmyhammer-search" }
 swissarmyhammer-perspectives = { path = "crates/swissarmyhammer-perspectives" }
 swissarmyhammer-plugin = { path = "crates/swissarmyhammer-plugin" }
 swissarmyhammer-project-detection = { path = "crates/swissarmyhammer-project-detection" }

@@ -77,6 +77,7 @@ impl SchemaConfig {
 /// - Op field with enum of all operations
 /// - x-operation-schemas for operation-specific documentation
 /// - x-operation-groups categorizing operations by noun
+/// - x-op-signatures mapping each op to its required parameter names
 /// - Custom extension fields from config
 ///
 /// # Example
@@ -89,19 +90,32 @@ impl SchemaConfig {
 /// let schema = generate_mcp_schema(&MY_OPERATIONS, config);
 /// ```
 ///
-/// This is a thin alias of [`generate_mcp_schema_full`], kept so the existing
-/// in-process / wire callers keep compiling during the full-vs-wire transition.
+/// This is a thin alias of [`generate_mcp_schema_full`], for in-process /
+/// non-wire callers only.
+///
+/// # Operation-tool authors: do NOT use this for `schema()`
+///
+/// An `McpTool::schema()` is the model-facing surface sent over MCP `tools/list`
+/// on every prompt — it must return [`generate_mcp_schema_wire`], which drops the
+/// heavy [`WIRE_DROPPED_KEYS`]. Return the FULL surface (this function /
+/// [`generate_mcp_schema_full`]) from the `McpTool::schema_full()` override
+/// instead, which the in-process CLI generator consumes. Using this alias for
+/// `schema()` ships `x-operation-schemas` / `x-operation-groups` /
+/// `x-op-signatures` to the model unnecessarily.
 pub fn generate_mcp_schema(operations: &[&dyn Operation], config: SchemaConfig) -> Value {
     generate_mcp_schema_full(operations, config)
 }
 
 /// Generate the complete CLI-facing MCP tool schema from operation metadata.
 ///
-/// Byte-for-byte the historical behavior of [`generate_mcp_schema`]: flat
-/// `properties`, the `op` enum, `x-operation-schemas`, `x-operation-groups`,
-/// `x-forgiving-input`, `examples`, and any custom extensions. The
+/// Flat `properties`, the `op` enum, `x-operation-schemas`,
+/// `x-operation-groups`, `x-forgiving-input`, `examples`, `x-op-signatures`
+/// (the per-op required-name map), and any custom extensions. The
 /// schema-driven CLI generator ([`crate::cli_gen`]) reads this surface
 /// in-process, so it must retain the per-op detail.
+///
+/// `x-op-signatures` has exactly one key per op in the enum; each value is that
+/// op's required parameter names (excluding `op`) in declaration order.
 ///
 /// # Arguments
 ///
@@ -120,6 +134,13 @@ pub fn generate_mcp_schema_full(operations: &[&dyn Operation], config: SchemaCon
     // Build operation groups
     let operation_groups = group_operations_by_noun(operations);
 
+    // Per-op required-name signatures, keyed by op string, covering every op.
+    // This is a full/documentation-only key — it never ships over the wire.
+    let signatures: Map<String, Value> = operations
+        .iter()
+        .map(|op| (op.op_string(), json!(required_param_names_for_op(*op))))
+        .collect();
+
     // Build base schema
     let mut schema = json!({
         "type": "object",
@@ -128,6 +149,7 @@ pub fn generate_mcp_schema_full(operations: &[&dyn Operation], config: SchemaCon
         "properties": all_properties,
         "x-operation-schemas": operation_schemas,
         "x-operation-groups": operation_groups,
+        "x-op-signatures": signatures,
     });
 
     // Add examples if provided
@@ -157,29 +179,31 @@ pub fn generate_mcp_schema_full(operations: &[&dyn Operation], config: SchemaCon
     schema
 }
 
-/// The heavy CLI-facing keys that the FULL schema carries but the slim WIRE
-/// schema deliberately omits.
+/// The CLI/documentation-facing keys that the FULL schema carries but the slim
+/// WIRE schema deliberately omits.
 ///
 /// [`generate_mcp_schema_full`] adds all of these; [`generate_mcp_schema_wire`]
-/// adds none of them. This is the single source of truth for that contract:
-/// wire-omission tests across the workspace import this slice instead of
-/// re-declaring the literal list, so adding a fifth heavy key here keeps every
-/// such test in lockstep.
-pub const WIRE_DROPPED_KEYS: [&str; 4] = [
+/// adds none of them. `x-op-signatures` (the per-op required-name map) lives
+/// here too: it is full-only and never ships over the wire. This is the single
+/// source of truth for that contract: wire-omission tests across the workspace
+/// import this slice instead of re-declaring the literal list, so adding a key
+/// here keeps every such test in lockstep.
+pub const WIRE_DROPPED_KEYS: [&str; 5] = [
     "x-operation-schemas",
     "x-operation-groups",
     "x-forgiving-input",
     "examples",
+    "x-op-signatures",
 ];
 
 /// Generate the slim WIRE MCP tool schema from operation metadata.
 ///
 /// This is the model-facing surface: it carries only what the model needs to
-/// call the tool correctly — the tool description, the `op` enum of valid op
-/// strings, and a compact per-op required-field map under `x-op-signatures`.
-/// It deliberately DROPS the heavy CLI-facing detail (`x-operation-schemas`,
-/// `x-operation-groups`, `x-forgiving-input`, `examples`) and the per-op
-/// property sub-objects, keeping only the `op` property.
+/// call the tool correctly — the tool description and the `op` enum of valid op
+/// strings. It deliberately DROPS the heavy CLI-facing detail
+/// (`x-operation-schemas`, `x-operation-groups`, `x-forgiving-input`,
+/// `examples`), the per-op required-name map (`x-op-signatures`, full-only),
+/// and the per-op property sub-objects — keeping only the `op` property.
 ///
 /// Shape:
 /// ```jsonc
@@ -188,25 +212,15 @@ pub const WIRE_DROPPED_KEYS: [&str; 4] = [
 ///   "additionalProperties": true,
 ///   "description": "<tool description>",
 ///   "properties": { "op": { "type": "string", "enum": [ ...op strings ] } },
-///   "required": ["op"],
-///   "x-op-signatures": { "<op>": ["<required param>", ...], ... }
+///   "required": ["op"]
 /// }
 /// ```
-///
-/// `x-op-signatures` has exactly one key per op in the enum; each value is that
-/// op's required parameter names (excluding `op`) in declaration order.
 ///
 /// # Arguments
 ///
 /// * `operations` - Slice of operation trait objects
 /// * `config` - Schema configuration (only `description` is used here)
 pub fn generate_mcp_schema_wire(operations: &[&dyn Operation], config: SchemaConfig) -> Value {
-    // Per-op required-name signatures, keyed by op string, covering every op.
-    let signatures: Map<String, Value> = operations
-        .iter()
-        .map(|op| (op.op_string(), json!(required_param_names_for_op(*op))))
-        .collect();
-
     // Only the `op` property survives, carrying the enum of valid op strings.
     let op_enum: Vec<String> = operations.iter().map(|op| op.op_string()).collect();
 
@@ -225,16 +239,15 @@ pub fn generate_mcp_schema_wire(operations: &[&dyn Operation], config: SchemaCon
         "description": config.description,
         "properties": properties,
         "required": [OP_FIELD],
-        "x-op-signatures": signatures,
     })
 }
 
 /// The required parameter names of a single operation, in declaration order.
 ///
 /// Excludes the synthetic `op` field. Shared by [`operation_to_schema`] (the
-/// per-op full schema) and [`generate_mcp_schema_wire`] (the wire signature
-/// map) so the required-derivation logic lives in exactly one place. An op with
-/// no required parameters yields an empty vec.
+/// per-op full schema) and [`generate_mcp_schema_full`] (the full
+/// `x-op-signatures` map) so the required-derivation logic lives in exactly one
+/// place. An op with no required parameters yields an empty vec.
 fn required_param_names_for_op(op: &dyn Operation) -> Vec<String> {
     op.parameters()
         .iter()
@@ -375,16 +388,20 @@ fn params_to_meta(params: &[ParamMeta]) -> Value {
 /// The op field is included with enum of all operations.
 fn collect_all_parameters(operations: &[&dyn Operation]) -> Map<String, Value> {
     let mut properties = Map::new();
-    let mut seen_params: HashMap<String, (ParamType, String)> = HashMap::new();
+    #[allow(clippy::type_complexity)]
+    let mut seen_params: HashMap<String, (ParamType, String, Option<&'static [&'static str]>)> =
+        HashMap::new();
 
     // Collect all unique parameters
     for op in operations {
         for param in op.parameters() {
             let key = param.name.to_string();
             // Keep the first description we see for each parameter name
-            seen_params
-                .entry(key)
-                .or_insert((param.param_type, param.description.to_string()));
+            seen_params.entry(key).or_insert((
+                param.param_type,
+                param.description.to_string(),
+                param.allowed_values,
+            ));
         }
     }
 
@@ -399,7 +416,7 @@ fn collect_all_parameters(operations: &[&dyn Operation]) -> Map<String, Value> {
     );
 
     // Add all collected parameters
-    for (name, (param_type, description)) in seen_params {
+    for (name, (param_type, description, allowed_values)) in seen_params {
         let json_type = param_type_to_json_schema_type(param_type);
 
         let mut prop = Map::new();
@@ -411,6 +428,10 @@ fn collect_all_parameters(operations: &[&dyn Operation]) -> Map<String, Value> {
 
         if param_type == ParamType::Array {
             prop.insert("items".to_string(), json!({"type": "string"}));
+        }
+
+        if let Some(values) = allowed_values {
+            prop.insert("enum".to_string(), json!(values));
         }
 
         properties.insert(name, Value::Object(prop));
@@ -453,6 +474,11 @@ fn operation_to_schema(op: &dyn Operation) -> Value {
         // For array types, add items schema
         if param.param_type == ParamType::Array {
             prop_schema.insert("items".to_string(), json!({"type": "string"}));
+        }
+
+        // Closed value sets become a JSON Schema `enum`.
+        if let Some(values) = param.allowed_values {
+            prop_schema.insert("enum".to_string(), json!(values));
         }
 
         properties.insert(param.name.to_string(), Value::Object(prop_schema));
@@ -559,6 +585,72 @@ mod tests {
         assert!(enum_vals.contains(&json!("add task")));
         assert!(enum_vals.contains(&json!("get task")));
         assert!(enum_vals.contains(&json!("list tasks")));
+    }
+
+    /// A mock op carrying one `allowed_values`-constrained param and one plain
+    /// param, to prove enum emission and back-compat in one place.
+    struct MockEnumOp;
+
+    static MOCK_ENUM_PARAMS: &[ParamMeta] = &[
+        ParamMeta::new("severity").allowed_values(&["error", "warning", "info", "hint"]),
+        ParamMeta::new("plain"),
+    ];
+
+    impl Operation for MockEnumOp {
+        fn verb(&self) -> &'static str {
+            "check"
+        }
+        fn noun(&self) -> &'static str {
+            "thing"
+        }
+        fn description(&self) -> &'static str {
+            "mock op with an enum-constrained param"
+        }
+        fn parameters(&self) -> &'static [ParamMeta] {
+            MOCK_ENUM_PARAMS
+        }
+    }
+
+    #[test]
+    fn allowed_values_emits_enum_and_plain_param_is_unchanged() {
+        let ops: Vec<&dyn Operation> = vec![&MockEnumOp];
+
+        // Top-level merged properties.
+        let props = collect_all_parameters(&ops);
+        assert_eq!(
+            props["severity"]["enum"],
+            json!(["error", "warning", "info", "hint"]),
+            "a param with allowed_values must emit a JSON Schema enum"
+        );
+        assert!(
+            props["plain"].get("enum").is_none(),
+            "a param without allowed_values must not emit an enum (back-compat)"
+        );
+
+        // Per-operation schema.
+        let op_schema = operation_to_schema(&MockEnumOp);
+        assert_eq!(
+            op_schema["properties"]["severity"]["enum"],
+            json!(["error", "warning", "info", "hint"])
+        );
+        assert!(op_schema["properties"]["plain"].get("enum").is_none());
+    }
+
+    #[test]
+    fn existing_ops_without_allowed_values_emit_no_enum() {
+        // Back-compat guard: ops that predate allowed_values are byte-for-byte
+        // unchanged — none of their params gain an `enum`.
+        let ops: Vec<&dyn Operation> = vec![&MockAddTask, &MockGetTask, &MockListTasks];
+        let props = collect_all_parameters(&ops);
+        for (name, prop) in &props {
+            if name == "op" {
+                continue; // the op selector legitimately has an enum
+            }
+            assert!(
+                prop.get("enum").is_none(),
+                "param {name} unexpectedly gained an enum"
+            );
+        }
     }
 
     #[test]
@@ -770,10 +862,11 @@ mod tests {
         let schema = generate_mcp_schema_wire(&ops, config);
         let obj = schema.as_object().unwrap();
 
-        assert!(!obj.contains_key("x-operation-schemas"));
-        assert!(!obj.contains_key("x-operation-groups"));
-        assert!(!obj.contains_key("x-forgiving-input"));
-        assert!(!obj.contains_key("examples"));
+        // Iterate the single source of truth so a newly-dropped key (e.g.
+        // `x-op-signatures`) is covered automatically.
+        for key in WIRE_DROPPED_KEYS {
+            assert!(!obj.contains_key(key), "wire schema must omit {key:?}");
+        }
     }
 
     #[test]
@@ -799,9 +892,9 @@ mod tests {
     }
 
     #[test]
-    fn wire_schema_signatures_cover_every_op_with_ordered_required_names() {
+    fn full_schema_signatures_cover_every_op_with_ordered_required_names() {
         let ops = full_mock_ops();
-        let schema = generate_mcp_schema_wire(&ops, SchemaConfig::new("Mock operations"));
+        let schema = generate_mcp_schema_full(&ops, SchemaConfig::new("Mock operations"));
         let sigs = schema["x-op-signatures"].as_object().unwrap();
 
         // One key per op in the enum.

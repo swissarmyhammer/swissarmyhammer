@@ -376,6 +376,11 @@ pub struct ScriptedAgentConfig {
     /// for this path and records the content the client returns (readable via
     /// [`ScriptedAgent::observed_read`]).
     pub read_file: Option<std::path::PathBuf>,
+    /// When set, every `prompt` attaches this prompt-cache usage to its
+    /// `PromptResponse._meta` (under the `cache_usage` key, as a real claude
+    /// agent does), so a fleet test can exercise the warm/cold cache-usage log
+    /// path without a live Anthropic backend.
+    pub cache_usage: Option<claude_agent::protocol_translator::CacheUsage>,
 }
 
 impl Default for ScriptedAgentConfig {
@@ -387,6 +392,7 @@ impl Default for ScriptedAgentConfig {
             bridge_to_connection: false,
             demand_permission: false,
             read_file: None,
+            cache_usage: None,
         }
     }
 }
@@ -732,9 +738,16 @@ async fn handle_prompt(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     mock.complete_turn(&session_key, pin_on_save);
-    responder
-        .cast()
-        .respond_with_result(Ok(PromptResponse::new(StopReason::EndTurn)))
+    // Attach prompt-cache usage to `_meta` exactly as a real claude agent does
+    // (`agent_prompt_handling::build_streaming_response`), so a fleet test can
+    // drive the warm/cold cache-usage log path off this mock.
+    let mut response = PromptResponse::new(StopReason::EndTurn);
+    if let Some(usage) = mock.config.cache_usage {
+        let mut meta = serde_json::Map::new();
+        meta.insert("cache_usage".to_string(), usage.to_meta_json());
+        response = response.meta(meta);
+    }
+    responder.cast().respond_with_result(Ok(response))
 }
 
 /// Issue the mid-turn `session/request_permission` round-trip a real `claude`

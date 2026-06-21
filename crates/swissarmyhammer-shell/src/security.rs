@@ -11,11 +11,15 @@ use swissarmyhammer_common::{ErrorSeverity, Result, Severity, SwissArmyHammerErr
 use thiserror::Error;
 use tracing::{info, warn};
 
-/// Maximum allowed command length in characters
-const MAX_COMMAND_LENGTH: usize = 4096;
+/// Maximum allowed command length in characters (default-policy fallback).
+///
+/// Mirrors [`crate::config::DEFAULT_MAX_COMMAND_LENGTH`]. The operative limit at
+/// runtime comes from the stacked YAML config; this is only the in-code default
+/// used by [`ShellSecurityPolicy::default`].
+const MAX_COMMAND_LENGTH: usize = crate::config::DEFAULT_MAX_COMMAND_LENGTH;
 
 /// Maximum allowed environment variable value length in characters
-const MAX_ENV_VALUE_LENGTH: usize = 1024;
+const MAX_ENV_VALUE_LENGTH: usize = crate::config::DEFAULT_MAX_ENV_VALUE_LENGTH;
 
 /// Security validation errors that can occur during shell command processing
 #[derive(Debug, Error)]
@@ -119,38 +123,15 @@ pub struct ShellSecurityPolicy {
 
 impl Default for ShellSecurityPolicy {
     fn default() -> Self {
+        // Single source of truth: the deny list is derived from the embedded
+        // builtin `config.yaml`, not a hand-maintained parallel copy. This
+        // eliminates the drift that previously existed between the two lists.
+        let config = crate::config::parse_shell_config(crate::config::BUILTIN_CONFIG_YAML)
+            .expect("embedded builtin shell config.yaml must always parse");
+
         Self {
             enable_validation: true,
-            blocked_commands: vec![
-                // Dangerous file operations
-                r"rm\s+-rf\s+/".to_string(),
-                r"rm\s+-rf\s+\*".to_string(),
-                r"format\s+".to_string(),
-                r"mkfs\s+".to_string(),
-                r"dd\s+if=.*of=/dev/".to_string(),
-                // System modification commands
-                r"fdisk\s+".to_string(),
-                r"parted\s+".to_string(),
-                r"shutdown\s+".to_string(),
-                r"reboot\s+".to_string(),
-                r"sudo\s+".to_string(),
-                r"systemctl\s+".to_string(),
-                r"crontab\s+".to_string(),
-                r"chmod\s+\+s\s+".to_string(),
-                // Network-based attacks
-                r"wget.*http.*\|.*sh".to_string(),
-                r"curl.*http.*\|.*sh".to_string(),
-                r"nc\s+-l\s+".to_string(),
-                r"ssh\s+.*@".to_string(),
-                // Code execution patterns
-                r"eval\s+".to_string(),
-                r"exec\s+/bin/".to_string(),
-                // Sensitive file access
-                r"/etc/passwd".to_string(),
-                r"/etc/shadow".to_string(),
-                // sed ends in pain, use the editing tools
-                r"sed\s+.*".to_string(), // Force more use of edit tools
-            ],
+            blocked_commands: config.deny.into_iter().map(|rule| rule.pattern).collect(),
             allowed_directories: None, // No directory restrictions by default
             max_command_length: MAX_COMMAND_LENGTH,
             enable_audit_logging: true,

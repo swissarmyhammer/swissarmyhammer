@@ -25,13 +25,12 @@ pub fn file_path_to_uri(path: &str) -> String {
 
 /// Convert a `file://` URI to a filesystem path.
 ///
-/// Strips the `file://` prefix. Returns the URI as-is for non-file schemes.
+/// Thin alias for the canonical [`swissarmyhammer_lsp::file_path_from_uri`] so
+/// the `file://` prefix-strip lives in exactly one place (the shared LSP crate
+/// both this crate and `swissarmyhammer-diagnostics` depend on); kept under its
+/// local name so existing op-module callers are unaffected.
 pub fn uri_to_file_path(uri: &str) -> String {
-    if let Some(path) = uri.strip_prefix("file://") {
-        path.to_string()
-    } else {
-        uri.to_string()
-    }
+    swissarmyhammer_lsp::file_path_from_uri(uri)
 }
 
 /// Guess an LSP `languageId` string from a file extension.

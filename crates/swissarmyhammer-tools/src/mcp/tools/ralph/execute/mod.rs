@@ -538,18 +538,13 @@ mod tests {
     fn test_schema_generation() {
         let tool = RalphTool::new();
 
-        // Wire schema: op present, heavy keys dropped, signatures present.
+        // Wire schema: op present, every heavy key dropped (including the
+        // full-only `x-op-signatures` map).
         let wire = tool.schema();
         assert!(wire.is_object());
         let obj = wire.as_object().unwrap();
         assert!(obj["properties"].as_object().unwrap().contains_key("op"));
-        assert!(wire["x-op-signatures"].is_object());
-        for key in [
-            "x-operation-schemas",
-            "x-operation-groups",
-            "x-forgiving-input",
-            "examples",
-        ] {
+        for key in swissarmyhammer_operations::WIRE_DROPPED_KEYS {
             assert!(!obj.contains_key(key), "wire schema must omit {key:?}");
         }
 
@@ -557,6 +552,7 @@ mod tests {
         let full = tool.schema_full();
         assert!(full["x-operation-schemas"].is_array());
         assert!(full["x-operation-groups"].is_object());
+        assert!(full["x-op-signatures"].is_object());
     }
 
     #[tokio::test]

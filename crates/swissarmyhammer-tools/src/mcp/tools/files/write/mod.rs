@@ -220,6 +220,11 @@ pub async fn execute_write(
     // Perform atomic write operation
     let bytes_written = WriteFileTool::write_file_atomic(&validated_path, &request.content).await?;
 
+    // Record the mutated path on the typed side-channel so the dispatch
+    // chokepoint can fold inline diagnostics into this result (no content
+    // parsing). `validated_path` is already the absolute path that was written.
+    context.record_mutated_path(validated_path.clone());
+
     let success_message = "OK".to_string();
 
     debug!(

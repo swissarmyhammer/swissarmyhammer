@@ -788,8 +788,6 @@ mod tests {
     fn test_no_live_lsp_empty_mutex_falls_through() {
         // An LSP client mutex exists but contains None (no connected server).
         // has_live_lsp() should return false, skipping the live layer.
-        use std::sync::{Arc, Mutex};
-
         let conn = test_db();
         insert_file(&conn, "src/app.rs", 0, 1);
         insert_lsp_symbol(
@@ -805,9 +803,14 @@ mod tests {
             1,
         );
 
-        // Create a SharedLspClient (Arc<Mutex<Option<...>>>) containing None
-        let empty_client: crate::lsp_worker::SharedLspClient = Arc::new(Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&empty_client));
+        // Create a SharedLspSession over a None client (no connected server)
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
         assert!(!ctx.has_live_lsp());
 
         let opts = GetDefinitionOptions {

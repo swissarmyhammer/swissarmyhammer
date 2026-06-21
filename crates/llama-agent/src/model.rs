@@ -23,6 +23,42 @@ use std::os::raw::c_char;
 
 static GLOBAL_BACKEND: OnceLock<Result<Arc<LlamaBackend>, String>> = OnceLock::new();
 
+/// Recurrent-state rollback window (in tokens) for partial `seq_rm`. Needed for
+/// two distinct rollback paths on hybrid attention + recurrent models
+/// (Qwen3.5/3.6 with gated delta net):
+///   1. The MTP `accept`'s partial clear of the verify's rejected drafts
+///      (bounded by `MtpParams::n_max` per round).
+///   2. The streaming KV-reuse trim-to-LCP in `prepare_streaming_kv_cache`,
+///      whose rollback distance is the number of tokens the cached state ran
+///      past the new prompt's LCP — i.e. the previous turn's generation length,
+///      which can easily be hundreds of tokens in an agentic loop.
+///
+/// If the rollback distance exceeds this window, `seq_rm` silently returns
+/// `Ok(false)`, `max_pos` stays high, and the next decode batch trips M-RoPE's
+/// `KV.max_pos < batch.start_pos` invariant. The callers handle that
+/// silent-failure case (fall back to cold start), but a comfortable window
+/// avoids that fallback for typical turns.
+///
+/// llama.cpp clamps this to 0 on non-recurrent arches automatically, so it
+/// costs nothing where it isn't needed. The compute graph scales linearly with
+/// this value (each snapshot is a tensor view), so a value of 1024 blew up the
+/// ggml object pool at graph reserve on Qwen3.5/3.6. 64 is the sweet spot:
+/// covers typical per-turn generation lengths (and the MTP per-step rollback
+/// within them) without inflating the compute graph. Longer turns fall back to
+/// a cold full-reprocess (see the `Ok(false)` handler in
+/// `prepare_streaming_kv_cache`) — slow but correct.
+///
+/// 2026-06-01: tried bumping to 256 on the assumption that the updated
+/// llama-cpp-rs had a larger graph pool; the kanban app crashed on the next
+/// context creation. Reverted. Future attempts need a real context-creation
+/// test against the 35B model BEFORE claiming the bump is safe — there is no
+/// headroom to guess at.
+///
+/// Shared by the context-params builder (`with_n_rs_seq`) and the session-state
+/// store's donor-rollback budget (`crate::agent::recurrent_rollback_window`) so
+/// both speak the same window — do not duplicate the literal.
+pub(crate) const N_RS_SEQ: u32 = 64;
+
 /// Get or initialize the global LlamaBackend singleton.
 ///
 /// llama.cpp can only be initialized once per process. This function ensures
@@ -402,39 +438,9 @@ impl ModelManager {
         let kv_type = KvCacheType::Q8_0;
         let flash_attn = llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_ENABLED;
 
-        // Recurrent-state rollback window for partial `seq_rm`. Needed for two
-        // distinct rollback paths on hybrid attention + recurrent models
-        // (Qwen3.5/3.6 with gated delta net):
-        //   1. The MTP `accept`'s partial clear of the verify's rejected
-        //      drafts (bounded by `MtpParams::n_max` per round).
-        //   2. The streaming KV-reuse trim-to-LCP in
-        //      `prepare_streaming_kv_cache`, whose rollback distance is the
-        //      number of tokens the cached state ran past the new prompt's
-        //      LCP — i.e. the previous turn's generation length, which can
-        //      easily be hundreds of tokens in an agentic loop.
-        // If the rollback distance exceeds this window, `seq_rm` silently
-        // returns `Ok(false)`, `max_pos` stays high, and the next decode
-        // batch trips M-RoPE's `KV.max_pos < batch.start_pos` invariant. The
-        // callers handle that silent-failure case (fall back to cold start),
-        // but a comfortable window avoids that fallback for typical turns.
-        //
-        // llama.cpp clamps this to 0 on non-recurrent arches automatically,
-        // so it costs nothing where it isn't needed. The compute graph
-        // scales linearly with this value (each snapshot is a tensor view),
-        // so a value of 1024 blew up the ggml object pool at graph reserve
-        // on Qwen3.5/3.6. 64 is the sweet spot: covers typical per-turn
-        // generation lengths (and the MTP per-step rollback within them)
-        // without inflating the compute graph. Longer turns fall back to a
-        // cold full-reprocess (see the `Ok(false)` handler in
-        // `prepare_streaming_kv_cache`) — slow but correct.
-        //
-        // 2026-06-01: tried bumping to 256 on the assumption that the
-        // updated llama-cpp-rs had a larger graph pool; the kanban app
-        // crashed on the next context creation. Reverted. Future attempts
-        // need a real context-creation test against the 35B model BEFORE
-        // claiming the bump is safe — there is no headroom to guess at.
-        const N_RS_SEQ: u32 = 64;
-
+        // Recurrent-state rollback window for partial `seq_rm`; see the
+        // `N_RS_SEQ` module const for the full rationale and the shared
+        // session-state-store coupling.
         let context_params = LlamaContextParams::default()
             .with_n_ctx(Some(std::num::NonZeroU32::new(n_ctx as u32).unwrap()))
             .with_n_batch(n_batch)

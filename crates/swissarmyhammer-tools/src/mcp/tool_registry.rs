@@ -392,6 +392,22 @@ pub struct ToolContext {
     /// tools use a `NoopReporter` and emit no progress notifications.
     pub progress_token: Option<ProgressToken>,
 
+    /// Typed side-channel by which a file-mutating tool declares the paths it
+    /// changed, so the dispatch chokepoint can fold inline diagnostics into the
+    /// tool's own result without parsing its `CallToolResult` content.
+    ///
+    /// A mutator (e.g. `files` `write`/`edit`) calls
+    /// [`record_mutated_path`](Self::record_mutated_path) after a successful
+    /// mutation; the chokepoint drains the list with
+    /// [`take_mutated_paths`](Self::take_mutated_paths) and runs the shared
+    /// diagnostics fold-in over the diagnosable subset. The field is
+    /// interior-mutable (the same pattern as `session_actor`/`peer`) because
+    /// `execute` takes `&ToolContext`, and per-call so accumulation cannot leak
+    /// across calls: the chokepoint installs a fresh sink with
+    /// [`with_fresh_mutated_paths`](Self::with_fresh_mutated_paths) before each
+    /// dispatch.
+    pub mutated_paths: Arc<std::sync::Mutex<Vec<PathBuf>>>,
+
     /// Optional in-process sink for `ProgressNotificationParam` events.
     ///
     /// Used by in-process callers (e.g. the `code-context` CLI) that invoke
@@ -435,7 +451,49 @@ impl ToolContext {
             prompt_library: None,
             progress_token: None,
             progress_sink: None,
+            mutated_paths: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    /// Record a path mutated by the current tool call.
+    ///
+    /// File-mutating tools (`files` `write`/`edit`, and any future mutator) call
+    /// this with the **absolute** path they changed after the mutation succeeds.
+    /// The dispatch chokepoint later drains these via
+    /// [`take_mutated_paths`](Self::take_mutated_paths) and folds inline
+    /// diagnostics for the diagnosable subset into the tool's own result.
+    ///
+    /// This is the typed side-channel: the chokepoint never parses the tool's
+    /// `CallToolResult` content to learn what changed.
+    pub fn record_mutated_path(&self, path: impl Into<PathBuf>) {
+        self.mutated_paths
+            .lock()
+            .expect("mutated_paths mutex poisoned")
+            .push(path.into());
+    }
+
+    /// Drain and return the paths recorded by [`record_mutated_path`] during the
+    /// current tool call, leaving the sink empty.
+    ///
+    /// Called once by the dispatch chokepoint after `execute` returns.
+    pub fn take_mutated_paths(&self) -> Vec<PathBuf> {
+        std::mem::take(
+            &mut self
+                .mutated_paths
+                .lock()
+                .expect("mutated_paths mutex poisoned"),
+        )
+    }
+
+    /// Install a fresh, empty `mutated_paths` sink on a clone of this context.
+    ///
+    /// The dispatch chokepoint calls this before each tool dispatch so the
+    /// recorded paths are scoped to exactly one call and cannot leak across the
+    /// long-lived shared context (the `execute_tool` in-process path passes the
+    /// server's single shared context, which would otherwise accumulate).
+    pub fn with_fresh_mutated_paths(mut self) -> Self {
+        self.mutated_paths = Arc::new(std::sync::Mutex::new(Vec::new()));
+        self
     }
 
     /// Set the prompt library for template rendering
@@ -701,8 +759,14 @@ impl ToolContext {
                 }
             };
 
+            // Isolate the inner call's mutated-paths channel so a delegated
+            // mutation does not bleed into the *outer* call's sink (which the
+            // dispatch chokepoint drains to fold inline diagnostics into the
+            // outer tool's own result). Inline diagnostics are a property of the
+            // top-level dispatch, not of internal tool composition.
+            let inner_context = self.clone().with_fresh_mutated_paths();
             let start = std::time::Instant::now();
-            let result = tool.execute(params_map, self).await;
+            let result = tool.execute(params_map, &inner_context).await;
             let elapsed = start.elapsed();
 
             let is_error = match &result {
@@ -799,6 +863,16 @@ pub trait McpTool:
     /// and validation rules for the tool's arguments. Include detailed
     /// descriptions for all parameters.
     ///
+    /// # Operation-based tools: return the WIRE surface here
+    ///
+    /// This is the model-facing schema advertised over MCP `tools/list`. For
+    /// operation-based tools (those that implement [`McpTool::operations`]) it
+    /// MUST be the slim wire surface — `generate_mcp_schema_wire(...)`, which
+    /// drops the heavy CLI-facing keys. The full surface (with
+    /// `x-operation-schemas` / `x-operation-groups` / `x-op-signatures`) belongs
+    /// on the [`McpTool::schema_full`] override, NOT here. See
+    /// [`swissarmyhammer_operations::generate_mcp_schema`] for the steering note.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -821,10 +895,11 @@ pub trait McpTool:
     /// Get the tool's FULL JSON schema for in-process CLI generation.
     ///
     /// Operation-based tools return a slim, model-facing schema from
-    /// [`McpTool::schema`] over the MCP wire — it carries only the `op` enum and
-    /// per-op required-field signatures, dropping the heavy `x-operation-schemas`
-    /// / `x-operation-groups` / `x-forgiving-input` / `examples` keys and the
-    /// flat per-parameter properties.
+    /// [`McpTool::schema`] over the MCP wire — it carries only the `op` enum,
+    /// dropping the heavy `x-operation-schemas` / `x-operation-groups` /
+    /// `x-forgiving-input` / `examples` keys, the per-op required-field
+    /// signatures (`x-op-signatures`, full-only), and the flat per-parameter
+    /// properties.
     ///
     /// The in-process CLI generator and argument extractor, however, build the
     /// noun/verb command tree and map clap matches back to JSON arguments from
@@ -1231,12 +1306,13 @@ impl ToolRegistry {
     /// [`ToolCategory::Replacement`] tools.
     ///
     /// Each `Replacement { native }` tool declares the native host tool it
-    /// supersedes (e.g. `shell` supersedes `"Bash"`). This returns those
-    /// `native` names — the single source of truth for which native tools the
-    /// serve boundary should suppress on a host that receives the replacements.
-    /// Today that is exactly `["Bash"]` (from `shell`), but deriving it from the
-    /// category metadata keeps the suppression tied to the served set rather than
-    /// a hardcoded list. Names are deduplicated; order is unspecified.
+    /// supersedes (e.g. `shell` supersedes `"Bash"`, `files` supersedes
+    /// `"Edit"`). This returns those `native` names — the single source of truth
+    /// for which native tools the serve boundary should suppress on a host that
+    /// receives the replacements. Deriving it from the category metadata keeps
+    /// the suppression tied to the served set rather than a hardcoded list, so it
+    /// grows automatically as more `Replacement` tools register. Names are
+    /// deduplicated; order is unspecified.
     pub fn replacement_natives(&self) -> Vec<&'static str> {
         let mut natives: Vec<&'static str> = self
             .iter_tools()
@@ -1253,14 +1329,30 @@ impl ToolRegistry {
     /// Build the MCP `Tool` objects for every enabled tool that satisfies
     /// `keep`, sharing the schema/meta construction across the unfiltered and
     /// host-filtered entry points.
+    ///
+    /// Tools are emitted **sorted by name**. The backing store is a `HashMap`
+    /// (for O(1) routing lookup), whose iteration order is non-deterministic
+    /// under hash randomization — so the list is sorted here, at the emission
+    /// boundary, to guarantee a stable order across repeated calls and process
+    /// restarts. This keeps the rendered system+tools prefix byte-identical
+    /// across sibling agent sessions, a precondition for KV prefix reuse (a
+    /// non-deterministic order shrinks the shared-prefix LCP below the full
+    /// prefix). Routing/dispatch is unaffected — only the rendered LIST order.
     fn list_tools_filtered<F>(&self, keep: F) -> Vec<Tool>
     where
         F: Fn(&dyn McpTool) -> bool,
     {
-        self.tools
+        let mut tools: Vec<&dyn McpTool> = self
+            .tools
             .values()
-            .filter(|tool| !self.disabled_tools.contains(McpTool::name(tool.as_ref())))
-            .filter(|tool| keep(tool.as_ref()))
+            .map(|tool| tool.as_ref())
+            .filter(|tool| !self.disabled_tools.contains(McpTool::name(*tool)))
+            .filter(|tool| keep(*tool))
+            .collect();
+        tools.sort_unstable_by_key(|tool| McpTool::name(*tool));
+
+        tools
+            .into_iter()
             .map(|tool| {
                 let schema = tool.schema();
                 let schema_map = if let serde_json::Value::Object(map) = schema {
@@ -1269,9 +1361,8 @@ impl ToolRegistry {
                     serde_json::Map::new()
                 };
 
-                let mut mcp_tool =
-                    Tool::new(McpTool::name(tool.as_ref()), tool.description(), schema_map)
-                        .with_title(McpTool::name(tool.as_ref()));
+                let mut mcp_tool = Tool::new(McpTool::name(tool), tool.description(), schema_map)
+                    .with_title(McpTool::name(tool));
                 let mut meta = Meta::new();
                 meta.0.insert(
                     "anthropic/alwaysLoad".to_string(),
@@ -2080,6 +2171,11 @@ register_tool_category!(
     review,
     "Register the operation-based review tool with the registry"
 );
+register_tool_category!(
+    register_diagnostics_tools,
+    diagnostics,
+    "Register the operation-based diagnostics tool with the registry"
+);
 
 /// Create a fully registered tool registry with all available tools
 ///
@@ -2103,6 +2199,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_web_tools(&mut registry);
     register_ralph_tools(&mut registry);
     register_review_tools(&mut registry);
+    register_diagnostics_tools(&mut registry);
 
     registry
 }
@@ -2905,6 +3002,111 @@ mod tests {
                 tool.name
             );
         }
+    }
+
+    #[test]
+    fn test_list_tools_deterministic_sorted_order() {
+        // The rendered tools/list must be byte-identical across sibling
+        // sessions so the KV prefix-reuse donor's LCP stays full. The registry
+        // is HashMap-backed, so the emission point must sort by tool name to be
+        // deterministic. Register in deliberately non-sorted insertion order;
+        // assert the emitted order is sorted by name and stable across calls.
+        //
+        // Asserts exact ordered equality (not set-equality) so it fails under
+        // HashMap iteration order / hash randomization.
+        let names_in = [
+            "shell",
+            "kanban",
+            "git",
+            "web",
+            "files",
+            "code_context",
+            "review",
+            "ralph",
+            "question",
+            "skill",
+            "agent",
+        ];
+        let mut registry = ToolRegistry::new();
+        for name in names_in {
+            registry.register(MockTool {
+                name,
+                description: "tool",
+            });
+        }
+
+        let mut expected = names_in.to_vec();
+        expected.sort_unstable();
+
+        let first: Vec<String> = registry
+            .list_tools()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        let second: Vec<String> = registry
+            .list_tools()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        // Two successive calls return an identical ordered sequence.
+        assert_eq!(
+            first, second,
+            "successive list_tools() calls returned different orders"
+        );
+        // And the order is the expected stable ordering (sorted by name).
+        assert_eq!(
+            first, expected,
+            "list_tools() order is not sorted by tool name"
+        );
+
+        // list_tools_filtered's other entry point (host composition) must be
+        // sorted too — share the same emission guarantee.
+        let for_host: Vec<String> = registry
+            .list_tools_for_host(crate::mcp::host::Host::Claude)
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        assert_eq!(
+            for_host, expected,
+            "list_tools_for_host() order is not sorted by tool name"
+        );
+    }
+
+    /// The unified `files` tool is a `Replacement` for the native edit surface,
+    /// so the primary per-client serve advertises it to Claude (which gets
+    /// `Shared` + `Replacement`) but not to llama or unknown clients (which get
+    /// `Shared` only and mount their own file tools in-process). Regression for
+    /// the bug where `files` was `Agent`-category and therefore stripped from
+    /// every host — including Claude — leaving Claude with its native edit
+    /// surface denied and no served replacement.
+    #[test]
+    fn files_replacement_served_to_claude_not_llama() {
+        use crate::mcp::host::Host;
+
+        let mut registry = ToolRegistry::new();
+        super::register_file_tools(&mut registry);
+
+        let names_for = |host: Host| -> Vec<String> {
+            registry
+                .list_tools_for_host(host)
+                .iter()
+                .map(|t| t.name.to_string())
+                .collect()
+        };
+
+        assert!(
+            names_for(Host::Claude).iter().any(|n| n == "files"),
+            "Claude must be served the `files` replacement"
+        );
+        assert!(
+            !names_for(Host::Llama).iter().any(|n| n == "files"),
+            "llama must not be served `files` via the primary serve"
+        );
+        assert!(
+            !names_for(Host::Other).iter().any(|n| n == "files"),
+            "unknown clients must not be served `files` via the primary serve"
+        );
     }
 
     // --- ToolContext builder method tests ---

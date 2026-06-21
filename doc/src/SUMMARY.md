@@ -9,6 +9,7 @@
 - [Agents](concepts/agents.md)
 - [Tools](concepts/tools.md)
 - [Validators](concepts/validators.md)
+- [Closing the Write Surface](concepts/closed-write-surface.md)
 
 # Getting Started
 

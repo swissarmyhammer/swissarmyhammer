@@ -334,6 +334,14 @@ impl KanbanContext {
         self.root.join("board.yaml")
     }
 
+    /// Path to the per-task embedding cache SQLite sidecar.
+    ///
+    /// Sits beside `board.yaml`/`tasks/` so the cache travels with the board
+    /// dir; it is gitignored derived data, rebuilt per machine.
+    pub fn search_cache_path(&self) -> PathBuf {
+        self.root.join("search-cache.sqlite3")
+    }
+
     /// Path to tasks directory
     pub fn tasks_dir(&self) -> PathBuf {
         self.root.join("tasks")
@@ -838,6 +846,7 @@ mod tests {
         assert_eq!(ctx.root(), root);
         assert_eq!(ctx.board_path(), root.join("board.yaml"));
         assert_eq!(ctx.tasks_dir(), root.join("tasks"));
+        assert_eq!(ctx.search_cache_path(), root.join("search-cache.sqlite3"));
     }
 
     #[test]

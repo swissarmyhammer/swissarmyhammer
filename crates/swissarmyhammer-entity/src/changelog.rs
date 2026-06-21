@@ -602,6 +602,11 @@ mod tests {
             .await
             .unwrap();
         file.write_all(line.as_bytes()).await.unwrap();
+        // tokio::fs::File buffers writes and does NOT flush on drop, so without
+        // an explicit flush a subsequent append (or read) can race ahead of the
+        // buffered bytes and lose this line under load — surfacing as a flaky
+        // short read in append_and_read_changelog.
+        file.flush().await.unwrap();
     }
 
     #[test]

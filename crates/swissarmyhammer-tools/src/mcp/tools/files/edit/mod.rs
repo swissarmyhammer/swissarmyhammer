@@ -547,6 +547,16 @@ pub async fn execute_edit(
         final_result = Some(edit_result);
     }
 
+    // Record the mutated path on the typed side-channel so the dispatch
+    // chokepoint can fold inline diagnostics into this result (no content
+    // parsing). Best-effort: resolve to the same absolute path the edit wrote;
+    // a resolution failure simply skips the fold-in for this call.
+    if let Ok(abs) =
+        crate::mcp::tools::files::shared_utils::validate_file_path(&base_dir, &file_path)
+    {
+        context.record_mutated_path(abs);
+    }
+
     // Create success response
     let final_result =
         final_result.expect("At least one edit operation should have been performed");

@@ -34,7 +34,11 @@ pub struct AddTask {
     /// Assignees for this task
     #[serde(default)]
     pub assignees: Vec<ActorId>,
-    /// Task IDs this task depends on
+    /// Task refs this task depends on. Accepts a single ref or a list, in any
+    /// id format (full ULID, 7-char short id, `^<short>`, unique ULID prefix,
+    /// lowercase) — each resolves to the canonical full ULID. The derived
+    /// `blocked_by` field (the unsatisfied subset of `depends_on`) is computed,
+    /// not directly settable.
     #[serde(default)]
     pub depends_on: Vec<TaskId>,
     /// Project this task belongs to

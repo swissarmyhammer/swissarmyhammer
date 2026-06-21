@@ -30,27 +30,15 @@ use agent_client_protocol::schema::{NewSessionRequest, SessionId};
 use agent_client_protocol_extras::{
     SessionForkRequest, SessionPinRequest, SessionStateStatusRequest,
 };
-use llama_agent::acp::AcpServer;
 use serial_test::serial;
 use tracing::warn;
 
 use crate::integration::real_model_helpers::{
-    build_real_model_server, real_model_config, text_prompt,
+    build_real_model_server, prompt_turn, real_model_config,
 };
 
 /// Per-prompt hang guard, matching the sibling agentic-loop tests.
 const NO_HANG_BUDGET: Duration = Duration::from_secs(120);
-
-/// Run one prompt turn under the hang budget, panicking on error.
-async fn prompt_turn(server: &AcpServer, session_id: &SessionId, text: &str) {
-    tokio::time::timeout(
-        NO_HANG_BUDGET,
-        server.prompt(text_prompt(session_id.clone(), text)),
-    )
-    .await
-    .expect("prompt must not hang")
-    .expect("prompt must succeed against a healthy model");
-}
 
 /// Prime → confirm saved → pin → fork ×2 → both forks reuse the parent's full
 /// saved prefix with zero KV-trim fallbacks.
@@ -102,6 +90,7 @@ async fn forked_sessions_reuse_full_parent_prefix_without_rollback() {
         &server,
         &parent,
         "/no_think Remember the secret word is plum. Reply with exactly: ok",
+        NO_HANG_BUDGET,
     )
     .await;
 
@@ -150,7 +139,7 @@ async fn forked_sessions_reuse_full_parent_prefix_without_rollback() {
         );
 
         let fork_session = SessionId::new(fork.session_id.clone());
-        prompt_turn(&server, &fork_session, continuation).await;
+        prompt_turn(&server, &fork_session, continuation, NO_HANG_BUDGET).await;
         fork_ids.push(fork.session_id);
     }
 

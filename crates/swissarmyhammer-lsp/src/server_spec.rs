@@ -1,23 +1,21 @@
-//! LSP server detection and startup for code indexing.
+//! LSP server detection, startup, and the builtin server registry.
 //!
 //! Manages spawning and communicating with language servers (e.g., rust-analyzer)
-//! to extract symbol definitions and track call edges.
-//!
-//! This module also owns the single source of truth for the builtin LSP server
-//! registry: every supported language server is declared by a YAML file under
+//! and owns the single source of truth for the builtin LSP server registry:
+//! every supported language server is declared by a YAML file under
 //! `builtin/lsp/`. Those files are embedded at compile time via `include_dir!`
 //! and parsed into [`OwnedLspServerSpec`] values on first access. Adding a new
 //! server requires only dropping a YAML file into `builtin/lsp/` — the directory
 //! is walked automatically at compile time with no source edits needed.
 //!
-//! The `swissarmyhammer-lsp` crate depends on this crate and re-exports
+//! This module is the workspace-wide home for the LSP server registry. The
+//! `swissarmyhammer-code-context` crate depends on this crate and re-exports
 //! [`OwnedLspServerSpec`], [`builtin_lsp_yaml_sources`], and [`load_lsp_servers`]
-//! directly — there is no second definition anywhere in the workspace.
+//! so its existing callers compile unchanged.
 
 use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -26,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use swissarmyhammer_project_detection::ProjectType;
 use tracing::{debug, info, warn};
 
-use crate::error::CodeContextError;
+use crate::error::LspError;
 
 /// Builtin LSP server YAML directory embedded at compile time.
 ///
@@ -37,11 +35,11 @@ static BUILTIN_LSP_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../builtin/ls
 /// Owned LSP server specification loaded from YAML configuration.
 ///
 /// This is the single, workspace-wide definition used by both
-/// `swissarmyhammer-code-context` (for indexing) and `swissarmyhammer-lsp`
-/// (for daemon lifecycle management). Every builtin `builtin/lsp/*.yaml` file
-/// deserialises into exactly one of these. Fields required in YAML are
-/// required here; fields that are truly optional (`icon`) use `Option<T>`;
-/// fields with sensible defaults (`startup_timeout_secs`,
+/// `swissarmyhammer-lsp` (for daemon lifecycle management) and
+/// `swissarmyhammer-code-context` (for indexing scope). Every builtin
+/// `builtin/lsp/*.yaml` file deserialises into exactly one of these. Fields
+/// required in YAML are required here; fields that are truly optional (`icon`)
+/// use `Option<T>`; fields with sensible defaults (`startup_timeout_secs`,
 /// `health_check_interval_secs`) fall back to those defaults when missing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OwnedLspServerSpec {
@@ -154,8 +152,8 @@ pub fn load_lsp_servers() -> Vec<OwnedLspServerSpec> {
 /// Lazy-initialized registry of LSP server specs loaded from embedded YAML.
 ///
 /// This is the single registry of builtin servers shared across the workspace.
-/// Both `swissarmyhammer-code-context` (for indexing scope) and
-/// `swissarmyhammer-lsp` (for daemon spawning) read from it.
+/// Both `swissarmyhammer-lsp` (for daemon spawning) and
+/// `swissarmyhammer-code-context` (for indexing scope) read from it.
 pub static LSP_REGISTRY: LazyLock<Vec<OwnedLspServerSpec>> = LazyLock::new(load_lsp_servers);
 
 /// Configuration for starting an LSP server.
@@ -231,16 +229,22 @@ pub fn detect_rust_analyzer() -> Option<PathBuf> {
 
 /// Start an LSP server for the given language.
 ///
-/// Looks up the language in the loaded YAML configurations. If found, creates
-/// a server configuration; otherwise returns an error handle with unsupported message.
+/// Looks up the language in the loaded YAML configurations and reports whether
+/// the server is **available to start** — it does NOT launch the server. The
+/// returned [`LspServerHandle`] carries an availability signal (`started` =
+/// "available", `error` = why not); the real server is spawned and owned (with
+/// kill-on-drop) by the daemon, not here. Launching a throwaway server to
+/// "verify" it previously leaked an orphaned `rust-analyzer` on every call.
 ///
 /// # Arguments
-/// * `language` - Language to start server for (e.g., "rust", "python")
-/// * `project_root` - Root directory of the project
+/// * `language` - Language to check availability for (e.g., "rust", "python")
+/// * `_project_root` - Accepted for API compatibility. The availability probe
+///   resolves the executable on disk/`PATH` and never spawns, so no working
+///   directory is needed.
 ///
 /// # Returns
-/// LspServerHandle with startup status
-pub fn start_lsp_server(language: &str, project_root: &Path) -> LspServerHandle {
+/// LspServerHandle whose `started` flag reports availability.
+pub fn start_lsp_server(language: &str, _project_root: &Path) -> LspServerHandle {
     debug!("Starting LSP server for language: {}", language);
 
     let config = match find_config_for_language(language) {
@@ -261,11 +265,15 @@ pub fn start_lsp_server(language: &str, project_root: &Path) -> LspServerHandle 
         }
     };
 
-    // Try to start the server
-    match spawn_server(&config, project_root) {
-        Ok(_) => {
+    // Report whether the server is available WITHOUT launching it. A throwaway
+    // liveness spawn here is what leaked orphaned rust-analyzers (the spawned
+    // child was verified and then dropped without being killed). Production LSP
+    // lifecycle is owned by the daemon (kill-on-drop); this function is only an
+    // availability signal, so a non-spawning on-disk/PATH probe is sufficient.
+    match verify_server_available(&config) {
+        Ok(()) => {
             info!(
-                "LSP server started for {}: {}",
+                "LSP server available for {}: {}",
                 language,
                 config.executable.display()
             );
@@ -276,7 +284,7 @@ pub fn start_lsp_server(language: &str, project_root: &Path) -> LspServerHandle 
             }
         }
         Err(e) => {
-            warn!("Failed to start LSP server for {}: {}", language, e);
+            warn!("LSP server unavailable for {}: {}", language, e);
             LspServerHandle {
                 language: language.to_string(),
                 started: false,
@@ -309,25 +317,27 @@ fn create_config_from_spec(language: &str, spec: OwnedLspServerSpec) -> LspServe
     }
 }
 
-/// Spawn an LSP server process.
+/// Verify that an LSP server is available to start, **without launching it**.
 ///
-/// Resolves the executable (checking the filesystem first, then PATH),
-/// spawns the process, and verifies it doesn't exit immediately.
+/// Availability is a pure on-disk/PATH check: the executable resolves (exists
+/// on the filesystem or is found on `$PATH`). It deliberately does NOT spawn a
+/// throwaway process to confirm liveness — doing so previously leaked an
+/// orphaned server on every call, because the verified child was dropped
+/// without being killed. The real server is spawned and owned (with
+/// kill-on-drop) by the daemon, not here.
 ///
 /// # Arguments
 /// * `config` - Server configuration
-/// * `project_root` - Working directory for the server
 ///
 /// # Returns
-/// Result indicating success or error
-fn spawn_server(config: &LspServerConfig, project_root: &Path) -> Result<(), CodeContextError> {
-    let exe_path = resolve_executable(&config.executable)?;
-    spawn_and_verify(&exe_path, &config.args, project_root)
+/// `Ok(())` if the executable resolves, otherwise the resolve error.
+fn verify_server_available(config: &LspServerConfig) -> Result<(), LspError> {
+    resolve_executable(&config.executable).map(|_| ())
 }
 
 /// Resolve the executable path: use as-is if the file exists on disk,
 /// otherwise search PATH. Returns an error if not found anywhere.
-fn resolve_executable(executable: &Path) -> Result<PathBuf, CodeContextError> {
+fn resolve_executable(executable: &Path) -> Result<PathBuf, LspError> {
     if executable.exists() {
         return Ok(executable.to_path_buf());
     }
@@ -346,47 +356,50 @@ fn resolve_executable(executable: &Path) -> Result<PathBuf, CodeContextError> {
     })
 }
 
-/// Spawn a child process and verify it stays alive past a brief grace period.
-///
-/// The process is spawned with piped stdio (stdin, stdout, stderr) so
-/// a JSON-RPC client can be attached later. If the process exits within
-/// 100 ms it is treated as a startup failure.
-fn spawn_and_verify(
-    exe_path: &Path,
-    args: &[String],
-    project_root: &Path,
-) -> Result<(), CodeContextError> {
-    let mut cmd = Command::new(exe_path);
-    cmd.current_dir(project_root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    for arg in args {
-        cmd.arg(arg);
-    }
-
-    let mut child = cmd.spawn()?;
-    debug!("LSP server process spawned with PID: {:?}", child.id());
-
-    // Brief wait to catch immediate startup failures
-    std::thread::sleep(Duration::from_millis(100));
-
-    match child.try_wait() {
-        Ok(Some(_)) => Err(std::io::Error::other(
-            "LSP server process exited immediately",
-        ))?,
-        Ok(None) => {
-            debug!("LSP server process is running");
-            Ok(())
-        }
-        Err(e) => Err(e)?,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Count live `rust-analyzer` server processes owned by this machine,
+    /// excluding the `proc-macro` helper. Used to prove the availability probe
+    /// spawns no surviving rust-analyzer. Unix-only; returns `None` elsewhere.
+    #[cfg(unix)]
+    fn count_rust_analyzers() -> Option<usize> {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("ps -eo command | grep '[b]in/rust-analyzer' | grep -v proc-macro")
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        Some(text.lines().filter(|l| !l.trim().is_empty()).count())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_start_lsp_server_does_not_spawn_rust_analyzer() {
+        // The availability check must be a non-spawning probe: asking whether a
+        // rust language server can be started must NOT launch a throwaway
+        // rust-analyzer that then leaks as a PPID=1 orphan. Assert the live
+        // rust-analyzer count is unchanged across the call.
+        let Some(before) = count_rust_analyzers() else {
+            return; // ps unavailable in this environment
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _ = start_lsp_server("rust", tmp.path());
+        // Give any (buggy) spawned child the same 100ms grace the old code used,
+        // so a leaked process would be counted rather than racing the check.
+        std::thread::sleep(Duration::from_millis(200));
+
+        let after = count_rust_analyzers().unwrap();
+        // The probe must add NO new rust-analyzer. The count may legitimately
+        // drop (an unrelated server elsewhere exiting), so assert it never rose.
+        assert!(
+            after <= before,
+            "availability probe must not spawn a rust-analyzer \
+             (before={before}, after={after})"
+        );
+    }
 
     #[test]
     fn test_find_executable_in_path() {
@@ -536,52 +549,50 @@ mod tests {
     }
 
     #[test]
-    fn test_spawn_server_nonexistent_executable() {
-        // An executable that does not exist on the filesystem or in PATH
+    fn test_verify_server_available_nonexistent_executable() {
+        // An executable that does not exist on the filesystem or in PATH is
+        // reported unavailable via a resolve (not-found) error — and, crucially,
+        // nothing is spawned.
         let config = LspServerConfig {
             language: "fake".to_string(),
             executable: PathBuf::from("totally_nonexistent_lsp_server_xyz_12345"),
             args: vec![],
             init_timeout: 5,
         };
-        let tmp = tempfile::tempdir().unwrap();
-        let result = spawn_server(&config, tmp.path());
+        let result = verify_server_available(&config);
         assert!(result.is_err(), "Should fail when executable not found");
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("IO error"),
-            "Error should be IO-based, got: {}",
+            err_msg.contains("not found"),
+            "Error should be a resolve not-found failure, got: {}",
             err_msg
         );
     }
 
     #[test]
-    fn test_spawn_server_with_exe_in_path_that_exits_immediately() {
-        // Use 'true' (or 'cmd /c exit 0' on Windows) which exits immediately.
-        // This exercises the PATH-lookup branch and the "exited immediately" error path.
+    fn test_verify_server_available_exe_in_path() {
+        // An executable resolvable on PATH is reported available WITHOUT being
+        // spawned. The probe must never launch the binary, so even a binary
+        // that would exit immediately (`true`) resolves as available.
         let exe_name = if cfg!(windows) { "cmd" } else { "true" };
         let config = LspServerConfig {
             language: "test".to_string(),
             executable: PathBuf::from(exe_name),
-            args: if cfg!(windows) {
-                vec!["/c".to_string(), "exit".to_string(), "0".to_string()]
-            } else {
-                vec![]
-            },
+            args: vec![],
             init_timeout: 5,
         };
-        let tmp = tempfile::tempdir().unwrap();
-        let result = spawn_server(&config, tmp.path());
-        // 'true' exits immediately, so spawn_server should detect this
+        let result = verify_server_available(&config);
         assert!(
-            result.is_err(),
-            "Should fail because process exits immediately"
+            result.is_ok(),
+            "PATH-resolvable executable should be reported available: {:?}",
+            result.err()
         );
     }
 
     #[test]
-    fn test_spawn_server_with_absolute_exe_that_exits_immediately() {
-        // Find the absolute path to 'true' so we hit the else branch (executable.exists())
+    fn test_verify_server_available_absolute_exe() {
+        // An absolute path that exists on disk resolves as available via the
+        // `executable.exists()` branch — still without spawning.
         let true_path = find_executable("true");
         // On some systems 'true' might not be a standalone binary; skip if not found
         if let Some(abs_path) = true_path {
@@ -591,11 +602,11 @@ mod tests {
                 args: vec![],
                 init_timeout: 5,
             };
-            let tmp = tempfile::tempdir().unwrap();
-            let result = spawn_server(&config, tmp.path());
+            let result = verify_server_available(&config);
             assert!(
-                result.is_err(),
-                "Should fail because process exits immediately"
+                result.is_ok(),
+                "Absolute on-disk executable should be reported available: {:?}",
+                result.err()
             );
         }
     }
@@ -618,22 +629,20 @@ mod tests {
     }
 
     #[test]
-    fn test_spawn_server_with_args() {
-        // Verify args are passed through by using a command that accepts them.
-        // 'sleep 10' stays alive, exercising the "process still running" success path.
-        let exe_name = "sleep";
+    fn test_verify_server_available_ignores_args() {
+        // Availability is determined purely by whether the executable resolves;
+        // args are irrelevant to the probe (and nothing is spawned, so an arg
+        // like a long sleep never actually runs).
         let config = LspServerConfig {
             language: "test".to_string(),
-            executable: PathBuf::from(exe_name),
+            executable: PathBuf::from("sleep"),
             args: vec!["10".to_string()],
             init_timeout: 5,
         };
-        let tmp = tempfile::tempdir().unwrap();
-        let result = spawn_server(&config, tmp.path());
-        // sleep should stay alive for 10s, so spawn_server succeeds
+        let result = verify_server_available(&config);
         assert!(
             result.is_ok(),
-            "sleep 10 should stay running: {:?}",
+            "sleep resolves on PATH, so it is available: {:?}",
             result.err()
         );
     }
@@ -693,44 +702,10 @@ mod tests {
     }
 
     #[test]
-    fn test_spawn_server_exe_exits_immediately_error_message() {
-        // Use an absolute path to 'true' (which exits immediately) to exercise
-        // the direct-executable branch (config.executable.exists() == true).
-        // Verifies the specific "exited immediately" error message via the
-        // inner io::Error (CodeContextError::Io wraps it with Display "IO error").
-        let true_path = find_executable("true");
-        if let Some(abs_path) = true_path {
-            let config = LspServerConfig {
-                language: "test".to_string(),
-                executable: abs_path,
-                args: vec![],
-                init_timeout: 5,
-            };
-            let tmp = tempfile::tempdir().unwrap();
-            let result = spawn_server(&config, tmp.path());
-            assert!(
-                result.is_err(),
-                "Process that exits immediately should error"
-            );
-            let err = result.unwrap_err();
-            // CodeContextError::Io Display is just "IO error"; check the source chain
-            // for the actual io::Error message.
-            let inner_msg = std::error::Error::source(&err)
-                .map(|e| e.to_string())
-                .unwrap_or_default();
-            assert!(
-                inner_msg.contains("exited immediately"),
-                "Inner error should mention 'exited immediately', got: {}",
-                inner_msg
-            );
-        }
-    }
-
-    #[test]
-    fn test_spawn_server_absolute_path_process_stays_alive() {
-        // Find the absolute path to 'sleep' and use it directly, exercising
-        // the else branch where config.executable.exists() is true and the
-        // process stays alive (try_wait returns Ok(None)).
+    fn test_verify_server_available_absolute_path_resolves() {
+        // Find the absolute path to 'sleep' and use it directly, exercising the
+        // `executable.exists()` branch. It resolves as available WITHOUT being
+        // spawned (the old version spawned `sleep 10` and leaked it).
         let sleep_path = find_executable("sleep");
         if let Some(abs_path) = sleep_path {
             let config = LspServerConfig {
@@ -739,11 +714,10 @@ mod tests {
                 args: vec!["10".to_string()],
                 init_timeout: 5,
             };
-            let tmp = tempfile::tempdir().unwrap();
-            let result = spawn_server(&config, tmp.path());
+            let result = verify_server_available(&config);
             assert!(
                 result.is_ok(),
-                "Process that stays alive should succeed: {:?}",
+                "On-disk executable should resolve as available: {:?}",
                 result.err()
             );
         }

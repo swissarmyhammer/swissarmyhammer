@@ -270,7 +270,7 @@ fn parse_symbol_information(item: &serde_json::Value) -> Option<SymbolInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_fixtures::{insert_file, test_db};
+    use crate::test_fixtures::{insert_file, mock_lsp_session, spawn_mock_lsp, test_db};
     use rusqlite::Connection;
 
     /// Insert an LSP symbol (detail-before-file_path order used by these tests).
@@ -562,9 +562,13 @@ mod tests {
         let conn = test_db();
         insert_file(&conn, "src/main.rs", 0, 0);
 
-        let shared: crate::lsp_worker::SharedLspClient =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
 
         let opts = WorkspaceSymbolLiveOptions {
             query: "something".to_string(),
@@ -598,9 +602,13 @@ mod tests {
             1,
         );
 
-        let shared: crate::lsp_worker::SharedLspClient =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
 
         let opts = WorkspaceSymbolLiveOptions {
             query: "find".to_string(),
@@ -631,9 +639,13 @@ mod tests {
             "fn find_handler() {\n    // body\n}",
         );
 
-        let shared: crate::lsp_worker::SharedLspClient =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
 
         let opts = WorkspaceSymbolLiveOptions {
             query: "find".to_string(),
@@ -650,65 +662,8 @@ mod tests {
     }
 
     // --- Mock LSP helper for live-path tests ---
-
-    /// Spawn a Python process that acts as a mock LSP server.
-    ///
-    /// Each entry in the responses array is either `null` (read a
-    /// notification, no reply) or a JSON-RPC response object (read a
-    /// request, reply with this object).
-    fn spawn_mock_lsp(responses: &[serde_json::Value]) -> std::process::Child {
-        let temp_dir = tempfile::tempdir().expect("failed to create temp dir for mock LSP");
-        let response_file = temp_dir.path().join("mock_responses.json");
-        std::fs::write(&response_file, serde_json::to_string(responses).unwrap())
-            .expect("failed to write mock responses file");
-
-        let script = "\
-            import sys, json, os\n\
-            def read_msg():\n\
-            \tcl = None\n\
-            \twhile True:\n\
-            \t\tline = sys.stdin.readline()\n\
-            \t\tif not line: return None\n\
-            \t\tline = line.strip()\n\
-            \t\tif not line: break\n\
-            \t\tif line.startswith('Content-Length:'):\n\
-            \t\t\tcl = int(line.split(':', 1)[1].strip())\n\
-            \tif cl is None: return None\n\
-            \tbody = sys.stdin.read(cl)\n\
-            \treturn json.loads(body)\n\
-            def send_msg(obj):\n\
-            \ts = json.dumps(obj)\n\
-            \tsys.stdout.write(f'Content-Length: {len(s)}\\r\\n\\r\\n{s}')\n\
-            \tsys.stdout.flush()\n\
-            with open(os.environ['MOCK_RESPONSE_FILE']) as f:\n\
-            \tresponses = json.load(f)\n\
-            for resp in responses:\n\
-            \tread_msg()\n\
-            \tif resp is not None:\n\
-            \t\tsend_msg(resp)\n";
-
-        // Leak the tempdir so it outlives the child process.
-        std::mem::forget(temp_dir);
-
-        std::process::Command::new("python3")
-            .arg("-c")
-            .arg(script)
-            .env("MOCK_RESPONSE_FILE", &response_file)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("failed to spawn mock LSP python3 process")
-    }
-
-    /// Create a `SharedLspClient` from a mock LSP child process.
-    fn mock_lsp_client(child: &mut std::process::Child) -> crate::lsp_worker::SharedLspClient {
-        use crate::lsp_communication::LspJsonRpcClient;
-        let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let client = LspJsonRpcClient::new(stdin, stdout);
-        std::sync::Arc::new(std::sync::Mutex::new(Some(client)))
-    }
+    // `spawn_mock_lsp` / `mock_lsp_session` are the shared
+    // `crate::test_fixtures` helpers, imported above.
 
     // --- Live LSP workspace/symbol tests ---
 
@@ -749,10 +704,10 @@ mod tests {
 
         let responses = vec![ws_response];
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = WorkspaceSymbolLiveOptions {
             query: "MyStruct".to_string(),
             max_results: 50,
@@ -792,11 +747,11 @@ mod tests {
 
         let responses = vec![ws_response];
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let conn = test_db();
         insert_file(&conn, "src/main.rs", 0, 0);
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = WorkspaceSymbolLiveOptions {
             query: "anything".to_string(),
             max_results: 10,
@@ -823,11 +778,11 @@ mod tests {
 
         let responses = vec![ws_response];
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let conn = test_db();
         insert_file(&conn, "src/main.rs", 0, 0);
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = WorkspaceSymbolLiveOptions {
             query: "anything".to_string(),
             max_results: 10,
@@ -853,7 +808,7 @@ mod tests {
 
         let responses = vec![ws_response];
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let conn = test_db();
         insert_file(&conn, "src/main.rs", 0, 1);
@@ -869,7 +824,7 @@ mod tests {
             20,
             1,
         );
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = WorkspaceSymbolLiveOptions {
             query: "handler".to_string(),
             max_results: 10,
@@ -911,10 +866,10 @@ mod tests {
 
         let responses = vec![ws_response];
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = WorkspaceSymbolLiveOptions {
             query: "sym".to_string(),
             max_results: 2,

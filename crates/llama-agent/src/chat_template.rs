@@ -1576,6 +1576,7 @@ impl BufferedStreamingParser {
 mod qwen3coder_model_integration {
     use super::*;
     use crate::model::get_or_init_backend;
+    use crate::tests::centralized_test_utils::{create_session_with_messages, msg};
     use crate::types::{
         MCPServerConfig, Message, MessageRole, ModelConfig, ModelSource, ProcessServerConfig,
         RetryConfig, Session, SessionId, ToolDefinition,
@@ -1591,7 +1592,7 @@ mod qwen3coder_model_integration {
     /// Skip tests if model is not available
     fn skip_if_model_unavailable() -> Result<(), &'static str> {
         if env::var("QWEN3_CODER_MODEL_PATH").is_err() {
-            eprintln!("Skipping test: QWEN3_CODER_MODEL_PATH not set. Set to path of Qwen3-Coder model file to enable tests.");
+            tracing::warn!("Skipping test: QWEN3_CODER_MODEL_PATH not set. Set to path of Qwen3-Coder model file to enable tests.");
             return Err("Model unavailable - test skipped");
         }
         Ok(())
@@ -1921,6 +1922,218 @@ mod qwen3coder_model_integration {
         );
 
         println!("✓ Full template and tokenization workflow completed successfully");
+    }
+
+    /// THE FORK-BOUNDARY INVARIANT (card 309wyrm, project kv-prefix-reuse).
+    ///
+    /// Fork-based KV reuse only works if a forked child's rendered TOKEN
+    /// sequence begins with EXACTLY the parent's saved-boundary token
+    /// sequence — otherwise the rollback-aware selector computes a tiny LCP,
+    /// rolls back almost the whole donor, and the cache is useless (the live
+    /// calcutron-qwen "no usable cached prefix" every turn).
+    ///
+    /// Production save boundary (`queue.rs::save_prompt_boundary_state`,
+    /// PRE-generation): the parent's fingerprint is
+    /// `str_to_token(render([system, prime_user], add_generation_prompt=true),
+    /// AddBos::Always)` — the prompt ending in `<|im_start|>assistant\n` with
+    /// NO assistant content.
+    ///
+    /// A forked child (`session_fork.rs::clone_child_session`) clones ALL
+    /// parent messages INCLUDING the parent's completed assistant reply, then
+    /// the next turn appends a new user message and re-renders with the
+    /// generation prompt:
+    /// `render([system, prime_user, assistant "OK", new_user],
+    /// add_generation_prompt=true)`.
+    ///
+    /// This asserts `child_tokens[..parent_len] == parent_tokens` (exact
+    /// prefix), tolerating at most a 1-2 token tail mismatch from a BPE
+    /// boundary merge where the parent's trailing generation-prompt newline
+    /// meets the child's first assistant-content byte. A structural
+    /// divergence (the prefix breaking early) would be the root-cause bug.
+    ///
+    /// Model-gated like the other `QWEN3_CODER_MODEL_PATH` tests: the
+    /// tokenizer needs the loaded model, so this skips when no model is set
+    /// (no GPU/model in CI fast lane). It drives the renderer + tokenizer
+    /// directly — no generation, no context state.
+    #[test]
+    fn test_fork_child_render_is_token_prefix_of_parent_save_boundary() {
+        if skip_if_model_unavailable().is_err() {
+            return;
+        }
+
+        let model_config = create_test_model_config();
+        let backend = get_or_init_backend().expect("Backend should initialize");
+        let model_params = LlamaModelParams::default();
+        let model = LlamaModel::load_from_file(&backend, get_model_path(), &model_params)
+            .expect("Model should load");
+        let engine = ChatTemplateEngine::with_model_strategy("Qwen3-Coder");
+
+        // Maximum rollback the n_rs_seq recurrent-state snapshot window can
+        // absorb before reuse degrades to a cold prefill. A boundary-merge
+        // tail mismatch must stay well under this; a structural divergence
+        // blows past it.
+        const N_RS_SEQ: usize = crate::model::N_RS_SEQ as usize;
+
+        // Maximum acceptable rollback at the fork boundary. The only legitimate
+        // mismatch is a BPE token-boundary merge where the parent's trailing
+        // generation-prompt newline fuses with the child's first
+        // assistant-content byte, perturbing at most the last one or two tokens.
+        // Anything beyond this is a STRUCTURAL divergence, not a boundary merge.
+        const FORK_BOUNDARY_ROLLBACK_TOLERANCE: usize = 2;
+
+        // Parent at its PRE-generation save boundary: system prompt + the
+        // prime user turn, rendered with the generation prompt, no assistant
+        // content. This is exactly what `save_prompt_boundary_state`
+        // fingerprints.
+        let parent = create_session_with_messages(vec![
+            msg(MessageRole::System, "You are a helpful assistant."),
+            msg(MessageRole::User, "Summarize the corpus under review."),
+        ]);
+
+        // Child after a fork: the clone carries the parent's COMPLETED
+        // assistant reply, and the next turn appends a new user message. Same
+        // renderer, same generation prompt.
+        let child = create_session_with_messages(vec![
+            msg(MessageRole::System, "You are a helpful assistant."),
+            msg(MessageRole::User, "Summarize the corpus under review."),
+            msg(MessageRole::Assistant, "OK"),
+            msg(MessageRole::User, "Now list the open questions."),
+        ]);
+
+        let parent_prompt = engine
+            .render_session_with_config(&parent, &model, Some(&model_config))
+            .expect("parent render");
+        let child_prompt = engine
+            .render_session_with_config(&child, &model, Some(&model_config))
+            .expect("child render");
+
+        // Same tokenizer call the production save path uses
+        // (`queue.rs`: `str_to_token(&prompt, AddBos::Always)`), so the BOS is
+        // consistent on both sides and never a source of divergence.
+        use llama_cpp_2::model::AddBos;
+        let to_ids = |s: &str| -> Vec<i32> {
+            model
+                .str_to_token(s, AddBos::Always)
+                .expect("tokenize")
+                .into_iter()
+                .map(|t| t.0)
+                .collect()
+        };
+        let parent_tokens = to_ids(&parent_prompt);
+        let child_tokens = to_ids(&child_prompt);
+
+        assert!(
+            !parent_tokens.is_empty(),
+            "parent boundary must tokenize to a non-empty fingerprint"
+        );
+        assert!(
+            child_tokens.len() >= parent_tokens.len(),
+            "child render ({} tokens) must be at least as long as the parent boundary ({} tokens)",
+            child_tokens.len(),
+            parent_tokens.len()
+        );
+
+        // Longest common prefix of the two token sequences. The parent's
+        // rollback distance under the selector is `parent_len - lcp`.
+        let lcp = parent_tokens
+            .iter()
+            .zip(child_tokens.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let rollback = parent_tokens.len() - lcp;
+
+        // The invariant: the child reproduces the parent's saved boundary as a
+        // verbatim token prefix, modulo at most a tiny BPE boundary-merge tail
+        // that stays far under the n_rs_seq window.
+        assert!(
+            rollback <= FORK_BOUNDARY_ROLLBACK_TOLERANCE,
+            "FORK-BOUNDARY DIVERGENCE: child render diverges from the parent save \
+             boundary after {lcp} of {} parent tokens (rollback {rollback}). A \
+             rollback > {FORK_BOUNDARY_ROLLBACK_TOLERANCE} here is a STRUCTURAL divergence — the child is NOT a \
+             token-prefix extension of the parent, so the rollback-aware selector \
+             cannot reuse the parent's KV and every fork turn cold-prefills \
+             (\"no usable cached prefix\").\n\
+             parent boundary prompt:\n{parent_prompt}\n\
+             child prompt:\n{child_prompt}",
+            parent_tokens.len(),
+        );
+        assert!(
+            rollback < N_RS_SEQ,
+            "rollback {rollback} must stay under the n_rs_seq window {N_RS_SEQ}"
+        );
+    }
+
+    /// THE FORK-BOUNDARY INVARIANT, structural half (model-free).
+    ///
+    /// The token-level invariant
+    /// (`test_fork_child_render_is_token_prefix_of_parent_save_boundary`)
+    /// decomposes into two parts: (1) the parent's PRE-generation render is a
+    /// verbatim STRING prefix of the child's render, and (2) tokenization
+    /// preserves that prefix modulo a tiny BPE boundary-merge tail. Part (2)
+    /// needs the loaded tokenizer and is therefore model-gated; part (1) is
+    /// pure string rendering and can — and must — be proven without a model.
+    ///
+    /// If this string prefix ever breaks, the token prefix cannot hold either:
+    /// a structural divergence would be visible here first, with no GPU. This
+    /// is the guard `w37g2tw` depends on for the common (ChatML) case, and it
+    /// runs in the fast lane.
+    #[test]
+    fn test_fork_child_render_is_string_prefix_of_parent_save_boundary() {
+        // Drive the model-free ChatML renderer (`format_qwen_template`)
+        // directly, exactly as the native-template fallback path does for a
+        // Qwen/ChatML model. No tools, so the prompt is just the conversation
+        // frame.
+        let engine = ChatTemplateEngine::new();
+
+        // Parent at its PRE-generation save boundary: system + prime user,
+        // ending in the `<|im_start|>assistant\n` generation prompt with no
+        // assistant content.
+        let parent_messages = vec![
+            (
+                "system".to_string(),
+                "You are a helpful assistant.".to_string(),
+            ),
+            (
+                "user".to_string(),
+                "Summarize the corpus under review.".to_string(),
+            ),
+        ];
+
+        // Child after a fork: parent messages + the parent's COMPLETED
+        // assistant reply + a new user turn, same generation prompt.
+        let mut child_messages = parent_messages.clone();
+        child_messages.push(("assistant".to_string(), "OK".to_string()));
+        child_messages.push((
+            "user".to_string(),
+            "Now list the open questions.".to_string(),
+        ));
+
+        let parent_prompt = engine
+            .format_qwen_template(&parent_messages, None)
+            .expect("parent render");
+        let child_prompt = engine
+            .format_qwen_template(&child_messages, None)
+            .expect("child render");
+
+        assert!(
+            child_prompt.starts_with(&parent_prompt),
+            "FORK-BOUNDARY STRING DIVERGENCE: the parent's pre-generation render is \
+             not a verbatim prefix of the child's render. The token prefix cannot \
+             hold if the string prefix does not.\n\
+             parent boundary prompt:\n{parent_prompt}\n\
+             child prompt:\n{child_prompt}"
+        );
+
+        // The child's continuation past the boundary must begin with the
+        // parent's completed assistant content — confirming the boundary sits
+        // exactly at the generation prompt and the assistant reply is appended
+        // after it (the only place a BPE merge could perturb the token tail).
+        let continuation = &child_prompt[parent_prompt.len()..];
+        assert!(
+            continuation.starts_with("OK<|im_end|>"),
+            "child continuation past the parent boundary must be the completed \
+             assistant reply, got: {continuation}"
+        );
     }
 
     /// Test streaming tool call extraction with realistic model-like deltas

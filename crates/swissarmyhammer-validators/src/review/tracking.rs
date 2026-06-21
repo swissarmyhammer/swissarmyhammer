@@ -53,7 +53,7 @@
 //! causes a redundant re-review, never incorrectness.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -188,12 +188,94 @@ pub fn validators_dir(repo_path: &Path) -> PathBuf {
     repo_path.join(VALIDATORS_DIR)
 }
 
-/// The path-mirrored tracking-entry file for a repo-relative source path:
-/// `<repo>/.validators/.hashes/<rel_path>.yaml`.
-fn entry_path(repo_path: &Path, rel_path: &str) -> PathBuf {
-    validators_dir(repo_path)
-        .join(HASHES_DIR)
-        .join(format!("{rel_path}.{ENTRY_EXT}"))
+/// Collapse any spelling of a source path — absolute, `repo_path`-prefixed, or
+/// already-relative, with `.`/`..` segments — into the single canonical
+/// **repo-relative key** the tracking store keys on.
+///
+/// This is the store's self-protection: it is run on BOTH the write side
+/// (recording an entry) and the read side (looking one up / subtracting), at
+/// every choke point, so an absolute path written by one pass and the relative
+/// spelling read by the next (or vice versa) resolve to the identical
+/// `.validators/.hashes/<key>.yaml` and the identical `context_hash`. Without it,
+/// the dedup would silently depend on every upstream caller handing tracking a
+/// consistent path form.
+///
+/// Rule:
+/// - An absolute path (or one lexically under `repo_path`) has the `repo_path`
+///   prefix stripped to leave the repo-relative remainder; both `repo_path` and
+///   the candidate are canonicalized-where-they-exist and then lexically cleaned
+///   so symlinked or `..`-laden spellings of the same file do not fork keys.
+/// - An already-relative path is lexically cleaned in place.
+///
+/// Confinement: the cleaned key must stay within `.hashes/` — a `..` segment
+/// that would climb out of the repo root is rejected to `None` (mirroring the
+/// `confine_under_repo` boundary in `drive.rs`), so a malicious/stray path can
+/// never write or read outside the tracking subtree. Forward slashes are used in
+/// the returned key so the on-disk layout and the hashed key are stable across
+/// platforms.
+fn rel_key(repo_path: &Path, path: &str) -> Option<String> {
+    let candidate = Path::new(path);
+    // Canonicalize the repo root where it exists so a symlinked root and a
+    // `..`-laden absolute candidate compare on the same canonical basis.
+    let canonical_root = repo_path
+        .canonicalize()
+        .unwrap_or_else(|_| repo_path.to_path_buf());
+
+    let relative: PathBuf = if candidate.is_absolute() {
+        let canonical_candidate = candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.to_path_buf());
+        // Strip the repo prefix in whichever basis matches: prefer the canonical
+        // pairing, fall back to the raw spellings for a not-yet-existing target.
+        canonical_candidate
+            .strip_prefix(&canonical_root)
+            .or_else(|_| candidate.strip_prefix(repo_path))
+            .or_else(|_| canonical_candidate.strip_prefix(repo_path))
+            .ok()?
+            .to_path_buf()
+    } else {
+        candidate.to_path_buf()
+    };
+
+    clean_relative(&relative)
+}
+
+/// Lexically normalize a relative path to a forward-slash key, collapsing `.`
+/// segments and resolving `..` against earlier segments. Returns `None` when a
+/// `..` would climb above the root (the confinement boundary) or the path is
+/// absolute after cleaning.
+fn clean_relative(path: &Path) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                // A `..` that cannot be matched by an earlier real segment climbs
+                // above the repo root: refuse it.
+                parts.pop()?;
+            }
+            Component::Normal(seg) => parts.push(seg.to_str()?.to_string()),
+            // An absolute prefix/root left after relativization escapes the repo.
+            Component::Prefix(_) | Component::RootDir => return None,
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
+/// The path-mirrored tracking-entry file for a source path in any spelling:
+/// `<repo>/.validators/.hashes/<rel_key>.yaml`. The path is normalized through
+/// [`rel_key`] so absolute and relative spellings of the same file map to one
+/// entry file; a path that escapes the repo yields `None`.
+fn entry_path(repo_path: &Path, path: &str) -> Option<PathBuf> {
+    let key = rel_key(repo_path, path)?;
+    Some(
+        validators_dir(repo_path)
+            .join(HASHES_DIR)
+            .join(format!("{key}.{ENTRY_EXT}")),
+    )
 }
 
 /// Ensure `.validators/.gitignore` exists and ignores `.hashes/`.
@@ -233,28 +315,39 @@ pub fn ensure_gitignore(repo_path: &Path) -> Result<(), AvpError> {
     write_atomic(&gitignore, content.as_bytes())
 }
 
-/// Read the tracking entry for `rel_path`, `None` when none exists yet (or it is
-/// unreadable / unparseable — a corrupt entry simply forces a re-review).
-pub fn read_entry(repo_path: &Path, rel_path: &str) -> Option<TrackingEntry> {
-    let path = entry_path(repo_path, rel_path);
-    let content = std::fs::read_to_string(path).ok()?;
+/// Read the tracking entry for a source `path` in any spelling, `None` when none
+/// exists yet (or it is unreadable / unparseable — a corrupt entry simply forces
+/// a re-review). The path is normalized through [`rel_key`] so the read side
+/// resolves to the same entry file the write side produced.
+pub fn read_entry(repo_path: &Path, path: &str) -> Option<TrackingEntry> {
+    let entry = entry_path(repo_path, path)?;
+    let content = std::fs::read_to_string(entry).ok()?;
     serde_yaml_ng::from_str(&content).ok()
 }
 
 /// Upsert the tracking entry for one reviewed file.
 ///
-/// Lazily [`ensure_gitignore`]s before the first write so the hash dir is never
-/// committed, creates the path-mirrored parent directory, and writes the entry
-/// atomically (temp + rename) so a concurrent writer never observes a torn file.
-/// Overwrites any existing entry in place.
+/// The entry's `path` is normalized through [`rel_key`] to the canonical
+/// repo-relative key, so an absolute and a relative spelling of the same file
+/// write to the same `.validators/.hashes/<key>.yaml` and the read side resolves
+/// to the identical entry. Lazily [`ensure_gitignore`]s before the first write so
+/// the hash dir is never committed, creates the path-mirrored parent directory,
+/// and writes the entry atomically (temp + rename) so a concurrent writer never
+/// observes a torn file. Overwrites any existing entry in place.
 ///
 /// # Errors
 ///
-/// Returns [`AvpError::Io`] on a filesystem failure or [`AvpError::Json`] (YAML)
-/// when the entry cannot be serialized.
+/// Returns [`AvpError::Context`] when the entry path escapes the repository,
+/// [`AvpError::Io`] on a filesystem failure, or [`AvpError::Json`] (YAML) when the
+/// entry cannot be serialized.
 pub fn upsert_entry(repo_path: &Path, entry: &TrackingEntry) -> Result<(), AvpError> {
+    let Some(path) = entry_path(repo_path, &entry.path) else {
+        return Err(AvpError::Context(format!(
+            "tracking entry path escapes the repository: {}",
+            entry.path
+        )));
+    };
     ensure_gitignore(repo_path)?;
-    let path = entry_path(repo_path, &entry.path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -265,10 +358,14 @@ pub fn upsert_entry(repo_path: &Path, entry: &TrackingEntry) -> Result<(), AvpEr
 
 /// Record tracking entries for every reviewed file after a successful pass.
 ///
-/// For each `path` in `files`, reads the file's current working-tree content and
-/// upserts its entry against `rules_hash`, stamped `reviewed_at`. A file that
-/// cannot be read (e.g. deleted in the same change) is skipped — it has no
-/// content to hash and will resolve fresh next pass. The entry is written
+/// For each `path` in `files`, the path is first normalized/confined to its
+/// canonical repo-relative key via [`rel_key`] — a path that escapes the repo is
+/// skipped **before any read**, so an absolute out-of-repo spelling never triggers
+/// even a transient read outside the repo. The file's current working-tree content
+/// is then read from that confined location and its entry upserted against
+/// `rules_hash`, stamped `reviewed_at`. A file that cannot be read (e.g. deleted in
+/// the same change) is skipped — it has no content to hash and will resolve fresh
+/// next pass. The entry is written
 /// **regardless of findings**: an unchanged file with an open finding is
 /// correctly not re-scanned, because re-scanning only re-derives the same
 /// finding; when the implementer edits it, its content hash changes and it
@@ -285,10 +382,19 @@ pub fn record_reviewed(
     reviewed_at: &str,
 ) -> Result<(), AvpError> {
     for path in files {
-        let Ok(content) = std::fs::read_to_string(repo_path.join(path)) else {
+        // Normalize/confine to the canonical repo-relative key FIRST, before any
+        // filesystem read. A path that escapes the repo is skipped, so an absolute
+        // out-of-repo spelling can never cause even a transient read outside the
+        // repo. The stored `path` and `context_hash` are then keyed identically to
+        // what the read side computes for any spelling of this file.
+        let Some(key) = rel_key(repo_path, path) else {
             continue;
         };
-        let entry = TrackingEntry::new(path, &content, rules_hash, reviewed_at);
+        // Read from the confined location, never from the caller's raw spelling.
+        let Ok(content) = std::fs::read_to_string(repo_path.join(&key)) else {
+            continue;
+        };
+        let entry = TrackingEntry::new(&key, &content, rules_hash, reviewed_at);
         upsert_entry(repo_path, &entry)?;
     }
     Ok(())
@@ -344,14 +450,17 @@ pub fn record_baseline_if_working(
 /// The deduped, sorted set of files that appeared in the work-list — the files a
 /// validator actually reviewed this pass. This is the set the incremental
 /// tracking baseline is recorded for.
+///
+/// Shares the work-list's [`WorkList::distinct_files`](crate::review::WorkList::distinct_files)
+/// dedup (the same one the fan-out prime builds its file set from); the baseline
+/// only needs the paths, sorted for a deterministic on-disk tracking layout, so
+/// it re-collects them through a [`BTreeSet`].
 fn reviewed_files(work: &WorkList) -> Vec<String> {
-    let mut files: BTreeSet<String> = BTreeSet::new();
-    for validator in &work.validators {
-        for file in &validator.files {
-            files.insert(file.path.clone());
-        }
-    }
-    files.into_iter().collect()
+    work.distinct_files()
+        .map(|file| file.path.clone())
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect()
 }
 
 /// Subtract files whose tracking entry's `context_hash` matches their current
@@ -371,8 +480,14 @@ pub fn subtract_unchanged(
     candidates
         .iter()
         .filter(|(path, content)| {
-            let current = context_hash(path, content, rules_hash);
-            match read_entry(repo_path, path) {
+            // Normalize to the canonical key so the lookup hash matches the one
+            // the recorder stored for any spelling of this file. A path that
+            // escapes the repo has no entry and is always kept (re-reviewed).
+            let Some(key) = rel_key(repo_path, path) else {
+                return true;
+            };
+            let current = context_hash(&key, content, rules_hash);
+            match read_entry(repo_path, &key) {
                 Some(entry) => entry.context_hash != current,
                 None => true,
             }
@@ -744,6 +859,115 @@ mod tests {
         assert!(
             survivors.is_empty(),
             "an unedited second pass subtracts every recorded file, got: {survivors:?}"
+        );
+    }
+
+    // ---- path-form defense: the store self-protects ----------------------
+
+    #[test]
+    fn record_reviewed_confines_an_out_of_repo_absolute_path() {
+        // An absolute path resolving OUTSIDE the repo must be confined: it records
+        // no `.validators/.hashes/` entry (and never errors/panics), while a normal
+        // relative path in the SAME call still records. This proves the key is
+        // normalized/confined before any read so an out-of-repo path can never seed
+        // the tracking store.
+        let repo = TempDir::new().unwrap();
+        std::fs::write(repo.path().join("inside.rs"), "content").unwrap();
+
+        // A real, readable file outside the repo root.
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("secret.rs");
+        std::fs::write(&outside_file, "out of repo").unwrap();
+        let outside_str = outside_file.to_str().unwrap().to_string();
+
+        record_reviewed(
+            repo.path(),
+            &["inside.rs".to_string(), outside_str],
+            RULES,
+            NOW,
+        )
+        .unwrap();
+
+        // The in-repo relative path is recorded as normal.
+        assert!(
+            read_entry(repo.path(), "inside.rs").is_some(),
+            "a normal relative path in the same call still records"
+        );
+        // The out-of-repo absolute path produced no entry anywhere under .hashes/.
+        let hashes = repo.path().join(".validators/.hashes");
+        let escaped = hashes.exists()
+            && walk_files(&hashes).any(|p| {
+                std::fs::read_to_string(&p)
+                    .map(|c| c.contains("out of repo"))
+                    .unwrap_or(false)
+            });
+        assert!(
+            !escaped,
+            "an out-of-repo absolute path must record no tracking entry"
+        );
+    }
+
+    /// Yield every file beneath `dir`, recursively — test helper for asserting no
+    /// stray tracking entry was written for a confined path.
+    fn walk_files(dir: &Path) -> impl Iterator<Item = PathBuf> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            if let Ok(entries) = std::fs::read_dir(&d) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else {
+                        out.push(path);
+                    }
+                }
+            }
+        }
+        out.into_iter()
+    }
+
+    #[test]
+    fn subtract_matches_a_relative_spelling_against_an_absolute_recording() {
+        // The store is recorded with an ABSOLUTE path; a later subtract using the
+        // RELATIVE spelling of the same file must still find the entry and drop it.
+        let repo = TempDir::new().unwrap();
+        let abs = repo.path().join("src/a.rs");
+        let abs_str = abs.to_str().unwrap();
+        record_reviewed(
+            repo.path(),
+            std::slice::from_ref(&{
+                std::fs::create_dir_all(repo.path().join("src")).unwrap();
+                std::fs::write(&abs, "content").unwrap();
+                abs_str.to_string()
+            }),
+            RULES,
+            NOW,
+        )
+        .unwrap();
+
+        let candidates = vec![("src/a.rs".to_string(), "content".to_string())];
+        let survivors = subtract_unchanged(repo.path(), &candidates, RULES);
+        assert!(
+            survivors.is_empty(),
+            "a relative-spelled candidate must match an absolute-spelled recording, got: {survivors:?}"
+        );
+    }
+
+    #[test]
+    fn subtract_matches_an_absolute_spelling_against_a_relative_recording() {
+        // The mirror: recorded RELATIVE, subtracted with the ABSOLUTE spelling.
+        let repo = TempDir::new().unwrap();
+        std::fs::create_dir_all(repo.path().join("src")).unwrap();
+        std::fs::write(repo.path().join("src/a.rs"), "content").unwrap();
+        record_reviewed(repo.path(), &["src/a.rs".to_string()], RULES, NOW).unwrap();
+
+        let abs = repo.path().join("src/a.rs").to_str().unwrap().to_string();
+        let candidates = vec![(abs, "content".to_string())];
+        let survivors = subtract_unchanged(repo.path(), &candidates, RULES);
+        assert!(
+            survivors.is_empty(),
+            "an absolute-spelled candidate must match a relative-spelled recording, got: {survivors:?}"
         );
     }
 

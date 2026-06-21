@@ -556,18 +556,13 @@ mod tests {
     fn test_git_changes_tool_schema() {
         let tool = GitChangesTool::new();
 
-        // Wire schema: only `op` in properties, heavy keys dropped, signatures kept.
+        // Wire schema: only `op` in properties, every heavy key dropped
+        // (including the full-only `x-op-signatures` map).
         let wire = tool.schema();
         assert!(wire.is_object());
         assert!(wire["properties"]["op"].is_object());
-        assert!(wire["x-op-signatures"].is_object());
         let wire_obj = wire.as_object().unwrap();
-        for key in [
-            "x-operation-schemas",
-            "x-operation-groups",
-            "x-forgiving-input",
-            "examples",
-        ] {
+        for key in swissarmyhammer_operations::WIRE_DROPPED_KEYS {
             assert!(!wire_obj.contains_key(key), "wire schema must omit {key:?}");
         }
 
@@ -580,6 +575,7 @@ mod tests {
         assert!(properties.get("op").is_some());
         assert!(full["x-operation-schemas"].is_array());
         assert!(full["x-operation-groups"].is_object());
+        assert!(full["x-op-signatures"].is_object());
     }
 
     #[tokio::test]

@@ -20,9 +20,12 @@ chrono = { workspace = true }
 fs2 = { workspace = true }
 async-trait = { workspace = true }
 open = "5"
+rusqlite = { workspace = true }
 whoami = "1"
 
 # Local workspace dependencies
+swissarmyhammer-search = { workspace = true }
+swissarmyhammer-embedding = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-config = { workspace = true }
 swissarmyhammer-directory = { workspace = true }

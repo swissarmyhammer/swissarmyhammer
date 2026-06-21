@@ -93,7 +93,7 @@ settings:
 
     let config = load_shell_config_from_paths(&[project]);
 
-    // Settings from project layer should override builtin's 4096
+    // Settings from project layer should override the builtin default
     assert_eq!(config.settings.max_command_length, 8192);
 
     // A validator built from this config should allow a 5000-char command
@@ -114,23 +114,23 @@ fn hot_reload_picks_up_config_changes() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
 
-    // Start with no overlays — builtin denies `eval\s+`
-    assert!(eval(&[], "eval dangerous_thing").is_err());
+    // Start with no overlays — builtin denies `sudo\s+`
+    assert!(eval(&[], "sudo reboot").is_err());
 
-    // Now write a project overlay that permits `eval`
+    // Now write a project overlay that permits `sudo`
     write_overlay(
         &project,
         r#"
 permit:
-  - pattern: 'eval\s+'
-    reason: "Project allows eval"
+  - pattern: 'sudo\s+'
+    reason: "Project allows sudo"
 "#,
     );
 
     // Re-load with the overlay — same command is now permitted
     assert!(
-        eval(std::slice::from_ref(&project), "eval dangerous_thing").is_ok(),
-        "eval should be allowed after overlay permits it"
+        eval(std::slice::from_ref(&project), "sudo reboot").is_ok(),
+        "sudo should be allowed after overlay permits it"
     );
 
     // Overwrite the overlay to remove the permit
@@ -141,10 +141,10 @@ permit: []
 "#,
     );
 
-    // Re-load again — eval is denied again
+    // Re-load again — sudo is denied again
     assert!(
-        eval(&[project], "eval dangerous_thing").is_err(),
-        "eval should be denied again after permit removed"
+        eval(&[project], "sudo reboot").is_err(),
+        "sudo should be denied again after permit removed"
     );
 }
 

@@ -3,9 +3,10 @@
 //!
 //! sah is "just a bigger profile": it declares the shared SAH MCP server
 //! (`sah serve`), every builtin skill, every builtin agent, and the sah-only
-//! statusline + CLAUDE.md preamble flags. [`mirdan::install::init_profile`] /
-//! [`mirdan::install::deinit_profile`] interpret this data — there is no
-//! bespoke per-step `Initializable` code for skill/agent/mcp/statusline/preamble.
+//! statusline flag.
+//! [`mirdan::install::init_profile`] / [`mirdan::install::deinit_profile`]
+//! interpret this data — there is no bespoke per-step `Initializable` code for
+//! skill/agent/mcp/statusline.
 //!
 //! The two concerns that are *not* expressible as profile data —
 //! creating the `.sah/` + `.prompts/` project workspace and registering the
@@ -21,7 +22,10 @@ use mirdan::install::{Profile, ProfileMcpServer, Selector};
 /// - `skills`: every builtin skill ([`Selector::All`]).
 /// - `agents`: every builtin agent ([`Selector::All`]).
 /// - `statusline`: install the `sah statusline` block.
-/// - `preamble`: ensure the CLAUDE.md preamble is present.
+/// - `edit_redirect`: deny the native `Edit`/`Write` tools so every
+///   mutation flows through the served `files` MCP replacement; the deny alone
+///   closes the write surface (no `PreToolUse` hook), so diagnostics ride every
+///   mutation.
 ///
 /// Kept in sync with mirdan's cross-CLI consistency tests
 /// (`mirdan::install::profile_consistency_tests::sah_profile`), which
@@ -35,7 +39,8 @@ pub fn sah_profile() -> Profile {
         agents: Some(Selector::All),
         validators: Some(Selector::All),
         statusline: true,
-        preamble: true,
+        preamble: false,
+        edit_redirect: true,
     }
 }
 
@@ -44,7 +49,7 @@ mod tests {
     use super::*;
 
     /// sah's profile declares the full set: the `sah serve` MCP server, all
-    /// builtin skills, all builtin agents, statusline, and preamble.
+    /// builtin skills, all builtin agents, and statusline.
     #[test]
     fn test_sah_profile_declares_full_set() {
         let profile = sah_profile();
@@ -60,6 +65,7 @@ mod tests {
         assert_eq!(profile.agents, Some(Selector::All));
         assert_eq!(profile.validators, Some(Selector::All));
         assert!(profile.statusline);
-        assert!(profile.preamble);
+        assert!(!profile.preamble);
+        assert!(profile.edit_redirect);
     }
 }

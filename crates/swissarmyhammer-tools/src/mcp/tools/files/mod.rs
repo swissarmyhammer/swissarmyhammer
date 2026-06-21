@@ -150,11 +150,16 @@ impl McpTool for FilesTool {
     }
 
     fn category(&self) -> ToolCategory {
-        // File read/write/edit/glob/grep is a base agent capability. The
-        // validator surface does not serve this unified tool at all — it serves
-        // the split read-only `read_file`/`glob_files`/`grep_files` tools via
-        // the validator profile (`tools::register_validator_tools`).
-        ToolCategory::Agent
+        // File read/write/edit/glob/grep supersedes the host's native edit
+        // surface, so it is a `Replacement` for `Edit`: the primary per-client
+        // serve advertises it to Claude (mirroring how `shell` replaces `Bash`)
+        // and serve-time deny closes the native `Edit` tool. The validator
+        // surface does not serve this unified tool at all — it serves the split
+        // read-only `read_file`/`glob_files`/`grep_files` tools via the validator
+        // profile (`tools::register_validator_tools`), and the agent-tools /
+        // validator servers serve verbatim (`compose_per_client = false`), so
+        // this category does not change what those endpoints advertise.
+        ToolCategory::Replacement { native: "Edit" }
     }
 
     async fn execute(
@@ -399,6 +404,9 @@ mod tests {
             .as_array()
             .expect("should have x-operation-schemas");
         assert_eq!(op_schemas.len(), 5);
+
+        // The per-op signature map is carried on the full schema.
+        assert!(schema["x-op-signatures"].is_object());
     }
 
     #[test]
@@ -410,7 +418,11 @@ mod tests {
             schema.get("x-operation-schemas").is_none(),
             "wire schema must omit x-operation-schemas"
         );
-        assert!(schema["x-op-signatures"].is_object());
+        // `x-op-signatures` is full-only; the wire surface omits it.
+        assert!(
+            schema.get("x-op-signatures").is_none(),
+            "wire schema must omit x-op-signatures"
+        );
     }
 
     #[tokio::test]
@@ -576,17 +588,23 @@ mod tests {
     }
 
     #[test]
-    fn test_read_only_category_is_agent() {
+    fn test_read_only_category_is_replacement() {
         use crate::mcp::tool_registry::ToolCategory;
         let tool = FilesTool::read_only();
-        assert_eq!(McpTool::category(&tool), ToolCategory::Agent);
+        assert_eq!(
+            McpTool::category(&tool),
+            ToolCategory::Replacement { native: "Edit" }
+        );
     }
 
     #[test]
-    fn test_all_category_is_agent() {
+    fn test_all_category_is_replacement() {
         use crate::mcp::tool_registry::ToolCategory;
         let tool = FilesTool::new();
-        assert_eq!(McpTool::category(&tool), ToolCategory::Agent);
+        assert_eq!(
+            McpTool::category(&tool),
+            ToolCategory::Replacement { native: "Edit" }
+        );
     }
 
     #[tokio::test]
