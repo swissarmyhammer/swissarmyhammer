@@ -19,8 +19,8 @@ use crate::lockfile::{self, LockedPackage, Lockfile};
 use crate::mcp_config;
 use crate::package_type::{self, PackageType};
 use crate::registry::{RegistryClient, RegistryError};
-use crate::store;
 use crate::settings;
+use crate::store;
 
 /// Sanitize a package name for use as a filesystem directory name.
 ///

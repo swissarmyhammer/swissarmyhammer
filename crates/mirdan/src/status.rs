@@ -1134,9 +1134,7 @@ mod tests {
             let status = statuses
                 .iter()
                 .find(|s| s.component == Component::Mcp && s.scope == scope)
-                .unwrap_or_else(|| {
-                    panic!("expected codex MCP status row at scope {:?}", scope)
-                });
+                .unwrap_or_else(|| panic!("expected codex MCP status row at scope {:?}", scope));
             assert_ne!(
                 status.state,
                 ComponentState::NotApplicable,

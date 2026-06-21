@@ -217,10 +217,14 @@ fn rel_key(repo_path: &Path, path: &str) -> Option<String> {
     let candidate = Path::new(path);
     // Canonicalize the repo root where it exists so a symlinked root and a
     // `..`-laden absolute candidate compare on the same canonical basis.
-    let canonical_root = repo_path.canonicalize().unwrap_or_else(|_| repo_path.to_path_buf());
+    let canonical_root = repo_path
+        .canonicalize()
+        .unwrap_or_else(|_| repo_path.to_path_buf());
 
     let relative: PathBuf = if candidate.is_absolute() {
-        let canonical_candidate = candidate.canonicalize().unwrap_or_else(|_| candidate.to_path_buf());
+        let canonical_candidate = candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.to_path_buf());
         // Strip the repo prefix in whichever basis matches: prefer the canonical
         // pairing, fall back to the raw spellings for a not-yet-existing target.
         canonical_candidate
