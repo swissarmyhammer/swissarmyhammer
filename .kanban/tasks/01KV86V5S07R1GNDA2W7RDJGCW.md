@@ -18,6 +18,17 @@ comments:
   id: 01kvbpp288hb1x48bgy6ceksqb
   text: '[implement] Iteration 2 picked up. Moved to doing. Working the Review Findings checklist: 2 substantive (server.rs JoinError swallow, sync_document fs-read swallow), warnings (doc comment, parse_hover helper extraction, extension_to_language_id lookup table, test-fixture dedup), and nits (named constants).'
   timestamp: 2026-06-17T21:09:36.648841+00:00
+- actor: claude-code
+  id: 01kvjmjpd061eapqbj1kr1kbmk
+  text: |-
+    Routed from a review run on ^9nj62gm (the review engine swept the shared working tree and flagged uncommitted changes in code-context watcher.rs files, which belong to this task's stream, not ^9nj62gm). Please address or split these — they are real defects, not nits to ignore:
+
+    - BLOCKER — crates/swissarmyhammer-tools/src/mcp/tools/code_context/watcher.rs:166 — test helpers `get_ts_indexed` / `get_lsp_indexed` are near-verbatim duplicates differing only in the queried column ('ts_indexed' vs 'lsp_indexed'). Collapse into one column-parameterized helper `get_indexed_flag(conn, path, column)`.
+    - WARNING — watcher.rs:91 — debounce loop nests >4 levels (while→match→Ok→for→for→if); extract `process_debounced_events(...) -> Vec<FileEvent>`.
+    - NIT — watcher.rs:105 — magic `1` debounce timeout; promote to a named `WATCHER_DEBOUNCE_SECS` constant.
+
+    (Also a near-identical watcher at crates/swissarmyhammer-code-context/src/watcher.rs is dirty in the tree — check whether the same dedup applies there.)
+  timestamp: 2026-06-20T13:47:30.080218+00:00
 position_column: doing
 position_ordinal: '80'
 project: diagnostics

@@ -87,6 +87,10 @@ comments:
   id: 01kvjjfzcx82tgfnnj3jftm9a8
   text: 'Iteration 3 implement: items 1 (# Errors doc on notify), 3 (named DEBOUNCE_TIMEOUT const), 4 (test doc accuracy re: with_embedder vs _async) done. Item 2 (thiserror wrap) correctly NOT done. Adversarial double-check PASS. Tests 1976/1977 (pre-existing unrelated failure only), clippy --all-targets clean, fmt clean. Iteration 3: dispatching final /review. Note: findings have decayed blockers→warnings→nits and the core UPSERT fix was never flagged across two passes; this is the convergence pass.'
   timestamp: 2026-06-20T13:11:03.837119+00:00
+- actor: claude-code
+  id: 01kvjk0sah7xjgmtkzad4pt7f1
+  text: 'DONE. Final convergence review: core UPSERT fix passed its 3rd review pass unflagged; remaining items were test-only style nits + one re-raise of an already-resolved finding (and the declined thiserror wrap), none blocking. Task moved to done (completed 2026-06-20T13:18:36Z). Local rollback-point commit 7dbcaa745 created (NOT pushed) with exactly the 2 watcher-fix files + this task''s 2 .kanban files. Leftover non-blocking test-cleanup nits (collapse get_ts_indexed/get_lsp_indexed helpers; name 1024 / symbol-kind 12 literals) noted, safe to sweep later. The secondary rust-analyzer readiness issue (queried ~1s after spawn before warmup, returns 0 symbols, never retried) was deliberately left out of scope per the task and should be tracked as its own card if desired.'
+  timestamp: 2026-06-20T13:20:14.673277+00:00
 position_column: done
 position_ordinal: ffffffffffffffffffffffffffffffffffffffce80
 project: diagnostics

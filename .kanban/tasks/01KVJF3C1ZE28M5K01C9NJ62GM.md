@@ -42,8 +42,30 @@ comments:
 
     DISPOSITION: not looping /implement on tangential/pre-existing findings (would force forbidden bonus-refactoring of another task's file + the known review-churn loop). Acceptance criteria are machine-verified green by the test gate: category()==Replacement, list_tools_for_host(Claude) includes "files" & Llama/Other don't, fragment is deny-only with no PreToolUse, validator/agent-tools surface unchanged (test_validator_endpoint passed). Moving to done; committing only this task's 4 files (the 2 watcher.rs files belong to the concurrent diagnostics task and are excluded).
   timestamp: 2026-06-20T12:52:58.612343+00:00
-position_column: done
-position_ordinal: ffffffffffffffffffffffffffffffffffffffcd80
+- actor: claude-code
+  id: 01kvjmm1zqh37b1h9s234f63t2
+  text: 'Follow-up pass picked up: fix the two confirmed files/mod.rs operation-inference findings (duplicated read-only vs all-ops if-else chains; 8+-branch conditional mixing inference with read-only validation). Plan: extract one data-driven inference table OperationMeta{op_name, matches: fn(&Map)->bool} preserving precedence (edit > write > grep > glob > read), plus a single infer_operation(args, available_ops) walking the filtered table. Read-only filters edit+write out. TDD: add focused unit test for infer_operation table-driven first, then refactor dispatch. Behavior must be identical (same op inferred per input, same error messages). category() stays Replacement{native:"Edit"}. files/mod.rs only.'
+  timestamp: 2026-06-20T13:48:14.711176+00:00
+- actor: claude-code
+  id: 01kvjmwmx42254ha9jrz4xn7xc
+  text: |-
+    BLOCKED — cannot apply the files/mod.rs refactor: no write-capable tool is available in this environment.
+
+    The refactor is fully designed and ready (data-driven OperationMeta table + single infer_operation(args, available_ops), folding both review findings — the duplicated read-only/all-ops inference chains AND the 8-branch inference+validation conditional — into one mechanism; behavior identical, category() stays Replacement{native:"Edit"}). A focused TDD unit test (test_infer_operation_table_driven) is written and ready to land first.
+
+    What was tried:
+    - Direct Edit on crates/swissarmyhammer-tools/src/mcp/tools/files/mod.rs: denied 4x. Error: "No such tool available: Edit. Edit exists but is not enabled in this context."
+    - Write: not in the active tool set; ToolSearch select:Write,Edit,MultiEdit -> "No matching deferred tools found". Only NotebookEdit (Jupyter-only) is write-capable, inapplicable to .rs.
+    - Delegated to a fresh `default` subagent and an `implementer` subagent (both "all tools"): BOTH independently confirmed Edit AND Write unavailable in their contexts too, with the identical "Edit is not enabled in this context" error.
+    - The `files` MCP write tool (the intended replacement surface) is NOT mounted in this session or in subagent sessions, so there is no path to mutate the file.
+    - Bash is denied in .claude/settings.local.json (used the sah shell MCP tool for reads); shell heredoc mutation is explicitly off-limits per task constraints and would be the wrong tool anyway.
+
+    Root cause: this branch's own change closes Edit/Write/MultiEdit and routes writes through the `files` MCP tool — but `files` is not advertised to THIS host, so the agent has no write surface at all. This is the dead-end the original task warned about, now affecting the agent doing the follow-up.
+
+    Leaving task in `doing`. The refactor cannot proceed until a write tool (native Edit/Write, or the `files` MCP tool) is enabled for this session. The complete patch (table + infer_operation + rewritten execute body + the new test) is specified verbatim in the orchestrator transcript and can be applied in one shot once a write surface exists.
+  timestamp: 2026-06-20T13:52:56.228695+00:00
+position_column: doing
+position_ordinal: '8180'
 project: agent-builtins
 title: Serve the `files` write/edit replacement to Claude Code and drop the edit_redirect PreToolUse hook (deny alone closes the surface)
 ---

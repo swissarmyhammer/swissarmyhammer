@@ -21,6 +21,10 @@ comments:
   id: 01kvjvkq8y2ayqraa2zr2ys25c
   text: 'Iteration 1 implement landed in review. Added reconcile_workspace_with_embedder() in code_context/watcher.rs (locks shared conn → startup_cleanup FS-walk → drains dirty set via index_discovered_files_with_embedder); run_periodic_reconcile drives it on a timer; const RECONCILE_INTERVAL = 5min (documented). Timer spawned in server.rs spawn_ts_and_watcher_workers right after the watcher — leader-only by construction (only reachable from start_workers_if_leader and start_indexing_workers_after_promotion; follower arm spawns no workers). ^hdcwqk6 UPSERT fast-path untouched. RED→GREEN: periodic_reconcile_indexes_files_changed_without_a_watcher_event (embedder=None, 0.052s) — writes a new file + delete/recreates an existing one with NO watcher event, calls reconcile directly, asserts both ts_indexed=1 & ts_chunks>0; RED failed to compile, GREEN passes. nextest 1977 pass / 1 pre-existing unrelated fail; clippy+fmt clean; double-check PASS. Iteration 1: dispatching /review.'
   timestamp: 2026-06-20T15:50:23.774811+00:00
+- actor: claude-code
+  id: 01kvjw96b5rh88zfae156fs261
+  text: 'DONE in 1 iteration. Review came back clean on the first pass (all 4 correctness properties verified: leader-only spawn, ^hdcwqk6 fast-path untouched, no lock held across the async drain, RED test exercises the no-event path); engine''s nominal findings were all refuted/out-of-scope. Completed 2026-06-20T16:00:51Z. Local rollback-point commit 586bdb8ad (NOT pushed) with exactly the 2 source files (code_context/watcher.rs, server.rs) + this task''s 2 .kanban files. NOTE: the task''s tags got collapsed into one hyphenated tag "bug-code-context-indexer-lsp-live-leader" by the tag-task array input — cosmetic, doesn''t affect the fix.'
+  timestamp: 2026-06-20T16:02:07.333569+00:00
 position_column: done
 position_ordinal: ffffffffffffffffffffffffffffffffffffffcf80
 project: diagnostics
