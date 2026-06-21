@@ -68,20 +68,43 @@ fn seed_rust_project(root: &Path) -> std::path::PathBuf {
     main_rs
 }
 
-/// Poll `session.diagnostics_for(uri)` until it is non-empty or the deadline
-/// passes. Returns the diagnostics (possibly empty on timeout).
-async fn wait_for_diagnostics<C: swissarmyhammer_lsp::client::LspTransport>(
+/// Wait for the watcher to drive a non-empty re-report, nudging it with fresh
+/// disk writes on a cadence until one lands (or the deadline passes).
+///
+/// The watcher re-diagnoses only on the filesystem changes it observes, and a
+/// single write right after a cold start can land its one debounced pull before
+/// rust-analyzer has finished indexing the fresh crate — after which nothing
+/// re-pulls the static cache (push diagnostics are not wired into the daemon
+/// read loop). Re-writing the erroneous file keeps the watcher firing — each
+/// write is exactly the external-edit scenario the watcher exists to react to,
+/// not a hand-sync of the analyzer. The cadence is kept above the watcher's
+/// debounce so each write actually settles into a refresh instead of perpetually
+/// resetting the debounce timer. Every write preserves the type error (only a
+/// trailing marker comment varies), so any captured diagnostic still carries it.
+async fn wait_for_watcher_rereport<C: swissarmyhammer_lsp::client::LspTransport>(
     session: &swissarmyhammer_lsp::LspSession<C>,
+    main_rs: &Path,
     uri: &str,
     deadline: Duration,
 ) -> Vec<lsp_types::Diagnostic> {
     let start = std::time::Instant::now();
+    let mut nudge = 0u32;
     loop {
+        // Settle window: longer than DIAGNOSTICS_WATCH_DEBOUNCE (~1s) so the
+        // prior write debounces into a refresh + pull before we re-check.
+        tokio::time::sleep(Duration::from_secs(3)).await;
         let diags = session.diagnostics_for(uri);
         if !diags.is_empty() || start.elapsed() >= deadline {
             return diags;
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        // Still nothing — nudge the watcher with another on-disk edit that
+        // keeps the type error in place.
+        nudge += 1;
+        std::fs::write(
+            main_rs,
+            format!("fn main() {{\n    let _x: u32 = \"not a number\";\n}}\n// nudge {nudge}\n"),
+        )
+        .unwrap();
     }
 }
 
@@ -160,10 +183,12 @@ async fn watcher_redreport_on_direct_disk_write() {
 
     let uri = file_uri_from_path(&main_rs.to_string_lossy());
 
-    // The watcher debounces (~1s) then re-diagnoses. Give rust-analyzer time to
-    // analyze and report. A generous deadline keeps this robust on slow CI.
-    let diags = wait_for_diagnostics(
+    // The watcher debounces (~1s) then re-diagnoses. Keep nudging it with fresh
+    // disk writes on a cadence so a cold rust-analyzer that misses the first
+    // pull still gets re-driven before the generous deadline.
+    let diags = wait_for_watcher_rereport(
         &session,
+        &main_rs,
         &uri,
         Duration::from_secs(CI_DIAGNOSTIC_WAIT_DEADLINE_SECS),
     )

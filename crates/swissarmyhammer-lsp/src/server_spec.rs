@@ -360,18 +360,35 @@ fn resolve_executable(executable: &Path) -> Result<PathBuf, LspError> {
 mod tests {
     use super::*;
 
-    /// Count live `rust-analyzer` server processes owned by this machine,
-    /// excluding the `proc-macro` helper. Used to prove the availability probe
-    /// spawns no surviving rust-analyzer. Unix-only; returns `None` elsewhere.
+    /// Count live `rust-analyzer` processes that are **direct children of this
+    /// test process** (excluding the `proc-macro` helper). Unix-only; returns
+    /// `None` when `ps` is unavailable.
+    ///
+    /// Parent-PID scoping — rather than a machine-wide count — is what keeps
+    /// this isolated from the rest of the suite: other test binaries (notably
+    /// the diagnostics `leader_watcher` integration tests) spawn their own real
+    /// rust-analyzers concurrently under the test runner, and a machine-wide
+    /// count races them. A regression where the availability probe spawns a
+    /// throwaway server would parent that child to *us* and, because this
+    /// process stays alive for the rest of the test, it never reparents to
+    /// PID 1 within the observation window — so it shows up here and nowhere
+    /// that the concurrent spawns can pollute.
     #[cfg(unix)]
-    fn count_rust_analyzers() -> Option<usize> {
+    fn rust_analyzers_parented_to_us() -> Option<usize> {
+        let me = std::process::id();
         let out = std::process::Command::new("sh")
             .arg("-c")
-            .arg("ps -eo command | grep '[b]in/rust-analyzer' | grep -v proc-macro")
+            .arg("ps -eo ppid,command | grep '[b]in/rust-analyzer' | grep -v proc-macro")
             .output()
             .ok()?;
         let text = String::from_utf8_lossy(&out.stdout);
-        Some(text.lines().filter(|l| !l.trim().is_empty()).count())
+        let count = text
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .filter_map(|ppid| ppid.parse::<u32>().ok())
+            .filter(|&ppid| ppid == me)
+            .count();
+        Some(count)
     }
 
     #[cfg(unix)]
@@ -379,25 +396,27 @@ mod tests {
     fn test_start_lsp_server_does_not_spawn_rust_analyzer() {
         // The availability check must be a non-spawning probe: asking whether a
         // rust language server can be started must NOT launch a throwaway
-        // rust-analyzer that then leaks as a PPID=1 orphan. Assert the live
-        // rust-analyzer count is unchanged across the call.
-        let Some(before) = count_rust_analyzers() else {
+        // rust-analyzer that then leaks as a PPID=1 orphan. Assert the probe
+        // leaves no rust-analyzer parented to this process.
+        let Some(before) = rust_analyzers_parented_to_us() else {
             return; // ps unavailable in this environment
         };
+        assert_eq!(
+            before, 0,
+            "precondition: no rust-analyzer should be a child of this test yet"
+        );
 
         let tmp = tempfile::tempdir().unwrap();
         let _ = start_lsp_server("rust", tmp.path());
-        // Give any (buggy) spawned child the same 100ms grace the old code used,
-        // so a leaked process would be counted rather than racing the check.
+        // Give any (buggy) spawned child the same grace the old code used so a
+        // leaked process is observed rather than racing the check.
         std::thread::sleep(Duration::from_millis(200));
 
-        let after = count_rust_analyzers().unwrap();
-        // The probe must add NO new rust-analyzer. The count may legitimately
-        // drop (an unrelated server elsewhere exiting), so assert it never rose.
-        assert!(
-            after <= before,
-            "availability probe must not spawn a rust-analyzer \
-             (before={before}, after={after})"
+        let after = rust_analyzers_parented_to_us().unwrap();
+        assert_eq!(
+            after, 0,
+            "availability probe must not spawn a rust-analyzer parented to \
+             this process (found {after})"
         );
     }
 
