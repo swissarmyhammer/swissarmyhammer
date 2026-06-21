@@ -37,7 +37,8 @@ use swissarmyhammer_diagnostics::{
 };
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_operations::{
-    generate_mcp_schema, Operation, ParamMeta, ParamType, SchemaConfig,
+    generate_mcp_schema_full, generate_mcp_schema_wire, Operation, ParamMeta, ParamType,
+    SchemaConfig,
 };
 
 use crate::mcp::op_tool_helpers::{json_result, string_arg};
@@ -449,6 +450,14 @@ fn settled_empty() -> DiagnoseOutcome {
     }
 }
 
+/// The shared [`SchemaConfig`] for the diagnostics tool's wire and full
+/// schemas, so both surfaces describe the tool identically from one source.
+fn diagnostics_schema_config() -> SchemaConfig {
+    SchemaConfig::new(
+        "LSP diagnostics over working/file/sha scopes, plus server status, dispatched by `op`.",
+    )
+}
+
 crate::impl_default_doctorable!(DiagnosticsTool);
 crate::impl_empty_initializable!(DiagnosticsTool);
 
@@ -463,10 +472,11 @@ impl McpTool for DiagnosticsTool {
     }
 
     fn schema(&self) -> serde_json::Value {
-        let config = SchemaConfig::new(
-            "LSP diagnostics over working/file/sha scopes, plus server status, dispatched by `op`.",
-        );
-        generate_mcp_schema(&DIAGNOSTICS_OPERATIONS, config)
+        generate_mcp_schema_wire(&DIAGNOSTICS_OPERATIONS, diagnostics_schema_config())
+    }
+
+    fn schema_full(&self) -> serde_json::Value {
+        generate_mcp_schema_full(&DIAGNOSTICS_OPERATIONS, diagnostics_schema_config())
     }
 
     fn cli_category(&self) -> Option<&'static str> {
@@ -825,8 +835,9 @@ mod tests {
 
     #[test]
     fn schema_exposes_all_ops_and_severity_enum() {
-        let schema = tool().schema();
-        let ops = schema["properties"]["op"]["enum"]
+        // The wire schema (sent over MCP) carries the discriminator `op` enum.
+        let wire = tool().schema();
+        let ops = wire["properties"]["op"]["enum"]
             .as_array()
             .expect("op enum");
         for expected in [
@@ -838,13 +849,15 @@ mod tests {
         ] {
             assert!(ops.iter().any(|v| v == expected), "missing op {expected}");
         }
-        // The severity modifier carries the allowed_values enum — derived from
-        // the floor-order table so this assertion can never drift from the
-        // single source of truth for the level names.
+        // The per-modifier detail (the `severity` allowed_values enum) lives on
+        // the FULL schema, not the slimmed wire schema. It is derived from the
+        // floor-order table so this assertion can never drift from the single
+        // source of truth for the level names.
+        let full = tool().schema_full();
         let expected_levels: Vec<&str> =
             SEVERITY_FLOOR_ORDER.iter().map(|(name, _)| *name).collect();
         assert_eq!(
-            schema["properties"]["severity"]["enum"],
+            full["properties"]["severity"]["enum"],
             serde_json::json!(expected_levels)
         );
     }

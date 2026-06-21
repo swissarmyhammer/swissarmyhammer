@@ -89,7 +89,6 @@ mod tests {
         assert_eq!(profile.skills, Some(skills_selector()));
         assert!(profile.agents.is_none());
         assert!(!profile.statusline);
-        assert!(!profile.preamble);
     }
 
     #[test]
