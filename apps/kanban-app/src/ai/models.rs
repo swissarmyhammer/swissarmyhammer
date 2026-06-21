@@ -426,11 +426,11 @@ pub async fn ai_start_agent(
     Ok(AgentEndpoint { ws_url, mcp_url })
 }
 
-/// Report the AI conversation's streaming status into `UIState`.
+/// Report the AI conversation's streaming status into `UiState`.
 ///
 /// The AI panel's conversation lifecycle lives entirely in the webview
 /// (`useConversation`). This command mirrors that transient turn status into
-/// the backend `UIState.ai_streaming` flag — exactly the role the `can_undo` /
+/// the backend `UiState.ai_streaming` flag — exactly the role the `can_undo` /
 /// `can_redo` flags play for the undo stack — so the synchronous
 /// `Command::available()` check for `ai.cancel` can gate the palette entry
 /// (cancellable only mid-stream) without reaching into the webview.

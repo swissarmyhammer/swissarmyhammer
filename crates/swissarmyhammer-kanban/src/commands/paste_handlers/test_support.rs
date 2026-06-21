@@ -43,7 +43,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_operations::Execute;
-use swissarmyhammer_ui_state::UIState;
+use swissarmyhammer_ui_state::UiState;
 use tempfile::TempDir;
 
 // =============================================================================
@@ -109,7 +109,7 @@ pub fn make_ctx(kanban: &Arc<KanbanContext>) -> CommandContext {
     ctx
 }
 
-/// Like [`make_ctx`] but also attaches a fresh [`UIState`] extension.
+/// Like [`make_ctx`] but also attaches a fresh [`UiState`] extension.
 ///
 /// Some handlers (e.g. `actor_onto_task`, `attachment_onto_task`) read
 /// `ctx.ui_state` indirectly via the dispatcher contract; this variant
@@ -122,7 +122,7 @@ pub fn make_ctx_with_ui(target: &str, kanban: &Arc<KanbanContext>) -> CommandCon
         HashMap::new(),
     );
     ctx.set_extension(Arc::clone(kanban));
-    ctx.ui_state = Some(Arc::new(UIState::new()));
+    ctx.ui_state = Some(Arc::new(UiState::new()));
     ctx
 }
 
@@ -133,7 +133,7 @@ pub fn make_ctx_with_clipboard(
     scope: &[&str],
     kanban: &Arc<KanbanContext>,
     clipboard: &Arc<ClipboardProviderExt>,
-    ui: &Arc<UIState>,
+    ui: &Arc<UiState>,
 ) -> CommandContext {
     let mut ctx = CommandContext::new(
         "entity.paste",

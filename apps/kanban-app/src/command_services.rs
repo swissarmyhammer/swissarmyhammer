@@ -36,7 +36,7 @@ use swissarmyhammer_focus::{
 use swissarmyhammer_kanban::command_seam::{task_local_store_resolver, StoreTransactionSeam};
 use swissarmyhammer_plugin::{InProcessServer, McpServer, PluginHost};
 use swissarmyhammer_store::StoreServer;
-use swissarmyhammer_ui_state::{UIState, UiStateServer};
+use swissarmyhammer_ui_state::{UiState, UiStateServer};
 use swissarmyhammer_views::{task_local_resolver as views_task_local_resolver, ViewsServer};
 use swissarmyhammer_window_service::{WindowService, WindowShell};
 use tauri::{AppHandle, Emitter};
@@ -214,7 +214,7 @@ impl UiGeometryProvider for TauriUiGeometryProvider {
 /// same host).
 pub async fn install_app_command_services(
     host: &PluginHost,
-    ui_state: Arc<UIState>,
+    ui_state: Arc<UiState>,
     window_shell: Option<Arc<dyn WindowShell>>,
     app_shell: Option<Arc<dyn AppShell>>,
 ) -> Result<Arc<CommandService>, String> {
@@ -259,7 +259,7 @@ pub async fn install_app_command_services(
         .await
         .map_err(|e| format!("expose views module: {e}"))?;
 
-    // ui_state — app-wide, captures the shared UIState arc.
+    // ui_state — app-wide, captures the shared UiState arc.
     let ui_state_server: Arc<dyn McpServer> = Arc::new(
         InProcessServer::from_arc(Arc::new(UiStateServer::new(ui_state)))
             .await

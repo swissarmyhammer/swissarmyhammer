@@ -2,7 +2,7 @@
 //!
 //! [`build_dynamic_sources`] is the tier-0 replacement for the former
 //! `build_dynamic_sources` helper in `kanban-app/src/commands.rs`. The
-//! inputs are plain references — [`UIState`], one or more
+//! inputs are plain references — [`UiState`], one or more
 //! [`KanbanContext`]s, an active window label, and a caller-supplied list
 //! of live [`WindowInfo`] — so every piece except the live window data
 //! can be constructed in a Rust integration test without standing up any
@@ -11,8 +11,8 @@
 //! # Why windows are caller-supplied
 //!
 //! Live window state (title, visibility, focus) is owned by the GUI
-//! runtime (Tauri's `AppHandle`) and cannot be derived from [`UIState`]
-//! alone: [`UIState`] persists per-window geometry and board assignment,
+//! runtime (Tauri's `AppHandle`) and cannot be derived from [`UiState`]
+//! alone: [`UiState`] persists per-window geometry and board assignment,
 //! but not the currently-displayed title or focus flag. The GUI crate
 //! snapshots those via `app.webview_windows()` and passes them in.
 //! Headless tests fabricate the list (often empty) and exercise every
@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 use swissarmyhammer_common::WindowInfo;
 use swissarmyhammer_perspectives::{PerspectiveFieldInfo, PerspectiveInfo};
-use swissarmyhammer_ui_state::UIState;
+use swissarmyhammer_ui_state::UiState;
 use swissarmyhammer_views::ViewInfo;
 
 use crate::commands::perspective_commands::perspective_belongs_to_active_view;
@@ -48,7 +48,7 @@ use crate::scope_commands::{BoardInfo, DynamicSources};
 /// `list_commands_for_scope` invocation; there is no cheaper shape.
 pub struct DynamicSourcesInputs<'a> {
     /// UI state — provides `open_boards`, `active_view_id`, etc.
-    pub ui_state: &'a UIState,
+    pub ui_state: &'a UiState,
     /// Context for the currently active board, if any.
     ///
     /// `None` when no board is focused — the live app passes `None` while
@@ -82,7 +82,7 @@ pub struct DynamicSourcesInputs<'a> {
     pub ai_models: Vec<crate::commands::options_resolvers::AiModelInfo>,
 }
 
-/// Hand-rolled `Debug` impl because [`UIState`] is not `Debug` (it owns
+/// Hand-rolled `Debug` impl because [`UiState`] is not `Debug` (it owns
 /// an `RwLock` with interior mutable state). The impl deliberately elides
 /// anything that would require locking — it prints only counts and
 /// trivially-copyable flags so tracing can log an `inputs=…` line without
@@ -166,7 +166,7 @@ fn gather_views(ctx: Option<&KanbanContext>) -> Vec<ViewInfo> {
         .collect()
 }
 
-/// Gather open-board info from UIState + the caller-supplied context map.
+/// Gather open-board info from UiState + the caller-supplied context map.
 ///
 /// The path list is authoritative: every entry in `ui_state.open_boards()`
 /// produces exactly one [`BoardInfo`]. `open_board_ctxs` is a best-effort
@@ -174,7 +174,7 @@ fn gather_views(ctx: Option<&KanbanContext>) -> Vec<ViewInfo> {
 /// parent directory basename for both `entity_name` and `context_name`,
 /// matching the pre-refactor GUI behavior.
 async fn gather_boards(
-    ui_state: &UIState,
+    ui_state: &UiState,
     open_board_ctxs: &HashMap<PathBuf, Arc<KanbanContext>>,
 ) -> Vec<BoardInfo> {
     let open_paths = ui_state.open_boards();
@@ -207,7 +207,7 @@ async fn gather_boards(
     result
 }
 
-/// Resolve the active view id + kind from UIState + the active board's
+/// Resolve the active view id + kind from UiState + the active board's
 /// views registry.
 ///
 /// Returns `(None, None)` when there is no active context, no active window
@@ -222,7 +222,7 @@ async fn gather_boards(
 /// `view_id == None` fall back to kind-equality.
 fn resolve_active_view(
     ctx: Option<&KanbanContext>,
-    ui_state: &UIState,
+    ui_state: &UiState,
     active_window_label: Option<&str>,
 ) -> (Option<String>, Option<String>) {
     let Some(ctx) = ctx else {

@@ -7,7 +7,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "UIState struct and the in-process MCP server (ui_state) that exposes its mutations"
+description = "UiState struct and the in-process MCP server (ui_state) that exposes its mutations"
 
 [dependencies]
 rmcp = { workspace = true }

@@ -37,6 +37,10 @@ use serde_json::json;
 use swissarmyhammer_command_service::bootstrap::install_commands_module;
 use swissarmyhammer_plugin::{CallerId, InProcessServer, McpNotification, McpServer, PluginHost};
 
+#[path = "fixture/mod.rs"]
+mod fixture;
+use fixture::LoadResult;
+
 /// A generous upper bound on any single host interaction.
 const TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -112,15 +116,11 @@ async fn host_with_recorder() -> (PluginHost, tempfile::TempDir, Arc<Mutex<Vec<S
     (host, bundle, seen)
 }
 
-/// Writes a one-file plugin bundle whose default-class `load()` runs `body`.
+/// Writes a one-file `index.ts` plugin bundle whose `load(): Promise<void>`
+/// runs `body`. Thin adapter over the shared [`fixture::write_plugin`] binding
+/// this file's fixed bundle shape.
 fn write_plugin(dir: &std::path::Path, body: &str) {
-    let entry = format!(
-        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
-         export default class P extends Plugin {{\n\
-           async load(): Promise<void> {{\n{body}\n}}\n\
-         }}\n"
-    );
-    std::fs::write(dir.join("index.ts"), entry).expect("index.ts should be written");
+    fixture::write_plugin(dir, "index.ts", body, LoadResult::Void);
 }
 
 /// Polls `seen` until it holds at least `want` entries, or fails on timeout.

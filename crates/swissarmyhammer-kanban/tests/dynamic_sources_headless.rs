@@ -7,7 +7,7 @@
 //!
 //! This file proves the relocated entry point produces the exact same
 //! `DynamicSources` shape the GUI crate used to assemble inline: views,
-//! boards, and perspectives computed from a bare `UIState` + one or more
+//! boards, and perspectives computed from a bare `UiState` + one or more
 //! `KanbanContext`s, with `WindowInfo` supplied by the caller (since live
 //! window titles/focus states can only come from the GUI runtime).
 //!
@@ -32,7 +32,7 @@ use swissarmyhammer_kanban::scope_commands::{commands_for_scope, DynamicSources}
 use swissarmyhammer_kanban::{
     board::InitBoard, dispatch::execute_operation, parse::parse_input, Execute, KanbanContext,
 };
-use swissarmyhammer_ui_state::UIState;
+use swissarmyhammer_ui_state::UiState;
 use tempfile::TempDir;
 
 /// Open a fresh board under a temp dir and return the context and its
@@ -106,7 +106,7 @@ async fn add_perspective_inner(
 /// board's views registry. Returns nothing — the id is the caller's input.
 ///
 /// Used by the per-`view_id` perspective scoping tests, which need to flip
-/// `UIState`'s active view between two grid views sharing the same kind
+/// `UiState`'s active view between two grid views sharing the same kind
 /// to prove `view_id` resolves to different perspectives.
 async fn register_grid_view(ctx: &KanbanContext, id: &str, name: &str) {
     use swissarmyhammer_views::{ViewDef, ViewKind};
@@ -127,7 +127,7 @@ async fn register_grid_view(ctx: &KanbanContext, id: &str, name: &str) {
         .expect("write_view must succeed");
 }
 
-/// End-to-end headless assembly: seed a board + a perspective, point UIState
+/// End-to-end headless assembly: seed a board + a perspective, point UiState
 /// at that board + an active view, then call `build_dynamic_sources` and
 /// assert every emitted dynamic command matches what the GUI path would
 /// produce. No Tauri crate is in scope.
@@ -139,9 +139,9 @@ async fn build_dynamic_sources_assembles_views_boards_perspectives_headless() {
     // has something to return.
     let persp_id = add_perspective(&ctx, "Active Sprint", "board").await;
 
-    // Bare UIState: marks the board as open and selects a real view id so
+    // Bare UiState: marks the board as open and selects a real view id so
     // `resolve_active_view` has something to return.
-    let ui = UIState::new();
+    let ui = UiState::new();
     let board_path_str = board_path.display().to_string();
     ui.add_open_board(&board_path_str);
     // Use the ULID id of the built-in `board` view (kind=board). ViewsContext
@@ -274,7 +274,7 @@ async fn build_dynamic_sources_assembles_views_boards_perspectives_headless() {
 /// `None` (no board focused).
 #[tokio::test]
 async fn build_dynamic_sources_handles_no_active_context() {
-    let ui = UIState::new();
+    let ui = UiState::new();
     let open_boards: HashMap<PathBuf, Arc<KanbanContext>> = HashMap::new();
 
     let inputs = DynamicSourcesInputs {
@@ -303,7 +303,7 @@ async fn build_dynamic_sources_emits_every_open_board_and_window() {
     let (_tmp_a, ctx_a, path_a) = open_board("Board Alpha").await;
     let (_tmp_b, ctx_b, path_b) = open_board("Board Beta").await;
 
-    let ui = UIState::new();
+    let ui = UiState::new();
     let path_a_str = path_a.display().to_string();
     let path_b_str = path_b.display().to_string();
     ui.add_open_board(&path_a_str);
@@ -340,7 +340,7 @@ async fn build_dynamic_sources_emits_every_open_board_and_window() {
     let dynamic: DynamicSources = build_dynamic_sources(inputs).await;
 
     // Both boards must be present with the entity names we initialised them
-    // under — order is unspecified because it follows `UIState::open_boards`.
+    // under — order is unspecified because it follows `UiState::open_boards`.
     assert_eq!(dynamic.boards.len(), 2, "both open boards must be emitted");
     let paths: Vec<&str> = dynamic.boards.iter().map(|b| b.path.as_str()).collect();
     assert!(paths.contains(&path_a_str.as_str()));
@@ -426,7 +426,7 @@ async fn build_dynamic_sources_emits_every_open_board_and_window() {
 /// parent directory basename for both `entity_name` and `context_name`.
 ///
 /// This branch is load-bearing on the live-app splash/welcome path,
-/// where UIState lists recent boards the user has not opened yet — there
+/// where UiState lists recent boards the user has not opened yet — there
 /// is no `KanbanContext` for them, but they still need to render in the
 /// board-switcher menu as something humans can read.
 #[tokio::test]
@@ -437,7 +437,7 @@ async fn build_dynamic_sources_falls_back_to_basename_when_ctx_missing() {
     let recent_path = PathBuf::from("/tmp/swissarmyhammer-headless/recents-fixture/.kanban");
     let recent_str = recent_path.display().to_string();
 
-    let ui = UIState::new();
+    let ui = UiState::new();
     ui.add_open_board(&recent_str);
 
     // Intentionally empty: the path is in `open_boards` but we have no
@@ -486,7 +486,7 @@ async fn build_dynamic_sources_filters_perspectives_by_active_view_kind() {
     let board_persp_id = add_perspective(&ctx, "Board Sprint", "board").await;
     let grid_persp_id = add_perspective(&ctx, "Grid Backlog", "grid").await;
 
-    let ui = UIState::new();
+    let ui = UiState::new();
     let board_path_str = board_path.display().to_string();
     ui.add_open_board(&board_path_str);
     // Active view kind is "board" — so grid perspectives must be filtered out.
@@ -568,7 +568,7 @@ async fn perspectives_are_scoped_by_view_id_when_set() {
     open_boards.insert(board_path.clone(), Arc::clone(&ctx));
 
     // With view B active, the scoped perspective must be filtered out.
-    let ui_b = UIState::new();
+    let ui_b = UiState::new();
     ui_b.add_open_board(&board_path_str);
     ui_b.set_active_view("main", GRID_VIEW_B_ID);
     let dynamic_b = build_dynamic_sources(DynamicSourcesInputs {
@@ -591,7 +591,7 @@ async fn perspectives_are_scoped_by_view_id_when_set() {
     );
 
     // With view A active, the scoped perspective must be present.
-    let ui_a = UIState::new();
+    let ui_a = UiState::new();
     ui_a.add_open_board(&board_path_str);
     ui_a.set_active_view("main", GRID_VIEW_A_ID);
     let dynamic_a = build_dynamic_sources(DynamicSourcesInputs {
@@ -634,7 +634,7 @@ async fn legacy_kind_perspectives_remain_shared_by_kind() {
     open_boards.insert(board_path.clone(), Arc::clone(&ctx));
 
     for view_id in [GRID_VIEW_A_ID, GRID_VIEW_B_ID] {
-        let ui = UIState::new();
+        let ui = UiState::new();
         ui.add_open_board(&board_path_str);
         ui.set_active_view("main", view_id);
         let dynamic = build_dynamic_sources(DynamicSourcesInputs {
@@ -659,7 +659,7 @@ async fn legacy_kind_perspectives_remain_shared_by_kind() {
     }
 
     // Board-kind view: legacy grid perspective must NOT appear.
-    let ui_board = UIState::new();
+    let ui_board = UiState::new();
     ui_board.add_open_board(&board_path_str);
     const BUILTIN_BOARD_VIEW_ID: &str = "01JMVIEW0000000000BOARD0";
     ui_board.set_active_view("main", BUILTIN_BOARD_VIEW_ID);
@@ -708,7 +708,7 @@ fn view_info(id: &str, name: &str) -> swissarmyhammer_views::ViewInfo {
 }
 
 /// Run `commands_for_scope` over a fixed two-view `DynamicSources` and the
-/// supplied scope chain, returning every emitted command. Uses an empty UIState
+/// supplied scope chain, returning every emitted command. Uses an empty UiState
 /// and the composed kanban registry — the same plumbing the other tests use.
 fn switch_rows_for_scope(
     views: &[swissarmyhammer_views::ViewInfo],
@@ -721,7 +721,7 @@ fn switch_rows_for_scope(
     let registry = compose_registry![swissarmyhammer_kanban];
     let impls: HashMap<String, Arc<dyn swissarmyhammer_kanban::commands_core::Command>> =
         HashMap::new();
-    let ui_arc = Arc::new(UIState::new());
+    let ui_arc = Arc::new(UiState::new());
     commands_for_scope(
         scope,
         &registry,

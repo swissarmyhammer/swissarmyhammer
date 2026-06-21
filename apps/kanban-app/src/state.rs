@@ -12,7 +12,7 @@ use swissarmyhammer_kanban::KanbanContext;
 use swissarmyhammer_tools::mcp::unified_server::{
     start_mcp_server_with_options, McpServerHandle, McpServerMode,
 };
-use swissarmyhammer_ui_state::UIState;
+use swissarmyhammer_ui_state::UiState;
 use tauri::menu::{CheckMenuItem, MenuItem};
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 
@@ -23,7 +23,7 @@ use crate::plugins::PluginPlatform;
 use crate::watcher;
 use swissarmyhammer_entity::EntityCache;
 
-/// XDG subdirectory for this consumer's UIState config file. Passed to
+/// XDG subdirectory for this consumer's UiState config file. Passed to
 /// [`swissarmyhammer_kanban::default_ui_state`], which owns the full
 /// `$XDG_CONFIG_HOME/sah/<subdir>/ui-state.yaml` resolution.
 const CONFIG_APP_SUBDIR: &str = "kanban-app";
@@ -722,7 +722,7 @@ impl MenuItemHandle {
 pub(crate) struct AppState {
     pub(crate) boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
     /// Shared UI state (inspector stack, palette, keymap, drag session, etc.).
-    pub(crate) ui_state: Arc<UIState>,
+    pub(crate) ui_state: Arc<UiState>,
     /// YAML-loaded command definitions. Behind RwLock because user overrides
     /// are merged when switching boards.
     pub(crate) commands_registry: RwLock<CommandsRegistry>,
@@ -836,9 +836,9 @@ impl AppState {
         Self::with_ui_state(ui_state, platform, plugin_roots)
     }
 
-    /// Create AppState with a freshly loaded UIState written to a
+    /// Create AppState with a freshly loaded UiState written to a
     /// per-test temp path, so unit tests don't clobber the developer's
-    /// real config. Still goes through [`UIState::load`] to exercise the
+    /// real config. Still goes through [`UiState::load`] to exercise the
     /// same loader the production path uses.
     ///
     /// Synchronous, and the plugin platform it wires is the empty
@@ -852,7 +852,7 @@ impl AppState {
         // No shared plugin roots: plain unit tests don't open real boards, and
         // boards opened without roots skip the per-board platform.
         Self::with_ui_state(
-            Arc::new(UIState::load(path)),
+            Arc::new(UiState::load(path)),
             PluginPlatform::for_tests_empty(),
             None,
         )
@@ -877,7 +877,7 @@ impl AppState {
         tool_working_dir: PathBuf,
     ) -> Result<Self, String> {
         let path = std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new()));
-        let ui_state = Arc::new(UIState::load(path));
+        let ui_state = Arc::new(UiState::load(path));
         // The test global platform models a boardless host: no project layer.
         let mut platform = PluginPlatform::build(
             user_root.clone(),
@@ -921,7 +921,7 @@ impl AppState {
         Ok(state)
     }
 
-    /// Internal constructor that takes an already-loaded [`UIState`] and a
+    /// Internal constructor that takes an already-loaded [`UiState`] and a
     /// fully-built [`PluginPlatform`].
     ///
     /// Every other constructor funnels through here so the wiring (MRU,
@@ -935,7 +935,7 @@ impl AppState {
     /// platform is built by the caller because its construction is async,
     /// while this funnel stays synchronous.
     fn with_ui_state(
-        ui_state: Arc<UIState>,
+        ui_state: Arc<UiState>,
         plugin_platform: PluginPlatform,
         plugin_roots: Option<PluginRoots>,
     ) -> Self {
@@ -1199,7 +1199,7 @@ impl AppState {
         }
     }
 
-    /// Insert the newly-opened board into the map and update UIState MRU
+    /// Insert the newly-opened board into the map and update UiState MRU
     /// tracking. The watcher may already be emitting events, but the frontend
     /// won't see them until `list_open_boards` returns this board.
     async fn register_open_board(&self, canonical: &Path, handle: BoardHandle, board_name: &str) {
@@ -1215,7 +1215,7 @@ impl AppState {
         self.ui_state.add_open_board(&canonical_str);
     }
 
-    /// Sync UIState undo/redo flags from the newly opened board's
+    /// Sync UiState undo/redo flags from the newly opened board's
     /// `StoreContext` so menu items reflect correct enabled state from the
     /// start.
     async fn sync_undo_redo_state(&self, canonical: &Path) {
@@ -1279,7 +1279,7 @@ impl AppState {
         }
     }
 
-    /// Restore previously-open boards from UIState's `open_boards` list.
+    /// Restore previously-open boards from UiState's `open_boards` list.
     ///
     /// Removes stale entries (empty paths, directories that no longer exist,
     /// and malformed dirs with no board entity) and opens all valid board
@@ -1341,7 +1341,7 @@ impl AppState {
         }
     }
 
-    /// Open boards referenced in UIState `window_boards` that aren't already open.
+    /// Open boards referenced in UiState `window_boards` that aren't already open.
     ///
     /// Handles the case where a secondary window shows a different board
     /// than the ones in `open_boards`.
@@ -1363,7 +1363,7 @@ impl AppState {
                 continue;
             }
             if path.is_dir() {
-                tracing::info!(path = %path.display(), "auto_open_board: restoring board from UIState window_boards");
+                tracing::info!(path = %path.display(), "auto_open_board: restoring board from UiState window_boards");
                 if let Err(e) = self.open_board(&path, None).await {
                     tracing::warn!(path = %path.display(), error = %e, "auto_open_board: failed to restore windows board");
                 }
@@ -1478,7 +1478,7 @@ impl AppState {
             }
         }
 
-        // Update UIState board tracking so it stays in sync.
+        // Update UiState board tracking so it stays in sync.
         self.ui_state
             .remove_open_board(&canonical.display().to_string());
 
@@ -1504,7 +1504,7 @@ impl AppState {
     /// Resolve the calling window's board handle from its label.
     ///
     /// Maps `label` → board path via the per-window assignment persisted in
-    /// [`UIState`](swissarmyhammer_ui_state::UIState) (`window_board`), then
+    /// [`UiState`](swissarmyhammer_ui_state::UiState) (`window_board`), then
     /// canonicalizes that path the same way [`open_board`](Self::open_board)
     /// keys the `boards` map and looks it up. Returns `None` for a boardless
     /// window (no assignment) or an unknown label — the caller then falls back
@@ -1537,7 +1537,7 @@ pub(crate) struct PluginRoots {
     builtin_cache: PathBuf,
     /// Shared UI state, threaded into each per-board platform's
     /// `wire_command_services` call.
-    ui_state: Arc<UIState>,
+    ui_state: Arc<UiState>,
 }
 
 impl PluginRoots {
@@ -1546,7 +1546,7 @@ impl PluginRoots {
     /// Returns `None` when either directory can't be resolved — plugins are
     /// then disabled app-wide (no global platform built from real roots, and
     /// boards open without per-board platforms), but board data still works.
-    fn resolve(ui_state: Arc<UIState>) -> Option<Self> {
+    fn resolve(ui_state: Arc<UiState>) -> Option<Self> {
         use swissarmyhammer_directory::{KanbanConfig, ManagedDirectory};
 
         let user_root = match ManagedDirectory::<KanbanConfig>::xdg_config() {
@@ -1812,9 +1812,9 @@ fn try_home_backstop(cwd: &Path) -> Option<PathBuf> {
 
 /// Try the most recently used board as a fallback.
 ///
-/// Reads the MRU list from UIState and returns the first entry whose
+/// Reads the MRU list from UiState and returns the first entry whose
 /// path still exists on disk, or `None` if no valid MRU entry is found.
-fn try_mru_fallback(ui_state: &swissarmyhammer_ui_state::UIState) -> Option<PathBuf> {
+fn try_mru_fallback(ui_state: &swissarmyhammer_ui_state::UiState) -> Option<PathBuf> {
     let recent_boards = ui_state.recent_boards();
     let recent = recent_boards.first()?;
     let path = PathBuf::from(&recent.path);
@@ -2273,7 +2273,7 @@ mod tests {
 
     #[test]
     fn test_mru_uistate_touch_and_truncate() {
-        let ui_state = swissarmyhammer_ui_state::UIState::new();
+        let ui_state = swissarmyhammer_ui_state::UiState::new();
 
         for i in 0..25 {
             ui_state.touch_recent(&format!("/board/{}", i), &format!("Board {}", i));
@@ -2318,7 +2318,7 @@ mod tests {
 
     #[test]
     fn test_mru_deduplicates() {
-        let ui_state = swissarmyhammer_ui_state::UIState::new();
+        let ui_state = swissarmyhammer_ui_state::UiState::new();
 
         ui_state.touch_recent("/board/a", "Board A");
         ui_state.touch_recent("/board/b", "Board B");

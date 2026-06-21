@@ -332,7 +332,7 @@ fn wire_deep_links(app: &tauri::App) {
     });
 }
 
-/// Restore ALL board windows from persisted UIState. Every board window is
+/// Restore ALL board windows from persisted UiState. Every board window is
 /// created dynamically via `create_window_impl` — no static "main" window,
 /// no primary/secondary distinction. Falls back to one window for the first
 /// open board when nothing was restored.
@@ -489,7 +489,7 @@ fn on_window_focused(window: &tauri::Window, label: &str) {
     }
 }
 
-/// Mid-session close: user clicked X on a secondary window. Remove the UIState
+/// Mid-session close: user clicked X on a secondary window. Remove the UiState
 /// entry synchronously BEFORE the window is destroyed so it won't resurrect
 /// on restart. During app quit, ExitRequested sets `shutting_down=true` before
 /// CloseRequested fires, so entries are preserved for restore.
@@ -507,7 +507,7 @@ fn on_window_close_requested(window: &tauri::Window, label: &str) {
 }
 
 /// Rebuild the Window menu when a secondary window is destroyed. Actual
-/// UIState cleanup already happened in `on_window_close_requested`.
+/// UiState cleanup already happened in `on_window_close_requested`.
 fn on_window_destroyed(window: &tauri::Window) {
     let state = window.app_handle().state::<AppState>();
     if state.shutting_down.load(Ordering::SeqCst) {
@@ -527,7 +527,7 @@ fn handle_run_event(app_handle: &tauri::AppHandle, event: tauri::RunEvent) {
     // (via update_window_geometry), so this is the single save point that
     // captures the latest positions.
     if let Err(e) = state.ui_state.save() {
-        tracing::error!(error = %e, "failed to save UIState on exit");
+        tracing::error!(error = %e, "failed to save UiState on exit");
     }
     // Stop every in-process AI agent endpoint so no loopback WebSocket server
     // outlives the process. Each `RunningAgent` also aborts its accept loop on

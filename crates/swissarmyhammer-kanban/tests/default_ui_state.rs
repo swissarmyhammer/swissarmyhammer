@@ -3,7 +3,7 @@
 //! The helper is the XDG-aware entry point consumers (GUI, CLI, MCP)
 //! use at startup: it resolves
 //! `$XDG_CONFIG_HOME/sah/<app_subdir>/ui-state.yaml` and delegates the
-//! file read to `UIState::load`. This test seeds a fixture at the exact
+//! file read to `UiState::load`. This test seeds a fixture at the exact
 //! XDG-resolved path and asserts the helper picks it up, exercising
 //! path composition end-to-end.
 //!

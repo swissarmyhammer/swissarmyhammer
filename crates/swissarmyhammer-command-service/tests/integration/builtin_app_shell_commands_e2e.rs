@@ -25,7 +25,7 @@
 //!     `entity.inspect`, `app.inspector.{close,close_all,set_width}`,
 //!     `app.palette.{open,close}`, `app.entity.startRename`, `app.mode.set`,
 //!     `app.setFocus` — route to the `ui_state` server
-//!     (`swissarmyhammer-ui-state::UiStateServer` over a temp-file `UIState`),
+//!     (`swissarmyhammer-ui-state::UiStateServer` over a temp-file `UiState`),
 //!     exposed under id `"ui_state"`.
 //!   - `window.new`                                   → the `window` server
 //!     (`swissarmyhammer-window-service::WindowService` over a recording spy
@@ -51,11 +51,11 @@
 //!      and revert / reapply a real entity write on the ONE shared
 //!      `StoreContext`.
 //!    - `settings.keymap.vim` then `settings.keymap.cua` flip the active keymap
-//!      mode observed on the shared `UIState`.
-//!    - `drag.start` → `drag.complete` progress the `UIState` drag state
+//!      mode observed on the shared `UiState`.
+//!    - `drag.start` → `drag.complete` progress the `UiState` drag state
 //!      machine (session present, then taken).
 //!    - `app.quit` / `app.about` / `app.help` hit the recording `AppShell` spy.
-//!    - `app.inspect` pushes the target moniker onto the `UIState` inspector
+//!    - `app.inspect` pushes the target moniker onto the `UiState` inspector
 //!      stack, `app.inspector.close` pops it, `app.inspector.close_all` clears
 //!      it, `app.inspector.set_width` persists the width
 //!      (regression `no-client-side-inspect`: via the Command service, not a
@@ -88,7 +88,7 @@ use swissarmyhammer_plugin::{
     CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR,
 };
 use swissarmyhammer_store::{StoreContext, StoreServer};
-use swissarmyhammer_ui_state::{UIState, UiStateServer};
+use swissarmyhammer_ui_state::{UiState, UiStateServer};
 use swissarmyhammer_window_service::{
     ContextMenuItem, CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition,
     WindowService, WindowShell,
@@ -96,7 +96,9 @@ use swissarmyhammer_window_service::{
 use tempfile::TempDir;
 use tokio::sync::Mutex as TokioMutex;
 
-use crate::support::{assert_inspect_applies_to, call_command, execute_result, try_call_command};
+use crate::support::{
+    assert_inspect_applies_to, call_command, copy_dir_recursive, execute_result, try_call_command,
+};
 
 /// A generous upper bound on any single host or isolate interaction.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -130,21 +132,6 @@ fn workspace_root() -> PathBuf {
         .nth(2)
         .expect("workspace root is two levels above the crate manifest dir")
         .to_path_buf()
-}
-
-/// Recursively copy a directory tree from `source` to `destination`.
-fn copy_dir_recursive(source: &Path, destination: &Path) {
-    std::fs::create_dir_all(destination).expect("staging directory should be created");
-    for entry in std::fs::read_dir(source).expect("bundle dir should be readable") {
-        let entry = entry.expect("a directory entry should be readable");
-        let from = entry.path();
-        let to = destination.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to);
-        } else {
-            std::fs::copy(&from, &to).expect("bundle file should copy");
-        }
-    }
 }
 
 /// Stage the committed `builtin/plugins/app-shell-commands` bundle into a temp
@@ -319,7 +306,7 @@ struct ExposedBackends {
     entity_ctx: Arc<EntityContext>,
     /// The shared UI state `ui_state`-routed commands mutate (keymap, drag,
     /// inspector, palette, rename, scope chain).
-    ui_state: Arc<UIState>,
+    ui_state: Arc<UiState>,
     /// The recording app-shell spy `app.quit` / `about` / `help` hit.
     shell: Arc<SpyAppShell>,
     /// The focus kernel's spatial state, read back to assert `app.setFocus`
@@ -327,6 +314,22 @@ struct ExposedBackends {
     spatial_state: Arc<TokioMutex<SpatialState>>,
     /// The recording window shell `window.new` hits.
     window_shell: Arc<SpyWindowShell>,
+}
+
+/// Wrap an `rmcp` server handler in an [`InProcessServer`] and expose it to
+/// `host` under `name`. The single wrap-and-expose step every backend repeats,
+/// factored out so `expose_backends` reads as a list of (name, server) pairs
+/// rather than five copies of the same three-line incantation.
+async fn expose_backend<S>(host: &PluginHost, name: &str, server: S)
+where
+    S: rmcp::ServerHandler + Send + Sync + 'static,
+{
+    let module = InProcessServer::new(server)
+        .await
+        .unwrap_or_else(|e| panic!("wrapping the {name} server in an InProcessServer: {e}"));
+    host.expose_rust_module(name.to_string(), Arc::new(module) as Arc<dyn PluginMcpServer>)
+        .await
+        .unwrap_or_else(|e| panic!("exposing the {name} module: {e}"));
 }
 
 /// Build the `app`, `ui_state`, `store`, `window`, and `focus` backends over a
@@ -350,42 +353,20 @@ async fn expose_backends(host: &PluginHost) -> ExposedBackends {
     let entity_ctx = kanban.entity_context().await.expect("entity_context");
 
     // --- store server over the shared StoreContext ---
-    let store_server = StoreServer::new(Arc::clone(&store_ctx));
-    let store_module = InProcessServer::new(store_server)
-        .await
-        .expect("wrapping the store server in an InProcessServer should succeed");
-    host.expose_rust_module(
-        "store".to_string(),
-        Arc::new(store_module) as Arc<dyn PluginMcpServer>,
-    )
-    .await
-    .expect("exposing the store module should succeed");
+    expose_backend(host, "store", StoreServer::new(Arc::clone(&store_ctx))).await;
 
-    // --- ui_state server over a temp-file-backed UIState ---
-    let ui_state = Arc::new(UIState::load(dir.path().join("ui_state.yaml")));
-    let ui_state_server = UiStateServer::new(Arc::clone(&ui_state));
-    let ui_state_module = InProcessServer::new(ui_state_server)
-        .await
-        .expect("wrapping the ui_state server in an InProcessServer should succeed");
-    host.expose_rust_module(
-        "ui_state".to_string(),
-        Arc::new(ui_state_module) as Arc<dyn PluginMcpServer>,
-    )
-    .await
-    .expect("exposing the ui_state module should succeed");
+    // --- ui_state server over a temp-file-backed UiState ---
+    let ui_state = Arc::new(UiState::load(dir.path().join("ui_state.yaml")));
+    expose_backend(host, "ui_state", UiStateServer::new(Arc::clone(&ui_state))).await;
 
     // --- app server over a recording spy AppShell ---
     let shell = Arc::new(SpyAppShell::new());
-    let app_server = AppService::new(Arc::clone(&shell) as Arc<dyn AppShell>);
-    let app_module = InProcessServer::new(app_server)
-        .await
-        .expect("wrapping the app server in an InProcessServer should succeed");
-    host.expose_rust_module(
-        "app".to_string(),
-        Arc::new(app_module) as Arc<dyn PluginMcpServer>,
+    expose_backend(
+        host,
+        "app",
+        AppService::new(Arc::clone(&shell) as Arc<dyn AppShell>),
     )
-    .await
-    .expect("exposing the app module should succeed");
+    .await;
 
     // --- focus server over a real SpatialRegistry / SpatialState ---
     let focus_server = FocusServer::new();
@@ -405,28 +386,16 @@ async fn expose_backends(host: &PluginHost) -> ExposedBackends {
             last_focused: None,
         });
     }
-    let focus_module = InProcessServer::new(focus_server)
-        .await
-        .expect("wrapping the focus server in an InProcessServer should succeed");
-    host.expose_rust_module(
-        "focus".to_string(),
-        Arc::new(focus_module) as Arc<dyn PluginMcpServer>,
-    )
-    .await
-    .expect("exposing the focus module should succeed");
+    expose_backend(host, "focus", focus_server).await;
 
     // --- window server over a recording spy WindowShell ---
     let window_shell = Arc::new(SpyWindowShell::new());
-    let window_service = WindowService::new(Arc::clone(&window_shell) as Arc<dyn WindowShell>);
-    let window_module = InProcessServer::new(window_service)
-        .await
-        .expect("wrapping the window service in an InProcessServer should succeed");
-    host.expose_rust_module(
-        "window".to_string(),
-        Arc::new(window_module) as Arc<dyn PluginMcpServer>,
+    expose_backend(
+        host,
+        "window",
+        WindowService::new(Arc::clone(&window_shell) as Arc<dyn WindowShell>),
     )
-    .await
-    .expect("exposing the window module should succeed");
+    .await;
 
     ExposedBackends {
         _dir: dir,
@@ -677,7 +646,7 @@ async fn app_shell_commands_plugin_registers_and_executes() {
         "the reapplied tag must be the same one that was undone"
     );
 
-    // ── (3c) settings.keymap.* flip the active keymap mode on the UIState ───
+    // ── (3c) settings.keymap.* flip the active keymap mode on the UiState ───
     assert_eq!(
         backends.ui_state.keymap_mode(),
         "cua",
@@ -696,7 +665,7 @@ async fn app_shell_commands_plugin_registers_and_executes() {
         "settings.keymap.cua must switch the active keymap mode back to cua"
     );
 
-    // ── (3d) drag.start → drag.complete progress the UIState drag machine ───
+    // ── (3d) drag.start → drag.complete progress the UiState drag machine ───
     assert!(
         backends.ui_state.drag_session().is_none(),
         "precondition: no drag session before drag.start"
@@ -720,7 +689,7 @@ async fn app_shell_commands_plugin_registers_and_executes() {
     let session = backends
         .ui_state
         .drag_session()
-        .expect("drag.start must open a drag session on the UIState");
+        .expect("drag.start must open a drag session on the UiState");
     assert_eq!(
         session.session_id, "01DRAG0000000000000000001",
         "the open session carries the started session id"
@@ -775,7 +744,7 @@ async fn ui_origin_commands_execute_against_their_backends() {
     // ── (a) app.inspect pushes the target moniker onto the inspector stack ──
     // Regression (`no-client-side-inspect`): this goes via the Command service
     // into the ui_state backend, NOT a React-side shortcut — the mutation is
-    // observed on the shared UIState.
+    // observed on the shared UiState.
     assert!(
         backends.ui_state.inspector_stack(WINDOW).is_empty(),
         "precondition: the inspector stack is empty before app.inspect"
@@ -915,7 +884,7 @@ async fn ui_origin_commands_execute_against_their_backends() {
     );
 
     // ── (c') entity.inspect resolves its target SERVER-SIDE (Card G) ────────
-    // Three contracts, against the same shared `UIState` inspector stack:
+    // Three contracts, against the same shared `UiState` inspector stack:
     //   1. An explicit `ctx.target` wins verbatim (the palette-result-row /
     //      programmatic dispatch shape).
     //   2. With no target, the INNERMOST inspectable-entity moniker in the
@@ -1008,7 +977,7 @@ async fn ui_origin_commands_execute_against_their_backends() {
     assert_eq!(
         backends.ui_state.inspector_width(WINDOW),
         Some(480),
-        "app.inspector.set_width must persist the inspector width on the UIState"
+        "app.inspector.set_width must persist the inspector width on the UiState"
     );
 
     // ── (e) app.palette.open / app.palette.close flip the palette flag ──────
@@ -1024,7 +993,7 @@ async fn ui_origin_commands_execute_against_their_backends() {
     .await;
     assert!(
         backends.ui_state.palette_open(WINDOW),
-        "app.palette.open must open the command palette on the UIState"
+        "app.palette.open must open the command palette on the UiState"
     );
     // The window must come from the scope chain, NOT default to "main": the
     // exact regression where palette state landed on a window no board reads.
@@ -1041,7 +1010,7 @@ async fn ui_origin_commands_execute_against_their_backends() {
     .await;
     assert!(
         !backends.ui_state.palette_open(WINDOW),
-        "app.palette.close must close the command palette on the UIState"
+        "app.palette.close must close the command palette on the UiState"
     );
 
     // ── (f) app.mode.set switches the active keymap mode ────────────────────
@@ -1452,9 +1421,16 @@ fn assert_app_help(cmd: &Value) {
 /// order:0}.
 fn assert_app_quit(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Quit"), "app.quit name");
+    // Canonical lowercase form `normalizeKeyEvent` emits for an unshifted
+    // letter chord (`Mod+q`, not `Mod+Q`). The registry is the only webview
+    // key source post Card I, and `extractKeymapBindings` matches the literal;
+    // an uppercase unshifted letter is unreachable from a real keydown. Quit
+    // has no `BINDING_TABLES` entry (it rides the native menu accelerator,
+    // which parses letters case-insensitively), so the lowercase form keeps
+    // the accelerator AND makes the chord live in the webview on non-Mac.
     assert_eq!(
         cmd["keys"],
-        json!({ "cua": "Mod+Q", "vim": ":q" }),
+        json!({ "cua": "Mod+q", "vim": ":q" }),
         "app.quit keys"
     );
     assert_eq!(
@@ -1488,13 +1464,21 @@ fn assert_app_palette(cmd: &Value) {
     assert_no_menu(cmd, "app.palette");
 }
 
-/// `app.search` — app.yaml: keys vim:"/" / cua:Mod+F / emacs:Mod+F, menu
-/// {path:[Edit], group:0, order:2}.
+/// `app.search` — keys vim:"/" / cua:Mod+f, menu {path:[Edit], group:0,
+/// order:2}.
+///
+/// cua canonicalized to the lowercase `Mod+f` form `normalizeKeyEvent` emits
+/// (matching `BINDING_TABLES.cua`). The emacs key is DROPPED, not lowercased:
+/// `BINDING_TABLES.emacs` binds `Mod+f` to `nav.right` (the non-Mac
+/// normalization of emacs forward-char `Ctrl+f`), so canonicalizing app.search's
+/// emacs key to `Mod+f` would steal forward-char and re-open the first-id-wins
+/// nondeterminism (card 01KMT56FTBAP8PQ4QQND08MP97 / 01KTQ6QZNB3VN4MAND7VPASM21).
+/// Emacs Find stays palette-only.
 fn assert_app_search(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Find"), "app.search name");
     assert_eq!(
         cmd["keys"],
-        json!({ "vim": "/", "cua": "Mod+F", "emacs": "Mod+F" }),
+        json!({ "vim": "/", "cua": "Mod+f" }),
         "app.search keys"
     );
     assert_eq!(
@@ -1514,8 +1498,9 @@ fn assert_app_dismiss(cmd: &Value) {
     assert_no_menu(cmd, "app.dismiss");
 }
 
-/// `app.undo` — app.yaml: undoable:false; keys cua:Mod+Z / vim:u /
-/// emacs:Ctrl+/, menu {path:[Edit], group:0, order:0}.
+/// `app.undo` — undoable:false; keys cua:Mod+z / vim:u / emacs:Ctrl+/, menu
+/// {path:[Edit], group:0, order:0}. cua canonicalized to lowercase `Mod+z`
+/// (`BINDING_TABLES.cua` agrees).
 ///
 /// The emacs `Ctrl+/` binding moved here from `app-shell.tsx`'s deleted
 /// `STATIC_GLOBAL_COMMANDS` (Card I) — the registry is now the only key
@@ -1525,7 +1510,7 @@ fn assert_app_undo(cmd: &Value) {
     assert_eq!(cmd["undoable"], json!(false), "app.undo undoable:false");
     assert_eq!(
         cmd["keys"],
-        json!({ "cua": "Mod+Z", "vim": "u", "emacs": "Ctrl+/" }),
+        json!({ "cua": "Mod+z", "vim": "u", "emacs": "Ctrl+/" }),
         "app.undo keys"
     );
     assert_eq!(
@@ -1535,14 +1520,19 @@ fn assert_app_undo(cmd: &Value) {
     );
 }
 
-/// `app.redo` — app.yaml: undoable:false; keys cua:Mod+Shift+Z / vim:Ctrl+R,
-/// menu {path:[Edit], group:0, order:1}.
+/// `app.redo` — undoable:false; keys cua:Mod+Shift+Z / vim:Mod+r, menu
+/// {path:[Edit], group:0, order:1}.
+///
+/// vim canonicalized to `Mod+r` per `BINDING_TABLES.vim` (`Mod+r` → app.redo).
+/// The legacy `Ctrl+R` literal was unreachable: on non-Mac `Ctrl+r` normalizes
+/// to `Mod+r`, and on Mac `Ctrl` stays distinct so `Ctrl+R` never appeared in
+/// the table. `Mod+r` means Cmd+R on Mac, Ctrl+R elsewhere — both reachable.
 fn assert_app_redo(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Redo"), "app.redo name");
     assert_eq!(cmd["undoable"], json!(false), "app.redo undoable:false");
     assert_eq!(
         cmd["keys"],
-        json!({ "cua": "Mod+Shift+Z", "vim": "Ctrl+R" }),
+        json!({ "cua": "Mod+Shift+Z", "vim": "Mod+r" }),
         "app.redo keys"
     );
     assert_eq!(

@@ -414,7 +414,7 @@ impl ViewsServer {
     //
     // Only `goto` (pure resolution) lives here. Perspective ACTIVATION
     // (next / prev / switch) moved to the `entity` tool — it needs the shared
-    // `UIState` this server does not hold. See card 01KTYQY0ZB62KHN6BPK3FBMBD7.
+    // `UiState` this server does not hold. See card 01KTYQY0ZB62KHN6BPK3FBMBD7.
 
     /// Handle `goto perspective` — resolve by id, optionally validating view.
     async fn handle_goto(&self, req: GotoPerspective) -> Result<Value, McpError> {

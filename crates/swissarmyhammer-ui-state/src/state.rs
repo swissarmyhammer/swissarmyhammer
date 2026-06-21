@@ -75,7 +75,7 @@ pub enum DragDestination {
 
 /// Active drag session for cross-window drag coordination.
 ///
-/// Transient — carried in UIState but never persisted to the YAML config.
+/// Transient — carried in UiState but never persisted to the YAML config.
 ///
 /// The session captures only the drag's *source*: the destination is
 /// computed at drop time from the args passed to `drag.complete`. This
@@ -175,7 +175,7 @@ pub struct WindowState {
     /// board empty on launch.
     ///
     /// Written atomically with `active_perspective_id` by
-    /// [`UIState::switch_perspective`] so the frontend sees both fields land
+    /// [`UiState::switch_perspective`] so the frontend sees both fields land
     /// in a single `ui-state-changed` event. Transient — not persisted: a
     /// fresh window restart will repopulate this on the next perspective
     /// switch.
@@ -244,12 +244,12 @@ pub struct RecentBoard {
     pub last_opened: String,
 }
 
-/// Payload returned by UIState mutation methods.
+/// Payload returned by UiState mutation methods.
 ///
 /// The caller (Tauri layer) uses this to decide which events to emit.
 /// Each variant carries the new value after the mutation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum UIStateChange {
+pub enum UiStateChange {
     /// The inspector stack changed; carries the full new stack.
     InspectorStack(Vec<String>),
     /// The active view changed; carries the new view ID.
@@ -277,7 +277,7 @@ pub enum UIStateChange {
     /// The active perspective and its filtered task id list changed in one
     /// atomic update.
     ///
-    /// Emitted by [`UIState::switch_perspective`] so the frontend sees both
+    /// Emitted by [`UiState::switch_perspective`] so the frontend sees both
     /// fields land in a single `ui-state-changed` event. Replaces the
     /// previous pair of (`ActivePerspective` + frontend-side filter fetch)
     /// roundtrips — backend now owns the filter evaluation and pushes the
@@ -295,14 +295,14 @@ pub enum UIStateChange {
 /// Pure state machine for UI state: inspector stack, active view, palette, keymap.
 ///
 /// Thread-safe via internal `RwLock`. All mutation methods return a
-/// `UIStateChange` describing what changed, so the caller can emit events.
+/// `UiStateChange` describing what changed, so the caller can emit events.
 /// Methods return `None` when the mutation would be a no-op.
 ///
-/// When constructed via `UIState::load(path)`, mutations are automatically
-/// persisted to the YAML config file. When constructed via `UIState::new()`,
+/// When constructed via `UiState::load(path)`, mutations are automatically
+/// persisted to the YAML config file. When constructed via `UiState::new()`,
 /// no persistence occurs (suitable for tests).
-pub struct UIState {
-    inner: RwLock<UIStateInner>,
+pub struct UiState {
+    inner: RwLock<UiStateInner>,
     /// Path to the YAML config file, if persistence is enabled.
     config_path: Option<PathBuf>,
     /// When true, auto-save is disabled for the lifetime of this instance:
@@ -323,7 +323,7 @@ pub struct UIState {
 /// and are not written to the config file.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
-struct UIStateInner {
+struct UiStateInner {
     /// Current keymap mode: "cua", "vim", or "emacs".
     keymap_mode: String,
     /// Current focus scope chain (innermost first). Transient — not persisted.
@@ -368,7 +368,7 @@ struct UIStateInner {
     most_recent_board_path: Option<String>,
 }
 
-impl Default for UIStateInner {
+impl Default for UiStateInner {
     /// Returns the default UI state values.
     fn default() -> Self {
         Self {
@@ -414,7 +414,7 @@ impl std::error::Error for YamlSerializeError {
 /// used to skip change-free saves.
 struct LoadedConfig {
     /// The deserialized state, or defaults when the file was missing/bad.
-    inner: UIStateInner,
+    inner: UiStateInner,
     /// True when saving must be disabled to protect the on-disk file.
     persist_blocked: bool,
     /// Serialized form of `inner` when it came from a successful parse;
@@ -422,21 +422,21 @@ struct LoadedConfig {
     baseline: Option<String>,
 }
 
-impl UIState {
-    /// Create a new UIState with default values and no persistence.
+impl UiState {
+    /// Create a new UiState with default values and no persistence.
     ///
     /// Defaults: empty inspector stack, empty active_view_id, palette closed,
     /// keymap mode "cua", empty scope chain. Suitable for tests.
     pub fn new() -> Self {
         Self {
-            inner: RwLock::new(UIStateInner::default()),
+            inner: RwLock::new(UiStateInner::default()),
             config_path: None,
             persist_blocked: false,
             last_persisted_yaml: Mutex::new(None),
         }
     }
 
-    /// Load UIState from a YAML config file, or return defaults if the file is
+    /// Load UiState from a YAML config file, or return defaults if the file is
     /// missing or malformed.
     ///
     /// Once loaded, all subsequent mutations will auto-save to the same path.
@@ -466,7 +466,7 @@ impl UIState {
     /// failed backup, persistence is blocked for the returned instance.
     fn read_from_file(path: &Path) -> LoadedConfig {
         match std::fs::read_to_string(path) {
-            Ok(contents) => match serde_yaml_ng::from_str::<UIStateInner>(&contents) {
+            Ok(contents) => match serde_yaml_ng::from_str::<UiStateInner>(&contents) {
                 Ok(inner) => {
                     let baseline = serde_yaml_ng::to_string(&inner).ok();
                     LoadedConfig {
@@ -479,19 +479,19 @@ impl UIState {
                     tracing::error!(
                         path = %path.display(),
                         error = %err,
-                        "UIState: failed to parse YAML config; preserving the \
+                        "UiState: failed to parse YAML config; preserving the \
                          file and running with in-memory defaults"
                     );
                     let backed_up = Self::backup_corrupt_file(path);
                     LoadedConfig {
-                        inner: UIStateInner::default(),
+                        inner: UiStateInner::default(),
                         persist_blocked: !backed_up,
                         baseline: None,
                     }
                 }
             },
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => LoadedConfig {
-                inner: UIStateInner::default(),
+                inner: UiStateInner::default(),
                 persist_blocked: false,
                 baseline: None,
             },
@@ -499,11 +499,11 @@ impl UIState {
                 tracing::error!(
                     path = %path.display(),
                     error = %err,
-                    "UIState: failed to read config file; persistence disabled \
+                    "UiState: failed to read config file; persistence disabled \
                      so the unreadable file is never overwritten with defaults"
                 );
                 LoadedConfig {
-                    inner: UIStateInner::default(),
+                    inner: UiStateInner::default(),
                     persist_blocked: true,
                     baseline: None,
                 }
@@ -531,7 +531,7 @@ impl UIState {
                 tracing::warn!(
                     path = %path.display(),
                     backup = %backup.display(),
-                    "UIState: backed up corrupt config before continuing with defaults"
+                    "UiState: backed up corrupt config before continuing with defaults"
                 );
                 true
             }
@@ -539,7 +539,7 @@ impl UIState {
                 tracing::error!(
                     path = %path.display(),
                     error = %err,
-                    "UIState: could not back up corrupt config; persistence \
+                    "UiState: could not back up corrupt config; persistence \
                      disabled so the file is never overwritten with defaults"
                 );
                 false
@@ -550,7 +550,7 @@ impl UIState {
     /// Save current state to the configured YAML path.
     ///
     /// Creates parent directories if needed. Returns an error if writing fails.
-    /// No-op if no config path was set (i.e. constructed via `UIState::new()`),
+    /// No-op if no config path was set (i.e. constructed via `UiState::new()`),
     /// if persistence was blocked by a failed load, or if the state is
     /// unchanged since it was last loaded/saved (so a change-free session
     /// never touches the file).
@@ -565,7 +565,7 @@ impl UIState {
         if self.persist_blocked {
             tracing::warn!(
                 path = %path.display(),
-                "UIState: skipping save — persistence is disabled because the \
+                "UiState: skipping save — persistence is disabled because the \
                  config file could not be safely read or backed up at load"
             );
             return Ok(());
@@ -617,7 +617,7 @@ impl UIState {
     /// Called internally after every persisted mutation.
     fn try_save(&self) {
         if let Err(err) = self.save() {
-            tracing::warn!(error = %err, "UIState: failed to auto-save config");
+            tracing::warn!(error = %err, "UiState: failed to auto-save config");
         }
     }
 
@@ -626,7 +626,7 @@ impl UIState {
     /// True stack: always pushes. If the moniker is already on top, no-op.
     /// If the moniker exists deeper in the stack, removes it and pushes to top.
     /// Auto-saves if a config path is configured.
-    pub fn inspect(&self, window_label: &str, moniker: &str) -> UIStateChange {
+    pub fn inspect(&self, window_label: &str, moniker: &str) -> UiStateChange {
         let change = {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             let stack = &mut inner
@@ -637,14 +637,14 @@ impl UIState {
 
             // Already on top — no-op
             if stack.last().map(|s| s.as_str()) == Some(moniker) {
-                return UIStateChange::InspectorStack(stack.clone());
+                return UiStateChange::InspectorStack(stack.clone());
             }
 
             // Remove if already in stack (moves to top)
             stack.retain(|m| m != moniker);
             stack.push(moniker.to_string());
 
-            UIStateChange::InspectorStack(stack.clone())
+            UiStateChange::InspectorStack(stack.clone())
         };
         self.try_save();
         change
@@ -654,7 +654,7 @@ impl UIState {
     ///
     /// Returns `None` if the stack was already empty.
     /// Auto-saves if a config path is configured.
-    pub fn inspector_close(&self, window_label: &str) -> Option<UIStateChange> {
+    pub fn inspector_close(&self, window_label: &str) -> Option<UiStateChange> {
         let change = {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             let stack = &mut inner
@@ -666,7 +666,7 @@ impl UIState {
                 return None;
             }
             stack.pop();
-            Some(UIStateChange::InspectorStack(stack.clone()))
+            Some(UiStateChange::InspectorStack(stack.clone()))
         };
         self.try_save();
         change
@@ -676,7 +676,7 @@ impl UIState {
     ///
     /// Returns `None` if the stack was already empty.
     /// Auto-saves if a config path is configured.
-    pub fn inspector_close_all(&self, window_label: &str) -> Option<UIStateChange> {
+    pub fn inspector_close_all(&self, window_label: &str) -> Option<UiStateChange> {
         let change = {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             let stack = &mut inner
@@ -688,7 +688,7 @@ impl UIState {
                 return None;
             }
             stack.clear();
-            Some(UIStateChange::InspectorStack(stack.clone()))
+            Some(UiStateChange::InspectorStack(stack.clone()))
         };
         self.try_save();
         change
@@ -698,7 +698,7 @@ impl UIState {
     ///
     /// Returns `None` if the view ID is unchanged.
     /// Auto-saves if a config path is configured.
-    pub fn set_active_view(&self, window_label: &str, id: &str) -> Option<UIStateChange> {
+    pub fn set_active_view(&self, window_label: &str, id: &str) -> Option<UiStateChange> {
         let change = {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             let ws = inner.windows.entry(window_label.to_string()).or_default();
@@ -706,7 +706,7 @@ impl UIState {
                 return None;
             }
             ws.active_view_id = id.to_string();
-            Some(UIStateChange::ActiveView(id.to_string()))
+            Some(UiStateChange::ActiveView(id.to_string()))
         };
         self.try_save();
         change
@@ -716,7 +716,7 @@ impl UIState {
     ///
     /// Returns `None` if the perspective ID is unchanged.
     /// Auto-saves if a config path is configured.
-    pub fn set_active_perspective(&self, window_label: &str, id: &str) -> Option<UIStateChange> {
+    pub fn set_active_perspective(&self, window_label: &str, id: &str) -> Option<UiStateChange> {
         let change = {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             let ws = inner.windows.entry(window_label.to_string()).or_default();
@@ -724,7 +724,7 @@ impl UIState {
                 return None;
             }
             ws.active_perspective_id = id.to_string();
-            Some(UIStateChange::ActivePerspective(id.to_string()))
+            Some(UiStateChange::ActivePerspective(id.to_string()))
         };
         self.try_save();
         change
@@ -733,7 +733,7 @@ impl UIState {
     /// Atomically set both the active perspective id and the filtered task
     /// id list for a specific window.
     ///
-    /// Emits a single [`UIStateChange::PerspectiveSwitch`] event so the
+    /// Emits a single [`UiStateChange::PerspectiveSwitch`] event so the
     /// frontend sees both fields land in one `ui-state-changed` payload —
     /// no transitional render shows the new perspective with the old
     /// filtered list (or vice versa). When neither field is actually
@@ -747,7 +747,7 @@ impl UIState {
         window_label: &str,
         perspective_id: &str,
         filtered_task_ids: Vec<String>,
-    ) -> Option<UIStateChange> {
+    ) -> Option<UiStateChange> {
         let change = {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             let ws = inner.windows.entry(window_label.to_string()).or_default();
@@ -760,7 +760,7 @@ impl UIState {
             }
             ws.active_perspective_id = perspective_id.to_string();
             ws.filtered_task_ids = Some(filtered_task_ids.clone());
-            Some(UIStateChange::PerspectiveSwitch {
+            Some(UiStateChange::PerspectiveSwitch {
                 perspective_id: perspective_id.to_string(),
                 filtered_task_ids,
             })
@@ -773,27 +773,27 @@ impl UIState {
     ///
     /// Returns `None` if the value is unchanged. Palette state is transient
     /// and is NOT persisted to the config file.
-    pub fn set_palette_open(&self, window_label: &str, open: bool) -> Option<UIStateChange> {
+    pub fn set_palette_open(&self, window_label: &str, open: bool) -> Option<UiStateChange> {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let ws = inner.windows.entry(window_label.to_string()).or_default();
         if ws.palette_open == open {
             return None;
         }
         ws.palette_open = open;
-        Some(UIStateChange::PaletteOpen(ws.palette_open))
+        Some(UiStateChange::PaletteOpen(ws.palette_open))
         // No try_save — palette_open is transient (#[serde(skip)])
     }
 
     /// Set the palette open state and mode in one call for a specific window.
     ///
-    /// Mode is "command" or "search". Returns a UIStateChange even if only the
+    /// Mode is "command" or "search". Returns a UiStateChange even if only the
     /// mode changed (so the frontend can react to mode switches).
     pub fn set_palette_open_with_mode(
         &self,
         window_label: &str,
         open: bool,
         mode: &str,
-    ) -> Option<UIStateChange> {
+    ) -> Option<UiStateChange> {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let ws = inner.windows.entry(window_label.to_string()).or_default();
         let changed = ws.palette_open != open || ws.palette_mode != mode;
@@ -802,21 +802,21 @@ impl UIState {
         }
         ws.palette_open = open;
         ws.palette_mode = mode.to_string();
-        Some(UIStateChange::PaletteOpen(ws.palette_open))
+        Some(UiStateChange::PaletteOpen(ws.palette_open))
     }
 
     /// Set the keymap mode (e.g. "cua", "vim", "emacs").
     ///
     /// Returns `None` if the mode is unchanged.
     /// Auto-saves if a config path is configured.
-    pub fn set_keymap_mode(&self, mode: &str) -> Option<UIStateChange> {
+    pub fn set_keymap_mode(&self, mode: &str) -> Option<UiStateChange> {
         let change = {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             if inner.keymap_mode == mode {
                 return None;
             }
             inner.keymap_mode = mode.to_string();
-            Some(UIStateChange::KeymapMode(inner.keymap_mode.clone()))
+            Some(UiStateChange::KeymapMode(inner.keymap_mode.clone()))
         };
         self.try_save();
         change
@@ -825,10 +825,10 @@ impl UIState {
     /// Set the focus scope chain. Always returns the new scope chain.
     ///
     /// Scope chain is transient and is NOT persisted to the config file.
-    pub fn set_scope_chain(&self, chain: Vec<String>) -> UIStateChange {
+    pub fn set_scope_chain(&self, chain: Vec<String>) -> UiStateChange {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         inner.scope_chain = chain;
-        UIStateChange::ScopeChain(inner.scope_chain.clone())
+        UiStateChange::ScopeChain(inner.scope_chain.clone())
         // No try_save — scope_chain is transient (#[serde(skip)])
     }
 
@@ -1064,8 +1064,8 @@ impl UIState {
 
     /// Restore the open boards list from persisted data.
     ///
-    /// Used at startup to populate UIState from legacy AppConfig data when
-    /// UIState has no boards yet (first migration).
+    /// Used at startup to populate UiState from legacy AppConfig data when
+    /// UiState has no boards yet (first migration).
     pub fn restore_boards(&self, open_boards: Vec<String>) {
         {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
@@ -1108,7 +1108,7 @@ impl UIState {
     /// when the new width matches the existing value (so the bridge can
     /// skip a redundant `ui-state-changed` emit). Auto-saves if a config
     /// path is configured.
-    pub fn set_inspector_width(&self, window_label: &str, width: u32) -> Option<UIStateChange> {
+    pub fn set_inspector_width(&self, window_label: &str, width: u32) -> Option<UiStateChange> {
         let change = {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             let ws = inner.windows.entry(window_label.to_string()).or_default();
@@ -1116,7 +1116,7 @@ impl UIState {
                 return None;
             }
             ws.inspector_width = Some(width);
-            UIStateChange::InspectorWidth {
+            UiStateChange::InspectorWidth {
                 window_label: window_label.to_string(),
                 width,
             }
@@ -1293,14 +1293,14 @@ impl UIState {
     ///
     /// Valid modes: "normal", "command", "search". Returns `None` if unchanged.
     /// Transient — not persisted to the config file.
-    pub fn set_app_mode(&self, window_label: &str, mode: &str) -> Option<UIStateChange> {
+    pub fn set_app_mode(&self, window_label: &str, mode: &str) -> Option<UiStateChange> {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let ws = inner.windows.entry(window_label.to_string()).or_default();
         if ws.app_mode == mode {
             return None;
         }
         ws.app_mode = mode.to_string();
-        Some(UIStateChange::AppMode(ws.app_mode.clone()))
+        Some(UiStateChange::AppMode(ws.app_mode.clone()))
         // No try_save — app_mode is transient (#[serde(skip)])
     }
 
@@ -1455,10 +1455,10 @@ impl UIState {
     }
 }
 
-impl std::fmt::Debug for UIState {
+impl std::fmt::Debug for UiState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        f.debug_struct("UIState")
+        f.debug_struct("UiState")
             .field("keymap_mode", &inner.keymap_mode)
             .field("scope_chain", &inner.scope_chain)
             .field("windows", &inner.windows)
@@ -1467,7 +1467,7 @@ impl std::fmt::Debug for UIState {
     }
 }
 
-impl Default for UIState {
+impl Default for UiState {
     fn default() -> Self {
         Self::new()
     }
@@ -1481,14 +1481,14 @@ mod tests {
 
     #[test]
     fn inspect_pushes_onto_stack() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.inspect("main", "task:01XYZ");
         assert_eq!(state.inspector_stack("main"), vec!["task:01XYZ"]);
     }
 
     #[test]
     fn inspect_pushes_per_window() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.inspect("main", "task:01XYZ");
         state.inspect("board-2", "task:01ABC");
         // Each window has its own stack
@@ -1498,7 +1498,7 @@ mod tests {
 
     #[test]
     fn inspect_stacks_any_types() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.inspect("main", "task:01XYZ");
         state.inspect("main", "tag:01TAG");
         assert_eq!(
@@ -1509,7 +1509,7 @@ mod tests {
 
     #[test]
     fn inspect_stacks_same_type() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.inspect("main", "task:01XYZ");
         state.inspect("main", "tag:01TAG");
         state.inspect("main", "task:01ABC");
@@ -1521,7 +1521,7 @@ mod tests {
 
     #[test]
     fn inspect_same_moniker_on_top_is_noop() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.inspect("main", "task:01XYZ");
         state.inspect("main", "task:01XYZ");
         assert_eq!(state.inspector_stack("main"), vec!["task:01XYZ"]);
@@ -1529,7 +1529,7 @@ mod tests {
 
     #[test]
     fn inspect_existing_moniker_moves_to_top() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.inspect("main", "task:01XYZ");
         state.inspect("main", "tag:01A");
         state.inspect("main", "task:01XYZ");
@@ -1538,7 +1538,7 @@ mod tests {
 
     #[test]
     fn inspector_close_pops() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.inspect("main", "task:01XYZ");
         state.inspect("main", "tag:01TAG");
         let change = state.inspector_close("main");
@@ -1548,13 +1548,13 @@ mod tests {
 
     #[test]
     fn inspector_close_empty_returns_none() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(state.inspector_close("main").is_none());
     }
 
     #[test]
     fn inspector_close_all_clears() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.inspect("main", "task:01XYZ");
         state.inspect("main", "tag:01TAG");
         let change = state.inspector_close_all("main");
@@ -1564,13 +1564,13 @@ mod tests {
 
     #[test]
     fn inspector_close_all_empty_returns_none() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(state.inspector_close_all("main").is_none());
     }
 
     #[test]
     fn set_active_view_changes() {
-        let state = UIState::new();
+        let state = UiState::new();
         let change = state.set_active_view("main", "board-view");
         assert!(change.is_some());
         assert_eq!(state.active_view_id("main"), "board-view");
@@ -1578,7 +1578,7 @@ mod tests {
 
     #[test]
     fn set_active_view_same_returns_none() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_active_view("main", "board-view");
         let change = state.set_active_view("main", "board-view");
         assert!(change.is_none());
@@ -1586,7 +1586,7 @@ mod tests {
 
     #[test]
     fn set_active_view_per_window() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_active_view("main", "board-view");
         state.set_active_view("board-2", "grid-view");
         assert_eq!(state.active_view_id("main"), "board-view");
@@ -1595,13 +1595,13 @@ mod tests {
 
     #[test]
     fn active_view_id_empty_for_unknown_window() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert_eq!(state.active_view_id("unknown-window"), "");
     }
 
     #[test]
     fn set_palette_open_toggles() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(!state.palette_open("main"));
 
         let change = state.set_palette_open("main", true);
@@ -1615,7 +1615,7 @@ mod tests {
 
     #[test]
     fn set_palette_open_per_window() {
-        let state = UIState::new();
+        let state = UiState::new();
         // Open palette on secondary only
         state.set_palette_open("secondary", true);
         // Main should still be closed
@@ -1625,7 +1625,7 @@ mod tests {
 
     #[test]
     fn palette_mode_per_window() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_palette_open_with_mode("main", true, "command");
         state.set_palette_open_with_mode("secondary", true, "search");
         assert_eq!(state.palette_mode("main"), "command");
@@ -1634,7 +1634,7 @@ mod tests {
 
     #[test]
     fn set_app_mode_changes() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert_eq!(state.app_mode("main"), "normal");
 
         let change = state.set_app_mode("main", "command");
@@ -1652,7 +1652,7 @@ mod tests {
 
     #[test]
     fn app_mode_per_window() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_app_mode("main", "command");
         state.set_app_mode("secondary", "search");
         assert_eq!(state.app_mode("main"), "command");
@@ -1661,13 +1661,13 @@ mod tests {
 
     #[test]
     fn app_mode_defaults_normal_for_unknown_window() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert_eq!(state.app_mode("nonexistent"), "normal");
     }
 
     #[test]
     fn set_keymap_mode_changes() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert_eq!(state.keymap_mode(), "cua");
 
         let change = state.set_keymap_mode("vim");
@@ -1680,14 +1680,14 @@ mod tests {
 
     #[test]
     fn set_scope_chain_stores() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_scope_chain(vec!["task:01XYZ".into(), "column:todo".into()]);
         assert_eq!(state.scope_chain(), vec!["task:01XYZ", "column:todo"]);
     }
 
     #[test]
     fn set_inspector_stack_restores() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_inspector_stack("main", vec!["task:01XYZ".into(), "tag:01TAG".into()]);
         assert_eq!(
             state.inspector_stack("main"),
@@ -1697,14 +1697,14 @@ mod tests {
 
     #[test]
     fn inspector_stack_empty_for_unknown_window() {
-        let state = UIState::new();
+        let state = UiState::new();
         // A window with no entries returns an empty stack
         assert!(state.inspector_stack("unknown-window").is_empty());
     }
 
     #[test]
     fn inspector_width_defaults_to_none() {
-        let state = UIState::new();
+        let state = UiState::new();
         // Unknown windows return None — the React side falls back to 420 px.
         assert!(state.inspector_width("unknown-window").is_none());
         // A window with no inspector_width set also returns None.
@@ -1714,11 +1714,11 @@ mod tests {
 
     #[test]
     fn set_inspector_width_round_trip() {
-        let state = UIState::new();
+        let state = UiState::new();
         let change = state.set_inspector_width("main", 540);
         // Mutation returns a payload describing the change.
         match change {
-            Some(UIStateChange::InspectorWidth {
+            Some(UiStateChange::InspectorWidth {
                 window_label,
                 width,
             }) => {
@@ -1732,7 +1732,7 @@ mod tests {
 
     #[test]
     fn set_inspector_width_noop_returns_none() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(state.set_inspector_width("main", 540).is_some());
         // Setting the same width is a no-op — returns None so the bridge
         // does not emit a redundant ui-state-changed event.
@@ -1745,12 +1745,12 @@ mod tests {
         let path = temp_yaml_path("inspector_width_roundtrip");
         let _ = fs::remove_file(&path);
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.set_inspector_width("main", 540);
             state.save().unwrap();
         }
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             assert_eq!(state.inspector_width("main"), Some(540));
         }
         let _ = fs::remove_file(&path);
@@ -1773,7 +1773,7 @@ mod tests {
         let path = temp_yaml_path("missing");
         // Ensure the file does not exist
         let _ = fs::remove_file(&path);
-        let state = UIState::load(&path);
+        let state = UiState::load(&path);
         assert_eq!(state.keymap_mode(), "cua");
         assert!(state.inspector_stack("main").is_empty());
         assert_eq!(state.active_view_id("main"), "");
@@ -1788,7 +1788,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ui-state.yaml");
         fs::write(&path, b"keymap_mode: [unterminated").unwrap();
-        let state = UIState::load(&path);
+        let state = UiState::load(&path);
         assert_eq!(state.keymap_mode(), "cua");
         assert!(state.inspector_stack("main").is_empty());
     }
@@ -1797,14 +1797,14 @@ mod tests {
     fn round_trip_persists_state() {
         let path = temp_yaml_path("roundtrip");
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.set_keymap_mode("vim");
             state.inspect("main", "task:01XYZ");
             state.set_active_view("main", "board-view");
             state.save().unwrap();
         }
         // Load again and verify
-        let state2 = UIState::load(&path);
+        let state2 = UiState::load(&path);
         assert_eq!(state2.keymap_mode(), "vim");
         assert_eq!(state2.inspector_stack("main"), vec!["task:01XYZ"]);
         assert_eq!(state2.active_view_id("main"), "board-view");
@@ -1815,13 +1815,13 @@ mod tests {
     fn transient_fields_not_persisted() {
         let path = temp_yaml_path("transient");
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.set_palette_open("main", true);
             state.set_scope_chain(vec!["scope:x".to_string()]);
             state.set_keymap_mode("emacs"); // persisted — forces a file to exist
             state.save().unwrap();
         }
-        let state2 = UIState::load(&path);
+        let state2 = UiState::load(&path);
         // Transient fields reset to defaults
         assert!(!state2.palette_open("main"));
         assert!(state2.scope_chain().is_empty());
@@ -1835,20 +1835,20 @@ mod tests {
         let path = temp_yaml_path("autosave");
         let _ = fs::remove_file(&path);
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             // Mutate — should auto-save without explicit save() call
             state.set_keymap_mode("vim");
         }
         // Load from same path; mutation should have been persisted automatically
-        let state2 = UIState::load(&path);
+        let state2 = UiState::load(&path);
         assert_eq!(state2.keymap_mode(), "vim");
         let _ = fs::remove_file(&path);
     }
 
     #[test]
     fn new_without_path_no_persistence() {
-        // UIState::new() has no config_path — save() is a no-op
-        let state = UIState::new();
+        // UiState::new() has no config_path — save() is a no-op
+        let state = UiState::new();
         state.set_keymap_mode("vim");
         // save() should return Ok without writing any file
         state.save().expect("save on new() should be a no-op Ok");
@@ -1856,33 +1856,33 @@ mod tests {
 
     #[test]
     fn mutation_returns_correct_payload() {
-        let state = UIState::new();
+        let state = UiState::new();
 
         // inspect returns InspectorStack
         let change = state.inspect("main", "task:01XYZ");
         match change {
-            UIStateChange::InspectorStack(stack) => assert_eq!(stack, vec!["task:01XYZ"]),
+            UiStateChange::InspectorStack(stack) => assert_eq!(stack, vec!["task:01XYZ"]),
             other => panic!("Expected InspectorStack, got {:?}", other),
         }
 
         // set_active_view returns ActiveView
         let change = state.set_active_view("main", "my-view").unwrap();
         match change {
-            UIStateChange::ActiveView(id) => assert_eq!(id, "my-view"),
+            UiStateChange::ActiveView(id) => assert_eq!(id, "my-view"),
             other => panic!("Expected ActiveView, got {:?}", other),
         }
 
         // set_palette_open returns PaletteOpen
         let change = state.set_palette_open("main", true).unwrap();
         match change {
-            UIStateChange::PaletteOpen(open) => assert!(open),
+            UiStateChange::PaletteOpen(open) => assert!(open),
             other => panic!("Expected PaletteOpen, got {:?}", other),
         }
 
         // set_keymap_mode returns KeymapMode
         let change = state.set_keymap_mode("emacs").unwrap();
         match change {
-            UIStateChange::KeymapMode(mode) => assert_eq!(mode, "emacs"),
+            UiStateChange::KeymapMode(mode) => assert_eq!(mode, "emacs"),
             other => panic!("Expected KeymapMode, got {:?}", other),
         }
 
@@ -1890,7 +1890,7 @@ mod tests {
         let chain = vec!["board:main".to_string()];
         let change = state.set_scope_chain(chain.clone());
         match change {
-            UIStateChange::ScopeChain(sc) => assert_eq!(sc, chain),
+            UiStateChange::ScopeChain(sc) => assert_eq!(sc, chain),
             other => panic!("Expected ScopeChain, got {:?}", other),
         }
     }
@@ -1899,13 +1899,13 @@ mod tests {
 
     #[test]
     fn most_recent_board_defaults_to_none() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(state.most_recent_board().is_none());
     }
 
     #[test]
     fn set_most_recent_board_stores_path() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_most_recent_board("/boards/my-project/.kanban");
         assert_eq!(
             state.most_recent_board(),
@@ -1915,7 +1915,7 @@ mod tests {
 
     #[test]
     fn set_most_recent_board_overwrites() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_most_recent_board("/boards/first/.kanban");
         state.set_most_recent_board("/boards/second/.kanban");
         assert_eq!(
@@ -1928,11 +1928,11 @@ mod tests {
     fn most_recent_board_persists_round_trip() {
         let path = temp_yaml_path("most_recent_board");
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.set_most_recent_board("/boards/project/.kanban");
             state.save().unwrap();
         }
-        let state2 = UIState::load(&path);
+        let state2 = UiState::load(&path);
         assert_eq!(
             state2.most_recent_board(),
             Some("/boards/project/.kanban".to_string())
@@ -1942,7 +1942,7 @@ mod tests {
 
     #[test]
     fn most_recent_board_in_to_json() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_most_recent_board("/boards/foo/.kanban");
         let json = state.to_json();
         assert_eq!(
@@ -1953,7 +1953,7 @@ mod tests {
 
     #[test]
     fn most_recent_board_null_in_to_json_when_unset() {
-        let state = UIState::new();
+        let state = UiState::new();
         let json = state.to_json();
         assert!(json["most_recent_board_path"].is_null());
     }
@@ -1977,7 +1977,7 @@ mod tests {
 
     #[test]
     fn start_drag_then_drag_session_returns_session() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.start_drag(make_drag_session("task-1", "/board/a"));
         let current = state.drag_session();
         assert!(current.is_some());
@@ -1986,7 +1986,7 @@ mod tests {
 
     #[test]
     fn take_drag_returns_session_and_clears() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.start_drag(make_drag_session("task-1", "/board/a"));
 
         let taken = state.take_drag();
@@ -1998,7 +1998,7 @@ mod tests {
 
     #[test]
     fn cancel_drag_clears_session() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.start_drag(make_drag_session("task-1", "/board/a"));
         state.cancel_drag();
         assert!(state.drag_session().is_none());
@@ -2006,7 +2006,7 @@ mod tests {
 
     #[test]
     fn start_drag_replaces_existing_session() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.start_drag(make_drag_session("task-1", "/board/a"));
         state.start_drag(make_drag_session("task-2", "/board/b"));
 
@@ -2017,7 +2017,7 @@ mod tests {
 
     #[test]
     fn take_drag_on_empty_returns_none() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(state.take_drag().is_none());
     }
 
@@ -2025,7 +2025,7 @@ mod tests {
 
     #[test]
     fn add_open_board_adds_and_deduplicates() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.add_open_board("/boards/a");
         state.add_open_board("/boards/b");
         state.add_open_board("/boards/a"); // duplicate
@@ -2034,7 +2034,7 @@ mod tests {
 
     #[test]
     fn remove_open_board_removes_from_list() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.add_open_board("/boards/a");
         state.add_open_board("/boards/b");
         state.remove_open_board("/boards/a");
@@ -2043,7 +2043,7 @@ mod tests {
 
     #[test]
     fn remove_open_board_clears_window_board_path() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.add_open_board("/boards/a");
         state.set_window_board("main", "/boards/a");
         state.remove_open_board("/boards/a");
@@ -2052,7 +2052,7 @@ mod tests {
 
     #[test]
     fn set_window_board_and_window_board_round_trip() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_window_board("main", "/boards/foo");
         assert_eq!(state.window_board("main").as_deref(), Some("/boards/foo"));
     }
@@ -2069,7 +2069,7 @@ mod tests {
     /// a (new board, old perspective id, old filtered ids) tuple.
     #[test]
     fn set_window_board_clears_perspective_state_when_path_changes() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_window_board("main", "/boards/old");
         state.switch_perspective("main", "p-old", vec!["t1".to_string(), "t2".to_string()]);
         assert_eq!(state.active_perspective_id("main"), "p-old");
@@ -2105,7 +2105,7 @@ mod tests {
     /// they would race with the auto-select repair path.
     #[test]
     fn set_window_board_with_same_path_preserves_perspective_state() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_window_board("main", "/boards/foo");
         state.switch_perspective("main", "p-keep", vec!["t1".to_string(), "t2".to_string()]);
         assert_eq!(state.active_perspective_id("main"), "p-keep");
@@ -2132,7 +2132,7 @@ mod tests {
     /// real board path is assigned.
     #[test]
     fn set_window_board_first_assignment_clears_pre_seeded_perspective_state() {
-        let state = UIState::new();
+        let state = UiState::new();
         // Seed perspective state on a window that has no board_path yet.
         state.switch_perspective("main", "p-pre", vec!["t1".to_string()]);
         assert!(state.window_board("main").is_none());
@@ -2152,13 +2152,13 @@ mod tests {
 
     #[test]
     fn window_board_returns_none_for_unassigned() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(state.window_board("unknown").is_none());
     }
 
     #[test]
     fn all_window_boards_filters_empty() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_window_board("main", "/boards/a");
         state.set_window_board("secondary", "/boards/b");
         // Create a window with empty board_path by removing its board
@@ -2173,7 +2173,7 @@ mod tests {
 
     #[test]
     fn touch_recent_adds_entry() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.touch_recent("/boards/a", "Board A");
         let recent = state.recent_boards();
         assert_eq!(recent.len(), 1);
@@ -2183,7 +2183,7 @@ mod tests {
 
     #[test]
     fn touch_recent_moves_to_front() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.touch_recent("/boards/a", "A");
         state.touch_recent("/boards/b", "B");
         state.touch_recent("/boards/a", "A Updated");
@@ -2196,7 +2196,7 @@ mod tests {
 
     #[test]
     fn touch_recent_caps_at_max() {
-        let state = UIState::new();
+        let state = UiState::new();
         for i in 0..25 {
             state.touch_recent(&format!("/boards/{i}"), &format!("Board {i}"));
         }
@@ -2205,7 +2205,7 @@ mod tests {
 
     #[test]
     fn touch_recent_populates_last_opened() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.touch_recent("/boards/a", "A");
         let recent = state.recent_boards();
         assert!(!recent[0].last_opened.is_empty());
@@ -2215,7 +2215,7 @@ mod tests {
 
     #[test]
     fn save_window_geometry_and_get_window_state_round_trip() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.save_window_geometry("main", 100, 200, 800, 600, true);
         let ws = state.get_window_state("main").expect("window state exists");
         assert_eq!(ws.x, Some(100));
@@ -2227,7 +2227,7 @@ mod tests {
 
     #[test]
     fn remove_window_removes_entry() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.save_window_geometry("main", 0, 0, 800, 600, false);
         state.remove_window("main");
         assert!(state.get_window_state("main").is_none());
@@ -2235,7 +2235,7 @@ mod tests {
 
     #[test]
     fn clear_windows_removes_all() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.save_window_geometry("main", 0, 0, 800, 600, false);
         state.save_window_geometry("secondary", 100, 100, 400, 300, false);
         state.clear_windows();
@@ -2244,14 +2244,14 @@ mod tests {
 
     #[test]
     fn restore_boards_populates_when_empty() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.restore_boards(vec!["/a".into(), "/b".into()]);
         assert_eq!(state.open_boards(), vec!["/a", "/b"]);
     }
 
     #[test]
     fn restore_boards_no_ops_when_not_empty() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.add_open_board("/existing");
         state.restore_boards(vec!["/a".into(), "/b".into()]);
         assert_eq!(state.open_boards(), vec!["/existing"]);
@@ -2259,7 +2259,7 @@ mod tests {
 
     #[test]
     fn all_windows_returns_all_entries() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.save_window_geometry("main", 0, 0, 800, 600, false);
         state.save_window_geometry("secondary", 100, 100, 400, 300, false);
         let all = state.all_windows();
@@ -2276,7 +2276,7 @@ mod tests {
     fn window_state_persists_through_save_load() {
         let path = temp_yaml_path("window_roundtrip");
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.save_window_geometry("main", 10, 20, 1200, 800, false);
             state.save_window_geometry("board-abc", 100, 200, 900, 600, true);
             state.set_window_board("main", "/boards/alpha/.kanban");
@@ -2284,7 +2284,7 @@ mod tests {
             state.save().unwrap();
         }
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             let all = state.all_windows();
             assert_eq!(all.len(), 2, "both windows should survive save/load");
 
@@ -2313,12 +2313,12 @@ mod tests {
     fn window_board_survives_save_load() {
         let path = temp_yaml_path("window_board_roundtrip");
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.set_window_board("secondary", "/boards/test/.kanban");
             state.save().unwrap();
         }
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             assert_eq!(
                 state.window_board("secondary").as_deref(),
                 Some("/boards/test/.kanban"),
@@ -2332,7 +2332,7 @@ mod tests {
     fn palette_state_is_transient_not_persisted() {
         let path = temp_yaml_path("palette_transient");
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.save_window_geometry("main", 0, 0, 800, 600, false);
             state.set_palette_open_with_mode("main", true, "search");
             assert!(state.palette_open("main"));
@@ -2340,7 +2340,7 @@ mod tests {
             state.save().unwrap();
         }
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             // palette_open and palette_mode are #[serde(skip)] — should reset to defaults
             assert!(!state.palette_open("main"), "palette_open must not persist");
             assert_eq!(
@@ -2356,7 +2356,7 @@ mod tests {
     fn remove_window_persists_through_save_load() {
         let path = temp_yaml_path("remove_window_roundtrip");
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.save_window_geometry("main", 0, 0, 800, 600, false);
             state.save_window_geometry("board-xyz", 100, 100, 400, 300, false);
             state.set_window_board("board-xyz", "/boards/old/.kanban");
@@ -2364,7 +2364,7 @@ mod tests {
             state.save().unwrap();
         }
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             let all = state.all_windows();
             assert_eq!(all.len(), 1, "removed window should not reappear");
             assert!(all.contains_key("main"));
@@ -2378,7 +2378,7 @@ mod tests {
 
     #[test]
     fn update_window_geometry_updates_existing_entry() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_window_board("board-1", "/boards/a");
         state.save_window_geometry("board-1", 100, 200, 800, 600, false);
 
@@ -2397,7 +2397,7 @@ mod tests {
 
     #[test]
     fn update_window_geometry_ignores_unknown_label() {
-        let state = UIState::new();
+        let state = UiState::new();
         // No window entry exists for "ghost-window"
         state.update_window_geometry("ghost-window", 0, 0, 100, 100, false);
         // Should not create a new entry
@@ -2407,7 +2407,7 @@ mod tests {
 
     #[test]
     fn update_window_geometry_does_not_resurrect_removed_window() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_window_board("board-1", "/boards/a");
         state.save_window_geometry("board-1", 100, 200, 800, 600, false);
 
@@ -2428,21 +2428,21 @@ mod tests {
         let path = temp_yaml_path("update_no_disk");
         let _ = fs::remove_file(&path);
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.set_window_board("board-1", "/boards/a");
             state.save_window_geometry("board-1", 100, 200, 800, 600, false);
             // save_window_geometry writes to disk (via try_save)
         }
         // Load to get baseline on-disk state
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             // Now update geometry in memory only
             state.update_window_geometry("board-1", 999, 999, 1, 1, true);
             // Do NOT call save() — drop the state
         }
         // Reload from disk — should still have the original geometry
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             let ws = state.get_window_state("board-1").unwrap();
             assert_eq!(ws.x, Some(100), "memory-only update must not reach disk");
             assert_eq!(ws.y, Some(200));
@@ -2454,13 +2454,13 @@ mod tests {
 
     #[test]
     fn has_clipboard_defaults_to_false() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(!state.has_clipboard());
     }
 
     #[test]
     fn set_has_clipboard_true_and_false() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_has_clipboard(true);
         assert!(state.has_clipboard());
 
@@ -2470,7 +2470,7 @@ mod tests {
 
     #[test]
     fn set_has_clipboard_false_clears_entity_type() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_clipboard_entity_type("task");
         assert!(state.has_clipboard());
         assert_eq!(state.clipboard_entity_type(), Some("task".to_string()));
@@ -2482,7 +2482,7 @@ mod tests {
 
     #[test]
     fn set_clipboard_entity_type_sets_both_fields() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_clipboard_entity_type("tag");
         assert!(state.has_clipboard());
         assert_eq!(state.clipboard_entity_type(), Some("tag".to_string()));
@@ -2490,7 +2490,7 @@ mod tests {
 
     #[test]
     fn clipboard_entity_type_defaults_to_none() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(state.clipboard_entity_type().is_none());
     }
 
@@ -2498,19 +2498,19 @@ mod tests {
 
     #[test]
     fn can_undo_defaults_to_false() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(!state.can_undo());
     }
 
     #[test]
     fn can_redo_defaults_to_false() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(!state.can_redo());
     }
 
     #[test]
     fn set_undo_redo_state_updates_both() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_undo_redo_state(true, false);
         assert!(state.can_undo());
         assert!(!state.can_redo());
@@ -2528,7 +2528,7 @@ mod tests {
 
     #[test]
     fn ai_streaming_defaults_to_false() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(
             !state.ai_streaming(),
             "ai_streaming must default to false — a fresh app is not mid-turn"
@@ -2540,7 +2540,7 @@ mod tests {
         // `set_ai_streaming` is the transient flag the webview keeps in sync
         // with the ACP turn status; the frontend `ai.cancel` command builder
         // reads it to gate the "Stop AI Generation" entry to streaming turns.
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_ai_streaming(true);
         assert!(state.ai_streaming());
         state.set_ai_streaming(false);
@@ -2554,11 +2554,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ui-state.yaml");
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.set_ai_streaming(true);
             state.save().unwrap();
         }
-        let reloaded = UIState::load(&path);
+        let reloaded = UiState::load(&path);
         assert!(
             !reloaded.ai_streaming(),
             "ai_streaming is transient — it must not survive a save/reload"
@@ -2569,11 +2569,11 @@ mod tests {
 
     #[test]
     fn ui_state_debug_impl_includes_key_fields() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_keymap_mode("vim");
         state.set_scope_chain(vec!["task:01ABC".into()]);
         let debug_str = format!("{:?}", state);
-        assert!(debug_str.contains("UIState"));
+        assert!(debug_str.contains("UiState"));
         assert!(debug_str.contains("vim"));
         assert!(debug_str.contains("task:01ABC"));
     }
@@ -2582,7 +2582,7 @@ mod tests {
 
     #[test]
     fn to_json_includes_window_palette_fields() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_palette_open_with_mode("main", true, "search");
         state.set_window_board("main", "/boards/a");
         let json = state.to_json();
@@ -2596,19 +2596,19 @@ mod tests {
 
     #[test]
     fn palette_open_returns_false_for_unknown_window() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(!state.palette_open("unknown-window"));
     }
 
     #[test]
     fn palette_mode_returns_command_for_unknown_window() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert_eq!(state.palette_mode("unknown-window"), "command");
     }
 
     #[test]
     fn set_palette_open_same_value_returns_none() {
-        let state = UIState::new();
+        let state = UiState::new();
         // palette_open defaults to false, so setting to false should be no-op
         let change = state.set_palette_open("main", false);
         assert!(change.is_none());
@@ -2616,7 +2616,7 @@ mod tests {
 
     #[test]
     fn set_palette_open_with_mode_same_value_returns_none() {
-        let state = UIState::new();
+        let state = UiState::new();
         // Default: palette_open=false, palette_mode="command"
         // Setting the same values should return None
         state.set_palette_open_with_mode("main", false, "command");
@@ -2627,7 +2627,7 @@ mod tests {
 
     #[test]
     fn to_json_includes_clipboard_and_scope() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_clipboard_entity_type("task");
         state.set_scope_chain(vec!["board:main".into()]);
         let json = state.to_json();
@@ -2641,7 +2641,7 @@ mod tests {
         let path = temp_yaml_path("update_then_save");
         let _ = fs::remove_file(&path);
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.set_window_board("board-1", "/boards/a");
             state.save_window_geometry("board-1", 100, 200, 800, 600, false);
             // Simulate move events
@@ -2650,7 +2650,7 @@ mod tests {
             state.save().unwrap();
         }
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             let ws = state.get_window_state("board-1").unwrap();
             assert_eq!(
                 ws.x,
@@ -2673,13 +2673,13 @@ mod tests {
         let path = temp_yaml_path("open_boards_roundtrip");
         let _ = fs::remove_file(&path);
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.add_open_board("/boards/alpha");
             state.add_open_board("/boards/beta");
             state.save().unwrap();
         }
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             assert_eq!(state.open_boards(), vec!["/boards/alpha", "/boards/beta"]);
         }
         let _ = fs::remove_file(&path);
@@ -2690,13 +2690,13 @@ mod tests {
         let path = temp_yaml_path("recent_boards_roundtrip");
         let _ = fs::remove_file(&path);
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.touch_recent("/boards/x", "X");
             state.touch_recent("/boards/y", "Y");
             state.save().unwrap();
         }
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             let recent = state.recent_boards();
             assert_eq!(recent.len(), 2);
             // Most recent first
@@ -2711,13 +2711,13 @@ mod tests {
         let path = temp_yaml_path("inspector_stack_roundtrip");
         let _ = fs::remove_file(&path);
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.inspect("main", "task:01A");
             state.inspect("main", "tag:01B");
             state.save().unwrap();
         }
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             assert_eq!(state.inspector_stack("main"), vec!["task:01A", "tag:01B"]);
         }
         let _ = fs::remove_file(&path);
@@ -2728,12 +2728,12 @@ mod tests {
         let path = temp_yaml_path("set_inspector_autosave");
         let _ = fs::remove_file(&path);
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.set_inspector_stack("main", vec!["task:01X".into(), "tag:01Y".into()]);
             // No explicit save() — should auto-save
         }
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             assert_eq!(state.inspector_stack("main"), vec!["task:01X", "tag:01Y"]);
         }
         let _ = fs::remove_file(&path);
@@ -2745,7 +2745,7 @@ mod tests {
 
     #[test]
     fn to_json_includes_all_persisted_fields() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_keymap_mode("vim");
         state.add_open_board("/boards/a");
         state.touch_recent("/boards/a", "Board A");
@@ -2760,7 +2760,7 @@ mod tests {
 
     #[test]
     fn to_json_includes_transient_fields() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_scope_chain(vec!["board:main".into(), "column:todo".into()]);
         state.set_has_clipboard(true);
         state.set_clipboard_entity_type("task");
@@ -2775,7 +2775,7 @@ mod tests {
 
     #[test]
     fn to_json_includes_window_transient_palette_fields() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.save_window_geometry("main", 0, 0, 800, 600, false);
         state.set_window_board("main", "/boards/test");
         state.set_palette_open_with_mode("main", true, "search");
@@ -2797,7 +2797,7 @@ mod tests {
 
     #[test]
     fn to_json_empty_state_has_expected_shape() {
-        let state = UIState::new();
+        let state = UiState::new();
         let json = state.to_json();
         assert_eq!(json["keymap_mode"].as_str(), Some("cua"));
         assert!(json["scope_chain"].as_array().unwrap().is_empty());
@@ -2815,14 +2815,14 @@ mod tests {
 
     #[test]
     fn clipboard_defaults_to_empty() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(!state.has_clipboard());
         assert!(state.clipboard_entity_type().is_none());
     }
 
     #[test]
     fn set_has_clipboard_toggles_flag() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_has_clipboard(true);
         assert!(state.has_clipboard());
         state.set_has_clipboard(false);
@@ -2833,7 +2833,7 @@ mod tests {
 
     #[test]
     fn set_clipboard_entity_type_sets_both() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_clipboard_entity_type("tag");
         assert!(state.has_clipboard());
         assert_eq!(state.clipboard_entity_type().as_deref(), Some("tag"));
@@ -2845,14 +2845,14 @@ mod tests {
 
     #[test]
     fn undo_redo_defaults_to_false() {
-        let state = UIState::new();
+        let state = UiState::new();
         assert!(!state.can_undo());
         assert!(!state.can_redo());
     }
 
     #[test]
     fn set_undo_redo_state_updates_flags() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.set_undo_redo_state(true, false);
         assert!(state.can_undo());
         assert!(!state.can_redo());
@@ -2874,13 +2874,13 @@ mod tests {
     fn save_creates_parent_directories() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("deep").join("ui_state.yaml");
-        let state = UIState::load(&path);
+        let state = UiState::load(&path);
         state.set_keymap_mode("emacs");
         state.save().unwrap();
 
         // File should exist at nested path
         assert!(path.exists());
-        let state2 = UIState::load(&path);
+        let state2 = UiState::load(&path);
         assert_eq!(state2.keymap_mode(), "emacs");
     }
 
@@ -2893,7 +2893,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("full_roundtrip.yaml");
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.set_keymap_mode("vim");
             state.add_open_board("/boards/proj");
             state.set_window_board("main", "/boards/proj");
@@ -2906,7 +2906,7 @@ mod tests {
             state.save().unwrap();
         }
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             assert_eq!(state.keymap_mode(), "vim");
             assert_eq!(state.open_boards(), vec!["/boards/proj"]);
             assert_eq!(state.window_board("main").as_deref(), Some("/boards/proj"));
@@ -2931,7 +2931,7 @@ mod tests {
 
     #[test]
     fn to_json_multiple_windows() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.save_window_geometry("win-a", 0, 0, 800, 600, false);
         state.save_window_geometry("win-b", 100, 100, 400, 300, true);
         state.set_window_board("win-a", "/boards/alpha");
@@ -2962,15 +2962,15 @@ mod tests {
     /// Switching to a new perspective with a fresh filtered list must:
     /// - update `active_perspective_id`
     /// - update `filtered_task_ids`
-    /// - return exactly one `UIStateChange::PerspectiveSwitch` carrying both
+    /// - return exactly one `UiStateChange::PerspectiveSwitch` carrying both
     #[test]
     fn switch_perspective_sets_both_fields_atomically() {
-        let state = UIState::new();
+        let state = UiState::new();
         let change =
             state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
         assert!(change.is_some(), "first switch should produce a change");
         match change.unwrap() {
-            UIStateChange::PerspectiveSwitch {
+            UiStateChange::PerspectiveSwitch {
                 perspective_id,
                 filtered_task_ids,
             } => {
@@ -2987,7 +2987,7 @@ mod tests {
     /// caller does not emit a redundant `ui-state-changed` event.
     #[test]
     fn switch_perspective_noop_returns_none() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.switch_perspective("main", "p1", vec!["t1".to_string()]);
         let change = state.switch_perspective("main", "p1", vec!["t1".to_string()]);
         assert!(change.is_none(), "identical switch must not emit a change",);
@@ -2998,7 +2998,7 @@ mod tests {
     /// perspective and the caller is re-evaluating the filter.
     #[test]
     fn switch_perspective_emits_change_when_only_ids_change() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.switch_perspective("main", "p1", vec!["t1".to_string()]);
         let change =
             state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
@@ -3010,7 +3010,7 @@ mod tests {
     /// `secondary`'s slot.
     #[test]
     fn switch_perspective_isolates_windows() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.switch_perspective("main", "p1", vec!["t1".to_string()]);
         state.switch_perspective("secondary", "p2", vec!["t9".to_string()]);
         assert_eq!(state.active_perspective_id("main"), "p1");
@@ -3024,7 +3024,7 @@ mod tests {
     /// for YAML persistence but must be injected on the wire.
     #[test]
     fn switch_perspective_appears_in_to_json() {
-        let state = UIState::new();
+        let state = UiState::new();
         state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
         let json = state.to_json();
         let main_win = &json["windows"]["main"];
@@ -3042,7 +3042,7 @@ mod tests {
     /// zero" and leaves the board empty on launch.
     #[test]
     fn never_switched_window_omits_filtered_task_ids_in_to_json() {
-        let state = UIState::new();
+        let state = UiState::new();
         // Touch the window through a non-perspective mutation so it exists in
         // the windows map without ever calling switch_perspective.
         state.set_active_view("main", "board-view");
@@ -3067,12 +3067,12 @@ mod tests {
         let path = temp_yaml_path("filtered_task_ids_transient");
         let _ = fs::remove_file(&path);
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
             state.save().unwrap();
         }
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             assert_eq!(state.active_perspective_id("main"), "p1");
             assert!(
                 state.filtered_task_ids("main").is_empty(),
@@ -3111,7 +3111,7 @@ mod tests {
         let garbage = b"keymap_mode: vim\nopen_boards: [/a/.kanban, /b";
         fs::write(&path, garbage).unwrap();
 
-        let state = UIState::load(&path);
+        let state = UiState::load(&path);
         // App runs with in-memory defaults...
         assert_eq!(state.keymap_mode(), "cua");
         // ...but the original file is untouched on disk...
@@ -3133,12 +3133,12 @@ mod tests {
         let garbage = b"keymap_mode: [unterminated";
         fs::write(&path, garbage).unwrap();
 
-        let state = UIState::load(&path);
+        let state = UiState::load(&path);
         // A real user change after the failed load may overwrite the live
         // file — but only because the original was backed up first.
         state.set_keymap_mode("vim");
 
-        let reloaded = UIState::load(&path);
+        let reloaded = UiState::load(&path);
         assert_eq!(reloaded.keymap_mode(), "vim");
         let backup = find_corrupt_backup(dir.path())
             .expect("backup must exist before the corrupt file is overwritten");
@@ -3155,7 +3155,7 @@ mod tests {
         fs::write(&path, original).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
 
-        let state = UIState::load(&path);
+        let state = UiState::load(&path);
         // Read failed → defaults in memory; a mutation must NOT save those
         // defaults over a file whose contents we never saw (and couldn't
         // back up).
@@ -3177,7 +3177,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ui-state.yaml");
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.set_keymap_mode("vim");
             state.add_open_board("/a/.kanban");
             state.save().unwrap();
@@ -3189,7 +3189,7 @@ mod tests {
 
         // Simulate a clean start + clean exit with no setting changes:
         // load, then the exit-path save().
-        let state = UIState::load(&path);
+        let state = UiState::load(&path);
         state.save().unwrap();
 
         let after_meta = fs::metadata(&path).unwrap();
@@ -3217,13 +3217,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ui-state.yaml");
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.set_keymap_mode("vim");
             state.save().unwrap();
         }
         let ino_before = fs::metadata(&path).unwrap().ino();
 
-        let state = UIState::load(&path);
+        let state = UiState::load(&path);
         state.set_keymap_mode("emacs"); // auto-saves
 
         let ino_after = fs::metadata(&path).unwrap().ino();
@@ -3243,7 +3243,7 @@ mod tests {
             leftovers.is_empty(),
             "temp files left behind: {leftovers:?}"
         );
-        assert_eq!(UIState::load(&path).keymap_mode(), "emacs");
+        assert_eq!(UiState::load(&path).keymap_mode(), "emacs");
     }
 
     #[test]
@@ -3257,7 +3257,7 @@ mod tests {
             "/d/.kanban".to_string(),
         ];
         {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.set_keymap_mode("vim");
             for b in &boards {
                 state.add_open_board(b);
@@ -3267,10 +3267,10 @@ mod tests {
         // Simulate tauri-dev restart churn: each cycle is the app lifecycle
         // (load at start, unconditional save() at exit) with no user changes.
         for _ in 0..10 {
-            let state = UIState::load(&path);
+            let state = UiState::load(&path);
             state.save().unwrap();
         }
-        let state = UIState::load(&path);
+        let state = UiState::load(&path);
         assert_eq!(state.keymap_mode(), "vim");
         assert_eq!(state.open_boards(), boards);
     }
@@ -3285,7 +3285,7 @@ mod tests {
 
         // One large state (keymap vim) so a torn read has a wide window to
         // land in with a non-atomic truncate-then-write.
-        let writer_state = UIState::load(&path);
+        let writer_state = UiState::load(&path);
         writer_state.set_keymap_mode("vim");
         for i in 0..500 {
             writer_state.add_open_board(&format!("/very/long/board/path/{i:04}/.kanban"));
@@ -3306,7 +3306,7 @@ mod tests {
         // Reader: every load must observe a complete file (old or new), never
         // a torn/empty one that silently degrades to defaults.
         while !done.load(Ordering::SeqCst) {
-            let snapshot = UIState::load(&path);
+            let snapshot = UiState::load(&path);
             assert_eq!(
                 snapshot.keymap_mode(),
                 "vim",

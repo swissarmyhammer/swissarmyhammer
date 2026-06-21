@@ -347,10 +347,10 @@ pub struct Paste {
 // the `entity` tool for the same reason the clipboard ops do: it is the
 // board-bundle server — the only in-process module holding BOTH the
 // board's `KanbanContext` (perspective lookup + filter-DSL evaluation)
-// and the shared `UIState` (the per-window `active_perspective_id` /
+// and the shared `UiState` (the per-window `active_perspective_id` /
 // `filtered_task_ids` slots an activation writes). The `views` server's
 // perspective nav ops, by design, only RESOLVE a target perspective; the
-// activation half — the UIState write — is this server's job.
+// activation half — the UiState write — is this server's job.
 //
 // All three are per-window operations: the dispatching window is resolved
 // from the `window:<label>` moniker in `scope`, and a missing moniker is
@@ -362,9 +362,9 @@ pub struct Paste {
 /// Runs the shared `SwitchPerspectiveCmd`: look the perspective up by id,
 /// evaluate its filter DSL against the board's tasks, and atomically write
 /// BOTH `active_perspective_id` and `filtered_task_ids` on the window —
-/// producing one `UIStateChange::PerspectiveSwitch`.
+/// producing one `UiStateChange::PerspectiveSwitch`.
 ///
-/// Returns `{ ok: true, change: <UIStateChange|null> }` — the host's
+/// Returns `{ ok: true, change: <UiStateChange|null> }` — the host's
 /// `ui-state-changed` emit unwraps `change`.
 #[operation(
     verb = "switch",
@@ -436,12 +436,12 @@ pub struct PrevPerspective {
 /// Delete a perspective, re-selecting a survivor when it was active.
 ///
 /// Runs the shared `DeletePerspectiveCmd`: trash the perspective (undoable),
-/// then — because this server holds the per-window `UIState` — fall back the
+/// then — because this server holds the per-window `UiState` — fall back the
 /// dispatching window's selection to a surviving perspective when the deleted
 /// one was active, so the tab bar is never left pointing at a dangling id (the
 /// "empty bar" the never-zero invariant forbids). The `views` server's
 /// `delete perspective` op only mutates STORAGE; the selection fallback — the
-/// UIState write — is this server's job, same split as `switch perspective`.
+/// UiState write — is this server's job, same split as `switch perspective`.
 #[operation(
     verb = "delete",
     noun = "perspective",
@@ -466,17 +466,17 @@ pub struct DeletePerspective {
 /// then — when the edited perspective is the dispatching window's *active*
 /// selection — recompute the window's `filtered_task_ids` (re-evaluating the
 /// just-written filter via the same DSL pipeline `switch perspective` uses) and
-/// emit a `UIStateChange::PerspectiveSwitch`. Lives on the `entity` server for
+/// emit a `UiStateChange::PerspectiveSwitch`. Lives on the `entity` server for
 /// the same reason switch/next/prev/delete do: it is the only module holding
-/// BOTH the board's `KanbanContext` and the shared `UIState`.
+/// BOTH the board's `KanbanContext` and the shared `UiState`.
 ///
 /// This is the fix for the filter-edit refresh bug (card
 /// 01KV0MJYA58GW5PRXGVXWHQK32): the `perspective.filter` command used to route
 /// to the `views` server's storage-only `set filter`, which never wrote
-/// `UIState`, so a filter change did not re-filter the view until a later
+/// `UiState`, so a filter change did not re-filter the view until a later
 /// `perspective.switch` (the click-away/back) re-evaluated it.
 ///
-/// Returns `{ ok: true, change: <UIStateChange|null> }` — the host's
+/// Returns `{ ok: true, change: <UiStateChange|null> }` — the host's
 /// `ui-state-changed` emit unwraps `change`. `change` is null when the edited
 /// perspective is not the window's active selection (storage updated, no
 /// window refresh needed).

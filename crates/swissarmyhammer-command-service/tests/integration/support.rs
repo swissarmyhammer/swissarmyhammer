@@ -207,6 +207,25 @@ pub fn ids_of(list_result: &Value) -> Vec<String> {
         .collect()
 }
 
+/// Recursively copy a directory tree from `source` to `destination`.
+///
+/// Stages a committed builtin plugin bundle into a temp workspace so the
+/// discovery path finds it at the expected layer root. Mirrors the shape every
+/// `stage_*` helper in this suite drives.
+pub fn copy_dir_recursive(source: &Path, destination: &Path) {
+    std::fs::create_dir_all(destination).expect("staging directory should be created");
+    for entry in std::fs::read_dir(source).expect("bundle dir should be readable") {
+        let entry = entry.expect("a directory entry should be readable");
+        let from = entry.path();
+        let to = destination.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to);
+        } else {
+            std::fs::copy(&from, &to).expect("bundle file should copy");
+        }
+    }
+}
+
 /// Write a no-op probe plugin bundle into `plugins_dir/<id>/`.
 ///
 /// The bundle is the minimal real plugin: a TypeScript `index.ts` that

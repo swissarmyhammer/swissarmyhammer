@@ -65,9 +65,9 @@ fn validate_filter(filter: &str) -> Result<(), CommandError> {
 /// Where a resolved `perspective_id` came from.
 ///
 /// Distinguishes caller-supplied ids (explicit arg or scope-chain moniker)
-/// from resolver-chosen ids (UIState active, or first-perspective-for-view
+/// from resolver-chosen ids (UiState active, or first-perspective-for-view
 /// fallback). When the resolver picks the id itself, the caller should
-/// persist the choice by writing it back to [`UIState::set_active_perspective`]
+/// persist the choice by writing it back to [`UiState::set_active_perspective`]
 /// so subsequent palette invocations find a non-empty active id — making the
 /// fallback self-healing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +76,7 @@ enum ResolvedFrom {
     Arg,
     /// The id came from a `perspective:{id}` moniker in the scope chain.
     Scope,
-    /// The id came from `UIState.active_perspective_id(window_label)`.
+    /// The id came from `UiState.active_perspective_id(window_label)`.
     UiState,
     /// The id came from the first perspective whose `view` matches the
     /// active view kind (last-resort fallback).
@@ -89,7 +89,7 @@ enum ResolvedFrom {
 ///
 /// 1. explicit `args.perspective_id`
 /// 2. a `perspective:{id}` moniker in the scope chain (innermost-first)
-/// 3. `UIState.active_perspective_id(window_label)` for the current window
+/// 3. `UiState.active_perspective_id(window_label)` for the current window
 /// 4. the first perspective whose `view` matches the active view kind
 ///
 /// Returns [`CommandError::MissingArg`] only if every fallback fails — i.e.
@@ -103,7 +103,7 @@ enum ResolvedFrom {
 /// source won. When the tag is [`ResolvedFrom::UiState`] or
 /// [`ResolvedFrom::FirstForViewKind`] (i.e. the caller did not supply the
 /// id), [`persist_resolved_perspective_id`] writes the choice back to
-/// [`UIState`] so subsequent commands find it set.
+/// [`UiState`] so subsequent commands find it set.
 async fn resolve_perspective_id(
     ctx: &CommandContext,
     kanban: &KanbanContext,
@@ -121,7 +121,7 @@ async fn resolve_perspective_id(
 
 /// Pure resolution body for [`resolve_perspective_id`] — no tracing.
 ///
-/// Walks the four fallbacks (arg → scope → UIState → first-for-view-kind)
+/// Walks the four fallbacks (arg → scope → UiState → first-for-view-kind)
 /// and returns the first hit. Split out so the wrapper stays short enough
 /// to pass the `code-quality:function-length` validator while the single
 /// tracing line in the wrapper still records every resolved call.
@@ -155,14 +155,14 @@ async fn resolve_perspective_id_inner(
         .ok_or_else(|| CommandError::MissingArg("perspective_id".into()))
 }
 
-/// Persist the resolved perspective id back to [`UIState`] when the resolver
+/// Persist the resolved perspective id back to [`UiState`] when the resolver
 /// chose it (rather than accepting a caller-supplied id).
 ///
 /// This makes the fallback self-healing: after the first palette/keybinding
-/// invocation, [`UIState::active_perspective_id`] is non-empty, so subsequent
+/// invocation, [`UiState::active_perspective_id`] is non-empty, so subsequent
 /// commands hit path 3 instead of walking the full resolver chain.
 ///
-/// [`UIState::set_active_perspective`] is idempotent — it returns `None`
+/// [`UiState::set_active_perspective`] is idempotent — it returns `None`
 /// (and skips the save) when the value is unchanged — so this is safe to
 /// call unconditionally within the fallback branches.
 fn persist_resolved_perspective_id(
@@ -172,7 +172,7 @@ fn persist_resolved_perspective_id(
 ) {
     match resolved_from {
         ResolvedFrom::Arg | ResolvedFrom::Scope => {
-            // The caller supplied the id; don't mutate UIState on their behalf.
+            // The caller supplied the id; don't mutate UiState on their behalf.
         }
         ResolvedFrom::UiState | ResolvedFrom::FirstForViewKind => {
             if let Some(ui) = ctx.ui_state.as_ref() {
@@ -183,7 +183,7 @@ fn persist_resolved_perspective_id(
     }
 }
 
-/// Resolve the perspective id and persist it to [`UIState`] when the resolver
+/// Resolve the perspective id and persist it to [`UiState`] when the resolver
 /// chose the id via fallback. Returns the id as a [`String`].
 ///
 /// This is the combined form used by every mutation command that targets
@@ -393,14 +393,14 @@ fn first_free_untitled_name<'a>(taken: impl Iterator<Item = &'a str>) -> String 
 /// Accepts `name` arg (the perspective name or ID), or resolves the
 /// perspective ID from the scope chain moniker `perspective:{id}`.
 ///
-/// When the dispatch carries a [`UIState`](swissarmyhammer_ui_state::UIState)
+/// When the dispatch carries a [`UiState`](swissarmyhammer_ui_state::UiState)
 /// (the board-bundle `entity` server's wiring) and the deleted perspective was
 /// the dispatching window's ACTIVE selection, selection falls back to a
 /// surviving perspective so the tab bar is never left pointing at a
 /// just-deleted id (the "empty bar" the never-zero invariant forbids). The
 /// fallback is the first perspective still belonging to the active view; when
 /// none survive the active id is cleared. The command-layer dispatch (no
-/// UIState) skips the reselect — there the delete is purely a storage mutation.
+/// UiState) skips the reselect — there the delete is purely a storage mutation.
 pub struct DeletePerspectiveCmd;
 
 #[async_trait]
@@ -419,10 +419,10 @@ impl Command for DeletePerspectiveCmd {
 
         // If the deleted perspective was the dispatching window's active
         // selection, re-select a survivor so the tab bar never points at a
-        // dangling id. Only the UIState-bearing dispatch (the `entity` server)
-        // can do this; the command-layer dispatch has no UIState and skips it
+        // dangling id. Only the UiState-bearing dispatch (the `entity` server)
+        // can do this; the command-layer dispatch has no UiState and skips it
         // (the reselect returns `Null`). FORWARD the reselect's
-        // `PerspectiveSwitch` change on the result so the UIState-bearing
+        // `PerspectiveSwitch` change on the result so the UiState-bearing
         // caller can surface it where the host's `ui-state-changed` emit
         // unwraps the selection — the backend write would otherwise be
         // invisible to the UI.
@@ -467,12 +467,12 @@ impl DeletePerspectiveCmd {
     /// After a successful delete, re-point the window's active perspective at a
     /// survivor when the deleted id was the active one.
     ///
-    /// Returns the reselection's `UIStateChange::PerspectiveSwitch` (as JSON)
+    /// Returns the reselection's `UiStateChange::PerspectiveSwitch` (as JSON)
     /// when a survivor was activated, so the caller can FORWARD it on the
     /// result envelope and the host's `ui-state-changed` emit fires for the
     /// new selection — the same `change` contract switch/next/prev ride.
     /// Returns `Value::Null` when there is nothing to forward: no
-    /// [`UIState`](swissarmyhammer_ui_state::UIState) in scope, the deleted
+    /// [`UiState`](swissarmyhammer_ui_state::UiState) in scope, the deleted
     /// perspective was not the window's active selection, or no survivor
     /// existed (the active id is cleared, which carries no switch change).
     ///
@@ -546,7 +546,7 @@ impl Command for RenamePerspectiveCmd {
 /// Set the filter on an active perspective.
 ///
 /// Always available. The target perspective is resolved at execute time via
-/// [`resolve_perspective_id`] (explicit arg → scope-chain moniker → UIState
+/// [`resolve_perspective_id`] (explicit arg → scope-chain moniker → UiState
 /// active → first perspective for the active view kind). See
 /// [`ClearFilterCmd`] for the same resolution semantics.
 pub struct SetFilterCmd;
@@ -588,7 +588,7 @@ impl Command for SetFilterCmd {
 /// 01KTYQY0ZB62KHN6BPK3FBMBD7 / 01KTYVSA68WDFGXCEJ44T4VFNW).
 ///
 /// This command lives on the board-bundle `entity` server (the only module
-/// holding BOTH the [`KanbanContext`] and the [`UIState`]). It:
+/// holding BOTH the [`KanbanContext`] and the [`UiState`]). It:
 ///
 /// 1. Resolves + persists the target perspective id and validates the filter,
 ///    then writes the new filter to STORAGE via `UpdatePerspective` (same as
@@ -597,8 +597,8 @@ impl Command for SetFilterCmd {
 ///    selection, re-runs the shared [`switch_to_perspective`] pipeline — which
 ///    re-reads the perspective's now-updated filter, re-evaluates it via
 ///    [`evaluate_perspective_filter`], and writes the window's
-///    `filtered_task_ids` atomically via `UIState::switch_perspective`,
-///    returning the resulting [`UIStateChange::PerspectiveSwitch`].
+///    `filtered_task_ids` atomically via `UiState::switch_perspective`,
+///    returning the resulting [`UiStateChange::PerspectiveSwitch`].
 ///    Otherwise it returns `Value::Null`: storage is updated but no window
 ///    needs refreshing.
 ///
@@ -606,7 +606,7 @@ impl Command for SetFilterCmd {
 /// when omitted) and `filter`. The `window:<label>` moniker in the scope chain
 /// selects the window whose active-perspective comparison drives the refresh.
 ///
-/// [`UIStateChange::PerspectiveSwitch`]: swissarmyhammer_ui_state::UIStateChange::PerspectiveSwitch
+/// [`UiStateChange::PerspectiveSwitch`]: swissarmyhammer_ui_state::UiStateChange::PerspectiveSwitch
 pub struct SetFilterAndRefreshCmd;
 
 #[async_trait]
@@ -620,7 +620,7 @@ impl Command for SetFilterAndRefreshCmd {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         let perspective_id = resolve_and_persist_perspective_id(ctx, &kanban).await?;
 
@@ -650,7 +650,7 @@ impl Command for SetFilterAndRefreshCmd {
 /// Clear the filter on an active perspective.
 ///
 /// Always available. The target perspective is resolved at execute time via
-/// [`resolve_perspective_id`] (explicit arg → scope-chain moniker → UIState
+/// [`resolve_perspective_id`] (explicit arg → scope-chain moniker → UiState
 /// active → first perspective for the active view kind).
 pub struct ClearFilterCmd;
 
@@ -673,7 +673,7 @@ impl Command for ClearFilterCmd {
 /// Set the group on an active perspective.
 ///
 /// Always available. The target perspective is resolved at execute time via
-/// [`resolve_perspective_id`] (explicit arg → scope-chain moniker → UIState
+/// [`resolve_perspective_id`] (explicit arg → scope-chain moniker → UiState
 /// active → first perspective for the active view kind).
 pub struct SetGroupCmd;
 
@@ -701,7 +701,7 @@ impl Command for SetGroupCmd {
 /// Clear the group on an active perspective.
 ///
 /// Always available. The target perspective is resolved at execute time via
-/// [`resolve_perspective_id`] (explicit arg → scope-chain moniker → UIState
+/// [`resolve_perspective_id`] (explicit arg → scope-chain moniker → UiState
 /// active → first perspective for the active view kind).
 pub struct ClearGroupCmd;
 
@@ -983,7 +983,7 @@ enum CycleDirection {
 ///
 /// Lists all perspectives, filters to those matching `view_kind`, finds the
 /// current active perspective by index, and advances or retreats by one
-/// (wrapping). Updates UIState and returns the `UIStateChange`, or `null`
+/// (wrapping). Updates UiState and returns the `UiStateChange`, or `null`
 /// if cycling is not possible (fewer than 2 matching perspectives).
 async fn cycle_perspective(
     ctx: &CommandContext,
@@ -993,7 +993,7 @@ async fn cycle_perspective(
     let ui = ctx
         .ui_state
         .as_ref()
-        .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+        .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
     let (view_kind, view_id) = resolve_active_view(ctx, &kanban).await;
     let window_label = ctx.window_label_from_scope().unwrap_or("main");
@@ -1056,7 +1056,7 @@ impl Command for GotoPerspectiveCmd {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         let id = ctx.require_arg_str("id")?;
         let view_kind = ctx.arg("view_kind").and_then(|v| v.as_str());
@@ -1087,7 +1087,7 @@ impl Command for GotoPerspectiveCmd {
             }
         }
 
-        // Release the lock before mutating UIState.
+        // Release the lock before mutating UiState.
         drop(pctx);
 
         let change = ui.set_active_perspective(window_label, id);
@@ -1098,7 +1098,7 @@ impl Command for GotoPerspectiveCmd {
 /// Switch to a perspective AND evaluate its filter in one backend command.
 ///
 /// Replaces the prior `perspective.set` (and its predecessor
-/// `ui.perspective.set`) which only mutated `UIState.active_perspective_id`.
+/// `ui.perspective.set`) which only mutated `UiState.active_perspective_id`.
 /// That left filter evaluation to a follow-up `list_entities(filter=...)`
 /// roundtrip driven by a frontend `useEffect`; clicking a tab dispatched a
 /// command with no backend work, so the indeterminate progress bar tied to
@@ -1113,11 +1113,11 @@ impl Command for GotoPerspectiveCmd {
 ///    `filter_task_ids` in `task_helpers` so the DSL evaluator is the
 ///    same one `list_entities` uses — no duplication.
 /// 3. Atomically write BOTH `active_perspective_id` and `filtered_task_ids`
-///    on the window via [`UIState::switch_perspective`], producing exactly
-///    one `UIStateChange::PerspectiveSwitch`. The frontend renders the
-///    filtered task list directly out of UIState.
+///    on the window via [`UiState::switch_perspective`], producing exactly
+///    one `UiStateChange::PerspectiveSwitch`. The frontend renders the
+///    filtered task list directly out of UiState.
 ///
-/// Required arg: `perspective_id`. Returns the [`UIStateChange`] as JSON,
+/// Required arg: `perspective_id`. Returns the [`UiStateChange`] as JSON,
 /// or `Value::Null` when the switch is a no-op (id and filtered id list
 /// both already match).
 pub struct SwitchPerspectiveCmd;
@@ -1133,7 +1133,7 @@ impl Command for SwitchPerspectiveCmd {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         let perspective_id = ctx.require_arg_str("perspective_id")?;
         let window_label = ctx.window_label_from_scope().unwrap_or("main");
@@ -1144,18 +1144,18 @@ impl Command for SwitchPerspectiveCmd {
 
 /// Switch a window's active perspective: look the perspective up, evaluate
 /// its filter DSL, and atomically write BOTH `active_perspective_id` and
-/// `filtered_task_ids` via [`UIState::switch_perspective`].
+/// `filtered_task_ids` via [`UiState::switch_perspective`].
 ///
 /// The single switch pipeline shared by [`SwitchPerspectiveCmd`] (switch by
 /// explicit id) and [`cycle_perspective`] (next/prev) — cycling re-filters
 /// the window exactly like a direct switch, producing the same atomic
-/// `UIStateChange::PerspectiveSwitch`. Returns that change as JSON, or
+/// `UiStateChange::PerspectiveSwitch`. Returns that change as JSON, or
 /// `Value::Null` when the switch is a no-op.
 ///
-/// [`UIState::switch_perspective`]: swissarmyhammer_ui_state::UIState::switch_perspective
+/// [`UiState::switch_perspective`]: swissarmyhammer_ui_state::UiState::switch_perspective
 pub async fn switch_to_perspective(
     kanban: &KanbanContext,
-    ui: &swissarmyhammer_ui_state::UIState,
+    ui: &swissarmyhammer_ui_state::UiState,
     window_label: &str,
     perspective_id: &str,
 ) -> crate::commands_core::Result<Value> {
@@ -1609,14 +1609,14 @@ mod tests {
     #[tokio::test]
     async fn test_clear_sort_cmd_works_from_palette_with_no_perspective_id() {
         // Palette invocation: no args, no scope perspective moniker.
-        // The resolver falls back to UIState.active_perspective_id("main"),
+        // The resolver falls back to UiState.active_perspective_id("main"),
         // and the command must clear the sort list on that perspective.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
         let pid = create_perspective_with_view(&kanban, "Palette Sort", "grid").await;
 
-        // Mark this perspective as UIState-active for the default window.
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        // Mark this perspective as UiState-active for the default window.
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
         ui.set_active_perspective("main", &pid);
 
         // Seed a sort entry on it.
@@ -1631,13 +1631,13 @@ mod tests {
         );
         SetSortCmd.execute(&cmd_ctx).await.unwrap();
 
-        // Palette dispatch: empty args, no scope moniker — UIState must win.
+        // Palette dispatch: empty args, no scope moniker — UiState must win.
         let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), HashMap::new(), Arc::clone(&ui));
         let result = ClearSortCmd.execute(&cmd_ctx).await.unwrap();
         let sort = result["sort"].as_array();
         assert!(
             sort.is_none() || sort.unwrap().is_empty(),
-            "palette dispatch should resolve perspective via UIState and clear sort, got: {:?}",
+            "palette dispatch should resolve perspective via UiState and clear sort, got: {:?}",
             sort
         );
     }
@@ -2053,11 +2053,11 @@ mod tests {
     // Next / Prev perspective cycling
     // =========================================================================
 
-    /// Build a CommandContext with KanbanContext extension and UIState.
+    /// Build a CommandContext with KanbanContext extension and UiState.
     fn make_ctx_with_ui(
         kanban: Arc<KanbanContext>,
         args: HashMap<String, Value>,
-        ui: Arc<swissarmyhammer_ui_state::UIState>,
+        ui: Arc<swissarmyhammer_ui_state::UiState>,
     ) -> CommandContext {
         let mut ctx = CommandContext::new("test", vec![], None, args);
         ctx.set_extension(kanban);
@@ -2069,7 +2069,7 @@ mod tests {
     async fn test_next_perspective_cycles_forward_with_wrapping() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let id_a = create_perspective_with_view(&kanban, "A", "board").await;
         let id_b = create_perspective_with_view(&kanban, "B", "board").await;
@@ -2105,7 +2105,7 @@ mod tests {
     async fn test_prev_perspective_cycles_backward_with_wrapping() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let id_a = create_perspective_with_view(&kanban, "A", "grid").await;
         let id_b = create_perspective_with_view(&kanban, "B", "grid").await;
@@ -2140,7 +2140,7 @@ mod tests {
     async fn test_cycle_noop_with_zero_matching_perspectives() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         // Create perspectives for "board" but query for "grid"
         create_perspective_with_view(&kanban, "A", "board").await;
@@ -2156,7 +2156,7 @@ mod tests {
     async fn test_cycle_noop_with_one_matching_perspective() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let id_a = create_perspective_with_view(&kanban, "A", "board").await;
         ui.set_active_perspective("main", &id_a);
@@ -2172,7 +2172,7 @@ mod tests {
     async fn test_cycle_filters_by_view_kind() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let id_board = create_perspective_with_view(&kanban, "Board1", "board").await;
         let _id_grid = create_perspective_with_view(&kanban, "Grid1", "grid").await;
@@ -2215,7 +2215,7 @@ mod tests {
         kanban: Arc<KanbanContext>,
         args: HashMap<String, Value>,
         scope_chain: Vec<String>,
-        ui: Arc<swissarmyhammer_ui_state::UIState>,
+        ui: Arc<swissarmyhammer_ui_state::UiState>,
     ) -> CommandContext {
         let mut ctx = CommandContext::new("test", scope_chain, None, args);
         ctx.set_extension(kanban);
@@ -2227,7 +2227,7 @@ mod tests {
     async fn test_next_perspective_derives_view_kind_from_scope_chain() {
         let (_temp, ctx) = setup_with_views().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         // Create board perspectives
         let id_a = create_perspective_with_view(&kanban, "A", "board").await;
@@ -2249,7 +2249,7 @@ mod tests {
     async fn test_next_perspective_explicit_view_kind_overrides_scope() {
         let (_temp, ctx) = setup_with_views().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         // Create board and grid perspectives
         let _id_board_a = create_perspective_with_view(&kanban, "BoardA", "board").await;
@@ -2282,7 +2282,7 @@ mod tests {
     async fn test_goto_perspective_valid_id_sets_active() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let id = create_perspective_with_view(&kanban, "Target", "board").await;
 
@@ -2299,7 +2299,7 @@ mod tests {
     async fn test_goto_perspective_invalid_id_returns_error() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let mut args = HashMap::new();
         args.insert("id".into(), Value::String("nonexistent".into()));
@@ -2313,7 +2313,7 @@ mod tests {
     async fn test_goto_perspective_mismatched_view_kind_returns_error() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let id = create_perspective_with_view(&kanban, "BoardView", "board").await;
 
@@ -2330,7 +2330,7 @@ mod tests {
     async fn test_goto_perspective_without_view_kind_succeeds() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let id = create_perspective_with_view(&kanban, "GridView", "grid").await;
 
@@ -2391,14 +2391,14 @@ mod tests {
     // resolve_perspective_id — four-tier fallback
     // =========================================================================
 
-    /// Build a CommandContext with scope chain, args, UIState, and a
+    /// Build a CommandContext with scope chain, args, UiState, and a
     /// KanbanContext extension. Used for resolver tests that need every
     /// input simultaneously.
     fn make_full_ctx(
         kanban: Arc<KanbanContext>,
         args: HashMap<String, Value>,
         scope_chain: Vec<String>,
-        ui: Arc<swissarmyhammer_ui_state::UIState>,
+        ui: Arc<swissarmyhammer_ui_state::UiState>,
     ) -> CommandContext {
         let mut ctx = CommandContext::new("test", scope_chain, None, args);
         ctx.set_extension(kanban);
@@ -2410,9 +2410,9 @@ mod tests {
     async fn resolve_perspective_id_prefers_explicit_arg() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
-        // Populate UIState so every fallback path has an id available —
+        // Populate UiState so every fallback path has an id available —
         // the explicit arg must still win.
         ui.set_active_perspective("main", "ui-id");
 
@@ -2434,10 +2434,10 @@ mod tests {
     async fn resolve_perspective_id_falls_back_to_scope_chain() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
         ui.set_active_perspective("main", "ui-id");
 
-        // No arg — scope chain's perspective moniker should win over UIState.
+        // No arg — scope chain's perspective moniker should win over UiState.
         let cmd_ctx = make_full_ctx(
             Arc::clone(&kanban),
             HashMap::new(),
@@ -2454,10 +2454,10 @@ mod tests {
     async fn resolve_perspective_id_falls_back_to_uistate() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
         ui.set_active_perspective("main", "ui-id");
 
-        // No arg, no scope-chain perspective moniker — UIState wins.
+        // No arg, no scope-chain perspective moniker — UiState wins.
         let cmd_ctx = make_full_ctx(
             Arc::clone(&kanban),
             HashMap::new(),
@@ -2474,13 +2474,13 @@ mod tests {
     async fn resolve_perspective_id_falls_back_to_first_for_view_kind() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         // Two perspectives: one for each view kind.
         let board_pid = create_perspective_with_view(&kanban, "Board", "board").await;
         let _grid_pid = create_perspective_with_view(&kanban, "Grid", "grid").await;
 
-        // No arg, no scope-chain perspective, empty UIState.
+        // No arg, no scope-chain perspective, empty UiState.
         // view_kind arg steers the fallback to the "board" perspective.
         let mut args = HashMap::new();
         args.insert("view_kind".into(), Value::String("board".into()));
@@ -2500,7 +2500,7 @@ mod tests {
     async fn resolve_and_persist_writes_uistate_when_fallback_used() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let board_pid = create_perspective_with_view(&kanban, "Board", "board").await;
 
@@ -2513,7 +2513,7 @@ mod tests {
             Arc::clone(&ui),
         );
 
-        // Confirm UIState starts empty.
+        // Confirm UiState starts empty.
         assert_eq!(ui.active_perspective_id("main"), "");
 
         let resolved = resolve_and_persist_perspective_id(&cmd_ctx, &kanban)
@@ -2525,7 +2525,7 @@ mod tests {
         assert_eq!(
             ui.active_perspective_id("main"),
             board_pid,
-            "fallback resolution should persist to UIState so subsequent commands find it"
+            "fallback resolution should persist to UiState so subsequent commands find it"
         );
     }
 
@@ -2533,7 +2533,7 @@ mod tests {
     async fn resolve_and_persist_does_not_touch_uistate_when_arg_supplied() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String("arg-id".into()));
@@ -2548,7 +2548,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resolved, "arg-id");
-        // Caller-supplied ids must not mutate UIState on the caller's behalf —
+        // Caller-supplied ids must not mutate UiState on the caller's behalf —
         // changing the active perspective is the caller's decision.
         assert_eq!(ui.active_perspective_id("main"), "");
     }
@@ -2557,7 +2557,7 @@ mod tests {
     async fn resolve_and_persist_does_not_touch_uistate_when_scope_supplied() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let cmd_ctx = make_full_ctx(
             Arc::clone(&kanban),
@@ -2577,12 +2577,12 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_perspective_id_errors_when_no_fallback_succeeds() {
-        // No arg, no scope-chain perspective, empty UIState, no perspectives
+        // No arg, no scope-chain perspective, empty UiState, no perspectives
         // registered for the view kind → the resolver must surface the
         // missing-arg error so the caller can report it.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let cmd_ctx = make_full_ctx(
             Arc::clone(&kanban),
@@ -2606,9 +2606,9 @@ mod tests {
     async fn clear_filter_works_from_palette_with_no_args() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
-        // Create a perspective with a filter, then mark it active in UIState.
+        // Create a perspective with a filter, then mark it active in UiState.
         let pid = create_perspective_with_view(&kanban, "Active", "board").await;
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
@@ -2651,7 +2651,7 @@ mod tests {
     async fn clear_group_works_from_palette_with_no_args() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let pid = create_perspective_with_view(&kanban, "Active", "board").await;
         // Seed a group value via SetGroupCmd (explicit arg, full scope).
@@ -2691,7 +2691,7 @@ mod tests {
     async fn toggle_sort_works_from_palette_with_no_perspective_arg() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let pid = create_perspective_with_view(&kanban, "Active", "board").await;
         ui.set_active_perspective("main", &pid);
@@ -2786,12 +2786,12 @@ mod tests {
         // fallback walks the view_id-aware filter rather than kind-only.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let pid_a = create_perspective_scoped(&kanban, "GridA", "grid", GRID_VIEW_A_ID).await;
         let pid_b = create_perspective_scoped(&kanban, "GridB", "grid", GRID_VIEW_B_ID).await;
 
-        // Resolver fallback path: no arg, no scope, empty UIState; `view_kind`
+        // Resolver fallback path: no arg, no scope, empty UiState; `view_kind`
         // + `view_id` args steer the first-for-view-kind branch. The matching
         // perspective MUST be the one pinned to GRID_VIEW_A_ID.
         let mut args = HashMap::new();
@@ -2825,7 +2825,7 @@ mod tests {
         // it must fall back to the legacy perspective.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let pid_legacy = create_perspective_with_view(&kanban, "Legacy", "grid").await;
         let pid_scoped = create_perspective_scoped(&kanban, "Scoped", "grid", GRID_VIEW_A_ID).await;
@@ -2858,7 +2858,7 @@ mod tests {
         // view B. With `view_id=A`, NextPerspective must cycle within A only.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let pid_a1 = create_perspective_scoped(&kanban, "A1", "grid", GRID_VIEW_A_ID).await;
         let pid_a2 = create_perspective_scoped(&kanban, "A2", "grid", GRID_VIEW_A_ID).await;
@@ -2896,7 +2896,7 @@ mod tests {
         // perspective is scoped to that view must succeed.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let pid = create_perspective_scoped(&kanban, "Pinned", "grid", GRID_VIEW_A_ID).await;
 
@@ -2918,7 +2918,7 @@ mod tests {
         // where two grid views shared every scoped perspective.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let pid = create_perspective_scoped(&kanban, "Pinned to A", "grid", GRID_VIEW_A_ID).await;
 
@@ -2987,16 +2987,16 @@ mod tests {
     // Covers the four contracts called out in 01KP3ERHEDP86C2JYYR7NM1593:
     //   (a) sets `active_perspective_id`
     //   (b) writes `filtered_task_ids` matching the perspective's filter
-    //   (c) both changes land in one `UIStateChange::PerspectiveSwitch`
+    //   (c) both changes land in one `UiStateChange::PerspectiveSwitch`
     //   (d) unknown perspective id surfaces as a clean `ExecutionFailed`
     // =========================================================================
 
-    /// Build a CommandContext with KanbanContext + UIState + a single
+    /// Build a CommandContext with KanbanContext + UiState + a single
     /// `perspective_id` arg — the minimal shape every `perspective.switch`
     /// test needs.
     fn switch_ctx(
         kanban: Arc<KanbanContext>,
-        ui: Arc<swissarmyhammer_ui_state::UIState>,
+        ui: Arc<swissarmyhammer_ui_state::UiState>,
         perspective_id: &str,
     ) -> CommandContext {
         let mut args = HashMap::new();
@@ -3028,10 +3028,10 @@ mod tests {
         // Contract (d): an unknown perspective id must surface as a
         // clean `ExecutionFailed` error so the dispatcher can log it
         // and the frontend's `.catch(console.error)` can record it.
-        // Crucially, it must NOT silently mutate UIState.
+        // Crucially, it must NOT silently mutate UiState.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let cmd_ctx = switch_ctx(Arc::clone(&kanban), Arc::clone(&ui), "does-not-exist");
         let err = SwitchPerspectiveCmd
@@ -3047,7 +3047,7 @@ mod tests {
             }
             other => panic!("expected ExecutionFailed, got: {other:?}"),
         }
-        // UIState must be untouched.
+        // UiState must be untouched.
         assert!(ui.active_perspective_id("main").is_empty());
         assert!(ui.filtered_task_ids("main").is_empty());
     }
@@ -3059,7 +3059,7 @@ mod tests {
         // task on the board (filter empty → no-filter).
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         // Two tasks; no filter on the perspective.
         let t1 = add_task_with_body(&kanban, "Bug task", "#bug fix this").await;
@@ -3068,7 +3068,7 @@ mod tests {
 
         let cmd_ctx = switch_ctx(Arc::clone(&kanban), Arc::clone(&ui), &pid);
         let result = SwitchPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
-        assert!(!result.is_null(), "switch should produce a UIStateChange");
+        assert!(!result.is_null(), "switch should produce a UiStateChange");
 
         assert_eq!(ui.active_perspective_id("main"), pid);
         let filtered = ui.filtered_task_ids("main");
@@ -3086,7 +3086,7 @@ mod tests {
         // `task_helpers::tests`).
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let t_bug = add_task_with_body(&kanban, "Bug", "#bug top of body").await;
         let _t_feat = add_task_with_body(&kanban, "Feature", "#feature pretty").await;
@@ -3110,12 +3110,12 @@ mod tests {
     #[tokio::test]
     async fn switch_perspective_emits_single_atomic_change() {
         // Contract (c): both `active_perspective_id` and
-        // `filtered_task_ids` arrive in ONE `UIStateChange::PerspectiveSwitch`.
+        // `filtered_task_ids` arrive in ONE `UiStateChange::PerspectiveSwitch`.
         // The frontend's `ui-state-changed` subscriber gets exactly one
         // event per click — never two.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let t = add_task_with_body(&kanban, "Bug", "#bug oops").await;
         let mut args = HashMap::new();
@@ -3134,10 +3134,10 @@ mod tests {
         // The result must deserialize as `PerspectiveSwitch` — not a pair
         // of `ActivePerspective` + something-else, and not as a tuple of
         // two changes.
-        let change: swissarmyhammer_ui_state::UIStateChange =
-            serde_json::from_value(result).expect("result must be a single UIStateChange");
+        let change: swissarmyhammer_ui_state::UiStateChange =
+            serde_json::from_value(result).expect("result must be a single UiStateChange");
         match change {
-            swissarmyhammer_ui_state::UIStateChange::PerspectiveSwitch {
+            swissarmyhammer_ui_state::UiStateChange::PerspectiveSwitch {
                 perspective_id,
                 filtered_task_ids,
             } => {
@@ -3155,7 +3155,7 @@ mod tests {
         // window_label_from_scope path the production app uses.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         add_task_with_body(&kanban, "Bug", "#bug").await;
         let pid = create_perspective_with_view(&kanban, "All", "board").await;
@@ -3188,7 +3188,7 @@ mod tests {
         // registration, no name typo).
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let t = add_task_with_body(&kanban, "Bug", "#bug oops").await;
         let mut args = HashMap::new();
@@ -3223,7 +3223,7 @@ mod tests {
         // can't silently pass an empty switch.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let mut cmd_ctx = CommandContext::new("perspective.switch", vec![], None, HashMap::new());
         cmd_ctx.set_extension(Arc::clone(&kanban));
@@ -3250,12 +3250,12 @@ mod tests {
     // only persists STORAGE (no window refresh to drive).
     // =========================================================================
 
-    /// Build a CommandContext with KanbanContext + UIState + `perspective_id`
+    /// Build a CommandContext with KanbanContext + UiState + `perspective_id`
     /// and `filter` args and a `window:<label>` scope — the shape the entity
     /// server's `handle_set_filter` produces.
     fn set_filter_ctx(
         kanban: Arc<KanbanContext>,
-        ui: Arc<swissarmyhammer_ui_state::UIState>,
+        ui: Arc<swissarmyhammer_ui_state::UiState>,
         perspective_id: &str,
         filter: &str,
         window_label: &str,
@@ -3285,7 +3285,7 @@ mod tests {
         // host's `ui-state-changed` emit fires — no click-away required.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let t_bug = add_task_with_body(&kanban, "Bug", "#bug top").await;
         let _t_feat = add_task_with_body(&kanban, "Feature", "#feature pretty").await;
@@ -3306,10 +3306,10 @@ mod tests {
 
         // The result must be a single `PerspectiveSwitch` change carrying the
         // recomputed id list.
-        let change: swissarmyhammer_ui_state::UIStateChange =
-            serde_json::from_value(result).expect("result must be a single UIStateChange");
+        let change: swissarmyhammer_ui_state::UiStateChange =
+            serde_json::from_value(result).expect("result must be a single UiStateChange");
         match change {
-            swissarmyhammer_ui_state::UIStateChange::PerspectiveSwitch {
+            swissarmyhammer_ui_state::UiStateChange::PerspectiveSwitch {
                 perspective_id,
                 filtered_task_ids,
             } => {
@@ -3332,7 +3332,7 @@ mod tests {
         // untouched.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let ui = Arc::new(swissarmyhammer_ui_state::UIState::new());
+        let ui = Arc::new(swissarmyhammer_ui_state::UiState::new());
 
         let t_bug = add_task_with_body(&kanban, "Bug", "#bug top").await;
         let t_feat = add_task_with_body(&kanban, "Feature", "#feature pretty").await;

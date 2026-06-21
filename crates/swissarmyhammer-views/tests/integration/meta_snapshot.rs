@@ -41,7 +41,7 @@ async fn views_tool_meta_operations_tree_is_complete() {
         ("perspective", "load", "load perspective"),
         ("perspective", "save", "save perspective"),
         // delete is NOT a views op — it routes to the `entity` server (which
-        // holds the per-window UIState the active-selection fallback writes).
+        // holds the per-window UiState the active-selection fallback writes).
         ("perspective", "rename", "rename perspective"),
         ("perspective", "list", "list perspective"),
         // filter

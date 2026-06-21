@@ -28,7 +28,7 @@ impl Command for SetKeymapModeCmd {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         let change = ui.set_keymap_mode(self.0);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
@@ -100,7 +100,7 @@ impl Command for CommandPaletteCmd {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         let window_label = ctx.window_label_from_scope().unwrap_or("main");
         let change = ui.set_palette_open_with_mode(window_label, true, "command");
@@ -124,7 +124,7 @@ impl Command for SearchPaletteCmd {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         let window_label = ctx.window_label_from_scope().unwrap_or("main");
         let change = ui.set_palette_open_with_mode(window_label, true, "search");
@@ -135,7 +135,7 @@ impl Command for SearchPaletteCmd {
 /// Dismiss — layered close: palette first, then topmost inspector.
 ///
 /// Always available. Closes the palette if open in the invoking window,
-/// otherwise pops the inspector stack. Returns a UIStateChange so the
+/// otherwise pops the inspector stack. Returns a UiStateChange so the
 /// frontend stays in sync.
 pub struct DismissCmd;
 
@@ -149,7 +149,7 @@ impl Command for DismissCmd {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         let window_label = ctx.window_label_from_scope().unwrap_or("main");
 

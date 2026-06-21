@@ -46,7 +46,7 @@ swissarmyhammer-kanban = { workspace = true }
 # generic `entity` operation tool to a `PluginHost`. CRUD round-trips use the
 # bare `EntityServer::new`; the clipboard copy→paste round-trip needs the
 # clipboard-wired `EntityServer::with_clipboard` (over a `KanbanContext` board
-# substrate + `InMemoryClipboard` + `UIState`). Dev-only edge, same shape as
+# substrate + `InMemoryClipboard` + `UiState`). Dev-only edge, same shape as
 # the other reverse dev edges in this section.
 swissarmyhammer-entity-mcp = { workspace = true }
 swissarmyhammer-ui-state = { workspace = true }
@@ -55,7 +55,7 @@ swissarmyhammer-store = { workspace = true }
 # The `builtin_app_shell_commands_e2e` integration test exposes the REAL
 # in-process `app` / `ui_state` / `store` / `window` / `focus` operation tools
 # to a `PluginHost` (the `app` tool over a recording spy `AppShell`, `ui_state`
-# over a temp-file `UIState`, `store` over the board's one shared
+# over a temp-file `UiState`, `store` over the board's one shared
 # `StoreContext`, `window` over a recording spy `WindowShell`, and `focus` as a
 # `swissarmyhammer_focus::FocusServer` over a real `SpatialRegistry` /
 # `SpatialState`) so the 33 ported app commands route through the same servers

@@ -166,7 +166,7 @@ fn register_ui(map: &mut CmdMap) {
 /// Register `view.*` kanban commands.
 ///
 /// Currently only `view.set` — the impl lives in `ui_commands.rs` (the
-/// command mutates `UIState::active_view_id` which is a UI-surface concern)
+/// command mutates `UiState::active_view_id` which is a UI-surface concern)
 /// but the YAML declaration and id live in the kanban `view` namespace
 /// because "view" is a kanban concept, not a generic UI primitive.
 /// Relocated from `ui.view.set` in 01KPY02X405QTP5ACH67THHSN8.
@@ -278,7 +278,7 @@ fn register_perspective(map: &mut CmdMap) {
     // predecessor `ui.perspective.set`). The handler loads the perspective,
     // evaluates its filter DSL against the board's tasks, and writes BOTH
     // `active_perspective_id` and a per-window `filtered_task_ids` list in
-    // one atomic `UIStateChange::PerspectiveSwitch`. See
+    // one atomic `UiStateChange::PerspectiveSwitch`. See
     // `SwitchPerspectiveCmd` in `perspective_commands.rs`.
     map.insert(
         "perspective.switch".into(),
@@ -353,10 +353,10 @@ mod tests {
     use crate::commands_core::CommandContext;
     use serde_json::Value;
     use std::sync::Arc;
-    use swissarmyhammer_ui_state::UIState;
+    use swissarmyhammer_ui_state::UiState;
 
-    /// Build a CommandContext with the given scope chain, target, and optional UIState.
-    fn ctx_with(scope: &[&str], target: Option<&str>, ui: Option<Arc<UIState>>) -> CommandContext {
+    /// Build a CommandContext with the given scope chain, target, and optional UiState.
+    fn ctx_with(scope: &[&str], target: Option<&str>, ui: Option<Arc<UiState>>) -> CommandContext {
         let mut ctx = CommandContext::new(
             "test",
             scope.iter().map(|s| s.to_string()).collect(),
@@ -600,14 +600,14 @@ mod tests {
     // Paste command availability tests
     // =========================================================================
 
-    fn ui_with_task_clipboard() -> Arc<UIState> {
-        let ui = Arc::new(UIState::new());
+    fn ui_with_task_clipboard() -> Arc<UiState> {
+        let ui = Arc::new(UiState::new());
         ui.set_clipboard_entity_type("task");
         ui
     }
 
-    fn ui_with_tag_clipboard() -> Arc<UIState> {
-        let ui = Arc::new(UIState::new());
+    fn ui_with_tag_clipboard() -> Arc<UiState> {
+        let ui = Arc::new(UiState::new());
         ui.set_clipboard_entity_type("tag");
         ui
     }
@@ -658,7 +658,7 @@ mod tests {
     fn paste_not_available_without_clipboard() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.paste").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let ctx = ctx_with(&[], Some("column:todo"), Some(ui));
         assert!(!cmd.available(&ctx));
     }
@@ -673,7 +673,7 @@ mod tests {
     }
 
     // =========================================================================
-    // UI command tests — use in-memory UIState, no disk I/O
+    // UI command tests — use in-memory UiState, no disk I/O
     // =========================================================================
 
     #[test]
@@ -704,7 +704,7 @@ mod tests {
     async fn inspect_executes_updates_ui_state() {
         let cmds = register_commands();
         let cmd = cmds.get("app.inspect").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let ctx = ctx_with(&[], Some("task:01XYZ"), Some(Arc::clone(&ui)));
 
         let result = cmd.execute(&ctx).await;
@@ -717,7 +717,7 @@ mod tests {
     async fn inspector_close_executes() {
         let cmds = register_commands();
         let cmd = cmds.get("app.inspector.close").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.inspect("main", "task:01XYZ");
         ui.inspect("main", "tag:01TAG");
 
@@ -731,7 +731,7 @@ mod tests {
     async fn inspector_close_all_executes() {
         let cmds = register_commands();
         let cmd = cmds.get("app.inspector.close_all").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.inspect("main", "task:01XYZ");
         ui.inspect("main", "tag:01TAG");
 
@@ -745,7 +745,7 @@ mod tests {
     async fn palette_open_executes() {
         let cmds = register_commands();
         let cmd = cmds.get("app.palette.open").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         assert!(!ui.palette_open("main"));
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
@@ -758,7 +758,7 @@ mod tests {
     async fn palette_close_executes() {
         let cmds = register_commands();
         let cmd = cmds.get("app.palette.close").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.set_palette_open("main", true);
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
@@ -771,7 +771,7 @@ mod tests {
     async fn set_keymap_mode_executes() {
         let cmds = register_commands();
         let cmd = cmds.get("settings.keymap.vim").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         assert_eq!(ui.keymap_mode(), "cua");
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
@@ -784,7 +784,7 @@ mod tests {
     async fn set_focus_cmd_sets_scope_chain() {
         let cmds = register_commands();
         let cmd = cmds.get("app.setFocus").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         assert!(ui.scope_chain().is_empty());
 
         let mut args = std::collections::HashMap::new();
@@ -804,7 +804,7 @@ mod tests {
     async fn set_focus_cmd_clears_scope_chain_with_empty_arg() {
         let cmds = register_commands();
         let cmd = cmds.get("app.setFocus").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.set_scope_chain(vec!["task:01XYZ".to_string()]);
 
         let mut args = std::collections::HashMap::new();
@@ -821,7 +821,7 @@ mod tests {
     async fn set_focus_cmd_defaults_to_empty_when_no_arg() {
         let cmds = register_commands();
         let cmd = cmds.get("app.setFocus").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.set_scope_chain(vec!["task:01XYZ".to_string()]);
 
         // No scope_chain arg — should default to empty
@@ -838,7 +838,7 @@ mod tests {
     async fn set_active_view_executes() {
         let cmds = register_commands();
         let cmd = cmds.get("view.set").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let mut args = std::collections::HashMap::new();
         args.insert("view_id".to_string(), Value::String("my-view".into()));
@@ -919,7 +919,7 @@ mod tests {
     async fn command_palette_opens_palette_in_command_mode() {
         let cmds = register_commands();
         let cmd = cmds.get("app.command").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         assert!(!ui.palette_open("main"));
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
@@ -933,7 +933,7 @@ mod tests {
     async fn search_palette_opens_palette_in_search_mode() {
         let cmds = register_commands();
         let cmd = cmds.get("app.search").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         assert!(!ui.palette_open("main"));
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
@@ -947,7 +947,7 @@ mod tests {
     async fn command_palette_targets_invoking_window_only() {
         let cmds = register_commands();
         let cmd = cmds.get("app.command").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         // Execute with scope chain containing window:secondary
         let ctx = ctx_with(&["window:secondary"], None, Some(Arc::clone(&ui)));
@@ -969,7 +969,7 @@ mod tests {
     async fn dismiss_closes_palette_when_open() {
         let cmds = register_commands();
         let cmd = cmds.get("app.dismiss").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.set_palette_open("main", true);
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
@@ -982,7 +982,7 @@ mod tests {
     async fn dismiss_closes_inspector_when_palette_closed() {
         let cmds = register_commands();
         let cmd = cmds.get("app.dismiss").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.inspect("main", "task:01XYZ");
         assert!(!ui.palette_open("main"));
         assert_eq!(ui.inspector_stack("main").len(), 1);
@@ -997,7 +997,7 @@ mod tests {
     async fn dismiss_returns_null_when_nothing_to_dismiss() {
         let cmds = register_commands();
         let cmd = cmds.get("app.dismiss").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await.unwrap();
@@ -1012,7 +1012,7 @@ mod tests {
     fn undo_unavailable_without_ui_state() {
         let cmds = register_commands();
         let cmd = cmds.get("app.undo").unwrap();
-        // No UIState on context — undo should not be available
+        // No UiState on context — undo should not be available
         assert!(!cmd.available(&ctx_scope(&[])));
     }
 
@@ -1020,7 +1020,7 @@ mod tests {
     fn redo_unavailable_without_ui_state() {
         let cmds = register_commands();
         let cmd = cmds.get("app.redo").unwrap();
-        // No UIState on context — redo should not be available
+        // No UiState on context — redo should not be available
         assert!(!cmd.available(&ctx_scope(&[])));
     }
 
@@ -1028,8 +1028,8 @@ mod tests {
     fn undo_unavailable_when_stack_empty() {
         let cmds = register_commands();
         let cmd = cmds.get("app.undo").unwrap();
-        let ui = Arc::new(UIState::new());
-        // UIState present but can_undo defaults to false
+        let ui = Arc::new(UiState::new());
+        // UiState present but can_undo defaults to false
         assert!(!cmd.available(&ctx_with(&[], None, Some(ui))));
     }
 
@@ -1037,7 +1037,7 @@ mod tests {
     fn undo_available_when_can_undo_set() {
         let cmds = register_commands();
         let cmd = cmds.get("app.undo").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.set_undo_redo_state(true, false);
         assert!(cmd.available(&ctx_with(&[], None, Some(ui))));
     }
@@ -1046,7 +1046,7 @@ mod tests {
     fn redo_available_when_can_redo_set() {
         let cmds = register_commands();
         let cmd = cmds.get("app.redo").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.set_undo_redo_state(false, true);
         assert!(cmd.available(&ctx_with(&[], None, Some(ui))));
     }
@@ -1061,7 +1061,7 @@ mod tests {
         // then execute. This verifies that register_commands() produces working
         // trait objects that the dispatcher can drive.
         let cmds = register_commands();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         // Dispatch app.inspect with a target
         let cmd = cmds.get("app.inspect").unwrap();
@@ -1096,7 +1096,7 @@ mod tests {
     async fn drag_start_cmd_stores_session() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.start").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         assert!(ui.drag_session().is_none());
 
         let mut args = std::collections::HashMap::new();
@@ -1120,7 +1120,7 @@ mod tests {
     async fn drag_start_cmd_returns_drag_start_result() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.start").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let mut args = std::collections::HashMap::new();
         args.insert("boardPath".into(), serde_json::json!("/boards/b/.kanban"));
@@ -1145,7 +1145,7 @@ mod tests {
     async fn drag_start_cmd_replaces_existing_session() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.start").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         // Start first session
         let mut args1 = std::collections::HashMap::new();
@@ -1172,7 +1172,7 @@ mod tests {
     async fn drag_start_cmd_missing_task_id_returns_error() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.start").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let mut args = std::collections::HashMap::new();
         args.insert("boardPath".into(), serde_json::json!("/boards/a"));
@@ -1188,7 +1188,7 @@ mod tests {
     async fn drag_start_cmd_copy_mode_defaults_to_false() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.start").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let mut args = std::collections::HashMap::new();
         args.insert("boardPath".into(), serde_json::json!("/boards/a"));
@@ -1210,7 +1210,7 @@ mod tests {
     async fn drag_cancel_cmd_clears_session() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.cancel").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         // Start a session first via drag.start
         let start_cmd = cmds.get("drag.start").unwrap();
@@ -1248,7 +1248,7 @@ mod tests {
     async fn drag_cancel_cmd_no_session_returns_null() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.cancel").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         assert!(ui.drag_session().is_none(), "no session should be active");
 
         let mut ctx = CommandContext::new(
@@ -1270,7 +1270,7 @@ mod tests {
     async fn drag_start_cmd_copy_mode_can_be_set() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.start").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let mut args = std::collections::HashMap::new();
         args.insert("boardPath".into(), serde_json::json!("/boards/a"));

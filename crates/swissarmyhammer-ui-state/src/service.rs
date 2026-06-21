@@ -1,16 +1,16 @@
 //! In-process `rmcp::ServerHandler` for the `ui_state` operation tool.
 //!
-//! [`UiStateServer`] wraps an [`Arc<UIState>`](crate::state::UIState) and
+//! [`UiStateServer`] wraps an [`Arc<UiState>`](crate::state::UiState) and
 //! advertises a single `ui_state` operation tool whose `inputSchema` and
 //! `_meta` are derived from the operation structs in [`crate::operations`].
 //! Every verb routes to the matching mutating method on the wrapped
-//! [`UIState`], so behavior is a 1:1 port of the original command layer with
+//! [`UiState`], so behavior is a 1:1 port of the original command layer with
 //! no behavior change.
 //!
-//! The server holds the `UIState` directly (no extra seam) because `UIState`
+//! The server holds the `UiState` directly (no extra seam) because `UiState`
 //! is itself the injectable, file-backed state machine: construct it with
-//! [`UiStateServer::new`] over a [`UIState::load(path)`](crate::state::UIState::load)
-//! for production persistence, or over a temp-file-backed `UIState` in tests.
+//! [`UiStateServer::new`] over a [`UiState::load(path)`](crate::state::UiState::load)
+//! for production persistence, or over a temp-file-backed `UiState` in tests.
 //!
 //! There is no focus / `set_focus` op — spatial focus lives on the separate
 //! `focus` MCP server.
@@ -31,7 +31,7 @@ use crate::operations::{
     InspectorCloseAll, InspectorSetWidth, PaletteClose, PaletteOpen, SetActiveView, SetKeymapMode,
     SetScopeChain, ShowCommand, ShowPalette, ShowSearch, StartRename,
 };
-use crate::state::{DragSession, DragSource, UIState};
+use crate::state::{DragSession, DragSource, UiState};
 
 /// Minimum inspector width enforced by `set_width`.
 ///
@@ -83,14 +83,14 @@ fn window_from_scope<'a>(scope_chain: &'a [String], op: &str) -> Result<&'a str,
 
 /// In-process `rmcp::ServerHandler` for the `ui_state` operation tool.
 ///
-/// Holds an `Arc<UIState>` so every verb routes through the same shared,
-/// file-backed state. Cloning the server shares the underlying `UIState`.
+/// Holds an `Arc<UiState>` so every verb routes through the same shared,
+/// file-backed state. Cloning the server shares the underlying `UiState`.
 #[derive(Clone)]
 pub struct UiStateServer {
     /// The shared UI state every op mutates. File-backed when constructed
-    /// over a `UIState::load(path)`; in-memory when constructed over
-    /// `UIState::new()`.
-    ui_state: Arc<UIState>,
+    /// over a `UiState::load(path)`; in-memory when constructed over
+    /// `UiState::new()`.
+    ui_state: Arc<UiState>,
 }
 
 impl std::fmt::Debug for UiStateServer {
@@ -102,17 +102,17 @@ impl std::fmt::Debug for UiStateServer {
 }
 
 impl UiStateServer {
-    /// Construct a server over a shared [`UIState`].
+    /// Construct a server over a shared [`UiState`].
     ///
-    /// Production wires a `UIState::load(~/.swissarmyhammer/ui-state.json)`;
-    /// tests wire a temp-file-backed `UIState` so no real home dir is touched.
-    pub fn new(ui_state: Arc<UIState>) -> Self {
+    /// Production wires a `UiState::load(~/.swissarmyhammer/ui-state.json)`;
+    /// tests wire a temp-file-backed `UiState` so no real home dir is touched.
+    pub fn new(ui_state: Arc<UiState>) -> Self {
         Self { ui_state }
     }
 
-    /// Borrow the wrapped [`UIState`] (used by tests to observe persisted
+    /// Borrow the wrapped [`UiState`] (used by tests to observe persisted
     /// state after driving an op).
-    pub fn ui_state(&self) -> &Arc<UIState> {
+    pub fn ui_state(&self) -> &Arc<UiState> {
         &self.ui_state
     }
 

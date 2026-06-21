@@ -704,9 +704,9 @@ fn watch_event_touches_task(evt: &WatchEvent) -> bool {
 /// Recompute every filtered window's perspective filter and emit a
 /// `ui-state-changed` event for each window whose id list actually moved.
 ///
-/// Reaches `UIState` through the app's managed [`AppState`] and mirrors the
+/// Reaches `UiState` through the app's managed [`AppState`] and mirrors the
 /// `ui-state-changed` payload shape produced by `emit_ui_state_change_if_needed`
-/// in `commands.rs` — `{ "kind": "perspective_switch", "state": <UIState> }`.
+/// in `commands.rs` — `{ "kind": "perspective_switch", "state": <UiState> }`.
 async fn recompute_and_emit_perspective_filters(ctx: &Arc<KanbanContext>, app: &tauri::AppHandle) {
     let app_state = app.state::<crate::state::AppState>();
     let ui_state = &app_state.ui_state;
@@ -732,12 +732,12 @@ async fn recompute_and_emit_perspective_filters(ctx: &Arc<KanbanContext>, app: &
 
 /// Re-evaluate the perspective filter for every window whose `filtered_task_ids`
 /// is already populated (`Some`) and write the fresh id list back via
-/// [`UIState::switch_perspective`].
+/// [`UiState::switch_perspective`].
 ///
 /// Returns the label of every window whose id list actually changed —
 /// `switch_perspective` is idempotent and yields `None` when the recompute
 /// produces the same set, so unchanged windows are absent. The caller emits a
-/// full `UIState` snapshot per changed window (mirroring
+/// full `UiState` snapshot per changed window (mirroring
 /// `emit_ui_state_change_if_needed`), so only the labels are needed here.
 ///
 /// Windows whose `filtered_task_ids` is `None` (never switched perspective)
@@ -750,7 +750,7 @@ async fn recompute_and_emit_perspective_filters(ctx: &Arc<KanbanContext>, app: &
 /// `perspective.switch`.
 pub async fn recompute_perspective_filters(
     ctx: &KanbanContext,
-    ui_state: &swissarmyhammer_ui_state::UIState,
+    ui_state: &swissarmyhammer_ui_state::UiState,
 ) -> Vec<String> {
     use swissarmyhammer_kanban::commands::perspective_commands::evaluate_perspective_filter;
 
@@ -1610,12 +1610,12 @@ mod tests {
     // board because the window's `filtered_task_ids` snapshot went stale.
     //
     // `recompute_perspective_filters` is the bridge-side hook: given the
-    // current `KanbanContext` and `UIState`, it re-evaluates each filtered
+    // current `KanbanContext` and `UiState`, it re-evaluates each filtered
     // window's perspective filter and returns the windows whose id list
     // actually moved.
     // ------------------------------------------------------------------------
 
-    use swissarmyhammer_ui_state::UIState;
+    use swissarmyhammer_ui_state::UiState;
 
     /// Add a `#bug` perspective to the board and return its id.
     async fn add_bug_perspective(ctx: &Arc<KanbanContext>) -> String {
@@ -1651,7 +1651,7 @@ mod tests {
         let pid = add_bug_perspective(&ctx).await;
         let t1 = add_bug_task(&ctx, "First bug").await;
 
-        let ui = UIState::new();
+        let ui = UiState::new();
         // Window starts on the perspective with only the first task in scope.
         ui.switch_perspective("main", &pid, vec![t1.clone()]);
 
@@ -1665,7 +1665,7 @@ mod tests {
             vec!["main".to_string()],
             "exactly the `main` window should change"
         );
-        // UIState itself must carry the refreshed list.
+        // UiState itself must carry the refreshed list.
         let stored = ui.filtered_task_ids("main");
         assert!(stored.contains(&t1));
         assert!(
@@ -1683,7 +1683,7 @@ mod tests {
         let _pid = add_bug_perspective(&ctx).await;
         let _t1 = add_bug_task(&ctx, "A bug").await;
 
-        let ui = UIState::new();
+        let ui = UiState::new();
         // No switch_perspective call — the `main` window's filtered_task_ids
         // stays `None`.
 
@@ -1709,7 +1709,7 @@ mod tests {
         let pid = add_bug_perspective(&ctx).await;
         let t1 = add_bug_task(&ctx, "First bug").await;
 
-        let ui = UIState::new();
+        let ui = UiState::new();
         ui.switch_perspective("main", &pid, vec![t1.clone()]);
         ui.switch_perspective("secondary", &pid, vec![t1.clone()]);
 
@@ -1741,7 +1741,7 @@ mod tests {
         let t1 = add_bug_task(&ctx, "First bug").await;
         let t2 = add_bug_task(&ctx, "Second bug").await;
 
-        let ui = UIState::new();
+        let ui = UiState::new();
         ui.switch_perspective("main", &pid, vec![t1.clone(), t2.clone()]);
 
         // External process deletes the second task.

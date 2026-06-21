@@ -51,7 +51,7 @@ use swissarmyhammer_store::{StoreContext, StoreHandle};
 use swissarmyhammer_tools::mcp::plugin_bridge::build_tool_modules;
 use swissarmyhammer_tools::mcp::ToolHandlers;
 use swissarmyhammer_tools::{register_kanban_tools, ToolContext, ToolRegistry};
-use swissarmyhammer_ui_state::{UIState, UiStateServer};
+use swissarmyhammer_ui_state::{UiState, UiStateServer};
 use swissarmyhammer_views::{ViewStore, ViewsContext, ViewsServer};
 use swissarmyhammer_window_service::{
     ContextMenuItem, CreatedBoard, MonitorInfo, NewWindow, OpenedBoard, WindowPosition,
@@ -60,7 +60,7 @@ use swissarmyhammer_window_service::{
 use tempfile::TempDir;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 
-use crate::support::call_command;
+use crate::support::{call_command, copy_dir_recursive};
 
 /// A generous upper bound on any single host or isolate interaction.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -76,21 +76,6 @@ fn workspace_root() -> PathBuf {
         .nth(2)
         .expect("workspace root is two levels above the crate manifest dir")
         .to_path_buf()
-}
-
-/// Recursively copy a directory tree from `source` to `destination`.
-fn copy_dir_recursive(source: &Path, destination: &Path) {
-    std::fs::create_dir_all(destination).expect("staging directory should be created");
-    for entry in std::fs::read_dir(source).expect("bundle dir should be readable") {
-        let entry = entry.expect("a directory entry should be readable");
-        let from = entry.path();
-        let to = destination.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to);
-        } else {
-            std::fs::copy(&from, &to).expect("bundle file should copy");
-        }
-    }
 }
 
 /// Stage the committed `builtin/plugins/kanban-misc-commands` bundle into a temp
@@ -461,9 +446,9 @@ async fn kanban_misc_commands_plugin_registers_and_executes() {
         .expect("exposing views should not hang");
 
     // `view.set` records the active view in `ui_state` (not a views-definition
-    // write), so expose a ui_state backend too. Keep the `Arc<UIState>` so the
+    // write), so expose a ui_state backend too. Keep the `Arc<UiState>` so the
     // effect assertion can read the recorded active view back.
-    let ui_state = Arc::new(UIState::new());
+    let ui_state = Arc::new(UiState::new());
     {
         let server = UiStateServer::new(Arc::clone(&ui_state));
         let module = InProcessServer::new(server)

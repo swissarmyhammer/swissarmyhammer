@@ -10,7 +10,7 @@ use swissarmyhammer_kanban::commands_core::{CommandDef, CommandsRegistry};
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
-use swissarmyhammer_ui_state::{RecentBoard, UIState};
+use swissarmyhammer_ui_state::{RecentBoard, UiState};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -40,7 +40,7 @@ struct MenuEntry {
 pub fn build_menu_from_commands(
     app: &AppHandle,
     registry: &CommandsRegistry,
-    ui_state: &UIState,
+    ui_state: &UiState,
     recent: &[RecentBoard],
     windows: &[WindowInfo],
 ) -> tauri::Result<HashMap<String, MenuItemHandle>> {
@@ -85,7 +85,7 @@ pub fn build_menu_from_commands(
 /// Collect commands with menu metadata into groups keyed by path (e.g. "App", "App/Settings").
 fn collect_menu_entries(
     registry: &CommandsRegistry,
-    ui_state: &UIState,
+    ui_state: &UiState,
 ) -> HashMap<String, Vec<MenuEntry>> {
     let keymap_mode = ui_state.keymap_mode();
     let mut menus: HashMap<String, Vec<MenuEntry>> = HashMap::new();
@@ -491,7 +491,7 @@ fn resolve_accelerator(cmd: &CommandDef, keymap_mode: &str) -> Option<String> {
 ///
 /// Currently supports the "keymap" radio group — the item matching the
 /// active keymap mode is checked.
-fn resolve_checked(cmd: &CommandDef, ui_state: &UIState) -> bool {
+fn resolve_checked(cmd: &CommandDef, ui_state: &UiState) -> bool {
     let Some(ref placement) = cmd.menu else {
         return false;
     };
@@ -544,7 +544,7 @@ fn append_menu_entry(
 
 /// Update the enabled state of all menu items based on command availability.
 ///
-/// Builds a CommandContext from the current scope chain and UIState, then
+/// Builds a CommandContext from the current scope chain and UiState, then
 /// checks each cached menu item's command `available()` to set enabled/disabled.
 /// Called after every command dispatch.
 pub fn update_menu_enabled_state(state: &AppState) {
@@ -816,7 +816,7 @@ fn focused_window_label(app: &AppHandle) -> Option<String> {
 /// Open a board and emit frontend events.
 ///
 /// Routes board opening through `dispatch_command_internal` so that all
-/// UIState tracking and BoardHandle lifecycle are handled consistently.
+/// UiState tracking and BoardHandle lifecycle are handled consistently.
 ///
 /// Emits `board-opened` to the source window (the one that initiated
 /// the open) so only that window switches. The `board-changed` broadcast
@@ -846,7 +846,7 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
     {
         Ok(_) => {
             // Resolve the canonical path so the frontend gets the same path
-            // that the board was registered under in UIState.
+            // that the board was registered under in UiState.
             let canonical = resolve_kanban_path(path)
                 .ok()
                 .and_then(|p| p.canonicalize().ok().or(Some(p)))
@@ -876,7 +876,7 @@ mod tests {
     use crate::command_services::build_registry_from_metadata;
     use crate::state::AppState;
     use swissarmyhammer_kanban::commands_core::{CommandDef, CommandsRegistry, KeysDef};
-    use swissarmyhammer_ui_state::UIState;
+    use swissarmyhammer_ui_state::UiState;
     use tempfile::TempDir;
 
     /// Build the synchronous [`CommandsRegistry`] from the SAME catalogue the
@@ -966,7 +966,7 @@ mod tests {
     #[tokio::test]
     async fn navigation_submenu_contains_all_nine_nav_commands() {
         let (registry, _user, _cache, _global) = runtime_registry().await;
-        let ui_state = UIState::new();
+        let ui_state = UiState::new();
         let menus = collect_menu_entries(&registry, &ui_state);
 
         let nav = menus
@@ -1020,7 +1020,7 @@ mod tests {
     #[tokio::test]
     async fn app_palette_open_lands_in_app_submenu() {
         let (registry, _user, _cache, _global) = runtime_registry().await;
-        let ui_state = UIState::new();
+        let ui_state = UiState::new();
         let menus = collect_menu_entries(&registry, &ui_state);
 
         let app = menus

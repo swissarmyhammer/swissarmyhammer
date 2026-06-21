@@ -216,7 +216,7 @@ impl PluginPlatform {
     /// internally (see [`Self::command_service`]).
     pub(crate) async fn wire_command_services(
         &mut self,
-        ui_state: std::sync::Arc<swissarmyhammer_ui_state::UIState>,
+        ui_state: std::sync::Arc<swissarmyhammer_ui_state::UiState>,
         window_shell: Option<std::sync::Arc<dyn swissarmyhammer_window_service::WindowShell>>,
         app_shell: Option<std::sync::Arc<dyn swissarmyhammer_app_service::AppShell>>,
     ) -> Result<std::sync::Arc<CommandService>, String> {
@@ -1223,7 +1223,7 @@ mod tests {
         let (_user_root, _builtin_cache, _global_dir, state) = app_state_with_plugin_roots().await;
 
         // Open one board, but query an unknown window label that has no
-        // assignment in UIState.
+        // assignment in UiState.
         let (_dir, _path) = open_temp_board(&state).await;
         assert!(
             state

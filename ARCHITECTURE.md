@@ -126,7 +126,7 @@ pub trait Command: Send + Sync {
 }
 ```
 
-Commands are registered by string ID (e.g. `"task.add"`) in a flat map. They receive a `CommandContext` containing the scope chain, target moniker, explicit args, UIState, and domain-specific extensions (KanbanContext, EntityContext, StoreContext). The Command trait is defined separately from the kanban engine — it knows nothing about tasks or boards.
+Commands are registered by string ID (e.g. `"task.add"`) in a flat map. They receive a `CommandContext` containing the scope chain, target moniker, explicit args, UiState, and domain-specific extensions (KanbanContext, EntityContext, StoreContext). The Command trait is defined separately from the kanban engine — it knows nothing about tasks or boards.
 
 Commands are **defined and run in Rust**, but **exposed for invocation** through four surfaces: native menu bar, context menus, the command palette, and occasionally direct button clicks. The YAML command definition controls which surfaces a command appears on via `menu`, `context_menu`, `keys`, and `visible` properties.
 
@@ -176,7 +176,7 @@ pub struct Entity {
 
 Entity IDs come from filenames, not file contents. This makes git diffs clean and merges tractable.
 
-#### UIState
+#### UiState
 
 Per-window state tracked in the Rust backend (`swissarmyhammer-commands`) and synced to the frontend via events:
 
@@ -567,7 +567,7 @@ The kanban desktop app is a Tauri 2 application with a React frontend.
 
 The Tauri backend is a thin wiring layer:
 
-- **AppState** holds the command registry, command impls, open boards (each a `BoardHandle` wrapping KanbanContext + StoreContext + EntityCache + SearchIndex + a per-board in-process full-SAH-toolset MCP server), UIState, and native menu.
+- **AppState** holds the command registry, command impls, open boards (each a `BoardHandle` wrapping KanbanContext + StoreContext + EntityCache + SearchIndex + a per-board in-process full-SAH-toolset MCP server), UiState, and native menu.
 - **`dispatch_command`** is the single mutation entry point. All other `#[tauri::command]` functions are read-only queries.
 - **File watcher** monitors `.kanban/` directories for external changes. SHA-256 content hashing avoids double-firing on its own writes.
 - **Menu** is built dynamically from the CommandsRegistry and rebuilds on keymap changes, board switches, and focus changes.
@@ -600,7 +600,7 @@ This separation means Containers are testable for state management without rende
 
 Each level of the scope hierarchy uses a Container component. The authoritative container tree is defined in `kanban-app/ui/src/App.tsx`, where each container has inline comments explaining its placement and dependencies. Refer to App.tsx for the current hierarchy rather than duplicating it here.
 
-`AppModeContainer` is the first container inside the window because the interaction mode governs the entire UI surface — which keybindings are active, whether the toolbar shows a search field, which commands are available. It wraps NavBar, the content area, and everything else. Mode transitions (normal → command → search) are command-driven through Rust UIState.
+`AppModeContainer` is the first container inside the window because the interaction mode governs the entire UI surface — which keybindings are active, whether the toolbar shows a search field, which commands are available. It wraps NavBar, the content area, and everything else. Mode transitions (normal → command → search) are command-driven through Rust UiState.
 
 ##### Command Invocation Surfaces
 
@@ -706,7 +706,7 @@ Command execution
   ├── StoreContext.flush_all() → detect changed files
   ├── Emit Tauri events:
   │     entity-created / entity-removed / entity-field-changed
-  │     ui-state-changed (if UIState mutated)
+  │     ui-state-changed (if UiState mutated)
   │
   React event listeners
   │
@@ -731,7 +731,7 @@ CodeMirror 6 is the standard editor component for all text editing in the UI. **
 
 `TextEditor` provides:
 
-- **Keymap consistency** — CUA, Vim, and Emacs keymap modes read from UIState and applied via `keymapExtension(mode)`. Every editor instance shares the same keymap config.
+- **Keymap consistency** — CUA, Vim, and Emacs keymap modes read from UiState and applied via `keymapExtension(mode)`. Every editor instance shares the same keymap config.
 - **Smart rendering** — syntax highlighting, mention pills, markdown preview via `extraExtensions`
 - **Behavioral modes via props:**
   - `singleLine` — Enter always commits (no newlines, even in vim insert mode), Escape commits immediately in vim (no two-escape normal-mode dance), blur commits. Use for inline rename, short inputs.
@@ -742,7 +742,7 @@ When a new editing context needs different behavior, add a prop to `TextEditor` 
 
 ### Patterns
 
-- **Single Dispatch Path**: ALL state mutations route through `dispatch_command`. This gives every mutation undo/redo, event emission, UIState persistence, and audit logging for free.
+- **Single Dispatch Path**: ALL state mutations route through `dispatch_command`. This gives every mutation undo/redo, event emission, UiState persistence, and audit logging for free.
 - **Container / View Separation**: Containers own state and scope. Views take props and render. Never mix the two roles in one component.
 - **Events Carry Data for Entity Changes**: `entity-created` / `entity-field-changed` / `entity-removed` payloads are patched into the frontend store in place — no re-fetch. Structural events (column/swimlane adds or removes) still trigger a `list_entities` refresh. The backend `EntityCache` remains authoritative; the frontend store is a replicated projection kept in sync by the event stream.
 - **Scope Chain = Situational Awareness**: Commands know where they're invoked via the moniker chain. The same command behaves differently based on context.

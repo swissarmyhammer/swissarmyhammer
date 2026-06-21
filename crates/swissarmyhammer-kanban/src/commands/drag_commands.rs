@@ -1,6 +1,6 @@
 //! Drag session command implementations.
 //!
-//! These commands manage cross-window drag sessions in UIState.
+//! These commands manage cross-window drag sessions in UiState.
 //! The actual `drag-session-active` event is emitted by the Tauri layer
 //! as a post-execution side effect (same pattern as BoardSwitch).
 
@@ -13,7 +13,7 @@ use crate::clipboard::{ClipboardData, ClipboardPayload};
 
 /// Start a cross-window drag session.
 ///
-/// Stores the drag session in UIState, replacing any existing session.
+/// Stores the drag session in UiState, replacing any existing session.
 /// Returns a `DragStart` result that the Tauri dispatch layer uses to emit
 /// the `drag-session-active` event to all windows.
 ///
@@ -46,7 +46,7 @@ impl Command for DragStartCmd {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         let params = resolve_drag_start_params(ctx)?;
 
@@ -359,7 +359,7 @@ fn resolve_drag_start_params(
 
 /// Complete an active drag session by dropping on a target.
 ///
-/// Reads the active drag session from UIState, dispatches to the right
+/// Reads the active drag session from UiState, dispatches to the right
 /// branch based on the source variant, and returns a `DragComplete` result
 /// payload.
 ///
@@ -498,15 +498,15 @@ fn resolve_drag_complete_params_with_session(
     })
 }
 
-/// Take the currently-active drag session from `UIState`.
+/// Take the currently-active drag session from `UiState`.
 ///
-/// Errors when `UIState` is not attached to the command context (e.g. a
+/// Errors when `UiState` is not attached to the command context (e.g. a
 /// non-Tauri caller) or when no session is currently pending.
 fn take_active_drag_session(ctx: &CommandContext) -> crate::commands_core::Result<DragSession> {
     let ui = ctx
         .ui_state
         .as_ref()
-        .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+        .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
     ui.take_drag()
         .ok_or_else(|| CommandError::ExecutionFailed("No active drag session".into()))
 }
@@ -772,7 +772,7 @@ fn synthesize_file_clipboard(path: &str) -> ClipboardPayload {
 
 /// Cancel the active drag session.
 ///
-/// Takes the session from UIState and returns a `DragCancel` result.
+/// Takes the session from UiState and returns a `DragCancel` result.
 /// The Tauri dispatch handler emits `drag-session-cancelled`.
 /// Gracefully returns `null` if no session is active.
 pub struct DragCancelCmd;
@@ -786,14 +786,14 @@ impl Command for DragCancelCmd {
 
     /// Execute the drag.cancel command.
     ///
-    /// Takes the active drag session from UIState.  If a session was active,
+    /// Takes the active drag session from UiState.  If a session was active,
     /// returns a `DragCancel` result payload so the Tauri layer can emit
     /// `drag-session-cancelled`.  Returns `null` when no session is active.
     async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         match ui.take_drag() {
             Some(session) => Ok(json!({
@@ -813,10 +813,10 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     use swissarmyhammer_operations::Execute;
-    use swissarmyhammer_ui_state::UIState;
+    use swissarmyhammer_ui_state::UiState;
 
-    /// Build a CommandContext with the given scope chain, target, and optional UIState.
-    fn ctx_with(scope: &[&str], target: Option<&str>, ui: Option<Arc<UIState>>) -> CommandContext {
+    /// Build a CommandContext with the given scope chain, target, and optional UiState.
+    fn ctx_with(scope: &[&str], target: Option<&str>, ui: Option<Arc<UiState>>) -> CommandContext {
         let mut ctx = CommandContext::new(
             "test",
             scope.iter().map(|s| s.to_string()).collect(),
@@ -829,7 +829,7 @@ mod tests {
         ctx
     }
 
-    fn ctx_with_args_and_ui(args: HashMap<String, Value>, ui: Arc<UIState>) -> CommandContext {
+    fn ctx_with_args_and_ui(args: HashMap<String, Value>, ui: Arc<UiState>) -> CommandContext {
         let mut ctx = CommandContext::new("test", vec![], None, args);
         ctx.ui_state = Some(ui);
         ctx
@@ -914,13 +914,13 @@ mod tests {
         let ctx = CommandContext::new("drag.start", vec![], None, args);
         // No ui_state set
         let result = cmd.execute(&ctx).await;
-        assert!(result.is_err(), "should fail without UIState");
+        assert!(result.is_err(), "should fail without UiState");
     }
 
     #[tokio::test]
     async fn drag_start_fails_without_board_path() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("taskId".into(), json!("task-1"));
         // boardPath intentionally omitted
@@ -932,7 +932,7 @@ mod tests {
     #[tokio::test]
     async fn drag_start_custom_source_window_label() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("boardPath".into(), json!("/boards/a"));
         args.insert("taskId".into(), json!("task-1"));
@@ -950,7 +950,7 @@ mod tests {
     #[tokio::test]
     async fn drag_start_preserves_task_fields() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("boardPath".into(), json!("/boards/a"));
         args.insert("taskId".into(), json!("task-1"));
@@ -969,7 +969,7 @@ mod tests {
     #[tokio::test]
     async fn drag_start_task_fields_defaults_to_null() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("boardPath".into(), json!("/boards/a"));
         args.insert("taskId".into(), json!("task-1"));
@@ -984,7 +984,7 @@ mod tests {
     #[tokio::test]
     async fn drag_start_copy_mode_in_result() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("boardPath".into(), json!("/boards/a"));
         args.insert("taskId".into(), json!("task-1"));
@@ -999,7 +999,7 @@ mod tests {
     #[tokio::test]
     async fn drag_start_result_has_session_id() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("boardPath".into(), json!("/boards/a"));
         args.insert("taskId".into(), json!("task-1"));
@@ -1014,7 +1014,7 @@ mod tests {
     #[tokio::test]
     async fn drag_start_result_has_started_at_ms() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("boardPath".into(), json!("/boards/a"));
         args.insert("taskId".into(), json!("task-1"));
@@ -1037,13 +1037,13 @@ mod tests {
         args.insert("targetColumn".into(), json!("done"));
         let ctx = CommandContext::new("drag.complete", vec![], None, args);
         let result = cmd.execute(&ctx).await;
-        assert!(result.is_err(), "should fail without UIState");
+        assert!(result.is_err(), "should fail without UiState");
     }
 
     #[tokio::test]
     async fn drag_complete_fails_without_active_session() {
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("targetBoardPath".into(), json!("/boards/b"));
         args.insert("targetColumn".into(), json!("done"));
@@ -1055,7 +1055,7 @@ mod tests {
     #[tokio::test]
     async fn drag_complete_fails_without_target_board_path() {
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         // Start a session first
         let session = task_drag_session("s1", "/boards/a", "task-1", Value::Null, false, 0);
         ui.start_drag(session);
@@ -1071,7 +1071,7 @@ mod tests {
     #[tokio::test]
     async fn drag_complete_fails_without_target_column() {
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let session = task_drag_session("s1", "/boards/a", "task-1", Value::Null, false, 0);
         ui.start_drag(session);
 
@@ -1086,7 +1086,7 @@ mod tests {
     #[tokio::test]
     async fn drag_complete_cross_board_returns_transfer_params() {
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let session = task_drag_session("s1", "/boards/a", "task-1", Value::Null, false, 100);
         ui.start_drag(session);
 
@@ -1109,7 +1109,7 @@ mod tests {
     #[tokio::test]
     async fn drag_complete_cross_board_with_copy_mode_from_session() {
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let session = task_drag_session("s2", "/boards/a", "task-2", Value::Null, true, 200);
         ui.start_drag(session);
 
@@ -1130,7 +1130,7 @@ mod tests {
     #[tokio::test]
     async fn drag_complete_cross_board_with_copy_mode_from_args() {
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let session = task_drag_session("s3", "/boards/a", "task-3", Value::Null, false, 300);
         ui.start_drag(session);
 
@@ -1151,7 +1151,7 @@ mod tests {
     #[tokio::test]
     async fn drag_complete_cross_board_with_before_after_ids() {
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let session = task_drag_session("s4", "/boards/a", "task-4", Value::Null, false, 400);
         ui.start_drag(session);
 
@@ -1173,7 +1173,7 @@ mod tests {
     #[tokio::test]
     async fn drag_complete_consumes_session() {
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let session = task_drag_session("s5", "/boards/a", "task-5", Value::Null, false, 500);
         ui.start_drag(session);
         assert!(ui.drag_session().is_some());
@@ -1197,13 +1197,13 @@ mod tests {
         let cmd = DragCancelCmd;
         let ctx = CommandContext::new("drag.cancel", vec![], None, HashMap::new());
         let result = cmd.execute(&ctx).await;
-        assert!(result.is_err(), "should fail without UIState");
+        assert!(result.is_err(), "should fail without UiState");
     }
 
     #[tokio::test]
     async fn drag_cancel_returns_drag_cancel_result_when_session_active() {
         let cmd = DragCancelCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let session = task_drag_session(
             "cancel-s1",
             "/boards/a",
@@ -1229,7 +1229,7 @@ mod tests {
     #[tokio::test]
     async fn drag_cancel_returns_null_when_no_session_active() {
         let cmd = DragCancelCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         // No session started
 
         let ctx = ctx_with_args_and_ui(HashMap::new(), ui);
@@ -1246,7 +1246,7 @@ mod tests {
     async fn drag_cancel_cancels_existing_session_before_new_drag_start() {
         // Verify that starting a new drag cancels any existing session (from DragStartCmd).
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         // Start first drag
         let mut args = HashMap::new();
@@ -1299,7 +1299,7 @@ mod tests {
         let task_id = result["id"].as_str().unwrap().to_string();
 
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let board_path = kanban_dir.display().to_string();
         let session = task_drag_session(
             "same-board-s1",
@@ -1354,7 +1354,7 @@ mod tests {
         let task_id = result["id"].as_str().unwrap().to_string();
 
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let board_path = kanban_dir.display().to_string();
         let session =
             task_drag_session("drop-idx-s1", &board_path, &task_id, Value::Null, false, 0);
@@ -1400,7 +1400,7 @@ mod tests {
         let task_id = result["id"].as_str().unwrap().to_string();
 
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let board_path = kanban_dir.display().to_string();
         let session = task_drag_session("before-s1", &board_path, &task_id, Value::Null, false, 0);
         ui.start_drag(session);
@@ -1445,7 +1445,7 @@ mod tests {
         let task_id = result["id"].as_str().unwrap().to_string();
 
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let board_path = kanban_dir.display().to_string();
         let session = task_drag_session("after-s1", &board_path, &task_id, Value::Null, false, 0);
         ui.start_drag(session);
@@ -1470,7 +1470,7 @@ mod tests {
     #[tokio::test]
     async fn drag_start_fails_without_task_id() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("boardPath".into(), json!("/boards/a"));
         // taskId intentionally omitted
@@ -1482,7 +1482,7 @@ mod tests {
     #[tokio::test]
     async fn drag_start_default_source_window_label_is_main() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("boardPath".into(), json!("/boards/a"));
         args.insert("taskId".into(), json!("task-1"));
@@ -1497,7 +1497,7 @@ mod tests {
     #[tokio::test]
     async fn drag_start_stores_session_in_ui_state() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("boardPath".into(), json!("/boards/a"));
         args.insert("taskId".into(), json!("task-1"));
@@ -1525,7 +1525,7 @@ mod tests {
     #[tokio::test]
     async fn drag_start_constructs_focus_chain_task_source() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("boardPath".into(), json!("/boards/a"));
         args.insert("taskId".into(), json!("task-7"));
@@ -1580,7 +1580,7 @@ mod tests {
     #[tokio::test]
     async fn drag_complete_file_source_requires_target_moniker() {
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let session = DragSession {
             session_id: "ext-s1".into(),
             from: DragSource::File {
@@ -1618,7 +1618,7 @@ mod tests {
             .unwrap();
 
         let cmd = DragCompleteCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let board_path = kanban_dir.display().to_string();
         let session = DragSession {
             session_id: "non-task-s1".into(),
@@ -1733,7 +1733,7 @@ mod tests {
         let target_b_id = target_b_result["id"].as_str().unwrap().to_string();
 
         let board_path_b = kanban_dir_b.display().to_string();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let session = task_drag_session(
             "parity-s1",
             &board_path_b,
@@ -1784,7 +1784,7 @@ mod tests {
     #[tokio::test]
     async fn drag_start_file_source_constructs_file_variant() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("sourceKind".into(), json!("file"));
         args.insert("filePath".into(), json!("/tmp/example/screenshot.png"));
@@ -1805,7 +1805,7 @@ mod tests {
             "/tmp/example/screenshot.png"
         );
 
-        let session = ui.drag_session().expect("session stored in UIState");
+        let session = ui.drag_session().expect("session stored in UiState");
         match &session.from {
             DragSource::File { path } => {
                 assert_eq!(path, "/tmp/example/screenshot.png");
@@ -1823,7 +1823,7 @@ mod tests {
     #[tokio::test]
     async fn drag_start_file_source_rejects_relative_path() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("sourceKind".into(), json!("file"));
         args.insert("filePath".into(), json!("relative/path.png"));
@@ -1844,7 +1844,7 @@ mod tests {
     #[tokio::test]
     async fn drag_start_file_source_requires_file_path() {
         let cmd = DragStartCmd;
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("sourceKind".into(), json!("file"));
         // filePath intentionally omitted
@@ -1891,7 +1891,7 @@ mod tests {
         let file_path_str = file_path.display().to_string();
 
         // Start a file-source drag session.
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.start_drag(DragSession {
             session_id: "file-drag-s1".into(),
             from: DragSource::File {
@@ -1968,7 +1968,7 @@ mod tests {
         let file_path = temp.path().join("file.txt");
         std::fs::write(&file_path, b"x").unwrap();
 
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.start_drag(DragSession {
             session_id: "file-bad-target-s1".into(),
             from: DragSource::File {
@@ -2043,7 +2043,7 @@ mod tests {
         let temp_a = tempfile::TempDir::new().unwrap();
         let (kctx_a, task_a_id) = seed_board(temp_a.path()).await;
         let target_a = format!("task:{task_a_id}");
-        let ui_a = Arc::new(UIState::new());
+        let ui_a = Arc::new(UiState::new());
         ui_a.start_drag(DragSession {
             session_id: "drag-path".into(),
             from: DragSource::File {
@@ -2078,7 +2078,7 @@ mod tests {
             Some(target_b.clone()),
             HashMap::new(),
         );
-        paste_ctx.ui_state = Some(Arc::new(UIState::new()));
+        paste_ctx.ui_state = Some(Arc::new(UiState::new()));
         paste_ctx.set_extension(Arc::clone(&kctx_b));
         let direct_paste = handler
             .execute(&synthetic_payload, &target_b, &paste_ctx)

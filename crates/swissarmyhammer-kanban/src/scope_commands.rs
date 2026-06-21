@@ -47,7 +47,7 @@ use std::sync::Arc;
 use swissarmyhammer_common::WindowInfo;
 use swissarmyhammer_fields::FieldsContext;
 use swissarmyhammer_perspectives::PerspectiveInfo;
-use swissarmyhammer_ui_state::UIState;
+use swissarmyhammer_ui_state::UiState;
 use swissarmyhammer_views::ViewInfo;
 
 /// Lightweight open-board descriptor for dynamic command generation.
@@ -201,7 +201,7 @@ fn check_available(
     scope_chain: &[String],
     target: Option<&str>,
     command_impls: &HashMap<String, Arc<dyn Command>>,
-    ui_state: &Arc<UIState>,
+    ui_state: &Arc<UiState>,
 ) -> bool {
     let Some(cmd_impl) = command_impls.get(cmd_id) else {
         return true;
@@ -632,7 +632,7 @@ pub fn commands_for_scope(
     registry: &CommandsRegistry,
     command_impls: &HashMap<String, Arc<dyn Command>>,
     fields: Option<&FieldsContext>,
-    ui_state: &Arc<UIState>,
+    ui_state: &Arc<UiState>,
     context_menu_only: bool,
     dynamic: Option<&DynamicSources>,
     options_registry: Option<&OptionsRegistry>,
@@ -712,7 +712,7 @@ pub fn commands_for_scope_with_context(
     registry: &CommandsRegistry,
     command_impls: &HashMap<String, Arc<dyn Command>>,
     active_context: Option<&crate::context::KanbanContext>,
-    ui_state: &Arc<UIState>,
+    ui_state: &Arc<UiState>,
     context_menu_only: bool,
     dynamic: Option<&DynamicSources>,
 ) -> Vec<ResolvedCommand> {
@@ -936,7 +936,7 @@ fn emit_scoped_commands(
     all_registry_cmds: &[&CommandDef],
     command_impls: &HashMap<String, Arc<dyn Command>>,
     fields: Option<&FieldsContext>,
-    ui_state: &Arc<UIState>,
+    ui_state: &Arc<UiState>,
     clipboard_type: Option<&str>,
     seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
@@ -1023,7 +1023,7 @@ fn emit_cross_cutting_commands(
     moniker: &str,
     scope_chain: &[String],
     command_impls: &HashMap<String, Arc<dyn Command>>,
-    ui_state: &Arc<UIState>,
+    ui_state: &Arc<UiState>,
     clipboard_type: Option<&str>,
     seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
@@ -1092,7 +1092,7 @@ fn try_match_cross_cutting_command(
     scope_chain: &[String],
     scope_prefixed: &str,
     command_impls: &HashMap<String, Arc<dyn Command>>,
-    ui_state: &Arc<UIState>,
+    ui_state: &Arc<UiState>,
     clipboard_type: Option<&str>,
     seen: &HashSet<SeenKey>,
 ) -> Option<Pending> {
@@ -1201,7 +1201,7 @@ fn emit_scoped_registry_commands(
     entity_type: &str,
     scope_chain: &[String],
     command_impls: &HashMap<String, Arc<dyn Command>>,
-    ui_state: &Arc<UIState>,
+    ui_state: &Arc<UiState>,
     clipboard_type: Option<&str>,
     seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
@@ -1249,7 +1249,7 @@ fn emit_global_registry_commands(
     all_registry_cmds: &[&CommandDef],
     scope_chain: &[String],
     command_impls: &HashMap<String, Arc<dyn Command>>,
-    ui_state: &Arc<UIState>,
+    ui_state: &Arc<UiState>,
     clipboard_type: Option<&str>,
     seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,

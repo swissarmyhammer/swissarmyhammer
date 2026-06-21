@@ -43,7 +43,7 @@ use swissarmyhammer_window_service::{
 };
 use tempfile::TempDir;
 
-use crate::support::call_command;
+use crate::support::{call_command, copy_dir_recursive};
 
 /// A generous upper bound on any single host or isolate interaction.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -64,21 +64,6 @@ fn workspace_root() -> PathBuf {
         .nth(2)
         .expect("workspace root is two levels above the crate manifest dir")
         .to_path_buf()
-}
-
-/// Recursively copy a directory tree from `source` to `destination`.
-fn copy_dir_recursive(source: &Path, destination: &Path) {
-    std::fs::create_dir_all(destination).expect("staging directory should be created");
-    for entry in std::fs::read_dir(source).expect("bundle dir should be readable") {
-        let entry = entry.expect("a directory entry should be readable");
-        let from = entry.path();
-        let to = destination.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to);
-        } else {
-            std::fs::copy(&from, &to).expect("bundle file should copy");
-        }
-    }
 }
 
 /// Stage the committed `builtin/plugins/file-commands` bundle into a temp
@@ -508,8 +493,13 @@ fn assert_new_board_metadata(cmd: &Value) {
     assert_no_scope_or_params(cmd, "file.newBoard");
 }
 
-/// `file.openBoard` — file.yaml: undoable:false, keys cua Mod+O, menu
-/// File/0/1.
+/// `file.openBoard` — undoable:false, keys cua Mod+o, menu File/0/1.
+///
+/// Canonical lowercase form `normalizeKeyEvent` emits for an unshifted letter
+/// chord (`Mod+o`, not `Mod+O`) — the `file.closeBoard` precedent (Card I).
+/// No `BINDING_TABLES` entry exists (open rides the native menu accelerator,
+/// which parses letters case-insensitively); lowercasing keeps the accelerator
+/// AND makes the chord reachable in the webview on non-Mac.
 fn assert_open_board_metadata(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Open Board"), "file.openBoard name");
     assert_eq!(
@@ -519,7 +509,7 @@ fn assert_open_board_metadata(cmd: &Value) {
     );
     assert_eq!(
         cmd["keys"],
-        json!({ "cua": "Mod+O" }),
+        json!({ "cua": "Mod+o" }),
         "file.openBoard keys"
     );
     assert_eq!(

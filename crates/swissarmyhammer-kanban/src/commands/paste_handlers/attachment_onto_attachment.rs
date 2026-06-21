@@ -80,7 +80,7 @@ mod tests {
     use crate::Execute;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_ui_state::UIState;
+    use swissarmyhammer_ui_state::UiState;
 
     /// Build a `CommandContext` whose scope chain looks like the real
     /// frontend's attachment row focus chain, with the supplied `target`
@@ -102,7 +102,7 @@ mod tests {
             HashMap::new(),
         );
         ctx.set_extension(Arc::clone(kanban));
-        ctx.ui_state = Some(Arc::new(UIState::new()));
+        ctx.ui_state = Some(Arc::new(UiState::new()));
         ctx
     }
 
@@ -180,7 +180,7 @@ mod tests {
             HashMap::new(),
         );
         ctx.set_extension(Arc::clone(&kanban));
-        ctx.ui_state = Some(Arc::new(UIState::new()));
+        ctx.ui_state = Some(Arc::new(UiState::new()));
 
         let payload = attachment_clipboard("/tmp/y.png", "y.png", None, None, "copy");
         let err = AttachmentOntoAttachmentHandler
