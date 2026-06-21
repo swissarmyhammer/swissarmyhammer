@@ -96,7 +96,7 @@ Full description + subtasks. Understand before writing code.
 
 - **Find symbols** — `search symbol` for functions/types/modules in the task
 - **Read implementations** — `get symbol` for actual source, not just names
-- **Map blast radius** — `get blastradius` on every file you plan to change. This is a **gate**, not a suggestion: not run = not ready to edit. Surfaces callers, tests, downstream consumers you must keep working.
+- **Map dependents** — `get callgraph` (inbound) on every symbol whose signature or behavior you change, to find its callers. When the symbol is shared or public, `get blastradius` on the file surfaces the wider set of callers, tests, and downstream consumers. It is not a mandatory gate — skip or disregard it when LSP call edges aren't available (empty `edges: []` is common on compiling code), and fall back to inbound `get callgraph` and targeted reads.
 - **Trace call chains** — `get callgraph` (inbound) on every symbol whose signature or behavior changes
 - **Check architecture** — read `ARCHITECTURE.md` (if present) per the Architecture Awareness guidance, to confirm where the change belongs
 - **Fallback** — Glob/Grep/Read for string literals, config, patterns not in the index

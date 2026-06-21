@@ -42,7 +42,7 @@ Either way, still do the `code_context` research below before creating tasks —
 
 **Feature request → decomposed board:** User says "I want to add authentication to the app".
 
-1. Research with `code_context`: `search symbol "user"`, `search symbol "session"`, `get blastradius src/server.rs max_hops 3` to find boundaries and callers.
+1. Research with `code_context`: `search symbol "user"`, `search symbol "session"`, `get callgraph` (inbound) on the symbols you expect to change to find callers — and `get blastradius src/server.rs max_hops 3` when a change touches a shared symbol's signature.
 2. Ensure a board exists: `kanban` `{"op": "init board", "name": "<repo name>"}` (`add task` auto-creates one, but name it).
 3. As design crystallizes in conversation, create tasks one at a time with the `kanban` tool — not as an end-of-discussion batch. Each `description` follows the Task Standards template (What / Acceptance Criteria / Tests):
    - `{"op": "add task", "title": "Design auth architecture", "description": "## What\n…\n## Acceptance Criteria\n- [ ] …\n## Tests\n- [ ] …"}`
@@ -71,7 +71,7 @@ Every planned item becomes a kanban task. The board IS the plan; no markdown fil
 
 ### Research before tasks
 
-`code_context` is primary. Always run `get blastradius` on files you expect to change — that's how you find downstream work you'd otherwise miss. Use symbol search, callgraphs, and text search (Glob/Grep/Read) to fill in the picture.
+`code_context` is primary. Use symbol search, callgraphs (inbound to find callers), and text search (Glob/Grep/Read) to build the picture. When a planned change touches a shared symbol's signature, `get blastradius` on the file surfaces downstream work you'd otherwise miss — it's built from LSP call edges, so treat an empty `edges: []` as "LSP not ready", not "no impact", and lean on inbound `get callgraph` instead.
 
 {% include "_partials/task-standards" %}
 

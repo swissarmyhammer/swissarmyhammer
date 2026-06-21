@@ -24,7 +24,7 @@ metadata:
 1. **Run the full test suite** using project detection to pick the right command.
 2. **Type-check + lint** with warnings as errors (`cargo clippy -- -D warnings`).
 3. **Check for skipped/ignored tests** — fix or delete each. Skips are not acceptable.
-4. **Fix every failure and warning**, re-running after each fix. Trace before editing: `get symbol` on the failing function, `get callgraph` (inbound) to see callers, `get blastradius` on the file to avoid breaking a passing test elsewhere.
+4. **Fix every failure and warning**, re-running after each fix. Trace before editing: `get symbol` on the failing function, `get callgraph` (inbound) to see callers, and — if you're changing a shared symbol — `get blastradius` on the file to spot passing tests elsewhere that the change could break.
 5. **Track remaining failures on kanban.** Ensure tag exists:
 
    ```json
