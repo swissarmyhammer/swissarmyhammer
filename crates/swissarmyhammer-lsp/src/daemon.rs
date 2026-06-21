@@ -18,10 +18,21 @@ use tokio::process::{Child, Command};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
-use swissarmyhammer_code_context::{LspJsonRpcClient, SharedLspClient};
-
+use crate::client::{LspJsonRpcClient, SharedLspClient};
 use crate::error::LspError;
+use crate::session::LspSession;
 use crate::types::{LspDaemonState, OwnedLspServerSpec};
+
+/// Predicate that decides whether a line of LSP-server stderr should be
+/// suppressed from debug logs.
+///
+/// LSP servers can be noisy on stderr (progress chatter, info banners). The
+/// daemon drains stderr in the background and applies this filter so callers
+/// can suppress known-noise lines. The filter is injected by the owner (via
+/// [`LspSupervisorManager::with_stderr_filter`](crate::LspSupervisorManager::with_stderr_filter))
+/// rather than hard-wired, so this crate stays free of any configuration-source
+/// dependency. When no filter is set, every stderr line is logged.
+pub type StderrFilter = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// Maximum consecutive failures before we stop retrying.
 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
@@ -62,6 +73,11 @@ pub struct LspDaemon {
     /// LSP indexing worker) can share access to the client without owning the
     /// daemon. The `Option` is `None` when the daemon is not running.
     client: SharedLspClient,
+    /// The single owned session for this server, built over the same shared
+    /// `client` handle. It owns the shared open-document set and is the one
+    /// type through which in-process consumers issue requests and keep
+    /// documents open across them — no other type spawns a client.
+    session: LspSession<LspJsonRpcClient>,
     /// Consecutive failure count for backoff calculation.
     consecutive_failures: u32,
     /// Observable state — subscribers get notified on every transition.
@@ -73,6 +89,11 @@ pub struct LspDaemon {
     /// [`set_shutdown_grace`](Self::set_shutdown_grace) so they don't wait out
     /// the full production grace period when probing the timeout path.
     shutdown_grace: Duration,
+    /// Optional predicate suppressing matching LSP-server stderr lines.
+    ///
+    /// Injected by the owner so this crate doesn't depend on any config source.
+    /// `None` logs every stderr line.
+    stderr_filter: Option<StderrFilter>,
 }
 
 impl std::fmt::Debug for LspDaemon {
@@ -88,16 +109,36 @@ impl LspDaemon {
     /// Create a new daemon for the given server spec and workspace root.
     pub fn new(spec: OwnedLspServerSpec, workspace_root: PathBuf) -> Self {
         let (state_tx, state_rx) = watch::channel(LspDaemonState::NotStarted);
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        // One session per server, sharing the daemon's single client handle.
+        let language_id = spec
+            .language_ids
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "plaintext".to_string());
+        let session = LspSession::new(Arc::clone(&client), language_id);
         Self {
             spec,
             workspace_root,
             child: None,
-            client: Arc::new(Mutex::new(None)),
+            client,
+            session,
             consecutive_failures: 0,
             state_tx,
             state_rx,
             shutdown_grace: Duration::from_secs(SHUTDOWN_GRACE_SECS),
+            stderr_filter: None,
         }
+    }
+
+    /// Set the stderr-noise filter for this daemon.
+    ///
+    /// The predicate receives each line the LSP server writes to stderr and
+    /// returns `true` to suppress it from debug logs. Injecting the filter here
+    /// keeps the configuration source (e.g. code-context's stderr-filter config)
+    /// in the owning crate instead of this one.
+    pub fn set_stderr_filter(&mut self, filter: StderrFilter) {
+        self.stderr_filter = Some(filter);
     }
 
     /// Override the graceful-shutdown grace period.
@@ -163,6 +204,18 @@ impl LspDaemon {
         Arc::clone(&self.client)
     }
 
+    /// Return a cloneable handle to this daemon's single LSP session.
+    ///
+    /// The session owns the shared open-document set and routes
+    /// requests/notifications through the same client this daemon manages.
+    /// Every clone shares one open-doc set, so multiple in-process consumers
+    /// (the code-context indexer and query ops, diagnostics) never disagree
+    /// about what the server believes is open. This daemon owns exactly one
+    /// session; no other type spawns a client.
+    pub fn session(&self) -> LspSession<LspJsonRpcClient> {
+        self.session.clone()
+    }
+
     // -- lifecycle --------------------------------------------------------
 
     /// Attempt to start the LSP server.
@@ -220,29 +273,17 @@ impl LspDaemon {
                     .unwrap_or_default()
                     .as_millis() as u64;
 
-                // Drain stderr in the background, filtering noise via config
+                // Drain stderr in the background, suppressing lines the
+                // injected filter matches (the owner supplies the filter so
+                // this crate carries no configuration-source dependency).
                 if let Some(stderr) = child.stderr.take() {
                     let cmd = self.spec.command.clone();
-                    // Load stderr filter config once at daemon start
-                    let filter_config = {
-                        use swissarmyhammer_code_context::config::{
-                            load_code_context_config, CompiledCodeContextConfig,
-                        };
-                        let raw = load_code_context_config();
-                        CompiledCodeContextConfig::compile(&raw).ok()
-                    };
+                    let filter = self.stderr_filter.clone();
                     tokio::spawn(async move {
                         use tokio::io::{AsyncBufReadExt, BufReader};
                         let mut lines = BufReader::new(stderr).lines();
                         while let Ok(Some(line)) = lines.next_line().await {
-                            let filtered = filter_config
-                                .as_ref()
-                                .map(|c| {
-                                    swissarmyhammer_code_context::config::should_filter_stderr(
-                                        &line, c,
-                                    )
-                                })
-                                .unwrap_or(false);
+                            let filtered = filter.as_ref().map(|f| f(&line)).unwrap_or(false);
                             if !filtered {
                                 tracing::debug!(cmd = %cmd, "LSP stderr: {}", line);
                             }
@@ -275,6 +316,12 @@ impl LspDaemon {
                         None
                     }
                 };
+
+                // A fresh process knows nothing about what a prior incarnation
+                // had open, so the session's open-doc set must start empty —
+                // otherwise post-restart opens would be suppressed as stale
+                // duplicates and the new server would never learn the document.
+                self.session.reset_documents();
 
                 // Store the client in the shared Arc<Mutex<Option<...>>>
                 if let Ok(mut guard) = self.client.lock() {
@@ -324,6 +371,10 @@ impl LspDaemon {
                 if let Ok(mut guard) = self.client.lock() {
                     *guard = None;
                 }
+                // The process is gone; the session must not keep believing its
+                // documents are open (a restart would otherwise suppress the
+                // re-opens as stale duplicates).
+                self.session.reset_documents();
                 self.child = None;
                 self.record_failure(reason);
                 false
@@ -335,6 +386,10 @@ impl LspDaemon {
                 if let Ok(mut guard) = self.client.lock() {
                     *guard = None;
                 }
+                // The process is gone; the session must not keep believing its
+                // documents are open (a restart would otherwise suppress the
+                // re-opens as stale duplicates).
+                self.session.reset_documents();
                 self.child = None;
                 self.record_failure(reason);
                 false
@@ -388,6 +443,9 @@ impl LspDaemon {
         if let Ok(mut guard) = self.client.lock() {
             *guard = None;
         }
+        // The server is going away; forget what it had open so a later restart
+        // re-announces documents instead of suppressing them as duplicates.
+        self.session.reset_documents();
 
         let child = match self.child.take() {
             Some(c) => c,
@@ -1096,6 +1154,38 @@ mod tests {
 
         daemon.shutdown().await;
         assert_eq!(daemon.state(), LspDaemonState::NotStarted);
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_resets_session_open_documents() {
+        // `cat` gives the daemon a live client (it echoes valid framing), so a
+        // didOpen notification through the session succeeds. After shutdown the
+        // client is gone and the session's open set must be cleared, so a
+        // restart re-announces documents rather than suppressing them.
+        let spec = cat_spec();
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+
+        daemon
+            .start()
+            .await
+            .expect("cat echo handshake should pass");
+
+        let session = daemon.session();
+        let path = workspace.path().join("doc.rs");
+        session.open(&path, "fn d() {}").expect("open via session");
+        assert!(
+            session.is_open(&path),
+            "document should be open after open()"
+        );
+
+        daemon.shutdown().await;
+
+        assert!(
+            !session.is_open(&path),
+            "shutdown must clear the session's open-document set"
+        );
+        assert!(daemon.session().open_documents().is_empty());
     }
 
     #[tokio::test]

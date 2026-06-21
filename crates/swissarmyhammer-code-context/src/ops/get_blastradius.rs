@@ -85,8 +85,10 @@ pub struct BlastRadius {
 /// # Errors
 ///
 /// Returns [`CodeContextError::Database`] on SQLite failures.
-/// Returns [`CodeContextError::Pattern`] if no symbols are found for the
-/// given file/symbol combination.
+/// Returns [`CodeContextError::NotFound`] when a named-symbol filter
+/// (`options.symbol == Some(_)`) matches no symbol in the file. A whole-file
+/// query (`options.symbol == None`) on a file with no indexed symbols is NOT
+/// an error -- it returns an empty [`BlastRadius`].
 pub fn get_blastradius(
     conn: &Connection,
     options: &BlastRadiusOptions,
@@ -97,11 +99,26 @@ pub fn get_blastradius(
     let roots = find_roots(conn, &options.file_path, options.symbol.as_deref())?;
 
     if roots.is_empty() {
-        return Err(CodeContextError::Pattern(format!(
-            "no symbols found in file '{}' matching '{}'",
-            options.file_path,
-            options.symbol.as_deref().unwrap_or("*"),
-        )));
+        match options.symbol.as_deref() {
+            // A named-symbol filter that matched nothing is a real miss: the
+            // caller asked for a symbol that isn't in the file.
+            Some(symbol) => {
+                return Err(CodeContextError::NotFound(format!(
+                    "symbol '{}' not found in file '{}'",
+                    symbol, options.file_path,
+                )));
+            }
+            // A whole-file query (no filter) on a file with no indexed symbols
+            // legitimately has an empty blast radius -- return it, don't error.
+            None => {
+                return Ok(BlastRadius {
+                    roots: Vec::new(),
+                    hops: Vec::new(),
+                    total_affected_symbols: 0,
+                    total_affected_files: 0,
+                });
+            }
+        }
     }
 
     let root_ids: Vec<String> = roots.iter().map(|r| r.0.clone()).collect();
@@ -427,18 +444,54 @@ mod tests {
     #[test]
     fn test_blast_radius_symbol_not_found() {
         let conn = test_db();
-        insert_file(&conn, "src/empty.rs");
-        // File exists in indexed_files but has no symbols.
+        seed_chain(&conn);
+        // src/a.rs has symbol func_a, but we ask for a symbol that isn't there.
 
         let result = get_blastradius(
             &conn,
             &BlastRadiusOptions {
-                file_path: "src/empty.rs".to_string(),
+                file_path: "src/a.rs".to_string(),
                 symbol: Some("nonexistent".to_string()),
                 max_hops: 3,
             },
         );
 
-        assert!(result.is_err());
+        // A named-symbol miss is a real not-found, surfaced as NotFound with a
+        // clean message -- never the historical "invalid regex pattern" prefix.
+        match result {
+            Err(CodeContextError::NotFound(msg)) => {
+                assert!(
+                    msg.contains("nonexistent") && msg.contains("src/a.rs"),
+                    "message should name the missing symbol and file: {msg}"
+                );
+                assert!(
+                    !msg.contains("invalid regex pattern"),
+                    "not-found must not be labeled as a regex error: {msg}"
+                );
+            }
+            other => panic!("expected NotFound error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_blast_radius_whole_file_no_symbols_is_empty_not_error() {
+        let conn = test_db();
+        insert_file(&conn, "src/empty.rs");
+        // File is indexed but has no symbols, and no symbol filter is given.
+
+        let result = get_blastradius(
+            &conn,
+            &BlastRadiusOptions {
+                file_path: "src/empty.rs".to_string(),
+                symbol: None,
+                max_hops: 3,
+            },
+        )
+        .expect("whole-file query on a symbol-free file should be Ok, not Err");
+
+        assert!(result.roots.is_empty(), "no roots for a symbol-free file");
+        assert!(result.hops.is_empty(), "no hops for a symbol-free file");
+        assert_eq!(result.total_affected_symbols, 0);
+        assert_eq!(result.total_affected_files, 0);
     }
 }

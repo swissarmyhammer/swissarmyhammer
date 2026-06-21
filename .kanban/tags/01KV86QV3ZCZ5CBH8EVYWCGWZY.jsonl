@@ -1,0 +1,1 @@
+{"id":"01KV86QV41P1ETNNF2R6DW986D","timestamp":"2026-06-16T12:33:14.369845Z","op":"create","item_id":"01KV86QV3ZCZ5CBH8EVYWCGWZY","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 2da44e\n+tag_name: diagnostics\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 2da44e\n-tag_name: diagnostics\n","transaction_id":null}

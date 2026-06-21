@@ -1,14 +1,34 @@
-//! Semantic similarity search across stored chunk embeddings.
+//! Hybrid fusion search across stored chunk embeddings.
 //!
-//! Loads chunk embeddings from `ts_chunks`, computes cosine similarity
-//! against a pre-computed query embedding, and returns the top-k results.
+//! Loads chunk rows from `ts_chunks` (text, `symbol_path`, embedding), builds a
+//! [`swissarmyhammer_search::Doc`] per chunk — the short `symbol_path` as a
+//! high-weight field, the chunk body as a low-weight field, plus the embedding —
+//! and ranks them with [`swissarmyhammer_search::search`], which fuses BM25,
+//! character-trigram, and cosine signals into a single normalized score. All
+//! fusion logic lives in the leaf `swissarmyhammer-search` crate; this module
+//! only adapts the DB rows into `Doc`s and maps the [`Hit`]s back out.
 
 use rusqlite::Connection;
-use swissarmyhammer_entity_search::top_k_by_cosine;
+use swissarmyhammer_search::{search, Doc, Field, Hit, Query, SignalWeights};
 
 use crate::error::CodeContextError;
 
-/// A chunk that matched the semantic search query.
+// Re-export the per-signal score breakdown so `SearchCodeMatch::signals` has a
+// public type and `swissarmyhammer_code_context::Signals` resolves.
+pub use swissarmyhammer_search::Signals;
+
+/// Fusion weight applied to the short, identifier-bearing `symbol_path` field.
+///
+/// High relative to [`TEXT_FIELD_WEIGHT`] so an exact identifier match in the
+/// symbol path drives the BM25/trigram signals even though the much larger body
+/// field dilutes them (a big denominator makes the body's Dice naturally tiny).
+const SYMBOL_FIELD_WEIGHT: f32 = 5.0;
+
+/// Fusion weight applied to the full chunk-body text field.
+const TEXT_FIELD_WEIGHT: f32 = 1.0;
+
+/// A chunk that matched the search query, with its fused score and per-signal
+/// breakdown.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchCodeMatch {
     /// Path of the file containing this chunk.
@@ -21,8 +41,11 @@ pub struct SearchCodeMatch {
     pub symbol_path: Option<String>,
     /// Full text of the matched chunk.
     pub text: String,
-    /// Cosine similarity score (0.0 to 1.0).
-    pub similarity: f32,
+    /// Fused, normalized relevance score in `[0.0, 1.0]`.
+    pub score: f32,
+    /// The individual signal scores (`bm25`, `trigram`, `cosine`) that produced
+    /// [`SearchCodeMatch::score`].
+    pub signals: Signals,
 }
 
 /// Options for [`search_code`].
@@ -30,8 +53,15 @@ pub struct SearchCodeMatch {
 pub struct SearchCodeOptions {
     /// Maximum number of results to return.
     pub top_k: usize,
-    /// Minimum cosine similarity threshold.
-    pub min_similarity: f32,
+    /// Fusion weight for the BM25 lexical signal.
+    pub w_bm25: f32,
+    /// Fusion weight for the character-trigram (fuzzy) signal.
+    pub w_trigram: f32,
+    /// Fusion weight for the embedding cosine-similarity signal.
+    pub w_cosine: f32,
+    /// Optional minimum on the NORMALIZED `[0, 1]` fused score; matches below it
+    /// are dropped. `None` keeps every match the corpus yields.
+    pub min_fused_score: Option<f32>,
     /// Only search chunks from files with these extensions.
     pub language: Option<Vec<String>>,
     /// Only search chunks matching this file path pattern.
@@ -42,7 +72,10 @@ impl Default for SearchCodeOptions {
     fn default() -> Self {
         Self {
             top_k: 10,
-            min_similarity: 0.7,
+            w_bm25: 1.0,
+            w_trigram: 1.0,
+            w_cosine: 1.0,
+            min_fused_score: None,
             language: None,
             file_pattern: None,
         }
@@ -110,55 +143,53 @@ pub struct LoadedChunk {
     pub embedding: Vec<f32>,
 }
 
-impl LoadedChunk {
-    /// Render this chunk as a [`SearchCodeMatch`] carrying `similarity`.
-    fn to_match(&self, similarity: f32) -> SearchCodeMatch {
-        SearchCodeMatch {
-            file_path: self.file_path.clone(),
-            start_line: self.start_line,
-            end_line: self.end_line,
-            symbol_path: self.symbol_path.clone(),
-            text: self.text.clone(),
-            similarity,
-        }
-    }
-}
+// Re-export the canonical blob helper from the leaf search crate. Production
+// consumers (the live indexer, the CLI doctor) import
+// `swissarmyhammer_code_context::serialize_embedding`; keeping the name and
+// signature here preserves that public path.
+pub use swissarmyhammer_search::serialize_embedding;
 
-pub use model_embedding::cosine_similarity;
+use swissarmyhammer_search::deserialize_embedding;
 
-/// Deserialize an embedding blob (little-endian f32 array) into a Vec<f32>.
-fn deserialize_embedding(blob: &[u8]) -> Vec<f32> {
-    blob.chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
-}
-
-/// Serialize an f32 slice into a little-endian byte blob.
-pub fn serialize_embedding(embedding: &[f32]) -> Vec<u8> {
-    embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
-}
-
-/// Search chunk embeddings by cosine similarity against a query embedding.
+/// Build the [`Doc`] for one chunk, identified by its position in the corpus.
 ///
-/// The query embedding must be pre-computed by the caller using the same
-/// embedding model that produced the chunk embeddings.
+/// The `id` is the chunk's index into the corpus slice (as a string) so a [`Hit`]
+/// maps back to its [`LoadedChunk`] in O(1) without cloning chunk fields into a
+/// side map. The `symbol_path` becomes a high-weight field and the chunk body a
+/// low-weight one; the embedding is moved in to drive the cosine signal.
+fn chunk_to_doc(index: usize, chunk: &LoadedChunk) -> Doc {
+    let symbol = chunk.symbol_path.clone().unwrap_or_default();
+    Doc::new(
+        index.to_string(),
+        vec![
+            Field::new(SYMBOL_FIELD_WEIGHT, symbol),
+            Field::new(TEXT_FIELD_WEIGHT, chunk.text.clone()),
+        ],
+        Some(chunk.embedding.clone()),
+    )
+}
+
+/// Search chunk embeddings by hybrid fusion against a query.
+///
+/// `query_text` is tokenized for the BM25/trigram signals; `query_embedding`
+/// (pre-computed by the caller with the same model that produced the chunk
+/// embeddings) drives the cosine signal. Matches are ranked by the normalized
+/// fused score; `options` controls the per-signal weights, the `top_k`, and the
+/// optional `min_fused_score` floor.
 ///
 /// # Errors
 ///
 /// Returns [`CodeContextError::Database`] on SQLite failures.
 pub fn search_code(
     conn: &Connection,
+    query_text: &str,
     query_embedding: &[f32],
     options: &SearchCodeOptions,
 ) -> Result<SearchCodeResult, CodeContextError> {
     let rows = load_embedded_chunks(conn, options)?;
     let refs: Vec<&LoadedChunk> = rows.iter().collect();
-    let (matches, total_chunks_searched, truncated) = rank_loaded(
-        &refs,
-        query_embedding,
-        options.min_similarity,
-        options.top_k,
-    );
+    let (matches, total_chunks_searched, truncated) =
+        rank_loaded(&refs, query_text, query_embedding, options);
     let progress = compute_indexing_progress(conn)?;
 
     Ok(SearchCodeResult {
@@ -169,7 +200,7 @@ pub fn search_code(
     })
 }
 
-/// Rank a pre-loaded corpus against `query_embedding` by cosine similarity.
+/// Rank a pre-loaded corpus against the query with hybrid fusion.
 ///
 /// The corpus-based counterpart of [`search_code`]: it runs the identical
 /// ranking core ([`rank_loaded`]) but against chunks the caller already loaded
@@ -180,6 +211,7 @@ pub fn search_code(
 /// snapshot the corpus path's callers (e.g. the review engine) do not consume.
 pub fn search_loaded(
     corpus: &[LoadedChunk],
+    query_text: &str,
     query_embedding: &[f32],
     options: &SearchCodeOptions,
 ) -> Vec<SearchCodeMatch> {
@@ -187,13 +219,7 @@ pub fn search_loaded(
         .iter()
         .filter(|c| chunk_matches_filters(c, options))
         .collect();
-    rank_loaded(
-        &filtered,
-        query_embedding,
-        options.min_similarity,
-        options.top_k,
-    )
-    .0
+    rank_loaded(&filtered, query_text, query_embedding, options).0
 }
 
 /// Whether a chunk passes a [`SearchCodeOptions`] language / file-pattern filter.
@@ -225,8 +251,9 @@ fn chunk_matches_filters(chunk: &LoadedChunk, options: &SearchCodeOptions) -> bo
     true
 }
 
-/// The shared ranking core: cosine-score every chunk against the query, keep
-/// those at or above `min_similarity`, sort descending, and take the top `top_k`.
+/// The shared ranking core: build a [`Doc`] per chunk, fuse the BM25 / trigram /
+/// cosine signals via [`swissarmyhammer_search::search`], apply the
+/// `min_fused_score` floor, and take the top `top_k`.
 ///
 /// Returns the ranked matches, the number of chunks searched, and whether the
 /// result was truncated by `top_k`. Both [`search_code`] (connection-loaded) and
@@ -234,33 +261,62 @@ fn chunk_matches_filters(chunk: &LoadedChunk, options: &SearchCodeOptions) -> bo
 /// exactly one place.
 fn rank_loaded(
     chunks: &[&LoadedChunk],
+    query_text: &str,
     query_embedding: &[f32],
-    min_similarity: f32,
-    top_k: usize,
+    options: &SearchCodeOptions,
 ) -> (Vec<SearchCodeMatch>, usize, bool) {
     let total_chunks_searched = chunks.len();
 
-    // Rank via the shared bounded top-k primitive (the one in the search crate),
-    // so peak memory is O(top_k) — not O(corpus) — and we build a
-    // `SearchCodeMatch` (which clones chunk text) only for the kept hits.
-    let result = top_k_by_cosine(
-        query_embedding,
-        chunks
-            .iter()
-            .map(|chunk| (*chunk, chunk.embedding.as_slice())),
-        min_similarity,
-        top_k,
-    );
-    // `considered` counts every chunk at/above the threshold, so more matched
-    // than we kept exactly when it exceeds `top_k`.
-    let truncated = result.considered > top_k;
-    let matches: Vec<SearchCodeMatch> = result
-        .ranked
+    let docs: Vec<Doc> = chunks
+        .iter()
+        .enumerate()
+        .map(|(i, chunk)| chunk_to_doc(i, chunk))
+        .collect();
+
+    // Ask the ranker for every passing hit (top_k = corpus size) so we can detect
+    // truncation by comparing the passing count against the caller's `top_k`,
+    // then truncate ourselves.
+    let mut query = Query::new(query_text)
+        .with_embedding(query_embedding.to_vec())
+        .with_weights(SignalWeights::new(
+            options.w_bm25,
+            options.w_trigram,
+            options.w_cosine,
+        ))
+        .with_top_k(docs.len());
+    if let Some(floor) = options.min_fused_score {
+        query = query.with_min_score(floor);
+    }
+
+    let hits = search(&docs, &query);
+    let truncated = hits.len() > options.top_k;
+
+    let matches: Vec<SearchCodeMatch> = hits
         .into_iter()
-        .map(|r| r.id.to_match(r.score))
+        .take(options.top_k)
+        .map(|hit| hit_to_match(&hit, chunks))
         .collect();
 
     (matches, total_chunks_searched, truncated)
+}
+
+/// Map a [`Hit`] back to a [`SearchCodeMatch`] via the chunk's corpus index,
+/// which was stashed in [`Hit::id`] by [`chunk_to_doc`].
+fn hit_to_match(hit: &Hit, chunks: &[&LoadedChunk]) -> SearchCodeMatch {
+    let index: usize = hit
+        .id
+        .parse()
+        .expect("Doc id is the chunk's corpus index, set in chunk_to_doc");
+    let chunk = chunks[index];
+    SearchCodeMatch {
+        file_path: chunk.file_path.clone(),
+        start_line: chunk.start_line,
+        end_line: chunk.end_line,
+        symbol_path: chunk.symbol_path.clone(),
+        text: chunk.text.clone(),
+        score: hit.score,
+        signals: hit.signals,
+    }
 }
 
 /// Summarise embedding-pass progress from `indexed_files`.
@@ -413,47 +469,15 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn test_cosine_similarity_identical() {
-        let v = vec![1.0, 2.0, 3.0];
-        let sim = cosine_similarity(&v, &v);
-        assert!((sim - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_cosine_similarity_orthogonal() {
-        let a = vec![1.0, 0.0];
-        let b = vec![0.0, 1.0];
-        let sim = cosine_similarity(&a, &b);
-        assert!(sim.abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_cosine_similarity_opposite() {
-        let a = vec![1.0, 0.0];
-        let b = vec![-1.0, 0.0];
-        let sim = cosine_similarity(&a, &b);
-        assert!((sim - (-1.0)).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_cosine_similarity_empty() {
-        let sim = cosine_similarity(&[], &[]);
-        assert_eq!(sim, 0.0);
-    }
-
-    #[test]
-    fn test_cosine_similarity_mismatched_lengths() {
-        let sim = cosine_similarity(&[1.0, 2.0], &[1.0]);
-        assert_eq!(sim, 0.0);
-    }
-
-    #[test]
-    fn test_serialize_deserialize_roundtrip() {
-        let original = vec![1.0f32, -2.5, std::f32::consts::PI, 0.0];
-        let blob = serialize_embedding(&original);
-        let recovered = deserialize_embedding(&blob);
-        assert_eq!(original, recovered);
+    /// Cosine-only options (BM25/trigram off) — recovers the legacy embedding
+    /// ranking so the migrated similarity tests still pin embedding order.
+    fn cosine_only() -> SearchCodeOptions {
+        SearchCodeOptions {
+            w_bm25: 0.0,
+            w_trigram: 0.0,
+            w_cosine: 1.0,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -461,10 +485,10 @@ mod tests {
         let conn = test_db();
         insert_file(&conn, "src/main.rs");
 
-        // Query vector points in the direction [1, 0, 0]
+        // Query vector points in the direction [1, 0, 0].
         let query = vec![1.0, 0.0, 0.0];
 
-        // Chunk A: very similar to query
+        // Chunk A: very similar to query.
         insert_chunk_with_embedding(
             &conn,
             "src/main.rs",
@@ -474,8 +498,7 @@ mod tests {
             "fn main() {}",
             &[0.9, 0.1, 0.0],
         );
-
-        // Chunk B: somewhat similar
+        // Chunk B: somewhat similar.
         insert_chunk_with_embedding(
             &conn,
             "src/main.rs",
@@ -485,8 +508,7 @@ mod tests {
             "fn helper() {}",
             &[0.5, 0.5, 0.0],
         );
-
-        // Chunk C: not similar (orthogonal)
+        // Chunk C: not similar (orthogonal).
         insert_chunk_with_embedding(
             &conn,
             "src/main.rs",
@@ -497,13 +519,13 @@ mod tests {
             &[0.0, 0.0, 1.0],
         );
 
-        let result = search_code(&conn, &query, &SearchCodeOptions::default()).unwrap();
+        // Cosine-only fusion reproduces the old embedding ranking: A then B then C.
+        let result = search_code(&conn, "main", &query, &cosine_only()).unwrap();
 
-        // Only chunks above min_similarity=0.7 should match
-        // A has cosine ~0.994, B has cosine ~0.707, C has cosine 0.0
-        assert_eq!(result.matches.len(), 2);
+        assert_eq!(result.matches.len(), 3);
         assert_eq!(result.matches[0].symbol_path.as_deref(), Some("main"));
-        assert!(result.matches[0].similarity > result.matches[1].similarity);
+        assert!(result.matches[0].score >= result.matches[1].score);
+        assert!(result.matches[1].score >= result.matches[2].score);
         assert_eq!(result.total_chunks_searched, 3);
     }
 
@@ -513,7 +535,6 @@ mod tests {
         insert_file(&conn, "src/lib.rs");
 
         let query = vec![1.0, 0.0];
-
         insert_chunk_with_embedding(
             &conn,
             "src/lib.rs",
@@ -525,9 +546,9 @@ mod tests {
         );
         insert_chunk_without_embedding(&conn, "src/lib.rs", 4, 6, "fn no_embedding() {}");
 
-        let result = search_code(&conn, &query, &SearchCodeOptions::default()).unwrap();
+        let result = search_code(&conn, "has_embedding", &query, &cosine_only()).unwrap();
 
-        // Only the chunk with an embedding should be searched
+        // Only the chunk with an embedding is loaded and searched.
         assert_eq!(result.total_chunks_searched, 1);
         assert_eq!(result.matches.len(), 1);
     }
@@ -539,7 +560,7 @@ mod tests {
 
         let query = vec![1.0, 0.0];
 
-        // Insert 5 chunks all similar to query
+        // Insert 5 chunks all similar to query.
         for i in 0..5 {
             let text = format!("fn func_{i}() {{}}");
             insert_chunk_with_embedding(
@@ -555,24 +576,25 @@ mod tests {
 
         let opts = SearchCodeOptions {
             top_k: 2,
-            min_similarity: 0.0,
-            ..Default::default()
+            ..cosine_only()
         };
-        let result = search_code(&conn, &query, &opts).unwrap();
+        let result = search_code(&conn, "func", &query, &opts).unwrap();
 
         assert_eq!(result.matches.len(), 2);
         assert!(result.truncated);
         assert_eq!(result.total_chunks_searched, 5);
     }
 
+    /// Converted from the old `min_similarity` filter test: a `min_fused_score`
+    /// floor on the NORMALIZED [0,1] fused score keeps only the dominating hit.
     #[test]
-    fn test_search_code_min_similarity_filter() {
+    fn test_search_code_min_fused_score_filter() {
         let conn = test_db();
         insert_file(&conn, "src/lib.rs");
 
         let query = vec![1.0, 0.0];
 
-        // High similarity
+        // High cosine — wins every present signal -> normalized score 1.0.
         insert_chunk_with_embedding(
             &conn,
             "src/lib.rs",
@@ -582,17 +604,19 @@ mod tests {
             "fn close() {}",
             &[0.99, 0.1],
         );
-        // Low similarity
+        // Low cosine — strictly below the top.
         insert_chunk_with_embedding(&conn, "src/lib.rs", 4, 6, None, "fn far() {}", &[0.1, 0.99]);
 
+        // Cosine-only so ranking is purely embedding-driven; floor just under 1.0.
         let opts = SearchCodeOptions {
-            min_similarity: 0.9,
-            ..Default::default()
+            min_fused_score: Some(0.999),
+            ..cosine_only()
         };
-        let result = search_code(&conn, &query, &opts).unwrap();
+        let result = search_code(&conn, "close", &query, &opts).unwrap();
 
         assert_eq!(result.matches.len(), 1);
         assert!(result.matches[0].text.contains("close"));
+        assert!((result.matches[0].score - 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -600,10 +624,140 @@ mod tests {
         let conn = test_db();
         let query = vec![1.0, 0.0, 0.0];
 
-        let result = search_code(&conn, &query, &SearchCodeOptions::default()).unwrap();
+        let result = search_code(&conn, "anything", &query, &SearchCodeOptions::default()).unwrap();
         assert!(result.matches.is_empty());
         assert_eq!(result.total_chunks_searched, 0);
         assert!(!result.truncated);
+    }
+
+    /// A chunk whose `symbol_path` exactly matches the query identifier but whose
+    /// cosine is weak must still rank first, carried by the BM25/trigram signals
+    /// over the high-weight symbol field. This is the fusion contract for code.
+    #[test]
+    fn test_search_code_lexical_symbol_match_beats_weak_cosine() {
+        let conn = test_db();
+        insert_file(&conn, "src/a.rs");
+        insert_file(&conn, "src/b.rs");
+
+        // The query embedding points at [0,1] — so the lexical chunk's [1,0]
+        // embedding is orthogonal (cosine 0), while the decoy is aligned.
+        let query_embedding = vec![0.0, 1.0];
+
+        // Lexical match: symbol_path == query identifier, weak (orthogonal) cosine.
+        insert_chunk_with_embedding(
+            &conn,
+            "src/a.rs",
+            1,
+            5,
+            Some("parse_config"),
+            "fn parse_config() { /* body */ }",
+            &[1.0, 0.0],
+        );
+        // Decoy: strong cosine, no lexical overlap with the query identifier.
+        insert_chunk_with_embedding(
+            &conn,
+            "src/b.rs",
+            1,
+            5,
+            Some("unrelated_helper"),
+            "fn unrelated_helper() { /* body */ }",
+            &[0.0, 1.0],
+        );
+
+        let result = search_code(
+            &conn,
+            "parse_config",
+            &query_embedding,
+            &SearchCodeOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.matches[0].symbol_path.as_deref(),
+            Some("parse_config"),
+            "the exact symbol_path match must rank first despite weak cosine"
+        );
+    }
+
+    /// Every match carries its per-signal breakdown.
+    #[test]
+    fn test_search_code_exposes_signals() {
+        let conn = test_db();
+        insert_file(&conn, "src/a.rs");
+
+        let query = vec![1.0, 0.0];
+        insert_chunk_with_embedding(
+            &conn,
+            "src/a.rs",
+            1,
+            5,
+            Some("parse_config"),
+            "fn parse_config() {}",
+            &[1.0, 0.0],
+        );
+
+        let result =
+            search_code(&conn, "parse_config", &query, &SearchCodeOptions::default()).unwrap();
+
+        let m = &result.matches[0];
+        // All three signals are present and finite; cosine is high for the
+        // aligned embedding, lexical signals fired for the matching identifier.
+        assert!(m.signals.cosine > 0.9, "cosine={}", m.signals.cosine);
+        assert!(m.signals.bm25 > 0.0, "bm25={}", m.signals.bm25);
+        assert!(m.signals.trigram > 0.0, "trigram={}", m.signals.trigram);
+    }
+
+    /// Flipping the signal weights on the SAME corpus reorders results: boosting
+    /// `w_cosine` (and zeroing the lexical signals) ranks the strong-cosine decoy
+    /// over the lexical match, the inverse of the default-fusion ordering.
+    #[test]
+    fn test_search_code_weights_reorder_results() {
+        let conn = test_db();
+        insert_file(&conn, "src/a.rs");
+        insert_file(&conn, "src/b.rs");
+
+        let query_embedding = vec![0.0, 1.0];
+        // Lexical match, weak cosine.
+        insert_chunk_with_embedding(
+            &conn,
+            "src/a.rs",
+            1,
+            5,
+            Some("parse_config"),
+            "fn parse_config() {}",
+            &[1.0, 0.0],
+        );
+        // Strong cosine, no lexical overlap.
+        insert_chunk_with_embedding(
+            &conn,
+            "src/b.rs",
+            1,
+            5,
+            Some("unrelated_helper"),
+            "fn unrelated_helper() {}",
+            &[0.0, 1.0],
+        );
+
+        // Default fusion: lexical match wins.
+        let lexical = search_code(
+            &conn,
+            "parse_config",
+            &query_embedding,
+            &SearchCodeOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            lexical.matches[0].symbol_path.as_deref(),
+            Some("parse_config")
+        );
+
+        // Cosine-only: the strong-cosine decoy wins instead.
+        let cosine = search_code(&conn, "parse_config", &query_embedding, &cosine_only()).unwrap();
+        assert_eq!(
+            cosine.matches[0].symbol_path.as_deref(),
+            Some("unrelated_helper"),
+            "boosting cosine must reorder the strong-cosine chunk to the top"
+        );
     }
 
     /// Set the `embedded` flag for a specific file row.
@@ -631,8 +785,6 @@ mod tests {
         set_embedded(&conn, "src/b.rs", 1);
         set_embedded(&conn, "src/c.rs", 1);
 
-        // Insert one embedded chunk in one of the embedded files so a match
-        // is possible.
         let query = vec![1.0, 0.0];
         insert_chunk_with_embedding(
             &conn,
@@ -644,7 +796,7 @@ mod tests {
             &[1.0, 0.0],
         );
 
-        let result = search_code(&conn, &query, &SearchCodeOptions::default()).unwrap();
+        let result = search_code(&conn, "foo", &query, &SearchCodeOptions::default()).unwrap();
 
         assert_eq!(result.matches.len(), 1);
         let progress = result
@@ -672,7 +824,7 @@ mod tests {
         let query = vec![1.0, 0.0];
         insert_chunk_with_embedding(&conn, "src/a.rs", 1, 3, None, "fn foo() {}", &[1.0, 0.0]);
 
-        let result = search_code(&conn, &query, &SearchCodeOptions::default()).unwrap();
+        let result = search_code(&conn, "foo", &query, &SearchCodeOptions::default()).unwrap();
         assert!(
             result.progress.is_none(),
             "progress must be None when embedded_files == total_files"
@@ -686,7 +838,7 @@ mod tests {
         let conn = test_db();
         let query = vec![1.0, 0.0, 0.0];
 
-        let result = search_code(&conn, &query, &SearchCodeOptions::default()).unwrap();
+        let result = search_code(&conn, "anything", &query, &SearchCodeOptions::default()).unwrap();
         assert!(result.matches.is_empty());
         assert!(
             result.progress.is_none(),
@@ -735,9 +887,9 @@ mod tests {
         );
 
         let options = SearchCodeOptions::default();
-        let via_conn = search_code(&conn, &query, &options).unwrap();
+        let via_conn = search_code(&conn, "a", &query, &options).unwrap();
         let corpus = load_all_embedded_chunks(&conn).unwrap();
-        let via_corpus = search_loaded(&corpus, &query, &options);
+        let via_corpus = search_loaded(&corpus, "a", &query, &options);
 
         assert_eq!(
             serde_json::to_value(&via_conn.matches).unwrap(),
@@ -789,10 +941,10 @@ mod tests {
         // language filter: only the `.rs` chunks survive.
         let rs_only = search_loaded(
             &corpus,
+            "keep",
             &query,
             &SearchCodeOptions {
                 language: Some(vec!["rs".to_string()]),
-                min_similarity: 0.0,
                 ..Default::default()
             },
         );
@@ -802,10 +954,10 @@ mod tests {
         // file_pattern filter: only chunks whose path contains `src/`.
         let src_only = search_loaded(
             &corpus,
+            "keep",
             &query,
             &SearchCodeOptions {
                 file_pattern: Some("src/".to_string()),
-                min_similarity: 0.0,
                 ..Default::default()
             },
         );
@@ -813,14 +965,7 @@ mod tests {
         assert!(src_only.iter().all(|m| m.file_path.contains("src/")));
 
         // no filters: the whole corpus is ranked.
-        let unfiltered = search_loaded(
-            &corpus,
-            &query,
-            &SearchCodeOptions {
-                min_similarity: 0.0,
-                ..Default::default()
-            },
-        );
+        let unfiltered = search_loaded(&corpus, "keep", &query, &SearchCodeOptions::default());
         assert_eq!(unfiltered.len(), 3, "all three chunks when unfiltered");
     }
 
@@ -834,7 +979,7 @@ mod tests {
         insert_file(&conn, "src/b.rs");
 
         let query = vec![1.0, 0.0];
-        let result = search_code(&conn, &query, &SearchCodeOptions::default()).unwrap();
+        let result = search_code(&conn, "anything", &query, &SearchCodeOptions::default()).unwrap();
 
         assert!(result.matches.is_empty());
         let progress = result

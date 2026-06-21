@@ -12,6 +12,7 @@ pub enum Verb {
     Init,
     Get,
     List,
+    Search,
     Add,
     Update,
     Move,
@@ -34,6 +35,7 @@ impl Verb {
             Self::Init => "init",
             Self::Get => "get",
             Self::List => "list",
+            Self::Search => "search",
             Self::Add => "add",
             Self::Update => "update",
             Self::Move => "move",
@@ -55,7 +57,8 @@ impl Verb {
         match s.to_lowercase().as_str() {
             "init" | "create" | "new" => Some(Self::Init),
             "get" | "show" | "read" | "fetch" => Some(Self::Get),
-            "list" | "ls" | "find" | "search" | "query" => Some(Self::List),
+            "list" | "ls" | "find" | "query" => Some(Self::List),
+            "search" => Some(Self::Search),
             "add" | "insert" => Some(Self::Add),
             "update" | "edit" | "modify" | "set" | "patch" => Some(Self::Update),
             "move" | "mv" => Some(Self::Move),
@@ -217,7 +220,10 @@ impl Operation {
 
     /// Check if this operation is a mutation (vs read-only)
     pub fn is_mutation(&self) -> bool {
-        !matches!(self.verb, Verb::Get | Verb::List | Verb::Next)
+        !matches!(
+            self.verb,
+            Verb::Get | Verb::List | Verb::Search | Verb::Next
+        )
     }
 
     /// Get a parameter value
@@ -273,8 +279,8 @@ pub fn is_valid_operation(verb: Verb, noun: Noun) -> bool {
         (Verb::Move, Noun::Task) | (Verb::Delete, Noun::Task) | (Verb::Next, Noun::Task) |
         (Verb::Tag, Noun::Task) | (Verb::Untag, Noun::Task) | (Verb::Complete, Noun::Task) |
         (Verb::Assign, Noun::Task) | (Verb::Unassign, Noun::Task) |
-        // Tasks listing
-        (Verb::List, Noun::Tasks) |
+        // Tasks listing + relevance search
+        (Verb::List, Noun::Tasks) | (Verb::Search, Noun::Tasks) |
         // Tag operations (board-level)
         (Verb::Get, Noun::Tag) | (Verb::Add, Noun::Tag) | (Verb::Update, Noun::Tag) |
         (Verb::Delete, Noun::Tag) | (Verb::List, Noun::Tags) |
@@ -308,6 +314,23 @@ mod tests {
         assert_eq!(Verb::from_alias("mv"), Some(Verb::Move));
     }
 
+    /// `search` is its own verb (relevance search), distinct from `list`. The
+    /// remaining list aliases — `ls`, `find`, `query` — STAY on `Verb::List`
+    /// for back-compat; only `search` moved off. Guards the alias split that
+    /// keeps `search tasks` from colliding with `list tasks`.
+    #[test]
+    fn test_search_alias_distinct_from_list() {
+        // `search` resolves to the dedicated Search verb.
+        assert_eq!(Verb::from_alias("search"), Some(Verb::Search));
+        assert_eq!(Verb::Search.as_str(), "search");
+
+        // The other list aliases are unchanged.
+        assert_eq!(Verb::from_alias("list"), Some(Verb::List));
+        assert_eq!(Verb::from_alias("ls"), Some(Verb::List));
+        assert_eq!(Verb::from_alias("find"), Some(Verb::List));
+        assert_eq!(Verb::from_alias("query"), Some(Verb::List));
+    }
+
     #[test]
     fn test_noun_parsing() {
         assert_eq!(Noun::parse("board"), Some(Noun::Board));
@@ -331,6 +354,21 @@ mod tests {
         // Invalid combinations
         assert!(!is_valid_operation(Verb::Move, Noun::Board));
         assert!(!is_valid_operation(Verb::Init, Noun::Task));
+    }
+
+    /// `search` is valid ONLY against the `tasks` plural noun (relevance
+    /// search over the board). It is intentionally invalid for every other
+    /// noun — `find`/`query` remain the list-via-alias path for those.
+    #[test]
+    fn test_search_is_valid_only_for_tasks() {
+        assert!(is_valid_operation(Verb::Search, Noun::Tasks));
+
+        // Not valid for the singular task noun or any non-task noun.
+        assert!(!is_valid_operation(Verb::Search, Noun::Task));
+        assert!(!is_valid_operation(Verb::Search, Noun::Board));
+        assert!(!is_valid_operation(Verb::Search, Noun::Actors));
+        assert!(!is_valid_operation(Verb::Search, Noun::Projects));
+        assert!(!is_valid_operation(Verb::Search, Noun::Tags));
     }
 
     #[test]

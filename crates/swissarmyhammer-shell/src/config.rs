@@ -373,7 +373,10 @@ mod tests {
         );
 
         // Settings should have defaults
-        assert_eq!(config.settings.max_command_length, DEFAULT_MAX_COMMAND_LENGTH);
+        assert_eq!(
+            config.settings.max_command_length,
+            DEFAULT_MAX_COMMAND_LENGTH
+        );
         assert_eq!(
             config.settings.max_env_value_length,
             DEFAULT_MAX_ENV_VALUE_LENGTH
@@ -417,7 +420,10 @@ permit: []
         assert!(config.deny.is_empty());
         assert!(config.permit.is_empty());
         // Settings should use defaults
-        assert_eq!(config.settings.max_command_length, DEFAULT_MAX_COMMAND_LENGTH);
+        assert_eq!(
+            config.settings.max_command_length,
+            DEFAULT_MAX_COMMAND_LENGTH
+        );
     }
 
     #[test]
@@ -450,7 +456,10 @@ settings:
         let config = ShellSecurityConfig::default();
         assert!(config.permit.is_empty());
         assert!(config.deny.is_empty());
-        assert_eq!(config.settings.max_command_length, DEFAULT_MAX_COMMAND_LENGTH);
+        assert_eq!(
+            config.settings.max_command_length,
+            DEFAULT_MAX_COMMAND_LENGTH
+        );
     }
 
     #[test]

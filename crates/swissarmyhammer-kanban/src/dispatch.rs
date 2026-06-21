@@ -18,7 +18,7 @@ use crate::project::{AddProject, DeleteProject, GetProject, ListProjects, Update
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
 use crate::task::{
     AddTask, ArchiveTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListArchived, ListTasks,
-    MoveTask, NextTask, TagTask, UnarchiveTask, UnassignTask, UntagTask, UpdateTask,
+    MoveTask, NextTask, SearchTasks, TagTask, UnarchiveTask, UnassignTask, UntagTask, UpdateTask,
 };
 use crate::types::{
     resolve_short_ref, ActorId, Noun, Operation as KanbanOperation, ResolveResult, TaskId, Verb,
@@ -30,6 +30,24 @@ use serde_json::Value;
 fn req<'a>(op: &'a KanbanOperation, key: &str) -> Result<&'a str, KanbanError> {
     op.get_string(key)
         .ok_or_else(|| KanbanError::parse(format!("missing required field: {}", key)))
+}
+
+/// Helper: require a string param accepting either `primary` or `alt` as the
+/// field name, returning a KanbanError naming both when neither is present.
+///
+/// Used where one entity field has two equally-natural names — e.g. a column's
+/// id is just as naturally passed as `column`, so `get/update/delete column`
+/// accept either. `primary` is preferred when both are supplied.
+fn req_alias<'a>(
+    op: &'a KanbanOperation,
+    primary: &str,
+    alt: &str,
+) -> Result<&'a str, KanbanError> {
+    op.get_string(primary)
+        .or_else(|| op.get_string(alt))
+        .ok_or_else(|| {
+            KanbanError::parse(format!("missing required field: {} (or {})", primary, alt))
+        })
 }
 
 /// Recognize an already-canonical full ULID reference and return its canonical
@@ -271,11 +289,11 @@ async fn execute_column_operation(
             processor.process(&cmd, ctx).await
         }
         (Verb::Get, Noun::Column) => {
-            let id = req(op, "id")?;
+            let id = req_alias(op, "id", "column")?;
             processor.process(&GetColumn::new(id), ctx).await
         }
         (Verb::Update, Noun::Column) => {
-            let id = req(op, "id")?;
+            let id = req_alias(op, "id", "column")?;
             let mut cmd = UpdateColumn::new(id);
             if let Some(name) = op.get_string("name") {
                 cmd = cmd.with_name(name);
@@ -286,7 +304,7 @@ async fn execute_column_operation(
             processor.process(&cmd, ctx).await
         }
         (Verb::Delete, Noun::Column) => {
-            let id = req(op, "id")?;
+            let id = req_alias(op, "id", "column")?;
             processor.process(&DeleteColumn::new(id), ctx).await
         }
         (Verb::List, Noun::Columns) => processor.process(&ListColumns, ctx).await,
@@ -565,7 +583,7 @@ async fn execute_task_assignment_operation(
     }
 }
 
-/// Dispatch task query operations: list, next.
+/// Dispatch task query operations: list, next, search.
 async fn execute_task_query_operation(
     processor: &KanbanOperationProcessor,
     ctx: &KanbanContext,
@@ -618,6 +636,19 @@ async fn execute_task_query_operation(
             }
             processor.process(&cmd, ctx).await
         }
+        Verb::Search => {
+            // `query` is required; `filter` scopes the corpus and `top_k`
+            // caps the ranked hits (defaults applied inside SearchTasks).
+            let query = req(op, "query")?;
+            let mut cmd = SearchTasks::new(query);
+            if let Some(filter) = op.get_string("filter") {
+                cmd = cmd.with_filter(filter);
+            }
+            if let Some(top_k) = op.get_u64("top_k").and_then(|n| usize::try_from(n).ok()) {
+                cmd = cmd.with_top_k(top_k);
+            }
+            processor.process(&cmd, ctx).await
+        }
         _ => Err(KanbanError::parse(format!(
             "unsupported operation: {} {}",
             op.verb, op.noun
@@ -643,7 +674,9 @@ async fn execute_task_operation(
         Verb::Assign | Verb::Unassign | Verb::Tag | Verb::Untag => {
             execute_task_assignment_operation(processor, ctx, op).await
         }
-        Verb::Next | Verb::List => execute_task_query_operation(processor, ctx, op).await,
+        Verb::Next | Verb::List | Verb::Search => {
+            execute_task_query_operation(processor, ctx, op).await
+        }
         _ => Err(KanbanError::parse(format!(
             "unsupported operation: {} {}",
             op.verb, op.noun
@@ -1185,6 +1218,29 @@ mod tests {
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["count"], 1);
         assert_eq!(result["tasks"][0]["id"], task_id);
+    }
+
+    /// `search tasks` must parse to (Verb::Search, Noun::Tasks) and dispatch to
+    /// SearchTasks. On an empty board the op short-circuits before loading any
+    /// model, so this proves the wiring without an embedding model. A missing
+    /// `query` must surface a parse error.
+    #[tokio::test]
+    async fn dispatch_search_tasks_wiring() {
+        let (_temp, ctx) = setup().await;
+
+        // Parses to the Search verb and the Tasks noun.
+        let ops = parse_input(json!({"op": "search tasks", "query": "anything"})).unwrap();
+        assert_eq!(ops[0].verb, Verb::Search);
+        assert_eq!(ops[0].noun, Noun::Tasks);
+
+        // Empty board → ranked result of zero, no model loaded.
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["count"], 0);
+        assert!(result["tasks"].as_array().unwrap().is_empty());
+
+        // `query` is required.
+        let ops = parse_input(json!({"op": "search tasks"})).unwrap();
+        assert!(execute_operation(&ctx, &ops[0]).await.is_err());
     }
 
     #[tokio::test]
@@ -1737,6 +1793,66 @@ mod tests {
         let ops = parse_input(json!({"op": "get column", "id": "todo"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["id"], "todo");
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_column_accepts_column_alias() {
+        let (_temp, ctx) = setup().await;
+
+        // `column` is the natural field name for a column id; it must be
+        // accepted as an alias for `id` and return the identical result.
+        let by_alias = execute_operation(
+            &ctx,
+            &parse_input(json!({"op": "get column", "column": "todo"})).unwrap()[0],
+        )
+        .await
+        .unwrap();
+        let by_id = execute_operation(
+            &ctx,
+            &parse_input(json!({"op": "get column", "id": "todo"})).unwrap()[0],
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_alias["id"], "todo");
+        assert_eq!(by_alias, by_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_column_missing_field_names_both_aliases() {
+        let (_temp, ctx) = setup().await;
+
+        // Neither `id` nor `column` present → parse error naming both.
+        let op = crate::types::Operation::new(
+            crate::types::Verb::Get,
+            crate::types::Noun::Column,
+            serde_json::Map::new(),
+        );
+        let err = execute_operation(&ctx, &op).await.unwrap_err().to_string();
+        assert!(err.contains("id"), "error should name `id`: {err}");
+        assert!(err.contains("column"), "error should name `column`: {err}");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_column_accepts_column_alias() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "update column", "column": "todo", "name": "Backlog"}))
+            .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Backlog");
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_column_accepts_column_alias() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a new empty column then delete it via the `column` alias.
+        let ops = parse_input(json!({"op": "add column", "id": "temp", "name": "Temp"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "delete column", "column": "temp"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["deleted"], true);
     }
 
     #[tokio::test]

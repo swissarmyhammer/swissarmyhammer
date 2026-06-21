@@ -15,6 +15,13 @@ use async_watcher::{notify::RecursiveMode, AsyncDebouncer};
 use rusqlite::Connection;
 use swissarmyhammer_code_context::{FanoutWatcher, FileEvent, SharedDb};
 
+/// Debounce window for coalescing filesystem events before processing a batch.
+///
+/// `async-watcher` buffers raw `notify` events for this duration and emits them
+/// as a single debounced batch, so a burst of writes to the same file (e.g. an
+/// editor save) is collapsed into one re-index pass.
+const DEBOUNCE_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// Source file extensions worth tracking for code context indexing.
 const SOURCE_EXTENSIONS: &[&str] = &[
     "rs", "py", "js", "ts", "tsx", "jsx", "go", "java", "c", "cpp", "h", "hpp", "rb", "swift",
@@ -105,29 +112,33 @@ pub(crate) fn process_file_events(
 ///
 /// Uses the leader's shared write connection for all DB operations.
 /// Spawns a background tokio task that:
-/// 1. Watches `workspace_root` recursively with a 1-second debounce
+/// 1. Watches `workspace_root` recursively with a [`DEBOUNCE_TIMEOUT`] debounce
 /// 2. Converts notify events to `FileEvent`s
 /// 3. Calls [`process_file_events`] to mark DB rows dirty
 /// 4. Triggers re-indexing of dirty files
 ///
 /// Returns the `JoinHandle` for the watcher task.
 pub fn start_code_context_watcher(
-    workspace_root: PathBuf,
+    workspace_root: impl AsRef<Path>,
     db: SharedDb,
+    shutdown: swissarmyhammer_code_context::ShutdownFlag,
 ) -> tokio::task::JoinHandle<()> {
+    let workspace_root = workspace_root.as_ref().to_path_buf();
     tokio::spawn(async move {
-        if let Err(e) = run_watcher(&workspace_root, &db).await {
+        if let Err(e) = run_watcher(&workspace_root, &db, &shutdown).await {
             tracing::error!("code-context watcher failed: {}", e);
         }
     })
 }
 
 async fn run_watcher(
-    workspace_root: &Path,
+    workspace_root: impl AsRef<Path>,
     db: &SharedDb,
+    shutdown: &swissarmyhammer_code_context::ShutdownFlag,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let workspace_root = workspace_root.as_ref();
     let (mut debouncer, mut event_rx) =
-        AsyncDebouncer::new_with_channel(Duration::from_secs(1), None).await?;
+        AsyncDebouncer::new_with_channel(DEBOUNCE_TIMEOUT, None).await?;
 
     debouncer
         .watcher()
@@ -141,56 +152,33 @@ async fn run_watcher(
     let fanout = FanoutWatcher::new();
     let ws_root = workspace_root.to_path_buf();
 
-    while let Some(events_result) = event_rx.recv().await {
+    // Wake at least every 500ms even with no filesystem events so a step-down
+    // (which sets the shutdown flag) is observed promptly and the watcher stops
+    // writing before the new leader takes over.
+    let mut shutdown_tick = tokio::time::interval(Duration::from_millis(500));
+
+    loop {
+        if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+
+        let events_result = tokio::select! {
+            maybe = event_rx.recv() => match maybe {
+                Some(r) => r,
+                None => break,
+            },
+            _ = shutdown_tick.tick() => continue,
+        };
+
+        // Re-check immediately before the write path: a step-down may have
+        // landed while a debounced batch was in flight.
+        if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+
         match events_result {
             Ok(debounced_events) => {
-                // Collect file events from the batch
-                let mut file_events = Vec::new();
-                for debounced in &debounced_events {
-                    for path in &debounced.event.paths {
-                        if !is_source_file(path) {
-                            continue;
-                        }
-                        if let Some(event) =
-                            to_file_event(&debounced.event.kind, path.clone(), &ws_root)
-                        {
-                            file_events.push(event);
-                        }
-                    }
-                }
-
-                if file_events.is_empty() {
-                    continue;
-                }
-
-                tracing::info!(
-                    "code-context: {} file change(s) detected, marking dirty",
-                    file_events.len()
-                );
-
-                // Lock DB and process events
-                {
-                    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-                    let result = process_file_events(&conn, &fanout, &file_events);
-                    tracing::info!(
-                        "code-context watcher: {} dirty, {} deleted, {} errors",
-                        result.dirty_count,
-                        result.deleted_count,
-                        result.error_count,
-                    );
-                }
-
-                // Re-index dirty files using the shared connection. The
-                // watcher path has no progress channel of its own — pass
-                // the no-op reporter. Surfacing watcher progress to MCP
-                // clients is a separate piece of work (see the
-                // rebuild-index roadmap).
-                super::index_discovered_files_async(
-                    &ws_root,
-                    std::sync::Arc::clone(db),
-                    swissarmyhammer_code_context::noop_reporter(),
-                )
-                .await;
+                process_ok_events(db, &ws_root, &fanout, &debounced_events, shutdown).await;
             }
             Err(errors) => {
                 for error in errors {
@@ -200,8 +188,188 @@ async fn run_watcher(
         }
     }
 
-    tracing::info!("code-context: file watcher stopped");
+    tracing::info!("code-context: file watcher stopping (stepped down)");
     Ok(())
+}
+
+/// Handle one debounced batch of successful filesystem events.
+///
+/// Filters the batch to source-file [`FileEvent`]s, marks the affected DB rows
+/// dirty via [`process_file_events`], then drains the dirty set by re-indexing.
+/// A batch with no relevant source-file changes is a no-op.
+async fn process_ok_events(
+    db: &SharedDb,
+    ws_root: &Path,
+    fanout: &FanoutWatcher,
+    debounced_events: &[async_watcher::DebouncedEvent],
+    shutdown: &swissarmyhammer_code_context::ShutdownFlag,
+) {
+    // Collect file events from the batch
+    let mut file_events = Vec::new();
+    for debounced in debounced_events {
+        for path in &debounced.event.paths {
+            if !is_source_file(path) {
+                continue;
+            }
+            if let Some(event) = to_file_event(&debounced.event.kind, path.clone(), ws_root) {
+                file_events.push(event);
+            }
+        }
+    }
+
+    if file_events.is_empty() {
+        return;
+    }
+
+    tracing::info!(
+        "code-context: {} file change(s) detected, marking dirty",
+        file_events.len()
+    );
+
+    // Lock DB and process events
+    {
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        let result = process_file_events(&conn, fanout, &file_events);
+        tracing::info!(
+            "code-context watcher: {} dirty, {} deleted, {} errors",
+            result.dirty_count,
+            result.deleted_count,
+            result.error_count,
+        );
+    }
+
+    // Re-index dirty files using the shared connection. The watcher path has
+    // no progress channel of its own — pass the no-op reporter. Surfacing
+    // watcher progress to MCP clients is a separate piece of work (see the
+    // rebuild-index roadmap).
+    super::index_discovered_files_async(
+        ws_root,
+        std::sync::Arc::clone(db),
+        swissarmyhammer_code_context::noop_reporter(),
+        std::sync::Arc::clone(shutdown),
+    )
+    .await;
+}
+
+/// How often the leader re-walks the filesystem to reconcile the index.
+///
+/// The live watcher's per-event path is the low-latency fast path, but it has
+/// no correctness floor: any missed `notify` event (event storms, editors that
+/// write via rename/replace, files materialized before the watcher attached,
+/// bulk regeneration) leaves rows the event path never revisits, and a leader
+/// alive for hours or days drifts permanently. This timer gives the leader a
+/// periodic FS-walk reconcile so it always converges on disk truth without a
+/// restart or a hand-run `rebuild index`.
+///
+/// Five minutes balances staleness against cost. The reconcile diffs by
+/// content-hash/mtime and only marks genuinely-changed rows dirty, so a
+/// steady-state pass over an unchanged tree is a bounded hash-and-compare with
+/// no re-indexing -- cheap enough to run often, infrequent enough not to compete
+/// with the event fast path that already handles the common edit case in ~1s.
+const RECONCILE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// Periodic correctness floor for the leader's index.
+///
+/// Runs the [`startup_cleanup`](swissarmyhammer_code_context::startup_cleanup)
+/// FS-walk reconcile under the shared write lock, then drains the resulting
+/// dirty set (`WHERE ts_indexed = 0`) via the same indexer the watcher uses.
+/// This is the entrypoint the leader's [`run_periodic_reconcile`] timer calls,
+/// and the one a unit test drives directly with `embedder = None` to skip the
+/// model load.
+///
+/// `embedder` is threaded through to
+/// [`index_discovered_files_with_embedder`](super::index_discovered_files_with_embedder):
+/// `Some` embeds chunks, `None` writes chunks without embeddings (the test path,
+/// and the soft fallback when the model is unavailable).
+///
+/// `shutdown` is the leader's step-down flag, forwarded to the indexer so a
+/// reconcile pass stops writing the shared DB promptly once the leader has
+/// stepped down.
+pub(crate) async fn reconcile_workspace_with_embedder(
+    workspace_root: &Path,
+    db: &SharedDb,
+    embedder: Option<std::sync::Arc<dyn model_embedding::TextEmbedder>>,
+    reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
+    shutdown: &swissarmyhammer_code_context::ShutdownFlag,
+) {
+    // FS-walk reconcile under the write lock: deletes vanished files, marks
+    // hash-changed files dirty, and inserts new files with ts_indexed = 0.
+    {
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        match swissarmyhammer_code_context::startup_cleanup(&conn, workspace_root) {
+            Ok(stats) => tracing::info!(
+                "code-context periodic reconcile: {} added, {} removed, {} dirty, {} unchanged",
+                stats.files_added,
+                stats.files_removed,
+                stats.files_dirty,
+                stats.files_unchanged,
+            ),
+            Err(e) => {
+                tracing::warn!("code-context periodic reconcile: FS walk failed: {}", e);
+                return;
+            }
+        }
+    }
+
+    // Drain the dirty set the reconcile just produced.
+    super::index_discovered_files_with_embedder(
+        workspace_root,
+        std::sync::Arc::clone(db),
+        embedder,
+        reporter,
+        std::sync::Arc::clone(shutdown),
+    )
+    .await;
+}
+
+/// Run [`reconcile_workspace_with_embedder`] with the production embedder.
+///
+/// Builds the default chunk embedder (or `None` on load failure / opt-out) and
+/// uses the no-op progress reporter -- the periodic reconcile has no JSON-RPC
+/// progress channel, mirroring the watcher's own re-index path.
+async fn reconcile_workspace(
+    workspace_root: &Path,
+    db: &SharedDb,
+    shutdown: &swissarmyhammer_code_context::ShutdownFlag,
+) {
+    let embedder = super::build_default_embedder().await;
+    reconcile_workspace_with_embedder(
+        workspace_root,
+        db,
+        embedder,
+        swissarmyhammer_code_context::noop_reporter(),
+        shutdown,
+    )
+    .await;
+}
+
+/// Drive [`reconcile_workspace`] forever on a [`RECONCILE_INTERVAL`] timer.
+///
+/// This is the leader's self-heal loop. It MUST be spawned only on the leader --
+/// it holds and writes through the leader's shared write connection. Followers
+/// route to the leader and never run it. The caller (the leader-gated worker
+/// spawn in the MCP server) is responsible for that gating, exactly as it is for
+/// the watcher itself.
+pub fn run_periodic_reconcile(
+    workspace_root: impl AsRef<Path>,
+    db: SharedDb,
+    shutdown: swissarmyhammer_code_context::ShutdownFlag,
+) -> tokio::task::JoinHandle<()> {
+    let workspace_root = workspace_root.as_ref().to_path_buf();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(RECONCILE_INTERVAL);
+        // Skip the immediate first tick: startup already ran startup_cleanup, so
+        // the first periodic reconcile fires one interval later.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            // Stop before any reconcile write once the leader has stepped down.
+            if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            reconcile_workspace(&workspace_root, &db, &shutdown).await;
+        }
+    })
 }
 
 #[cfg(test)]
@@ -425,18 +593,23 @@ mod tests {
     }
 
     #[test]
-    fn test_create_event_on_unknown_file_does_not_error() {
+    fn test_create_event_on_unknown_file_inserts_dirty_row() {
         let conn = test_db();
 
-        // Created event for a file not yet in the DB — should succeed with 0 rows
+        // Created event for a file not yet in the DB — the watcher upserts a
+        // dirty row so the file enters the `ts_indexed = 0` dirty set.
         let watcher = FanoutWatcher::new();
         let events = vec![FileEvent::Created(PathBuf::from("src/new_file.rs"))];
         let result = process_file_events(&conn, &watcher, &events);
 
-        // FanoutWatcher does UPDATE ... WHERE file_path = ?, which returns 0 rows
-        // for a file not in the DB — that's not an error
-        assert_eq!(result.dirty_count, 0);
+        // INSERT ... ON CONFLICT affects 1 row for a previously unknown file.
+        assert_eq!(result.dirty_count, 1);
         assert_eq!(result.error_count, 0);
+
+        // The row exists and is marked dirty.
+        assert!(file_exists(&conn, "src/new_file.rs"));
+        assert_eq!(get_ts_indexed(&conn, "src/new_file.rs"), Some(0));
+        assert_eq!(get_lsp_indexed(&conn, "src/new_file.rs"), Some(0));
     }
 
     #[test]
@@ -552,6 +725,210 @@ mod tests {
         assert_eq!(result.deleted_count, 0);
     }
 
+    /// Regression: a file created AFTER the startup scan must get indexed.
+    ///
+    /// Drives the same dirty-set indexing path the live watcher runs — a
+    /// `Created` event through [`process_file_events`], then the dirty-set
+    /// indexer — and asserts the brand-new file (which has no pre-existing
+    /// `indexed_files` row) is inserted, tree-sitter indexed, and produces
+    /// chunks.
+    ///
+    /// The one deliberate divergence from production: production
+    /// [`process_ok_events`] calls [`super::index_discovered_files_async`],
+    /// which first builds the default embedder and then delegates to
+    /// [`super::super::index_discovered_files_with_embedder`]. This test calls
+    /// `index_discovered_files_with_embedder` directly with `embedder = None`,
+    /// skipping the model load so the test is deterministic and fast (no model
+    /// download/inference, no flakiness). Embedding is orthogonal to the bug
+    /// under test — the indexing/insert path exercised is identical.
+    ///
+    /// Before the fix, `Created` did UPDATE-only SQL that matched 0 rows for a
+    /// row-less file, so it never entered the dirty set and was never indexed.
+    #[tokio::test]
+    async fn watcher_indexes_file_created_after_startup() {
+        use std::sync::{Arc, Mutex};
+        use swissarmyhammer_code_context::{FanoutWatcher, FileEvent};
+
+        // --- workspace with ONE file already indexed at "startup" ---
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/existing.rs"), "pub fn a() {}").unwrap();
+
+        let conn = Connection::open(dir.path().join("index.db")).unwrap();
+        configure_connection(&conn).unwrap();
+        create_schema(&conn).unwrap();
+        // existing.rs is already in the index (as startup_cleanup would have left it)
+        conn.execute(
+            "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed)
+             VALUES ('src/existing.rs', X'00', 13, 1000, 1, 1)",
+            [],
+        )
+        .unwrap();
+        let db: swissarmyhammer_code_context::SharedDb = Arc::new(Mutex::new(conn));
+
+        // --- a NEW file is created AFTER startup (what /finish does) ---
+        std::fs::write(
+            dir.path().join("src/created_after_start.rs"),
+            "pub fn brand_new() -> i32 { 42 }",
+        )
+        .unwrap();
+
+        // --- exactly what run_watcher does on the resulting notify event ---
+        let fanout = FanoutWatcher::new();
+        let events = vec![FileEvent::Created(std::path::PathBuf::from(
+            "src/created_after_start.rs",
+        ))];
+        {
+            let conn = db.lock().unwrap();
+            super::process_file_events(&conn, &fanout, &events);
+        }
+        super::super::index_discovered_files_with_embedder(
+            dir.path(),
+            Arc::clone(&db),
+            None,
+            swissarmyhammer_code_context::noop_reporter(),
+            swissarmyhammer_code_context::new_shutdown_flag(),
+        )
+        .await;
+
+        // --- ASSERT the new file is indexed ---
+        let conn = db.lock().unwrap();
+        assert!(
+            file_exists(&conn, "src/created_after_start.rs"),
+            "new file created after startup must be inserted into indexed_files"
+        );
+        assert_eq!(
+            get_ts_indexed(&conn, "src/created_after_start.rs"),
+            Some(1),
+            "new file must be tree-sitter indexed"
+        );
+        let chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ts_chunks WHERE file_path = 'src/created_after_start.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(chunks > 0, "new file must produce ts_chunks");
+    }
+
+    /// Regression: a long-lived leader must self-heal when filesystem changes
+    /// arrive with NO watcher event at all.
+    ///
+    /// This is the correctness floor underneath the watcher's event fast-path.
+    /// It mutates the filesystem the way a missed/never-delivered notify event
+    /// would leave it -- a brand-new file AND a delete+recreate of an existing
+    /// file, neither announced to the watcher -- then invokes the periodic
+    /// reconcile entrypoint directly (the function the leader's timer calls) and
+    /// asserts both files converge to the indexed state.
+    ///
+    /// As in [`watcher_indexes_file_created_after_startup`], the embedder is
+    /// `None` so no model loads -- the bug under test is the FS-walk reconcile,
+    /// orthogonal to embedding, which keeps the unit test deterministic and well
+    /// under the 10s budget.
+    ///
+    /// Before the periodic reconcile existed, nothing re-walked the filesystem
+    /// after startup, so the new and recreated files never re-entered the dirty
+    /// set and stayed absent/stale forever.
+    #[tokio::test]
+    async fn periodic_reconcile_indexes_files_changed_without_a_watcher_event() {
+        use std::sync::{Arc, Mutex};
+
+        // --- workspace indexed as the leader would leave it at startup ---
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/existing.rs"), "pub fn a() {}").unwrap();
+
+        let conn = Connection::open(dir.path().join("index.db")).unwrap();
+        configure_connection(&conn).unwrap();
+        create_schema(&conn).unwrap();
+        let db: swissarmyhammer_code_context::SharedDb = Arc::new(Mutex::new(conn));
+        let sd = swissarmyhammer_code_context::new_shutdown_flag();
+
+        // Initial reconcile populates indexed_files and drives the dirty set,
+        // exactly as the leader's startup pass does.
+        super::reconcile_workspace_with_embedder(
+            dir.path(),
+            &db,
+            None,
+            swissarmyhammer_code_context::noop_reporter(),
+            &sd,
+        )
+        .await;
+        {
+            let conn = db.lock().unwrap();
+            assert_eq!(
+                get_ts_indexed(&conn, "src/existing.rs"),
+                Some(1),
+                "existing file should be indexed after the initial reconcile"
+            );
+        }
+
+        // --- mutate the FS with NO watcher event delivered ---
+        // 1. a brand-new file that was never announced
+        std::fs::write(
+            dir.path().join("src/never_announced.rs"),
+            "pub fn brand_new() -> i32 { 42 }",
+        )
+        .unwrap();
+        // 2. delete+recreate an existing file with different contents (the
+        //    rename/replace pattern editors use, whose event can be missed)
+        std::fs::remove_file(dir.path().join("src/existing.rs")).unwrap();
+        std::fs::write(
+            dir.path().join("src/existing.rs"),
+            "pub fn a() {}\npub fn b() {}",
+        )
+        .unwrap();
+
+        // --- invoke the periodic reconcile entrypoint directly ---
+        super::reconcile_workspace_with_embedder(
+            dir.path(),
+            &db,
+            None,
+            swissarmyhammer_code_context::noop_reporter(),
+            &sd,
+        )
+        .await;
+
+        // --- ASSERT both files converged to indexed (ts_indexed 0 -> indexed) ---
+        let conn = db.lock().unwrap();
+
+        assert!(
+            file_exists(&conn, "src/never_announced.rs"),
+            "new file with no watcher event must be reconciled into indexed_files"
+        );
+        assert_eq!(
+            get_ts_indexed(&conn, "src/never_announced.rs"),
+            Some(1),
+            "new file must be tree-sitter indexed by the periodic reconcile"
+        );
+        let new_chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ts_chunks WHERE file_path = 'src/never_announced.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(new_chunks > 0, "new file must produce ts_chunks");
+
+        assert_eq!(
+            get_ts_indexed(&conn, "src/existing.rs"),
+            Some(1),
+            "recreated file must be re-indexed by the periodic reconcile"
+        );
+        let recreated_chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ts_chunks WHERE file_path = 'src/existing.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            recreated_chunks > 0,
+            "recreated file must produce ts_chunks"
+        );
+    }
+
     #[test]
     fn test_modify_clears_both_index_flags() {
         let conn = test_db();
@@ -570,5 +947,75 @@ mod tests {
 
         assert_eq!(get_ts_indexed(&conn, "src/partial.rs"), Some(0));
         assert_eq!(get_lsp_indexed(&conn, "src/partial.rs"), Some(0));
+    }
+
+    /// Driving `reconcile_workspace_with_embedder` with the shutdown flag
+    /// already set must NOT index the file: the FS-walk reconcile inserts the
+    /// new file row (`ts_indexed = 0`), but the indexer it then calls hits its
+    /// top-of-loop `break` and writes no chunks and never flips `ts_indexed`.
+    /// This drives the real production code path (no inline guard), so it would
+    /// fail if the indexer's step-down break were removed.
+    #[tokio::test]
+    async fn periodic_reconcile_stops_writing_after_shutdown_flag_set() {
+        use std::sync::{Arc, Mutex};
+        use swissarmyhammer_code_context::new_shutdown_flag;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+
+        let conn = Connection::open(dir.path().join("index.db")).unwrap();
+        configure_connection(&conn).unwrap();
+        create_schema(&conn).unwrap();
+        let db: swissarmyhammer_code_context::SharedDb = Arc::new(Mutex::new(conn));
+
+        // A brand-new source file that a reconcile WOULD pick up and index.
+        std::fs::write(
+            dir.path().join("src/never_announced.rs"),
+            "pub fn brand_new() -> i32 { 42 }",
+        )
+        .unwrap();
+
+        // Step-down already happened: the flag is set before the pass.
+        let shutdown = new_shutdown_flag();
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        // Drive the REAL production path unconditionally. The reconcile inserts
+        // the file row, then the indexer breaks on the first iteration because
+        // the flag is set.
+        super::reconcile_workspace_with_embedder(
+            dir.path(),
+            &db,
+            None,
+            swissarmyhammer_code_context::noop_reporter(),
+            &shutdown,
+        )
+        .await;
+
+        let conn = db.lock().unwrap();
+        // The FS-walk reconcile inserted the row...
+        assert!(
+            file_exists(&conn, "src/never_announced.rs"),
+            "startup_cleanup should have inserted the new file row"
+        );
+        // ...but the indexer's step-down break must have left it un-indexed:
+        // ts_indexed still 0 and no chunks written.
+        assert_eq!(
+            get_ts_indexed(&conn, "src/never_announced.rs"),
+            Some(0),
+            "with the shutdown flag set, the indexer must break before flipping \
+             ts_indexed, leaving the file dirty"
+        );
+        let chunk_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ts_chunks WHERE file_path = ?1",
+                ["src/never_announced.rs"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            chunk_count, 0,
+            "with the shutdown flag set, the indexer must write zero chunks for \
+             the new file"
+        );
     }
 }

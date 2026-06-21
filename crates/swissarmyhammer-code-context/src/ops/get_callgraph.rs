@@ -96,7 +96,7 @@ pub struct CallGraph {
 /// # Errors
 ///
 /// Returns [`CodeContextError::Database`] on SQLite failures.
-/// Returns [`CodeContextError::Pattern`] if the symbol cannot be resolved.
+/// Returns [`CodeContextError::NotFound`] if the symbol cannot be resolved.
 pub fn get_callgraph(
     conn: &Connection,
     options: &CallGraphOptions,
@@ -263,7 +263,7 @@ fn resolve_by_name(conn: &Connection, name: &str) -> Result<CallGraphNode, CodeC
         }
     }
 
-    Err(CodeContextError::Pattern(format!(
+    Err(CodeContextError::NotFound(format!(
         "symbol not found: {}",
         name
     )))
@@ -600,7 +600,22 @@ mod tests {
             },
         );
 
-        assert!(result.is_err());
+        // A legit not-found must surface as NotFound, never mislabeled as a
+        // regex error (the historical bug: "invalid regex pattern: symbol
+        // not found: ...").
+        match result {
+            Err(CodeContextError::NotFound(msg)) => {
+                assert!(
+                    msg.contains("symbol not found: nonexistent"),
+                    "message should name the missing symbol: {msg}"
+                );
+                assert!(
+                    !msg.contains("invalid regex pattern"),
+                    "not-found must not be labeled as a regex error: {msg}"
+                );
+            }
+            other => panic!("expected NotFound error, got: {other:?}"),
+        }
     }
 
     #[test]

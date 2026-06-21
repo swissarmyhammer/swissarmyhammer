@@ -23,6 +23,17 @@ pub enum CodeContextError {
     #[error("invalid regex pattern: {0}")]
     Pattern(String),
 
+    /// A requested symbol, file, or other entity was not found.
+    ///
+    /// Carries an already-formatted human-readable message (rendered
+    /// verbatim via `#[error("{0}")]`, with no prefix). This is the
+    /// not-found carrier for structural ops such as `get_callgraph` and
+    /// `get_blastradius`; it must NOT be conflated with [`Self::Pattern`],
+    /// whose `"invalid regex pattern: "` prefix only makes sense for a
+    /// genuine `Regex::new` failure.
+    #[error("{0}")]
+    NotFound(String),
+
     /// LSP communication error
     #[error("LSP error: {0}")]
     LspError(String),
@@ -70,4 +81,15 @@ pub enum CodeContextError {
         /// Path to the code-context SQLite database file.
         db_path: PathBuf,
     },
+}
+
+impl From<swissarmyhammer_lsp::LspError> for CodeContextError {
+    /// Map a transport-level [`swissarmyhammer_lsp::LspError`] into the
+    /// code-context error space. The LSP client and server-spec registry live
+    /// in `swissarmyhammer-lsp`; the symbol-collection layer here wraps its
+    /// failures as [`CodeContextError::LspError`] so `?` propagation works
+    /// across the crate boundary.
+    fn from(err: swissarmyhammer_lsp::LspError) -> Self {
+        CodeContextError::LspError(err.to_string())
+    }
 }

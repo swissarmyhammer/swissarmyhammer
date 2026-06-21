@@ -8134,7 +8134,9 @@ dependencies = [
  "swissarmyhammer-directory",
  "swissarmyhammer-entity-search",
  "swissarmyhammer-leader-election",
+ "swissarmyhammer-lsp",
  "swissarmyhammer-project-detection",
+ "swissarmyhammer-search",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -8209,6 +8211,26 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "swissarmyhammer-diagnostics"
+version = "0.15.1"
+dependencies = [
+ "async-watcher",
+ "lsp-types",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "swissarmyhammer-code-context",
+ "swissarmyhammer-leader-election",
+ "swissarmyhammer-lsp",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-rust",
+ "which",
 ]
 
 [[package]]
@@ -8381,6 +8403,7 @@ dependencies = [
  "fs2",
  "include_dir",
  "open",
+ "rusqlite",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -8389,6 +8412,7 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-directory",
+ "swissarmyhammer-embedding",
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",
  "swissarmyhammer-filter-expr",
@@ -8396,6 +8420,7 @@ dependencies = [
  "swissarmyhammer-kanban",
  "swissarmyhammer-operations",
  "swissarmyhammer-perspectives",
+ "swissarmyhammer-search",
  "swissarmyhammer-store",
  "swissarmyhammer-views",
  "tempfile",
@@ -8412,11 +8437,14 @@ dependencies = [
 name = "swissarmyhammer-leader-election"
 version = "0.15.1"
 dependencies = [
+ "filetime",
  "fs2",
  "md5",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "zmq",
 ]
@@ -8425,12 +8453,12 @@ dependencies = [
 name = "swissarmyhammer-lsp"
 version = "0.15.1"
 dependencies = [
+ "include_dir",
  "lsp-types",
  "once_cell",
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "swissarmyhammer-code-context",
  "swissarmyhammer-leader-election",
  "swissarmyhammer-project-detection",
  "tempfile",
@@ -8530,6 +8558,15 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "tempfile",
+]
+
+[[package]]
+name = "swissarmyhammer-search"
+version = "0.15.1"
+dependencies = [
+ "convert_case",
+ "serde",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -8688,6 +8725,7 @@ dependencies = [
  "hyper",
  "ignore",
  "libc",
+ "lsp-types",
  "md5",
  "mirdan",
  "model-embedding",
@@ -8709,6 +8747,7 @@ dependencies = [
  "swissarmyhammer-code-context",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
+ "swissarmyhammer-diagnostics",
  "swissarmyhammer-directory",
  "swissarmyhammer-embedding",
  "swissarmyhammer-git",

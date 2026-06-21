@@ -262,16 +262,20 @@ fn required_param_names_for_op(op: &dyn Operation) -> Vec<String> {
 /// The op field is included with enum of all operations.
 fn collect_all_parameters(operations: &[&dyn Operation]) -> Map<String, Value> {
     let mut properties = Map::new();
-    let mut seen_params: HashMap<String, (ParamType, String)> = HashMap::new();
+    #[allow(clippy::type_complexity)]
+    let mut seen_params: HashMap<String, (ParamType, String, Option<&'static [&'static str]>)> =
+        HashMap::new();
 
     // Collect all unique parameters
     for op in operations {
         for param in op.parameters() {
             let key = param.name.to_string();
             // Keep the first description we see for each parameter name
-            seen_params
-                .entry(key)
-                .or_insert((param.param_type, param.description.to_string()));
+            seen_params.entry(key).or_insert((
+                param.param_type,
+                param.description.to_string(),
+                param.allowed_values,
+            ));
         }
     }
 
@@ -286,7 +290,7 @@ fn collect_all_parameters(operations: &[&dyn Operation]) -> Map<String, Value> {
     );
 
     // Add all collected parameters
-    for (name, (param_type, description)) in seen_params {
+    for (name, (param_type, description, allowed_values)) in seen_params {
         let json_type = param_type_to_json_schema_type(param_type);
 
         let mut prop = Map::new();
@@ -298,6 +302,10 @@ fn collect_all_parameters(operations: &[&dyn Operation]) -> Map<String, Value> {
 
         if param_type == ParamType::Array {
             prop.insert("items".to_string(), json!({"type": "string"}));
+        }
+
+        if let Some(values) = allowed_values {
+            prop.insert("enum".to_string(), json!(values));
         }
 
         properties.insert(name, Value::Object(prop));
@@ -340,6 +348,11 @@ fn operation_to_schema(op: &dyn Operation) -> Value {
         // For array types, add items schema
         if param.param_type == ParamType::Array {
             prop_schema.insert("items".to_string(), json!({"type": "string"}));
+        }
+
+        // Closed value sets become a JSON Schema `enum`.
+        if let Some(values) = param.allowed_values {
+            prop_schema.insert("enum".to_string(), json!(values));
         }
 
         properties.insert(param.name.to_string(), Value::Object(prop_schema));
@@ -446,6 +459,72 @@ mod tests {
         assert!(enum_vals.contains(&json!("add task")));
         assert!(enum_vals.contains(&json!("get task")));
         assert!(enum_vals.contains(&json!("list tasks")));
+    }
+
+    /// A mock op carrying one `allowed_values`-constrained param and one plain
+    /// param, to prove enum emission and back-compat in one place.
+    struct MockEnumOp;
+
+    static MOCK_ENUM_PARAMS: &[ParamMeta] = &[
+        ParamMeta::new("severity").allowed_values(&["error", "warning", "info", "hint"]),
+        ParamMeta::new("plain"),
+    ];
+
+    impl Operation for MockEnumOp {
+        fn verb(&self) -> &'static str {
+            "check"
+        }
+        fn noun(&self) -> &'static str {
+            "thing"
+        }
+        fn description(&self) -> &'static str {
+            "mock op with an enum-constrained param"
+        }
+        fn parameters(&self) -> &'static [ParamMeta] {
+            MOCK_ENUM_PARAMS
+        }
+    }
+
+    #[test]
+    fn allowed_values_emits_enum_and_plain_param_is_unchanged() {
+        let ops: Vec<&dyn Operation> = vec![&MockEnumOp];
+
+        // Top-level merged properties.
+        let props = collect_all_parameters(&ops);
+        assert_eq!(
+            props["severity"]["enum"],
+            json!(["error", "warning", "info", "hint"]),
+            "a param with allowed_values must emit a JSON Schema enum"
+        );
+        assert!(
+            props["plain"].get("enum").is_none(),
+            "a param without allowed_values must not emit an enum (back-compat)"
+        );
+
+        // Per-operation schema.
+        let op_schema = operation_to_schema(&MockEnumOp);
+        assert_eq!(
+            op_schema["properties"]["severity"]["enum"],
+            json!(["error", "warning", "info", "hint"])
+        );
+        assert!(op_schema["properties"]["plain"].get("enum").is_none());
+    }
+
+    #[test]
+    fn existing_ops_without_allowed_values_emit_no_enum() {
+        // Back-compat guard: ops that predate allowed_values are byte-for-byte
+        // unchanged — none of their params gain an `enum`.
+        let ops: Vec<&dyn Operation> = vec![&MockAddTask, &MockGetTask, &MockListTasks];
+        let props = collect_all_parameters(&ops);
+        for (name, prop) in &props {
+            if name == "op" {
+                continue; // the op selector legitimately has an enum
+            }
+            assert!(
+                prop.get("enum").is_none(),
+                "param {name} unexpectedly gained an enum"
+            );
+        }
     }
 
     #[test]

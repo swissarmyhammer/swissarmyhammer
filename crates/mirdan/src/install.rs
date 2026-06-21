@@ -839,7 +839,7 @@ async fn deploy_agent(
 // A `Profile` is the *only* thing that differs between consumers (sah, the tool
 // CLIs, the kanban desktop app): a declarative manifest of what to install — an
 // MCP server, a selection of builtin skills, a selection of builtin agents, and
-// the sah-only statusline/preamble flags. `init_profile`/`deinit_profile` are
+// the sah-only statusline flag. `init_profile`/`deinit_profile` are
 // the single code path that interprets that data; there are no per-consumer
 // branches. Builtin skills and agents are rendered once through the prompt
 // library's Liquid engine (so `{% include "_partials/..." %}` references expand)
@@ -940,7 +940,7 @@ impl ProfileMcpServer {
 ///
 /// This is the single value that differs per consumer; [`init_profile`] /
 /// [`deinit_profile`] interpret it with no per-consumer branching. The sah-only
-/// concerns (`statusline`, `preamble`) are plain declarative flags so that sah
+/// concern (`statusline`) is a plain declarative flag so that sah
 /// is "just a bigger profile" rather than a special case.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Profile {
@@ -961,6 +961,14 @@ pub struct Profile {
     pub statusline: bool,
     /// Whether to ensure the CLAUDE.md preamble is present.
     pub preamble: bool,
+    /// Whether to install the edit-surface redirect fragment: a
+    /// `permissions.deny` on the native `Edit`/`Write` tools so every
+    /// mutation flows through the served `files` MCP replacement (the
+    /// diagnostics-instrumented path), mirroring how `shell` supersedes `Bash`.
+    /// The deny alone closes the surface — no `PreToolUse` hook. Claude-shaped
+    /// and inert on hosts that don't read that key (see
+    /// [`apply_profile_edit_redirect`]).
+    pub edit_redirect: bool,
 }
 
 /// Map an [`InitScope`] to the boolean `global` flag the deploy/store helpers
@@ -1525,6 +1533,136 @@ fn apply_statusline_at(path: &Path, install: bool) -> Result<bool, RegistryError
     Ok(changed)
 }
 
+// ── Edit-surface redirect (close the write surface) ──────────────────
+//
+// An MCP server cannot disable a host's *native* built-in tools, so closing
+// the editing surface — forcing every mutation through the served `files` MCP
+// replacement, so diagnostics always ride the result — ships as an installable
+// Claude Code settings fragment that `permissions.deny`s the native
+// mutators (`Edit`, `Write`). The deny alone closes the surface:
+// the model is steered to the served `files` replacement, exactly as `shell`
+// supersedes the native `Bash` with a plain deny and no redirect hook. (An
+// earlier version also installed a `PreToolUse` redirect hook; it was redundant
+// once `files` is served as the replacement, and it dead-ended wherever that
+// replacement isn't mounted — so it was dropped.)
+//
+// The deny is a plain Claude-shaped settings key, harmless on agents that don't
+// read it — so the fragment is a no-op there rather than an error.
+
+/// The native Claude Code mutator tools the redirect fragment denies, so every
+/// mutation is forced through the served `files` MCP replacement. Kept as data
+/// (not spelled into control flow) so the deny list derives from one source.
+pub const EDIT_REDIRECT_DENY_TOOLS: &[&str] = &["Edit", "Write"];
+
+/// The installable Claude Code settings fragment that closes the write surface.
+///
+/// Denies the native `Edit`/`Write` tools — and nothing else. The
+/// model is steered to the served `files` MCP replacement, exactly as `shell`
+/// replaces the native `Bash` with a plain `permissions.deny` and no redirect
+/// hook. The deny alone closes the surface; a `PreToolUse` redirect would be
+/// redundant and breaks wherever the replacement isn't mounted (the host's own
+/// write attempts, nested contexts). This is the single source of truth for the
+/// fragment's shape; [`apply_edit_redirect_at`] merges its parts into a real
+/// settings file without clobbering unrelated keys.
+fn desired_edit_redirect_fragment() -> serde_json::Value {
+    serde_json::json!({
+        "permissions": {
+            "deny": EDIT_REDIRECT_DENY_TOOLS,
+        }
+    })
+}
+
+/// JSON pointer for the `permissions.deny` array (Claude Code shape).
+const PERMISSIONS_DENY_POINTER: &str = "/permissions/deny";
+
+/// Object keys used to read the canonical fragment's parts back out (kept in one
+/// place so the pointer strings and these accessors can never drift).
+const POINTER_KEY_PERMISSIONS: &str = "permissions";
+const POINTER_KEY_DENY: &str = "deny";
+
+/// Merge the edit-redirect fragment into the settings file at `path`, or strip
+/// it when `install` is false.
+///
+/// On install, the three deny entries are added idempotently (existing unrelated
+/// deny entries are preserved, and re-running adds nothing). On removal, exactly
+/// those entries are taken back out and unrelated keys are left intact. A missing
+/// file is created on install and a no-op on removal. Returns `Ok(true)` when the
+/// file changed.
+fn apply_edit_redirect_at(path: &Path, install: bool) -> Result<bool, RegistryError> {
+    if !install && !path.exists() {
+        return Ok(false);
+    }
+
+    // Derive the exact pieces to merge from the canonical fragment, so the
+    // fragment validated by tests is the same shape written to disk — there is
+    // one source of truth for what "the edit-redirect" is.
+    let fragment = desired_edit_redirect_fragment();
+    let deny_entries = fragment[POINTER_KEY_PERMISSIONS][POINTER_KEY_DENY]
+        .as_array()
+        .expect("fragment permissions.deny is an array");
+
+    let mut settings = settings::read_json(path)?;
+    let mut changed = false;
+    for entry in deny_entries {
+        let one = if install {
+            settings::ensure_array_contains(&mut settings, PERMISSIONS_DENY_POINTER, entry)
+        } else {
+            settings::remove_from_array(&mut settings, PERMISSIONS_DENY_POINTER, entry)
+        };
+        changed |= one;
+    }
+
+    if changed {
+        settings::write_json(path, &settings)?;
+    }
+    Ok(changed)
+}
+
+/// Install the edit-redirect fragment into every detected agent's settings file,
+/// or strip it when `install` is false. Root-aware so project-scope settings
+/// files resolve against `root` instead of `current_dir()`. Mirrors
+/// [`apply_profile_statusline`]: the fragment is Claude-shaped and inert on
+/// agents that do not read those keys.
+fn apply_profile_edit_redirect(
+    install: bool,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    let verb = if install { "Installed" } else { "Removed" };
+    for_each_detected_agent(
+        scope,
+        reporter,
+        |agent, global| {
+            let Some(path) = resolve_agent_file(
+                agent,
+                global,
+                root,
+                agents::agent_global_settings_file,
+                agents::agent_project_settings_file,
+            ) else {
+                return Ok(None);
+            };
+            Ok(
+                apply_edit_redirect_at(&path, install)?.then(|| AgentAction {
+                    verb: verb.to_string(),
+                    message: format!(
+                        "edit-surface redirect for {} ({})",
+                        agent.name,
+                        path.display()
+                    ),
+                }),
+            )
+        },
+        |changed| {
+            InitResult::ok(
+                "profile-edit-redirect",
+                format!("{verb} edit-surface redirect for {changed} agent(s)"),
+            )
+        },
+    )
+}
+
 /// Ensure the CLAUDE.md preamble is present in every detected agent's
 /// instructions file, or strip it when `install` is false. Root-aware so
 /// project-scope instructions files resolve against `root`.
@@ -1801,7 +1939,7 @@ fn unregister_mcp_server_at(
 /// 2. render the selected builtin skills with Liquid + the partial library and
 ///    deploy them via store + symlink,
 /// 3. render and deploy the selected builtin agents the same way,
-/// 4. apply the statusline / preamble when the profile sets those flags.
+/// 4. apply the statusline when the profile sets that flag.
 ///
 /// `root` makes the whole operation CWD-free: project-scope skill/agent stores,
 /// agent directories, and MCP configs are resolved against `root` instead of the
@@ -1871,14 +2009,18 @@ pub fn init_profile(
         results.extend(apply_profile_preamble(true, scope, root, reporter));
     }
 
+    if profile.edit_redirect {
+        results.extend(apply_profile_edit_redirect(true, scope, root, reporter));
+    }
+
     results
 }
 
 /// Remove everything a [`Profile`] declares, mirroring [`init_profile`].
 ///
 /// Unregisters the MCP server, removes the selected skills/agents from detected
-/// agents, and strips the statusline block / CLAUDE.md preamble when the profile
-/// declared them. `root` roots project-scope paths so deinit is CWD-free.
+/// agents, and strips the statusline block when the profile declared it. `root`
+/// roots project-scope paths so deinit is CWD-free.
 ///
 /// # Version coupling
 ///
@@ -1976,6 +2118,10 @@ pub fn deinit_profile(
         results.extend(apply_profile_preamble(false, scope, root, reporter));
     }
 
+    if profile.edit_redirect {
+        results.extend(apply_profile_edit_redirect(false, scope, root, reporter));
+    }
+
     results
 }
 
@@ -1990,7 +2136,7 @@ pub fn deinit_profile(
 /// "profile then registry, concatenate results" sequence in four places.
 ///
 /// Results are ordered profile-first (matching every prior consumer): the MCP
-/// server, skills, agents, statusline/preamble, then the registry components in
+/// server, skills, agents, statusline, then the registry components in
 /// priority order. `root` is forwarded to [`init_profile`] for CWD-free
 /// installs. Compute the exit code from the returned results' `status` fields.
 pub fn init_profile_with_registry(
@@ -3046,7 +3192,7 @@ struct AgentAction {
 
 /// Drive an applier over every detected agent for the root-explicit init path.
 ///
-/// Owns the structural skeleton shared by the statusline, preamble, and MCP
+/// Owns the structural skeleton shared by the statusline and MCP
 /// register/unregister appliers: load detected agents (short-circuiting to an
 /// error `InitResult` on failure), compute the `global` scope flag, run `apply`
 /// per agent, emit an Action event for each `Ok(Some(_))` change, emit a Warning
@@ -5199,7 +5345,7 @@ mod profile_tests {
     /// declares a relative skill dir (`.fake/skills`), agent dir (`.fake/agents`),
     /// `.mcp.json` MCP config, settings file (`.fake/settings.json`), and
     /// instructions file (`.fake/CLAUDE.md`) — the artifact kinds a profile
-    /// installs (skills/agents/mcp + statusline/preamble).
+    /// installs (skills/agents/mcp + statusline).
     fn write_profile_agents_config(project_dir: &Path) -> PathBuf {
         let agents_yaml = format!(
             r#"agents:
@@ -5234,6 +5380,7 @@ mod profile_tests {
             validators: None,
             statusline: false,
             preamble: false,
+            edit_redirect: false,
         }
     }
 
@@ -5366,13 +5513,12 @@ mod profile_tests {
         assert!(std::fs::symlink_metadata(root.join(".fake/skills/commit")).is_err());
     }
 
-    /// A profile that declares `statusline`/`preamble` writes the `statusLine`
-    /// block and the CLAUDE.md preamble into the detected agent's files, and
-    /// `deinit_profile` removes both. Exercised with an explicit `root` to prove
-    /// step 4 is CWD-free.
+    /// A profile that declares `statusline` writes the `statusLine` block into
+    /// the detected agent's settings file, and `deinit_profile` removes it.
+    /// Exercised with an explicit `root` to prove step 4 is CWD-free.
     #[test]
     #[serial]
-    fn init_profile_statusline_and_preamble_install_and_deinit() {
+    fn init_profile_statusline_install_and_deinit() {
         let root_dir = tempfile::tempdir().unwrap();
         let root = root_dir.path().canonicalize().unwrap();
 
@@ -5386,7 +5532,6 @@ mod profile_tests {
 
         let profile = Profile {
             statusline: true,
-            preamble: true,
             ..Profile::default()
         };
         let reporter = NullReporter;
@@ -5395,7 +5540,7 @@ mod profile_tests {
             results
                 .iter()
                 .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
-            "statusline/preamble init must not error: {results:?}"
+            "statusline init must not error: {results:?}"
         );
 
         // Statusline block written to the agent's settings file under root.
@@ -5405,18 +5550,10 @@ mod profile_tests {
         assert_eq!(settings["statusLine"]["type"], "command");
         assert_eq!(settings["statusLine"]["command"], "sah statusline");
 
-        // Preamble prepended to the agent's instructions file under root.
-        let claude_md = root.join(".fake/CLAUDE.md");
-        let body = std::fs::read_to_string(&claude_md).unwrap();
-        assert!(
-            status::preamble_present_in(&body),
-            "preamble must be present: {body:?}"
-        );
-
         // Nothing leaked into the CWD.
         assert!(!cwd.join(".fake").exists(), "step 4 must not touch CWD");
 
-        // Deinit strips both.
+        // Deinit strips the statusline block.
         let results = deinit_profile(&profile, InitScope::Project, Some(&root), &reporter);
         assert!(results
             .iter()
@@ -5427,10 +5564,91 @@ mod profile_tests {
             settings.get("statusLine").is_none(),
             "statusLine must be removed on deinit"
         );
-        // The instructions file held only the preamble, so deinit deletes it.
+    }
+
+    /// `init_profile` with `edit_redirect: true` merges the native-mutator deny
+    /// into the detected agent's settings file (no `PreToolUse` redirect hook),
+    /// preserving unrelated keys; `deinit_profile` strips the deny back out.
+    #[test]
+    #[serial]
+    fn init_profile_installs_edit_redirect_and_deinit_removes() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+        let cwd_dir = tempfile::tempdir().unwrap();
+        let cwd = cwd_dir.path().canonicalize().unwrap();
+        let _cwd = CurrentDirGuard::new(&cwd).unwrap();
+
+        let config_path = write_profile_agents_config(&root);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        // Pre-existing unrelated settings the install must not clobber.
+        let settings_path = root.join(".fake/settings.json");
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            serde_json::to_string_pretty(&serde_json::json!({ "model": "opus" })).unwrap(),
+        )
+        .unwrap();
+
+        let profile = Profile {
+            edit_redirect: true,
+            ..Profile::default()
+        };
+        let reporter = NullReporter;
+        let results = init_profile(&profile, InitScope::Project, Some(&root), &reporter);
         assert!(
-            !claude_md.exists(),
-            "preamble-only instructions file should be deleted on deinit"
+            results
+                .iter()
+                .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+            "edit-redirect init must not error: {results:?}"
+        );
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        // Unrelated key preserved.
+        assert_eq!(settings["model"], serde_json::json!("opus"));
+        // Native mutators denied.
+        let deny = settings["permissions"]["deny"].as_array().unwrap();
+        for tool in EDIT_REDIRECT_DENY_TOOLS {
+            assert!(
+                deny.iter().any(|v| v == &serde_json::json!(tool)),
+                "{tool} must be denied; got {deny:?}"
+            );
+        }
+        // No PreToolUse redirect hook installed — the deny is the whole mechanism.
+        assert!(
+            settings.get("hooks").is_none(),
+            "edit-redirect must not install any hooks; got {settings:?}"
+        );
+
+        // Nothing leaked into the CWD.
+        assert!(
+            !cwd.join(".fake").exists(),
+            "edit-redirect must not touch CWD"
+        );
+
+        // Deinit strips the deny + redirect but keeps the unrelated key.
+        let results = deinit_profile(&profile, InitScope::Project, Some(&root), &reporter);
+        assert!(results
+            .iter()
+            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error));
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(settings["model"], serde_json::json!("opus"));
+        let deny = settings["permissions"]["deny"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for tool in EDIT_REDIRECT_DENY_TOOLS {
+            assert!(
+                !deny.iter().any(|v| v == &serde_json::json!(tool)),
+                "{tool} deny must be removed on deinit"
+            );
+        }
+        // No hooks were ever installed, so none should appear.
+        assert!(
+            settings.get("hooks").is_none(),
+            "no hooks must be present after deinit; got {settings:?}"
         );
     }
 
@@ -5640,8 +5858,7 @@ mod profile_consistency_tests {
     }
 
     /// sah's profile — the "bigger profile": all builtin skills + all builtin
-    /// agents + statusline, but NOT the CLAUDE.md preamble
-    /// (`apps/swissarmyhammer-cli/.../profile.rs`).
+    /// agents + statusline (`apps/swissarmyhammer-cli/.../profile.rs`).
     fn sah_profile(_scope: InitScope) -> Profile {
         Profile {
             mcp_server: Some(ProfileMcpServer::serve("sah")),
@@ -5650,6 +5867,7 @@ mod profile_consistency_tests {
             validators: Some(Selector::All),
             statusline: true,
             preamble: false,
+            edit_redirect: true,
         }
     }
 
@@ -6028,6 +6246,142 @@ mod profile_consistency_tests {
                 .get("code-context")
                 .is_none(),
             "deinit must remove the local-scope MCP registration"
+        );
+    }
+}
+
+#[cfg(test)]
+mod edit_redirect_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The generated fragment must be valid Claude Code settings JSON: it denies
+    /// the native edit tools and installs **no** `PreToolUse` hook. The
+    /// deny alone closes the native write surface — the model is steered to the
+    /// served `files` replacement, mirroring how `shell` replaces `Bash` with a
+    /// plain deny and no redirect hook.
+    #[test]
+    fn fragment_denies_native_edit_tools_without_hook() {
+        let fragment = desired_edit_redirect_fragment();
+
+        // Deny entries: Edit, Write (order matches the constant).
+        let deny = fragment["permissions"]["deny"]
+            .as_array()
+            .expect("permissions.deny must be an array");
+        for tool in EDIT_REDIRECT_DENY_TOOLS {
+            assert!(
+                deny.iter().any(|v| v == &json!(tool)),
+                "deny must contain {tool}; got {deny:?}"
+            );
+        }
+
+        // No PreToolUse redirect hook: the deny is the whole mechanism.
+        assert!(
+            fragment.get("hooks").is_none(),
+            "fragment must not carry any hooks; got {fragment:?}"
+        );
+    }
+
+    /// Installing into a fresh settings file writes the deny; doing it again is a
+    /// no-op (idempotent). No `PreToolUse` hook is written.
+    #[test]
+    fn apply_edit_redirect_at_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".claude/settings.local.json");
+
+        assert!(
+            apply_edit_redirect_at(&path, true).unwrap(),
+            "first install must change the file"
+        );
+        assert!(
+            !apply_edit_redirect_at(&path, true).unwrap(),
+            "second install must be a no-op"
+        );
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // The deny is present and not duplicated by the second install.
+        let deny = written["permissions"]["deny"].as_array().unwrap();
+        for tool in EDIT_REDIRECT_DENY_TOOLS {
+            assert_eq!(
+                deny.iter().filter(|v| *v == &json!(tool)).count(),
+                1,
+                "{tool} deny must appear exactly once; got {deny:?}"
+            );
+        }
+        // No redirect hook is installed.
+        assert!(
+            written.get("hooks").is_none(),
+            "install must not write any hooks; got {written:?}"
+        );
+    }
+
+    /// The install must merge the deny into an existing settings chain without
+    /// clobbering unrelated keys or pre-existing deny/hook entries.
+    #[test]
+    fn apply_edit_redirect_at_preserves_unrelated_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&json!({
+                "model": "opus",
+                "permissions": { "deny": ["Bash"], "allow": ["Read"] },
+                "hooks": {
+                    "PostToolUse": [
+                        { "matcher": "Write", "hooks": [{ "type": "command", "command": "fmt" }] }
+                    ]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(apply_edit_redirect_at(&path, true).unwrap());
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // Unrelated top-level key untouched.
+        assert_eq!(written["model"], json!("opus"));
+        // Pre-existing allow + the pre-existing Bash deny survive.
+        assert_eq!(written["permissions"]["allow"], json!(["Read"]));
+        let deny = written["permissions"]["deny"].as_array().unwrap();
+        assert!(deny.iter().any(|v| v == &json!("Bash")));
+        assert!(deny.iter().any(|v| v == &json!("Edit")));
+        // The unrelated PostToolUse hook is preserved.
+        assert!(written["hooks"]["PostToolUse"].is_array());
+    }
+
+    /// Removal strips the deny but leaves unrelated entries; removal on a missing
+    /// file is a no-op. No hooks are ever written, so none are left behind.
+    #[test]
+    fn apply_edit_redirect_at_removes_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+
+        // Removal on a missing file is a no-op.
+        assert!(!apply_edit_redirect_at(&path, false).unwrap());
+
+        // Install then remove returns to a clean state for our keys.
+        apply_edit_redirect_at(&path, true).unwrap();
+        assert!(apply_edit_redirect_at(&path, false).unwrap());
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let deny = written["permissions"]["deny"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for tool in EDIT_REDIRECT_DENY_TOOLS {
+            assert!(
+                !deny.iter().any(|v| v == &json!(tool)),
+                "{tool} deny must be removed"
+            );
+        }
+        // The redirect never installed a hook, so none should be present.
+        assert!(
+            written.get("hooks").is_none(),
+            "no hooks must be present; got {written:?}"
         );
     }
 }

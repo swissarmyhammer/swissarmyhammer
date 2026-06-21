@@ -37,6 +37,7 @@
 
 pub mod agent;
 pub mod code_context;
+pub mod diagnostics;
 pub mod files;
 
 pub mod git;

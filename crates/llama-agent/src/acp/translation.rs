@@ -1032,6 +1032,48 @@ pub fn tool_result_to_acp_update(
     ToolCallUpdate::new(tool_call_id, fields)
 }
 
+/// Build a diagnostics `session/update` carrying inline diagnostics for the
+/// editor's native gutter.
+///
+/// The ACP `SessionUpdate` enum (schema 0.13.2) has no dedicated diagnostics
+/// variant and is `#[non_exhaustive]`, so the structured report is carried in
+/// the notification's `_meta` envelope — the ACP-blessed extension mechanism,
+/// the same one [`crate::acp::server`]'s replay notifications use. The base
+/// `update` is a `ToolCallUpdate` for the originating call so a diagnostics-aware
+/// client can tie the markers back to the tool call that produced them.
+///
+/// The `_meta` shape mirrors the fold-in's tool-result shape exactly:
+/// `{ "diagnostics": <report>, "pending": <bool> }`, so the gutter renderer reads
+/// the same structured report the model sees in the conversation.
+///
+/// # Arguments
+/// * `session_id` - The ACP session the diagnostics pertain to.
+/// * `call_id` - The tool call whose mutation produced the diagnostics.
+/// * `report` - The structured diagnostics report (the fold-in `diagnostics`).
+/// * `pending` - Whether the analysis had not yet quiesced.
+pub fn diagnostics_notification(
+    session_id: AcpSessionId,
+    call_id: &crate::types::ids::ToolCallId,
+    report: serde_json::Value,
+    pending: bool,
+) -> agent_client_protocol::schema::SessionNotification {
+    use agent_client_protocol::schema::{
+        SessionNotification, SessionUpdate, ToolCallId as AcpToolCallId, ToolCallUpdate,
+        ToolCallUpdateFields,
+    };
+
+    let update = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+        AcpToolCallId::new(call_id.to_string()),
+        ToolCallUpdateFields::new(),
+    ));
+
+    let mut meta = serde_json::Map::new();
+    meta.insert("diagnostics".to_string(), report);
+    meta.insert("pending".to_string(), serde_json::json!(pending));
+
+    SessionNotification::new(session_id, update).meta(meta)
+}
+
 /// Error type for tool call handling
 #[derive(Debug, thiserror::Error)]
 pub enum ToolCallError {

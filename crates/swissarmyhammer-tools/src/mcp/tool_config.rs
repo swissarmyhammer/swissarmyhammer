@@ -366,9 +366,10 @@ mod tests {
         use tokio::sync::RwLock;
 
         use crate::mcp::tool_registry::{
-            register_code_context_tools, register_file_tools, register_git_tools,
-            register_kanban_tools, register_questions_tools, register_ralph_tools,
-            register_review_tools, register_shell_tools, register_web_tools, ToolRegistry,
+            register_code_context_tools, register_diagnostics_tools, register_file_tools,
+            register_git_tools, register_kanban_tools, register_questions_tools,
+            register_ralph_tools, register_review_tools, register_shell_tools, register_web_tools,
+            ToolRegistry,
         };
         use crate::mcp::tools::{agent::register_agent_tools, skill::register_skill_tools};
 
@@ -382,6 +383,7 @@ mod tests {
         register_web_tools(&mut registry);
         register_code_context_tools(&mut registry);
         register_review_tools(&mut registry);
+        register_diagnostics_tools(&mut registry);
 
         // agent and skill tools require library handles
         let agent_lib = Arc::new(RwLock::new(swissarmyhammer_agents::AgentLibrary::new()));

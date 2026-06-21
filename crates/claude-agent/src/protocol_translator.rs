@@ -326,7 +326,11 @@ impl ProtocolTranslator {
         let status = parsed
             .get(STATUS_FIELD)
             .or_else(|| parsed.get("rate_limit").and_then(|r| r.get(STATUS_FIELD)))
-            .or_else(|| parsed.get("rate_limit_info").and_then(|r| r.get(STATUS_FIELD)))
+            .or_else(|| {
+                parsed
+                    .get("rate_limit_info")
+                    .and_then(|r| r.get(STATUS_FIELD))
+            })
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         RateLimitEvent {

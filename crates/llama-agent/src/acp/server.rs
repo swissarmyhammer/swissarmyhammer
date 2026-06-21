@@ -1123,6 +1123,77 @@ impl AcpServer {
         Ok(())
     }
 
+    /// Forward inline diagnostics from a mutating tool result to the editor's
+    /// native gutter as an ACP `session/update`.
+    ///
+    /// Mirrors [`send_plan_notification_from_result`](Self::send_plan_notification_from_result):
+    /// it extracts the `diagnostics`/`pending` fields that `swissarmyhammer-tools`'
+    /// `fold_in_diagnostics` step folds into a mutator's own result, and
+    /// broadcasts them as a diagnostics `SessionNotification` over the existing
+    /// `notification_tx` channel — no second analysis, no parallel channel. A
+    /// result without a `diagnostics` field (a clean edit, a non-mutating call,
+    /// or a non-tool result) is a silent no-op.
+    ///
+    /// # Arguments
+    ///
+    /// * `acp_session_id` - The ACP session the diagnostics pertain to.
+    /// * `tool_result` - The tool result whose `result` may carry diagnostics.
+    fn send_diagnostics_notification_from_result(
+        &self,
+        acp_session_id: &agent_client_protocol::schema::SessionId,
+        tool_result: &crate::types::ToolResult,
+    ) -> Result<(), agent_client_protocol::Error> {
+        // The diagnostics ride on `result` either as a `Value` object or as a
+        // JSON string — exactly the two shapes the plan extractor handles.
+        let result_obj = if tool_result.result.is_object() {
+            tool_result.result.clone()
+        } else if let Some(result_str) = tool_result.result.as_str() {
+            match serde_json::from_str::<serde_json::Value>(result_str) {
+                Ok(parsed) => parsed,
+                Err(_) => {
+                    tracing::trace!("Tool result is not JSON; no diagnostics to forward");
+                    return Ok(());
+                }
+            }
+        } else {
+            return Ok(());
+        };
+
+        let Some(report) = result_obj.get("diagnostics") else {
+            tracing::trace!("No diagnostics field in tool result");
+            return Ok(());
+        };
+
+        let pending = result_obj
+            .get("pending")
+            .and_then(|p| p.as_bool())
+            .unwrap_or(false);
+
+        let notification = super::translation::diagnostics_notification(
+            acp_session_id.clone(),
+            &tool_result.call_id,
+            report.clone(),
+            pending,
+        );
+
+        self.broadcast_notification(notification);
+
+        let error_count = report
+            .get("counts")
+            .and_then(|c| c.get("errors"))
+            .and_then(|e| e.as_u64())
+            .unwrap_or(0);
+
+        tracing::info!(
+            "Forwarded diagnostics notification for session {} ({} errors, pending={})",
+            acp_session_id.0,
+            error_count,
+            pending
+        );
+
+        Ok(())
+    }
+
     /// Send CurrentModeUpdate notification when session mode changes
     ///
     /// Broadcasts a CurrentModeUpdate notification to inform the client that the session's
@@ -2475,6 +2546,19 @@ impl AcpServer {
                             e
                         );
                     }
+                }
+
+                // Forward inline diagnostics to the editor gutter when a mutating
+                // tool folded them into its result. Not tool-name-gated: any
+                // mutator (files write/edit, future mutators) may carry them, and
+                // the extractor is a no-op when there is no `diagnostics` field.
+                if let Err(e) = self.send_diagnostics_notification_from_result(session_id, &result)
+                {
+                    tracing::warn!(
+                        "Failed to forward diagnostics notification after '{}': {}",
+                        tool_name,
+                        e
+                    );
                 }
 
                 Ok(ProcessedToolCall {
@@ -7169,6 +7253,140 @@ mod tests {
             assert!(
                 feedback.contains("local override forbids fs_read"),
                 "the settings.local.json deny reason must reach the model; got {feedback:?}"
+            );
+        }
+    }
+
+    /// Inline-diagnostics ACP forward (path 2): after a mutating tool result
+    /// carries inline diagnostics (folded in by `swissarmyhammer-tools`), the
+    /// agent both (a) broadcasts a diagnostics `SessionNotification` on the
+    /// existing channel and (b) appends the tool result — diagnostics and all —
+    /// to the session messages so the model still sees what broke.
+    ///
+    /// These drive the extraction/broadcast and append seams directly with a
+    /// constructed `ToolResult` whose `result` JSON has the *exact* shape the
+    /// fold-in produces (`{"diagnostics": <report>, "pending": <bool>}`), so no
+    /// model, weights, or GPU are involved — the tests stay in milliseconds.
+    mod diagnostics_forward {
+        use super::*;
+
+        /// Build a `ToolResult` whose `result` carries diagnostics in the same
+        /// shape `swissarmyhammer-tools`' `fold_in_diagnostics` emits: a JSON
+        /// object with a `diagnostics` report and a `pending` flag.
+        fn tool_result_with_diagnostics(message: &str, pending: bool) -> crate::types::ToolResult {
+            let result = serde_json::json!({
+                "diagnostics": {
+                    "diagnostics": [{
+                        "path": "src/lib.rs",
+                        "range": {
+                            "start_line": 0,
+                            "start_character": 0,
+                            "end_line": 0,
+                            "end_character": 1
+                        },
+                        "severity": "Error",
+                        "message": message,
+                        "code": null,
+                        "source": "rustc",
+                        "containing_symbol": null
+                    }],
+                    "counts": { "errors": 1, "warnings": 0 }
+                },
+                "pending": pending,
+            });
+            crate::types::ToolResult {
+                call_id: crate::types::ids::ToolCallId::new(),
+                result,
+                error: None,
+            }
+        }
+
+        /// (a) A diagnostics-carrying tool result is broadcast as a diagnostics
+        /// `SessionNotification` whose `_meta` carries the structured report.
+        #[tokio::test]
+        async fn diagnostics_result_is_broadcast_as_notification() {
+            let server = create_test_server().await;
+            let session_id = agent_client_protocol::schema::SessionId::new("diag-session");
+
+            let mut rx = server.notification_tx.subscribe();
+
+            let tool_result = tool_result_with_diagnostics("mismatched types", false);
+            server
+                .send_diagnostics_notification_from_result(&session_id, &tool_result)
+                .expect("diagnostics notification must be sent");
+
+            let notification = rx.try_recv().expect("a notification must be broadcast");
+            assert_eq!(notification.session_id, session_id);
+
+            let meta = notification
+                .meta
+                .expect("diagnostics notification must carry a _meta envelope");
+            let diagnostics = meta
+                .get("diagnostics")
+                .expect("the _meta envelope must carry the structured diagnostics report");
+            assert_eq!(diagnostics["counts"]["errors"], serde_json::json!(1));
+            assert_eq!(
+                diagnostics["diagnostics"][0]["message"],
+                serde_json::json!("mismatched types")
+            );
+            assert_eq!(meta.get("pending"), Some(&serde_json::json!(false)));
+        }
+
+        /// A tool result with no diagnostics field broadcasts nothing — a clean
+        /// edit must not emit a diagnostics notification.
+        #[tokio::test]
+        async fn result_without_diagnostics_broadcasts_nothing() {
+            let server = create_test_server().await;
+            let session_id = agent_client_protocol::schema::SessionId::new("diag-session");
+
+            let mut rx = server.notification_tx.subscribe();
+
+            let tool_result = crate::types::ToolResult {
+                call_id: crate::types::ids::ToolCallId::new(),
+                result: serde_json::json!({"status": "ok"}),
+                error: None,
+            };
+            server
+                .send_diagnostics_notification_from_result(&session_id, &tool_result)
+                .expect("non-diagnostics result must be a no-op");
+
+            assert!(
+                rx.try_recv().is_err(),
+                "a result without diagnostics must broadcast nothing"
+            );
+        }
+
+        /// (b) The diagnostics-carrying tool result is appended to the session
+        /// messages, so the model still sees what broke (the model-context path).
+        #[tokio::test]
+        async fn diagnostics_result_is_appended_to_session_messages() {
+            let server = create_test_server().await;
+            let session = server.agent_server.create_session().await.unwrap();
+            let acp_session = AcpSessionState::new(session.id);
+
+            let tool_result = tool_result_with_diagnostics("mismatched types", false);
+            server
+                .append_tool_result(&acp_session, tool_result, None)
+                .await
+                .expect("tool result must append");
+
+            let after = server
+                .agent_server
+                .session_manager()
+                .get_session(&session.id)
+                .await
+                .unwrap()
+                .unwrap();
+            let tool_messages: Vec<_> = after
+                .messages
+                .iter()
+                .filter(|m| m.role == crate::types::MessageRole::Tool)
+                .collect();
+            assert_eq!(tool_messages.len(), 1, "exactly one tool message appended");
+            assert!(
+                tool_messages[0].content.contains("mismatched types"),
+                "the appended tool message must carry the diagnostics: {}",
+                tool_messages[0].content
             );
         }
     }

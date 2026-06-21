@@ -18,9 +18,11 @@
 
 pub mod detect;
 pub mod doctor;
+pub(crate) mod leader_route;
 pub mod schema;
 pub mod watcher;
 
+use crate::mcp::op_tool_helpers::json_result;
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -38,18 +40,29 @@ use swissarmyhammer_code_context::{
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
+/// Default cap on result count for ops that take an optional `max_results`
+/// (`query ast`, `search workspace_symbol`) when the caller omits it. Surfaced
+/// in those ops' `max_results` parameter descriptions ("default: 50").
+const DEFAULT_MAX_RESULTS: usize = 50;
+
 /// Global LSP supervisor handle, initialized once at MCP startup.
 /// Used by `get status` to report LSP server state and by `server.rs` for init.
 pub(crate) static LSP_SUPERVISOR: std::sync::OnceLock<
     std::sync::Arc<tokio::sync::Mutex<swissarmyhammer_lsp::LspSupervisorManager>>,
 > = std::sync::OnceLock::new();
 
-/// Look up the `SharedLspClient` for a file by matching its extension against
-/// the running LSP daemons in the global supervisor.
+/// Look up the shared [`SharedLspSession`](swissarmyhammer_code_context::SharedLspSession)
+/// for a file by matching its extension against the running LSP daemons in the
+/// global supervisor.
 ///
-/// Returns `None` when the supervisor is not initialised, no daemon handles the
-/// file's extension, or the supervisor lock cannot be acquired (e.g. contention).
-fn lsp_client_for_file(file_path: &str) -> Option<swissarmyhammer_code_context::SharedLspClient> {
+/// Returns the daemon-owned session (not a fresh wrapper), so the layered ops
+/// share the one open-document set with the indexing worker and the diagnostics
+/// path. Returns `None` when the supervisor is not initialised, no daemon
+/// handles the file's extension, or the supervisor lock cannot be acquired
+/// (e.g. contention).
+pub(crate) fn lsp_session_for_file(
+    file_path: &str,
+) -> Option<swissarmyhammer_code_context::SharedLspSession> {
     let ext = std::path::Path::new(file_path)
         .extension()
         .and_then(|e| e.to_str())?;
@@ -62,18 +75,18 @@ fn lsp_client_for_file(file_path: &str) -> Option<swissarmyhammer_code_context::
                 .iter()
                 .any(|e| e.eq_ignore_ascii_case(ext))
             {
-                return Some(daemon.shared_client());
+                return Some(daemon.session());
             }
         }
     }
     None
 }
 
-/// Return the first available `SharedLspClient` from any running daemon.
+/// Return the shared session of the first running daemon.
 ///
 /// Useful for workspace-wide LSP requests (e.g. `workspace/symbol`) that are
 /// not scoped to a single file extension.
-fn any_lsp_client() -> Option<swissarmyhammer_code_context::SharedLspClient> {
+pub(crate) fn any_lsp_session() -> Option<swissarmyhammer_code_context::SharedLspSession> {
     let sup = LSP_SUPERVISOR.get()?;
     let guard = sup.try_lock().ok()?;
     for name in guard.daemon_names() {
@@ -82,7 +95,7 @@ fn any_lsp_client() -> Option<swissarmyhammer_code_context::SharedLspClient> {
                 daemon.state(),
                 swissarmyhammer_lsp::LspDaemonState::Running { .. }
             ) {
-                return Some(daemon.shared_client());
+                return Some(daemon.session());
             }
         }
     }
@@ -437,9 +450,6 @@ static SEARCH_CODE_PARAMS: &[ParamMeta] = &[
     ParamMeta::new("top_k")
         .description("Maximum number of results to return (default: 10)")
         .param_type(ParamType::Integer),
-    ParamMeta::new("min_similarity")
-        .description("Minimum cosine similarity threshold, 0.0-1.0 (default: 0.7)")
-        .param_type(ParamType::Number),
     ParamMeta::new("language")
         .description("Only search chunks from files with these extensions (e.g. [\"rs\", \"py\"])")
         .param_type(ParamType::Array),
@@ -1164,18 +1174,18 @@ impl McpTool for CodeContextTool {
             "clear status" => execute_clear_status(context),
             "lsp status" => execute_lsp_status(context),
             "detect projects" => detect::execute_detect(&arguments, context).await,
-            "get rename_edits" => execute_get_rename_edits(&arguments, context),
+            "get rename_edits" => execute_get_rename_edits(&arguments, context).await,
             "get diagnostics" => execute_get_diagnostics(&arguments, context),
-            "get inbound_calls" => execute_get_inbound_calls(&arguments, context),
+            "get inbound_calls" => execute_get_inbound_calls(&arguments, context).await,
             "search workspace_symbol" => {
-                execute_workspace_symbol_live(&arguments, context)
+                execute_workspace_symbol_live(&arguments, context).await
             }
-            "get definition" => execute_get_definition(&arguments, context),
-            "get type_definition" => execute_get_type_definition(&arguments, context),
-            "get hover" => execute_get_hover(&arguments, context),
-            "get references" => execute_get_references(&arguments, context),
-            "get implementations" => execute_get_implementations(&arguments, context),
-            "get code_actions" => execute_get_code_actions(&arguments, context),
+            "get definition" => execute_get_definition(&arguments, context).await,
+            "get type_definition" => execute_get_type_definition(&arguments, context).await,
+            "get hover" => execute_get_hover(&arguments, context).await,
+            "get references" => execute_get_references(&arguments, context).await,
+            "get implementations" => execute_get_implementations(&arguments, context).await,
+            "get code_actions" => execute_get_code_actions(&arguments, context).await,
             "" => Err(McpError::invalid_params(
                 "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'rebuild index', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'.",
                 None,
@@ -1205,7 +1215,7 @@ impl McpTool for CodeContextTool {
 /// Open a CodeContextWorkspace from the tool context's working directory.
 ///
 /// Falls back to the current directory if no working_dir is set.
-fn open_workspace(context: &ToolContext) -> Result<CodeContextWorkspace, McpError> {
+pub(crate) fn open_workspace(context: &ToolContext) -> Result<CodeContextWorkspace, McpError> {
     let working_dir = context
         .working_dir
         .clone()
@@ -1220,15 +1230,6 @@ fn open_workspace(context: &ToolContext) -> Result<CodeContextWorkspace, McpErro
             None,
         )
     })
-}
-
-/// Format a serializable result into a CallToolResult with JSON text content.
-fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpError> {
-    let text = serde_json::to_string_pretty(value).map_err(|e| {
-        McpError::internal_error(format!("Failed to serialize result: {}", e), None)
-    })?;
-
-    Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
 /// Convert a CodeContextError into an McpError.
@@ -1512,7 +1513,7 @@ async fn execute_search_code(
         .await
         .map_err(|e| McpError::internal_error(format!("Failed to embed query: {}", e), None))?;
 
-    search_code_with_query_embedding(args, context, embed_result.embedding())
+    search_code_with_query_embedding(args, context, query, embed_result.embedding())
 }
 
 /// Inner half of [`execute_search_code`] after the query has been embedded.
@@ -1529,6 +1530,7 @@ async fn execute_search_code(
 fn search_code_with_query_embedding(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
+    query_text: &str,
     query_embedding: &[f32],
 ) -> Result<CallToolResult, McpError> {
     let top_k = args
@@ -1536,12 +1538,6 @@ fn search_code_with_query_embedding(
         .and_then(|v| v.as_u64())
         .map(|n| n as usize)
         .unwrap_or(10);
-
-    let min_similarity = args
-        .get("min_similarity")
-        .and_then(|v| v.as_f64())
-        .map(|n| n as f32)
-        .unwrap_or(0.7);
 
     let language = args.get("language").and_then(|v| {
         v.as_array().map(|arr| {
@@ -1556,16 +1552,20 @@ fn search_code_with_query_embedding(
         .and_then(|v| v.as_str())
         .map(String::from);
 
+    // Hybrid fusion uses the internal default signal weights and no fused-score
+    // floor; the MCP surface exposes only `query`, `top_k`, `language`, and
+    // `file_pattern` (the `min_similarity` knob is gone for `search code`).
     let options = SearchCodeOptions {
         top_k,
-        min_similarity,
         language,
         file_pattern,
+        ..Default::default()
     };
 
     let ws = open_workspace(context)?;
-    let result = swissarmyhammer_code_context::search_code(&ws.db(), query_embedding, &options)
-        .map_err(context_err)?;
+    let result =
+        swissarmyhammer_code_context::search_code(&ws.db(), query_text, query_embedding, &options)
+            .map_err(context_err)?;
     json_result(&result)
 }
 
@@ -1689,7 +1689,7 @@ fn execute_query_ast(
         .get("max_results")
         .and_then(|v| v.as_u64())
         .map(|n| n as usize)
-        .unwrap_or(50);
+        .unwrap_or(DEFAULT_MAX_RESULTS);
 
     let options = QueryAstOptions { max_results };
 
@@ -1806,6 +1806,11 @@ fn execute_get_blastradius(
 /// indexer over a temp workspace. The function is otherwise only called from
 /// within this crate (the MCP server bootstrap and the file watcher).
 ///
+/// The `shutdown` flag is the leader's step-down signal: when set, the indexer
+/// stops at the top of its per-file loop so a preempted old leader stops writing
+/// the shared DB promptly. One-shot/non-leader callers pass a fresh never-set
+/// flag (`new_shutdown_flag()`).
+///
 /// Returns an [`IndexRunStats`] summarising the run. Callers that drive the
 /// indexer purely for side effects (the bootstrap pass, the file watcher)
 /// may ignore the value; the synchronous `rebuild index` MCP op uses it to
@@ -1814,9 +1819,10 @@ pub async fn index_discovered_files_async(
     workspace_root: &Path,
     db: swissarmyhammer_code_context::SharedDb,
     reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
+    shutdown: swissarmyhammer_code_context::ShutdownFlag,
 ) -> swissarmyhammer_code_context::IndexRunStats {
     let embedder = build_default_embedder().await;
-    index_discovered_files_with_embedder(workspace_root, db, embedder, reporter).await
+    index_discovered_files_with_embedder(workspace_root, db, embedder, reporter, shutdown).await
 }
 
 /// Construct the default embedder and load it.
@@ -1923,11 +1929,17 @@ async fn build_default_embedder() -> Option<std::sync::Arc<dyn model_embedding::
 /// When `embedder` is `None` the indexer behaves as it did before chunk
 /// embeddings existed: chunks are written without an embedding blob and
 /// `embedded` stays at 0.
+///
+/// The `shutdown` flag is checked at the top of the per-file loop: when set
+/// (the leader has stepped down / been preempted), the pass stops early and
+/// returns the partial [`IndexRunStats`] so the old leader stops writing the
+/// shared DB before the new leader becomes the sole writer.
 pub(crate) async fn index_discovered_files_with_embedder(
     workspace_root: &Path,
     db: swissarmyhammer_code_context::SharedDb,
     embedder: Option<std::sync::Arc<dyn model_embedding::TextEmbedder>>,
     reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
+    shutdown: swissarmyhammer_code_context::ShutdownFlag,
 ) -> swissarmyhammer_code_context::IndexRunStats {
     use std::sync::Arc;
     use swissarmyhammer_code_context::{IndexProgress, IndexRunStats};
@@ -2013,6 +2025,21 @@ pub(crate) async fn index_discovered_files_with_embedder(
     let total_batches: u64 = total as u64;
 
     for relative_path in &dirty_files {
+        // Single-writer invariant: stop the pass promptly once the leader has
+        // stepped down. A preempted old leader must not keep writing the shared
+        // on-disk DB through its remaining dirty set while the new leader writes
+        // it too (the SharedDb mutex is per-process and does not serialize two
+        // processes). Mirrors the per-iteration check in `run_lsp_indexing_loop`.
+        if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::info!(
+                "code-context: tree-sitter indexer stopping mid-pass (stepped down) — \
+                 {} of {} dirty files indexed",
+                indexed,
+                total
+            );
+            break;
+        }
+
         let file_path = workspace_root.join(relative_path);
 
         // 1. Detect language (no DB needed)
@@ -2533,9 +2560,14 @@ async fn execute_rebuild_index(
             (swissarmyhammer_code_context::noop_reporter(), None)
         }
     };
-    let stats =
-        index_discovered_files_async(&workspace_root, shared_db, std::sync::Arc::clone(&reporter))
-            .await;
+    let stats = index_discovered_files_async(
+        &workspace_root,
+        shared_db,
+        std::sync::Arc::clone(&reporter),
+        ws.leader_shutdown_flag()
+            .unwrap_or_else(swissarmyhammer_code_context::new_shutdown_flag),
+    )
+    .await;
 
     // Drop the reporter so the mpsc channel closes; then await the
     // drain task so any buffered notifications (notably the terminal
@@ -2630,7 +2662,7 @@ fn execute_lsp_status(context: &ToolContext) -> Result<CallToolResult, McpError>
 ///
 /// Previews a rename at the given position without applying edits.
 /// Returns `can_rename: false` when no live LSP is available.
-fn execute_get_rename_edits(
+async fn execute_get_rename_edits(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2663,10 +2695,11 @@ fn execute_get_rename_edits(
         new_name: new_name.to_string(),
     };
 
+    let session = lsp_session_for_file(file_path);
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = swissarmyhammer_code_context::LayeredContext::new(&db, client.as_ref());
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result =
         swissarmyhammer_code_context::get_rename_edits(&ctx, &opts).map_err(context_err)?;
@@ -2704,8 +2737,8 @@ fn execute_get_diagnostics(
 
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let session = lsp_session_for_file(file_path);
+    let ctx = LayeredContext::new(&db, session);
 
     let result = swissarmyhammer_code_context::get_diagnostics(&ctx, &opts).map_err(context_err)?;
     json_result(&result)
@@ -2715,7 +2748,7 @@ fn execute_get_diagnostics(
 ///
 /// Finds all callers of a function at the given position using layered
 /// resolution (live LSP call hierarchy, then LSP index, then tree-sitter).
-fn execute_get_inbound_calls(
+async fn execute_get_inbound_calls(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2745,10 +2778,11 @@ fn execute_get_inbound_calls(
         depth,
     };
 
+    let session = lsp_session_for_file(file_path);
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result =
         swissarmyhammer_code_context::get_inbound_calls(&ctx, &opts).map_err(context_err)?;
@@ -2759,7 +2793,7 @@ fn execute_get_inbound_calls(
 ///
 /// Live workspace symbol search with layered resolution: live LSP
 /// workspace/symbol, then LSP index, then tree-sitter chunks.
-fn execute_workspace_symbol_live(
+async fn execute_workspace_symbol_live(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2771,17 +2805,19 @@ fn execute_workspace_symbol_live(
     let max_results = args
         .get("max_results")
         .and_then(|v| v.as_u64())
-        .unwrap_or(50) as usize;
+        .map(|n| n as usize)
+        .unwrap_or(DEFAULT_MAX_RESULTS);
 
     let opts = WorkspaceSymbolLiveOptions {
         query: query.to_string(),
         max_results,
     };
 
+    let session = any_lsp_session();
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = any_lsp_client();
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result =
         swissarmyhammer_code_context::workspace_symbol_live(&ctx, &opts).map_err(context_err)?;
@@ -2791,7 +2827,7 @@ fn execute_workspace_symbol_live(
 /// Execute the "get definition" operation.
 ///
 /// Go-to-definition with layered resolution: live LSP, LSP index, tree-sitter.
-fn execute_get_definition(
+async fn execute_get_definition(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2824,10 +2860,11 @@ fn execute_get_definition(
         include_source,
     };
 
+    let session = lsp_session_for_file(file_path);
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result = swissarmyhammer_code_context::get_definition(&ctx, &opts).map_err(context_err)?;
     json_result(&result)
@@ -2836,7 +2873,7 @@ fn execute_get_definition(
 /// Execute the "get type_definition" operation.
 ///
 /// Go-to-type-definition via live LSP only. Returns empty when no LSP is available.
-fn execute_get_type_definition(
+async fn execute_get_type_definition(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2869,10 +2906,11 @@ fn execute_get_type_definition(
         include_source,
     };
 
+    let session = lsp_session_for_file(file_path);
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result =
         swissarmyhammer_code_context::get_type_definition(&ctx, &opts).map_err(context_err)?;
@@ -2882,7 +2920,7 @@ fn execute_get_type_definition(
 /// Execute the "get hover" operation.
 ///
 /// Returns hover information (type signature, docs) with layered resolution.
-fn execute_get_hover(
+async fn execute_get_hover(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2909,11 +2947,12 @@ fn execute_get_hover(
         character,
     };
 
+    let session = lsp_session_for_file(file_path);
+    tracing::debug!(file_path = %file_path, client = session.is_some(), "get_hover: session lookup");
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    tracing::debug!(file_path = %file_path, client = client.is_some(), "get_hover: client lookup");
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let ctx = leader_route::build_layered_context(&db, session, routers);
     tracing::debug!(
         has_live_lsp = ctx.has_live_lsp(),
         "get_hover: context created"
@@ -2927,7 +2966,7 @@ fn execute_get_hover(
 /// Execute the "get references" operation.
 ///
 /// Finds all references to a symbol with layered resolution.
-fn execute_get_references(
+async fn execute_get_references(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -2966,10 +3005,11 @@ fn execute_get_references(
         max_results,
     };
 
+    let session = lsp_session_for_file(file_path);
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result = swissarmyhammer_code_context::get_references(&ctx, &opts).map_err(context_err)?;
     json_result(&result)
@@ -2978,7 +3018,7 @@ fn execute_get_references(
 /// Execute the "get implementations" operation.
 ///
 /// Finds implementations of a trait/interface with layered resolution.
-fn execute_get_implementations(
+async fn execute_get_implementations(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -3011,10 +3051,11 @@ fn execute_get_implementations(
         max_results,
     };
 
+    let session = lsp_session_for_file(file_path);
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result =
         swissarmyhammer_code_context::get_implementations(&ctx, &opts).map_err(context_err)?;
@@ -3025,7 +3066,7 @@ fn execute_get_implementations(
 ///
 /// Returns code actions (quickfixes, refactors) for a range via live LSP.
 /// Returns empty when no LSP is available.
-fn execute_get_code_actions(
+async fn execute_get_code_actions(
     args: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -3077,10 +3118,11 @@ fn execute_get_code_actions(
         filter_kind,
     };
 
+    let session = lsp_session_for_file(file_path);
+    let routers = leader_route::follower_route_for_op(&session, context).await;
     let ws = open_workspace(context)?;
     let db = ws.db();
-    let client = lsp_client_for_file(file_path);
-    let ctx = LayeredContext::new(&db, client.as_ref());
+    let ctx = leader_route::build_layered_context(&db, session, routers);
 
     let result =
         swissarmyhammer_code_context::get_code_actions(&ctx, &opts).map_err(context_err)?;
@@ -3347,6 +3389,7 @@ impl Calculator {
                 root,
                 shared_db,
                 swissarmyhammer_code_context::noop_reporter(),
+                swissarmyhammer_code_context::new_shutdown_flag(),
             )
             .await;
         }
@@ -4004,6 +4047,7 @@ impl Calculator {
             shared_db.clone(),
             Some(embedder),
             swissarmyhammer_code_context::noop_reporter(),
+            swissarmyhammer_code_context::new_shutdown_flag(),
         )
         .await;
 
@@ -4040,6 +4084,7 @@ impl Calculator {
             shared_db.clone(),
             Some(embedder),
             swissarmyhammer_code_context::noop_reporter(),
+            swissarmyhammer_code_context::new_shutdown_flag(),
         )
         .await;
 
@@ -4091,6 +4136,7 @@ impl Calculator {
             shared_db.clone(),
             Some(embedder),
             swissarmyhammer_code_context::noop_reporter(),
+            swissarmyhammer_code_context::new_shutdown_flag(),
         )
         .await;
 
@@ -4145,6 +4191,7 @@ impl Calculator {
             shared_db.clone(),
             None,
             swissarmyhammer_code_context::noop_reporter(),
+            swissarmyhammer_code_context::new_shutdown_flag(),
         )
         .await;
 
@@ -4225,6 +4272,7 @@ impl Calculator {
             shared_db.clone(),
             Some(embedder),
             dyn_reporter,
+            swissarmyhammer_code_context::new_shutdown_flag(),
         )
         .await;
 
@@ -4386,7 +4434,14 @@ impl Calculator {
         let reporter = std::sync::Arc::new(VecReporter::new());
         let dyn_reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter> =
             reporter.clone();
-        index_discovered_files_with_embedder(&root, shared_db, None, dyn_reporter).await;
+        index_discovered_files_with_embedder(
+            &root,
+            shared_db,
+            None,
+            dyn_reporter,
+            swissarmyhammer_code_context::new_shutdown_flag(),
+        )
+        .await;
 
         let events = reporter.snapshot();
         assert_eq!(
@@ -4434,7 +4489,14 @@ impl Calculator {
         let reporter = std::sync::Arc::new(VecReporter::new());
         let dyn_reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter> =
             reporter.clone();
-        index_discovered_files_with_embedder(&root, shared_db, None, dyn_reporter).await;
+        index_discovered_files_with_embedder(
+            &root,
+            shared_db,
+            None,
+            dyn_reporter,
+            swissarmyhammer_code_context::new_shutdown_flag(),
+        )
+        .await;
 
         let events = reporter.snapshot();
         assert_eq!(
@@ -4452,6 +4514,83 @@ impl Calculator {
             } => {}
             other => panic!("final event must be Done(0, 0, _), got {other:?}"),
         }
+    }
+
+    /// Single-writer invariant: when the leader's `ShutdownFlag` is already set
+    /// before the indexing pass starts (the preemption / step-down case), the
+    /// tree-sitter indexer must stop at the top of the per-file loop and NOT
+    /// write the whole dirty set — otherwise a preempted old leader keeps
+    /// writing the shared on-disk DB while the new leader is also writing it.
+    ///
+    /// We seed several dirty files, set the flag, run the indexer with
+    /// `embedder = None`, and assert it left every file un-indexed
+    /// (`ts_indexed = 0`). A pre-set flag is the deterministic worst case: the
+    /// check at the top of the loop fires on the first iteration.
+    #[tokio::test]
+    async fn test_indexer_stops_mid_pass_when_shutdown_flag_set() {
+        use swissarmyhammer_code_context::CodeContextWorkspace;
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path().to_path_buf();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        // Seed several dirty source files so "stops early" is observable.
+        let files = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs"];
+        for name in files {
+            std::fs::write(
+                root.join("src").join(name),
+                format!("pub fn {}() {{}}\n", name.trim_end_matches(".rs")),
+            )
+            .unwrap();
+        }
+
+        let ws = CodeContextWorkspace::open(&root).expect("workspace open");
+        let shared_db = ws.shared_db().expect("leader has shared db");
+
+        // Sanity: startup_cleanup left all files dirty (ts_indexed = 0).
+        let dirty_before: i64 = {
+            let conn = shared_db.lock().unwrap_or_else(|p| p.into_inner());
+            conn.query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            dirty_before,
+            files.len() as i64,
+            "all seeded files should be dirty before indexing"
+        );
+
+        // Preempt before the pass: set the flag so the loop-top check fires on
+        // the first iteration.
+        let shutdown = swissarmyhammer_code_context::new_shutdown_flag();
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        index_discovered_files_with_embedder(
+            &root,
+            shared_db.clone(),
+            None,
+            swissarmyhammer_code_context::noop_reporter(),
+            shutdown,
+        )
+        .await;
+
+        let still_dirty: i64 = {
+            let conn = shared_db.lock().unwrap_or_else(|p| p.into_inner());
+            conn.query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE ts_indexed = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            still_dirty,
+            files.len() as i64,
+            "a flag set before the pass should stop the indexer on the first \
+             iteration, leaving every file un-indexed (got {still_dirty} still dirty)"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4486,8 +4625,9 @@ impl Calculator {
         // no chunk embeddings exist yet, but it must still succeed and
         // produce a `SearchCodeResult` JSON, not the readiness placeholder.
         let dummy_query_embedding = vec![1.0f32, 0.0, 0.0];
-        let result = search_code_with_query_embedding(&args, &ctx, &dummy_query_embedding)
-            .expect("search code should succeed without the readiness gate");
+        let result =
+            search_code_with_query_embedding(&args, &ctx, "anything", &dummy_query_embedding)
+                .expect("search code should succeed without the readiness gate");
 
         let text = extract_text(&result);
         assert!(
@@ -4519,5 +4659,74 @@ impl Calculator {
             .and_then(|v| v.as_u64())
             .expect("total_files must be present and numeric");
         assert!(total > 0, "total_files should be > 0, got {total}");
+    }
+
+    /// A `search code` match exposes the fused-search response shape — a
+    /// normalized `score` and a `signals { bm25, trigram, cosine }` breakdown —
+    /// NOT the old single `similarity` field. This indexes a tiny project with
+    /// the mock embedder so real embedded chunks exist, then searches with a
+    /// query that lexically matches a chunk and asserts on the first match's
+    /// JSON shape.
+    #[tokio::test]
+    async fn test_search_code_match_exposes_score_and_signals_not_similarity() {
+        use model_embedding::mock::MockEmbedder;
+
+        let (_tmp, root, shared_db) = make_tiny_indexable_project().await;
+        let dim = 8;
+        let embedder: std::sync::Arc<dyn TextEmbedder> =
+            std::sync::Arc::new(MockEmbedder::new(dim));
+        index_discovered_files_with_embedder(
+            &root,
+            shared_db.clone(),
+            Some(embedder),
+            swissarmyhammer_code_context::noop_reporter(),
+            swissarmyhammer_code_context::new_shutdown_flag(),
+        )
+        .await;
+
+        let ctx = make_context_with_dir(root.clone());
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), serde_json::json!("search code"));
+        // "add" lexically matches the `pub fn add` chunk in src/lib.rs so the
+        // BM25/trigram signals produce a non-empty fused result.
+        args.insert("query".to_string(), serde_json::json!("add"));
+
+        // The query embedding must match the mock embedder's dimension so the
+        // cosine signal can be computed against the stored chunk embeddings.
+        let query_embedding = vec![0.1f32; dim];
+        let result = search_code_with_query_embedding(&args, &ctx, "add", &query_embedding)
+            .expect("search code should succeed");
+
+        let text = extract_text(&result);
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("result must be JSON-encoded SearchCodeResult");
+        let matches = parsed
+            .get("matches")
+            .and_then(|v| v.as_array())
+            .expect("result must have a `matches` array");
+        assert!(
+            !matches.is_empty(),
+            "expected at least one match for a query that lexically hits an embedded chunk, got: {text}"
+        );
+
+        let first = &matches[0];
+        assert!(
+            first.get("score").and_then(|v| v.as_f64()).is_some(),
+            "each match must expose a numeric `score`, got: {first}"
+        );
+        let signals = first
+            .get("signals")
+            .and_then(|v| v.as_object())
+            .expect("each match must expose a `signals` object");
+        for key in ["bm25", "trigram", "cosine"] {
+            assert!(
+                signals.get(key).and_then(|v| v.as_f64()).is_some(),
+                "signals must expose a numeric `{key}`, got: {first}"
+            );
+        }
+        assert!(
+            first.get("similarity").is_none(),
+            "the old `similarity` field must be gone from a search code match, got: {first}"
+        );
     }
 }

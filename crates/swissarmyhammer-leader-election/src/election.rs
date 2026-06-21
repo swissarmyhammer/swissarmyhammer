@@ -9,7 +9,7 @@
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Seek, SeekFrom, Write};
+use std::io;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
@@ -18,6 +18,7 @@ use fs2::FileExt;
 use crate::bus::{BusMessage, NullMessage, Publisher, Subscriber};
 use crate::discovery::{self, BusAddresses};
 use crate::error::{ElectionError, Result};
+use crate::lease::{self, Clock, SystemClock};
 use crate::proxy::ProxyHandle;
 
 /// Default prefix for lock and socket files
@@ -149,41 +150,6 @@ fn hash_path(path: &Path) -> String {
     format!("{:x}", digest)
 }
 
-/// Write the current process's PID into the (just-acquired) lock file.
-///
-/// The lock file already participates in `flock`-based leader election; this
-/// helper writes the PID as ASCII through the locked file handle so followers
-/// can call [`peek_leader_pid`] to identify the writing process. Failures
-/// are logged but not propagated — losing the PID record never invalidates
-/// leadership, since the flock itself is the source of truth.
-///
-/// The lock file is opened without truncation (so followers' open() calls
-/// don't wipe the PID), which means this function is responsible for
-/// truncating any prior content and rewriting from offset 0 so a shorter PID
-/// does not leave trailing bytes from a longer one.
-fn write_leader_pid(lock_file: &File, lock_path: &Path) {
-    let pid = std::process::id();
-    if let Err(e) = write_pid_inner(lock_file, pid) {
-        tracing::debug!(
-            path = %lock_path.display(),
-            error = %e,
-            "could not write leader PID to lock file (non-fatal)",
-        );
-    }
-}
-
-/// Inner helper: truncate the lock file and write the PID. Returns the
-/// first IO error encountered. Split out so `write_leader_pid` can route
-/// any error through a single `tracing::debug!` site.
-fn write_pid_inner(lock_file: &File, pid: u32) -> io::Result<()> {
-    // Truncate any pre-existing content (e.g. a previous leader's stale PID)
-    // and rewind so we write from the start.
-    lock_file.set_len(0)?;
-    let mut handle: &File = lock_file;
-    handle.seek(SeekFrom::Start(0))?;
-    writeln!(handle, "{}", pid)
-}
-
 /// Best-effort read of the PID currently recorded in a leader lock file.
 ///
 /// Returns `Some(pid)` when the file exists and contains a parseable PID on
@@ -196,6 +162,12 @@ fn write_pid_inner(lock_file: &File, pid: u32) -> io::Result<()> {
 /// participate in election semantics: leadership is determined by the flock,
 /// not by what's written in the file.
 pub fn peek_leader_pid(lock_path: &Path) -> Option<u32> {
+    // The lock file now holds a JSON lease whose `pid` field identifies the
+    // leader. Prefer that; fall back to the legacy bare-integer format so a
+    // lock file written by an older build still resolves.
+    if let Some(lease) = lease::read_lease(lock_path) {
+        return Some(lease.pid);
+    }
     let content = fs::read_to_string(lock_path).ok()?;
     content.lines().next()?.trim().parse::<u32>().ok()
 }
@@ -210,8 +182,27 @@ impl<M: BusMessage> LeaderElection<M> {
     }
 
     /// Create a new election coordinator with custom configuration
+    ///
+    /// The workspace root is **canonicalized** (symlinks resolved) before the
+    /// election key is derived, so two processes that reach the SAME physical
+    /// directory via different string forms — e.g. the macOS `/var` vs
+    /// `/private/var` (or `/tmp` vs `/private/tmp`) symlink forms, or any
+    /// relative/symlinked path — agree on one lock/socket and elect a single
+    /// leader (one rust-analyzer / index per workspace root). This is the one
+    /// chokepoint every election consumer flows through, so they all agree.
+    ///
+    /// Canonicalization is idempotent, so a caller that already canonicalized
+    /// its root (e.g. the diagnostics tool's `repo_root()`) derives the same
+    /// key as one that passed a raw symlink path. Distinct checkouts (git
+    /// worktrees) stay distinct canonical dirs, so they correctly keep
+    /// separate leaders.
+    ///
+    /// If canonicalization fails (e.g. the path does not yet exist), the raw
+    /// path is used unchanged — the workspace dir normally exists, and this
+    /// never panics.
     pub fn with_config(workspace_root: impl AsRef<Path>, config: ElectionConfig) -> Self {
-        let workspace_root = workspace_root.as_ref().to_path_buf();
+        let raw = workspace_root.as_ref().to_path_buf();
+        let workspace_root = fs::canonicalize(&raw).unwrap_or(raw);
         let hash = hash_path(&workspace_root);
         let base = config.base_dir();
 
@@ -242,26 +233,44 @@ impl<M: BusMessage> LeaderElection<M> {
     pub fn elect(&self) -> Result<ElectionOutcome<M>> {
         match self.try_acquire_lock() {
             Ok(guard) => Ok(ElectionOutcome::Leader(guard)),
-            Err(ElectionError::LockHeld) => {
-                // Read discovery file to find proxy addresses
-                let disc_path = self.discovery_path();
-                // Create context once; reused for both the publisher and all future subscribe() calls
-                let ctx = zmq::Context::new();
-                let publisher = match discovery::read_discovery(&disc_path)? {
-                    Some(addrs) => Publisher::connected(&ctx, &addrs.frontend)?,
-                    None => Publisher::noop(),
-                };
-                Ok(ElectionOutcome::Follower(FollowerGuard {
-                    lock_path: self.lock_path.clone(),
-                    socket_path: self.socket_path.clone(),
-                    discovery_path: disc_path,
-                    bus_addresses: self.bus_addresses(),
-                    publisher,
-                    zmq_ctx: ctx,
-                }))
-            }
+            Err(ElectionError::LockHeld) => Ok(ElectionOutcome::Follower(self.build_follower()?)),
             Err(e) => Err(e),
         }
+    }
+
+    /// Elect as a follower unconditionally, regardless of lock state.
+    ///
+    /// Used when policy forbids this process from contending for leadership
+    /// (see [`crate::may_contend_for_leadership`]) — e.g. a subagent-spawned
+    /// `sah serve` that must never index. It builds the same [`FollowerGuard`]
+    /// as the `LockHeld` arm of [`Self::elect`] *without* ever attempting the
+    /// flock, so a forbidden process never wins even on an empty workspace where
+    /// it would otherwise be the leader. The follower can still ride the
+    /// leader's bus and (in principle) re-contest, but the caller that opted out
+    /// of contention simply never promotes.
+    pub fn elect_as_follower_only(&self) -> Result<ElectionOutcome<M>> {
+        Ok(ElectionOutcome::Follower(self.build_follower()?))
+    }
+
+    /// Construct a [`FollowerGuard`] for this election, reading the discovery
+    /// file for the leader's proxy address. Shared by [`Self::elect`] (lock-held
+    /// arm) and [`Self::elect_as_follower_only`].
+    fn build_follower(&self) -> Result<FollowerGuard<M>> {
+        let disc_path = self.discovery_path();
+        // Create context once; reused for the publisher and all future subscribe() calls.
+        let ctx = zmq::Context::new();
+        let publisher = match discovery::read_discovery(&disc_path)? {
+            Some(addrs) => Publisher::connected(&ctx, &addrs.frontend)?,
+            None => Publisher::noop(),
+        };
+        Ok(FollowerGuard {
+            lock_path: self.lock_path.clone(),
+            socket_path: self.socket_path.clone(),
+            discovery_path: disc_path,
+            bus_addresses: self.bus_addresses(),
+            publisher,
+            zmq_ctx: ctx,
+        })
     }
 
     /// Try to become the leader (legacy API, prefer `elect()`).
@@ -295,40 +304,47 @@ impl<M: BusMessage> LeaderElection<M> {
         // Try to acquire exclusive lock (non-blocking)
         match lock_file.try_lock_exclusive() {
             Ok(()) => {
-                // Record this process's PID inside the lock file so followers
-                // can identify the leader (peek_leader_pid). The flock itself
-                // controls leadership; the PID is purely informational.
-                write_leader_pid(&lock_file, &self.lock_path);
-
-                // Clean up any stale socket file from previous run
-                let _ = fs::remove_file(&self.socket_path);
-
-                // Start the bus proxy
-                let addrs = self.bus_addresses();
-                let disc_path = self.discovery_path();
-
-                // Clean up stale IPC sockets before binding
-                discovery::cleanup_discovery(&disc_path, &addrs);
-
-                let proxy = ProxyHandle::start(&addrs)?;
-                discovery::write_discovery(&disc_path, &addrs)?;
-
-                // Create a publisher connected to our own proxy
-                let publisher = Publisher::connected(proxy.zmq_context(), &addrs.frontend)?;
-
-                Ok(LeaderGuard {
-                    _lock_file: lock_file,
-                    lock_path: self.lock_path.clone(),
-                    socket_path: self.socket_path.clone(),
-                    discovery_path: disc_path,
-                    bus_addresses: addrs,
-                    _proxy: proxy,
-                    publisher,
-                })
+                // Write an initial lease into the lock file under a fresh nonce
+                // so this leader can heartbeat under it and a candidate can
+                // detect staleness/takeover. The flock remains the fast path;
+                // the lease is the takeover path.
+                let nonce = lease::new_nonce();
+                let lease_record = lease::Lease {
+                    pid: std::process::id(),
+                    nonce,
+                    heartbeat_ms: SystemClock.now_millis(),
+                };
+                if let Err(e) = lease::write_lease_atomic(&self.lock_path, &lease_record) {
+                    tracing::debug!(
+                        path = %self.lock_path.display(),
+                        error = %e,
+                        "could not write initial leader lease (non-fatal; flock still held)",
+                    );
+                }
+                self.build_leader_guard(lock_file, nonce, true)
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(ElectionError::LockHeld),
             Err(e) => Err(ElectionError::LockAcquisition(e)),
         }
+    }
+
+    /// Build a leader guard via the shared free function, using this
+    /// election's own paths and bus addresses.
+    fn build_leader_guard(
+        &self,
+        lock_file: File,
+        nonce: u64,
+        holds_flock: bool,
+    ) -> Result<LeaderGuard<M>> {
+        build_leader_guard(
+            lock_file,
+            &self.lock_path,
+            &self.socket_path,
+            &self.discovery_path(),
+            self.bus_addresses(),
+            nonce,
+            holds_flock,
+        )
     }
 
     /// Check if a leader is currently active
@@ -375,6 +391,54 @@ impl<M: BusMessage> LeaderElection<M> {
     }
 }
 
+/// Build the leader-side machinery (socket cleanup, bus proxy, discovery file,
+/// publisher) and assemble a [`LeaderGuard`].
+///
+/// Single source of the proxy/discovery/publisher startup shared by initial
+/// election ([`LeaderElection::try_acquire_lock`]), flock re-election
+/// ([`FollowerGuard::try_promote`]), and lease takeover
+/// ([`FollowerGuard::try_promote_via_lease`]) — the three sites differ only in
+/// where the paths/addresses come from and whether they hold the OS flock.
+///
+/// `holds_flock` records whether the resulting guard actually owns the OS flock;
+/// a lease-takeover guard may hold leadership purely by lease while the old
+/// leader still holds the flock, in which case it must NOT delete the lock file
+/// on drop.
+#[allow(clippy::too_many_arguments)]
+fn build_leader_guard<M: BusMessage>(
+    lock_file: File,
+    lock_path: &Path,
+    socket_path: &Path,
+    discovery_path: &Path,
+    bus_addresses: BusAddresses,
+    nonce: u64,
+    holds_flock: bool,
+) -> Result<LeaderGuard<M>> {
+    // Clean up any stale socket file from a previous run.
+    let _ = fs::remove_file(socket_path);
+
+    // Clean up stale IPC sockets before binding.
+    discovery::cleanup_discovery(discovery_path, &bus_addresses);
+
+    let proxy = ProxyHandle::start(&bus_addresses)?;
+    discovery::write_discovery(discovery_path, &bus_addresses)?;
+
+    // Create a publisher connected to our own proxy.
+    let publisher = Publisher::connected(proxy.zmq_context(), &bus_addresses.frontend)?;
+
+    Ok(LeaderGuard {
+        _lock_file: lock_file,
+        lock_path: lock_path.to_path_buf(),
+        socket_path: socket_path.to_path_buf(),
+        discovery_path: discovery_path.to_path_buf(),
+        bus_addresses,
+        _proxy: proxy,
+        publisher,
+        nonce,
+        holds_flock,
+    })
+}
+
 /// Guard that holds the leader lock.
 ///
 /// When dropped, releases the flock, cleans up the socket file, and removes
@@ -394,6 +458,12 @@ pub struct LeaderGuard<M: BusMessage = NullMessage> {
     _proxy: ProxyHandle,
     /// Publisher for sending messages to the bus
     publisher: Publisher<M>,
+    /// The lease nonce this leader heartbeats under (identifies its term).
+    nonce: u64,
+    /// Whether this guard actually owns the OS flock. A lease-takeover guard
+    /// may hold leadership purely by lease while the old leader still holds the
+    /// flock; such a guard must NOT delete the lock file on drop.
+    holds_flock: bool,
 }
 
 impl<M: BusMessage> fmt::Debug for LeaderGuard<M> {
@@ -431,17 +501,40 @@ impl<M: BusMessage> LeaderGuard<M> {
     pub fn bus_addresses(&self) -> &BusAddresses {
         &self.bus_addresses
     }
+
+    /// The lease nonce this leader holds the current term under.
+    pub fn nonce(&self) -> u64 {
+        self.nonce
+    }
+
+    /// Refresh this leader's lease heartbeat under its nonce.
+    ///
+    /// Returns `true` if the lease is still ours (heartbeat refreshed) and
+    /// `false` if we were preempted — another process claimed a stale lease and
+    /// wrote a new nonce. A `false` return is the single loss signal: the caller
+    /// MUST step down (stop writing) so the single-writer invariant holds.
+    pub fn heartbeat(&self, clock: &dyn Clock) -> bool {
+        lease::heartbeat(&self.lock_path, self.nonce, clock)
+    }
 }
 
 impl<M: BusMessage> Drop for LeaderGuard<M> {
     fn drop(&mut self) {
-        // Clean up discovery file and IPC sockets
+        // Clean up discovery file and IPC sockets unconditionally — they belong
+        // to this proxy regardless of how leadership was held.
         discovery::cleanup_discovery(&self.discovery_path, &self.bus_addresses);
-        // Clean up socket and lock files when leader exits.
-        // The flock is released automatically when _lock_file is dropped,
-        // but the 0-byte files linger on disk unless we remove them.
         let _ = fs::remove_file(&self.socket_path);
-        let _ = fs::remove_file(&self.lock_path);
+        // Only remove the lock file when we hold the OS flock AND the on-disk
+        // lease is still ours. After a lease takeover, the OLD leader may hold
+        // the flock while a NEW leader owns the lease in the same file; an old
+        // leader stepping down must NOT delete the file out from under the new
+        // leader's lease (that would make the new leader's next heartbeat read a
+        // missing file and wrongly step down). `lease_held_by` returns false
+        // when the file is gone or carries a different nonce, so a preempted
+        // leader leaves the file (and the winner's lease) intact.
+        if self.holds_flock && lease::lease_held_by(&self.lock_path, self.nonce) {
+            let _ = fs::remove_file(&self.lock_path);
+        }
     }
 }
 
@@ -482,7 +575,7 @@ impl<M: BusMessage> FollowerGuard<M> {
         // Create-or-open the lock file *without* truncating. The previous
         // leader's drop may have deleted it, so we use create(true) to
         // ensure it exists for flock; but if a current leader holds it,
-        // truncating here would wipe out the PID the leader wrote.
+        // truncating here would wipe out the lease the leader wrote.
         let lock_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -493,34 +586,118 @@ impl<M: BusMessage> FollowerGuard<M> {
 
         match lock_file.try_lock_exclusive() {
             Ok(()) => {
-                // Record the new leader's PID for follower discovery.
-                write_leader_pid(&lock_file, &self.lock_path);
-
-                // Won the re-election — clean up stale socket from dead leader
-                let _ = fs::remove_file(&self.socket_path);
-
-                // Start a new proxy
-                let addrs = &self.bus_addresses;
-                discovery::cleanup_discovery(&self.discovery_path, addrs);
-
-                let proxy = ProxyHandle::start(addrs)?;
-                discovery::write_discovery(&self.discovery_path, addrs)?;
-
-                let publisher = Publisher::connected(proxy.zmq_context(), &addrs.frontend)?;
-
-                Ok(Some(LeaderGuard {
-                    _lock_file: lock_file,
-                    lock_path: self.lock_path.clone(),
-                    socket_path: self.socket_path.clone(),
-                    discovery_path: self.discovery_path.clone(),
-                    bus_addresses: addrs.clone(),
-                    _proxy: proxy,
-                    publisher,
-                }))
+                // We won the OS flock — but a free flock does NOT entitle us to
+                // leadership if a FRESH lease is still held by a live
+                // lease-leader. A leader B can hold leadership purely by lease
+                // (its guard has holds_flock=false) while the previous
+                // flock-holder still owns the flock; when that old flock-holder
+                // exits, the flock goes free even though B is alive and
+                // heartbeating. Taking over here would stomp B's fresh lease and
+                // preempt a healthy leader. So defer to the lease: if a fresh
+                // lease exists, release the flock we just grabbed (by dropping
+                // `lock_file`) and report no promotion. Do NOT delete the lock
+                // file — it holds B's live lease.
+                if let Some(existing) = lease::read_lease(&self.lock_path) {
+                    if !existing.is_stale(SystemClock.now_millis(), lease::LEASE_TTL) {
+                        // Dropping `lock_file` releases the flock on drop.
+                        return Ok(None);
+                    }
+                }
+                // No lease, or a stale lease → the flock-free dead-leader path.
+                // Write a fresh lease under a new nonce, then bring up the
+                // leader-side machinery. This guard holds the flock, so it
+                // cleans up the lock file on drop.
+                let nonce = self.write_fresh_lease();
+                Ok(Some(self.build_leader_guard(lock_file, nonce, true)?))
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
             Err(e) => Err(ElectionError::LockAcquisition(e)),
         }
+    }
+
+    /// Re-contest via the LEASE rather than the flock.
+    ///
+    /// This is the takeover path used when the flock is held by a LIVE but stale
+    /// leader (it stopped heartbeating). It claims the lease under a fresh nonce
+    /// ([`lease::try_claim_lease`]); the old leader will discover it lost when
+    /// its next [`LeaderGuard::heartbeat`] returns `false` and must step down.
+    ///
+    /// On success it brings up the same leader-side machinery as
+    /// [`Self::try_promote`], but it does NOT require holding the flock: it opens
+    /// the lock file and attempts a best-effort flock. If the flock is free
+    /// (the old leader has since exited) the guard records `holds_flock = true`;
+    /// if the old leader still holds it (WouldBlock) the guard holds leadership
+    /// purely by lease (`holds_flock = false`) and must not delete the lock file
+    /// on drop.
+    ///
+    /// Returns `Ok(None)` when the existing lease is still fresh
+    /// ([`lease::ClaimOutcome::Lost`]).
+    pub fn try_promote_via_lease(&self, clock: &dyn Clock) -> Result<Option<LeaderGuard<M>>> {
+        let nonce = match lease::try_claim_lease(&self.lock_path, clock, lease::LEASE_TTL) {
+            lease::ClaimOutcome::Lost => return Ok(None),
+            lease::ClaimOutcome::Won { nonce } => nonce,
+        };
+
+        // We now own the lease. Open the lock file (no truncate — we must not
+        // wipe the lease we just wrote) and attempt a best-effort flock.
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&self.lock_path)
+            .map_err(ElectionError::LockFileCreation)?;
+
+        let holds_flock = match lock_file.try_lock_exclusive() {
+            Ok(()) => true,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => false,
+            Err(e) => return Err(ElectionError::LockAcquisition(e)),
+        };
+
+        Ok(Some(self.build_leader_guard(
+            lock_file,
+            nonce,
+            holds_flock,
+        )?))
+    }
+
+    /// Write a fresh lease under a new nonce and return that nonce. Used by the
+    /// flock-fast-path promotion (`try_promote`) where we already own the flock,
+    /// so a write failure is non-fatal (the flock is the source of truth).
+    fn write_fresh_lease(&self) -> u64 {
+        let nonce = lease::new_nonce();
+        let record = lease::Lease {
+            pid: std::process::id(),
+            nonce,
+            heartbeat_ms: SystemClock.now_millis(),
+        };
+        if let Err(e) = lease::write_lease_atomic(&self.lock_path, &record) {
+            tracing::debug!(
+                path = %self.lock_path.display(),
+                error = %e,
+                "could not write fresh lease on promotion (non-fatal; flock held)",
+            );
+        }
+        nonce
+    }
+
+    /// Build a leader guard via the shared free function, using this follower's
+    /// cached paths and bus addresses.
+    fn build_leader_guard(
+        &self,
+        lock_file: File,
+        nonce: u64,
+        holds_flock: bool,
+    ) -> Result<LeaderGuard<M>> {
+        build_leader_guard(
+            lock_file,
+            &self.lock_path,
+            &self.socket_path,
+            &self.discovery_path,
+            self.bus_addresses.clone(),
+            nonce,
+            holds_flock,
+        )
     }
 
     /// Publish a message to the bus.
@@ -545,6 +722,15 @@ impl<M: BusMessage> FollowerGuard<M> {
     /// Get the path to the socket file
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
+    }
+
+    /// Get the bus addresses (for subscribing to the leader's proxy).
+    ///
+    /// A follower owns no proxy, but it knows where the leader's proxy binds, so
+    /// it can connect a [`Subscriber`](crate::Subscriber) to `backend` (via the
+    /// public `open` seam) and receive whatever the leader broadcasts.
+    pub fn bus_addresses(&self) -> &BusAddresses {
+        &self.bus_addresses
     }
 }
 
@@ -618,6 +804,83 @@ mod tests {
         let hash1 = hash_path(Path::new("/workspace/a"));
         let hash2 = hash_path(Path::new("/workspace/b"));
         assert_ne!(hash1, hash2);
+    }
+
+    /// Two elections opened against symlink-equivalent forms of the *same*
+    /// physical directory must derive the SAME lock_path/socket_path so they
+    /// elect a single leader (one rust-analyzer / index per workspace root).
+    ///
+    /// On macOS the canonical tempdir lives under `/private/var/...` but is
+    /// reachable through the `/var/...` symlink; a symlink we create here
+    /// reproduces the same split (`/var` vs `/private/var`, `/tmp` vs
+    /// `/private/tmp`). Before the fix the raw string forms hashed differently
+    /// and elected two leaders.
+    #[test]
+    fn test_symlink_equivalent_roots_derive_same_lock_path() {
+        let real = TempDir::new().unwrap();
+        let real_root = real.path();
+
+        // A symlink pointing at the same physical directory.
+        let link = real
+            .path()
+            .parent()
+            .unwrap()
+            .join(format!("leader-election-symlink-{}", std::process::id()));
+        let _ = fs::remove_file(&link);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(real_root, &link).unwrap();
+        #[cfg(not(unix))]
+        std::os::windows::fs::symlink_dir(real_root, &link).unwrap();
+
+        let canonical: LeaderElection = LeaderElection::new(real_root);
+        let via_link: LeaderElection = LeaderElection::new(&link);
+
+        assert_eq!(
+            canonical.lock_path(),
+            via_link.lock_path(),
+            "symlink-equivalent roots must share one lock_path"
+        );
+        assert_eq!(
+            canonical.socket_path(),
+            via_link.socket_path(),
+            "symlink-equivalent roots must share one socket_path"
+        );
+
+        // And exactly one of them wins the flock; the other is a follower.
+        let first = canonical.elect().unwrap();
+        assert!(matches!(first, ElectionOutcome::Leader(_)));
+        let second = via_link.elect().unwrap();
+        assert!(
+            matches!(second, ElectionOutcome::Follower(_)),
+            "the second election against the same physical dir must be a follower"
+        );
+
+        let _ = fs::remove_file(&link);
+    }
+
+    /// Canonicalization must NOT over-collapse: two genuinely-distinct
+    /// directories (the git-worktree case — each is a distinct checkout that
+    /// needs its own rust-analyzer) keep distinct lock_paths and elect
+    /// distinct leaders.
+    #[test]
+    fn test_distinct_dirs_derive_distinct_lock_paths() {
+        let dir_a = TempDir::new().unwrap();
+        let dir_b = TempDir::new().unwrap();
+
+        let election_a: LeaderElection = LeaderElection::new(dir_a.path());
+        let election_b: LeaderElection = LeaderElection::new(dir_b.path());
+
+        assert_ne!(
+            election_a.lock_path(),
+            election_b.lock_path(),
+            "distinct directories must not collapse to one lock_path"
+        );
+
+        // Both win their own election — two separate leaders.
+        let a = election_a.elect().unwrap();
+        let b = election_b.elect().unwrap();
+        assert!(matches!(a, ElectionOutcome::Leader(_)));
+        assert!(matches!(b, ElectionOutcome::Leader(_)));
     }
 
     #[test]
@@ -1110,5 +1373,204 @@ mod tests {
             Some(std::process::id()),
             "promotion path must record the new leader's PID"
         );
+    }
+
+    // --- lease takeover tests ---
+
+    /// A freshly-elected leader holds the lease under a nonce, and that lease is
+    /// NOT stale at its own heartbeat time. This is the deterministic stand-in
+    /// for "a candidate cannot take over a fresh lease": the lease the leader
+    /// wrote is held-by its nonce and not stale, so `try_promote_via_lease`
+    /// would return Lost.
+    #[test]
+    fn test_fresh_leader_lease_is_held_and_not_stale() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let guard = election.try_become_leader().unwrap();
+
+        let lease = crate::lease::read_lease(election.lock_path())
+            .expect("leader must have written a lease");
+        assert_eq!(lease.nonce, guard.nonce(), "guard nonce matches the lease");
+        assert!(
+            crate::lease::lease_held_by(election.lock_path(), guard.nonce()),
+            "the leader holds the lease under its nonce"
+        );
+        assert!(
+            !lease.is_stale(lease.heartbeat_ms, crate::lease::LEASE_TTL),
+            "a fresh lease is not stale at its own heartbeat time"
+        );
+    }
+
+    /// `try_promote_via_lease` returns None while the existing lease is fresh.
+    /// A TestClock pinned to the lease's own heartbeat time makes "fresh"
+    /// deterministic regardless of wall-clock drift.
+    #[test]
+    fn test_try_promote_via_lease_none_when_fresh() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let _leader = election.try_become_leader().unwrap();
+
+        let outcome = election.elect().unwrap();
+        let follower = match outcome {
+            ElectionOutcome::Follower(f) => f,
+            _ => panic!("expected follower"),
+        };
+
+        let lease = crate::lease::read_lease(election.lock_path()).unwrap();
+        // Candidate's clock is at the lease's heartbeat time — fully fresh.
+        let clock = crate::lease::TestClock::new(lease.heartbeat_ms);
+        let promoted = follower.try_promote_via_lease(&clock).unwrap();
+        assert!(
+            promoted.is_none(),
+            "a fresh lease must not be taken over via lease"
+        );
+    }
+
+    /// `LeaderGuard::heartbeat` returns true normally, and false once another
+    /// process has claimed the lease (simulated by writing a foreign-nonce
+    /// lease through `write_lease_atomic`). The false return is the leader's
+    /// step-down signal.
+    #[test]
+    fn test_leader_guard_heartbeat_true_then_false_after_preemption() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let guard = election.try_become_leader().unwrap();
+
+        let clock = crate::lease::SystemClock;
+        assert!(
+            guard.heartbeat(&clock),
+            "heartbeat under our own nonce must succeed"
+        );
+
+        // Simulate a takeover: a foreign process writes a new lease nonce.
+        let foreign = crate::lease::Lease {
+            pid: 4242,
+            nonce: guard.nonce().wrapping_add(1),
+            heartbeat_ms: clock.now_millis(),
+        };
+        crate::lease::write_lease_atomic(election.lock_path(), &foreign).unwrap();
+
+        assert!(
+            !guard.heartbeat(&clock),
+            "after preemption the leader's heartbeat must return false (step down)"
+        );
+    }
+
+    /// End-to-end takeover: a leader holds the flock, but its lease has gone
+    /// stale (it stopped heartbeating). A follower takes over via the LEASE path
+    /// even though the old leader still holds the flock, and the old leader's
+    /// next heartbeat returns false (it must step down). This is the core
+    /// single-writer-preserving invariant of the whole change.
+    #[test]
+    fn test_try_promote_via_lease_takes_over_stale_live_leader() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+
+        // Old leader: holds the flock, wrote a lease.
+        let old_leader = election.try_become_leader().unwrap();
+        let lease = crate::lease::read_lease(election.lock_path()).unwrap();
+
+        // A follower joins (loses the flock).
+        let outcome = election.elect().unwrap();
+        let follower = match outcome {
+            ElectionOutcome::Follower(f) => f,
+            _ => panic!("expected follower"),
+        };
+
+        // Time advances past the TTL with no heartbeat from the old leader.
+        let clock = crate::lease::TestClock::new(
+            lease.heartbeat_ms + crate::lease::LEASE_TTL.as_millis() as u64 + 1,
+        );
+
+        // The follower takes over via the lease. The old leader still holds the
+        // flock, so this guard holds leadership purely by lease.
+        let new_leader = follower
+            .try_promote_via_lease(&clock)
+            .unwrap()
+            .expect("a stale lease under a live flock must be claimable");
+        assert_ne!(new_leader.nonce(), old_leader.nonce(), "new term");
+        assert!(crate::lease::lease_held_by(
+            election.lock_path(),
+            new_leader.nonce()
+        ));
+
+        // The old leader notices it lost the term on its next heartbeat.
+        assert!(
+            !old_leader.heartbeat(&clock),
+            "the preempted old leader must step down (heartbeat false)"
+        );
+    }
+
+    /// A preempted old leader stepping down (dropping its guard) must NOT delete
+    /// the lock file holding the NEW leader's lease. Otherwise the new leader's
+    /// next heartbeat reads a missing file and wrongly steps down too.
+    #[test]
+    fn test_preempted_leader_drop_preserves_new_leader_lease() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+
+        // Old leader holds flock + lease.
+        let old_leader = election.try_become_leader().unwrap();
+        let lease = crate::lease::read_lease(election.lock_path()).unwrap();
+
+        // Follower joins and, after the TTL elapses with no heartbeat, takes
+        // over via the lease (old leader still holds the flock).
+        let follower = match election.elect().unwrap() {
+            ElectionOutcome::Follower(f) => f,
+            _ => panic!("expected follower"),
+        };
+        let clock = crate::lease::TestClock::new(
+            lease.heartbeat_ms + crate::lease::LEASE_TTL.as_millis() as u64 + 1,
+        );
+        let new_leader = follower
+            .try_promote_via_lease(&clock)
+            .unwrap()
+            .expect("stale lease under a live flock must be claimable");
+        let new_nonce = new_leader.nonce();
+
+        // The old leader steps down — drop its guard. Its holds_flock is true,
+        // but the lease is no longer its nonce, so it must leave the file alone.
+        drop(old_leader);
+
+        assert!(
+            crate::lease::lease_held_by(election.lock_path(), new_nonce),
+            "new leader's lease must survive the old leader's drop"
+        );
+        assert!(
+            new_leader.heartbeat(&clock),
+            "new leader must still be able to heartbeat after old leader drops"
+        );
+    }
+
+    /// A free flock does NOT entitle a process to leadership when a FRESH lease
+    /// is held by a live lease-leader. The flock fast path must defer to the lease.
+    #[test]
+    fn test_try_promote_flock_free_but_fresh_lease_does_not_preempt() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+
+        // Follower handle that never touches the flock.
+        let follower = match election.elect_as_follower_only().unwrap() {
+            ElectionOutcome::Follower(f) => f,
+            ElectionOutcome::Leader(_) => panic!("elect_as_follower_only must be a follower"),
+        };
+
+        // Simulate a live lease-leader B: a FRESH lease in the lock file, with the
+        // OS flock FREE (nobody holds it in this test).
+        let fresh = crate::lease::Lease {
+            pid: 4242,
+            nonce: 7777,
+            heartbeat_ms: crate::lease::SystemClock.now_millis(),
+        };
+        crate::lease::write_lease_atomic(election.lock_path(), &fresh).unwrap();
+
+        // try_promote can win the FREE flock, but must DEFER to B's fresh lease.
+        let promoted = follower.try_promote().unwrap();
+        assert!(
+            promoted.is_none(),
+            "flock-free + fresh-lease must NOT preempt the live lease-leader"
+        );
+        // B's lease is intact and unchanged.
+        assert!(crate::lease::lease_held_by(election.lock_path(), 7777));
     }
 }
