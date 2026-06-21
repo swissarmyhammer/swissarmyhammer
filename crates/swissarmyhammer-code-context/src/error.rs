@@ -23,6 +23,17 @@ pub enum CodeContextError {
     #[error("invalid regex pattern: {0}")]
     Pattern(String),
 
+    /// A requested symbol, file, or other entity was not found.
+    ///
+    /// Carries an already-formatted human-readable message (rendered
+    /// verbatim via `#[error("{0}")]`, with no prefix). This is the
+    /// not-found carrier for structural ops such as `get_callgraph` and
+    /// `get_blastradius`; it must NOT be conflated with [`Self::Pattern`],
+    /// whose `"invalid regex pattern: "` prefix only makes sense for a
+    /// genuine `Regex::new` failure.
+    #[error("{0}")]
+    NotFound(String),
+
     /// LSP communication error
     #[error("LSP error: {0}")]
     LspError(String),
