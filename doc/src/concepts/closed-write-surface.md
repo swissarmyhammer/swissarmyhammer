@@ -14,7 +14,7 @@ Claude Code, the prerequisite it still depends on, and the tradeoff it accepts.
 
 ## An MCP server can't disable a host's native tools
 
-Claude Code ships its own native `Edit`, `Write`, and `MultiEdit` tools. An MCP
+Claude Code ships its own native `Edit` and `Write` tools. An MCP
 server (which is what `sah serve` is) can *add* tools, but it cannot *remove* or
 disable the host's built-in ones. As long as the native mutators are present and
 allowed, the model — tuned to reach for them — will, and those edits bypass the
@@ -23,7 +23,7 @@ instrumented path.
 So the editing surface is closed not from inside the server but with a **host
 config fragment**: a Claude Code `settings.json` change that
 
-1. sets `permissions.deny` on `Edit`, `Write`, and `MultiEdit`, so the model is
+1. sets `permissions.deny` on `Edit` and `Write`, so the model is
    told not to use the native mutators, and
 2. adds a `PreToolUse` hook on those same tools that, if one is attempted
    anyway, denies it and redirects the model to the `files` MCP tool's

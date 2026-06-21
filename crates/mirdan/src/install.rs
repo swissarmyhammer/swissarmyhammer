@@ -962,7 +962,7 @@ pub struct Profile {
     /// Whether to ensure the CLAUDE.md preamble is present.
     pub preamble: bool,
     /// Whether to install the edit-surface redirect fragment: a
-    /// `permissions.deny` on the native `Edit`/`Write`/`MultiEdit` tools so every
+    /// `permissions.deny` on the native `Edit`/`Write` tools so every
     /// mutation flows through the served `files` MCP replacement (the
     /// diagnostics-instrumented path), mirroring how `shell` supersedes `Bash`.
     /// The deny alone closes the surface — no `PreToolUse` hook. Claude-shaped
@@ -1538,8 +1538,8 @@ fn apply_statusline_at(path: &Path, install: bool) -> Result<bool, RegistryError
 // An MCP server cannot disable a host's *native* built-in tools, so closing
 // the editing surface — forcing every mutation through the served `files` MCP
 // replacement, so diagnostics always ride the result — ships as an installable
-// Claude Code settings fragment that `permissions.deny`s the three native
-// mutators (`Edit`, `Write`, `MultiEdit`). The deny alone closes the surface:
+// Claude Code settings fragment that `permissions.deny`s the native
+// mutators (`Edit`, `Write`). The deny alone closes the surface:
 // the model is steered to the served `files` replacement, exactly as `shell`
 // supersedes the native `Bash` with a plain deny and no redirect hook. (An
 // earlier version also installed a `PreToolUse` redirect hook; it was redundant
@@ -1552,11 +1552,11 @@ fn apply_statusline_at(path: &Path, install: bool) -> Result<bool, RegistryError
 /// The native Claude Code mutator tools the redirect fragment denies, so every
 /// mutation is forced through the served `files` MCP replacement. Kept as data
 /// (not spelled into control flow) so the deny list derives from one source.
-pub const EDIT_REDIRECT_DENY_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit"];
+pub const EDIT_REDIRECT_DENY_TOOLS: &[&str] = &["Edit", "Write"];
 
 /// The installable Claude Code settings fragment that closes the write surface.
 ///
-/// Denies the native `Edit`/`Write`/`MultiEdit` tools — and nothing else. The
+/// Denies the native `Edit`/`Write` tools — and nothing else. The
 /// model is steered to the served `files` MCP replacement, exactly as `shell`
 /// replaces the native `Bash` with a plain `permissions.deny` and no redirect
 /// hook. The deny alone closes the surface; a `PreToolUse` redirect would be
@@ -6272,7 +6272,7 @@ mod edit_redirect_tests {
     use serde_json::json;
 
     /// The generated fragment must be valid Claude Code settings JSON: it denies
-    /// the three native edit tools and installs **no** `PreToolUse` hook. The
+    /// the native edit tools and installs **no** `PreToolUse` hook. The
     /// deny alone closes the native write surface — the model is steered to the
     /// served `files` replacement, mirroring how `shell` replaces `Bash` with a
     /// plain deny and no redirect hook.
@@ -6280,7 +6280,7 @@ mod edit_redirect_tests {
     fn fragment_denies_native_edit_tools_without_hook() {
         let fragment = desired_edit_redirect_fragment();
 
-        // Deny entries: Edit, Write, MultiEdit (order matches the constant).
+        // Deny entries: Edit, Write (order matches the constant).
         let deny = fragment["permissions"]["deny"]
             .as_array()
             .expect("permissions.deny must be an array");
