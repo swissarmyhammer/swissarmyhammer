@@ -1,7 +1,7 @@
 //! Composable `Initializable` components for sah init/deinit.
 //!
 //! Most of sah's install lifecycle — the MCP server, builtin skills, builtin
-//! agents, and the statusline — is installed
+//! agents, the statusline, and the CLAUDE.md preamble — is installed
 //! declaratively through sah's [`Profile`](mirdan::install::Profile) via
 //! [`mirdan::install::init_profile`] / [`mirdan::install::deinit_profile`]
 //! (see [`crate::commands::profile`]). The only install concern left here is
@@ -28,7 +28,7 @@ use swissarmyhammer_common::SwissarmyhammerDirectory;
 ///
 /// * `sah init --user` is a **per-agent config install** — it edits each
 ///   detected agent's global settings (Claude `~/.claude/settings.json`,
-///   statusline config, deployed agent
+///   the global `CLAUDE.md` preamble, statusline config, deployed agent
 ///   definitions). All of those are handled by sah's
 ///   [`Profile`](mirdan::install::Profile); user scope has no shared runtime
 ///   artifacts of its own.
@@ -75,7 +75,7 @@ impl Initializable for ProjectStructure {
         "structure"
     }
 
-    /// Component priority: 40 (runs after per-agent settings).
+    /// Component priority: 40 (runs after per-agent settings, before the preamble).
     fn priority(&self) -> i32 {
         40
     }
@@ -84,8 +84,8 @@ impl Initializable for ProjectStructure {
     ///
     /// User scope is intentionally excluded — see the struct-level
     /// documentation on [`ProjectStructure`] for the rationale. In short:
-    /// `sah init --user` installs per-agent config (settings, statusline,
-    /// agents) but has no shared runtime artifacts of its own;
+    /// `sah init --user` installs per-agent config (settings, preamble,
+    /// statusline, agents) but has no shared runtime artifacts of its own;
     /// sah's runtime state (`.sah/workflows/`, prompts, kanban, indexes)
     /// is project-local.
     fn is_applicable(&self, scope: &InitScope) -> bool {

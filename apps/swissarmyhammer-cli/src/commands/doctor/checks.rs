@@ -396,14 +396,14 @@ fn check_single_lsp_server(spec: &swissarmyhammer_lsp::types::OwnedLspServerSpec
 /// project and user scope.
 ///
 /// This is the agent-agnostic replacement for the old, Claude-specific,
-/// project-only install check. It loads the host's agents config and delegates
+/// project-only preamble check. It loads the host's agents config and delegates
 /// to [`check_install_stack_with`], which runs
 /// [`mirdan::status::check_all_doctored`] across [`InitScope::Project`] and
 /// [`InitScope::User`] and converts each applicable [`ComponentStatus`] into a
 /// doctor [`Check`] via [`mirdan::status::to_check`]. Only agents whose
 /// `AgentDef.doctor` is `true` (per `agents_default.yaml`) participate. The
 /// check name produced by `to_check` already encodes agent, scope, and
-/// component (e.g. `"Claude Code · user · Permissions"`), so project and user
+/// component (e.g. `"Claude Code · user · Preamble"`), so project and user
 /// rows are distinct.
 ///
 /// [`ComponentState::NotApplicable`] statuses are skipped entirely rather than
@@ -643,11 +643,12 @@ mod tests {
 
     /// With an isolated HOME that contains a detectable Claude Code layout, the
     /// install stack must report both project and user rows per component, map an
-    /// installed user-scope permissions file to Ok, and demote the missing
-    /// project-scope permissions row to Ok via the scope-pair policy.
+    /// installed user-scope preamble to Ok, and map a missing user-scope
+    /// permissions file to Warning.
     #[test]
     #[serial_test::serial(cwd)]
     fn test_check_install_stack_user_scope_rows() {
+        use mirdan::status::PREAMBLE_MARKER;
         use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
         let env = IsolatedTestEnvironment::new().expect("isolated env");
@@ -658,60 +659,75 @@ mod tests {
         let claude_dir = home.join(".claude");
         fs::create_dir_all(&claude_dir).unwrap();
 
-        // Install the user-scope permissions (`~/.claude/settings.json` with a
-        // `Bash` deny entry, which `mirdan::status::permissions_present` treats
-        // as installed); leave project-scope settings missing.
+        // Install the user-scope preamble (Ok), leave user-scope permissions
+        // (`~/.claude/settings.json`) missing (Warning).
         fs::write(
-            claude_dir.join("settings.json"),
-            r#"{"permissions":{"deny":["Bash"]}}"#,
+            claude_dir.join("CLAUDE.md"),
+            format!("{}\n\nnotes\n", PREAMBLE_MARKER),
         )
         .unwrap();
 
         let mut checks = Vec::new();
         check_install_stack(&mut checks).expect("install stack should not error");
 
-        // User-scope permissions are installed -> Ok.
+        // User-scope preamble is installed -> Ok.
+        let user_preamble = checks
+            .iter()
+            .find(|c| c.name == "Claude Code · user · Preamble")
+            .expect("expected a user-scope Preamble row");
+        assert_eq!(
+            user_preamble.status,
+            CheckStatus::Ok,
+            "installed preamble should be Ok, got: {}",
+            user_preamble.message
+        );
+
+        // User-scope permissions are missing -> Warning with an actionable fix.
         let user_permissions = checks
             .iter()
             .find(|c| c.name == "Claude Code · user · Permissions")
             .expect("expected a user-scope Permissions row");
         assert_eq!(
             user_permissions.status,
-            CheckStatus::Ok,
-            "installed permissions should be Ok, got: {}",
-            user_permissions.message
+            CheckStatus::Warning,
+            "missing permissions should be a Warning"
         );
+        assert!(user_permissions
+            .fix
+            .as_ref()
+            .expect("missing component should carry a fix")
+            .contains("sah init user"));
 
         // Both project and user rows are present for the agent.
-        let project_permissions = checks
+        let project_preamble = checks
             .iter()
-            .find(|c| c.name == "Claude Code · project · Permissions")
-            .expect("expected a project-scope Permissions row");
+            .find(|c| c.name == "Claude Code · project · Preamble")
+            .expect("expected a project-scope Preamble row");
         assert!(
             checks
                 .iter()
-                .any(|c| c.name == "Claude Code · user · Permissions"),
-            "expected a user-scope Permissions row"
+                .any(|c| c.name == "Claude Code · user · Preamble"),
+            "expected a user-scope Preamble row"
         );
 
-        // Scope-pair policy: project-scope permissions are missing on disk, but
-        // the user-scope permissions are installed — the project row demotes to
-        // Ok with no fix, and the message names the user scope.
+        // Scope-pair policy: project-scope preamble is missing on disk, but the
+        // user-scope preamble is installed — the project row demotes to Ok
+        // with no fix, and the message names the user scope.
         assert_eq!(
-            project_permissions.status,
+            project_preamble.status,
             CheckStatus::Ok,
-            "project-missing permissions should demote to Ok when user scope is installed; got: {}",
-            project_permissions.message
+            "project-missing preamble should demote to Ok when user scope is installed; got: {}",
+            project_preamble.message
         );
         assert!(
-            project_permissions.fix.is_none(),
+            project_preamble.fix.is_none(),
             "demoted project row should have no fix hint; got: {:?}",
-            project_permissions.fix
+            project_preamble.fix
         );
         assert!(
-            project_permissions.message.contains("user"),
+            project_preamble.message.contains("user"),
             "demoted project row should reference the user scope; got: {}",
-            project_permissions.message
+            project_preamble.message
         );
     }
 

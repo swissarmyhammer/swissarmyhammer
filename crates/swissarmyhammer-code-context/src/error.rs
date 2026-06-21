@@ -82,3 +82,14 @@ pub enum CodeContextError {
         db_path: PathBuf,
     },
 }
+
+impl From<swissarmyhammer_lsp::LspError> for CodeContextError {
+    /// Map a transport-level [`swissarmyhammer_lsp::LspError`] into the
+    /// code-context error space. The LSP client and server-spec registry live
+    /// in `swissarmyhammer-lsp`; the symbol-collection layer here wraps its
+    /// failures as [`CodeContextError::LspError`] so `?` propagation works
+    /// across the crate boundary.
+    fn from(err: swissarmyhammer_lsp::LspError) -> Self {
+        CodeContextError::LspError(err.to_string())
+    }
+}

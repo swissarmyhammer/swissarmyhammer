@@ -1,8 +1,8 @@
 //! Remove sah from all detected AI coding agents (skills + agents + MCP +
-//! statusline).
+//! statusline + preamble).
 //!
-//! Mirrors [`super::init`]: the MCP server, builtin skills, builtin agents, and
-//! statusline are removed through sah's declarative
+//! Mirrors [`super::init`]: the MCP server, builtin skills, builtin agents,
+//! statusline, and CLAUDE.md preamble are removed through sah's declarative
 //! [`Profile`] via [`mirdan::install::deinit_profile`], and the non-profile
 //! `Initializable` components (project workspace, kanban merge drivers) run via
 //! [`crate::commands::registry::register_all`].
@@ -16,7 +16,7 @@ use swissarmyhammer_common::reporter::{CliReporter, InitEvent, InitReporter};
 /// Uninstall sah from all detected AI coding agents.
 ///
 /// Runs sah's [`Profile`] through [`mirdan::install::deinit_profile`] (MCP,
-/// skills, agents, statusline) and then the non-profile
+/// skills, agents, statusline, preamble) and then the non-profile
 /// `Initializable` components in reverse priority order. The `remove_directory`
 /// flag controls whether `ProjectStructure` removes `.sah/` and `.prompts/`.
 pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), String> {

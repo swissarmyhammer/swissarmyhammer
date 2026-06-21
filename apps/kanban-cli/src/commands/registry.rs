@@ -43,6 +43,8 @@ pub fn profile(_scope: InitScope) -> mirdan::install::Profile {
         agents: None,
         validators: None,
         statusline: false,
+        preamble: false,
+        edit_redirect: false,
     }
 }
 

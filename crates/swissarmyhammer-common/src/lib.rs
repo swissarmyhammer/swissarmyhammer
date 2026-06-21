@@ -19,6 +19,7 @@
 //! - Serialization support for all public types
 //! - Documentation-driven development with clear API contracts
 
+pub mod build_info;
 pub mod constants;
 pub mod directory;
 pub mod editor;

@@ -9,7 +9,6 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-swissarmyhammer-code-context = { workspace = true }
 swissarmyhammer-project-detection = { workspace = true }
 lsp-types = { workspace = true }
 tokio = { workspace = true }
@@ -21,6 +20,7 @@ url = { workspace = true }
 which = { workspace = true }
 thiserror = { workspace = true }
 once_cell = { workspace = true }
+include_dir = { workspace = true }
 
 [dev-dependencies]
 swissarmyhammer-leader-election = { workspace = true }

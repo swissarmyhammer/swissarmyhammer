@@ -23,6 +23,18 @@ const DEFAULT_HTTP_PORT: &str = "8000";
 /// Default HTTP host used when no environment variable is set
 const DEFAULT_HTTP_HOST: &str = "127.0.0.1";
 
+/// Long version string shown by `sah --version`/`-V`: the crate version
+/// plus the git SHA baked in at build time, so the exact commit a binary
+/// was built from is visible without running the server. `Lazy` gives a
+/// `'static` backing store, satisfying clap's `long_version`.
+static LONG_VERSION: Lazy<String> = Lazy::new(|| {
+    format!(
+        "{} ({})",
+        env!("CARGO_PKG_VERSION"),
+        swissarmyhammer_common::build_info::GIT_SHA
+    )
+});
+
 /// Get default configuration from environment variables with fallback chain
 ///
 /// Checks both SAH_* and SWISSARMYHAMMER_* prefixed environment variables,
@@ -1064,6 +1076,7 @@ impl CliBuilder {
     fn build_base_cli() -> Command {
         let cmd = Command::new("swissarmyhammer")
             .version(env!("CARGO_PKG_VERSION"))
+            .long_version(LONG_VERSION.as_str())
             .about("The only coding assistant you'll ever need")
             .long_about(BASE_CLI_LONG_ABOUT);
 

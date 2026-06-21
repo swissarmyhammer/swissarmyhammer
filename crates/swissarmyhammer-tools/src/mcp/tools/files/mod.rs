@@ -137,11 +137,16 @@ impl McpTool for FilesTool {
     }
 
     fn category(&self) -> ToolCategory {
-        // File read/write/edit/glob/grep is a base agent capability. The
-        // validator surface does not serve this unified tool at all — it serves
-        // the split read-only `read_file`/`glob_files`/`grep_files` tools via
-        // the validator profile (`tools::register_validator_tools`).
-        ToolCategory::Agent
+        // File read/write/edit/glob/grep supersedes the host's native edit
+        // surface, so it is a `Replacement` for `Edit`: the primary per-client
+        // serve advertises it to Claude (mirroring how `shell` replaces `Bash`)
+        // and serve-time deny closes the native `Edit` tool. The validator
+        // surface does not serve this unified tool at all — it serves the split
+        // read-only `read_file`/`glob_files`/`grep_files` tools via the validator
+        // profile (`tools::register_validator_tools`), and the agent-tools /
+        // validator servers serve verbatim (`compose_per_client = false`), so
+        // this category does not change what those endpoints advertise.
+        ToolCategory::Replacement { native: "Edit" }
     }
 
     async fn execute(
@@ -570,17 +575,23 @@ mod tests {
     }
 
     #[test]
-    fn test_read_only_category_is_agent() {
+    fn test_read_only_category_is_replacement() {
         use crate::mcp::tool_registry::ToolCategory;
         let tool = FilesTool::read_only();
-        assert_eq!(McpTool::category(&tool), ToolCategory::Agent);
+        assert_eq!(
+            McpTool::category(&tool),
+            ToolCategory::Replacement { native: "Edit" }
+        );
     }
 
     #[test]
-    fn test_all_category_is_agent() {
+    fn test_all_category_is_replacement() {
         use crate::mcp::tool_registry::ToolCategory;
         let tool = FilesTool::new();
-        assert_eq!(McpTool::category(&tool), ToolCategory::Agent);
+        assert_eq!(
+            McpTool::category(&tool),
+            ToolCategory::Replacement { native: "Edit" }
+        );
     }
 
     #[tokio::test]

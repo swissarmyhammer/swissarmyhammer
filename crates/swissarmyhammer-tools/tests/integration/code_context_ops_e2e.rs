@@ -250,6 +250,7 @@ async fn index_real_workspace() -> (IsolatedTestEnvironment, tempfile::TempDir, 
         &root,
         Arc::clone(&shared_db),
         swissarmyhammer_code_context::noop_reporter(),
+        swissarmyhammer_code_context::new_shutdown_flag(),
     )
     .await;
 
@@ -557,12 +558,17 @@ fn drive_lsp_persistence(root: &Path, db: &SharedDb) -> i64 {
 
     let main_rs_path = root.join(LSP_MAIN_RS);
 
-    let mut child = Command::new("rust-analyzer")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn rust-analyzer");
+    // Kill-on-drop guarded so the assertions below can never leak the real
+    // rust-analyzer as a PPID=1 orphan on panic — see
+    // `swissarmyhammer_code_context::testing::KillOnDrop`.
+    let mut child = swissarmyhammer_code_context::testing::KillOnDrop::new(
+        Command::new("rust-analyzer")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn rust-analyzer"),
+    );
 
     let stdin = child.stdin.take().expect("take rust-analyzer stdin");
     let stdout = child.stdout.take().expect("take rust-analyzer stdout");
@@ -586,9 +592,13 @@ fn drive_lsp_persistence(root: &Path, db: &SharedDb) -> i64 {
     // Persist symbols into lsp_symbols / mark lsp_indexed = 1.
     {
         let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-        let persist = client
-            .collect_and_persist_file_symbols(&conn, &main_rs_path, LSP_MAIN_RS)
-            .expect("collect_and_persist_file_symbols");
+        let persist = swissarmyhammer_code_context::collect_and_persist_file_symbols(
+            &mut client,
+            &conn,
+            &main_rs_path,
+            LSP_MAIN_RS,
+        )
+        .expect("collect_and_persist_file_symbols");
         assert!(
             persist.error.is_none(),
             "LSP documentSymbol should not error: {:?}",
@@ -607,7 +617,12 @@ fn drive_lsp_persistence(root: &Path, db: &SharedDb) -> i64 {
     // assertions.
     let edge_count = {
         let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-        match client.collect_and_persist_call_edges(&conn, &main_rs_path, LSP_MAIN_RS) {
+        match swissarmyhammer_code_context::collect_and_persist_call_edges(
+            &mut client,
+            &conn,
+            &main_rs_path,
+            LSP_MAIN_RS,
+        ) {
             Ok(n) => n as i64,
             Err(e) => {
                 println!(
@@ -633,7 +648,8 @@ fn poll_symbol_count_via_client(client: &mut LspJsonRpcClient, main_rs_path: &Pa
     let poll_interval = std::time::Duration::from_millis(500);
     let mut last = 0;
     while start.elapsed() < timeout {
-        if let Ok(result) = client.collect_file_symbols(main_rs_path) {
+        if let Ok(result) = swissarmyhammer_code_context::collect_file_symbols(client, main_rs_path)
+        {
             last = result.symbol_count;
             if last >= 4 {
                 return last;
@@ -688,6 +704,7 @@ async fn qwen_embedding_lsp_layered_e2e() {
         root,
         Arc::clone(&shared_db),
         swissarmyhammer_code_context::noop_reporter(),
+        swissarmyhammer_code_context::new_shutdown_flag(),
     )
     .await;
 

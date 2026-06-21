@@ -2,7 +2,7 @@
 //!
 //! The `init` and `deinit` commands install/remove sah's declarative
 //! [`Profile`] (the shared SAH MCP server, all builtin skills, all builtin
-//! agents, and the statusline) via
+//! agents, the statusline, and the CLAUDE.md preamble) via
 //! [`mirdan::install::init_profile`] / [`mirdan::install::deinit_profile`],
 //! plus the two non-profile `Initializable` components (the `.sah/` +
 //! `.prompts/` project workspace and the `.kanban/` merge drivers) registered

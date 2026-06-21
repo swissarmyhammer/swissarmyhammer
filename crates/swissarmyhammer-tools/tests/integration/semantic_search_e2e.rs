@@ -242,6 +242,7 @@ async fn qwen_embedding_semantic_search_e2e() {
         &root,
         Arc::clone(&shared_db),
         swissarmyhammer_code_context::noop_reporter(),
+        swissarmyhammer_code_context::new_shutdown_flag(),
     )
     .await;
 

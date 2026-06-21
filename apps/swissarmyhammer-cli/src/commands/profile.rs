@@ -22,6 +22,10 @@ use mirdan::install::{Profile, ProfileMcpServer, Selector};
 /// - `skills`: every builtin skill ([`Selector::All`]).
 /// - `agents`: every builtin agent ([`Selector::All`]).
 /// - `statusline`: install the `sah statusline` block.
+/// - `edit_redirect`: deny the native `Edit`/`Write` tools so every
+///   mutation flows through the served `files` MCP replacement; the deny alone
+///   closes the write surface (no `PreToolUse` hook), so diagnostics ride every
+///   mutation.
 ///
 /// Kept in sync with mirdan's cross-CLI consistency tests
 /// (`mirdan::install::profile_consistency_tests::sah_profile`), which
@@ -35,6 +39,8 @@ pub fn sah_profile() -> Profile {
         agents: Some(Selector::All),
         validators: Some(Selector::All),
         statusline: true,
+        preamble: false,
+        edit_redirect: true,
     }
 }
 
@@ -59,5 +65,7 @@ mod tests {
         assert_eq!(profile.agents, Some(Selector::All));
         assert_eq!(profile.validators, Some(Selector::All));
         assert!(profile.statusline);
+        assert!(!profile.preamble);
+        assert!(profile.edit_redirect);
     }
 }

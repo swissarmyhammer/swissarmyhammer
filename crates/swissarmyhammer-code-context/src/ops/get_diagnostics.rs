@@ -1,55 +1,31 @@
-//! File diagnostics (errors, warnings) via live LSP pull diagnostics.
+//! File diagnostics (errors, warnings) via the unified session diagnostics path.
 //!
 //! This operation is **live LSP only** -- there is no meaningful index fallback
 //! for diagnostics, which require live analysis of the file. When no live LSP
 //! is available, returns an empty result with `SourceLayer::None`.
 //!
-//! Uses `textDocument/diagnostic` (LSP 3.17+ pull diagnostics) via
-//! [`LayeredContext::lsp_request`]. Falls back to empty if the server
-//! does not support pull diagnostics.
+//! It delegates to [`LayeredContext::lsp_diagnostics`], which routes through the
+//! shared [`LspSession`](swissarmyhammer_lsp::LspSession): the session opens the
+//! document, issues the `textDocument/diagnostic` (LSP 3.17+) pull, and feeds
+//! the result through the same latest-per-uri cache and fan-out that push
+//! `publishDiagnostics` notifications use. There is no separate pull-and-parse
+//! implementation here anymore — the JSON-to-typed mapping lives once in
+//! `swissarmyhammer-lsp`.
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::layered_context::{LayeredContext, LspRange, SourceLayer};
-use crate::ops::lsp_helpers::file_path_to_uri;
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
 /// Severity level for a diagnostic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DiagnosticSeverity {
-    Error,
-    Warning,
-    Info,
-    Hint,
-}
-
-impl DiagnosticSeverity {
-    /// Convert an LSP severity integer (1=Error, 2=Warning, 3=Info, 4=Hint)
-    /// to our enum. Defaults to `Hint` for unknown values.
-    pub fn from_lsp(value: u64) -> Self {
-        match value {
-            1 => Self::Error,
-            2 => Self::Warning,
-            3 => Self::Info,
-            4 => Self::Hint,
-            _ => Self::Hint,
-        }
-    }
-
-    /// Convert to the LSP severity integer.
-    pub fn to_lsp(self) -> u64 {
-        match self {
-            Self::Error => 1,
-            Self::Warning => 2,
-            Self::Info => 3,
-            Self::Hint => 4,
-        }
-    }
-}
+///
+/// Re-exported from the canonical definition in `swissarmyhammer-lsp` — there is
+/// exactly one severity enum for the workspace, and this crate uses it rather
+/// than defining a competing copy.
+pub use swissarmyhammer_lsp::DiagnosticSeverity;
 
 /// A single diagnostic for a file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,71 +73,30 @@ pub struct DiagnosticsResult {
 
 /// Get diagnostics for a file.
 ///
-/// Uses pull diagnostics (`textDocument/diagnostic`, LSP 3.17+) via the live
-/// LSP server. Returns an empty result when no live LSP is available or the
-/// server does not support pull diagnostics.
+/// Delegates to the unified session diagnostics path
+/// ([`LayeredContext::lsp_diagnostics`]), which pulls `textDocument/diagnostic`
+/// (LSP 3.17+) through the shared session and feeds the same cache/fan-out as
+/// push diagnostics. Returns an empty result when no live LSP is available or
+/// the server does not support pull diagnostics.
 ///
 /// # Arguments
 /// * `ctx` - The layered context providing access to all data layers.
 /// * `opts` - The file path and optional severity filter.
 ///
 /// # Errors
-/// Returns a `CodeContextError` if an LSP request fails unexpectedly.
+/// Returns a `CodeContextError` if the session surfaces an unexpected transport
+/// failure.
 pub fn get_diagnostics(
     ctx: &LayeredContext,
     opts: &GetDiagnosticsOptions,
 ) -> Result<DiagnosticsResult, crate::error::CodeContextError> {
-    if !ctx.has_live_lsp() {
-        return Ok(empty_result());
-    }
-
-    match try_pull_diagnostics(ctx, opts) {
-        Ok(Some(result)) => Ok(result),
-        Ok(None) | Err(_) => {
-            // Pull diagnostics not supported or failed -- return empty
-            Ok(empty_result())
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Pull diagnostics (LSP 3.17+)
-// ---------------------------------------------------------------------------
-
-/// Attempt to get diagnostics via `textDocument/diagnostic` (pull model).
-///
-/// Opens the document, requests diagnostics, then closes the document
-/// atomically under a single mutex hold to prevent interleaving with the
-/// indexing worker.
-/// Returns `None` if the server responds with an error (likely unsupported).
-fn try_pull_diagnostics(
-    ctx: &LayeredContext,
-    opts: &GetDiagnosticsOptions,
-) -> Result<Option<DiagnosticsResult>, crate::error::CodeContextError> {
-    let uri = file_path_to_uri(&opts.file_path);
-
-    let response = ctx.lsp_request_with_document(
-        &opts.file_path,
-        "textDocument/diagnostic",
-        json!({
-            "textDocument": { "uri": uri }
-        }),
-    )?;
-
-    let response = match response {
-        Some(v) if !v.is_null() => v,
-        _ => return Ok(None),
+    // No live session -> no diagnostics layer.
+    let raw = match ctx.lsp_diagnostics(&opts.file_path)? {
+        Some(raw) => raw,
+        None => return Ok(empty_result()),
     };
 
-    // Check for error response (server doesn't support pull diagnostics)
-    if response.get("error").is_some() {
-        return Ok(None);
-    }
-
-    // Parse the result -- could be in "result" or directly at top level
-    let result_val = response.get("result").unwrap_or(&response);
-
-    let raw_diagnostics = parse_diagnostics_from_result(result_val);
+    let raw_diagnostics: Vec<Diagnostic> = raw.iter().map(diagnostic_from_lsp).collect();
     let diagnostics =
         enrich_and_filter(ctx, &opts.file_path, raw_diagnostics, opts.severity_filter);
 
@@ -174,12 +109,12 @@ fn try_pull_diagnostics(
         .filter(|d| d.severity == DiagnosticSeverity::Warning)
         .count();
 
-    Ok(Some(DiagnosticsResult {
+    Ok(DiagnosticsResult {
         diagnostics,
         error_count,
         warning_count,
         source_layer: SourceLayer::LiveLsp,
-    }))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -188,78 +123,56 @@ fn try_pull_diagnostics(
 
 /// Parse diagnostics from a `textDocument/diagnostic` response result.
 ///
-/// The result contains either:
-/// - `{ "kind": "full", "items": [...] }` (DocumentDiagnosticReport)
-/// - `{ "items": [...] }` (simplified)
-/// - A direct array of diagnostics
+/// Delegates the JSON-to-[`lsp_types::Diagnostic`] mapping to the single shared
+/// parser in `swissarmyhammer-lsp`, then converts each into this crate's
+/// enriched [`Diagnostic`]. Accepts the same shapes the shared parser does
+/// (`{ "kind": "full", "items": [...] }`, `{ "items": [...] }`, or a bare
+/// array).
 pub fn parse_diagnostics_from_result(result: &serde_json::Value) -> Vec<Diagnostic> {
-    // Try "items" array first (standard pull diagnostics response)
-    let items = if let Some(items) = result.get("items").and_then(|v| v.as_array()) {
-        items.clone()
-    } else if let Some(arr) = result.as_array() {
-        arr.clone()
-    } else {
-        return Vec::new();
-    };
-
-    items.iter().filter_map(parse_single_diagnostic).collect()
+    swissarmyhammer_lsp::parse_diagnostics_from_result(result)
+        .iter()
+        .map(diagnostic_from_lsp)
+        .collect()
 }
 
-/// Parse diagnostics from a `publishDiagnostics` notification.
+/// Parse diagnostics from a `publishDiagnostics` notification's params.
 ///
-/// The notification params contain `{ "uri": "...", "diagnostics": [...] }`.
+/// Delegates to the shared parser in `swissarmyhammer-lsp` and converts the
+/// result into this crate's enriched [`Diagnostic`]. The params contain
+/// `{ "uri": "...", "diagnostics": [...] }`.
 pub fn parse_publish_diagnostics(params: &serde_json::Value) -> Vec<Diagnostic> {
-    let items = match params.get("diagnostics").and_then(|v| v.as_array()) {
-        Some(arr) => arr,
-        None => return Vec::new(),
-    };
-
-    items.iter().filter_map(parse_single_diagnostic).collect()
+    swissarmyhammer_lsp::parse_publish_diagnostics(params)
+        .iter()
+        .map(diagnostic_from_lsp)
+        .collect()
 }
 
-/// Parse a single LSP diagnostic object into our `Diagnostic` type.
-fn parse_single_diagnostic(item: &serde_json::Value) -> Option<Diagnostic> {
-    let range_val = item.get("range")?;
-    let start = range_val.get("start")?;
-    let end = range_val.get("end")?;
-
-    let range = LspRange {
-        start_line: start.get("line")?.as_u64()? as u32,
-        start_character: start.get("character")?.as_u64()? as u32,
-        end_line: end.get("line")?.as_u64()? as u32,
-        end_character: end.get("character")?.as_u64()? as u32,
-    };
-
-    let severity = item
-        .get("severity")
-        .and_then(|v| v.as_u64())
-        .map(DiagnosticSeverity::from_lsp)
-        .unwrap_or(DiagnosticSeverity::Hint);
-
-    let message = item.get("message")?.as_str()?.to_string();
-
-    let code = item.get("code").and_then(|v| {
-        // Code can be a string or integer
-        if let Some(s) = v.as_str() {
-            Some(s.to_string())
-        } else {
-            v.as_u64().map(|n| n.to_string())
-        }
+/// Convert a shared [`lsp_types::Diagnostic`] into this crate's enriched
+/// [`Diagnostic`] (sans enrichment, which `enrich_and_filter` fills in later).
+fn diagnostic_from_lsp(d: &lsp_types::Diagnostic) -> Diagnostic {
+    let code = d.code.as_ref().map(|c| match c {
+        lsp_types::NumberOrString::Number(n) => n.to_string(),
+        lsp_types::NumberOrString::String(s) => s.clone(),
     });
 
-    let source = item
-        .get("source")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    let severity = d
+        .severity
+        .map(DiagnosticSeverity::from_lsp_types)
+        .unwrap_or(DiagnosticSeverity::Hint);
 
-    Some(Diagnostic {
-        range,
+    Diagnostic {
+        range: LspRange {
+            start_line: d.range.start.line,
+            start_character: d.range.start.character,
+            end_line: d.range.end.line,
+            end_character: d.range.end.character,
+        },
         severity,
-        message,
+        message: d.message.clone(),
         code,
-        source,
+        source: d.source.clone(),
         containing_symbol: None, // enriched later
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +228,8 @@ fn empty_result() -> DiagnosticsResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_fixtures::test_db;
+    use crate::test_fixtures::{mock_session_and_file, spawn_mock_lsp, test_db};
+    use serde_json::json;
 
     // --- publishDiagnostics notification parsing ---
 
@@ -550,6 +464,112 @@ mod tests {
         assert_eq!(result.error_count, 0);
         assert_eq!(result.warning_count, 0);
         assert_eq!(result.source_layer, SourceLayer::None);
+    }
+
+    // --- source_layer fidelity through the unified session path ---
+    // `spawn_mock_lsp` / `mock_session_and_file` are the shared
+    // `crate::test_fixtures` helpers, imported above.
+
+    /// A transport-level failure of the pull (no live client) reports
+    /// `SourceLayer::None` with an empty result — the unified session path maps
+    /// `LspError::NotRunning` to "no diagnostics layer", matching the pre-session
+    /// behavior for a pull that could not run.
+    #[test]
+    fn test_pull_against_absent_client_reports_source_layer_none() {
+        // A session whose client is absent: the pull surfaces NotRunning, which
+        // `lsp_diagnostics` maps to `Ok(None)` -> empty + SourceLayer::None.
+        let session = crate::layered_context::SharedLspSession::new(
+            std::sync::Arc::new(std::sync::Mutex::new(None)),
+            "rust",
+        );
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(session));
+        let result = get_diagnostics(
+            &ctx,
+            &GetDiagnosticsOptions {
+                file_path: "src/main.rs".to_string(),
+                severity_filter: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.source_layer,
+            SourceLayer::None,
+            "a pull that cannot run (no live client) must report SourceLayer::None"
+        );
+        assert!(result.diagnostics.is_empty());
+    }
+
+    /// A server that responds to the pull — including with an error envelope
+    /// (e.g. method-not-found) or a clean empty report — is a *live* server, so
+    /// the result is `SourceLayer::LiveLsp` with whatever diagnostics it
+    /// returned (none, here). The unified session path no longer re-inspects the
+    /// raw envelope to downgrade a responded-but-empty pull to `None`; a server
+    /// that answered is the live layer.
+    #[test]
+    fn test_responded_pull_reports_live_lsp() {
+        // Sequence: didOpen (null, no reply), textDocument/diagnostic (error
+        // envelope — the server responded, just with method-not-found).
+        let error_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": -32601, "message": "method not found" }
+        });
+        let mut child = spawn_mock_lsp(&[serde_json::Value::Null, error_response]);
+        let (session, dir) = mock_session_and_file(&mut child);
+        let file_path = dir.path().join("test.rs").to_str().unwrap().to_string();
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(session));
+        let result = get_diagnostics(
+            &ctx,
+            &GetDiagnosticsOptions {
+                file_path,
+                severity_filter: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.source_layer,
+            SourceLayer::LiveLsp,
+            "a server that responded to the pull is the live layer"
+        );
+        assert!(result.diagnostics.is_empty());
+    }
+
+    /// A server that returns a valid *empty* report is the live layer reporting
+    /// a clean file: `SourceLayer::LiveLsp` with zero diagnostics.
+    #[test]
+    fn test_clean_pull_reports_live_lsp_empty() {
+        // Sequence: didOpen (null), textDocument/diagnostic (empty full report).
+        let empty_report = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "kind": "full", "items": [] }
+        });
+        let mut child = spawn_mock_lsp(&[serde_json::Value::Null, empty_report]);
+        let (session, dir) = mock_session_and_file(&mut child);
+        let file_path = dir.path().join("test.rs").to_str().unwrap().to_string();
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(session));
+        let result = get_diagnostics(
+            &ctx,
+            &GetDiagnosticsOptions {
+                file_path,
+                severity_filter: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.source_layer,
+            SourceLayer::LiveLsp,
+            "a clean (empty) pull from a live server is the live layer"
+        );
+        assert!(result.diagnostics.is_empty());
     }
 
     // --- DiagnosticSeverity conversion ---

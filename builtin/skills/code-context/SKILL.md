@@ -8,10 +8,10 @@ description: >-
   "find symbol", "find references", "go to definition", "symbol lookup",
   "callgraph", "find callers", "what calls this function", or "what's affected
   if I change this". Also use proactively before modifying code to understand
-  structure, dependencies, and impact — list symbols, get callgraph (inbound),
-  and get blastradius before touching any function, type, or file. Provides
-  indexed, structural code intelligence that is faster and more precise than
-  raw text search.
+  structure, dependencies, and impact — list symbols and get callgraph (inbound)
+  to see who calls a symbol, and get blastradius when changing a shared symbol's
+  signature. Provides indexed, structural code intelligence that is faster and
+  more precise than raw text search.
 license: MIT OR Apache-2.0
 compatibility: Requires the `code_context` MCP tool  for indexed symbol lookup, grep, callgraph, and blast-radius operations.
 metadata:
@@ -25,8 +25,9 @@ Structural code intelligence for AI agents — indexed symbol lookup, callgraph 
 
 The `code_context` tool is structural code intelligence — indexed symbol lookup,
 call graphs, and blast-radius analysis backed by tree-sitter and live LSP. It is
-not optional background. Treat the checkpoints below as gates: hitting them is
-part of doing the task, not extra work on top of it.
+not optional background. Lean on the cheap defaults below — `list symbols` and
+`get symbol` instead of reading whole files, `get callgraph` (inbound) to find
+callers — as part of doing the task, not extra work on top of it.
 
 Do not read files top to bottom, and do not guess where a symbol lives or who
 calls it. `code_context` answers those questions precisely and cheaply.
@@ -34,9 +35,11 @@ calls it. `code_context` answers those questions precisely and cheaply.
 - **Before reading a file** — `{"op": "list symbols", "file_path": "<file>"}` for a
   table of contents, then `{"op": "get symbol", "query": "<symbol>"}` to pull only
   the code you need. Reading a whole file is the fallback, not the default.
-- **Before changing a symbol** — `{"op": "get blastradius", "file_path": "<file>"}`
-  and `{"op": "get callgraph", "symbol": "<symbol>", "direction": "inbound"}`. If the
-  result surprises you, you do not yet understand the change well enough to make it.
+- **Before changing a symbol** — `{"op": "get callgraph", "symbol": "<symbol>",
+  "direction": "inbound"}` to see who calls it. When the symbol is shared or public
+  and you are changing its signature, also `{"op": "get blastradius", "file_path":
+  "<file>"}` for the wider dependent set. If the result surprises you, you do not yet
+  understand the change well enough to make it.
 - **After changing a signature or behavior** — re-check the inbound callers the
   blast radius surfaced, and confirm each one still holds.
 - **When a test or build fails** — `{"op": "get callgraph", "symbol": "<failing
@@ -56,7 +59,7 @@ syntax once code_context has already given you the location.
 
 ## When to Use
 
-- **Before modifying code**: `get blastradius` to know what depends on the target; `get callgraph` (inbound) before renaming or changing signatures.
+- **Before modifying code**: `get callgraph` (inbound) to know who calls the target before renaming or changing signatures; `get blastradius` for the wider dependent set when changing a shared symbol's signature.
 - **Navigating**: `get symbol` (jump to definition), `list symbols` (file overview), `search symbol` (fuzzy name).
 - **Pattern search**: `grep code` (regex with language/file filters).
 - **Meaning search**: `search code` (semantic similarity).
@@ -120,7 +123,7 @@ Semantic similarity — matches by meaning, not exact text.
 {"op": "get blastradius", "file_path": "src/server.rs", "max_hops": 3}
 ```
 
-Transitive set of files/symbols affected by a change. **Always run before modifying.**
+Transitive set of files/symbols affected by a change. Reach for it when changing a shared or public symbol's signature and you need its dependents — not a gate on every edit. Built from LSP call edges, so `edges: []` is common on compiling code when LSP is missing or warming up (see Troubleshooting); empty does not mean "no impact", so don't gate work on it — fall back to inbound `get callgraph` and targeted reads.
 
 Narrow to a symbol:
 
@@ -172,8 +175,8 @@ Project types, build/test commands, coding guidelines. Run early to learn conven
 
 1. `list symbols` on the target file
 2. `get symbol` to read the function/struct
-3. `get blastradius` on the file
-4. `get callgraph` (inbound) on the symbol
+3. `get callgraph` (inbound) on the symbol to find callers
+4. Changing a shared/public symbol's signature? `get blastradius` on the file for the wider dependent set (skip when it returns empty edges)
 5. Make changes
 6. Re-check callers for compatibility
 

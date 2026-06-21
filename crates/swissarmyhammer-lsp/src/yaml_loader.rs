@@ -1,14 +1,13 @@
-//! Re-exports of the builtin LSP YAML registry that lives in
-//! `swissarmyhammer-code-context`.
+//! Re-exports of the builtin LSP YAML registry.
 //!
 //! The loader, the embedded YAML sources list, and the
-//! [`OwnedLspServerSpec`] struct are all owned by the lower-tier
-//! `swissarmyhammer-code-context` crate. This module preserves the
+//! [`OwnedLspServerSpec`](crate::server_spec::OwnedLspServerSpec) struct are all
+//! defined in [`crate::server_spec`]. This module preserves the
 //! `swissarmyhammer_lsp::yaml_loader::{builtin_lsp_yaml_sources, load_lsp_servers}`
 //! API that existing callers in this crate use — they both delegate directly
 //! to the consolidated implementation.
 
-pub use swissarmyhammer_code_context::{builtin_lsp_yaml_sources, load_lsp_servers};
+pub use crate::server_spec::{builtin_lsp_yaml_sources, load_lsp_servers};
 
 #[cfg(test)]
 mod tests {

@@ -150,9 +150,13 @@ mod tests {
         // has_live_lsp() should return false and get_type_definition should
         // produce an empty result with SourceLayer::None -- not an error.
         let conn = test_db();
-        let shared: crate::lsp_worker::SharedLspClient =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
 
         let opts = GetTypeDefinitionOptions {
             file_path: "src/main.rs".to_string(),
@@ -173,9 +177,13 @@ mod tests {
         // Even with include_source: true, a None-inside SharedLspClient
         // should short-circuit before any file I/O.
         let conn = test_db();
-        let shared: crate::lsp_worker::SharedLspClient =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
 
         let opts = GetTypeDefinitionOptions {
             file_path: "nonexistent/file.rs".to_string(),
@@ -288,9 +296,13 @@ mod tests {
             Some("Config"),
         );
 
-        let shared: crate::lsp_worker::SharedLspClient =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
         let opts = GetTypeDefinitionOptions {
             file_path: "src/lib.rs".to_string(),
             line: 15,

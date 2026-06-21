@@ -2,13 +2,13 @@
 //!
 //! Loads LSP server specifications from YAML configuration files under
 //! `builtin/lsp/`. The single canonical registry lives in
-//! `swissarmyhammer-code-context` — this module simply queries it to
-//! provide ergonomic `servers_for_project`, `servers_for_extensions`, and
-//! `all_servers` helpers.
+//! [`crate::server_spec`] — this module simply queries it to provide ergonomic
+//! `servers_for_project`, `servers_for_extensions`, and `all_servers` helpers.
 
 use std::time::Duration;
-use swissarmyhammer_code_context::LSP_REGISTRY;
 use swissarmyhammer_project_detection::ProjectType;
+
+use crate::server_spec::LSP_REGISTRY;
 
 use crate::types::{LspServerSpec, OwnedLspServerSpec};
 

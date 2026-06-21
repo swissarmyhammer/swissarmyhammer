@@ -355,7 +355,7 @@ Reconcile .skills/ with agent directories and verify lockfile
 
 Report the install-status of sah-managed components per agent and scope
 
-Shows, for each detected agent and scope (project, user), whether the sah MCP server, skills, subagents, and permissions are installed.
+Shows, for each detected agent and scope (project, user), whether the sah MCP server, skills, subagents, preamble, and permissions are installed.
 
 **Usage:** `mirdan status [OPTIONS]`
 
