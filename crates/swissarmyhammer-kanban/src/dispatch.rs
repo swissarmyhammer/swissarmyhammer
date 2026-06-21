@@ -32,6 +32,24 @@ fn req<'a>(op: &'a KanbanOperation, key: &str) -> Result<&'a str, KanbanError> {
         .ok_or_else(|| KanbanError::parse(format!("missing required field: {}", key)))
 }
 
+/// Helper: require a string param accepting either `primary` or `alt` as the
+/// field name, returning a KanbanError naming both when neither is present.
+///
+/// Used where one entity field has two equally-natural names — e.g. a column's
+/// id is just as naturally passed as `column`, so `get/update/delete column`
+/// accept either. `primary` is preferred when both are supplied.
+fn req_alias<'a>(
+    op: &'a KanbanOperation,
+    primary: &str,
+    alt: &str,
+) -> Result<&'a str, KanbanError> {
+    op.get_string(primary)
+        .or_else(|| op.get_string(alt))
+        .ok_or_else(|| {
+            KanbanError::parse(format!("missing required field: {} (or {})", primary, alt))
+        })
+}
+
 /// Recognize an already-canonical full ULID reference and return its canonical
 /// (uppercase) form, skipping any board lookup.
 ///
@@ -271,11 +289,11 @@ async fn execute_column_operation(
             processor.process(&cmd, ctx).await
         }
         (Verb::Get, Noun::Column) => {
-            let id = req(op, "id")?;
+            let id = req_alias(op, "id", "column")?;
             processor.process(&GetColumn::new(id), ctx).await
         }
         (Verb::Update, Noun::Column) => {
-            let id = req(op, "id")?;
+            let id = req_alias(op, "id", "column")?;
             let mut cmd = UpdateColumn::new(id);
             if let Some(name) = op.get_string("name") {
                 cmd = cmd.with_name(name);
@@ -286,7 +304,7 @@ async fn execute_column_operation(
             processor.process(&cmd, ctx).await
         }
         (Verb::Delete, Noun::Column) => {
-            let id = req(op, "id")?;
+            let id = req_alias(op, "id", "column")?;
             processor.process(&DeleteColumn::new(id), ctx).await
         }
         (Verb::List, Noun::Columns) => processor.process(&ListColumns, ctx).await,
@@ -1775,6 +1793,66 @@ mod tests {
         let ops = parse_input(json!({"op": "get column", "id": "todo"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["id"], "todo");
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_column_accepts_column_alias() {
+        let (_temp, ctx) = setup().await;
+
+        // `column` is the natural field name for a column id; it must be
+        // accepted as an alias for `id` and return the identical result.
+        let by_alias = execute_operation(
+            &ctx,
+            &parse_input(json!({"op": "get column", "column": "todo"})).unwrap()[0],
+        )
+        .await
+        .unwrap();
+        let by_id = execute_operation(
+            &ctx,
+            &parse_input(json!({"op": "get column", "id": "todo"})).unwrap()[0],
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_alias["id"], "todo");
+        assert_eq!(by_alias, by_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_column_missing_field_names_both_aliases() {
+        let (_temp, ctx) = setup().await;
+
+        // Neither `id` nor `column` present → parse error naming both.
+        let op = crate::types::Operation::new(
+            crate::types::Verb::Get,
+            crate::types::Noun::Column,
+            serde_json::Map::new(),
+        );
+        let err = execute_operation(&ctx, &op).await.unwrap_err().to_string();
+        assert!(err.contains("id"), "error should name `id`: {err}");
+        assert!(err.contains("column"), "error should name `column`: {err}");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_column_accepts_column_alias() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "update column", "column": "todo", "name": "Backlog"}))
+            .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Backlog");
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_column_accepts_column_alias() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a new empty column then delete it via the `column` alias.
+        let ops = parse_input(json!({"op": "add column", "id": "temp", "name": "Temp"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "delete column", "column": "temp"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["deleted"], true);
     }
 
     #[tokio::test]
