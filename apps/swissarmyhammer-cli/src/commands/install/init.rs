@@ -1,8 +1,8 @@
 //! Set up sah for all detected AI coding agents (skills + agents + MCP +
-//! statusline + preamble).
+//! statusline).
 //!
-//! The MCP server, builtin skills, builtin agents, statusline, and CLAUDE.md
-//! preamble are all installed through sah's declarative [`Profile`] via
+//! The MCP server, builtin skills, builtin agents, and statusline are all
+//! installed through sah's declarative [`Profile`] via
 //! [`mirdan::install::init_profile`] — sah is "just a bigger profile," not a
 //! special case. The two install concerns that are not expressible as profile
 //! data — the `.sah/` + `.prompts/` workspace structure and the `.kanban/`
@@ -18,7 +18,7 @@ use swissarmyhammer_common::reporter::{CliReporter, InitEvent, InitReporter};
 /// Install sah for all detected AI coding agents.
 ///
 /// Runs sah's [`Profile`] through [`mirdan::install::init_profile`] (MCP,
-/// skills, agents, statusline, preamble) and then the non-profile
+/// skills, agents, statusline) and then the non-profile
 /// `Initializable` components (project workspace, kanban merge drivers) in
 /// priority order. Components that are not applicable to the given scope are
 /// automatically skipped.

@@ -43,7 +43,6 @@ pub fn profile(_scope: InitScope) -> mirdan::install::Profile {
         agents: None,
         validators: None,
         statusline: false,
-        preamble: false,
     }
 }
 
@@ -84,7 +83,6 @@ mod tests {
         );
         assert!(profile.agents.is_none());
         assert!(!profile.statusline);
-        assert!(!profile.preamble);
     }
 
     #[test]

@@ -105,7 +105,7 @@ pub struct AgentDef {
     /// Whether the `sah doctor` check-stack runs against this agent.
     ///
     /// When `true`, the doctor reports per-component install rows (MCP, Skills,
-    /// Subagents, Preamble, Permissions) for this agent. When `false` (the
+    /// Subagents, Permissions) for this agent. When `false` (the
     /// default for any agent that omits the field), the doctor skips it
     /// entirely. Only the four agents we explicitly support — `claude-code`,
     /// `zed-ai`, `copilot`, `codex` — should set this to `true`.

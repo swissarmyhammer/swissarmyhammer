@@ -120,7 +120,6 @@ pub fn plugin_catalog() -> Vec<PluginSpec> {
                 agents: Some(Selector::All),
                 validators: Some(Selector::All),
                 statusline: false,
-                preamble: false,
             },
         },
         // kanban — the `kanban` MCP server + the kanban-profile skill cluster

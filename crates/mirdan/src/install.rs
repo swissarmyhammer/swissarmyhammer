@@ -20,7 +20,7 @@ use crate::mcp_config;
 use crate::package_type::{self, PackageType};
 use crate::registry::{RegistryClient, RegistryError};
 use crate::store;
-use crate::{settings, status};
+use crate::settings;
 
 /// Sanitize a package name for use as a filesystem directory name.
 ///
@@ -839,7 +839,7 @@ async fn deploy_agent(
 // A `Profile` is the *only* thing that differs between consumers (sah, the tool
 // CLIs, the kanban desktop app): a declarative manifest of what to install — an
 // MCP server, a selection of builtin skills, a selection of builtin agents, and
-// the sah-only statusline/preamble flags. `init_profile`/`deinit_profile` are
+// the sah-only statusline flag. `init_profile`/`deinit_profile` are
 // the single code path that interprets that data; there are no per-consumer
 // branches. Builtin skills and agents are rendered once through the prompt
 // library's Liquid engine (so `{% include "_partials/..." %}` references expand)
@@ -940,7 +940,7 @@ impl ProfileMcpServer {
 ///
 /// This is the single value that differs per consumer; [`init_profile`] /
 /// [`deinit_profile`] interpret it with no per-consumer branching. The sah-only
-/// concerns (`statusline`, `preamble`) are plain declarative flags so that sah
+/// concern (`statusline`) is a plain declarative flag so that sah
 /// is "just a bigger profile" rather than a special case.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Profile {
@@ -959,8 +959,6 @@ pub struct Profile {
     pub validators: Option<Selector>,
     /// Whether to install the Claude Code statusline (`sah statusline`).
     pub statusline: bool,
-    /// Whether to ensure the CLAUDE.md preamble is present.
-    pub preamble: bool,
 }
 
 /// Map an [`InitScope`] to the boolean `global` flag the deploy/store helpers
@@ -1525,160 +1523,6 @@ fn apply_statusline_at(path: &Path, install: bool) -> Result<bool, RegistryError
     Ok(changed)
 }
 
-/// Ensure the CLAUDE.md preamble is present in every detected agent's
-/// instructions file, or strip it when `install` is false. Root-aware so
-/// project-scope instructions files resolve against `root`.
-fn apply_profile_preamble(
-    install: bool,
-    scope: InitScope,
-    root: Option<&Path>,
-    reporter: &dyn InitReporter,
-) -> Vec<InitResult> {
-    let verb = if install { "Installed" } else { "Removed" };
-    for_each_detected_agent(
-        scope,
-        reporter,
-        |agent, global| {
-            let Some(path) = resolve_agent_file(
-                agent,
-                global,
-                root,
-                agents::agent_global_instructions_file,
-                agents::agent_project_instructions_file,
-            ) else {
-                return Ok(None);
-            };
-            let outcome = if install {
-                ensure_preamble(&path)?
-            } else {
-                remove_preamble(&path)?
-            };
-            Ok(outcome.changed().then(|| AgentAction {
-                verb: outcome.verb().to_string(),
-                message: format!("preamble for {} ({})", agent.name, path.display()),
-            }))
-        },
-        |changed| {
-            InitResult::ok(
-                "profile-preamble",
-                format!("{verb} preamble for {changed} agent(s)"),
-            )
-        },
-    )
-}
-
-/// The outcome of an `ensure_preamble` / `remove_preamble` operation, carrying
-/// both a human-readable verb and whether the file actually changed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PreambleOutcome {
-    /// The file was created with the preamble.
-    Created,
-    /// The preamble was prepended to existing content.
-    Prepended,
-    /// The preamble was already present; no change.
-    AlreadyPresent,
-    /// The preamble was stripped from existing content.
-    Removed,
-    /// The file contained only the preamble and was deleted.
-    Deleted,
-    /// No file existed, or it had no preamble; no change.
-    Absent,
-}
-
-impl PreambleOutcome {
-    /// A stable verb for the reporter Action event.
-    fn verb(self) -> &'static str {
-        match self {
-            PreambleOutcome::Created => "Created",
-            PreambleOutcome::Prepended => "Prepended",
-            PreambleOutcome::AlreadyPresent => "Present",
-            PreambleOutcome::Removed => "Removed",
-            PreambleOutcome::Deleted => "Deleted",
-            PreambleOutcome::Absent => "Absent",
-        }
-    }
-
-    /// Whether the file changed on disk.
-    fn changed(self) -> bool {
-        matches!(
-            self,
-            PreambleOutcome::Created
-                | PreambleOutcome::Prepended
-                | PreambleOutcome::Removed
-                | PreambleOutcome::Deleted
-        )
-    }
-}
-
-/// Ensure the instructions file at `path` opens with the required preamble,
-/// creating the file (and parents) when missing and prepending the marker when
-/// present-but-missing. Delegates the "is it there?" check to
-/// [`status::preamble_present_in`] so install and `mirdan status` stay in lockstep.
-fn ensure_preamble(path: &Path) -> Result<PreambleOutcome, RegistryError> {
-    let marker = status::PREAMBLE_MARKER;
-    if !path.exists() {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                RegistryError::Validation(format!("failed to create {}: {e}", parent.display()))
-            })?;
-        }
-        std::fs::write(path, format!("{marker}\n")).map_err(|e| {
-            RegistryError::Validation(format!("failed to create {}: {e}", path.display()))
-        })?;
-        return Ok(PreambleOutcome::Created);
-    }
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        RegistryError::Validation(format!("failed to read {}: {e}", path.display()))
-    })?;
-    if status::preamble_present_in(&content) {
-        return Ok(PreambleOutcome::AlreadyPresent);
-    }
-    std::fs::write(path, format!("{marker}\n\n{content}")).map_err(|e| {
-        RegistryError::Validation(format!("failed to update {}: {e}", path.display()))
-    })?;
-    Ok(PreambleOutcome::Prepended)
-}
-
-/// Strip the preamble (and any blank lines immediately after it) from the
-/// instructions file at `path`, deleting the file when only the preamble
-/// remained. A missing file or one without the preamble is a no-op.
-fn remove_preamble(path: &Path) -> Result<PreambleOutcome, RegistryError> {
-    if !path.exists() {
-        return Ok(PreambleOutcome::Absent);
-    }
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        RegistryError::Validation(format!("failed to read {}: {e}", path.display()))
-    })?;
-    if !status::preamble_present_in(&content) {
-        return Ok(PreambleOutcome::Absent);
-    }
-    let mut after_preamble: Vec<&str> = Vec::new();
-    let mut found = false;
-    for line in content.lines() {
-        if !found && line.contains(status::PREAMBLE_MARKER) {
-            found = true;
-            continue;
-        }
-        if found {
-            after_preamble.push(line);
-        }
-    }
-    while after_preamble.first().is_some_and(|l| l.trim().is_empty()) {
-        after_preamble.remove(0);
-    }
-    if after_preamble.is_empty() {
-        std::fs::remove_file(path).map_err(|e| {
-            RegistryError::Validation(format!("failed to delete {}: {e}", path.display()))
-        })?;
-        return Ok(PreambleOutcome::Deleted);
-    }
-    let new_content = after_preamble.join("\n") + "\n";
-    std::fs::write(path, new_content).map_err(|e| {
-        RegistryError::Validation(format!("failed to update {}: {e}", path.display()))
-    })?;
-    Ok(PreambleOutcome::Removed)
-}
-
 /// Register the profile's MCP server across detected agents.
 ///
 /// With no explicit `root`, dispatches through the strategy-aware
@@ -1801,7 +1645,7 @@ fn unregister_mcp_server_at(
 /// 2. render the selected builtin skills with Liquid + the partial library and
 ///    deploy them via store + symlink,
 /// 3. render and deploy the selected builtin agents the same way,
-/// 4. apply the statusline / preamble when the profile sets those flags.
+/// 4. apply the statusline when the profile sets that flag.
 ///
 /// `root` makes the whole operation CWD-free: project-scope skill/agent stores,
 /// agent directories, and MCP configs are resolved against `root` instead of the
@@ -1867,18 +1711,14 @@ pub fn init_profile(
         results.extend(apply_profile_statusline(true, scope, root, reporter));
     }
 
-    if profile.preamble {
-        results.extend(apply_profile_preamble(true, scope, root, reporter));
-    }
-
     results
 }
 
 /// Remove everything a [`Profile`] declares, mirroring [`init_profile`].
 ///
 /// Unregisters the MCP server, removes the selected skills/agents from detected
-/// agents, and strips the statusline block / CLAUDE.md preamble when the profile
-/// declared them. `root` roots project-scope paths so deinit is CWD-free.
+/// agents, and strips the statusline block when the profile declared it. `root`
+/// roots project-scope paths so deinit is CWD-free.
 ///
 /// # Version coupling
 ///
@@ -1972,10 +1812,6 @@ pub fn deinit_profile(
         results.extend(apply_profile_statusline(false, scope, root, reporter));
     }
 
-    if profile.preamble {
-        results.extend(apply_profile_preamble(false, scope, root, reporter));
-    }
-
     results
 }
 
@@ -1990,7 +1826,7 @@ pub fn deinit_profile(
 /// "profile then registry, concatenate results" sequence in four places.
 ///
 /// Results are ordered profile-first (matching every prior consumer): the MCP
-/// server, skills, agents, statusline/preamble, then the registry components in
+/// server, skills, agents, statusline, then the registry components in
 /// priority order. `root` is forwarded to [`init_profile`] for CWD-free
 /// installs. Compute the exit code from the returned results' `status` fields.
 pub fn init_profile_with_registry(
@@ -3046,7 +2882,7 @@ struct AgentAction {
 
 /// Drive an applier over every detected agent for the root-explicit init path.
 ///
-/// Owns the structural skeleton shared by the statusline, preamble, and MCP
+/// Owns the structural skeleton shared by the statusline and MCP
 /// register/unregister appliers: load detected agents (short-circuiting to an
 /// error `InitResult` on failure), compute the `global` scope flag, run `apply`
 /// per agent, emit an Action event for each `Ok(Some(_))` change, emit a Warning
@@ -5199,7 +5035,7 @@ mod profile_tests {
     /// declares a relative skill dir (`.fake/skills`), agent dir (`.fake/agents`),
     /// `.mcp.json` MCP config, settings file (`.fake/settings.json`), and
     /// instructions file (`.fake/CLAUDE.md`) — the artifact kinds a profile
-    /// installs (skills/agents/mcp + statusline/preamble).
+    /// installs (skills/agents/mcp + statusline).
     fn write_profile_agents_config(project_dir: &Path) -> PathBuf {
         let agents_yaml = format!(
             r#"agents:
@@ -5233,7 +5069,6 @@ mod profile_tests {
             agents: Some(Selector::Single("reviewer".to_string())),
             validators: None,
             statusline: false,
-            preamble: false,
         }
     }
 
@@ -5366,13 +5201,12 @@ mod profile_tests {
         assert!(std::fs::symlink_metadata(root.join(".fake/skills/commit")).is_err());
     }
 
-    /// A profile that declares `statusline`/`preamble` writes the `statusLine`
-    /// block and the CLAUDE.md preamble into the detected agent's files, and
-    /// `deinit_profile` removes both. Exercised with an explicit `root` to prove
-    /// step 4 is CWD-free.
+    /// A profile that declares `statusline` writes the `statusLine` block into
+    /// the detected agent's settings file, and `deinit_profile` removes it.
+    /// Exercised with an explicit `root` to prove step 4 is CWD-free.
     #[test]
     #[serial]
-    fn init_profile_statusline_and_preamble_install_and_deinit() {
+    fn init_profile_statusline_install_and_deinit() {
         let root_dir = tempfile::tempdir().unwrap();
         let root = root_dir.path().canonicalize().unwrap();
 
@@ -5386,7 +5220,6 @@ mod profile_tests {
 
         let profile = Profile {
             statusline: true,
-            preamble: true,
             ..Profile::default()
         };
         let reporter = NullReporter;
@@ -5395,7 +5228,7 @@ mod profile_tests {
             results
                 .iter()
                 .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
-            "statusline/preamble init must not error: {results:?}"
+            "statusline init must not error: {results:?}"
         );
 
         // Statusline block written to the agent's settings file under root.
@@ -5405,18 +5238,10 @@ mod profile_tests {
         assert_eq!(settings["statusLine"]["type"], "command");
         assert_eq!(settings["statusLine"]["command"], "sah statusline");
 
-        // Preamble prepended to the agent's instructions file under root.
-        let claude_md = root.join(".fake/CLAUDE.md");
-        let body = std::fs::read_to_string(&claude_md).unwrap();
-        assert!(
-            status::preamble_present_in(&body),
-            "preamble must be present: {body:?}"
-        );
-
         // Nothing leaked into the CWD.
         assert!(!cwd.join(".fake").exists(), "step 4 must not touch CWD");
 
-        // Deinit strips both.
+        // Deinit strips the statusline block.
         let results = deinit_profile(&profile, InitScope::Project, Some(&root), &reporter);
         assert!(results
             .iter()
@@ -5426,11 +5251,6 @@ mod profile_tests {
         assert!(
             settings.get("statusLine").is_none(),
             "statusLine must be removed on deinit"
-        );
-        // The instructions file held only the preamble, so deinit deletes it.
-        assert!(
-            !claude_md.exists(),
-            "preamble-only instructions file should be deleted on deinit"
         );
     }
 
@@ -5640,8 +5460,7 @@ mod profile_consistency_tests {
     }
 
     /// sah's profile — the "bigger profile": all builtin skills + all builtin
-    /// agents + statusline, but NOT the CLAUDE.md preamble
-    /// (`apps/swissarmyhammer-cli/.../profile.rs`).
+    /// agents + statusline (`apps/swissarmyhammer-cli/.../profile.rs`).
     fn sah_profile(_scope: InitScope) -> Profile {
         Profile {
             mcp_server: Some(ProfileMcpServer::serve("sah")),
@@ -5649,7 +5468,6 @@ mod profile_consistency_tests {
             agents: Some(Selector::All),
             validators: Some(Selector::All),
             statusline: true,
-            preamble: false,
         }
     }
 

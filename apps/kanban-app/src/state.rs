@@ -1147,8 +1147,8 @@ pub fn resolve_kanban_path(path: &Path) -> Result<PathBuf, std::io::Error> {
 /// store + symlink mechanism.
 ///
 /// A board's workspace is exactly its tools — currently just the kanban tool —
-/// so the profile declares no MCP server, no agents, and none of the sah-only
-/// statusline/preamble flags: just the `kanban` skill subset. This is the same
+/// so the profile declares no MCP server, no agents, and not the sah-only
+/// statusline flag: just the `kanban` skill subset. This is the same
 /// data-driven `Profile` sah uses, restricted to one profile's cluster instead
 /// of [`Selector::All`](mirdan::install::Selector::All).
 fn kanban_profile() -> mirdan::install::Profile {

@@ -1,8 +1,8 @@
 //! sah init/deinit component registry.
 //!
 //! `sah init`/`sah deinit` install everything sah's [`Profile`] declares —
-//! the shared SAH MCP server, all builtin skills, all builtin agents, the
-//! statusline, and the CLAUDE.md preamble — through the single data-driven
+//! the shared SAH MCP server, all builtin skills, all builtin agents, and the
+//! statusline — through the single data-driven
 //! [`mirdan::install::init_profile`] / [`mirdan::install::deinit_profile`]
 //! path (see [`super::profile::sah_profile`]). There is no bespoke per-step
 //! `Initializable` code for any of those concerns.
@@ -31,7 +31,7 @@ use swissarmyhammer_common::lifecycle::InitRegistry;
 /// Register the non-profile sah init/deinit components into the given registry.
 ///
 /// Only `ProjectStructure` and `KanbanTool` are registered here — every other
-/// install concern (MCP, skills, agents, statusline, preamble) is handled by
+/// install concern (MCP, skills, agents, statusline) is handled by
 /// [`mirdan::install::init_profile`] / [`mirdan::install::deinit_profile`] from
 /// [`super::install::init`] / [`super::install::deinit`].
 ///
