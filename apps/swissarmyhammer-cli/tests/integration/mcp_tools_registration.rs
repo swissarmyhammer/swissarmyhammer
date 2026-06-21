@@ -210,7 +210,7 @@ async fn test_tool_schemas_are_claude_api_compatible() {
 /// enum against the full schema's `x-operation-schemas`, so a count change that
 /// touches only one of the two surfaces fails the test rather than silently
 /// disagreeing.
-const EXPECTED_KANBAN_OP_COUNT: usize = 53;
+const EXPECTED_KANBAN_OP_COUNT: usize = 54;
 
 /// Test that verifies kanban tool schema has all expected operations
 #[tokio::test]

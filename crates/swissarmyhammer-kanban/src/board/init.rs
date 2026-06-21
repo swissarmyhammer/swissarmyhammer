@@ -19,6 +19,16 @@ struct MergeDriver {
     command: &'static str,
 }
 
+/// Read-only Unix permission bits (`r--r--r--`). Applied in tests that need a
+/// write to fail; also the mode an unwritable file is left in.
+#[cfg(all(unix, test))]
+const READ_ONLY_PERMISSIONS: u32 = 0o444;
+
+/// Standard non-executable file permission bits (`rw-r--r--`). Used to restore
+/// a file's mode after a read-only test so the temp dir can be cleaned up.
+#[cfg(all(unix, test))]
+const STANDARD_PERMISSIONS: u32 = 0o644;
+
 /// All merge drivers to register when a board is initialized.
 const MERGE_DRIVERS: &[MergeDriver] = &[
     MergeDriver {
@@ -66,34 +76,67 @@ fn find_git_root(start: &Path) -> Option<std::path::PathBuf> {
 fn resolve_git_config(git_root: &Path) -> Option<std::path::PathBuf> {
     let dot_git = git_root.join(".git");
     if dot_git.is_dir() {
-        return Some(dot_git.join("config"));
+        return resolve_normal_config(&dot_git);
     }
-    // Worktree: .git is a file like `gitdir: /path/to/.git/worktrees/foo`
     if dot_git.is_file() {
-        if let Ok(contents) = std::fs::read_to_string(&dot_git) {
-            if let Some(gitdir) = contents.trim().strip_prefix("gitdir:") {
-                let gitdir = gitdir.trim();
-                let gitdir_path = if std::path::Path::new(gitdir).is_relative() {
-                    git_root.join(gitdir)
-                } else {
-                    std::path::PathBuf::from(gitdir)
-                };
-                let config = gitdir_path.join("config");
-                if config.exists() {
-                    return Some(config);
-                }
-                // Worktree gitdir (e.g. .git/worktrees/foo) — config lives
-                // in the main .git directory, two levels up.
-                if let Some(main_git) = gitdir_path.parent().and_then(|p| p.parent()) {
-                    let main_config = main_git.join("config");
-                    if main_config.exists() {
-                        return Some(main_config);
-                    }
-                }
-            }
-        }
+        return resolve_worktree_config(git_root, &dot_git);
     }
     None
+}
+
+/// Resolve the config path for a **normal** repository, where `.git` is a
+/// directory and the config always lives at `.git/config`.
+fn resolve_normal_config(dot_git: &Path) -> Option<std::path::PathBuf> {
+    Some(dot_git.join("config"))
+}
+
+/// Resolve the config path for a **worktree**, where `.git` is a *file* whose
+/// first line is `gitdir: <path>` pointing at the worktree's git directory
+/// (e.g. `.../.git/worktrees/foo`).
+///
+/// The pointer may be relative (resolved against `git_root`) or absolute. The
+/// config can live either directly in the resolved directory or — for the
+/// common `worktrees/<name>` layout — in the main `.git` directory two levels
+/// up. Returns `None` if the pointer can't be read or no `config` is found.
+fn resolve_worktree_config(git_root: &Path, dot_git: &Path) -> Option<std::path::PathBuf> {
+    let contents = std::fs::read_to_string(dot_git).ok()?;
+    let gitdir = contents.trim().strip_prefix("gitdir:")?.trim();
+    let gitdir_path = if std::path::Path::new(gitdir).is_relative() {
+        git_root.join(gitdir)
+    } else {
+        std::path::PathBuf::from(gitdir)
+    };
+
+    let config = gitdir_path.join("config");
+    if config.exists() {
+        return Some(config);
+    }
+
+    // Worktree gitdir (e.g. .git/worktrees/foo) — config lives in the main
+    // .git directory, two levels up.
+    let main_config = gitdir_path.parent()?.parent()?.join("config");
+    main_config.exists().then_some(main_config)
+}
+
+/// Write one of the `.kanban/`-owned merge-driver files (`.gitconfig` or
+/// `.gitattributes`), rewriting only when the desired `content` differs from
+/// what is already on disk.
+///
+/// These files are fully owned by us, so there is no "preserve existing
+/// content" concern — the goal is purely idempotence: don't touch the file
+/// (and its mtime) when nothing changed.
+///
+/// # Parameters
+/// - `board_root`: the `.kanban/` directory.
+/// - `filename`: the file to write within `board_root` (e.g. `.gitconfig`).
+/// - `content`: the full desired contents of the file.
+fn write_driver_file(board_root: &Path, filename: &str, content: &str) -> std::io::Result<()> {
+    let path = board_root.join(filename);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    if content != existing {
+        std::fs::write(&path, content)?;
+    }
+    Ok(())
 }
 
 /// Register git merge drivers for `.kanban/` files.
@@ -121,35 +164,21 @@ pub fn register_merge_drivers(board_root: &Path) -> Result<(), std::io::Error> {
     };
 
     // ------------------------------------------------------------------
-    // Write .kanban/.gitconfig with merge driver definitions
+    // Write .kanban/.gitconfig (merge driver definitions) and
+    // .kanban/.gitattributes (pattern → driver mappings).
     // ------------------------------------------------------------------
-    let kanban_gitconfig_path = board_root.join(".gitconfig");
     let mut gitconfig = String::new();
+    let mut attrs = String::new();
     for driver in MERGE_DRIVERS {
         gitconfig.push_str(&format!(
             "[merge \"{}\"]\n\tdriver = {}\n",
             driver.name, driver.command
         ));
-    }
-
-    let existing_gitconfig = std::fs::read_to_string(&kanban_gitconfig_path).unwrap_or_default();
-    if gitconfig != existing_gitconfig {
-        std::fs::write(&kanban_gitconfig_path, &gitconfig)?;
-    }
-
-    // ------------------------------------------------------------------
-    // Write .kanban/.gitattributes with pattern → driver mappings
-    // ------------------------------------------------------------------
-    let gitattributes_path = board_root.join(".gitattributes");
-    let mut attrs = String::new();
-    for driver in MERGE_DRIVERS {
         attrs.push_str(&format!("{} merge={}\n", driver.pattern, driver.name));
     }
 
-    let existing_attrs = std::fs::read_to_string(&gitattributes_path).unwrap_or_default();
-    if attrs != existing_attrs {
-        std::fs::write(&gitattributes_path, &attrs)?;
-    }
+    write_driver_file(board_root, ".gitconfig", &gitconfig)?;
+    write_driver_file(board_root, ".gitattributes", &attrs)?;
 
     // ------------------------------------------------------------------
     // Add include.path to .git/config pointing to .kanban/.gitconfig
@@ -212,31 +241,91 @@ pub fn unregister_merge_drivers(board_root: &Path) -> Result<(), std::io::Error>
 
     if let Ok(config) = std::fs::read_to_string(&git_config_path) {
         if config.contains(include_path) {
-            let cleaned: String = config
-                .lines()
-                .collect::<Vec<_>>()
-                .windows(2)
-                .fold((Vec::new(), false), |(mut lines, skip_next), window| {
-                    if skip_next {
-                        return (lines, false);
-                    }
-                    if window[0].trim() == "[include]" && window[1].contains(include_path) {
-                        return (lines, true);
-                    }
-                    lines.push(window[0]);
-                    (lines, false)
-                })
-                .0
-                .join("\n");
-            let cleaned = if cleaned.is_empty() {
-                cleaned
-            } else {
-                format!("{}\n", cleaned)
-            };
+            let cleaned = remove_config_section(&config, "[include]");
             std::fs::write(&git_config_path, &cleaned)?;
         }
     }
 
+    Ok(())
+}
+
+/// Remove a two-line git-config section — its `section` header line and the
+/// single body line that follows it — from `config`, preserving every other
+/// line.
+///
+/// Iterating over `lines()` directly (rather than `windows(2)`) preserves the
+/// final line of the config, which a windowed approach silently dropped. The
+/// returned string keeps a trailing newline when non-empty, matching git's
+/// own config formatting. A `section` that does not appear leaves the content
+/// unchanged.
+///
+/// # Parameters
+/// - `config`: the full git config text.
+/// - `section`: the section header to drop, e.g. `[include]` (matched against
+///   the trimmed line).
+fn remove_config_section(config: &str, section: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut skip_next = false;
+    for line in config.lines() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if line.trim() == section {
+            skip_next = true;
+            continue;
+        }
+        kept.push(line);
+    }
+    let cleaned = kept.join("\n");
+    if cleaned.is_empty() {
+        cleaned
+    } else {
+        format!("{cleaned}\n")
+    }
+}
+
+/// Ensure the `.kanban/.gitignore` lists every ephemeral entry without
+/// duplicating lines.
+///
+/// The cache and undo stack are derived data that must never be committed,
+/// but `.kanban/` is only partially tracked — task `.md`/`.jsonl` files are
+/// committed source — so we list each ephemeral file explicitly rather than
+/// blanket-ignoring the directory. Idempotent and safe on existing boards:
+/// reads whatever is there, adds any missing required entries, and rewrites
+/// only when something changed.
+/// Ephemeral files that must never be committed. Listed explicitly (not as
+/// a `search-cache.sqlite3*` glob) so the guarantee is exact and the
+/// directory's tracked task files stay un-ignored.
+///
+/// Declared at module scope (rather than inside [`ensure_gitignore_entries`])
+/// so the test suite can assert against the single source of truth instead of
+/// re-listing the literals.
+const REQUIRED_GITIGNORE_ENTRIES: &[&str] = &[
+    "undo_stack.yaml",
+    "search-cache.sqlite3",
+    "search-cache.sqlite3-wal",
+    "search-cache.sqlite3-shm",
+];
+
+fn ensure_gitignore_entries(kanban_root: &Path) -> std::io::Result<()> {
+    let gitignore_path = kanban_root.join(".gitignore");
+    let existing = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
+
+    let mut lines: Vec<String> = existing.lines().map(|l| l.to_string()).collect();
+    let mut changed = false;
+    for required in REQUIRED_GITIGNORE_ENTRIES {
+        if !lines.iter().any(|l| l.trim() == *required) {
+            lines.push((*required).to_string());
+            changed = true;
+        }
+    }
+
+    if changed {
+        let mut content = lines.join("\n");
+        content.push('\n');
+        std::fs::write(&gitignore_path, content)?;
+    }
     Ok(())
 }
 
@@ -284,11 +373,10 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
             // Create directory structure
             ctx.create_directories().await?;
 
-            // Create .gitignore to exclude ephemeral files from version control
-            let gitignore_path = ctx.root().join(".gitignore");
-            if !gitignore_path.exists() {
-                tokio::fs::write(&gitignore_path, "undo_stack.yaml\n").await?;
-            }
+            // Ensure ephemeral files (undo stack, search cache + SQLite WAL
+            // sidecars) are gitignored. Idempotent so existing boards gain
+            // any newly-required entries on the next init/open.
+            ensure_gitignore_entries(ctx.root()).map_err(KanbanError::Io)?;
 
             // Build board entity
             let ectx = ctx.entity_context().await?;
@@ -336,6 +424,71 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// The writer must add every required entry, never duplicate on repeat,
+    /// and must not blanket-ignore the dir (committed task files stay tracked).
+    #[test]
+    fn ensure_gitignore_entries_is_idempotent() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        // Run twice — the second pass must be a no-op for content.
+        ensure_gitignore_entries(&kanban_dir).unwrap();
+        ensure_gitignore_entries(&kanban_dir).unwrap();
+
+        let content = std::fs::read_to_string(kanban_dir.join(".gitignore")).unwrap();
+
+        for required in REQUIRED_GITIGNORE_ENTRIES {
+            let count = content.lines().filter(|l| l.trim() == *required).count();
+            assert_eq!(
+                count, 1,
+                "`{required}` must appear exactly once, found {count}"
+            );
+        }
+
+        // No blanket ignore — task files must remain tracked.
+        assert!(
+            !content.lines().any(|l| l.trim() == "*"),
+            "must not blanket-ignore the directory"
+        );
+        assert!(
+            !content
+                .lines()
+                .any(|l| l.trim() == "tasks" || l.trim() == "tasks/"),
+            "must not ignore the tracked tasks dir"
+        );
+    }
+
+    /// `remove_config_section` drops the named section's header line and its
+    /// single following body line, preserving every other line — including the
+    /// final one — and is a no-op when the section is absent.
+    #[test]
+    fn remove_config_section_drops_only_the_named_block() {
+        let config = "[core]\n\trepositoryformatversion = 0\n[include]\n\tpath = ../.kanban/.gitconfig\n[user]\n\tname = Test User\n";
+
+        let cleaned = remove_config_section(config, "[include]");
+
+        assert!(!cleaned.contains("[include]"), "the section header must go");
+        assert!(
+            !cleaned.contains("../.kanban/.gitconfig"),
+            "the section body must go"
+        );
+        assert!(cleaned.contains("[core]"), "earlier sections survive");
+        assert!(
+            cleaned.contains("\trepositoryformatversion = 0"),
+            "earlier body survives"
+        );
+        assert!(cleaned.contains("[user]"), "later sections survive");
+        assert!(
+            cleaned.contains("\tname = Test User"),
+            "the final line must not be dropped, got:\n{cleaned}"
+        );
+
+        // Absent section → unchanged content.
+        let unchanged = remove_config_section("[core]\n\tfoo = bar\n", "[include]");
+        assert_eq!(unchanged, "[core]\n\tfoo = bar\n");
+    }
 
     /// Create a temp dir WITHOUT a git repo
     async fn setup() -> (TempDir, KanbanContext) {
@@ -598,7 +751,7 @@ mod tests {
 
         // Make .git/config read-only so the write will fail
         let mut perms = std::fs::metadata(&config_path).unwrap().permissions();
-        perms.set_mode(0o444);
+        perms.set_mode(READ_ONLY_PERMISSIONS);
         std::fs::set_permissions(&config_path, perms).unwrap();
 
         let kanban_dir = temp.path().join(".kanban");
@@ -606,7 +759,7 @@ mod tests {
 
         // Restore permissions so TempDir can clean up
         let mut perms = std::fs::metadata(&config_path).unwrap().permissions();
-        perms.set_mode(0o644);
+        perms.set_mode(STANDARD_PERMISSIONS);
         std::fs::set_permissions(&config_path, perms).unwrap();
 
         assert!(
@@ -636,14 +789,14 @@ mod tests {
         let attrs_path = kanban_dir.join(".gitattributes");
         std::fs::write(&attrs_path, "# existing content\n").unwrap();
         let mut perms = std::fs::metadata(&attrs_path).unwrap().permissions();
-        perms.set_mode(0o444);
+        perms.set_mode(READ_ONLY_PERMISSIONS);
         std::fs::set_permissions(&attrs_path, perms).unwrap();
 
         let result = register_merge_drivers(&kanban_dir);
 
         // Restore permissions so TempDir can clean up
         let mut perms = std::fs::metadata(&attrs_path).unwrap().permissions();
-        perms.set_mode(0o644);
+        perms.set_mode(STANDARD_PERMISSIONS);
         std::fs::set_permissions(&attrs_path, perms).unwrap();
 
         assert!(
@@ -684,6 +837,55 @@ mod tests {
         assert!(
             !config.contains(".kanban/.gitconfig"),
             ".git/config should not reference .kanban/.gitconfig after unregister"
+        );
+    }
+
+    /// A register → unregister round-trip must remove ONLY the `[include]`
+    /// block and preserve every other line — including the very last line of
+    /// the config. The previous `.windows(2)` removal silently dropped the
+    /// final line; this guards against that regression.
+    #[tokio::test]
+    async fn test_unregister_preserves_all_other_lines() {
+        let temp = TempDir::new().unwrap();
+        let git_dir = temp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(
+            git_dir.join("config"),
+            "[core]\n\trepositoryformatversion = 0\n",
+        )
+        .unwrap();
+
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        // Register so the [include] block is appended.
+        register_merge_drivers(&kanban_dir).unwrap();
+
+        // Append a trailing section AFTER the include block so the last line
+        // of the file is not part of the block we remove.
+        let mut config = std::fs::read_to_string(git_dir.join("config")).unwrap();
+        config.push_str("[user]\n\tname = Test User\n");
+        std::fs::write(git_dir.join("config"), &config).unwrap();
+
+        // Unregister: only the [include] block should disappear.
+        unregister_merge_drivers(&kanban_dir).unwrap();
+
+        let cleaned = std::fs::read_to_string(git_dir.join("config")).unwrap();
+        assert!(
+            !cleaned.contains("[include]"),
+            "the [include] section must be removed"
+        );
+        assert!(
+            !cleaned.contains("../.kanban/.gitconfig"),
+            "the include path must be removed"
+        );
+        // Every non-include line must survive, including the final line.
+        assert!(cleaned.contains("[core]"));
+        assert!(cleaned.contains("\trepositoryformatversion = 0"));
+        assert!(cleaned.contains("[user]"));
+        assert!(
+            cleaned.contains("\tname = Test User"),
+            "the final line of the config must not be dropped, got:\n{cleaned}"
         );
     }
 }

@@ -1329,6 +1329,63 @@ mod tests {
         );
     }
 
+    /// The production round-trip: a real `review working` pass records its
+    /// baseline through the live recorder ([`record_baseline_if_working`]) — NOT a
+    /// hand-seeded entry — and a second pass over the unedited content must
+    /// subtract the file. This is the one test that exercises the record↔lookup
+    /// key agreement end to end: the recorder's write-side key and
+    /// `subtract_unchanged`'s read-side key must collapse to the same on-disk
+    /// entry, which the fixture-seeding `tracking_subtracts_*` tests cannot prove.
+    #[tokio::test]
+    async fn working_round_trip_subtracts_after_real_baseline_record() {
+        use crate::review::synthesize::FleetTally;
+        use crate::review::tracking::record_baseline_if_working;
+
+        let repo = TestRepo::new();
+        // A committed file, then a working-tree edit so it is genuinely in scope
+        // for the first pass.
+        let base = format!("{}\n", body("round_trip_fn"));
+        repo.write("src/round_trip.rs", &base);
+        repo.commit("initial");
+        let edited = format!("{base}// working edit\n");
+        repo.write("src/round_trip.rs", &edited);
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
+        let embedder = MockEmbedder::new(DIM);
+
+        // First pass: tracking on, no baseline yet, so the edited file is in scope.
+        let first = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, true)
+            .await
+            .unwrap();
+        assert!(
+            worklist_files(&first).contains("src/round_trip.rs"),
+            "the first pass must review the edited file, got: {:?}",
+            worklist_files(&first)
+        );
+
+        // Record the baseline the way production does — from the real work-list
+        // through the shared recorder, with a tally showing fan-out actually ran.
+        record_baseline_if_working(
+            true,
+            repo.path(),
+            &loader,
+            &first,
+            &FleetTally::new(1, 0),
+            "2026-06-20T00:00:00Z",
+        );
+
+        // Second pass over the SAME (unedited) content must subtract the file.
+        let second = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, true)
+            .await
+            .unwrap();
+        assert!(
+            !worklist_files(&second).contains("src/round_trip.rs"),
+            "an unedited second pass must subtract the file recorded by the real baseline, got: {:?}",
+            worklist_files(&second)
+        );
+    }
+
     // ---- scope_review: observability tracing -----------------------------
 
     #[tokio::test]

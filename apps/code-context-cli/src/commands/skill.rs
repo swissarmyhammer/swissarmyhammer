@@ -31,7 +31,6 @@ pub fn run_skill() -> i32 {
         agents: None,
         validators: None,
         statusline: false,
-        preamble: false,
     };
     let reporter = CliReporter;
     let results = mirdan::install::init_profile(&profile, InitScope::Project, None, &reporter);

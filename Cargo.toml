@@ -59,6 +59,7 @@ members = [
     "crates/swissarmyhammer-perspectives",
     "crates/swissarmyhammer-filter-expr",
     "crates/swissarmyhammer-merge",
+    "crates/swissarmyhammer-search",
     "crates/swissarmyhammer-store",
     "crates/swissarmyhammer-commands",
     "benches/embedding_benchmark",
@@ -103,6 +104,8 @@ test-log = {version = "0.2.20" , features = ["trace"]}
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 base64 = "0.22"
+convert_case = "0.10"
+unicode-segmentation = "1"
 
 # Library core dependencies
 liquid = "0.26.11"
@@ -292,6 +295,7 @@ swissarmyhammer-mcp-proxy = { path = "crates/swissarmyhammer-mcp-proxy" }
 swissarmyhammer-merge = { path = "crates/swissarmyhammer-merge" }
 swissarmyhammer-perspectives = { path = "crates/swissarmyhammer-perspectives" }
 swissarmyhammer-project-detection = { path = "crates/swissarmyhammer-project-detection" }
+swissarmyhammer-search = { path = "crates/swissarmyhammer-search" }
 swissarmyhammer-shell = { path = "crates/swissarmyhammer-shell" }
 swissarmyhammer-skills = { path = "crates/swissarmyhammer-skills" }
 swissarmyhammer-statusline = { path = "crates/swissarmyhammer-statusline" }

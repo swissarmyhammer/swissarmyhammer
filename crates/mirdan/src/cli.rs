@@ -194,7 +194,7 @@ pub enum Commands {
     /// Report the install-status of sah-managed components per agent and scope
     ///
     /// Shows, for each detected agent and scope (project, user), whether the
-    /// sah MCP server, skills, subagents, preamble, and permissions are
+    /// sah MCP server, skills, subagents, and permissions are
     /// installed.
     Status {
         /// Include components that do not apply to an agent at a scope

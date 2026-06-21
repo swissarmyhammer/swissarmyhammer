@@ -207,10 +207,66 @@ mod tests {
         assert!(props.contains_key("language"));
         assert!(props.contains_key("files"));
         assert!(props.contains_key("top_k"));
+        // `min_similarity` stays a valid union-level prop because `find
+        // duplicates` (`FIND_DUPLICATES_PARAMS`) still declares it. It is NOT
+        // a `search code` param anymore — see
+        // `test_search_code_own_params_are_lean` below.
         assert!(props.contains_key("min_similarity"));
         assert!(props.contains_key("file_pattern"));
         assert!(props.contains_key("min_chunk_bytes"));
         assert!(props.contains_key("max_per_chunk"));
+    }
+
+    /// Pull the per-op `x-operation-schemas` entry for one op string and return
+    /// its declared parameter names (excluding the always-present `op` const).
+    fn op_param_names(schema: &Value, op_string: &str) -> Vec<String> {
+        let entry = schema["x-operation-schemas"]
+            .as_array()
+            .expect("full schema must carry x-operation-schemas")
+            .iter()
+            .find(|e| e["title"] == json!(op_string))
+            .unwrap_or_else(|| panic!("no x-operation-schemas entry for {op_string:?}"));
+        let mut names: Vec<String> = entry["properties"]
+            .as_object()
+            .expect("op schema must have properties")
+            .keys()
+            .filter(|k| k.as_str() != "op")
+            .cloned()
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// `search code`'s agent-facing input surface must stay lean: exactly
+    /// `query`, `top_k`, `language`, `file_pattern`. No `min_similarity`, no
+    /// fusion weight knobs (`w_bm25`/`w_trigram`/`w_cosine`), no
+    /// `min_fused_score` floor — those stay internal to `SearchCodeOptions`.
+    #[test]
+    fn test_search_code_own_params_are_lean() {
+        let ops = test_operations();
+        let schema = generate_code_context_schema_full(&ops);
+
+        let mut expected = vec![
+            "file_pattern".to_string(),
+            "language".to_string(),
+            "query".to_string(),
+            "top_k".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(op_param_names(&schema, "search code"), expected);
+    }
+
+    /// The union-level `min_similarity` prop is justified solely by `find
+    /// duplicates`, which still declares it as its own param.
+    #[test]
+    fn test_find_duplicates_still_declares_min_similarity() {
+        let ops = test_operations();
+        let schema = generate_code_context_schema_full(&ops);
+
+        assert!(
+            op_param_names(&schema, "find duplicates").contains(&"min_similarity".to_string()),
+            "find duplicates must keep its own min_similarity param"
+        );
     }
 
     #[test]

@@ -1,10 +1,23 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kv64f3zg8kv359njazk2f93m
+  text: 'Picked up by /finish (scoped-batch $semantic-search) after sibling card ^1c67x5b landed in done. Task is in `review`, all acceptance criteria checked, progress 1.0. NOTE: this card''s files (board/init.rs, context.rs, task/embedding_cache.rs) were heavily scrutinized and fixed during ^1c67x5b''s whole-tree review loop — the init.rs merge-driver/gitignore code (unregister_merge_drivers last-line bug, write_driver_file helper, remove_config_section helper, named permission consts, REQUIRED const) and context.rs are already clean. Plan: verify `cargo test -p swissarmyhammer-kanban` green (incl embedding_cache + gitignore tests), then /review to drive review → done.'
+  timestamp: 2026-06-15T17:15:02.512416+00:00
+- actor: claude-code
+  id: 01kv64jzrmxvr4yc9sjmrb3b4m
+  text: '/test green: `cargo test -p swissarmyhammer-kanban` → 1450 passed, 0 failed. embedding_cache.rs 8 tests pass (round-trip, get-miss, prune-prior-rows, tags-excluded/hash-stable, model-name mismatch clears, dim mismatch clears, reopen preserves, cold-start on nonexistent path); board::init gitignore test ensure_gitignore_entries_is_idempotent passes; context.rs search_cache_path test_paths passes. clippy -D warnings clean. No changes needed. Proceeding to /review.'
+  timestamp: 2026-06-15T17:17:09.268510+00:00
+- actor: claude-code
+  id: 01kv656vz1x56xqb5mm5zpp8hz
+  text: '/review COMPLETE (15/15 sub-tasks, 0 failed): 0 blockers, 2 warnings, 2 nits — none holding. Warnings (×2): introduce TaskId/ContentHash newtypes on get/put — assessed FALSE POSITIVE in context (the entire kanban crate uses bare task_id: &str — task_helpers.rs, clipboard_commands.rs, paste_handlers; no such newtype exists anywhere; adopting in one file would invent an inconsistent pattern). Nits: EmbeddingCache lacks Debug impl; dim-mismatch test hardcodes 8 — optional polish. No duplicate-definition/compile blockers (consistent with crate compiling + 1450 tests passing). embedding_cache 8/8 pass. Moved to done.'
+  timestamp: 2026-06-15T17:28:00.737740+00:00
 depends_on:
 - 01KTC7Y50PEM427HQ79NW52WY4
-position_column: todo
-position_ordinal: '8e80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffab80
 project: semantic-search
 title: 'Kanban task-embedding cache: SQLite sidecar in the board dir'
 ---
@@ -41,22 +54,34 @@ The cache lives INSIDE `.kanban/`, which is only PARTIALLY tracked — the task 
 (A single `search-cache.sqlite3*` glob is acceptable.) Make the writer idempotent — if `.kanban/.gitignore` already exists, ensure the lines are present without duplicating them (existing boards must gain the entries on next init/open, not only freshly-created ones). Do NOT rely on the stray `search.db` pattern in the root `.gitignore`; ignore explicitly in the board's own ignore file so the guarantee travels with the board dir.
 
 ## Acceptance Criteria
-- [ ] `crates/swissarmyhammer-kanban/Cargo.toml` gains `rusqlite`, `swissarmyhammer-search`, `swissarmyhammer-embedding` deps; `cargo build -p swissarmyhammer-kanban` compiles.
-- [ ] `EmbeddingCache::open` creates the sidecar at `<root>/search-cache.sqlite3` in WAL mode with the `embeddings` + `meta` tables.
-- [ ] `put` then `get` for the same `(task_id, content_hash)` returns the exact vector (round-trips through the search-crate blob helpers).
-- [ ] `get` for a missing `(task_id, content_hash)` returns `None`.
-- [ ] `put` keeps at most one row per `task_id`: after putting a new `content_hash` for a task, prior rows for that `task_id` are gone.
-- [ ] `task_embedding_text(title, description)` is the single composition used for both hashing and embedding; a tag-only change does not alter it (tags are not part of the embed text).
-- [ ] Opening the cache with a different model name OR a different dim than the stored meta clears `embeddings` (self-healing) and updates `meta`.
-- [ ] `KanbanContext::search_cache_path()` returns `<root>/search-cache.sqlite3`.
-- [ ] **Cold start:** `EmbeddingCache::open` against a path that does NOT exist creates a fully usable cache (schema present, `put`/`get` work) — no pre-existing file required. This is the cross-machine / fresh-clone rebuild guarantee at the store layer.
-- [ ] **Gitignore:** after board init (and on open of a pre-existing board), `.kanban/.gitignore` contains `search-cache.sqlite3` (+ `-wal`/`-shm`, or the glob), the entries are not duplicated on repeat, and `git check-ignore` would match the cache file. `.kanban/`'s tracked task files remain un-ignored.
+- [x] `crates/swissarmyhammer-kanban/Cargo.toml` gains `rusqlite`, `swissarmyhammer-search`, `swissarmyhammer-embedding` deps; `cargo build -p swissarmyhammer-kanban` compiles.
+- [x] `EmbeddingCache::open` creates the sidecar at `<root>/search-cache.sqlite3` in WAL mode with the `embeddings` + `meta` tables.
+- [x] `put` then `get` for the same `(task_id, content_hash)` returns the exact vector (round-trips through the search-crate blob helpers).
+- [x] `get` for a missing `(task_id, content_hash)` returns `None`.
+- [x] `put` keeps at most one row per `task_id`: after putting a new `content_hash` for a task, prior rows for that `task_id` are gone.
+- [x] `task_embedding_text(title, description)` is the single composition used for both hashing and embedding; a tag-only change does not alter it (tags are not part of the embed text).
+- [x] Opening the cache with a different model name OR a different dim than the stored meta clears `embeddings` (self-healing) and updates `meta`.
+- [x] `KanbanContext::search_cache_path()` returns `<root>/search-cache.sqlite3`.
+- [x] **Cold start:** `EmbeddingCache::open` against a path that does NOT exist creates a fully usable cache (schema present, `put`/`get` work) — no pre-existing file required. This is the cross-machine / fresh-clone rebuild guarantee at the store layer.
+- [x] **Gitignore:** after board init (and on open of a pre-existing board), `.kanban/.gitignore` contains `search-cache.sqlite3` (+ `-wal`/`-shm`, or the glob), the entries are not duplicated on repeat, and `git check-ignore` would match the cache file. `.kanban/`'s tracked task files remain un-ignored.
 
 ## Tests
-- [ ] Unit/integration tests in `embedding_cache.rs` `#[cfg(test)] mod tests` using a `TempDir`: put/get round-trip; get-miss returns None; `put` prunes prior rows for the same task_id (only the latest hash survives); `task_embedding_text` excludes tags / `content_hash` stable for equal input and differs for different input; model-name-mismatch invalidation clears rows; dim-mismatch invalidation clears rows; reopening with the SAME model/dim preserves rows.
-- [ ] Cold-start test: `open` on a non-existent path inside a fresh `TempDir` succeeds and supports `put`/`get` (proves the rebuild-on-checkout path at the store layer).
-- [ ] Gitignore test (in `board/init.rs` tests or `embedding_cache.rs`): after writing/refreshing `.kanban/.gitignore`, assert it contains the `search-cache.sqlite3` (+ sidecar) patterns, that running the writer twice does not duplicate lines, and that the committed task files are still not ignored.
-- [ ] `cargo test -p swissarmyhammer-kanban embedding_cache` and the gitignore test pass (all new tests green, no real model required).
+- [x] Unit/integration tests in `embedding_cache.rs` `#[cfg(test)] mod tests` using a `TempDir`: put/get round-trip; get-miss returns None; `put` prunes prior rows for the same task_id (only the latest hash survives); `task_embedding_text` excludes tags / `content_hash` stable for equal input and differs for different input; model-name-mismatch invalidation clears rows; dim-mismatch invalidation clears rows; reopening with the SAME model/dim preserves rows.
+- [x] Cold-start test: `open` on a non-existent path inside a fresh `TempDir` succeeds and supports `put`/`get` (proves the rebuild-on-checkout path at the store layer).
+- [x] Gitignore test (in `board/init.rs` tests or `embedding_cache.rs`): after writing/refreshing `.kanban/.gitignore`, assert it contains the `search-cache.sqlite3` (+ sidecar) patterns, that running the writer twice does not duplicate lines, and that the committed task files are still not ignored.
+- [x] `cargo test -p swissarmyhammer-kanban embedding_cache` and the gitignore test pass (all new tests green, no real model required).
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to pass.
+
+## Review Findings (2026-06-15 12:17)
+
+### Warnings
+- [ ] `crates/swissarmyhammer-kanban/src/task/embedding_cache.rs` `get` — Adjacent parameters `task_id` and `content_hash` are both `&str` with different semantic meanings; engine suggests TaskId/ContentHash newtypes. ASSESSED — false positive in context: the entire kanban crate uses bare `task_id: &str` (task_helpers.rs, clipboard_commands.rs, paste_handlers); there is no TaskId/ContentHash newtype anywhere. Introducing them only here would invent a pattern inconsistent with the crate. Not a blocker for this card. (Optional crate-wide refactor if newtypes are ever adopted board-wide.)
+- [ ] `crates/swissarmyhammer-kanban/src/task/embedding_cache.rs` `put` — Same newtype suggestion as above (`task_id`/`content_hash`). Same assessment: matches crate convention, not a blocker.
+
+### Nits
+- [ ] `crates/swissarmyhammer-kanban/src/task/embedding_cache.rs` — `EmbeddingCache` (public type) does not implement `Debug`. Optional polish.
+- [ ] `crates/swissarmyhammer-kanban/src/task/embedding_cache.rs` (dim-mismatch test) — hardcoded dimension `8` could be a named constant. Optional test-readability polish.
+
+_Verdict: 0 blockers, 2 warnings (both the same newtype suggestion — false positive vs. the crate's established `&str` convention), 2 nits (optional polish). No genuine correctness blocker or substantive warning in this card's deliverables. Engine run was COMPLETE (15 attempted, 0 failed). All 8 `embedding_cache` tests pass. Moved to `done`._

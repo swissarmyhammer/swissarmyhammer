@@ -209,10 +209,9 @@ impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
     }
 
     fn priority(&self) -> i32 {
-        // Sits between the Preamble (50) and Skills (60) steps in the
-        // re-spaced 10s pipeline — same relative position it held in the
-        // legacy 22 → 25 → 30 ordering (after `ClaudeMd`, before
-        // `SkillDeployment`).
+        // Sits below the Skills (60) step in the re-spaced 10s pipeline —
+        // same relative position it held in the legacy 22 → 25 → 30 ordering
+        // (before `SkillDeployment`).
         55
     }
 
