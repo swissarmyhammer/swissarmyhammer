@@ -7,6 +7,7 @@
 //! view state the server reads back.
 
 use serde_json::json;
+use swissarmyhammer_views::{ViewCommand, ViewDef, ViewKind};
 
 use super::common::{call_tool, Harness};
 
@@ -327,4 +328,196 @@ async fn set_view_creates_and_persists() {
     let id = saved["view"]["id"].as_str().unwrap();
     assert_eq!(id.len(), 26, "minted id should be a 26-char ULID");
     assert!(h.dir.path().join(format!("views/{id}.yaml")).exists());
+}
+
+/// A partial `set view` against an EXISTING view must merge: omitting
+/// `icon`/`card_fields`/`entity_type` preserves their on-disk value rather than
+/// silently stripping them. Regression for the full-replace bug that wrote
+/// `{id, name, kind}` over a real view file and wiped icon/card_fields/commands.
+#[tokio::test]
+async fn set_view_partial_update_preserves_omitted_fields() {
+    let h = Harness::new().await;
+    let server = h.server();
+
+    // Create a fully-specified view.
+    let created = call_tool(
+        &server,
+        "set view",
+        json!({
+            "op": "set view",
+            "name": "My Grid",
+            "kind": "grid",
+            "icon": "folder",
+            "entity_type": "task",
+            "card_fields": ["title", "status"],
+        }),
+    )
+    .await
+    .unwrap();
+    let id = created["view"]["id"].as_str().unwrap().to_string();
+
+    // Partial update: only name + kind. icon / entity_type / card_fields omitted.
+    let updated = call_tool(
+        &server,
+        "set view",
+        json!({
+            "op": "set view",
+            "id": id,
+            "name": "My Grid Renamed",
+            "kind": "grid",
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(updated["view"]["name"], json!("My Grid Renamed"));
+    assert_eq!(
+        updated["view"]["icon"],
+        json!("folder"),
+        "omitted icon must be preserved, not stripped"
+    );
+    assert_eq!(
+        updated["view"]["entity_type"],
+        json!("task"),
+        "omitted entity_type must be preserved, not stripped"
+    );
+    assert_eq!(
+        updated["view"]["card_fields"],
+        json!(["title", "status"]),
+        "omitted card_fields must be preserved, not stripped"
+    );
+}
+
+/// An explicit empty `card_fields: []` and explicit `icon: null` on an existing
+/// view must still CLEAR the field — merge semantics preserve omitted fields
+/// but must not make explicit clearing impossible.
+#[tokio::test]
+async fn set_view_partial_update_explicit_empty_clears() {
+    let h = Harness::new().await;
+    let server = h.server();
+
+    let created = call_tool(
+        &server,
+        "set view",
+        json!({
+            "op": "set view",
+            "name": "My Grid",
+            "kind": "grid",
+            "icon": "folder",
+            "entity_type": "task",
+            "card_fields": ["title", "status"],
+        }),
+    )
+    .await
+    .unwrap();
+    let id = created["view"]["id"].as_str().unwrap().to_string();
+
+    let updated = call_tool(
+        &server,
+        "set view",
+        json!({
+            "op": "set view",
+            "id": id,
+            "name": "My Grid",
+            "kind": "grid",
+            "icon": null,
+            "entity_type": null,
+            "card_fields": [],
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        updated["view"]["icon"].is_null(),
+        "explicit icon: null must clear the icon"
+    );
+    assert!(
+        updated["view"]["entity_type"].is_null(),
+        "explicit entity_type: null must clear it"
+    );
+    // An empty `card_fields` serializes as absent (skip_serializing_if =
+    // Vec::is_empty), so the cleared list shows up as null in the output JSON.
+    assert!(
+        updated["view"]["card_fields"].is_null(),
+        "explicit card_fields: [] must clear the list (serializes as absent)"
+    );
+}
+
+/// A partial `set view` must preserve a view's `commands`, which have no wire
+/// surface and so can only be set out-of-band (builtin YAML / direct write).
+/// This is the most subtle clause of the merge contract: `set view` always
+/// built `commands: Vec::new()` before the fix, silently wiping them. The
+/// other regression tests cannot catch a regression here because every
+/// `set view`-created view starts with empty `commands`, so this test seeds a
+/// view carrying commands directly through the kernel first.
+#[tokio::test]
+async fn set_view_partial_update_preserves_commands() {
+    let h = Harness::new().await;
+
+    // Seed a view WITH commands directly through the views kernel (the wire
+    // `set view` op has no `commands` field, mirroring builtin YAML views).
+    let seeded = ViewDef {
+        id: "01AAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+        name: "Board".to_string(),
+        icon: Some("kanban".to_string()),
+        kind: ViewKind::Board,
+        entity_type: Some("task".to_string()),
+        card_fields: vec!["title".to_string()],
+        commands: vec![ViewCommand {
+            id: "board.newCard".to_string(),
+            name: "New Card".to_string(),
+            description: None,
+            keys: None,
+        }],
+    };
+    h.views.write().await.write_view(&seeded).await.unwrap();
+
+    // Partial `set view` touching only name; commands omitted (no wire field).
+    let server = h.server();
+    let updated = call_tool(
+        &server,
+        "set view",
+        json!({
+            "op": "set view",
+            "id": "01AAAAAAAAAAAAAAAAAAAAAAAA",
+            "name": "Board Renamed",
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(updated["view"]["name"], json!("Board Renamed"));
+    let commands = updated["view"]["commands"]
+        .as_array()
+        .expect("commands must survive a partial update, not be stripped to empty");
+    assert_eq!(commands.len(), 1, "the seeded command must be preserved");
+    assert_eq!(commands[0]["id"], json!("board.newCard"));
+}
+
+/// A partial `set view` against a NON-EXISTENT view creates it fresh — omitted
+/// optional fields default to empty/none (current create behavior is unchanged).
+#[tokio::test]
+async fn set_view_partial_update_creates_fresh_when_absent() {
+    let h = Harness::new().await;
+    let server = h.server();
+
+    let created = call_tool(
+        &server,
+        "set view",
+        json!({
+            "op": "set view",
+            "id": "01AAAAAAAAAAAAAAAAAAAAAAAA",
+            "name": "Brand New",
+            "kind": "list",
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(created["view"]["name"], json!("Brand New"));
+    assert_eq!(created["view"]["kind"], json!("list"));
+    assert!(created["view"]["icon"].is_null());
+    // Empty card_fields serializes as absent (skip_serializing_if).
+    assert!(created["view"]["card_fields"].is_null());
 }

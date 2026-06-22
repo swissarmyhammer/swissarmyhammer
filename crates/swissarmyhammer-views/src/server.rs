@@ -442,23 +442,30 @@ impl ViewsServer {
     // --- Views -----------------------------------------------------------
 
     /// Handle `set view` — create or update a view definition.
-    async fn handle_set_view(&self, req: SetView) -> Result<Value, McpError> {
+    ///
+    /// On an EXISTING view this is a partial read-modify-write merge: only the
+    /// fields present on the wire overwrite the on-disk view, omitted optional
+    /// fields preserve their current value (the tri-state optionals on
+    /// [`SetView`] distinguish "omitted → preserve" from an explicit empty/null
+    /// → clear). `commands` has no wire surface and is always preserved across
+    /// updates. On a NON-EXISTENT view (or an omitted id, so a fresh ULID is
+    /// minted) the view is created from the supplied fields, with omitted
+    /// optionals defaulting to empty/none.
+    async fn handle_set_view(&self, mut req: SetView) -> Result<Value, McpError> {
         let id = req
             .id
+            .take()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| ulid::Ulid::new().to_string());
-        let def = ViewDef {
-            id,
-            name: req.name,
-            icon: req.icon,
-            kind: parse_view_kind(&req.kind),
-            entity_type: req.entity_type,
-            card_fields: req.card_fields,
-            commands: Vec::new(),
-        };
 
         let services = self.services()?;
         let mut vctx = services.views.write().await;
+
+        // Read-modify-write: when the view already exists, omitted fields
+        // preserve the existing value; only provided fields are overwritten.
+        let existing = vctx.get_by_id(&id).cloned();
+        let def = merge_set_view(req, id, existing);
+
         let entry_id = vctx.write_view(&def).await.map_err(views_error_to_mcp)?;
         Ok(json!({
             "ok": true,
@@ -495,6 +502,51 @@ fn parse_direction(direction: &str) -> Result<SortDirection, McpError> {
             format!("invalid sort direction {other:?} (expected \"asc\" or \"desc\")"),
             None,
         )),
+    }
+}
+
+/// Merge a [`SetView`] request onto the existing view (if any) into a
+/// [`ViewDef`] to persist.
+///
+/// Implements the partial read-modify-write contract for `set view`:
+///
+/// - **Update** (`existing` is `Some`): every optional field on the request is
+///   tri-state — omitted (`None`) preserves the existing value, while an
+///   explicit value (including an explicit empty/null) overwrites it. `name`
+///   and `kind` likewise preserve the existing value when omitted. `commands`
+///   has no wire surface and is carried over verbatim, so a partial update
+///   cannot strip it.
+/// - **Create** (`existing` is `None`): omitted optionals default to
+///   empty/none, omitted `kind` falls through to [`ViewKind::Unknown`], and an
+///   omitted `name` defaults to empty — which `ViewDef::validate` rejects, so
+///   a create still requires a real name.
+fn merge_set_view(req: SetView, id: String, existing: Option<ViewDef>) -> ViewDef {
+    match existing {
+        Some(existing) => ViewDef {
+            id,
+            name: req.name.unwrap_or(existing.name),
+            kind: req
+                .kind
+                .map(|k| parse_view_kind(&k))
+                .unwrap_or(existing.kind),
+            icon: req.icon.unwrap_or(existing.icon),
+            entity_type: req.entity_type.unwrap_or(existing.entity_type),
+            card_fields: req.card_fields.unwrap_or(existing.card_fields),
+            // `commands` is not exposed on the wire; preserve it across updates.
+            commands: existing.commands,
+        },
+        None => ViewDef {
+            id,
+            name: req.name.unwrap_or_default(),
+            kind: req
+                .kind
+                .map(|k| parse_view_kind(&k))
+                .unwrap_or(ViewKind::Unknown),
+            icon: req.icon.unwrap_or_default(),
+            entity_type: req.entity_type.unwrap_or_default(),
+            card_fields: req.card_fields.unwrap_or_default(),
+            commands: Vec::new(),
+        },
     }
 }
 

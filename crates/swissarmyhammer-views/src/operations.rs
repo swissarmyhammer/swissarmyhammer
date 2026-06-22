@@ -27,9 +27,29 @@
 //! - **view** (`set`) — write a `ViewDef` through the views kernel.
 
 use rmcp::schemars::{self, JsonSchema};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::sync::LazyLock;
 use swissarmyhammer_operations::{operation, Operation};
+
+/// Deserialize a nullable field into the `Option<Option<T>>` tri-state.
+///
+/// Paired with `#[serde(default)]`, this distinguishes three wire shapes that
+/// plain `Option<Option<T>>` would otherwise collapse (serde maps a bare `null`
+/// to the *outer* `None`, losing the "explicitly cleared" signal):
+///
+/// - field absent        → `None`        ("omitted — preserve existing")
+/// - field present `null` → `Some(None)`  ("explicitly clear")
+/// - field present value  → `Some(Some)`  ("set to this value")
+///
+/// This is the canonical serde idiom for nullable partial-update fields; it
+/// powers the merge contract on [`SetView`].
+fn double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
+}
 
 // Lifecycle operations ───────────────────────────────────────────────────
 
@@ -339,8 +359,22 @@ pub struct GotoPerspective {
 
 /// Create or update a view definition.
 ///
-/// Writes the supplied [`ViewDef`](crate::ViewDef) through
-/// `ViewsContext::write_view`. When `id` is omitted a fresh ULID is minted.
+/// Writes a [`ViewDef`](crate::ViewDef) through `ViewsContext::write_view`.
+/// When `id` is omitted a fresh ULID is minted.
+///
+/// **Merge semantics on update.** When the target `id` already names a view,
+/// this is a partial read-modify-write: only the fields present on the wire
+/// overwrite the on-disk view; omitted optional fields preserve their current
+/// value (so a `{op, id, name, kind}` call no longer wipes `icon` /
+/// `card_fields` / `entity_type` / `commands`). The optional fields are
+/// tri-state — omitted means "preserve", an explicit empty/null value
+/// (`icon: null`, `card_fields: []`) still clears the field. `commands` is
+/// not on the wire surface and is always preserved across updates.
+///
+/// **Create when absent.** When the target `id` is unknown (or omitted, so a
+/// fresh ULID is minted) the view is created from the supplied fields, with
+/// omitted optionals defaulting to empty/none.
+///
 /// The write is undoable (pushed onto the shared `StoreContext`) and emits a
 /// `ViewEvent`.
 ///
@@ -348,28 +382,41 @@ pub struct GotoPerspective {
 #[operation(
     verb = "set",
     noun = "view",
-    description = "Create or update a view definition"
+    description = "Create or update a view definition (partial merge on update)"
 )]
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SetView {
     /// Optional explicit id. A fresh ULID is minted when omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    /// Human-readable name (e.g. "Board").
-    #[serde(default)]
-    pub name: String,
-    /// View kind token (e.g. "board", "grid", "list").
-    #[serde(default)]
-    pub kind: String,
-    /// Optional icon hint.
+    /// Human-readable name (e.g. "Board"). Omitted preserves the existing
+    /// name on update; required (non-empty) for a create.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub icon: Option<String>,
-    /// Optional entity type this view renders.
+    pub name: Option<String>,
+    /// View kind token (e.g. "board", "grid", "list"). Omitted preserves the
+    /// existing kind on update.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entity_type: Option<String>,
-    /// Optional ordered list of card field names.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub card_fields: Vec<String>,
+    pub kind: Option<String>,
+    /// Optional icon hint. Tri-state: omitted preserves the existing icon on
+    /// update; `Some(None)` (explicit `null`) clears it; `Some(Some(_))` sets it.
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub icon: Option<Option<String>>,
+    /// Optional entity type this view renders. Tri-state, same rules as `icon`.
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub entity_type: Option<Option<String>>,
+    /// Optional ordered list of card field names. Omitted preserves the
+    /// existing list on update; an explicit `[]` clears it (replace semantics —
+    /// the whole list is overwritten when present).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_fields: Option<Vec<String>>,
 }
 
 /// All `views` operations — the canonical list used for schema generation.
