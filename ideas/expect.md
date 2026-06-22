@@ -425,7 +425,7 @@ differently, the golden compare catches it as drift.
 expectation diagnostics register into the sah doctor framework, so a plain `sah
 doctor` includes "are the expectation specs valid?" alongside every other system
 check. `expect doctor` is just the scoped entry point into the same diagnostic
-provider. `expect check` always runs the doctor pass first and refuses to run a
+provider. `expect expectations check` always runs the doctor pass first and refuses to run a
 malformed spec, so a CI failure is never ambiguous between "bad spec" and "bad
 code."
 
@@ -441,7 +441,7 @@ order:
    or by tag via `--tag pricing`).
 
 With no scope at all, `doctor`/`check` discover every `**/*.expect.md` in the repo
-— the default CI invocation is a bare `expect check`.
+— the default CI invocation is a bare `expect expectations check`.
 
 #### `expect init`
 
@@ -468,7 +468,7 @@ A feature-local spec at `src/checkout/coupon.expect.md` keeps its golden at
 repo-relative path of each spec, so identity needs no `id`. `init` also detects
 the project's surfaces (CLI binary, HTTP server, desktop app, etc. — reusing the
 `detected-projects` machinery) and writes sensible `surface` defaults into
-`config.toml` so the first `expect create` has context to work from.
+`config.toml` so the first `expect expectation create` has context to work from.
 
 #### `expect expectation create`
 
@@ -553,7 +553,7 @@ messages are the primary defense against them.
 
 The complete, closed set of frontmatter keys. Anything not listed is rejected by
 the parser (so a typo fails loudly rather than being silently ignored). This table
-is also the schema handed to `expect create`.
+is also the schema handed to `expect expectation create`.
 
 | Key | Required | Type / allowed values | Default | Meaning |
 |-----|----------|-----------------------|---------|---------|
@@ -658,7 +658,7 @@ agent edit:
 pub struct Observation {
     pub path: String,               // repo-relative path of the spec — its identity
     pub final_state: FinalState,    // authoritative SUT state read by the adapter (ground truth)
-    pub trajectory: Trajectory,     // what the driver did, for `get observation` — never the verdict source
+    pub trajectory: Trajectory,     // what the driver did, for `observation get` — never the verdict source
     pub artifacts: Vec<Artifact>,   // stdout / a11y tree / db rows / http response, scrubbed
 }
 
@@ -748,7 +748,7 @@ When it needs agentic behavior, it delegates to an existing coding agent over AC
 (the next section makes the case). What `expect` owns is everything *around* the
 loop — the surface, the stop conditions, the capture, and the verdict.
 
-After the static `doctor` pass, an `expect check` runs each expectation as
+After the static `doctor` pass, an `expect expectation check` runs each expectation as
 **provision → arrange → act → observe → evaluate → teardown**, with three roles
 kept strictly separate — the **driver** causes the transition, the **adapter**
 observes the authoritative state, the **grader** judges — and the driver is never
@@ -825,7 +825,7 @@ Three hardening rules from the research are non-negotiable:
    data shows 35.7% of self-verified-as-correct trajectories were still wrong.
 3. **The check is tamper-resistant.** The agent under evaluation runs in a sandbox
    it cannot use to edit the expectation, the golden, or fixtures; mutations to the
-   ledger happen only through `expect approve`, a separate human-gated op. Detect
+   ledger happen only through `expect observation approve`, a separate human-gated op. Detect
    spec/fixture edits directly, not just by grading outcome.
 
 **Assert on outcomes, never on action equality.** Agent trajectories are not
@@ -1031,9 +1031,9 @@ stronger one grades, or vice versa.
 5. **cli** surface adapter + provisioning: build/launch from `setup` (via
    `detected-projects`), capture stdout/stderr/exit/files, teardown. The
    deterministic-only path needs **no agent**.
-6. `expect observe` → `Observation`; `expect evaluate` (pure) Tier 1 only
+6. `expect expectation observe` → `Observation`; `expect observation evaluate` (pure) Tier 1 only
    (exact/regex/schema/exit-code).
-7. `expect check` = doctor + observe + evaluate; scope resolution
+7. `expect expectation check` = doctor + observe + evaluate; scope resolution
    (path/folder/glob); teaching error messages.
 
 ### Phase 3 — The ledger and the human gate
@@ -1060,7 +1060,7 @@ stronger one grades, or vice versa.
 14. Tier 2 embedding tolerance bands (pinned embedder).
 15. Tier 3 model judgment against withheld criteria (named `model:`, binary,
     different model than the driver), gated behind tiers 1–2; optional panel.
-16. `expect create` — agent authors specs from intent (schema + rules as its
+16. `expect expectation create` — agent authors specs from intent (schema + rules as its
     instructions), `--from-session` capture; leaves the file + an unapproved
     golden (ledger state `new`) for a human to edit and `approve`.
 
