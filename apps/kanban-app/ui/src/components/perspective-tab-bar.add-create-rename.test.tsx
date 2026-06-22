@@ -176,6 +176,9 @@ import { asSegment } from "@/types/spatial";
 // Test helpers
 // ---------------------------------------------------------------------------
 
+/** Tooltip open delay (ms) passed to `TooltipProvider` in these tests. */
+const TOOLTIP_DELAY_MS = 100;
+
 /** Registry payload for the `perspective.save` (`+`) tab-button command. */
 function addRegistryEntry() {
   return {
@@ -202,7 +205,7 @@ function renderTabBar() {
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
-          <TooltipProvider delayDuration={100}>
+          <TooltipProvider delayDuration={TOOLTIP_DELAY_MS}>
             <PerspectiveTabBar />
           </TooltipProvider>
         </EntityFocusProvider>
@@ -709,7 +712,7 @@ describe("generateUntitledName — frontend/backend drift pin", () => {
   it("blank_name_placeholder_literal_matches_the_rust_caption_placeholder", () => {
     // Literal drift pin: `BLANK_PERSPECTIVE_NAME_PLACEHOLDER` in
     // `crates/swissarmyhammer-kanban/src/scope_commands.rs` pins the same
-    // string for the "Go to Perspective: …" palette caption — change both
+    // string for the "Switch to Perspective …" palette caption — change both
     // or neither.
     expect(BLANK_NAME_PLACEHOLDER).toBe("Untitled");
   });

@@ -857,3 +857,150 @@ fn no_context_menu_view_switch_row_without_a_view_in_scope() {
         "both views must still have palette switch rows; got {palette_view_ids:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Per-perspective "Switch to Perspective «name»" context-menu coverage
+// (card 01KV8SQR5VYH3B9GDK8QSMK7Z7).
+//
+// Perspective switching mirrors view switching exactly: every perspective gets
+// a palette-only (`context_menu: false`) switch row so the palette can switch
+// to any perspective from anywhere, and additionally the perspective whose
+// `perspective:{id}` moniker is present in the scope chain gets ITS OWN row
+// flagged `context_menu: true` — so right-clicking perspective X surfaces
+// exactly "Switch to Perspective «X»" and nothing for sibling perspectives.
+// ---------------------------------------------------------------------------
+
+const PERSP_X_ID: &str = "01JMPERS0000000000XBOARD";
+const PERSP_Y_ID: &str = "01JMPERS0000000000YBOARD";
+
+/// Build a minimal board-kind [`PerspectiveInfo`] for the switch-row tests.
+fn persp_info(id: &str, name: &str) -> swissarmyhammer_perspectives::PerspectiveInfo {
+    swissarmyhammer_perspectives::PerspectiveInfo {
+        id: id.into(),
+        name: name.into(),
+        view: "board".into(),
+        fields: Vec::new(),
+    }
+}
+
+/// Run `commands_for_scope` over a fixed two-perspective `DynamicSources` and
+/// the supplied scope chain, returning every emitted command.
+fn persp_switch_rows_for_scope(
+    perspectives: &[swissarmyhammer_perspectives::PerspectiveInfo],
+    scope: &[String],
+) -> Vec<swissarmyhammer_kanban::scope_commands::ResolvedCommand> {
+    let dynamic = DynamicSources {
+        perspectives: perspectives.to_vec(),
+        ..Default::default()
+    };
+    let registry = compose_registry![swissarmyhammer_kanban];
+    let impls: HashMap<String, Arc<dyn swissarmyhammer_kanban::commands_core::Command>> =
+        HashMap::new();
+    let ui_arc = Arc::new(UIState::new());
+    commands_for_scope(
+        scope,
+        &registry,
+        &impls,
+        None,
+        &ui_arc,
+        false,
+        Some(&dynamic),
+        None,
+    )
+}
+
+/// Pull the `perspective_id` from a `perspective.switch` row's args, if present.
+fn persp_switch_id(
+    cmd: &swissarmyhammer_kanban::scope_commands::ResolvedCommand,
+) -> Option<String> {
+    if cmd.id != "perspective.switch" {
+        return None;
+    }
+    cmd.args
+        .as_ref()
+        .and_then(|v| v.get("perspective_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// With `perspective:{X}` in the scope chain, exactly ONE `perspective.switch`
+/// row is flagged `context_menu: true`, it carries perspective X's
+/// `perspective_id`, and no sibling perspective's id appears as a context-menu
+/// row. The palette (`context_menu: false`) rows for ALL perspectives remain.
+#[test]
+fn context_menu_perspective_switch_is_scoped_to_the_perspective_in_scope() {
+    let perspectives = vec![
+        persp_info(PERSP_X_ID, "Sprint"),
+        persp_info(PERSP_Y_ID, "Backlog"),
+    ];
+
+    let cmds = persp_switch_rows_for_scope(&perspectives, &[format!("perspective:{PERSP_X_ID}")]);
+
+    // Exactly one context_menu:true perspective.switch row, and it is X's.
+    let ctx_menu_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| c.context_menu)
+        .filter_map(persp_switch_id)
+        .collect();
+    assert_eq!(
+        ctx_menu_ids,
+        vec![PERSP_X_ID.to_string()],
+        "exactly one context-menu perspective.switch row, scoped to the perspective in the chain; got {:?}",
+        cmds.iter()
+            .map(|c| (&c.id, c.context_menu, &c.args))
+            .collect::<Vec<_>>()
+    );
+
+    // The context-menu row's caption reads "Switch to Perspective «Sprint»".
+    let x_ctx_row = cmds
+        .iter()
+        .find(|c| c.context_menu && persp_switch_id(c).as_deref() == Some(PERSP_X_ID))
+        .expect("perspective X context-menu row exists");
+    assert_eq!(x_ctx_row.name, "Switch to Perspective Sprint");
+
+    // Palette rows (context_menu:false) for BOTH perspectives remain.
+    let palette_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| !c.context_menu)
+        .filter_map(persp_switch_id)
+        .collect();
+    assert!(
+        palette_ids.iter().any(|id| id == PERSP_Y_ID),
+        "perspective Y must still have a palette (context_menu:false) switch row; got {palette_ids:?}"
+    );
+}
+
+/// With NO `perspective:` moniker in the scope chain (e.g. a global/board/task
+/// context menu), no `perspective.switch` row is flagged `context_menu: true`.
+/// The palette rows still exist for every perspective.
+#[test]
+fn no_context_menu_perspective_switch_row_without_a_perspective_in_scope() {
+    let perspectives = vec![
+        persp_info(PERSP_X_ID, "Sprint"),
+        persp_info(PERSP_Y_ID, "Backlog"),
+    ];
+
+    let cmds = persp_switch_rows_for_scope(&perspectives, &["board:/tmp/sample/.kanban".into()]);
+
+    let ctx_menu_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| c.context_menu)
+        .filter_map(persp_switch_id)
+        .collect();
+    assert!(
+        ctx_menu_ids.is_empty(),
+        "no context-menu perspective.switch row may appear without a perspective:{{id}} in scope; got {ctx_menu_ids:?}"
+    );
+
+    // Palette rows still present for both perspectives.
+    let palette_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| !c.context_menu)
+        .filter_map(persp_switch_id)
+        .collect();
+    assert!(
+        palette_ids.iter().any(|id| id == PERSP_X_ID)
+            && palette_ids.iter().any(|id| id == PERSP_Y_ID),
+        "both perspectives must still have palette switch rows; got {palette_ids:?}"
+    );
+}

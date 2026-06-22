@@ -30,7 +30,7 @@
 //!      (e.g. `app.quit`, `app.undo`).
 //!   4. **dynamic** — runtime-generated rows such as per-view "Switch to X"
 //!      entries (emitted as the canonical `view.set` command with a
-//!      pre-filled `args.view_id`), per-perspective "Go to Perspective: X"
+//!      pre-filled `args.view_id`), per-perspective "Switch to Perspective X"
 //!      entries (emitted as `perspective.switch` with `args.perspective_id`),
 //!      plus the prefix-id rows `board.switch:{path}` and
 //!      `entity.add:{type}`.
@@ -426,15 +426,49 @@ fn emit_window_focus(
 /// there).
 const BLANK_PERSPECTIVE_NAME_PLACEHOLDER: &str = "Untitled";
 
-/// Emit one "Go to Perspective: <Name>" palette row per known perspective,
-/// each dispatching the canonical `perspective.switch` command with its
+/// Render the "Switch to Perspective «name»" caption for a perspective-switch
+/// row.
+///
+/// Mirrors [`view_switch_caption`]: the literal "Perspective" word is appended
+/// only when the perspective's name does not already contain it
+/// (case-insensitive whole-word check), so a name like `"Sprint"` reads
+/// "Switch to Perspective Sprint" while a name like `"Sprint Perspective"`
+/// reads "Switch to Sprint Perspective" rather than the doubled
+/// "Switch to Perspective Sprint Perspective". A blank/whitespace-only name
+/// renders the shared [`BLANK_PERSPECTIVE_NAME_PLACEHOLDER`] ("Untitled") so
+/// the row is never an empty "Switch to Perspective " suffix.
+fn perspective_switch_caption(perspective_name: &str) -> String {
+    let display_name = if perspective_name.trim().is_empty() {
+        BLANK_PERSPECTIVE_NAME_PLACEHOLDER
+    } else {
+        perspective_name
+    };
+    let mentions_perspective = display_name
+        .split_whitespace()
+        .any(|w| w.eq_ignore_ascii_case("perspective"));
+    if mentions_perspective {
+        format!("Switch to {display_name}")
+    } else {
+        format!("Switch to Perspective {display_name}")
+    }
+}
+
+/// Emit one "Switch to Perspective «name»" row per known perspective, each one
+/// dispatching the canonical `perspective.switch` command with its
 /// `perspective_id` pre-filled in `args`.
 ///
-/// Marked `context_menu: false` (palette-only). Shares `seen` with the other
-/// emit_* helpers so cross-emitter dedup works. Every emitted row has
-/// `id == "perspective.switch"` and `target == None`; the distinguishing
-/// information lives in `args["perspective_id"]`, which is why
-/// `push_dedup`'s [`SeenKey`] includes the args serialization.
+/// Every perspective is palette-switchable from anywhere, so every row is
+/// emitted. The row is marked `context_menu: true` for the single perspective
+/// whose `perspective:{id}` moniker is present in `scope_chain` — so
+/// right-clicking perspective X surfaces exactly "Switch to Perspective «X»"
+/// and nothing for sibling perspectives. Every other perspective's row stays
+/// `context_menu: false` (palette only). This is the exact mirror of
+/// [`emit_view_switch`]'s scope-resolved context-menu design.
+///
+/// Shares `seen` with the other emit_* helpers so cross-emitter dedup works.
+/// Every emitted row has `id == "perspective.switch"` and `target == None`;
+/// the distinguishing information lives in `args["perspective_id"]`, which is
+/// why `push_dedup`'s [`SeenKey`] includes the args serialization.
 ///
 /// The wire format change retires the legacy `perspective.goto:{id}` id in
 /// favour of the canonical `perspective.switch` command with pre-filled
@@ -445,27 +479,29 @@ const BLANK_PERSPECTIVE_NAME_PLACEHOLDER: &str = "Untitled";
 /// frontend filter fetch) into one atomic backend command.
 fn emit_perspective_goto(
     perspectives: &[PerspectiveInfo],
+    scope_chain: &[String],
     seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
 ) {
+    // The set of perspective ids whose `perspective:{id}` moniker is in the
+    // scope chain — those (typically exactly one) get a context-menu-visible
+    // switch row.
+    let in_scope: HashSet<&str> = scope_chain
+        .iter()
+        .filter_map(|m| m.strip_prefix("perspective:"))
+        .collect();
     for perspective in perspectives {
-        // Blank names render the shared placeholder so the palette row is
-        // never an empty "Go to Perspective: " suffix.
-        let display_name = if perspective.name.trim().is_empty() {
-            BLANK_PERSPECTIVE_NAME_PLACEHOLDER
-        } else {
-            perspective.name.as_str()
-        };
+        let context_menu = in_scope.contains(perspective.id.as_str());
         push_dedup(
             seen,
             result,
             ResolvedCommand {
                 id: "perspective.switch".into(),
-                name: format!("Go to Perspective: {display_name}"),
+                name: perspective_switch_caption(&perspective.name),
                 menu_name: None,
                 target: None,
                 group: "perspective".into(),
-                context_menu: false,
+                context_menu,
                 keys: None,
                 available: true,
                 args: Some(serde_json::json!({ "perspective_id": perspective.id })),
@@ -575,15 +611,18 @@ fn emit_entity_add(
 /// commands from the dynamic sources. Skips commands already in the
 /// `seen` set.
 ///
-/// Two dynamic emissions depend on the current scope chain. `entity.add:{type}`
-/// surfaces only when a `view:{id}` moniker is active and the matching view
-/// declares an `entity_type`, and is `context_menu: true` (a first-class
-/// creation action). View switching (`emit_view_switch`) emits a row for every
-/// view — `context_menu: false` for the palette — and additionally flips the
-/// in-scope view's row to `context_menu: true` so right-clicking view X
-/// surfaces exactly "Switch to View «X»". The remaining navigation dynamics
-/// (board switching, perspective switching, window focus) stay
-/// `context_menu: false` (palette only).
+/// Three dynamic emissions depend on the current scope chain.
+/// `entity.add:{type}` surfaces only when a `view:{id}` moniker is active and
+/// the matching view declares an `entity_type`, and is `context_menu: true`
+/// (a first-class creation action). View switching (`emit_view_switch`) emits
+/// a row for every view — `context_menu: false` for the palette — and
+/// additionally flips the in-scope view's row to `context_menu: true` so
+/// right-clicking view X surfaces exactly "Switch to View «X»". Perspective
+/// switching (`emit_perspective_goto`) mirrors this exactly: a row for every
+/// perspective, with the in-scope `perspective:{id}` row flipped to
+/// `context_menu: true` so right-clicking perspective X surfaces exactly
+/// "Switch to Perspective «X»". The remaining navigation dynamics (board
+/// switching, window focus) stay `context_menu: false` (palette only).
 ///
 /// The dispatch-side handler that actually creates the entity lives in
 /// `crate::entity::add::AddEntity`; `entity.add:{type}` monikers produced
@@ -603,7 +642,7 @@ fn emit_dynamic_commands(
     emit_view_switch(&dyn_src.views, scope_chain, seen, result);
     emit_board_switch(&dyn_src.boards, seen, result);
     emit_window_focus(&dyn_src.windows, seen, result);
-    emit_perspective_goto(&dyn_src.perspectives, seen, result);
+    emit_perspective_goto(&dyn_src.perspectives, scope_chain, seen, result);
     emit_entity_add(&views_by_id, scope_chain, seen, result);
 }
 
@@ -1451,7 +1490,7 @@ mod tests {
     }
 
     /// A blank-named perspective must render the "Untitled" placeholder in
-    /// its "Go to Perspective: …" palette caption — never an empty suffix.
+    /// its "Switch to Perspective …" palette caption — never an empty suffix.
     ///
     /// Mirrors the frontend tab placeholder (`BLANK_NAME_PLACEHOLDER` in
     /// `apps/kanban-app/ui/src/components/perspective-tab-bar.tsx`): the two
@@ -1470,19 +1509,92 @@ mod tests {
         ];
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        emit_perspective_goto(&perspectives, &mut seen, &mut result);
+        emit_perspective_goto(&perspectives, &[], &mut seen, &mut result);
 
         assert_eq!(
-            result[0].name, "Go to Perspective: Untitled",
+            result[0].name, "Switch to Perspective Untitled",
             "an empty perspective name must render the placeholder caption"
         );
         assert_eq!(
-            result[1].name, "Go to Perspective: Untitled",
+            result[1].name, "Switch to Perspective Untitled",
             "a whitespace-only perspective name must render the placeholder caption"
         );
         assert_eq!(
-            result[2].name, "Go to Perspective: Sprint",
+            result[2].name, "Switch to Perspective Sprint",
             "a non-blank perspective name must render verbatim"
+        );
+    }
+
+    /// Right-clicking perspective X surfaces exactly its own "Switch to
+    /// Perspective «X»" row (`context_menu: true`); sibling perspectives
+    /// stay palette-only (`context_menu: false`). With an empty scope chain
+    /// (no `perspective:{id}` in scope) every row is palette-only — mirrors
+    /// the view-switch design exactly.
+    #[test]
+    fn in_scope_perspective_gets_a_context_menu_switch_row_siblings_dont() {
+        let perspectives = vec![
+            perspective_info("01P1", "Sprint"),
+            perspective_info("01P2", "Backlog"),
+            perspective_info("01P3", "Done"),
+        ];
+
+        // Right-click on perspective 01P2: its `perspective:01P2` moniker is
+        // in the scope chain, so exactly its row is context-menu-visible.
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        emit_perspective_goto(
+            &perspectives,
+            &["perspective:01P2".to_string()],
+            &mut seen,
+            &mut result,
+        );
+
+        // Every perspective gets a "Switch to Perspective …" row dispatching
+        // `perspective.switch` with its `perspective_id` pre-filled.
+        assert_eq!(result.len(), 3, "one row per perspective");
+        for cmd in &result {
+            assert_eq!(cmd.id, "perspective.switch");
+            assert!(
+                cmd.name.starts_with("Switch to Perspective "),
+                "caption must be palette-findable under \"switch\": {:?}",
+                cmd.name
+            );
+        }
+
+        // Only the in-scope (01P2) row is context_menu: true.
+        let by_pid = |pid: &str| {
+            result
+                .iter()
+                .find(|c| {
+                    c.args
+                        .as_ref()
+                        .and_then(|a| a.get("perspective_id"))
+                        .and_then(|v| v.as_str())
+                        == Some(pid)
+                })
+                .expect("row for perspective id")
+        };
+        assert!(
+            by_pid("01P2").context_menu,
+            "the in-scope perspective's row must be context-menu-visible"
+        );
+        assert!(
+            !by_pid("01P1").context_menu,
+            "a sibling perspective's row must stay palette-only"
+        );
+        assert!(
+            !by_pid("01P3").context_menu,
+            "a sibling perspective's row must stay palette-only"
+        );
+
+        // Empty scope chain (palette context, no perspective focused): no row
+        // is context-menu-visible.
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        emit_perspective_goto(&perspectives, &[], &mut seen, &mut result);
+        assert!(
+            result.iter().all(|c| !c.context_menu),
+            "with an empty scope chain no perspective row may be context_menu: true"
         );
     }
 }

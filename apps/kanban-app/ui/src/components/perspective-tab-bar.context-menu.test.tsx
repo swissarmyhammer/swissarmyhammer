@@ -18,6 +18,15 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 import { answerListCommand } from "@/test/mock-command-list";
 
+/** Tooltip open delay (ms) passed to `TooltipProvider` in these tests. */
+const TOOLTIP_DELAY_MS = 100;
+
+/**
+ * Delay (ms) allowed for the right-click → scope-chain → `show context menu`
+ * round-trip to settle before asserting on the captured items.
+ */
+const CONTEXT_MENU_SYNC_DELAY_MS = 20;
+
 // `useContextMenu` fetches the Command registry at right-click time
 // (`list command` via `command_tool_call`); drive it through `mockRegistry`.
 let mockRegistry: Array<Record<string, unknown>> = [];
@@ -178,6 +187,26 @@ function capturedListScope(): string[] | undefined {
  * therefore ride in that bridge call's `params.items`.
  */
 function capturedItemScopes(): string[][] {
+  return capturedItems().map((i) => i.scope_chain);
+}
+
+/** One context-menu item as written into the `show context menu` op. */
+interface CapturedItem {
+  name: string;
+  cmd: string;
+  target?: string;
+  scope_chain: string[];
+  separator: boolean;
+}
+
+/**
+ * Extract every non-separator item written into the `show context menu` call.
+ *
+ * Items carry the self-contained dispatch info (`name`, `cmd`, `target`,
+ * `scope_chain`) — the regression guard reads `cmd` / `name` / `scope_chain`
+ * to prove a backend row surfaces and dispatches the right command.
+ */
+function capturedItems(): CapturedItem[] {
   const showCall = mockInvoke.mock.calls.find(
     (c) =>
       c[0] === "command_tool_call" &&
@@ -187,12 +216,10 @@ function capturedItemScopes(): string[][] {
   const items =
     (
       (showCall?.[1] as { params?: unknown } | undefined)?.params as
-        | {
-            items?: Array<{ scope_chain: string[]; separator: boolean }>;
-          }
+        | { items?: CapturedItem[] }
         | undefined
     )?.items ?? [];
-  return items.filter((i) => !i.separator).map((i) => i.scope_chain);
+  return items.filter((i) => !i.separator);
 }
 
 /**
@@ -207,7 +234,7 @@ function renderTabBarWithWindowScope() {
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
-          <TooltipProvider delayDuration={100}>
+          <TooltipProvider delayDuration={TOOLTIP_DELAY_MS}>
             <CommandScopeProvider moniker="window:main">
               <PerspectiveTabBar />
             </CommandScopeProvider>
@@ -250,7 +277,7 @@ describe("PerspectiveTabBar right-click scope chain", () => {
       // ScopedPerspectiveTab → CommandScopeProvider moniker="perspective:p2"
       // so the chain captured at right-click time should lead with `perspective:p2`.
       fireEvent.contextMenu(screen.getByText("Second"));
-      await new Promise((r) => setTimeout(r, 20));
+      await new Promise((r) => setTimeout(r, CONTEXT_MENU_SYNC_DELAY_MS));
     });
 
     const chain = capturedListScope();
@@ -291,7 +318,7 @@ describe("PerspectiveTabBar right-click scope chain", () => {
 
     await act(async () => {
       fireEvent.contextMenu(screen.getByText("First"));
-      await new Promise((r) => setTimeout(r, 20));
+      await new Promise((r) => setTimeout(r, CONTEXT_MENU_SYNC_DELAY_MS));
     });
 
     const chains = capturedItemScopes();
@@ -322,7 +349,7 @@ describe("PerspectiveTabBar right-click scope chain", () => {
 
     await act(async () => {
       fireEvent.contextMenu(screen.getByText("Second"));
-      await new Promise((r) => setTimeout(r, 20));
+      await new Promise((r) => setTimeout(r, CONTEXT_MENU_SYNC_DELAY_MS));
     });
 
     // The active perspective is p1, but we right-clicked on p2's tab.
@@ -333,6 +360,66 @@ describe("PerspectiveTabBar right-click scope chain", () => {
     expect(chain).toContain("perspective:p2");
     expect(chain).not.toContain("perspective_tab:p1");
     expect(chain).not.toContain("perspective:p1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "Switch to Perspective «name»" context-menu row
+// (card 01KV8SQR5VYH3B9GDK8QSMK7Z7).
+//
+// The backend `emit_perspective_goto` now flips the in-scope perspective's
+// `perspective.switch` row to `context_menu: true`, so right-clicking a tab
+// surfaces exactly its own "Switch to Perspective «name»" entry. This guard
+// fails before that backend fix (no perspective row was ever
+// `context_menu: true`, so the registry-driven menu dropped it). It dispatches
+// `perspective.switch`; the right-clicked perspective id rides in the item's
+// `scope_chain` (`perspective:<id>`), which the backend resolves via
+// `ResolvedFrom::Scope`.
+// ---------------------------------------------------------------------------
+
+describe("PerspectiveTabBar 'Switch to Perspective' context-menu row", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPerspectivesValue = {
+      perspectives: [
+        { id: "p1", name: "First", view: "board" },
+        { id: "p2", name: "Second", view: "board" },
+      ],
+      activePerspective: { id: "p1", name: "First", view: "board" },
+      setActivePerspectiveId: vi.fn(),
+      refresh: vi.fn(() => Promise.resolve()),
+    };
+  });
+
+  it("renders the in-scope tab's 'Switch to Perspective «name»' item dispatching perspective.switch with that perspective's moniker", async () => {
+    // Mirror the backend: the in-scope perspective's `perspective.switch` row
+    // is `context_menu: true`. Right-clicking p2's tab must surface exactly
+    // its "Switch to Perspective Second" row.
+    mockResolvedCommands([
+      {
+        id: "perspective.switch",
+        name: "Switch to Perspective Second",
+        group: "perspective",
+        context_menu: true,
+        available: true,
+      },
+    ]);
+
+    renderTabBarWithWindowScope();
+
+    await act(async () => {
+      fireEvent.contextMenu(screen.getByText("Second"));
+      await new Promise((r) => setTimeout(r, CONTEXT_MENU_SYNC_DELAY_MS));
+    });
+
+    const items = capturedItems();
+    const switchItem = items.find((i) => i.cmd === "perspective.switch");
+    expect(switchItem).toBeDefined();
+    expect(switchItem!.name).toBe("Switch to Perspective Second");
+    // The right-clicked perspective id rides in the scope chain — the backend
+    // resolves perspective_id from `perspective:p2` (ResolvedFrom::Scope).
+    expect(switchItem!.scope_chain).toContain("perspective:p2");
+    expect(switchItem!.target).toBe("perspective_tab:p2");
   });
 });
 
@@ -367,7 +454,7 @@ describe("PerspectivesContainer view-body scope", () => {
       <SpatialFocusProvider>
         <FocusLayer name={asSegment("window")}>
           <EntityFocusProvider>
-            <TooltipProvider delayDuration={100}>
+            <TooltipProvider delayDuration={TOOLTIP_DELAY_MS}>
               <CommandScopeProvider moniker="window:main">
                 <PerspectivesContainer>
                   {/* Attach a passthrough onContextMenu via the real useContextMenu
@@ -399,7 +486,7 @@ describe("PerspectivesContainer view-body scope", () => {
 
     await act(async () => {
       fireEvent.contextMenu(screen.getByTestId("view-body"));
-      await new Promise((r) => setTimeout(r, 20));
+      await new Promise((r) => setTimeout(r, CONTEXT_MENU_SYNC_DELAY_MS));
     });
 
     const chain = capturedListScope();
@@ -430,7 +517,7 @@ describe("PerspectivesContainer view-body scope", () => {
 
     await act(async () => {
       fireEvent.contextMenu(screen.getByTestId("view-body"));
-      await new Promise((r) => setTimeout(r, 20));
+      await new Promise((r) => setTimeout(r, CONTEXT_MENU_SYNC_DELAY_MS));
     });
 
     const chains = capturedItemScopes();
@@ -459,7 +546,7 @@ describe("PerspectivesContainer view-body scope", () => {
 
     await act(async () => {
       fireEvent.contextMenu(screen.getByTestId("view-body"));
-      await new Promise((r) => setTimeout(r, 20));
+      await new Promise((r) => setTimeout(r, CONTEXT_MENU_SYNC_DELAY_MS));
     });
 
     const chain = capturedListScope();
@@ -478,7 +565,11 @@ describe("PerspectivesContainer view-body scope", () => {
 
 import { useContextMenu } from "@/lib/context-menu";
 
-function ViewBodyWithContextMenu({ testId }: { testId: string }) {
+interface ViewBodyWithContextMenuProps {
+  testId: string;
+}
+
+function ViewBodyWithContextMenu({ testId }: ViewBodyWithContextMenuProps) {
   const handleContextMenu = useContextMenu();
   return (
     <div data-testid={testId} onContextMenu={handleContextMenu}>

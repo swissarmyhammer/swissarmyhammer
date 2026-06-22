@@ -118,7 +118,7 @@ export function navCommands(
     // ─── perspective.switch ─────────────────────────────────────────────────
     // YAML: visible:false; param perspective_id(args). Routes to entity
     // `switch perspective` — the canonical ACTIVATION: tab clicks, Enter on
-    // a focused tab, and the palette's "Go to Perspective: …" rows all
+    // a focused tab, and the palette's "Switch to Perspective …" rows all
     // dispatch this id.
     {
       id: "perspective.switch",
