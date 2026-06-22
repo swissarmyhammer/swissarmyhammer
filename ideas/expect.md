@@ -256,7 +256,7 @@ stack. The discount must come off the subtotal, not be a coincidence of some
 other arithmetic.
 
 ## Given
-- A cart with one $50 item
+- A freshly created cart with one $50 item (arranged per run, so `pass^3` stays independent)
 - A coupon `SAVE10` worth $10 off, currently valid
 
 ## When
@@ -302,24 +302,83 @@ Design choices in the format, each tied to a research finding:
 
 ### Operations
 
-Op-dispatched, matching the `code_context` / `review` pattern:
+Op-dispatched, and — like every sah CLI built on the shared `Operation` trait —
+the user-facing grammar is **noun-first: `expect <noun> <verb>`**. The generator
+(`swissarmyhammer-operations::cli_gen`) builds a `noun → verb → args` tree, exactly
+as kanban does — `kanban board init`, `kanban task add`, `kanban tasks list`. (The
+`verb noun` string `add task` is only the internal MCP op id; the command you type
+is noun-first.) **The noun's number follows cardinality**: singular for one
+(`expectation check`), plural for the collection or a batch (`expectations list`,
+`expectations check`).
+
+**Nouns** (four):
+
+- **expectation** — the `*.expect.md` spec (frontmatter + intent + criteria).
+- **observation** — one authoritative capture of a run: final state + trajectory +
+  artifacts (the `received`). Produced by `expectation observe`, addressed by its
+  expectation's path.
+- **golden** — an approved, scrubbed observation; the committed baseline. Produced
+  by `observation approve`.
+- **surface** — the adapter catalog (cli/http/browser/gui/file/db), read-only.
+
+The *verdict* is derived by `evaluate`, never stored, and is not a command noun.
+
+**Domain grid** — read each cell left-to-right as `<noun> <verb>`:
+
+| noun ↓ \ verb → | create | get | list | delete | observe | check | evaluate | approve |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| **expectation**  | ✓ | ✓ |   | ✓ | ✓ | ✓ |   |   |
+| **expectations** |   |   | ✓ |   | ✓ | ✓ |   |   |
+| **observation**  |   | ✓ |   | ✓ |   |   | ✓ | ✓ |
+| **observations** |   |   | ✓ |   |   |   | ✓ | ✓ |
+| **golden**       |   | ✓ |   | ✓ |   |   | ✓ |   |
+| **goldens**      |   |   | ✓ |   |   |   | ✓ |   |
+| **surface**      |   | ✓ |   |   |   |   |   |   |
+| **surfaces**     |   |   | ✓ |   |   |   |   |   |
+
+`expectation observe`/`expectation check` *produce* observations; `observation
+approve` *produces* a golden; `observation evaluate` / `golden evaluate` re-judge a
+stored observation or re-grade the baseline (no re-run). `list` is plural-always;
+`get`/`create`/`delete` are single-item; `observe`/`check`/`evaluate`/`approve`
+take singular or plural.
+
+**Trait verbs** — the two special cases. They are *not* `<noun> <verb>` ops; they
+are top-level (like kanban-cli's hand-written `doctor`), nounless, and roll up to
+the matching `sah` command:
+
+| command | trait | rolls up to |
+|---|---|---|
+| `expect init` | `Initializable` | `sah init` |
+| `expect doctor [scope]` | `Doctorable` | `sah doctor` |
+
+**Example flows** (`<noun> <verb>` throughout; `init`/`doctor` are the top-level
+exceptions):
 
 ```
-expect init               # scaffold the .expect/ tree + config; idempotent
-expect create <intent>    # a coding agent authors expectation file(s) from instructions
-expect doctor [scope]     # STATIC: are the expectation files well-formed? no execution
-expect observe [scope]    # provision the SUT, drive it, capture an authoritative observation
-expect evaluate [scope]   # pure: judge a captured observation against the criteria
-expect check [scope]      # doctor + observe + evaluate + compare-to-golden (the CI gate)
-expect list [--tag ...]   # enumerate expectations + their current ledger state
-expect status             # drift report: what changed vs golden, what's unapproved
-expect approve <scope>    # promote a received observation → golden (human gate)
-expect explain <scope>    # show the last observation's trajectory + evidence + reasoning
-```
+# set up, capture from a conversation, baseline it
+expect init                                       # trait verb, top-level
+expect expectation create --from-chat             # drafts src/checkout/coupon.expect.md (doctor'd, `new`)
+expect expectation observe src/checkout/coupon    # provision SUT, drive, capture the observation
+expect observation approve src/checkout/coupon    # promote received → golden, commit
 
-`expect init` is run once per repo; `expect create` is how expectations get
-written; `expect check` is the everyday CI gate; `expect approve` is the
-human-in-the-loop drift gate.
+# inner dev loop
+expect expectation check src/checkout/coupon      # doctor + observe + evaluate + compare → pass / fail / drift
+
+# a drift, triaged and accepted
+expect expectation check src/checkout/coupon      # → drifted
+expect observation get src/checkout/coupon        # what happened (trajectory + artifacts)
+expect observation evaluate src/checkout/coupon   # the reasoned verdict (why)
+expect observation approve src/checkout/coupon    # intended change → accept the new golden
+
+# edited a criterion — re-grade without re-running
+expect golden evaluate src/checkout/coupon        # re-judge the approved observation vs new criteria
+
+# CI gate, survey, retire
+expect expectations check                         # all specs; strict; non-zero on bad spec / unmet / drift
+expect expectations list                          # all specs + ledger state (new/approved/drifted/stale)
+expect doctor                                     # whole-suite static health (also via sah doctor)
+expect expectation delete src/checkout/coupon     # remove spec + its observation + golden
+```
 
 **`check` decomposes into three separable verbs.** `observe` produces an
 authoritative observation of the running system (and stores it as `received`);
@@ -328,7 +387,7 @@ authoritative observation of the running system (and stores it as `received`);
 the verdict against the golden. They are separate ops because each is
 independently useful: `observe` alone records a candidate baseline for `approve`;
 `evaluate` alone re-judges a stored observation against edited criteria or a
-changed `model:` *without re-running the system*. In CI, a bare `expect check`
+changed `model:` *without re-running the system*. In CI, a bare `expect expectations check`
 exits non-zero on a malformed spec *or* an unmet expectation *or* an unapproved
 drift.
 
@@ -339,7 +398,7 @@ not separate workflows: `check` is `doctor` plus execution. `doctor` exists on i
 own only because the static half is cheap enough to run constantly (on save, in
 `create`, inside `sah doctor`) without paying to drive the system.
 
-| | `expect doctor` (the static half) | `expect check` (doctor + observe + evaluate) |
+| | `expect doctor` (the static half) | `expect expectation check` (doctor + observe + evaluate + compare) |
 |---|---|---|
 | Question | Is this *spec* well-formed? | Does the *code* meet this spec? |
 | Reads | the `.expect.md` file only | the file **and** the running system |
@@ -377,8 +436,8 @@ order:
 1. **a specific expectation** — by path to one `*.expect.md` file, or by its
    repo-relative path with the extension dropped (`src/checkout/coupon`);
 2. **a folder** — every `*.expect.md` under it, recursively
-   (`expect check src/checkout/`);
-3. **a glob** — shell-style (`expect check 'src/**/*pricing*.expect.md'`,
+   (`expect expectations check src/checkout/`);
+3. **a glob** — shell-style (`expect expectations check 'src/**/*pricing*.expect.md'`,
    or by tag via `--tag pricing`).
 
 With no scope at all, `doctor`/`check` discover every `**/*.expect.md` in the repo
@@ -399,7 +458,7 @@ scaffolds it and is safe to re-run (it never overwrites an existing file):
   README.md              # what expectations are + how to write one (links the spec)
   example.expect.md      # one worked expectation, ready to copy
   expectations/          # repo-global expectations not tied to a single source dir
-  goldens/               # approved verdicts, mirroring each spec's repo-relative path
+  goldens/               # approved scrubbed observations, mirroring each spec's repo-relative path
   received/              # last run per spec (gitignored)
   .gitignore             # ignores received/, keeps goldens/
 ```
@@ -411,7 +470,7 @@ the project's surfaces (CLI binary, HTTP server, desktop app, etc. — reusing t
 `detected-projects` machinery) and writes sensible `surface` defaults into
 `config.toml` so the first `expect create` has context to work from.
 
-#### `expect create`
+#### `expect expectation create`
 
 The authoring op, and the one a coding agent drives on your behalf — because the
 most valuable expectations are captured *from intent at the moment it's
@@ -422,11 +481,11 @@ whatever intent-bearing artifact it is pointed at, drafts one or more
 the result **unapproved** for a human to confirm.
 
 ```
-expect create "a valid coupon reduces the order total by its discount, once"
-expect create --from-chat        # mine the current conversation for stated acceptance criteria
-expect create --from-task <id>   # draft from a kanban task's acceptance criteria (seed only)
-expect create --from-spec <path> # mine a design doc / PRD for "should/must/example" statements
-expect create --from-session     # turn what was just verified by hand into an expectation
+expect expectation create "a valid coupon reduces the order total by its discount, once"
+expect expectation create --from-chat        # mine the conversation for stated acceptance criteria
+expect expectation create --from-task <id>   # draft from a kanban task's acceptance criteria (seed)
+expect expectation create --from-spec <path> # mine a design doc / PRD for should/must/example
+expect expectation create --from-session     # turn a hand-verified run into an expectation
 ```
 
 Sources, all feeding one draft → doctor → confirm pipeline:
@@ -599,7 +658,7 @@ agent edit:
 pub struct Observation {
     pub path: String,               // repo-relative path of the spec — its identity
     pub final_state: FinalState,    // authoritative SUT state read by the adapter (ground truth)
-    pub trajectory: Trajectory,     // what the driver did, for `explain` — never the verdict source
+    pub trajectory: Trajectory,     // what the driver did, for `get observation` — never the verdict source
     pub artifacts: Vec<Artifact>,   // stdout / a11y tree / db rows / http response, scrubbed
 }
 
@@ -653,9 +712,10 @@ tests), adapted for non-determinism.
   missing-snapshot-fails) — you can never mint a green baseline in CI. The golden
   is created locally by `observe` + `approve` and committed in a reviewable diff.
 - **`approve` is a human gate over a diff, granular like `--update-snapshots`.**
-  `expect approve <scope>` promotes the last received observation to golden, with
-  `--missing` (only brand-new), `--changed` (only drifted), or `--all` (bulk).
-  `expect status` shows the pending old-vs-new diffs first; not approving = the
+  `expect observation approve <scope>` promotes the last received observation to
+  golden, with `--missing` (only brand-new), `--changed` (only drifted), or
+  `--all` (bulk). `expect expectations list` surfaces the pending old-vs-new diffs
+  first; not approving = the
   drift stays red until the code is fixed (Chromatic's reject). And **`CI=true`
   never auto-approves** — an unapproved drift is always a hard failure, never a
   silent write (the anti-`jest -u` invariant).
@@ -754,7 +814,10 @@ Three hardening rules from the research are non-negotiable:
    biggest defense against reward-hacking: an agent that can't see the rubric
    can't optimize to it. (METR measured o3 reward-hacking 30% of RE-Bench runs;
    "don't reward hack" in the prompt only moved it 80%→70% — withholding works,
-   prompting doesn't.)
+   prompting doesn't.) The body's stated intent is the driver's goal, but
+   `Notes`/right-reason text and the `Then` checklist are themselves criteria —
+   withheld from the driver and routed to the grader at prompt-assembly (Open
+   Question 8 tracks how cleanly that split holds).
 2. **The verdict is deterministic and lives in `expect`, never in the agent.** We
    delegate *exploration*, not the pass/fail call. The agent's self-declared
    "done" is re-validated, never trusted — Skyvern's independent `check-user-goal`
@@ -976,9 +1039,9 @@ stronger one grades, or vice versa.
 ### Phase 3 — The ledger and the human gate
 8. Golden = approved scrubbed **observation**; per-criterion compare by tier;
    scrubbers.
-9. `expect approve` (granular `--missing`/`--changed`/`--all`, human-gated) +
-   `expect status`; **strict first-run** (no golden ⇒ CI fails); never
-   auto-approve in CI.
+9. `expect observation approve` (granular `--missing`/`--changed`/`--all`,
+   human-gated); **strict first-run** (no golden ⇒ CI fails); never auto-approve
+   in CI.
 10. Drift detection: `evaluate(received)` vs `evaluate(golden)`, queue unapproved
     drift.
 
@@ -1013,7 +1076,7 @@ stronger one grades, or vice versa.
    scrubbed observation — trivial for cli/http/db, but large and noisy for
    browser/gui (a whole a11y tree). What gets committed vs. gitignored — the
    criterion-relevant slice + a digest in the golden, raw trajectory kept only
-   locally for `expect explain`? Scrubbing must be aggressive enough that the
+   locally for `expect observation get`? Scrubbing must be aggressive enough that the
    golden is stable yet still re-evaluable against new criteria.
 2. **Single expectation file vs. directory of small ones.** Following the project
    convention (one fact per memory, small rules), lean toward one expectation per
