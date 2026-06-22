@@ -20,14 +20,15 @@ use crate::clipboard::{ClipboardData, ClipboardPayload};
 /// ## Source variants
 ///
 /// - **Focus-chain (default)**: a task being dragged off a card. Required
-///   args: `taskId`. Optional args: `sourceWindowLabel` (defaults to
-///   "main"), `taskFields`, `copyMode`. The source board path is derived
-///   from the scope chain's `store:{path}` moniker — no explicit
-///   `boardPath` arg is needed.
+///   args: `taskId`. Optional args: `taskFields`, `copyMode`. The source
+///   board path is derived from the scope chain's `store:{path}` moniker —
+///   no explicit `boardPath` arg is needed. The source window is resolved
+///   from the scope chain's `window:<label>` moniker (no silent "main"
+///   fallback).
 /// - **External file** (`sourceKind = "file"`): an OS file dragged in
-///   from the desktop. Required args: `filePath`. Optional args:
-///   `sourceWindowLabel`, `copyMode`. No board path or task id is read —
-///   the drop is dispatched at `drag.complete` time via the
+///   from the desktop. Required args: `filePath`. Optional args: `copyMode`.
+///   No board path or task id is read — the drop is dispatched at
+///   `drag.complete` time via the
 ///   [`crate::commands::paste_handlers::PasteMatrix`].
 pub struct DragStartCmd;
 
@@ -314,17 +315,18 @@ fn read_file_fields(ctx: &CommandContext) -> crate::commands_core::Result<Source
 /// - `focus_chain` (default): `taskId` + a resolvable source board path
 ///   (either `boardPath` arg or a `store:` moniker in the scope chain).
 /// - `file`: `filePath`. No board path or task id required.
+///
+/// Both variants require a `window:<label>` moniker in the scope chain to
+/// resolve the source window — there is no silent "main" fallback.
 fn resolve_drag_start_params(
     ctx: &CommandContext,
 ) -> crate::commands_core::Result<DragStartParams> {
     let kind = read_source_kind(ctx)?;
 
-    let source_window_label = ctx
-        .args
-        .get("sourceWindowLabel")
-        .and_then(|v| v.as_str())
-        .unwrap_or("main")
-        .to_string();
+    // Per-window op: resolve the source window from the scope chain. There is
+    // no silent "main" fallback — a missing `window:<label>` moniker fails
+    // loudly (mirrors `CloseBoardCmd`/`SwitchBoardCmd` in `file_commands.rs`).
+    let source_window_label = ctx.window_label_required()?.to_string();
 
     let copy_mode = ctx
         .args
@@ -810,6 +812,7 @@ impl Command for DragCancelCmd {
 mod tests {
     use super::*;
     use crate::commands_core::CommandContext;
+    use crate::test_support::default_window_moniker;
     use std::collections::HashMap;
     use std::sync::Arc;
     use swissarmyhammer_operations::Execute;
@@ -830,7 +833,17 @@ mod tests {
     }
 
     fn ctx_with_args_and_ui(args: HashMap<String, Value>, ui: Arc<UIState>) -> CommandContext {
-        let mut ctx = CommandContext::new("test", vec![], None, args);
+        ctx_with_args_scope_ui(args, vec![default_window_moniker()], ui)
+    }
+
+    /// Like [`ctx_with_args_and_ui`] but with an explicit scope chain, for
+    /// tests that exercise a non-default `window:<label>` moniker.
+    fn ctx_with_args_scope_ui(
+        args: HashMap<String, Value>,
+        scope: Vec<String>,
+        ui: Arc<UIState>,
+    ) -> CommandContext {
+        let mut ctx = CommandContext::new("test", scope, None, args);
         ctx.ui_state = Some(ui);
         ctx
     }
@@ -936,8 +949,8 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("boardPath".into(), json!("/boards/a"));
         args.insert("taskId".into(), json!("task-1"));
-        args.insert("sourceWindowLabel".into(), json!("secondary"));
-        let ctx = ctx_with_args_and_ui(args, ui.clone());
+        // The source window is resolved from the scope chain, not an arg.
+        let ctx = ctx_with_args_scope_ui(args, vec!["window:secondary".into()], ui.clone());
 
         let result = cmd.execute(&ctx).await.unwrap();
         let ds = result.get("DragStart").unwrap();
@@ -945,6 +958,23 @@ mod tests {
 
         let session = ui.drag_session().unwrap();
         assert_eq!(session.source_window_label(), Some("secondary"));
+    }
+
+    #[tokio::test]
+    async fn drag_start_without_window_moniker_fails_closed() {
+        let cmd = DragStartCmd;
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("boardPath".into(), json!("/boards/a"));
+        args.insert("taskId".into(), json!("task-1"));
+        // No `window:` moniker in the scope chain — must fail loudly rather
+        // than silently defaulting to "main".
+        let ctx = ctx_with_args_scope_ui(args, vec![], ui);
+        let result = cmd.execute(&ctx).await;
+        assert!(
+            result.is_err(),
+            "drag.start with no window: moniker should fail closed"
+        );
     }
 
     #[tokio::test]
@@ -1480,13 +1510,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drag_start_default_source_window_label_is_main() {
+    async fn drag_start_resolves_source_window_label_from_scope() {
         let cmd = DragStartCmd;
         let ui = Arc::new(UIState::new());
         let mut args = HashMap::new();
         args.insert("boardPath".into(), json!("/boards/a"));
         args.insert("taskId".into(), json!("task-1"));
-        // sourceWindowLabel not provided — should default to "main"
+        // The helper injects a `window:main` moniker into the scope chain;
+        // the source window label is resolved from it (no arg, no fallback).
         let ctx = ctx_with_args_and_ui(args, ui.clone());
 
         let result = cmd.execute(&ctx).await.unwrap();

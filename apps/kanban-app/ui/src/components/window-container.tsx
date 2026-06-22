@@ -404,9 +404,10 @@ async function applyRestoredWindowState(
  * plane on for the webview.
  *
  * Idempotent backend-side: a window already bound to its current board is a
- * no-op, and a board switch re-binds the forwarder server-side, so this only
- * needs to run on mount. Failures are logged and swallowed — a transport hiccup
- * must not crash the window shell.
+ * no-op (binding is keyed per `(label, board)`), so running this on mount is
+ * sufficient for a window that displays a single board for its lifetime.
+ * Failures are logged and swallowed — a transport hiccup must not crash the
+ * window shell.
  */
 function useMcpSubscribeBootstrap(): void {
   useEffect(() => {

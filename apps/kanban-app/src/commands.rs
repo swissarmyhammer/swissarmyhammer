@@ -1586,12 +1586,10 @@ async fn apply_post_command_side_effects(
     active_handle: Option<&Arc<BoardHandle>>,
     result: &Value,
 ) {
-    handle_board_switch_result(app, state, effective_cmd, result).await;
-    handle_board_close_result(app, state, effective_cmd, result).await;
     handle_ui_trigger_results(app, state, result).await;
     handle_drag_events(app, state, active_handle, result).await;
     emit_ui_state_change_if_needed(app, state, result);
-    maybe_rebuild_menu_after_cmd(app, effective_cmd, result).await;
+    maybe_rebuild_menu_after_cmd(app, effective_cmd).await;
     flush_and_sync_after_command(app, state, effective_cmd, undoable, active_handle).await;
 }
 
@@ -1654,136 +1652,6 @@ async fn build_dispatch_context(
     ctx.set_extension(Arc::new(clipboard_ext));
 
     (ctx, active_handle)
-}
-
-/// Apply the `BoardSwitch` side-effect: open the target board, persist the
-/// window→board mapping, refresh the window title, and emit `board-changed`.
-///
-/// Only the Tauri layer can manage `BoardHandle`s, so although `file.switchBoard`
-/// already updated `UIState`, we still need to run this side-effect here.
-async fn handle_board_switch_result(
-    app: &AppHandle,
-    state: &AppState,
-    effective_cmd: &str,
-    result: &Value,
-) {
-    let Some(board_switch) = result.get("BoardSwitch") else {
-        return;
-    };
-    let Some(path_str) = board_switch.get("path").and_then(|v| v.as_str()) else {
-        return;
-    };
-    let board_path = std::path::PathBuf::from(path_str);
-    let label = board_switch
-        .get("window_label")
-        .and_then(|v| v.as_str())
-        .unwrap_or("main");
-
-    match state.open_board(&board_path, Some(app.clone())).await {
-        Ok(canonical) => {
-            state
-                .ui_state
-                .set_window_board(label, &canonical.display().to_string());
-            // The window was switched IN PLACE (reused, not recreated), so its
-            // notification forwarder is still bound to the OLD board's bridge.
-            // Proactively re-bind it to the new board's bridge — don't rely on
-            // the frontend re-invoking `mcp_subscribe`.
-            rebind_window_forwarder(app, state, label).await;
-            let boards = state.boards.read().await;
-            if let Some(handle) = boards.get(&canonical) {
-                let name = swissarmyhammer_kanban::board_display_name(&handle.ctx).await;
-                update_window_title(app, label, name.as_deref());
-            }
-        }
-        Err(e) => {
-            tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardSwitch: failed to open board");
-        }
-    }
-    let _ = app.emit("board-changed", ());
-}
-
-/// Apply the `BoardClose` side-effect: drop the board handle (if this window
-/// was the last viewer), close the requesting window, and emit
-/// `board-changed`. Keeps the window open when it's the only visible window,
-/// so the user is never left staring at a closed app.
-async fn handle_board_close_result(
-    app: &AppHandle,
-    state: &AppState,
-    effective_cmd: &str,
-    result: &Value,
-) {
-    let Some(board_close) = result.get("BoardClose") else {
-        return;
-    };
-    let Some(path_str) = board_close.get("path").and_then(|v| v.as_str()) else {
-        return;
-    };
-    let requesting_label = board_close
-        .get("window_label")
-        .and_then(|v| v.as_str())
-        .unwrap_or("main")
-        .to_string();
-
-    drop_or_detach_board(app, state, effective_cmd, path_str, &requesting_label).await;
-    close_or_retitle_window(app, &requesting_label);
-    let _ = app.emit("board-changed", ());
-}
-
-/// Drop the board handle when this is the last window showing it; otherwise
-/// just clear the requesting window's assignment so other windows keep
-/// running.
-async fn drop_or_detach_board(
-    app: &AppHandle,
-    state: &AppState,
-    effective_cmd: &str,
-    path_str: &str,
-    requesting_label: &str,
-) {
-    let windows_showing: Vec<String> = state
-        .ui_state
-        .all_window_boards()
-        .into_iter()
-        .filter(|(_, bp)| bp == path_str)
-        .map(|(label, _)| label)
-        .collect();
-
-    if windows_showing.len() <= 1 {
-        let target = std::path::PathBuf::from(path_str);
-        if let Err(e) = state.close_board(&target).await {
-            tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardClose: failed to close board");
-        }
-        state.ui_state.remove_open_board(path_str);
-        // The requesting window stays open only when it is the last visible
-        // window (see `close_or_retitle_window`); in that case it is now
-        // boardless, so move its forwarder onto the global bridge. When the
-        // window is actually closed, the close handler unbinds it instead, and
-        // this re-bind is a cheap no-op (no forwarder to move).
-        rebind_window_forwarder(app, state, requesting_label).await;
-    } else {
-        state.ui_state.set_window_board(requesting_label, "");
-        // Other windows keep the board open; this window detached from it, so
-        // re-bind its forwarder onto the global (boardless) bridge.
-        rebind_window_forwarder(app, state, requesting_label).await;
-    }
-}
-
-/// Close the requesting window unless it's the last visible window — in
-/// which case keep it open with a cleared title so the user is not left
-/// staring at a closed app.
-fn close_or_retitle_window(app: &AppHandle, requesting_label: &str) {
-    let visible_windows: Vec<_> = app
-        .webview_windows()
-        .into_iter()
-        .filter(|(label, w)| label != "quick-capture" && w.is_visible().unwrap_or(false))
-        .collect();
-
-    if visible_windows.len() > 1 {
-        if let Some(win) = app.get_webview_window(requesting_label) {
-            let _ = win.close();
-        }
-    } else {
-        update_window_title(app, requesting_label, None);
-    }
 }
 
 /// Apply UI-triggering command results: file dialogs, new-window creation,
@@ -2055,17 +1923,13 @@ fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Va
 ///   `keymap_mode`, `inspector_stack`, `active_view`,
 ///   `active_perspective`, `app_mode`, `inspector_width`,
 ///   `perspective_switch`).
-/// - `board_switch` / `board_close` for the two board result shapes,
-///   which are not typed as `UIStateChange` but still mutate what the
-///   `UIStateProvider` renders.
 fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
     // Commands dispatched through the CommandService / builtin plugins return
     // a `CallToolResult`-shaped value: `{ content, structuredContent: { ok,
     // change } }`, where the typed `UIStateChange` lives at
     // `structuredContent.change` (and is `null` when the command made no
     // UI-state change). Some paths return the bare `{ ok, change }` envelope,
-    // and the legacy Rust-impl / test paths return the bare `UIStateChange`
-    // (or a `BoardSwitch` / `BoardClose` side-effect shape) directly. Unwrap in
+    // and the test paths return the bare `UIStateChange` directly. Unwrap in
     // that order — `structuredContent.change` → `change` → the raw result.
     //
     // Looking only at the top-level `change` (the previous behavior) missed the
@@ -2100,24 +1964,14 @@ fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
             }
         });
     }
-    if result.get("BoardSwitch").is_some() {
-        return Some("board_switch");
-    }
-    if result.get("BoardClose").is_some() {
-        return Some("board_close");
-    }
     None
 }
 
 /// Rebuild the native menu after commands whose effects change what items
-/// are enabled or their accelerator mappings: keymap mode changes, focus
-/// changes, and board switch/close.
-async fn maybe_rebuild_menu_after_cmd(app: &AppHandle, effective_cmd: &str, result: &Value) {
-    if effective_cmd.starts_with("settings.keymap.")
-        || effective_cmd == "app.setFocus"
-        || result.get("BoardSwitch").is_some()
-        || result.get("BoardClose").is_some()
-    {
+/// are enabled or their accelerator mappings: keymap mode changes and focus
+/// changes.
+async fn maybe_rebuild_menu_after_cmd(app: &AppHandle, effective_cmd: &str) {
+    if effective_cmd.starts_with("settings.keymap.") || effective_cmd == "app.setFocus" {
         menu::rebuild_menu_async(app).await;
     }
 }
@@ -2634,10 +2488,10 @@ fn unwrap_tool_result(value: Value) -> Value {
 /// into another board's windows. Boardless windows (and boards without a
 /// per-board platform) fall back to the global host's bridge.
 ///
-/// Because the backend proactively re-binds on board switch (see
-/// [`rebind_window_forwarder`]), the frontend does NOT need to re-invoke this on
-/// a switch — but if it does, the per-`(label, board)` idempotency makes the
-/// extra call a harmless no-op rather than a second, duplicate forwarder.
+/// Binding is frontend-driven: the window invokes this on mount via
+/// `mcp_subscribe`. The per-`(label, board)` idempotency makes a repeat call a
+/// harmless no-op rather than a second, duplicate forwarder, and a call after
+/// the window's board changed re-binds it onto the new board's bridge.
 ///
 /// The event name is the MCP notification `method` verbatim
 /// (e.g. `"notifications/store/changed"`, `"notifications/commands/changed"`),
@@ -2745,23 +2599,6 @@ async fn bind_window_forwarder(app: &AppHandle, state: &AppState, label: &str) {
         },
     ) {
         prev.task.abort();
-    }
-}
-
-/// Re-bind `label`'s notification forwarder after its board assignment changed.
-///
-/// Called from the board switch / close side-effects so a window that switched
-/// boards IN PLACE (the window is reused, not recreated) is moved onto the new
-/// board's bridge proactively — without waiting on the frontend to re-subscribe.
-/// A no-op when the window has no forwarder yet (it will bind on its next
-/// `mcp_subscribe`).
-pub(crate) async fn rebind_window_forwarder(app: &AppHandle, state: &AppState, label: &str) {
-    let has_forwarder = {
-        let forwarders = WINDOW_FORWARDERS.lock().unwrap_or_else(|e| e.into_inner());
-        forwarders.contains_key(label)
-    };
-    if has_forwarder {
-        bind_window_forwarder(app, state, label).await;
     }
 }
 
@@ -3271,30 +3108,6 @@ mod tests {
         })
         .unwrap();
         assert_eq!(ui_state_change_kind(&value), Some("perspective_switch"));
-    }
-
-    #[test]
-    fn ui_state_change_kind_board_switch() {
-        // BoardSwitch is not typed as a UIStateChange — it's a side-effect
-        // result shape. Detected by the presence of the `BoardSwitch` key.
-        let value = serde_json::json!({
-            "BoardSwitch": {
-                "path": "/boards/my-board",
-                "window_label": "main",
-            }
-        });
-        assert_eq!(ui_state_change_kind(&value), Some("board_switch"));
-    }
-
-    #[test]
-    fn ui_state_change_kind_board_close() {
-        // Same shape as BoardSwitch — detected by the `BoardClose` key.
-        let value = serde_json::json!({
-            "BoardClose": {
-                "path": "/boards/my-board",
-            }
-        });
-        assert_eq!(ui_state_change_kind(&value), Some("board_close"));
     }
 
     #[test]

@@ -13,7 +13,8 @@ use serde_json::{json, Value};
 ///
 /// Updates UIState: sets the per-window board assignment via `windows[label].board_path`.
 /// Required arg: `path` (canonical path to the .kanban directory).
-/// Optional arg: `window_label` (defaults to "main").
+/// The window is resolved from the scope chain's `window:<label>` moniker
+/// (via `window_label_required()`); there is no silent "main" fallback.
 ///
 /// The Tauri dispatch_command handler also opens the BoardHandle as a side
 /// effect when this command returns a `BoardSwitch` result.
@@ -37,12 +38,10 @@ impl Command for SwitchBoardCmd {
             .and_then(|v| v.as_str())
             .ok_or_else(|| CommandError::MissingArg("path".into()))?;
 
-        let window_label = ctx
-            .args
-            .get("windowLabel")
-            .or_else(|| ctx.args.get("window_label"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("main");
+        // Per-window op: resolve the window from the scope chain. There is no
+        // silent "main" fallback — a missing `window:<label>` moniker fails
+        // loudly (mirrors `CloseBoardCmd::execute`).
+        let window_label = ctx.window_label_required()?;
 
         // Update per-window board assignment (stored in windows[label].board_path).
         ui.set_window_board(window_label, path);
@@ -131,7 +130,7 @@ impl Command for CloseBoardCmd {
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
         // `path` can be explicitly provided, or resolved from the window's board_path.
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let raw_path = ctx
             .args
             .get("path")
@@ -249,7 +248,8 @@ mod tests {
         let ui = Arc::new(UIState::new());
         let mut args = HashMap::new();
         args.insert("path".into(), json!("/tmp/myboard/.kanban"));
-        let ctx = make_ctx(Arc::clone(&ui), vec![], args);
+        // Per-window op: the scope chain must carry a `window:` moniker.
+        let ctx = make_ctx(Arc::clone(&ui), vec!["window:main".into()], args);
 
         let result = SwitchBoardCmd.execute(&ctx).await.unwrap();
 
@@ -258,17 +258,16 @@ mod tests {
         assert_eq!(
             switch["window_label"].as_str(),
             Some("main"),
-            "defaults to 'main' window label"
+            "window label resolved from the scope chain"
         );
     }
 
     #[tokio::test]
-    async fn switch_board_cmd_uses_explicit_window_label() {
+    async fn switch_board_cmd_uses_scope_window_label() {
         let ui = Arc::new(UIState::new());
         let mut args = HashMap::new();
         args.insert("path".into(), json!("/tmp/board/.kanban"));
-        args.insert("windowLabel".into(), json!("secondary"));
-        let ctx = make_ctx(Arc::clone(&ui), vec![], args);
+        let ctx = make_ctx(Arc::clone(&ui), vec!["window:secondary".into()], args);
 
         let result = SwitchBoardCmd.execute(&ctx).await.unwrap();
         assert_eq!(
@@ -278,9 +277,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn switch_board_cmd_missing_window_label_returns_error() {
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("path".into(), json!("/tmp/board/.kanban"));
+        // No `window:` moniker in the scope chain — must fail loudly rather
+        // than silently defaulting to "main".
+        let ctx = make_ctx(Arc::clone(&ui), vec![], args);
+        let result = SwitchBoardCmd.execute(&ctx).await;
+        assert!(
+            result.is_err(),
+            "SwitchBoardCmd with no window: moniker should fail closed"
+        );
+    }
+
+    #[tokio::test]
     async fn switch_board_cmd_missing_path_returns_error() {
         let ui = Arc::new(UIState::new());
-        let ctx = make_ctx(Arc::clone(&ui), vec![], HashMap::new());
+        let ctx = make_ctx(Arc::clone(&ui), vec!["window:main".into()], HashMap::new());
         let result = SwitchBoardCmd.execute(&ctx).await;
         assert!(result.is_err(), "SwitchBoardCmd with no path should fail");
     }
@@ -303,7 +317,7 @@ mod tests {
         let path = "/tmp/recent/.kanban";
         let mut args = HashMap::new();
         args.insert("path".into(), json!(path));
-        let ctx = make_ctx(Arc::clone(&ui), vec![], args);
+        let ctx = make_ctx(Arc::clone(&ui), vec!["window:main".into()], args);
 
         SwitchBoardCmd.execute(&ctx).await.unwrap();
 
@@ -337,7 +351,7 @@ mod tests {
         // Drive SwitchBoardCmd to a different board.
         let mut args = HashMap::new();
         args.insert("path".into(), json!("/boards/new/.kanban"));
-        let ctx = make_ctx(Arc::clone(&ui), vec![], args);
+        let ctx = make_ctx(Arc::clone(&ui), vec!["window:main".into()], args);
         SwitchBoardCmd.execute(&ctx).await.unwrap();
 
         // Board path moved forward.
@@ -371,10 +385,9 @@ mod tests {
     }
 
     /// Re-issuing the same path through `SwitchBoardCmd` (idempotent call)
-    /// must not clobber the window's perspective state. This guards the
-    /// Tauri adapter's `handle_board_switch_result` path, which re-writes
-    /// the canonical path after the command already wrote it — that
-    /// second write must be a no-op for perspective state so the
+    /// must not clobber the window's perspective state — a switch flow can
+    /// re-write the canonical path after the command already wrote it, and
+    /// that second write must be a no-op for perspective state so the
     /// auto-select repair path is never raced.
     #[tokio::test]
     async fn switch_board_cmd_same_path_preserves_perspective_state() {
@@ -385,7 +398,7 @@ mod tests {
 
         let mut args = HashMap::new();
         args.insert("path".into(), json!(path));
-        let ctx = make_ctx(Arc::clone(&ui), vec![], args);
+        let ctx = make_ctx(Arc::clone(&ui), vec!["window:main".into()], args);
         SwitchBoardCmd.execute(&ctx).await.unwrap();
 
         assert_eq!(
@@ -412,7 +425,9 @@ mod tests {
 
         let mut args = HashMap::new();
         args.insert("path".into(), json!(path));
-        let ctx = make_ctx(Arc::clone(&ui), vec![], args);
+        // Per-window op: the scope chain must carry a `window:` moniker —
+        // there is no silent "main" fallback.
+        let ctx = make_ctx(Arc::clone(&ui), vec!["window:main".into()], args);
 
         let result = CloseBoardCmd.execute(&ctx).await.unwrap();
         assert!(result["BoardClose"]["path"].as_str().is_some());

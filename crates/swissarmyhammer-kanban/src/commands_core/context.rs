@@ -74,6 +74,26 @@ impl CommandContext {
             .find_map(|m| m.strip_prefix("window:"))
     }
 
+    /// Resolve the window label from the scope chain, erroring when absent.
+    ///
+    /// Per-window operations (perspective activation, inspector stack, active
+    /// view, etc.) write state keyed by window label; resolving an *absent*
+    /// label to a hardcoded `"main"` silently bleeds one window's state into
+    /// another and — because windows are created dynamically with no
+    /// guaranteed `"main"` window — can target a window that never existed.
+    /// Callers that mutate per-window state MUST use this instead of a silent
+    /// `window_label_from_scope().unwrap_or("main")` so a missing
+    /// `window:<label>` moniker fails loudly rather than corrupting state.
+    pub fn window_label_required(&self) -> Result<&str> {
+        self.window_label_from_scope().ok_or_else(|| {
+            CommandError::MissingScope(format!(
+                "window: (per-window operation requires a `window:<label>` moniker \
+                 in the scope chain; no silent \"main\" fallback), got {:?}",
+                self.scope_chain
+            ))
+        })
+    }
+
     /// Insert a typed extension service into the context.
     ///
     /// Extensions are keyed by `TypeId`, so each concrete type can have at
@@ -419,6 +439,26 @@ mod tests {
     fn window_label_from_scope_empty_chain() {
         let ctx = test_ctx(&[]);
         assert_eq!(ctx.window_label_from_scope(), None);
+    }
+
+    // --- window_label_required tests ---
+
+    #[test]
+    fn window_label_required_returns_label_when_present() {
+        let ctx = test_ctx(&["task:abc", "window:secondary-2"]);
+        assert_eq!(ctx.window_label_required().unwrap(), "secondary-2");
+    }
+
+    #[test]
+    fn window_label_required_errors_when_missing() {
+        let ctx = test_ctx(&["task:abc", "column:todo"]);
+        let err = ctx
+            .window_label_required()
+            .expect_err("missing window: moniker must error, not fall back to \"main\"");
+        assert!(
+            matches!(err, CommandError::MissingScope(_)),
+            "expected MissingScope, got {err:?}",
+        );
     }
 
     // --- resolve_store_path tests ---

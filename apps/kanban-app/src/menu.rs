@@ -813,33 +813,95 @@ fn focused_window_label(app: &AppHandle) -> Option<String> {
         .map(|w| w.label().to_string())
 }
 
+/// Pure resolution rule for the window a board-open should target.
+///
+/// Windows are created dynamically (there is no static `"main"` window in
+/// `main.rs`), so a board-open must never assume a literal `"main"` window
+/// exists. Given the candidate labels already read from the app:
+/// 1. `source` when it is still an open window (`source_is_open`) — the window
+///    that initiated the open, captured before the native dialog stole focus.
+/// 2. Otherwise the currently-`focused` window.
+/// 3. Otherwise `any_open` window.
+/// 4. Otherwise `None`, so the caller surfaces a clear error rather than
+///    dispatching against a phantom window.
+///
+/// Split from the `AppHandle`-reading [`resolve_target_window`] so the rule is
+/// unit-testable without a live Tauri runtime.
+fn pick_target_window(
+    source: Option<&str>,
+    source_is_open: bool,
+    focused: Option<&str>,
+    any_open: Option<&str>,
+) -> Option<String> {
+    source
+        .filter(|_| source_is_open)
+        .or(focused)
+        .or(any_open)
+        .map(str::to_string)
+}
+
+/// Resolve a real, currently-open window to target a board-open at.
+///
+/// Prefers the `source` window (the one that initiated the open, captured
+/// before the native dialog stole focus) when it is still open. Otherwise
+/// falls back to whichever window is focused now, and finally to any open
+/// window. Returns `None` only when no window is open at all.
+///
+/// Windows are created dynamically (there is no static `"main"` window in
+/// `main.rs`), so the previous `unwrap_or("main")` could target a window
+/// that never existed. This resolves an actual live window instead.
+fn resolve_target_window(app: &AppHandle, source: Option<&str>) -> Option<String> {
+    let source_is_open = source.is_some_and(|label| app.get_webview_window(label).is_some());
+    let focused = focused_window_label(app);
+    let any_open = app.webview_windows().keys().next().cloned();
+    pick_target_window(
+        source,
+        source_is_open,
+        focused.as_deref(),
+        any_open.as_deref(),
+    )
+}
+
 /// Open a board and emit frontend events.
 ///
 /// Routes board opening through `dispatch_command_internal` so that all
 /// UIState tracking and BoardHandle lifecycle are handled consistently.
 ///
-/// Emits `board-opened` to the source window (the one that initiated
-/// the open) so only that window switches. The `board-changed` broadcast
-/// is handled by `dispatch_command_internal` via the `BoardSwitch` side effect.
+/// Emits `board-opened` to the resolved target window (the one that
+/// initiated the open, when it is still open) so only that window switches.
 async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: Option<&str>) {
     use serde_json::json;
     use tauri::Emitter;
 
     let state = handle.state::<AppState>();
     let path_str = path.display().to_string();
-    let window_label = source_window_label.unwrap_or("main").to_string();
+
+    // Resolve a REAL open window to target. Windows are created dynamically,
+    // so there is no guaranteed `"main"` window to fall back to — assuming one
+    // exists could target a nonexistent window. When no window is open at all,
+    // dispatch without a window moniker (the live `file.switchBoard` path
+    // derives board identity from `path`) and broadcast the result globally.
+    let target_window = resolve_target_window(handle, source_window_label);
 
     // Build a synthetic scope chain with the window moniker so the backend
-    // can derive window identity from the scope chain alone.
-    let synthetic_scope = vec![format!("window:{}", window_label)];
+    // can derive window identity from the scope chain alone — only when a real
+    // window exists to name.
+    let synthetic_scope = target_window
+        .as_ref()
+        .map(|label| vec![format!("window:{}", label)]);
+
+    let mut args = json!({ "path": path_str });
+    if let Some(ref label) = target_window {
+        args["windowLabel"] = json!(label);
+    }
 
     match crate::commands::dispatch_command_internal(
         handle,
         &state,
         "file.switchBoard",
-        Some(synthetic_scope),
+        synthetic_scope,
         None,
-        Some(json!({ "path": path_str, "windowLabel": window_label })),
+        Some(args),
         None,
     )
     .await
@@ -852,14 +914,14 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
                 .and_then(|p| p.canonicalize().ok().or(Some(p)))
                 .unwrap_or_else(|| path.to_path_buf());
 
-            // Emit board-opened so the originating window switches its active board.
-            // Use emit_to when we know which window triggered the open; fall back
+            // Emit board-opened so the originating window switches its active
+            // board. Use emit_to when a real target window resolved; fall back
             // to a global emit so the event always reaches at least one listener
-            // (focused_window_label can return None when OS focus shifts during
-            // native dialogs or menu interactions).
+            // (no window resolvable when OS focus shifts during native dialogs,
+            // or when no window is open).
             let payload = json!({ "path": canonical.display().to_string() });
-            if let Some(label) = source_window_label {
-                let _ = handle.emit_to(label, "board-opened", &payload);
+            if let Some(ref label) = target_window {
+                let _ = handle.emit_to(label.as_str(), "board-opened", &payload);
             } else {
                 let _ = handle.emit("board-opened", &payload);
             }
@@ -872,7 +934,9 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_menu_entries, is_valid_accelerator_key, resolve_accelerator};
+    use super::{
+        collect_menu_entries, is_valid_accelerator_key, pick_target_window, resolve_accelerator,
+    };
     use crate::command_services::build_registry_from_metadata;
     use crate::state::AppState;
     use swissarmyhammer_kanban::commands_core::{CommandDef, CommandsRegistry, KeysDef};
@@ -1315,5 +1379,50 @@ mod tests {
             Some("Home"),
             "nav.first under vim mode must fall back to its cua binding (Home)",
         );
+    }
+
+    /// `open_and_notify` must never assume a literal `"main"` window exists
+    /// when no window initiated the open (`focused_window_label` returns None
+    /// during native dialogs, and windows are created dynamically with no
+    /// static `main` window). These tests pin the pure resolution rule
+    /// `pick_target_window` that drives that behaviour.
+
+    /// The still-open `source` window is preferred over the focused / any-open
+    /// fallbacks — it is the authoritative originator of the open.
+    #[test]
+    fn pick_target_window_prefers_open_source() {
+        assert_eq!(
+            pick_target_window(Some("secondary-1"), true, Some("other"), Some("first")),
+            Some("secondary-1".to_string()),
+        );
+    }
+
+    /// When the `source` window is no longer open, the resolver skips it and
+    /// falls back to the focused window — never the dead source.
+    #[test]
+    fn pick_target_window_skips_closed_source_for_focused() {
+        assert_eq!(
+            pick_target_window(Some("gone"), false, Some("focused-win"), Some("first")),
+            Some("focused-win".to_string()),
+        );
+    }
+
+    /// With no usable source and nothing focused, the resolver falls back to
+    /// any open window — a real, live target rather than a synthesized
+    /// `"main"` that may not exist.
+    #[test]
+    fn pick_target_window_falls_back_to_any_open() {
+        assert_eq!(
+            pick_target_window(None, false, None, Some("only-window")),
+            Some("only-window".to_string()),
+        );
+    }
+
+    /// With no source, nothing focused, and no open windows, the resolver
+    /// returns None so the caller surfaces a clear error instead of targeting
+    /// a phantom `"main"` window.
+    #[test]
+    fn pick_target_window_none_when_no_windows() {
+        assert_eq!(pick_target_window(None, false, None, None), None);
     }
 }

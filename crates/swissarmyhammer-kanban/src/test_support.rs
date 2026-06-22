@@ -53,3 +53,22 @@ pub async fn setup() -> (tempfile::TempDir, crate::KanbanContext) {
 
     (temp, ctx)
 }
+
+/// Default window label used by the command test helpers.
+///
+/// Per-window ops (palette, inspector, view, app-mode, perspective, drag)
+/// require a `window:<label>` moniker in scope and no longer fall back to a
+/// silent `"main"`. The command test modules seed this label when a test
+/// supplies no explicit window, so they have a window to resolve.
+///
+/// This is the single definition: the command test modules
+/// (`commands/mod.rs`, `commands/drag_commands.rs`,
+/// `commands/perspective_commands.rs`) all reference it rather than each
+/// re-declaring the constant, so the default cannot drift between them.
+pub const DEFAULT_TEST_WINDOW: &str = "main";
+
+/// Build the `window:<DEFAULT_TEST_WINDOW>` scope moniker the command test
+/// helpers append when a test carries no explicit `window:` moniker.
+pub fn default_window_moniker() -> String {
+    format!("window:{DEFAULT_TEST_WINDOW}")
+}

@@ -43,7 +43,7 @@ impl Command for InspectCmd {
             .or_else(|| first_inspectable(&ctx.scope_chain))
             .ok_or_else(|| CommandError::MissingArg("target".into()))?;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.inspect(window_label, moniker);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -66,7 +66,7 @@ impl Command for InspectorCloseCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.inspector_close(window_label);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -89,7 +89,7 @@ impl Command for InspectorCloseAllCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.inspector_close_all(window_label);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -158,7 +158,7 @@ impl Command for InspectorSetWidthCmd {
         // value, so the cast can never lose information.
         let width = clamped as u32;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.set_inspector_width(window_label, width);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -181,7 +181,7 @@ impl Command for PaletteOpenCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.set_palette_open(window_label, true);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -204,7 +204,7 @@ impl Command for PaletteCloseCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.set_palette_open(window_label, false);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -258,7 +258,7 @@ impl Command for SetAppModeCmd {
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
         let mode = ctx.require_arg_str("mode")?;
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.set_app_mode(window_label, mode);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -284,7 +284,12 @@ impl Command for StartRenamePerspectiveCmd {
         let Some(ui) = ctx.ui_state.as_ref() else {
             return false;
         };
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        // Per-window availability check: no `window:` moniker means we cannot
+        // resolve which window's perspective to inspect — fail closed rather
+        // than assume "main".
+        let Some(window_label) = ctx.window_label_from_scope() else {
+            return false;
+        };
         !ui.active_perspective_id(window_label).is_empty()
     }
 
@@ -313,7 +318,7 @@ impl Command for SetActiveViewCmd {
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
         let view_id = ctx.require_arg_str("view_id")?;
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.set_active_view(window_label, view_id);
 
         // Keep the backend scope_chain consistent with the newly active view.

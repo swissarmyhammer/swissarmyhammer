@@ -495,6 +495,7 @@ mod registry_population_tests {
             undoable: Some(true),
             visible: Some(true),
             params: None,
+            applies_to: None,
         };
 
         let def = command_metadata_to_def(&meta).expect("metadata should map");
@@ -540,6 +541,7 @@ mod registry_population_tests {
             undoable: None,
             visible: None,
             params: None,
+            applies_to: None,
         };
 
         let def = command_metadata_to_def(&meta).expect("metadata should map");
@@ -574,6 +576,7 @@ mod registry_population_tests {
                 undoable: Some(false),
                 visible: None,
                 params: None,
+                applies_to: None,
             },
             CommandMetadata {
                 id: "task.add".to_string(),
@@ -592,6 +595,7 @@ mod registry_population_tests {
                 undoable: Some(true),
                 visible: None,
                 params: None,
+                applies_to: None,
             },
         ];
 

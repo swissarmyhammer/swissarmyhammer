@@ -102,7 +102,7 @@ impl Command for CommandPaletteCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.set_palette_open_with_mode(window_label, true, "command");
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -126,7 +126,7 @@ impl Command for SearchPaletteCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.set_palette_open_with_mode(window_label, true, "search");
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -151,7 +151,7 @@ impl Command for DismissCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
 
         // Layer 1: close palette if open in this window
         if ui.palette_open(window_label) {

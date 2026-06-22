@@ -351,15 +351,25 @@ pub fn register_commands() -> CmdMap {
 mod tests {
     use super::*;
     use crate::commands_core::CommandContext;
+    use crate::test_support::default_window_moniker;
     use serde_json::Value;
     use std::sync::Arc;
     use swissarmyhammer_ui_state::UIState;
 
     /// Build a CommandContext with the given scope chain, target, and optional UIState.
+    ///
+    /// When the scope carries no `window:` moniker, the default test window
+    /// (`crate::test_support::DEFAULT_TEST_WINDOW`) is appended: per-window ops
+    /// (palette, inspector, view, app-mode, perspective) require a window in
+    /// scope and no longer fall back to a silent "main".
     fn ctx_with(scope: &[&str], target: Option<&str>, ui: Option<Arc<UIState>>) -> CommandContext {
+        let mut scope: Vec<String> = scope.iter().map(|s| s.to_string()).collect();
+        if !scope.iter().any(|m| m.starts_with("window:")) {
+            scope.push(default_window_moniker());
+        }
         let mut ctx = CommandContext::new(
             "test",
-            scope.iter().map(|s| s.to_string()).collect(),
+            scope,
             target.map(|s| s.to_string()),
             std::collections::HashMap::new(),
         );
@@ -705,11 +715,10 @@ mod tests {
         let cmds = register_commands();
         let cmd = cmds.get("app.inspect").unwrap();
         let ui = Arc::new(UIState::new());
-        let ctx = ctx_with(&[], Some("task:01XYZ"), Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], Some("task:01XYZ"), Some(Arc::clone(&ui)));
 
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
-        // ctx has no window_label set, so falls back to "main"
         assert_eq!(ui.inspector_stack("main"), vec!["task:01XYZ"]);
     }
 
@@ -721,7 +730,7 @@ mod tests {
         ui.inspect("main", "task:01XYZ");
         ui.inspect("main", "tag:01TAG");
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert_eq!(ui.inspector_stack("main"), vec!["task:01XYZ"]);
@@ -735,7 +744,7 @@ mod tests {
         ui.inspect("main", "task:01XYZ");
         ui.inspect("main", "tag:01TAG");
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(ui.inspector_stack("main").is_empty());
@@ -748,7 +757,7 @@ mod tests {
         let ui = Arc::new(UIState::new());
         assert!(!ui.palette_open("main"));
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(ui.palette_open("main"));
@@ -761,7 +770,7 @@ mod tests {
         let ui = Arc::new(UIState::new());
         ui.set_palette_open("main", true);
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(!ui.palette_open("main"));
@@ -842,12 +851,11 @@ mod tests {
 
         let mut args = std::collections::HashMap::new();
         args.insert("view_id".to_string(), Value::String("my-view".into()));
-        let mut ctx = CommandContext::new("test", vec![], None, args);
+        let mut ctx = CommandContext::new("test", vec!["window:main".into()], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
-        // No window_label in ctx — defaults to "main"
         assert_eq!(ui.active_view_id("main"), "my-view");
     }
 
@@ -922,7 +930,7 @@ mod tests {
         let ui = Arc::new(UIState::new());
         assert!(!ui.palette_open("main"));
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(ui.palette_open("main"));
@@ -936,7 +944,7 @@ mod tests {
         let ui = Arc::new(UIState::new());
         assert!(!ui.palette_open("main"));
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(ui.palette_open("main"));
@@ -972,7 +980,7 @@ mod tests {
         let ui = Arc::new(UIState::new());
         ui.set_palette_open("main", true);
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(!ui.palette_open("main"));
@@ -987,7 +995,7 @@ mod tests {
         assert!(!ui.palette_open("main"));
         assert_eq!(ui.inspector_stack("main").len(), 1);
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(ui.inspector_stack("main").is_empty());
@@ -999,7 +1007,7 @@ mod tests {
         let cmd = cmds.get("app.dismiss").unwrap();
         let ui = Arc::new(UIState::new());
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await.unwrap();
         assert!(result.is_null());
     }
@@ -1065,17 +1073,20 @@ mod tests {
 
         // Dispatch app.inspect with a target
         let cmd = cmds.get("app.inspect").unwrap();
-        let ctx = ctx_with(&["task:01ABC"], Some("task:01ABC"), Some(Arc::clone(&ui)));
+        let ctx = ctx_with(
+            &["task:01ABC", "window:main"],
+            Some("task:01ABC"),
+            Some(Arc::clone(&ui)),
+        );
 
         assert!(cmd.available(&ctx), "inspect should be available");
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok(), "inspect should succeed");
-        // ctx has no window_label set, so falls back to "main"
         assert_eq!(ui.inspector_stack("main"), vec!["task:01ABC"]);
 
         // Dispatch app.inspector.close
         let cmd = cmds.get("app.inspector.close").unwrap();
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         assert!(cmd.available(&ctx));
         cmd.execute(&ctx).await.unwrap();
         assert!(ui.inspector_stack("main").is_empty());
@@ -1103,7 +1114,7 @@ mod tests {
         args.insert("boardPath".into(), serde_json::json!("/boards/a/.kanban"));
         args.insert("taskId".into(), serde_json::json!("task-123"));
         args.insert("taskFields".into(), serde_json::json!({"title": "My Task"}));
-        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        let mut ctx = CommandContext::new("drag.start", vec!["window:main".into()], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await;
@@ -1125,7 +1136,7 @@ mod tests {
         let mut args = std::collections::HashMap::new();
         args.insert("boardPath".into(), serde_json::json!("/boards/b/.kanban"));
         args.insert("taskId".into(), serde_json::json!("task-456"));
-        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        let mut ctx = CommandContext::new("drag.start", vec!["window:main".into()], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await.unwrap();
@@ -1151,7 +1162,7 @@ mod tests {
         let mut args1 = std::collections::HashMap::new();
         args1.insert("boardPath".into(), serde_json::json!("/boards/a"));
         args1.insert("taskId".into(), serde_json::json!("task-1"));
-        let mut ctx1 = CommandContext::new("drag.start", vec![], None, args1);
+        let mut ctx1 = CommandContext::new("drag.start", vec!["window:main".into()], None, args1);
         ctx1.ui_state = Some(Arc::clone(&ui));
         cmd.execute(&ctx1).await.unwrap();
 
@@ -1159,7 +1170,7 @@ mod tests {
         let mut args2 = std::collections::HashMap::new();
         args2.insert("boardPath".into(), serde_json::json!("/boards/b"));
         args2.insert("taskId".into(), serde_json::json!("task-2"));
-        let mut ctx2 = CommandContext::new("drag.start", vec![], None, args2);
+        let mut ctx2 = CommandContext::new("drag.start", vec!["window:main".into()], None, args2);
         ctx2.ui_state = Some(Arc::clone(&ui));
         cmd.execute(&ctx2).await.unwrap();
 
@@ -1177,7 +1188,7 @@ mod tests {
         let mut args = std::collections::HashMap::new();
         args.insert("boardPath".into(), serde_json::json!("/boards/a"));
         // taskId intentionally omitted
-        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        let mut ctx = CommandContext::new("drag.start", vec!["window:main".into()], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await;
@@ -1194,7 +1205,7 @@ mod tests {
         args.insert("boardPath".into(), serde_json::json!("/boards/a"));
         args.insert("taskId".into(), serde_json::json!("task-1"));
         // copyMode not provided
-        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        let mut ctx = CommandContext::new("drag.start", vec!["window:main".into()], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         cmd.execute(&ctx).await.unwrap();
@@ -1217,7 +1228,8 @@ mod tests {
         let mut start_args = std::collections::HashMap::new();
         start_args.insert("boardPath".into(), serde_json::json!("/boards/a/.kanban"));
         start_args.insert("taskId".into(), serde_json::json!("task-999"));
-        let mut start_ctx = CommandContext::new("drag.start", vec![], None, start_args);
+        let mut start_ctx =
+            CommandContext::new("drag.start", vec!["window:main".into()], None, start_args);
         start_ctx.ui_state = Some(Arc::clone(&ui));
         start_cmd.execute(&start_ctx).await.unwrap();
         assert!(ui.drag_session().is_some(), "session should be active");
@@ -1276,7 +1288,7 @@ mod tests {
         args.insert("boardPath".into(), serde_json::json!("/boards/a"));
         args.insert("taskId".into(), serde_json::json!("task-1"));
         args.insert("copyMode".into(), serde_json::json!(true));
-        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        let mut ctx = CommandContext::new("drag.start", vec!["window:main".into()], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         cmd.execute(&ctx).await.unwrap();

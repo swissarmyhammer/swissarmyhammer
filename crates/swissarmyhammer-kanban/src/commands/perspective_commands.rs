@@ -135,7 +135,7 @@ async fn resolve_perspective_id_inner(
     if let Some(id) = ctx.resolve_entity_id("perspective") {
         return Ok((id.to_string(), ResolvedFrom::Scope));
     }
-    let window_label = ctx.window_label_from_scope().unwrap_or("main");
+    let window_label = ctx.window_label_required()?;
     if let Some(ui) = ctx.ui_state.as_ref() {
         let active = ui.active_perspective_id(window_label);
         if !active.is_empty() {
@@ -175,8 +175,13 @@ fn persist_resolved_perspective_id(
             // The caller supplied the id; don't mutate UIState on their behalf.
         }
         ResolvedFrom::UiState | ResolvedFrom::FirstForViewKind => {
-            if let Some(ui) = ctx.ui_state.as_ref() {
-                let window_label = ctx.window_label_from_scope().unwrap_or("main");
+            // Persist only when a real window is in scope. No `window:` moniker
+            // means we cannot tell which window's selection to record — skip the
+            // self-healing persist rather than write it against a hardcoded
+            // "main" that could bleed into the wrong window.
+            if let (Some(ui), Some(window_label)) =
+                (ctx.ui_state.as_ref(), ctx.window_label_from_scope())
+            {
                 ui.set_active_perspective(window_label, perspective_id);
             }
         }
@@ -488,7 +493,7 @@ impl DeletePerspectiveCmd {
         let Some(ui) = ctx.ui_state.as_ref() else {
             return Ok(Value::Null);
         };
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         if ui.active_perspective_id(window_label) != deleted_id {
             return Ok(Value::Null);
         }
@@ -638,7 +643,7 @@ impl Command for SetFilterAndRefreshCmd {
         // Drive the window refresh only when the edited perspective IS the
         // dispatching window's active selection — re-using the shared switch
         // pipeline so it re-reads the just-written filter and re-evaluates it.
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         if ui.active_perspective_id(window_label) == perspective_id {
             switch_to_perspective(&kanban, ui, window_label, &perspective_id).await
         } else {
@@ -996,7 +1001,7 @@ async fn cycle_perspective(
         .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
     let (view_kind, view_id) = resolve_active_view(ctx, &kanban).await;
-    let window_label = ctx.window_label_from_scope().unwrap_or("main");
+    let window_label = ctx.window_label_required()?;
     let current_id = ui.active_perspective_id(window_label);
 
     // Get perspectives matching the requested view (by id when set, else kind).
@@ -1061,7 +1066,7 @@ impl Command for GotoPerspectiveCmd {
         let id = ctx.require_arg_str("id")?;
         let view_kind = ctx.arg("view_kind").and_then(|v| v.as_str());
         let view_id = ctx.arg("view_id").and_then(|v| v.as_str());
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
 
         // Validate the perspective exists.
         let pctx = kanban
@@ -1136,7 +1141,7 @@ impl Command for SwitchPerspectiveCmd {
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
         let perspective_id = ctx.require_arg_str("perspective_id")?;
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
 
         switch_to_perspective(&kanban, ui, window_label, perspective_id).await
     }
@@ -1296,6 +1301,7 @@ mod tests {
     use super::*;
     use crate::board::InitBoard;
     use crate::context::KanbanContext;
+    use crate::test_support::default_window_moniker;
     use std::collections::HashMap;
     use std::sync::Arc;
     use swissarmyhammer_operations::Execute;
@@ -1314,21 +1320,26 @@ mod tests {
         (temp, ctx)
     }
 
-    /// Build a CommandContext with the given args and a KanbanContext extension.
-    fn make_ctx(kanban: Arc<KanbanContext>, args: HashMap<String, Value>) -> CommandContext {
-        let mut ctx = CommandContext::new("test", vec![], None, args);
-        ctx.set_extension(kanban);
-        ctx
-    }
-
-    /// Build a CommandContext with a scope chain (for commands that need `has_in_scope`).
-    fn make_ctx_with_scope(
+    /// Build a CommandContext for a perspective command test.
+    ///
+    /// One parameterized helper for every test shape:
+    /// - `scope_chain: None` — seed only the default `window:` moniker.
+    /// - `scope_chain: Some(chain)` — use `chain`, appending the default
+    ///   `window:` moniker if it carries none (per-window ops resolve a
+    ///   window — they no longer fall back to a silent "main").
+    /// - `ui: Some(state)` — attach the UIState the per-window ops mutate.
+    fn make_ctx(
         kanban: Arc<KanbanContext>,
         args: HashMap<String, Value>,
-        scope_chain: Vec<String>,
+        scope_chain: Option<Vec<String>>,
+        ui: Option<Arc<swissarmyhammer_ui_state::UIState>>,
     ) -> CommandContext {
+        let scope_chain = with_default_window(scope_chain.unwrap_or_default());
         let mut ctx = CommandContext::new("test", scope_chain, None, args);
         ctx.set_extension(kanban);
+        if let Some(ui) = ui {
+            ctx.ui_state = Some(ui);
+        }
         ctx
     }
 
@@ -1341,7 +1352,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("name".into(), Value::String(name.into()));
         args.insert("view".into(), Value::String(view.into()));
-        let cmd_ctx = make_ctx(Arc::clone(kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(kanban), args, None, None);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         result["id"].as_str().unwrap().to_string()
     }
@@ -1357,7 +1368,7 @@ mod tests {
         args.insert("name".into(), Value::String(name.into()));
         args.insert("view".into(), Value::String(view.into()));
         args.insert("view_id".into(), Value::String(view_id.into()));
-        let cmd_ctx = make_ctx(Arc::clone(kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(kanban), args, None, None);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         result["id"].as_str().unwrap().to_string()
     }
@@ -1367,7 +1378,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("name".into(), Value::String(name.into()));
         args.insert("view".into(), Value::String("grid".into()));
-        let cmd_ctx = make_ctx(Arc::clone(kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(kanban), args, None, None);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         result["id"].as_str().unwrap().to_string()
     }
@@ -1376,7 +1387,7 @@ mod tests {
     async fn test_list_perspectives_cmd_empty() {
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), HashMap::new());
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), HashMap::new(), None, None);
 
         let result = ListPerspectivesCmd.execute(&cmd_ctx).await.unwrap();
         let perspectives = result["perspectives"].as_array().unwrap();
@@ -1393,11 +1404,11 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("name".into(), Value::String("My View".into()));
         args.insert("view".into(), Value::String("board".into()));
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
 
         // Now list
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), HashMap::new());
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), HashMap::new(), None, None);
         let result = ListPerspectivesCmd.execute(&cmd_ctx).await.unwrap();
         let perspectives = result["perspectives"].as_array().unwrap();
         assert_eq!(perspectives.len(), 1);
@@ -1424,7 +1435,7 @@ mod tests {
             args.insert("name".into(), Value::String("Default".into()));
             args.insert("view".into(), Value::String("board".into()));
             args.insert("if_absent".into(), Value::Bool(true));
-            let cmd_ctx = make_ctx(kanban, args);
+            let cmd_ctx = make_ctx(kanban, args, None, None);
             SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap()
         };
 
@@ -1443,7 +1454,7 @@ mod tests {
         }
 
         // The board holds exactly one perspective for this view kind.
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), HashMap::new());
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), HashMap::new(), None, None);
         let result = ListPerspectivesCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(result["count"], 1, "no duplicate Default perspectives");
     }
@@ -1464,7 +1475,7 @@ mod tests {
                 args.insert("view".into(), Value::String("board".into()));
                 args.insert("view_id".into(), Value::String(view_id));
                 args.insert("if_absent".into(), Value::Bool(true));
-                let cmd_ctx = make_ctx(kanban, args);
+                let cmd_ctx = make_ctx(kanban, args, None, None);
                 SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap()
             }
         };
@@ -1484,7 +1495,7 @@ mod tests {
             "a distinct view_id must seed its own perspective",
         );
 
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), HashMap::new());
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), HashMap::new(), None, None);
         let result = ListPerspectivesCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(result["count"], 2, "one Default per distinct view_id");
     }
@@ -1499,10 +1510,11 @@ mod tests {
         args.insert("perspective_id".into(), Value::String(pid.clone()));
         args.insert("field".into(), Value::String("title".into()));
         args.insert("direction".into(), Value::String("asc".into()));
-        let cmd_ctx = make_ctx_with_scope(
+        let cmd_ctx = make_ctx(
             Arc::clone(&kanban),
             args,
-            vec![format!("perspective:{pid}")],
+            Some(vec![format!("perspective:{pid}")]),
+            None,
         );
         let result = SetSortCmd.execute(&cmd_ctx).await.unwrap();
         let sort = result["sort"].as_array().unwrap();
@@ -1522,10 +1534,11 @@ mod tests {
         args.insert("perspective_id".into(), Value::String(pid.clone()));
         args.insert("field".into(), Value::String("title".into()));
         args.insert("direction".into(), Value::String("asc".into()));
-        let cmd_ctx = make_ctx_with_scope(
+        let cmd_ctx = make_ctx(
             Arc::clone(&kanban),
             args,
-            vec![format!("perspective:{pid}")],
+            Some(vec![format!("perspective:{pid}")]),
+            None,
         );
         SetSortCmd.execute(&cmd_ctx).await.unwrap();
 
@@ -1534,10 +1547,11 @@ mod tests {
         args.insert("perspective_id".into(), Value::String(pid.clone()));
         args.insert("field".into(), Value::String("title".into()));
         args.insert("direction".into(), Value::String("desc".into()));
-        let cmd_ctx = make_ctx_with_scope(
+        let cmd_ctx = make_ctx(
             Arc::clone(&kanban),
             args,
-            vec![format!("perspective:{pid}")],
+            Some(vec![format!("perspective:{pid}")]),
+            None,
         );
         let result = SetSortCmd.execute(&cmd_ctx).await.unwrap();
         let sort = result["sort"].as_array().unwrap();
@@ -1562,10 +1576,11 @@ mod tests {
             args.insert("perspective_id".into(), Value::String(pid.clone()));
             args.insert("field".into(), Value::String(field.into()));
             args.insert("direction".into(), Value::String(direction.into()));
-            let cmd_ctx = make_ctx_with_scope(
+            let cmd_ctx = make_ctx(
                 Arc::clone(&kanban),
                 args,
-                vec![format!("perspective:{pid}")],
+                Some(vec![format!("perspective:{pid}")]),
+                None,
             );
             SetSortCmd.execute(&cmd_ctx).await.unwrap();
         }
@@ -1573,10 +1588,11 @@ mod tests {
         // Clear — no `field` arg supplied; the command must drop both entries.
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
-        let cmd_ctx = make_ctx_with_scope(
+        let cmd_ctx = make_ctx(
             Arc::clone(&kanban),
             args,
-            vec![format!("perspective:{pid}")],
+            Some(vec![format!("perspective:{pid}")]),
+            None,
         );
         let result = ClearSortCmd.execute(&cmd_ctx).await.unwrap();
         let sort = result["sort"].as_array();
@@ -1596,10 +1612,11 @@ mod tests {
 
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
-        let cmd_ctx = make_ctx_with_scope(
+        let cmd_ctx = make_ctx(
             Arc::clone(&kanban),
             args,
-            vec![format!("perspective:{pid}")],
+            Some(vec![format!("perspective:{pid}")]),
+            None,
         );
         let result = ClearSortCmd.execute(&cmd_ctx).await.unwrap();
         let sort = result["sort"].as_array();
@@ -1624,15 +1641,21 @@ mod tests {
         args.insert("perspective_id".into(), Value::String(pid.clone()));
         args.insert("field".into(), Value::String("title".into()));
         args.insert("direction".into(), Value::String("asc".into()));
-        let cmd_ctx = make_ctx_with_scope(
+        let cmd_ctx = make_ctx(
             Arc::clone(&kanban),
             args,
-            vec![format!("perspective:{pid}")],
+            Some(vec![format!("perspective:{pid}")]),
+            None,
         );
         SetSortCmd.execute(&cmd_ctx).await.unwrap();
 
         // Palette dispatch: empty args, no scope moniker — UIState must win.
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), HashMap::new(), Arc::clone(&ui));
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            HashMap::new(),
+            None,
+            Some(Arc::clone(&ui)),
+        );
         let result = ClearSortCmd.execute(&cmd_ctx).await.unwrap();
         let sort = result["sort"].as_array();
         assert!(
@@ -1654,7 +1677,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
         args.insert("field".into(), Value::String("priority".into()));
-        let cmd_ctx = make_ctx_with_scope(Arc::clone(&kanban), args, scope.clone());
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, Some(scope.clone()), None);
         let result = ToggleSortCmd.execute(&cmd_ctx).await.unwrap();
         let sort = result["sort"].as_array().unwrap();
         assert_eq!(sort.len(), 1);
@@ -1664,7 +1687,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
         args.insert("field".into(), Value::String("priority".into()));
-        let cmd_ctx = make_ctx_with_scope(Arc::clone(&kanban), args, scope.clone());
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, Some(scope.clone()), None);
         let result = ToggleSortCmd.execute(&cmd_ctx).await.unwrap();
         let sort = result["sort"].as_array().unwrap();
         assert_eq!(sort.len(), 1);
@@ -1674,7 +1697,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
         args.insert("field".into(), Value::String("priority".into()));
-        let cmd_ctx = make_ctx_with_scope(Arc::clone(&kanban), args, scope.clone());
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, Some(scope.clone()), None);
         let result = ToggleSortCmd.execute(&cmd_ctx).await.unwrap();
         let sort = result["sort"].as_array();
         assert!(sort.is_none() || sort.unwrap().is_empty());
@@ -1691,10 +1714,11 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
         args.insert("filter".into(), Value::String("#bug && @will".into()));
-        let cmd_ctx = make_ctx_with_scope(
+        let cmd_ctx = make_ctx(
             Arc::clone(&kanban),
             args,
-            vec![format!("perspective:{pid}")],
+            Some(vec![format!("perspective:{pid}")]),
+            None,
         );
         let result = SetFilterCmd.execute(&cmd_ctx).await;
         assert!(result.is_ok(), "valid DSL should be accepted");
@@ -1710,10 +1734,11 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
         args.insert("filter".into(), Value::String("invalid $$$ garbage".into()));
-        let cmd_ctx = make_ctx_with_scope(
+        let cmd_ctx = make_ctx(
             Arc::clone(&kanban),
             args,
-            vec![format!("perspective:{pid}")],
+            Some(vec![format!("perspective:{pid}")]),
+            None,
         );
         let result = SetFilterCmd.execute(&cmd_ctx).await;
         assert!(result.is_err(), "invalid expression should be rejected");
@@ -1733,10 +1758,11 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
         args.insert("filter".into(), Value::String("Status !== \"Done\"".into()));
-        let cmd_ctx = make_ctx_with_scope(
+        let cmd_ctx = make_ctx(
             Arc::clone(&kanban),
             args,
-            vec![format!("perspective:{pid}")],
+            Some(vec![format!("perspective:{pid}")]),
+            None,
         );
         let result = SetFilterCmd.execute(&cmd_ctx).await;
         assert!(
@@ -1755,7 +1781,7 @@ mod tests {
         args.insert("name".into(), Value::String("Valid".into()));
         args.insert("view".into(), Value::String("board".into()));
         args.insert("filter".into(), Value::String("#bug || #feature".into()));
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await;
         assert!(
             result.is_ok(),
@@ -1767,7 +1793,7 @@ mod tests {
         args.insert("name".into(), Value::String("Invalid".into()));
         args.insert("view".into(), Value::String("board".into()));
         args.insert("filter".into(), Value::String("$$garbage".into()));
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await;
         assert!(result.is_err(), "invalid filter should be rejected on save");
     }
@@ -1815,7 +1841,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("name".into(), Value::String("".into()));
         args.insert("view".into(), Value::String("board".into()));
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(
             result["name"], "Untitled",
@@ -1826,7 +1852,7 @@ mod tests {
         // the previous Untitled is already in the perspective list.
         let mut args = HashMap::new();
         args.insert("view".into(), Value::String("board".into()));
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(
             result["name"], "Untitled 2",
@@ -1838,7 +1864,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("name".into(), Value::String("   ".into()));
         args.insert("view".into(), Value::String("board".into()));
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(
             result["name"], "Untitled 3",
@@ -1892,14 +1918,14 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("name".into(), Value::String("Untitled 2".into()));
         args.insert("view".into(), Value::String("board".into()));
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
 
         // Missing name → the generator must pick the first free slot
         // ("Untitled"), never the already-taken "Untitled 2".
         let mut args = HashMap::new();
         args.insert("view".into(), Value::String("board".into()));
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(
             result["name"], "Untitled",
@@ -1920,7 +1946,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("name".into(), Value::String("My Sprint".into()));
         args.insert("view".into(), Value::String("board".into()));
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(
             result["name"], "My Sprint",
@@ -1953,7 +1979,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("name".into(), Value::String("Pinned".into()));
         let scope = vec!["view:01JMVIEW0000000000BOARD0".to_string()];
-        let cmd_ctx = make_ctx_with_scope(Arc::clone(&kanban), args, scope);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, Some(scope), None);
 
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(
@@ -1985,7 +2011,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("name".into(), Value::String("From Grid".into()));
         let scope = vec!["view:01JMVIEW0000000000TGRID0".to_string()];
-        let cmd_ctx = make_ctx_with_scope(Arc::clone(&kanban), args, scope);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, Some(scope), None);
 
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(
@@ -2017,7 +2043,7 @@ mod tests {
             Value::String("01JMVIEW0000000000BOARD0".into()),
         );
         let scope = vec!["view:01JMVIEW0000000000TGRID0".to_string()];
-        let cmd_ctx = make_ctx_with_scope(Arc::clone(&kanban), args, scope);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, Some(scope), None);
 
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(
@@ -2053,18 +2079,6 @@ mod tests {
     // Next / Prev perspective cycling
     // =========================================================================
 
-    /// Build a CommandContext with KanbanContext extension and UIState.
-    fn make_ctx_with_ui(
-        kanban: Arc<KanbanContext>,
-        args: HashMap<String, Value>,
-        ui: Arc<swissarmyhammer_ui_state::UIState>,
-    ) -> CommandContext {
-        let mut ctx = CommandContext::new("test", vec![], None, args);
-        ctx.set_extension(kanban);
-        ctx.ui_state = Some(ui);
-        ctx
-    }
-
     #[tokio::test]
     async fn test_next_perspective_cycles_forward_with_wrapping() {
         let (_temp, ctx) = setup().await;
@@ -2081,7 +2095,7 @@ mod tests {
         // Next: A -> B
         let mut args = HashMap::new();
         args.insert("view_kind".into(), Value::String("board".into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         let result = NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert!(result != Value::Null);
         assert_eq!(ui.active_perspective_id("main"), id_b);
@@ -2089,14 +2103,14 @@ mod tests {
         // Next: B -> C
         let mut args = HashMap::new();
         args.insert("view_kind".into(), Value::String("board".into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(ui.active_perspective_id("main"), id_c);
 
         // Next: C -> A (wrap)
         let mut args = HashMap::new();
         args.insert("view_kind".into(), Value::String("board".into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(ui.active_perspective_id("main"), id_a);
     }
@@ -2117,21 +2131,21 @@ mod tests {
         // Prev: A -> C (wrap)
         let mut args = HashMap::new();
         args.insert("view_kind".into(), Value::String("grid".into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         PrevPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(ui.active_perspective_id("main"), id_c);
 
         // Prev: C -> B
         let mut args = HashMap::new();
         args.insert("view_kind".into(), Value::String("grid".into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         PrevPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(ui.active_perspective_id("main"), id_b);
 
         // Prev: B -> A
         let mut args = HashMap::new();
         args.insert("view_kind".into(), Value::String("grid".into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         PrevPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(ui.active_perspective_id("main"), id_a);
     }
@@ -2147,7 +2161,7 @@ mod tests {
 
         let mut args = HashMap::new();
         args.insert("view_kind".into(), Value::String("grid".into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         let result = NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(result, Value::Null);
     }
@@ -2163,7 +2177,7 @@ mod tests {
 
         let mut args = HashMap::new();
         args.insert("view_kind".into(), Value::String("board".into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         let result = NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(result, Value::Null);
     }
@@ -2184,7 +2198,7 @@ mod tests {
         // Next should go to Board2, not Grid1
         let mut args = HashMap::new();
         args.insert("view_kind".into(), Value::String("board".into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(ui.active_perspective_id("main"), id_board2);
     }
@@ -2210,17 +2224,14 @@ mod tests {
         (temp, ctx)
     }
 
-    /// Build a CommandContext with scope chain, UI state, and args.
-    fn make_ctx_with_scope_and_ui(
-        kanban: Arc<KanbanContext>,
-        args: HashMap<String, Value>,
-        scope_chain: Vec<String>,
-        ui: Arc<swissarmyhammer_ui_state::UIState>,
-    ) -> CommandContext {
-        let mut ctx = CommandContext::new("test", scope_chain, None, args);
-        ctx.set_extension(kanban);
-        ctx.ui_state = Some(ui);
-        ctx
+    /// Append a `window:<DEFAULT_TEST_WINDOW>` moniker to a scope chain when it
+    /// carries no `window:` moniker, so per-window ops have a window to resolve
+    /// in tests.
+    fn with_default_window(mut scope_chain: Vec<String>) -> Vec<String> {
+        if !scope_chain.iter().any(|m| m.starts_with("window:")) {
+            scope_chain.push(default_window_moniker());
+        }
+        scope_chain
     }
 
     #[tokio::test]
@@ -2237,8 +2248,12 @@ mod tests {
 
         // Invoke without view_kind arg, but with view:01JMVIEW0000000000BOARD0 in scope chain
         let scope = vec!["view:01JMVIEW0000000000BOARD0".to_string()];
-        let cmd_ctx =
-            make_ctx_with_scope_and_ui(Arc::clone(&kanban), HashMap::new(), scope, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            HashMap::new(),
+            Some(scope),
+            Some(Arc::clone(&ui)),
+        );
         let result = NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
 
         assert!(result != Value::Null, "should cycle, not return null");
@@ -2263,7 +2278,12 @@ mod tests {
         let scope = vec!["view:01JMVIEW0000000000BOARD0".to_string()];
         let mut args = HashMap::new();
         args.insert("view_kind".into(), Value::String("grid".into()));
-        let cmd_ctx = make_ctx_with_scope_and_ui(Arc::clone(&kanban), args, scope, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            args,
+            Some(scope),
+            Some(Arc::clone(&ui)),
+        );
         let result = NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
 
         assert!(result != Value::Null, "should cycle grid perspectives");
@@ -2288,7 +2308,7 @@ mod tests {
 
         let mut args = HashMap::new();
         args.insert("id".into(), Value::String(id.clone()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         let result = GotoPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
 
         assert!(result != Value::Null);
@@ -2303,7 +2323,7 @@ mod tests {
 
         let mut args = HashMap::new();
         args.insert("id".into(), Value::String("nonexistent".into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         let result = GotoPerspectiveCmd.execute(&cmd_ctx).await;
 
         assert!(result.is_err());
@@ -2320,7 +2340,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("id".into(), Value::String(id.clone()));
         args.insert("view_kind".into(), Value::String("grid".into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         let result = GotoPerspectiveCmd.execute(&cmd_ctx).await;
 
         assert!(result.is_err());
@@ -2337,7 +2357,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("id".into(), Value::String(id.clone()));
         // No view_kind arg — should succeed regardless of the perspective's view
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         let result = GotoPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
 
         assert!(result != Value::Null);
@@ -2366,7 +2386,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("id".into(), Value::String(id.clone()));
         args.insert("new_name".into(), Value::String("New Name".into()));
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         let result = RenamePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
 
         // Verify the result contains the new name
@@ -2381,7 +2401,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("id".into(), Value::String("nonexistent".into()));
         args.insert("new_name".into(), Value::String("Whatever".into()));
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         let result = RenamePerspectiveCmd.execute(&cmd_ctx).await;
 
         assert!(result.is_err());
@@ -2869,7 +2889,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("view_kind".into(), Value::String("grid".into()));
         args.insert("view_id".into(), Value::String(GRID_VIEW_A_ID.into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(
             ui.active_perspective_id("main"),
@@ -2881,7 +2901,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("view_kind".into(), Value::String("grid".into()));
         args.insert("view_id".into(), Value::String(GRID_VIEW_A_ID.into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(
             ui.active_perspective_id("main"),
@@ -2904,7 +2924,7 @@ mod tests {
         args.insert("id".into(), Value::String(pid.clone()));
         args.insert("view_kind".into(), Value::String("grid".into()));
         args.insert("view_id".into(), Value::String(GRID_VIEW_A_ID.into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         let result = GotoPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
         assert!(result != Value::Null);
         assert_eq!(ui.active_perspective_id("main"), pid);
@@ -2926,7 +2946,7 @@ mod tests {
         args.insert("id".into(), Value::String(pid));
         args.insert("view_kind".into(), Value::String("grid".into()));
         args.insert("view_id".into(), Value::String(GRID_VIEW_B_ID.into()));
-        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, None, Some(Arc::clone(&ui)));
         let result = GotoPerspectiveCmd.execute(&cmd_ctx).await;
         assert!(
             result.is_err(),
@@ -2957,10 +2977,11 @@ mod tests {
         let kanban = Arc::new(ctx);
         let pid = create_perspective(&kanban, "Focus Test").await;
 
-        let cmd_ctx = make_ctx_with_scope(
+        let cmd_ctx = make_ctx(
             Arc::clone(&kanban),
             HashMap::new(),
-            vec![format!("perspective:{pid}")],
+            Some(vec![format!("perspective:{pid}")]),
+            None,
         );
 
         let result = FocusFilterCmd.execute(&cmd_ctx).await.unwrap();
@@ -3004,7 +3025,10 @@ mod tests {
             "perspective_id".into(),
             Value::String(perspective_id.into()),
         );
-        let mut ctx = CommandContext::new("perspective.switch", vec![], None, args);
+        // Per-window op: the scope chain must carry a `window:` moniker — the
+        // silent "main" fallback was removed, so seed the default test window.
+        let mut ctx =
+            CommandContext::new("perspective.switch", vec!["window:main".into()], None, args);
         ctx.set_extension(kanban);
         ctx.ui_state = Some(ui);
         ctx
@@ -3096,7 +3120,7 @@ mod tests {
         args.insert("name".into(), Value::String("Bugs".into()));
         args.insert("view".into(), Value::String("board".into()));
         args.insert("filter".into(), Value::String("#bug".into()));
-        let save_ctx = make_ctx(Arc::clone(&kanban), args);
+        let save_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         let saved = SavePerspectiveCmd.execute(&save_ctx).await.unwrap();
         let pid = saved["id"].as_str().unwrap().to_string();
 
@@ -3122,7 +3146,7 @@ mod tests {
         args.insert("name".into(), Value::String("Bugs".into()));
         args.insert("view".into(), Value::String("board".into()));
         args.insert("filter".into(), Value::String("#bug".into()));
-        let save_ctx = make_ctx(Arc::clone(&kanban), args);
+        let save_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         let pid = SavePerspectiveCmd.execute(&save_ctx).await.unwrap()["id"]
             .as_str()
             .unwrap()
@@ -3195,7 +3219,7 @@ mod tests {
         args.insert("name".into(), Value::String("Bugs".into()));
         args.insert("view".into(), Value::String("board".into()));
         args.insert("filter".into(), Value::String("#bug".into()));
-        let save_ctx = make_ctx(Arc::clone(&kanban), args);
+        let save_ctx = make_ctx(Arc::clone(&kanban), args, None, None);
         let pid = SavePerspectiveCmd.execute(&save_ctx).await.unwrap()["id"]
             .as_str()
             .unwrap()
