@@ -48,6 +48,10 @@ comments:
 
     really-done gate GREEN: cargo fmt --check (exit 0); cargo clippy -p swissarmyhammer-cli --all-targets -- -D warnings (exit 0); cargo nextest run -p swissarmyhammer-cli (844 passed, 0 skipped). Adversarial double-check returned PASS; its one cosmetic note (Debug doc comment lumping "task handles" with both foreign types) was addressed by tightening the comment. Moving back to review.
   timestamp: 2026-06-22T15:28:43.393495+00:00
+- actor: claude-code
+  id: 01kvqzhgrvnck7fwgn1mwh9snq
+  text: 'DONE. Loop complete: implement → tests (844 passed) → review #1 (4 findings on pre-existing code) → implement #2 (2 fixed: manual Debug impl + create_arguments IntoIterator; 2 justified out-of-scope: error-type + getter-rename, captured as follow-up) → review #2 (clean) → done. Local rollback-point commit 4795366d5 (NOT pushed). No persistent findings hit the guardrail.'
+  timestamp: 2026-06-22T15:35:18.043002+00:00
 position_column: done
 position_ordinal: ffffffffffffffffffffffffffffffffffffffd180
 project: local-review
