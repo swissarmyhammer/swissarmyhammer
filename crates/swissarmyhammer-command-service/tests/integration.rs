@@ -36,6 +36,8 @@
 #[path = "integration/support.rs"]
 mod support;
 
+#[path = "integration/builtin_ai_commands_e2e.rs"]
+mod builtin_ai_commands_e2e;
 #[path = "integration/builtin_app_shell_commands_e2e.rs"]
 mod builtin_app_shell_commands_e2e;
 #[path = "integration/builtin_board_commands_e2e.rs"]

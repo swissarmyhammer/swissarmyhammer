@@ -2513,7 +2513,7 @@ pub async fn mcp_subscribe(
 ///
 /// Returns the `(BindKey, bridge)` pair so the caller can both detect a stale
 /// binding (by comparing `BindKey`s) and subscribe to the live bridge.
-async fn resolve_window_bridge(
+pub(crate) async fn resolve_window_bridge(
     state: &AppState,
     label: &str,
 ) -> (BindKey, swissarmyhammer_plugin::notify::NotificationBridge) {

@@ -13,7 +13,9 @@
 //!   ([`DragSession`], [`WindowState`], etc.). Moved verbatim; no behavior
 //!   change.
 //! - [`operations`] — the `#[operation]` structs that make up the `ui_state`
-//!   operation tool's verb / noun / parameter surface.
+//!   operation tool's verb / noun / parameter surface, plus the
+//!   `#[notification]`-declared [`operations::AiStreamingChanged`] event the
+//!   tool advertises so a plugin can `this.ui_state.on("aiStreaming", …)`.
 //! - [`service`] — [`UiStateServer`], the `rmcp::ServerHandler` that routes
 //!   `tools/call("ui_state", { op, … })` to the matching [`UIState`] method.
 //!
@@ -29,7 +31,7 @@ pub mod operations;
 pub mod service;
 pub mod state;
 
-pub use operations::operations;
+pub use operations::{ai_streaming_notification, notifications, operations, AiStreamingChanged};
 pub use service::UiStateServer;
 pub use state::{
     DragDestination, DragSession, DragSource, RecentBoard, UIState, UIStateChange, WindowState,

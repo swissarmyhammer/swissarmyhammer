@@ -756,9 +756,25 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// Seed a real `.kanban` board entity tree on disk under `root` so
+    /// `AppState::open_board` (which validates a board entity exists before
+    /// opening — Defense 1) accepts it. Mirrors the `create_board_at` seed used
+    /// by the `state.rs` open-board tests.
+    fn seed_board(root: &std::path::Path, name: &str) {
+        let kanban_dir = root.join(".kanban");
+        let boards_dir = kanban_dir.join("boards");
+        std::fs::create_dir_all(&boards_dir).expect("boards dir");
+        std::fs::write(boards_dir.join("board.yaml"), format!("name: {name}\n"))
+            .expect("board.yaml");
+        for sub in ["columns", "tasks", "tags", "actors", "perspectives"] {
+            std::fs::create_dir_all(kanban_dir.join(sub)).expect("board subdir");
+        }
+    }
+
     /// Open a board rooted at a fresh temp dir on `state`, returning the temp
     /// dir (kept alive by the caller) and the canonical `.kanban` path the
     /// board was registered under.
+    #[allow(dead_code)]
     async fn open_temp_board(state: &AppState) -> (TempDir, std::path::PathBuf) {
         let dir = TempDir::new().expect("board temp dir");
         let canonical = state
@@ -877,6 +893,144 @@ mod tests {
             );
         }
         assert_builtin_baseline(&platform, "the per-board host").await;
+    }
+
+    /// Call `available command` for `id` on a platform's host and return the
+    /// `{ ok, reason? }` structured object. Mirrors the production palette path
+    /// `command_tool_call` takes: `host.call(HostInternal, "commands",
+    /// "command", { op: "available command", id, ctx: {} })`.
+    async fn available_command(platform: &super::PluginPlatform, id: &str) -> serde_json::Value {
+        let result = tokio::time::timeout(
+            TIMEOUT,
+            platform.host().call(
+                CallerId::HostInternal,
+                "commands",
+                "command",
+                json!({ "op": "available command", "id": id, "ctx": {} }),
+            ),
+        )
+        .await
+        .expect("available command should not hang")
+        .expect("the commands module answers available command");
+        // `PluginHost::call` returns the raw rmcp `CallToolResult`; prefer the
+        // structured content, fall back to the first text part parsed as JSON.
+        result
+            .get("structuredContent")
+            .filter(|v| !v.is_null())
+            .cloned()
+            .or_else(|| {
+                result
+                    .get("content")
+                    .and_then(|c| c.as_array())
+                    .and_then(|parts| parts.iter().find_map(|p| p.get("text")?.as_str()))
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+            })
+            .unwrap_or_else(|| panic!("available command for {id} carried no result: {result}"))
+    }
+
+    /// Poll `available command` for `id` on `platform`'s host until its `ok`
+    /// matches `want`, or panic on timeout. The event pump delivers a published
+    /// notification to the plugin's `.on` callback asynchronously, so the cached
+    /// flag flips a beat after the publish.
+    async fn wait_for_available(
+        platform: &super::PluginPlatform,
+        id: &str,
+        want: bool,
+    ) -> serde_json::Value {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let got = available_command(platform, id).await;
+            if got.get("ok").and_then(serde_json::Value::as_bool) == Some(want) {
+                return got;
+            }
+            if Instant::now() >= deadline {
+                panic!("timed out waiting for {id} available.ok == {want}; last: {got}");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// MULTI-HOST REGRESSION: `ai_set_streaming` must publish to the host that
+    /// answers the palette for the STREAMING window — the per-board host of a
+    /// board window — not just the global host.
+    ///
+    /// This models the real production topology the single-host e2e test cannot:
+    /// the global host AND a per-board host each load their OWN `ai-commands`
+    /// isolate with its own cached streaming flag. The AI panel mounts inside a
+    /// board window, whose palette routes `available command` for `ai.cancel` to
+    /// the PER-BOARD host (`command_tool_call`'s board→per-board resolution). So
+    /// the publish — resolved from the streaming window's label via the SAME
+    /// `resolve_window_bridge` routing `command_tool_call` uses — must reach the
+    /// per-board isolate.
+    ///
+    /// Against the prior global-only publish this fails: the per-board isolate
+    /// never sees the flag flip and `ai.cancel` stays disabled mid-stream. After
+    /// the per-board-resolved publish it passes.
+    #[tokio::test]
+    async fn ai_set_streaming_reaches_per_board_host_for_a_board_window() {
+        let (_user_root, _builtin_cache, _global_dir, state) = app_state_with_plugin_roots().await;
+
+        // Seed a real `.kanban` board on disk so `open_board` accepts it (open
+        // validates a board entity exists — Defense 1), then open it: the board
+        // gets its own per-board platform with its own `ai-commands` isolate
+        // (and cached flag), exactly as production does.
+        let dir = TempDir::new().expect("board temp dir");
+        seed_board(dir.path(), "AI Streaming Board");
+        let path = state
+            .open_board(dir.path(), None)
+            .await
+            .expect("opening the seeded board should succeed");
+        let handle = {
+            let boards = state.boards.read().await;
+            boards.get(&path).expect("board is open").clone()
+        };
+        let platform = handle.platform().expect("board has a per-board platform");
+
+        // Bind a window label to this board, the way `create_window` persists a
+        // window→board assignment, so `resolve_window_bridge(label)` resolves to
+        // THIS board's per-board host (the AI panel mounts in a board window).
+        let label = "board-ai-streaming-test";
+        state
+            .ui_state
+            .set_window_board(label, &path.display().to_string());
+
+        // Idle: the per-board palette gate is closed.
+        {
+            let platform = platform.lock().await;
+            let idle = available_command(&platform, "ai.cancel").await;
+            assert_eq!(
+                idle["ok"],
+                json!(false),
+                "ai.cancel must be unavailable while idle on the per-board host, got {idle}"
+            );
+        }
+
+        // Streaming starts: publish via the PRODUCTION seam, resolving the
+        // bridge from the streaming window's label.
+        crate::ai::models::publish_ai_streaming(&state, label, true).await;
+
+        {
+            let platform = platform.lock().await;
+            let streaming = wait_for_available(&platform, "ai.cancel", true).await;
+            assert_eq!(
+                streaming["ok"],
+                json!(true),
+                "ai.cancel must be available mid-stream on the PER-BOARD host \
+                 (the host that answers the board window's palette), got {streaming}"
+            );
+        }
+
+        // The turn ends: the gate re-closes on the per-board host.
+        crate::ai::models::publish_ai_streaming(&state, label, false).await;
+        {
+            let platform = platform.lock().await;
+            let idle_again = wait_for_available(&platform, "ai.cancel", false).await;
+            assert_eq!(
+                idle_again["ok"],
+                json!(false),
+                "ai.cancel must re-close on the per-board host when the turn ends, got {idle_again}"
+            );
+        }
     }
 
     /// Closing board A drops its per-board host without affecting board B: the

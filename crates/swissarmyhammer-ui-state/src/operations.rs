@@ -27,7 +27,7 @@
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
-use swissarmyhammer_operations::{operation, Operation};
+use swissarmyhammer_operations::{notification, operation, Notification, Operation};
 
 // Inspector operations ──────────────────────────────────────────────────
 
@@ -448,4 +448,119 @@ static UI_STATE_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::ne
 /// Get the canonical slice of all `ui_state` operations.
 pub fn operations() -> &'static [&'static dyn Operation] {
     &UI_STATE_OPERATIONS
+}
+
+// Notifications ──────────────────────────────────────────────────────────
+
+/// The `notifications/ui_state/ai_streaming` event payload.
+///
+/// Reports whether the AI panel's conversation is currently streaming a turn,
+/// so a subscriber can gate streaming-only behaviour without a synchronous
+/// handle to the webview-owned conversation. The single declared subscriber is
+/// the `ai-commands` builtin plugin, which caches `streaming` and returns it
+/// from `ai.cancel`'s synchronous `available` callback (a generation can only
+/// be stopped while one is in flight).
+///
+/// This struct is the single source of truth for the event: it IS the published
+/// payload (it serializes to the notification's `params` via
+/// [`McpNotification::from_declared`](swissarmyhammer_plugin::McpNotification::from_declared))
+/// AND the declaration the SDK reads (its fields drive the
+/// `io.swissarmyhammer/notifications` `_meta`, resolved by
+/// `this.ui_state.on("aiStreaming", …)`). The two cannot drift.
+///
+/// The webview is the source of truth for the live flag (`aiStreaming()` in
+/// `apps/kanban-app/ui/src/ai/commands.ts`); the production publish point is the
+/// `ai_set_streaming` Tauri command, which builds this payload and publishes it
+/// onto the host's `NotificationBridge`. Provenance (`txn`/`origin`) is
+/// universal cross-cutting metadata stamped at publish time; it is intentionally
+/// NOT a field here.
+///
+/// The short event name is `"aiStreaming"` (an explicit override of the
+/// method's last segment `"ai_streaming"`) so a plugin subscribes with
+/// `this.ui_state.on("aiStreaming", …)` — the camelCase form matching the
+/// webview's `aiStreaming()` reader.
+#[notification(
+    method = "notifications/ui_state/ai_streaming",
+    event = "aiStreaming",
+    description = "The AI panel conversation's streaming turn-status changed."
+)]
+#[derive(Debug, Default, Serialize)]
+pub struct AiStreamingChanged {
+    /// Whether the AI conversation is currently streaming a turn.
+    pub streaming: bool,
+}
+
+/// The canonical slice of notifications the `ui_state` tool emits.
+///
+/// Mirrors [`operations`]: a leaked `Default` instance per notification, used
+/// only for its static metadata. Fed to `operation_tool!`'s `notifications:`
+/// field so the tool advertises its events in `_meta` and `.on()` can resolve
+/// them.
+static UI_STATE_NOTIFICATIONS: LazyLock<Vec<&'static dyn Notification>> =
+    LazyLock::new(|| vec![Box::leak(Box::<AiStreamingChanged>::default()) as &dyn Notification]);
+
+/// Get the canonical slice of all `ui_state` notifications.
+pub fn notifications() -> &'static [&'static dyn Notification] {
+    &UI_STATE_NOTIFICATIONS
+}
+
+/// Build the `notifications/ui_state/ai_streaming` notification for `streaming`.
+///
+/// The single production publish helper: serializes the declared
+/// [`AiStreamingChanged`] payload and stamps `user` provenance. Lives here, in
+/// the crate that DECLARES the notification, so the wire method comes from the
+/// `#[notification]` attribute (via the [`Notification`] trait) rather than
+/// being repeated as a string literal at the call site — the kanban app's
+/// `ai_set_streaming` Tauri command calls this so the declared schema and the
+/// published payload cannot drift.
+pub fn ai_streaming_notification(streaming: bool) -> swissarmyhammer_plugin::McpNotification {
+    let payload = AiStreamingChanged { streaming };
+    swissarmyhammer_plugin::McpNotification::from_declared(
+        payload.method(),
+        &payload,
+        swissarmyhammer_plugin::Provenance::user(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use swissarmyhammer_operations::generate_notifications_meta;
+
+    /// The `aiStreaming` notification declares the wire method and the
+    /// camelCase short event a plugin subscribes to with
+    /// `this.ui_state.on("aiStreaming", …)`.
+    #[test]
+    fn ai_streaming_notification_declares_method_and_event() {
+        let note = AiStreamingChanged::default();
+        assert_eq!(note.method(), "notifications/ui_state/ai_streaming");
+        assert_eq!(
+            note.event(),
+            "aiStreaming",
+            "the short event must be the camelCase override, not the method's \
+             last segment, so the plugin subscribes with `.on(\"aiStreaming\")`"
+        );
+    }
+
+    /// The notification serializes to its declared `params` shape — a single
+    /// `streaming` boolean — so `from_declared` produces the right payload.
+    #[test]
+    fn ai_streaming_payload_serializes_to_streaming_flag() {
+        let value = serde_json::to_value(AiStreamingChanged { streaming: true })
+            .expect("AiStreamingChanged serializes");
+        assert_eq!(value, serde_json::json!({ "streaming": true }));
+    }
+
+    /// The notification appears in the generated `io.swissarmyhammer/notifications`
+    /// `_meta` tree under its short event name with its wire method — the
+    /// discovery surface `this.ui_state.on(...)` resolves against.
+    #[test]
+    fn ui_state_notifications_meta_advertises_ai_streaming() {
+        let meta = generate_notifications_meta(notifications());
+        let obj = meta.as_object().expect("notifications meta is an object");
+        let leaf = obj
+            .get("aiStreaming")
+            .expect("aiStreaming event must be declared in the _meta tree");
+        assert_eq!(leaf["method"], "notifications/ui_state/ai_streaming");
+    }
 }

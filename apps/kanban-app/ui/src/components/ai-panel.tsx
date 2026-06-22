@@ -459,9 +459,9 @@ function AiPanelConversation({
 
   // Mirror the full ACP turn status (idle / streaming / error) into the AI
   // command registry. Two consumers read it back: `ai.cancel`'s `available`
-  // gate (plus the backend `UIState.ai_streaming` flag) tracks the streaming
-  // arm, and the bottom bar (`ModeIndicator`) shows the status. `setAiStatus`
-  // is a no-op on an unchanged value.
+  // gate (the `ai-commands` plugin's cached streaming flag) tracks the
+  // streaming arm, and the bottom bar (`ModeIndicator`) shows the status.
+  // `setAiStatus` is a no-op on an unchanged value.
   useEffect(() => {
     setAiStatus(status);
   }, [status]);

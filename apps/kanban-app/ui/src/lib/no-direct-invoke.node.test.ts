@@ -68,7 +68,7 @@ const ALLOWED_INVOKE_HANDLERS = new Set<string>([
   // clean MCP-wire equivalent; an `ai` MCP server is out of scope here.
   "ai_list_models", // native: queries the in-process AI agent registry (ModelManager::list_agents) — ai-panel territory
   "ai_start_agent", // native: spawns the in-process ACP agent's loopback WebSocket bridge + registers it in AppState for teardown — ai-panel territory
-  "ai_set_streaming", // native: flips the transient `#[serde(skip)]` UIState.ai_streaming availability-cache flag (parallel to set_undo_redo_state) — ai-panel territory
+  "ai_set_streaming", // native: publishes the webview streaming status onto the plugin host's NotificationBridge as notifications/ui_state/ai_streaming (gates the ai.cancel registry-palette entry via the ai-commands plugin's subscription) — ai-panel territory
 
   // ── OS / process primitives — documented natives. ──
   // (`show_context_menu` migrated to the `window` MCP server's

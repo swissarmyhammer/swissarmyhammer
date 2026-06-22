@@ -27,9 +27,9 @@ use serde_json::Value;
 use swissarmyhammer_operations_macros::operation_tool;
 
 use crate::operations::{
-    operations, Dismiss, DragCancel, DragComplete, DragStart, Inspect, InspectorClose,
-    InspectorCloseAll, InspectorSetWidth, PaletteClose, PaletteOpen, SetActiveView, SetKeymapMode,
-    SetScopeChain, ShowCommand, ShowPalette, ShowSearch, StartRename,
+    notifications, operations, Dismiss, DragCancel, DragComplete, DragStart, Inspect,
+    InspectorClose, InspectorCloseAll, InspectorSetWidth, PaletteClose, PaletteOpen, SetActiveView,
+    SetKeymapMode, SetScopeChain, ShowCommand, ShowPalette, ShowSearch, StartRename,
 };
 use crate::state::{DragSession, DragSource, UIState};
 
@@ -128,6 +128,7 @@ impl UiStateServer {
             name: "ui_state",
             description: "UI-state mutations: inspector, palette, keymap, rename, drag, and app-UI toggles.",
             operations: operations(),
+            notifications: notifications(),
         }
     }
 

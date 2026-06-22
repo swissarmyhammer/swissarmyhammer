@@ -443,12 +443,13 @@ function AiPanelContainerBody({
     });
   }, [handleToggle, handleFocus, handleSelectModel]);
 
-  // Mirror the conversation's streaming flag to the backend `UIState` so the
-  // `ai.cancel` palette entry is gated server-side too. `AiPanelConversation`
-  // (a View) reports streaming into the `ai/commands.ts` registry; the
-  // Container — which owns every backend seam — pushes it to `UIState` via
-  // the `ai_set_streaming` Tauri command. Keeping the `invoke` here, not in
-  // the View, preserves the Container/View split.
+  // Publish the conversation's streaming flag to the plugin host so the
+  // `ai.cancel` REGISTRY palette entry is gated. `AiPanelConversation` (a View)
+  // reports streaming into the `ai/commands.ts` registry; the Container — which
+  // owns every backend seam — pushes it to the backend via the `ai_set_streaming`
+  // Tauri command, which publishes a `notifications/ui_state/ai_streaming`
+  // notification the `ai-commands` plugin subscribes to. Keeping the `invoke`
+  // here, not in the View, preserves the Container/View split.
   const streaming = useSyncExternalStore(
     subscribeAiStreaming,
     aiStreaming,

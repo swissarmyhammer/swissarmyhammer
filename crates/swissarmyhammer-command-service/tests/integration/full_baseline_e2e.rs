@@ -94,9 +94,10 @@ use serde_json::{json, Map, Value};
 use swissarmyhammer_command_service::bootstrap::install_commands_module;
 use swissarmyhammer_directory::KanbanConfig;
 use swissarmyhammer_plugin::{
-    CallerId, McpServer as PluginMcpServer, PluginHost, Result as PluginResult, ToolMetadata,
-    PLUGINS_SUBDIR,
+    CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost, Result as PluginResult,
+    ToolMetadata, PLUGINS_SUBDIR,
 };
+use swissarmyhammer_ui_state::{UIState, UiStateServer};
 use tempfile::TempDir;
 
 use crate::support::call_command;
@@ -134,9 +135,14 @@ const BUILTIN_COMMAND_PLUGINS: &[&str] = &[
 ///
 /// `commands` is intentionally absent — `install_commands_module`
 /// exposes it as part of the bootstrap; trying to expose it twice
-/// errors out on the host's available-modules table.
+/// errors out on the host's available-modules table. `ui_state` is also
+/// absent here: it is exposed as the REAL [`UiStateServer`] (not a stub) so
+/// its declared `aiStreaming` notification `_meta` is present — the
+/// `ai-commands` bundle's `this.ui_state.on("aiStreaming", …)` subscription
+/// resolves against it at load time and would otherwise throw
+/// `UnknownNotification`.
 const STUB_BACKENDS: &[&str] = &[
-    "store", "entity", "kanban", "views", "ui_state", "window", "app", "focus",
+    "store", "entity", "kanban", "views", "window", "app", "focus",
 ];
 
 /// A no-op [`PluginMcpServer`] used to satisfy the per-plugin
@@ -215,8 +221,14 @@ fn stage_all_builtin_command_plugins(layer_root: &Path) {
     }
 }
 
-/// Expose every stub backend the plugins need to satisfy `ensureServices`.
-async fn expose_stub_backends(host: &PluginHost) {
+/// Expose every backend the plugins need to satisfy `ensureServices`.
+///
+/// Most backends are no-op [`StubBackend`]s — registration only needs the
+/// module to exist. `ui_state` is the exception: it is the REAL
+/// [`UiStateServer`] so its `aiStreaming` notification `_meta` is advertised and
+/// the `ai-commands` bundle's `this.ui_state.on("aiStreaming", …)` resolves
+/// (the kept `_dir` keeps the temp-file substrate alive for the load).
+async fn expose_stub_backends(host: &PluginHost, dir: &TempDir) {
     for module_id in STUB_BACKENDS {
         let backend = StubBackend::new(*module_id);
         host.expose_rust_module(
@@ -226,6 +238,18 @@ async fn expose_stub_backends(host: &PluginHost) {
         .await
         .unwrap_or_else(|e| panic!("exposing stub backend {module_id:?} should succeed: {e:?}"));
     }
+
+    let ui_state = Arc::new(UIState::load(dir.path().join("ui_state.yaml")));
+    let ui_state_server = UiStateServer::new(ui_state);
+    let ui_state_module = InProcessServer::new(ui_state_server)
+        .await
+        .expect("wrapping the real ui_state server should succeed");
+    host.expose_rust_module(
+        "ui_state".to_string(),
+        Arc::new(ui_state_module) as Arc<dyn PluginMcpServer>,
+    )
+    .await
+    .expect("exposing the real ui_state module should succeed");
 }
 
 /// Pull the registered command id-set out of the `list command` reply.
@@ -388,6 +412,9 @@ struct BootedBuiltins {
     _host: PluginHost,
     _user_root: TempDir,
     _builtin_root: TempDir,
+    /// Temp-file substrate for the real `ui_state` backend, kept alive so its
+    /// `UIState` file outlives the plugin loads.
+    _ui_state_dir: TempDir,
 }
 
 /// Boot a real `PluginHost` against a temp builtin-layer with all 10
@@ -417,7 +444,8 @@ async fn boot_all_builtin_plugins() -> BootedBuiltins {
     // on the host's available-modules table, each plugin's `load()`
     // runs to completion and its `registerCommands(...)` helper lands
     // on the service.
-    tokio::time::timeout(TIMEOUT, expose_stub_backends(&host))
+    let ui_state_dir = TempDir::new().expect("ui_state substrate temp dir");
+    tokio::time::timeout(TIMEOUT, expose_stub_backends(&host, &ui_state_dir))
         .await
         .expect("stub-backend exposure should not hang");
 
@@ -431,6 +459,7 @@ async fn boot_all_builtin_plugins() -> BootedBuiltins {
         _host: host,
         _user_root: user_root,
         _builtin_root: builtin_root,
+        _ui_state_dir: ui_state_dir,
     }
 }
 

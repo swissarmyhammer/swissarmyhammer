@@ -110,6 +110,48 @@ async fn ui_state_tool_meta_operations_tree_is_complete() {
     );
 }
 
+/// The `ui_state` tool advertises the `aiStreaming` notification in its
+/// `io.swissarmyhammer/notifications` `_meta`, so a plugin can resolve and
+/// subscribe to it with `this.ui_state.on("aiStreaming", …)`.
+///
+/// This is the discovery surface the SDK's `resolveNotificationMethod` walks:
+/// the short event name keys the tree and the leaf carries the full wire method.
+/// Pinning it here keeps the `ai-commands` plugin's `.on("aiStreaming", …)`
+/// subscription from silently breaking if the declaration is renamed or dropped.
+#[tokio::test]
+async fn ui_state_tool_meta_advertises_ai_streaming_notification() {
+    let h = Harness::new();
+    let service = h.service();
+
+    let listed = service
+        .list_tools(None, request_context())
+        .await
+        .expect("list_tools should succeed");
+    let tool = &listed.tools[0];
+    assert_eq!(tool.name.as_ref(), "ui_state");
+
+    let meta = tool
+        .meta
+        .as_ref()
+        .expect("ui_state tool advertises a _meta tree");
+    let notifications_tree = meta
+        .0
+        .get("io.swissarmyhammer/notifications")
+        .and_then(Value::as_object)
+        .expect("_meta carries io.swissarmyhammer/notifications");
+
+    let leaf = notifications_tree
+        .get("aiStreaming")
+        .expect("the aiStreaming event must be declared so .on(\"aiStreaming\") resolves");
+    assert_eq!(
+        leaf.get("method"),
+        Some(&Value::String(
+            "notifications/ui_state/ai_streaming".to_string()
+        )),
+        "the aiStreaming leaf must carry its full wire method",
+    );
+}
+
 /// Hard constraint: the `ui_state` tool owns no spatial-focus op.
 ///
 /// The spatial focus KERNEL is owned by the separate `focus` MCP server. The

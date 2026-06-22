@@ -34,19 +34,21 @@
  * {@link setAiStatus} — `idle`, `streaming`, or `error`. Two consumers read
  * it back:
  *
- * - `ai.cancel` is available only while the conversation is streaming. That
- *   gate is owned entirely frontend-side: the window-layer command builder
- *   (`app-shell.tsx`'s `buildAiCommands`) reads {@link aiStreaming} (derived
- *   from the status) and re-renders via {@link subscribeAiStreaming}, so the
- *   command's `available` flag tracks the live conversation — governing both
- *   the React-scope palette (`collectAvailableCommands`) and the keybinding
- *   (`resolveCommand` no-ops a blocked command). The registry-driven palette
- *   entry from the `ai-commands` builtin plugin carries no `available`
- *   callback (the plugin isolate has no synchronous view of this webview-only
- *   flag), so it shows as always-available there; the frontend gate is the
- *   authoritative one. (Historical note: this flag used to be mirrored into
- *   the backend `UIState.ai_streaming` for a Rust `AiCancelCmd::available()`
- *   check, but that command was retired in the ai.yaml → plugin migration.)
+ * - `ai.cancel` is available only while the conversation is streaming. The
+ *   AUTHORITATIVE execution gate is dispatch-time and frontend-side: the
+ *   `ai.cancel` webview bus handler (`app-shell.tsx`'s `useAiCommandBusHandlers`)
+ *   reads {@link aiStreaming} when dispatched and no-ops while idle, so both the
+ *   keybinding and palette dispatch are gated. The REGISTRY palette's
+ *   enabled/disabled rendering is gated separately: the `ai_set_streaming` Tauri
+ *   command (driven by {@link setAiStreaming} below) publishes the streaming
+ *   status onto the plugin host's notification bridge as
+ *   `notifications/ui_state/ai_streaming`, and the `ai-commands` builtin plugin
+ *   subscribes to it (`this.ui_state.on("aiStreaming", …)`), caching the flag
+ *   and returning it from `ai.cancel`'s synchronous `available` callback. So the
+ *   palette shows "Stop AI Generation" greyed-out while idle, matching the
+ *   dispatch behaviour. (Historical note: this flag used to be mirrored into a
+ *   never-read backend `UIState.ai_streaming` cache; that dead plumbing was
+ *   replaced by the notification publish.)
  * - The app's bottom bar (`ModeIndicator`) reads {@link aiStatus} and
  *   re-renders via {@link subscribeAiStatus} to show `idle` / `streaming` /
  *   `error` next to the keymap mode.
