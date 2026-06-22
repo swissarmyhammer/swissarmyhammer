@@ -67,10 +67,12 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { SparklesIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
+import { AiPanelPressable } from "@/components/ai-panel-focus";
 import { useActiveBoardPath, useDispatchCommand } from "@/lib/command-scope";
 import { useBoardData } from "@/components/window-container";
 import { getStr } from "@/types/kanban";
+import { asSegment } from "@/types/spatial";
 import {
   AiPanel,
   aiPanelConnectFactory,
@@ -675,17 +677,26 @@ function AiPanelShell({
 
       {/* The collapsed rail — a single AI-star toggle. Only shown when
           collapsed; the expanded panel has its own header with the matching
-          star control wired through `onCollapse` on the hosted View. */}
+          star control wired through `onCollapse` on the hosted View.
+
+          It is an `<AiPanelPressable>` (a `<FocusScope>` leaf with Enter/Space
+          activation), NOT a bare `<Button>`, so the collapsed panel can be
+          re-opened by spatial-nav and the jump-to overlay, not just the mouse.
+          The rail lives in the container SHELL, outside the hosted body's
+          `ui:ai-panel` zone, so its leaf composes its FQM directly under the
+          window layer (`/window/ui:ai-panel.expand`) — `AiPanelContainer` is a
+          child of `App.tsx`'s window-root `<FocusLayer>`. The ghost-icon look
+          is preserved via the equivalent `buttonVariants` className. */}
       {open ? null : (
         <div className="flex flex-col items-center py-2">
-          <Button
-            aria-label="Expand AI panel"
-            onClick={onToggle}
-            size="icon"
-            variant="ghost"
+          <AiPanelPressable
+            moniker={asSegment("ui:ai-panel.expand")}
+            ariaLabel="Expand AI panel"
+            onPress={onToggle}
+            className={buttonVariants({ variant: "ghost", size: "icon" })}
           >
             <SparklesIcon className="size-4" />
-          </Button>
+          </AiPanelPressable>
         </div>
       )}
 

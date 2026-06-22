@@ -58,7 +58,7 @@ import {
   RotateCcwIcon,
   SparklesIcon,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   AiPanelFocusScope,
   AiPanelPressable,
@@ -313,16 +313,23 @@ function AiPanelHeader({ onCollapse }: AiPanelHeaderProps): ReactNode {
   return (
     <header className="flex items-center justify-end gap-2 border-b px-3 py-2">
       {/* The single AI-star toggle — folds the panel to its rail. The hosting
-          container owns the open-state; this button is wired straight to the
-          `onCollapse` callback. */}
-      <Button
-        aria-label="Collapse AI panel"
-        onClick={onCollapse}
-        size="icon"
-        variant="ghost"
+          container owns the open-state; this control is wired straight to the
+          `onCollapse` callback.
+
+          It is an `<AiPanelPressable>` (a `<FocusScope>` leaf with Enter/Space
+          activation), NOT a bare `<Button>` — so it participates in spatial-nav
+          and the jump-to overlay like every other panel control. The
+          ghost-icon look is preserved by passing the equivalent
+          `buttonVariants` className. The leaf composes its FQM under the panel
+          zone: `/window/ui:ai-panel/ui:ai-panel.collapse`. */}
+      <AiPanelPressable
+        moniker={asSegment("ui:ai-panel.collapse")}
+        ariaLabel="Collapse AI panel"
+        onPress={onCollapse}
+        className={buttonVariants({ variant: "ghost", size: "icon" })}
       >
         <SparklesIcon className="size-4" />
-      </Button>
+      </AiPanelPressable>
     </header>
   );
 }
