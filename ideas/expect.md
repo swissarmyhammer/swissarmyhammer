@@ -299,6 +299,12 @@ Design choices in the format, each tied to a research finding:
   determinism is won or lost.
 - **`reliability: pass^k`** makes flakiness a first-class, declared property, not
   a surprise.
+- **State invariants, not scenarios.** A good `Then` says how the system *should be*
+  in domain language — "every column header's count equals its cards," "a task is in
+  exactly one column" — not a scripted example with incidental data ("card *X*,
+  count 2→3"). Invariants catch a *class* of failures and don't drift on incidental
+  data; the authoring skill pushes for them. (See *How `evaluate` turns prose into a
+  check* for why invariant assertions beat frozen literals.)
 
 ### Operations
 
@@ -314,9 +320,9 @@ is noun-first.) **The noun's number follows cardinality**: singular for one
 **Nouns** (four):
 
 - **expectation** — the `*.expect.md` spec (frontmatter + intent + criteria).
-- **observation** — one authoritative capture of a run: final state + trajectory +
-  artifacts (the `received`). Produced by `expectation observe`, addressed by its
-  expectation's path.
+- **observation** — one authoritative capture of a run: a timeline of checkpoints
+  (one per `When` step + a final) plus the driver trajectory (the `received`).
+  Produced by `expectation observe`, addressed by its expectation's path.
 - **golden** — an approved, scrubbed observation; the committed baseline. Produced
   by `observation approve`.
 - **surface** — the adapter catalog (cli/http/browser/gui/file/db), read-only.
@@ -366,7 +372,7 @@ expect expectation check src/checkout/coupon      # doctor + observe + evaluate 
 
 # a drift, triaged and accepted
 expect expectation check src/checkout/coupon      # → drifted
-expect observation get src/checkout/coupon        # what happened (trajectory + artifacts)
+expect observation get src/checkout/coupon        # what happened (checkpoint timeline + trajectory)
 expect observation evaluate src/checkout/coupon   # the reasoned verdict (why)
 expect observation approve src/checkout/coupon    # intended change → accept the new golden
 
@@ -650,16 +656,25 @@ defaulting to the sah model default — the same model resolution `review` and
 `rules` already use.
 
 `observe` produces an `Observation` (the authoritative capture); `evaluate` is the
-pure function `(Observation, &[Criterion]) -> ExpectationVerdict`. The verdict is
-structured, never a bare boolean — sparse pass/fail is too weak to drive the next
-agent edit:
+pure function `(Observation, &[Criterion]) -> ExpectationVerdict`. The observation
+is a **timeline of checkpoints**, not a single final snapshot — the adapter captures
+state (and timing) after *each* `When` step, because real criteria are multi-step
+("after the *first* apply… after the *second*…"), relational ("drops by the
+discount"), and temporal ("under 500ms"). A locator addresses a checkpoint. The
+verdict is structured, never a bare boolean — sparse pass/fail is too weak to drive
+the next agent edit:
 
 ```rust
 pub struct Observation {
-    pub path: String,               // repo-relative path of the spec — its identity
-    pub final_state: FinalState,    // authoritative SUT state read by the adapter (ground truth)
-    pub trajectory: Trajectory,     // what the driver did, for `observation get` — never the verdict source
-    pub artifacts: Vec<Artifact>,   // stdout / a11y tree / db rows / http response, scrubbed
+    pub path: String,                 // repo-relative path of the spec — its identity
+    pub checkpoints: Vec<Checkpoint>, // one per When step + a final — the authoritative timeline
+    pub trajectory: Trajectory,       // what the driver did, for `observation get` — never the verdict source
+}
+
+pub struct Checkpoint {
+    pub after: String,                // the When step this snapshot follows (or "final")
+    pub state: SurfaceState,          // adapter's authoritative read: a11y tree / json body / db rows / stdout
+    pub duration: Duration,           // for temporal criteria
 }
 
 // evaluate is pure and re-runnable: no system touched.
@@ -681,6 +696,92 @@ pub struct ExpectationVerdict {
     pub reliability: Reliability,   // pass^k result across repeated observations
 }
 ```
+
+### How `evaluate` turns prose into a check
+
+`evaluate` doesn't re-interpret each `Then` line every run. It works off a
+**compiled assertion** per criterion — and how that compilation works is where the
+"natural language, no step definitions" promise is kept rather than hand-waved.
+
+**1. Compile the criterion into a typed assertion.** A `Then` line binds to a
+checkpoint, a **locator** (where in that checkpoint's state the value lives), an
+operator, and an expected — or, for a judgment, a rubric + an anchor:
+
+```
+"after the first apply, the total is $40"
+  → { checkpoint: 1, locate: $.total, op: equals, expected: 40.00 }            (Tier 1)
+"an error explains the coupon is already applied"
+  → { checkpoint: 2, locate: $.message, op: judge,
+      rubric: "conveys already-applied", anchor: <approved text>, sim: 0.85 }  (Tier 3)
+```
+
+**The *kind* of assertion that compiles sets the tier** — locator + exact/regex/
+numeric → Tier 1; numeric or semantic tolerance → Tier 2; rubric + anchor → Tier 3.
+The author never picks a tier; the cheapest faithful one wins.
+
+**2. Locators are a per-surface dialect, ranked by robustness.** A locator resolves
+a path into a checkpoint's state; each surface has its own:
+
+| surface | locator | robustness |
+|---|---|---|
+| cli | stream regex-capture / json-path if JSON / `exit` | regex brittle, json-path stable |
+| http | `status` / `header:<name>` / json-path | json-path stable |
+| db | a SQL query + projection | very stable (the locator *is* SQL) |
+| file | path + content (+ sub-locator if structured) | stable |
+| browser / gui | `role[name=…]` + tree relationship (`within` / `ancestor`) | a11y-stable; pixel/offset brittle |
+
+The compiler prefers the most durable locator that captures the value (json-path
+over text-regex, role+name over DOM position). A locator that **stops binding** (the
+`Total:` line moved, the column was renamed) is itself **structural drift** —
+surfaced loudly, never a silent mis-read.
+
+**3. Compilation needs a real observation, so it freezes into the golden.** You
+can't write `$.total` without seeing the output's shape — so compilation happens at
+`observation approve`, bound against the approved observation, and the compiled
+assertion set is **frozen into the golden** alongside it. `evaluate` over a later
+observation **replays the frozen assertions** (no recompile) — apples-to-apples,
+mostly deterministic. A freshly compiled assertion must **bind and pass against the
+very observation it was compiled from**, or it's rejected as a hallucinated locator
+before it ever reaches the approve diff — compilation is self-verifying.
+
+**4. The compiled assertion is reviewable and hand-editable — but prose-bound.** The
+`observation approve` diff shows the binding ("$40 ← `$.total`"), not just the value,
+so a mis-compiled locator is caught at review. A reviewer can hand-edit a tricky
+locator. The guardrail that keeps this from becoming Cucumber step-definition glue:
+a hand-edit is **bound to the criterion's prose** — change the criterion text and
+the edit is discarded, recompiled, and re-reviewed. An assertion can never silently
+check something the prose no longer says.
+
+**5. Prefer invariants over frozen literals.** A criterion compiles to one of two
+deterministic flavors:
+
+- **literal-match** — `$.total equals 40` — freezes a specific value (example-style).
+- **invariant-holds** — *for each* column: `header_count == count(cards)` — freezes
+  a *relationship*; the expected is derived from the observation each run.
+
+Invariants are how you say "this is how things should be," and they're strictly
+better where they exist: they catch a *class* of failures (a count that lies on
+*any* board, not the one scenario you scripted), and they **don't drift on incidental
+data** (different tasks, different totals next month → still green, no re-approval
+noise). The authoring skill should push for invariants in the system's domain
+language; frozen literals are the fallback when there genuinely is only a specific
+expected value. This is the existential `Given`/`When`/`Then` — `Given` the essential
+precondition, `When` the essential action, `Then` the invariant that must then hold,
+not a fixture with a name and a magic number.
+
+**6. Tier 3 is the residual-of-the-residual.** A judgment criterion does *not* call
+the model every run. At `evaluate`: locate the evidence → first take **embedding
+similarity to the anchor** (the approved text). ≥ threshold → it's essentially the
+approved evidence → **pass, no model call**. Only on *divergence* does the judge wake:
+"does this *new* evidence still satisfy the rubric?" Yes → passes the rubric but the
+evidence changed → **drift**, surfaced for re-approval. No → fail. A stable message
+never touches the model; a changed one touches it once and shows as drift.
+
+**"Pure" means no SUT — not uniformly deterministic.** `evaluate` touches no system
+and is re-runnable, but determinism is *per-criterion*: Tier 1/2 frozen assertions
+run with no model (deterministic); a Tier 3 criterion that diverged calls the model
+live (fuzzy — hence `pass^k` / panel for those lines). A spec whose `Then` items all
+compile to Tier 1 / invariants is fully deterministic.
 
 ### The Drift Ledger (controlling drift)
 
@@ -743,10 +844,14 @@ location *is* its identity and moving a spec is a visible rename of its golden.
 
 ### The Check Loop
 
-The most important architectural decision: **`expect` does not build an agent loop.
-When it needs agentic behavior, it delegates to an existing coding agent over ACP**
-(the next section makes the case). What `expect` owns is everything *around* the
-loop — the surface, the stop conditions, the capture, and the verdict.
+The most important architectural decision: **`expect` owns the mechanical
+drive+observe for every surface in-process, and borrows an agent only for the
+*reasoning*** — interpreting a fuzzy step, or authoring one. Pressing a button by
+role+name, issuing an HTTP request, running a command is mechanical UI/IO automation,
+expect's to own (no Node, no Python — see *Surface adapters*). What it does *not*
+rebuild is LLM planning: when a step genuinely needs interpretation it delegates that
+to an existing agent over ACP (the *Delegation* section). Either way `expect` owns
+the surface, the stop conditions, the capture, and the verdict.
 
 After the static `doctor` pass, an `expect expectation check` runs each expectation as
 **provision → arrange → act → observe → evaluate → teardown**, with three roles
@@ -759,15 +864,20 @@ trusted as observer or judge:
    *Provisioning and Isolation*).
 2. **Arrange (Given)** — establish the precondition state, deterministically via
    fixtures where possible, agent-driven only where necessary.
-3. **Act (When)** — the **driver** causes the transition. For a deterministic cli
-   surface that's just running a command; for browser/gui it's a delegated ACP
-   agent driving a fixed set of surface MCP tools. The driver is handed the
-   **goal** (intent + Given + When) but **not** the `Then` criteria.
-4. **Observe** — the **surface adapter** reads the *authoritative* final state
-   directly from the SUT (exit code, stdout, files, a11y tree, db rows, http
-   response) plus the trajectory, and assembles the `Observation`. This — not the
-   driver's transcript — is the result; the *final program/DOM/DB state is ground
-   truth, not a screenshot*. If the driver was an agent, its structured output is
+3. **Act (When)** — the **driver** causes the transition, and for every surface the
+   default driver is **expect's built-in adapter** doing it mechanically: cli runs the
+   command, http issues the request, browser/gui press/type by `role[name=…]` over the
+   accessibility tree. Mechanical actuation is deterministic and reproducible. An LLM
+   agent enters only to *author* those concrete steps (in `create`) or as a **runtime
+   fallback** when a cached action stops binding — and a fallback re-resolve is
+   surfaced as drift, never silently applied. When an agent does drive, it is handed
+   the **goal** (intent + Given + When) but **not** the `Then` criteria.
+4. **Observe** — the **surface adapter** reads the *authoritative* state at each
+   checkpoint — after every `When` step and at the end — directly from the SUT (exit
+   code, stdout, files, a11y tree, db rows, http response), and assembles the
+   `Observation` timeline (plus the trajectory). This — not the driver's transcript —
+   is the result; the *observed program/DOM/DB state is ground truth, not a
+   screenshot*. If the driver was an agent, its structured output is
    captured via a schema-forced `StructuredOutput` tool call (reuse `review`'s
    contract + tolerant `extract_json_value`), but it is treated as a *claim*, never
    the observation.
@@ -777,19 +887,55 @@ trusted as observer or judge:
    success.
 6. **Teardown** the provisioned instance.
 
-The surface adapters and what each perceives/asserts:
+#### Surface adapters: built-in, mechanical, in-process
 
-- **cli** — run the command, capture stdout/stderr/exit-code/written files
-  (deterministic by construction; the easiest, highest-value surface to ship first).
-- **http** — issue requests, assert on status/body/headers (deterministic).
-- **browser** — drive via the **accessibility tree** (role + accessible name),
-  the most refactor-robust target available; reserve pixel/vision for last
-  resort. Playwright MCP is the model — a pure perceive (`browser_snapshot`) +
-  act (`browser_click` by `ref`) substrate that contributes *none* of the loop.
-- **gui** — drive a native desktop app via the OS accessibility API
-  (AX / UIA / AT-SPI); the desktop analog of `browser`.
-- **file / db** — assert on filesystem or end-of-run DB state (the τ-bench
-  pattern: compare final state to an annotated goal).
+Every surface adapter is a built-in engine that both **drives** (causes the When)
+and **observes** (captures the authoritative checkpoint) — the same mechanism does
+both. None of it is delegated to Node, Python, Playwright, or Appium; it all runs
+**in the `expect` process** as Rust FFI / COM / D-Bus / WebSocket:
+
+| surface | drive | observe | in-process mechanism |
+|---|---|---|---|
+| **cli** | run argv | stdout/stderr/exit/files | std process |
+| **http** | issue request | status/headers/body | an HTTP client |
+| **db** | run statements | rows/tables | a DB client |
+| **file** | write | files/dirs/content | the filesystem |
+| **browser** | press/type by `role[name=…]` | snapshot the a11y tree | **CDP** `Accessibility` + `Input` via `chromiumoxide` (pure Rust, no Node) |
+| **gui** | press/type by `role[name=…]` | snapshot the a11y tree | **AX** (macOS `AXUIElement`) · **UIA** (Windows `IUIAutomation`) · **AT-SPI** (Linux `atspi`+`zbus`) |
+
+**Accessibility is the GUI's drive *and* observe channel.** The same AX / UIA /
+AT-SPI (and CDP `Accessibility`) tree you read for the observation also exposes the
+actions — `AXPress` / UIA `InvokePattern` / AT-SPI actions / CDP `Input` — so the
+adapter presses `button[name="Complete"]` and snapshots the resulting tree through
+one API. This is deliberately *not* pixels: a locator binds to `role + accessible
+name + tree position`, robust to layout/styling, and a genuine control rename
+surfaces as honest structural drift — not the everything-screams-on-a-cosmetic-change
+noise of a screenshot diff. Sparse a11y → vision/OCR is the last resort, and a sparse
+tree is itself a signal the app's accessibility (and testability) is weak.
+
+**This makes browser/gui *deterministic* surfaces.** Mechanical a11y actuation
+("press the button named Complete") is reproducible, so browser/gui reclassify
+alongside cli/http: deterministic, can run once. Non-determinism only enters when an
+*agent* is in the mechanical loop (the runtime fallback), which is the exception.
+
+**Drilling into a Tauri / Electron app.** Tauri uses the OS webview (WebView2 /
+WKWebView / WebKitGTK), and **every OS webview bridges its web content's accessibility
+into the native a11y tree** — a `<button aria-label="Complete">` shows up as a real
+`button` node named "Complete" in AX / UIA / AT-SPI. So you **don't need the webview's
+debug protocol**: the `gui` (native-a11y) adapter reads and drives a Tauri app exactly
+like any native app.
+
+- **macOS** (WKWebView): the web UI appears under an `AXWebArea`; read the subtree and
+  drive via `AXUIElementPerformAction` — pure AX FFI, no inspector needed.
+- **Windows** (WebView2): in the UIA tree. Bonus — WebView2 is Chromium, so enabling
+  `--remote-debugging-port` also exposes the raw CDP `Accessibility` tree to
+  `chromiumoxide` as an escape hatch when the bridged tree is thin.
+- **Linux** (WebKitGTK): bridged to AT-SPI.
+
+So the in-repo `kanban-app` (Tauri) is checked with `surface: gui`, native a11y, **no
+CDP and no Node** — macOS AX reads the bridged React tree and `AXPress` actuates it.
+The one quality dependency: the bridged tree is only as good as the web app's
+semantics (`<button>`/`aria-label` → rich; `<div onclick>` soup → sparse).
 
 **Stop conditions — `expect` owns both, because the substrate won't.** Every
 mature loop in the survey has two independent stops, and the hard caps are always
@@ -831,7 +977,7 @@ Three hardening rules from the research are non-negotiable:
 **Assert on outcomes, never on action equality.** Agent trajectories are not
 reproducible even at temperature 0 + fixed seed — batch-invariance alone produced
 80 unique completions from 1000 identical temp-0 requests, diverging by token 103.
-Pass/fail is gated on the captured *outcome* (final state + criteria), never on a
+Pass/fail is gated on the captured *outcome* (checkpoint state + criteria), never on a
 byte-identical action sequence.
 
 **Determinism comes from not calling the model, not from temp=0.** Following
@@ -944,8 +1090,11 @@ the residual model-judged criteria.
 - **`pass^k` is the headline metric**, not average pass rate. `reliability:
   pass^3` means all three runs must pass; the verdict reports the per-run spread
   so a 2-of-3 flake is visible, not hidden behind an average.
-- **Repeat runs default to ≥2** where the surface is non-deterministic;
-  deterministic surfaces (cli/http/file/db with cached actions) can run once.
+- **Repeat runs default to ≥2 only when an agent drives** (the runtime fallback).
+  Every surface is *mechanically* driven by default — cli/http/file/db and
+  a11y-driven browser/gui alike — so the default is deterministic and runs once;
+  non-determinism (and the ≥2 default) enters only when the agent fallback resolves
+  an action live.
 - **`pass^k` requires a re-arranged `Given`.** Because the SUT is shared across a
   `check` (see *Provisioning and Isolation*), each repeated `observe` must
   re-establish its `Given` state — or set `isolation: fresh` for a clean instance.
@@ -983,7 +1132,8 @@ similarity_threshold = 0.80
 
 [reliability]
 default = "pass^1"
-nondeterministic_surfaces = ["browser"]  # these default to >=2 repeats
+nondeterministic_surfaces = []           # all surfaces drive mechanically (deterministic);
+                                         # only the agent runtime-fallback adds non-determinism
 
 [approval]
 ci_autoapprove = false             # CI=true => unapproved drift is a hard failure
