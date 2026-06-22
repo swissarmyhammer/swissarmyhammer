@@ -49,11 +49,17 @@ swissarmyhammer-plugin = { workspace = true }
 include_dir = { workspace = true }
 fractional_index = "2.0.2"
 
+# Optional, only linked when the `test-support` feature is on (or for this
+# crate's own tests via the dev-dependency). The shared `test_support::setup`
+# helper needs `TempDir`; everything else is gated behind cfg(test).
+tempfile = { workspace = true, optional = true }
+
 [features]
-# Exposes test-only helpers (e.g. `test_support::composed_builtin_yaml_sources`)
-# to integration tests and downstream crates. Enabled automatically for this
-# crate's own tests via the dev-dependency below. No extra dependencies.
-test-support = []
+# Exposes test-only helpers (e.g. `test_support::composed_builtin_yaml_sources`
+# and `test_support::setup`) to integration tests and downstream crates.
+# Enabled automatically for this crate's own tests via the dev-dependency
+# below. Pulls in `tempfile`, which the `setup` helper uses.
+test-support = ["dep:tempfile"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

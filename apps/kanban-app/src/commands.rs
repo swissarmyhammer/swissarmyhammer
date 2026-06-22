@@ -1991,7 +1991,15 @@ async fn perform_cross_board_drag_transfer(
     )
     .await;
 
-    let ok = transfer_result.is_ok();
+    let ok = match &transfer_result {
+        Ok(_) => true,
+        Err(err) => {
+            // `transfer_task` now returns a typed `TransferError`, so the failed
+            // step (read source / write target / delete source / …) is named.
+            tracing::error!("drag.complete: cross-board transfer failed: {err}");
+            false
+        }
+    };
     // Cross-board writes go through each board's `EntityCache`, which emits
     // events synchronously. Each board's notification fan-in already published
     // them as `notifications/store/changed` on the board's bridge — no extra

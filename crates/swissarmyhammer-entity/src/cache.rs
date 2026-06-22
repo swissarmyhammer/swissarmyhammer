@@ -437,50 +437,17 @@ impl EntityCache {
                 .map_or_else(|| self.bump_version(), |ce| ce.version)
         };
 
-        // Compute the field-level diff before moving `canonical` into the map.
-        //
-        // `canonical` and `old_entity` are RAW (no compute applied), so a
-        // change to a computed field's source — e.g. editing `tags` rewrites
-        // `#tag` mentions in `body`, which `parse-body-tags` turns back into
-        // `tags` — would otherwise emit a `body`-only event and the UI would
-        // never re-render the dependent `tags` field. Derive the computed
-        // fields on both sides (clones — the stored cache entry stays raw to
-        // keep aggregate computes fresh on read) so the diff surfaces the
-        // derived changes too.
-        let mut changes = if changed {
-            diff(old_entity.as_ref(), &canonical)
+        // Compute the field-level diff (raw + computed-field augmentation)
+        // before `canonical` moves into the cache.
+        let changes = if changed {
+            self.write_field_changes(entity, old_entity.as_ref(), &canonical)
+                .await
         } else {
             Vec::new()
         };
-        // The raw diff above never carries computed fields. Augment it with
-        // any computed field whose source changed (e.g. `body` → `tags`) so
-        // the UI re-renders the dependent field after an edit. Targeted by
-        // `depends_on`, so writes touching unrelated fields recompute nothing.
-        if !changes.is_empty() {
-            let changed_fields: std::collections::HashSet<String> =
-                changes.iter().map(|c| c.field.clone()).collect();
-            let mut computed = self
-                .inner
-                .computed_field_changes(
-                    &entity.entity_type,
-                    &changed_fields,
-                    old_entity.as_ref(),
-                    &canonical,
-                )
-                .await;
-            changes.append(&mut computed);
-        }
 
-        let mut map = self.cache.write().await;
-        map.insert(
-            key,
-            CachedEntity {
-                entity: canonical,
-                hash: new_hash,
-                version,
-            },
-        );
-        drop(map);
+        self.update_cache_entry(key, canonical, new_hash, version)
+            .await;
 
         // A non-idempotent write appends to the changelog and atomically
         // replaces the entity file; either can change what the memoized
@@ -496,18 +463,79 @@ impl EntityCache {
             .await;
 
         if changed {
-            let prov = self.forward_provenance();
-            let _ = self.event_sender.send(EntityEvent::EntityChanged {
-                entity_type: entity.entity_type.to_string(),
-                id: entity.id.to_string(),
-                version,
-                changes,
-                txn: prov.txn,
-                origin: prov.origin,
-            });
+            self.emit_changed_event(entity, version, changes);
         }
 
         Ok(change_id)
+    }
+
+    /// Build the field-level change list for a content-changed write.
+    ///
+    /// `canonical` and `old_entity` are RAW (no compute applied), so a change to
+    /// a computed field's source — e.g. editing `tags` rewrites `#tag` mentions
+    /// in `body`, which `parse-body-tags` turns back into `tags` — would
+    /// otherwise surface as a `body`-only change and the UI would never
+    /// re-render the dependent `tags` field. The raw `diff` is therefore
+    /// augmented with any computed field whose source changed. The augmentation
+    /// is targeted by `depends_on`, so writes touching unrelated fields
+    /// recompute nothing, and an empty raw diff short-circuits before any
+    /// compute work.
+    async fn write_field_changes(
+        &self,
+        entity: &Entity,
+        old_entity: Option<&Entity>,
+        canonical: &Entity,
+    ) -> Vec<FieldChange> {
+        let mut changes = diff(old_entity, canonical);
+        if changes.is_empty() {
+            return changes;
+        }
+        let changed_fields: std::collections::HashSet<String> =
+            changes.iter().map(|c| c.field.clone()).collect();
+        let mut computed = self
+            .inner
+            .computed_field_changes(&entity.entity_type, &changed_fields, old_entity, canonical)
+            .await;
+        changes.append(&mut computed);
+        changes
+    }
+
+    /// Insert (or replace) the cache entry for `key` with the freshly written
+    /// canonical entity, its content hash, and the resolved version stamp.
+    ///
+    /// `canonical` is stored RAW (no compute applied) so aggregate computes
+    /// stay fresh on every read out of the cache.
+    async fn update_cache_entry(
+        &self,
+        key: (String, String),
+        canonical: Entity,
+        new_hash: u64,
+        version: u64,
+    ) {
+        let mut map = self.cache.write().await;
+        map.insert(
+            key,
+            CachedEntity {
+                entity: canonical,
+                hash: new_hash,
+                version,
+            },
+        );
+    }
+
+    /// Broadcast an `EntityChanged` event for a content-changed write, tagged
+    /// with the current provenance (txn/origin) so downstream listeners can
+    /// route it. Send failures (no subscribers) are intentionally ignored.
+    fn emit_changed_event(&self, entity: &Entity, version: u64, changes: Vec<FieldChange>) {
+        let prov = self.forward_provenance();
+        let _ = self.event_sender.send(EntityEvent::EntityChanged {
+            entity_type: entity.entity_type.to_string(),
+            id: entity.id.to_string(),
+            version,
+            changes,
+            txn: prov.txn,
+            origin: prov.origin,
+        });
     }
 
     /// Delete an entity from disk and remove it from the cache.
@@ -788,6 +816,25 @@ impl EntityCache {
     /// Missing entries are loaded off-lock (the write lock is held only for
     /// the final memoization), so the slow-path disk read never blocks
     /// other entity lookups.
+    /// Read an entity's changelog from disk and serialize it into the JSON
+    /// array shape the compute layer feeds into `_changelog`.
+    ///
+    /// Entries that fail to serialize are skipped (best-effort); a missing
+    /// changelog yields an empty array. Performed off-lock so concurrent
+    /// `get_or_load_compute_inputs` callers never serialize disk reads.
+    async fn load_changelog_value(&self, entity_type: &str, id: &str) -> serde_json::Value {
+        let entries = self
+            .inner
+            .read_changelog(entity_type, id)
+            .await
+            .unwrap_or_default();
+        let json_entries: Vec<serde_json::Value> = entries
+            .iter()
+            .filter_map(|e| serde_json::to_value(e).ok())
+            .collect();
+        serde_json::Value::Array(json_entries)
+    }
+
     pub(crate) async fn get_or_load_compute_inputs(
         &self,
         entity_type: &str,
@@ -821,18 +868,8 @@ impl EntityCache {
         let need_file_created = want_file_created && file_created.is_none();
 
         if need_changelog {
-            let entries = self
-                .inner
-                .read_changelog(entity_type, id)
-                .await
-                .unwrap_or_default();
-            let json_entries: Vec<serde_json::Value> = entries
-                .iter()
-                .filter_map(|e| serde_json::to_value(e).ok())
-                .collect();
-            changelog = Some(serde_json::Value::Array(json_entries));
+            changelog = Some(self.load_changelog_value(entity_type, id).await);
         }
-
         if need_file_created {
             file_created = Some(
                 self.inner

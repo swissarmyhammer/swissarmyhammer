@@ -223,22 +223,7 @@ impl Execute<KanbanContext, KanbanError> for AddEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::InitBoard;
-    use tempfile::TempDir;
-
-    async fn setup() -> (TempDir, KanbanContext) {
-        let temp = TempDir::new().unwrap();
-        let kanban_dir = temp.path().join(".kanban");
-        let ctx = KanbanContext::new(kanban_dir);
-
-        InitBoard::new("Test")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        (temp, ctx)
-    }
+    use crate::test_support::setup;
 
     #[tokio::test]
     async fn add_tag_with_defaults_sets_tag_name() {

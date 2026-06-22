@@ -26,3 +26,30 @@ pub fn composed_builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
     sources.extend(crate::builtin_yaml_sources());
     sources
 }
+
+/// Create a temporary, initialized board and return its `(TempDir, KanbanContext)`.
+///
+/// The `TempDir` is returned alongside the context so the caller keeps it alive
+/// for the duration of the test — dropping it deletes the backing `.kanban`
+/// directory. The board is initialized with `InitBoard::new("Test")`, which
+/// creates the default columns, so the returned context is ready for command
+/// execution.
+///
+/// This is the single source of truth for the `setup()` helper that the per-op
+/// test modules previously duplicated verbatim.
+pub async fn setup() -> (tempfile::TempDir, crate::KanbanContext) {
+    use crate::board::InitBoard;
+    use swissarmyhammer_operations::Execute;
+
+    let temp = tempfile::TempDir::new().unwrap();
+    let kanban_dir = temp.path().join(".kanban");
+    let ctx = crate::KanbanContext::new(kanban_dir);
+
+    InitBoard::new("Test")
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+
+    (temp, ctx)
+}

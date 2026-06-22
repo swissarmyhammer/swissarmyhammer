@@ -4,8 +4,42 @@
 //! a task from one KanbanContext to another.  This lives in `swissarmyhammer-kanban`
 //! so it can be exercised by Rust unit tests without any Tauri infrastructure.
 
-use crate::{context::KanbanContext, task_helpers, types::Ordinal};
+use crate::{context::KanbanContext, error::KanbanError, task_helpers, types::Ordinal};
 use serde_json::{json, Value};
+use swissarmyhammer_entity::{Entity, EntityContext, EntityError};
+use thiserror::Error;
+
+/// Failure modes for [`transfer_task`].
+///
+/// Each variant names the step that failed so callers can match on the failure
+/// mode (e.g. distinguish "source task missing" from "could not write the
+/// target") rather than parsing an opaque error string.
+#[derive(Debug, Error)]
+pub enum TransferError {
+    /// Opening the source board's entity context failed.
+    #[error("failed to open source board: {0}")]
+    SourceContext(#[source] KanbanError),
+
+    /// Opening the target board's entity context failed.
+    #[error("failed to open target board: {0}")]
+    TargetContext(#[source] KanbanError),
+
+    /// Reading the source task to be transferred failed (e.g. it does not exist).
+    #[error("failed to read source task: {0}")]
+    ReadSource(#[source] EntityError),
+
+    /// Listing the target board's tasks (needed for ordinal placement) failed.
+    #[error("failed to list target tasks: {0}")]
+    ListTargetTasks(#[source] EntityError),
+
+    /// Writing the new task entity to the target board failed.
+    #[error("failed to write target task: {0}")]
+    WriteTarget(#[source] EntityError),
+
+    /// Deleting the source task after a (non-copy) move failed.
+    #[error("failed to delete source task: {0}")]
+    DeleteSource(#[source] EntityError),
+}
 
 /// Transfer or copy a task between two boards.
 ///
@@ -25,8 +59,8 @@ use serde_json::{json, Value};
 /// 3. Neither — append at end
 ///
 /// # Returns
-/// A JSON object `{ id, source_id, transferred, copied }` on success, or a `String`
-/// error message on failure.
+/// A JSON object `{ id, source_id, transferred, copied }` on success, or a
+/// [`TransferError`] naming the failed step.
 ///
 /// # Notes
 /// Tags that do not exist on the target board are stripped from the transferred task.
@@ -41,195 +75,31 @@ pub async fn transfer_task(
     before_id: Option<&str>,
     after_id: Option<&str>,
     copy_mode: bool,
-) -> Result<Value, String> {
+) -> Result<Value, TransferError> {
     // Read source task
     let source_ectx = source_ctx
         .entity_context()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(TransferError::SourceContext)?;
     let source_task = source_ectx
         .read("task", task_id)
         .await
-        .map_err(|e| format!("Failed to read source task: {}", e))?;
+        .map_err(TransferError::ReadSource)?;
 
     // Compute ordinal in target column
     let target_ectx = target_ctx
         .entity_context()
         .await
-        .map_err(|e| e.to_string())?;
-    let ordinal = {
-        let all_tasks = target_ectx.list("task").await.map_err(|e| e.to_string())?;
-        if before_id.is_some() || after_id.is_some() {
-            // ID-based placement: same pattern as MoveTask in task/mv.rs
-            let mut col_tasks: Vec<_> = all_tasks
-                .into_iter()
-                .filter(|t| t.get_str("position_column") == Some(target_column))
-                .collect();
-            col_tasks.sort_by(|a, b| {
-                let oa = a
-                    .get_str("position_ordinal")
-                    .unwrap_or(Ordinal::DEFAULT_STR);
-                let ob = b
-                    .get_str("position_ordinal")
-                    .unwrap_or(Ordinal::DEFAULT_STR);
-                oa.cmp(ob)
-            });
+        .map_err(TransferError::TargetContext)?;
+    let ordinal =
+        compute_target_ordinal(&target_ectx, target_column, drop_index, before_id, after_id)
+            .await?;
 
-            if let Some(ref_id) = before_id {
-                let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
-                match ref_idx {
-                    Some(0) => {
-                        let ref_ord = Ordinal::from_string(
-                            col_tasks[0]
-                                .get_str("position_ordinal")
-                                .unwrap_or(Ordinal::DEFAULT_STR),
-                        );
-                        task_helpers::compute_ordinal_for_neighbors(None, Some(&ref_ord))
-                    }
-                    Some(idx) => {
-                        let pred_ord = Ordinal::from_string(
-                            col_tasks[idx - 1]
-                                .get_str("position_ordinal")
-                                .unwrap_or(Ordinal::DEFAULT_STR),
-                        );
-                        let ref_ord = Ordinal::from_string(
-                            col_tasks[idx]
-                                .get_str("position_ordinal")
-                                .unwrap_or(Ordinal::DEFAULT_STR),
-                        );
-                        task_helpers::compute_ordinal_for_neighbors(Some(&pred_ord), Some(&ref_ord))
-                    }
-                    None => {
-                        // Reference not found — append at end
-                        task_helpers::compute_ordinal_for_neighbors(
-                            col_tasks
-                                .last()
-                                .map(|t| {
-                                    Ordinal::from_string(
-                                        t.get_str("position_ordinal")
-                                            .unwrap_or(Ordinal::DEFAULT_STR),
-                                    )
-                                })
-                                .as_ref(),
-                            None,
-                        )
-                    }
-                }
-            } else if let Some(ref_id) = after_id {
-                let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
-                match ref_idx {
-                    Some(idx) if idx == col_tasks.len() - 1 => {
-                        let ref_ord = Ordinal::from_string(
-                            col_tasks[idx]
-                                .get_str("position_ordinal")
-                                .unwrap_or(Ordinal::DEFAULT_STR),
-                        );
-                        task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), None)
-                    }
-                    Some(idx) => {
-                        let ref_ord = Ordinal::from_string(
-                            col_tasks[idx]
-                                .get_str("position_ordinal")
-                                .unwrap_or(Ordinal::DEFAULT_STR),
-                        );
-                        let succ_ord = Ordinal::from_string(
-                            col_tasks[idx + 1]
-                                .get_str("position_ordinal")
-                                .unwrap_or(Ordinal::DEFAULT_STR),
-                        );
-                        task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), Some(&succ_ord))
-                    }
-                    None => {
-                        // Reference not found — append at end
-                        task_helpers::compute_ordinal_for_neighbors(
-                            col_tasks
-                                .last()
-                                .map(|t| {
-                                    Ordinal::from_string(
-                                        t.get_str("position_ordinal")
-                                            .unwrap_or(Ordinal::DEFAULT_STR),
-                                    )
-                                })
-                                .as_ref(),
-                            None,
-                        )
-                    }
-                }
-            } else {
-                unreachable!()
-            }
-        } else if let Some(idx) = drop_index {
-            let mut col_tasks: Vec<_> = all_tasks
-                .into_iter()
-                .filter(|t| t.get_str("position_column") == Some(target_column))
-                .collect();
-            col_tasks.sort_by(|a, b| {
-                let oa = a.get_str("position_ordinal").unwrap_or("a0");
-                let ob = b.get_str("position_ordinal").unwrap_or("a0");
-                oa.cmp(ob)
-            });
-            task_helpers::compute_ordinal_for_drop(&col_tasks, idx as usize)
-        } else {
-            let mut last_ord: Option<Ordinal> = None;
-            for t in &all_tasks {
-                if t.get_str("position_column") == Some(target_column) {
-                    let ord = Ordinal::from_string(t.get_str("position_ordinal").unwrap_or("a0"));
-                    last_ord = Some(match last_ord {
-                        None => ord,
-                        Some(ref o) if ord > *o => ord,
-                        Some(o) => o,
-                    });
-                }
-            }
-            match last_ord {
-                Some(last) => Ordinal::after(&last),
-                None => Ordinal::first(),
-            }
-        }
-    };
-
-    // Create new task entity on target board
+    // Create new task entity on target board, copying the source's fields.
     let new_id = ulid::Ulid::new().to_string();
-    let mut new_task = swissarmyhammer_entity::Entity::new("task", new_id.as_str());
-
-    // Copy fields from source
-    let copy_fields = [
-        "title",
-        "body",
-        "assignees",
-        "depends_on",
-        "priority",
-        "estimate",
-        "due_date",
-        "color",
-    ];
-    for field in copy_fields {
-        if let Some(val) = source_task.get(field) {
-            new_task.set(field, val.clone());
-        }
-    }
-
-    // Strip tags that don't exist on the target board.
-    //
-    // The body is the single source of truth for a task's tags (the `tags`
-    // field is computed from `#tag` mentions in the body on every read), so
-    // stripping must edit the BODY — filtering the computed `tags` array would
-    // be futile, since it is recomputed from the copied body on the next read.
-    // Each body slug with no matching target tag is removed from the body.
-    {
-        let target_tags = target_ectx.list("tag").await.unwrap_or_default();
-        let target_tag_names: std::collections::HashSet<String> = target_tags
-            .iter()
-            .filter_map(|t| t.get_str("tag_name").map(|s| s.to_string()))
-            .collect();
-        let mut body = new_task.get_str("body").unwrap_or("").to_string();
-        for slug in crate::tag_parser::parse_tags(&body) {
-            if !target_tag_names.contains(&slug) {
-                body = crate::tag_parser::remove_tag(&body, &slug);
-            }
-        }
-        new_task.set("body", json!(body));
-    }
+    let mut new_task = Entity::new("task", new_id.as_str());
+    copy_task_fields(&source_task, &mut new_task);
+    strip_nonexistent_tags(&target_ectx, &mut new_task).await;
 
     // Set position on target board
     new_task.set("position_column", json!(target_column));
@@ -239,7 +109,7 @@ pub async fn transfer_task(
     target_ectx
         .write(&new_task)
         .await
-        .map_err(|e| format!("Failed to write target task: {}", e))?;
+        .map_err(TransferError::WriteTarget)?;
 
     // If transfer (not copy), delete source task before returning.
     // Both writes succeed before any events are emitted, avoiding a state where
@@ -248,7 +118,7 @@ pub async fn transfer_task(
         source_ectx
             .delete("task", task_id)
             .await
-            .map_err(|e| format!("Failed to delete source task: {}", e))?;
+            .map_err(TransferError::DeleteSource)?;
     }
 
     Ok(json!({
@@ -257,6 +127,170 @@ pub async fn transfer_task(
         "transferred": !copy_mode,
         "copied": copy_mode,
     }))
+}
+
+/// Compute the fractional-index ordinal for the transferred task within
+/// `target_column` on the target board.
+///
+/// Resolution priority matches the documented contract:
+/// 1. `before_id`/`after_id` — place relative to a named neighbor (same pattern
+///    as `MoveTask` in `task/mv.rs`); a missing reference appends at the end.
+/// 2. `drop_index` — legacy position-based placement.
+/// 3. Neither — append after the column's current last task.
+async fn compute_target_ordinal(
+    target_ectx: &EntityContext,
+    target_column: &str,
+    drop_index: Option<u64>,
+    before_id: Option<&str>,
+    after_id: Option<&str>,
+) -> Result<Ordinal, TransferError> {
+    let all_tasks = target_ectx
+        .list("task")
+        .await
+        .map_err(TransferError::ListTargetTasks)?;
+
+    if before_id.is_some() || after_id.is_some() {
+        let col_tasks = sorted_column_tasks(all_tasks, target_column);
+        if let Some(ref_id) = before_id {
+            Ok(ordinal_before(&col_tasks, ref_id))
+        } else if let Some(ref_id) = after_id {
+            Ok(ordinal_after(&col_tasks, ref_id))
+        } else {
+            unreachable!()
+        }
+    } else if let Some(idx) = drop_index {
+        let col_tasks = sorted_column_tasks(all_tasks, target_column);
+        Ok(task_helpers::compute_ordinal_for_drop(
+            &col_tasks,
+            idx as usize,
+        ))
+    } else {
+        Ok(append_ordinal(&all_tasks, target_column))
+    }
+}
+
+/// Filter `tasks` to those in `column` and sort them by their fractional-index
+/// `position_ordinal` (default `a0` when unset).
+fn sorted_column_tasks(tasks: Vec<Entity>, column: &str) -> Vec<Entity> {
+    let mut col_tasks: Vec<_> = tasks
+        .into_iter()
+        .filter(|t| t.get_str("position_column") == Some(column))
+        .collect();
+    col_tasks.sort_by(|a, b| {
+        let oa = a
+            .get_str("position_ordinal")
+            .unwrap_or(Ordinal::DEFAULT_STR);
+        let ob = b
+            .get_str("position_ordinal")
+            .unwrap_or(Ordinal::DEFAULT_STR);
+        oa.cmp(ob)
+    });
+    col_tasks
+}
+
+/// Read a task's `position_ordinal` (defaulting to `a0`) as an [`Ordinal`].
+fn task_ordinal(task: &Entity) -> Ordinal {
+    Ordinal::from_string(task.get_str("position_ordinal").unwrap_or("a0"))
+}
+
+/// Ordinal placing the new task immediately before `ref_id` in the sorted
+/// column. A missing reference appends at the end.
+fn ordinal_before(col_tasks: &[Entity], ref_id: &str) -> Ordinal {
+    match col_tasks.iter().position(|t| t.id.as_str() == ref_id) {
+        Some(0) => {
+            task_helpers::compute_ordinal_for_neighbors(None, Some(&task_ordinal(&col_tasks[0])))
+        }
+        Some(idx) => task_helpers::compute_ordinal_for_neighbors(
+            Some(&task_ordinal(&col_tasks[idx - 1])),
+            Some(&task_ordinal(&col_tasks[idx])),
+        ),
+        None => task_helpers::compute_ordinal_for_neighbors(
+            col_tasks.last().map(task_ordinal).as_ref(),
+            None,
+        ),
+    }
+}
+
+/// Ordinal placing the new task immediately after `ref_id` in the sorted
+/// column. A missing reference appends at the end.
+fn ordinal_after(col_tasks: &[Entity], ref_id: &str) -> Ordinal {
+    match col_tasks.iter().position(|t| t.id.as_str() == ref_id) {
+        Some(idx) if idx == col_tasks.len() - 1 => {
+            task_helpers::compute_ordinal_for_neighbors(Some(&task_ordinal(&col_tasks[idx])), None)
+        }
+        Some(idx) => task_helpers::compute_ordinal_for_neighbors(
+            Some(&task_ordinal(&col_tasks[idx])),
+            Some(&task_ordinal(&col_tasks[idx + 1])),
+        ),
+        None => task_helpers::compute_ordinal_for_neighbors(
+            col_tasks.last().map(task_ordinal).as_ref(),
+            None,
+        ),
+    }
+}
+
+/// Ordinal appending the new task after the column's current last task, or
+/// [`Ordinal::first`] when the column is empty.
+fn append_ordinal(all_tasks: &[Entity], column: &str) -> Ordinal {
+    let mut last_ord: Option<Ordinal> = None;
+    for t in all_tasks {
+        if t.get_str("position_column") == Some(column) {
+            let ord = task_ordinal(t);
+            last_ord = Some(match last_ord {
+                None => ord,
+                Some(ref o) if ord > *o => ord,
+                Some(o) => o,
+            });
+        }
+    }
+    match last_ord {
+        Some(last) => Ordinal::after(&last),
+        None => Ordinal::first(),
+    }
+}
+
+/// Copy the transferable scalar/reference fields from `source` onto `target`.
+///
+/// Position fields are set separately by the caller, and `tags` is intentionally
+/// not copied — the body is the source of truth and tags are recomputed on read.
+fn copy_task_fields(source: &Entity, target: &mut Entity) {
+    const COPY_FIELDS: [&str; 8] = [
+        "title",
+        "body",
+        "assignees",
+        "depends_on",
+        "priority",
+        "estimate",
+        "due_date",
+        "color",
+    ];
+    for field in COPY_FIELDS {
+        if let Some(val) = source.get(field) {
+            target.set(field, val.clone());
+        }
+    }
+}
+
+/// Strip from the task's BODY any `#tag` whose tag entity does not exist on the
+/// target board.
+///
+/// The body is the single source of truth for a task's tags (the `tags` field is
+/// computed from `#tag` mentions on every read), so stripping must edit the body
+/// — filtering the computed `tags` array would be futile, since it is recomputed
+/// from the copied body on the next read.
+async fn strip_nonexistent_tags(target_ectx: &EntityContext, task: &mut Entity) {
+    let target_tags = target_ectx.list("tag").await.unwrap_or_default();
+    let target_tag_names: std::collections::HashSet<String> = target_tags
+        .iter()
+        .filter_map(|t| t.get_str("tag_name").map(|s| s.to_string()))
+        .collect();
+    let mut body = task.get_str("body").unwrap_or("").to_string();
+    for slug in crate::tag_parser::parse_tags(&body) {
+        if !target_tag_names.contains(&slug) {
+            body = crate::tag_parser::remove_tag(&body, &slug);
+        }
+    }
+    task.set("body", json!(body));
 }
 
 #[cfg(test)]

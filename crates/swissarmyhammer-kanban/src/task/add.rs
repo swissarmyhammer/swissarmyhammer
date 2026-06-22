@@ -217,22 +217,7 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::InitBoard;
-    use tempfile::TempDir;
-
-    async fn setup() -> (TempDir, KanbanContext) {
-        let temp = TempDir::new().unwrap();
-        let kanban_dir = temp.path().join(".kanban");
-        let ctx = KanbanContext::new(kanban_dir);
-
-        InitBoard::new("Test")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        (temp, ctx)
-    }
+    use crate::test_support::setup;
 
     /// The add response is the slim projection: the agent gets the identity
     /// and placement it didn't have (`id`/`short_id`/`position`) but not its

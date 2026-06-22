@@ -66,24 +66,9 @@ impl Execute<KanbanContext, KanbanError> for GetAttachment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::InitBoard;
     use crate::task::AddTask;
+    use crate::test_support::setup;
     use serde_json::json;
-    use tempfile::TempDir;
-
-    async fn setup() -> (TempDir, KanbanContext) {
-        let temp = TempDir::new().unwrap();
-        let kanban_dir = temp.path().join(".kanban");
-        let ctx = KanbanContext::new(kanban_dir);
-
-        InitBoard::new("Test")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        (temp, ctx)
-    }
 
     fn create_temp_file(dir: &std::path::Path, name: &str, content: &[u8]) -> String {
         let path = dir.join(name);
