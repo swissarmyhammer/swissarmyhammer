@@ -197,10 +197,17 @@ The three pieces:
 
 1. **Expectation files** — human-written Markdown, optional Given/When/Then, that
    state intent and acceptance criteria.
-2. **The `expect` tool** — an agent reads an expectation, drives the system under
-   test, and renders a structured verdict through a tiered ladder.
-3. **The drift ledger** — golden verdicts with tolerance, committed to the repo,
-   that a human must approve every change to.
+2. **The `expect` tool** — provisions the system under test, **observes** an
+   authoritative outcome, **evaluates** it against the criteria through a tiered
+   ladder, and compares the result to a golden.
+3. **The drift ledger** — an approved *observation* per expectation, committed to
+   the repo, that a human must approve every change to.
+
+Three verbs do the work, and keeping them separate is the spine of the design:
+**`observe`** produces an authoritative observation of the running system,
+**`evaluate`** is a pure function `(observation, criteria) → verdict`, and
+**`approve`** promotes an observation to the golden. `check` is just
+`doctor + observe + evaluate + compare-to-golden`.
 
 ### Relationship to existing tools
 
@@ -210,10 +217,13 @@ The three pieces:
 | `review` | static | is this *diff* correct/clean? |
 | **`expect`** | **dynamic** | does the running *system* do what a human intended, and is that still true? |
 
-`expect` is the missing runtime/behavioral axis. It reuses the same agent
-infrastructure `rules check` already uses (`ToolContext.agent_config`, the
-`create_agent_from_config` path) and slots a new `AgentUseCase::Expectations`
-into the use-case-based agent assignment proposed in [rule_agent.md](./rule_agent.md).
+`expect` is the missing runtime/behavioral axis, and architecturally it is the
+closest sibling of `review`: both fan a scoped task out to a delegated agent over
+ACP, capture structured output, and verify it before recording a verdict. `expect`
+should reuse `review`'s ACP machinery wholesale rather than re-derive it (see
+[Delegation over ACP](#delegation-over-acp-dont-rebuild-the-agent)), and slots a
+new `AgentUseCase::Expectations` into the use-case-based agent assignment proposed
+in [rule_agent.md](./rule_agent.md).
 
 ### Expectation File Format
 
@@ -298,25 +308,29 @@ Op-dispatched, matching the `code_context` / `review` pattern:
 expect init               # scaffold the .expect/ tree + config; idempotent
 expect create <intent>    # a coding agent authors expectation file(s) from instructions
 expect doctor [scope]     # STATIC: are the expectation files well-formed? no execution
-expect check [scope]      # DYNAMIC: doctor, then run against the system, compare to golden
-expect list [--tag ...]   # enumerate expectations + their current golden verdict
+expect observe [scope]    # provision the SUT, drive it, capture an authoritative observation
+expect evaluate [scope]   # pure: judge a captured observation against the criteria
+expect check [scope]      # doctor + observe + evaluate + compare-to-golden (the CI gate)
+expect list [--tag ...]   # enumerate expectations + their current ledger state
 expect status             # drift report: what changed vs golden, what's unapproved
-expect approve <scope>    # promote .received → golden (the human approval gate)
-expect explain <scope>    # show the last run's trajectory + evidence + reasoning
+expect approve <scope>    # promote a received observation → golden (human gate)
+expect explain <scope>    # show the last observation's trajectory + evidence + reasoning
 ```
 
 `expect init` is run once per repo; `expect create` is how expectations get
-written; `expect check` is the one op that runs an expectation — inner loop *and*
-CI gate, no separate "run" — and `expect approve` is the human-in-the-loop drift
-gate.
+written; `expect check` is the everyday CI gate; `expect approve` is the
+human-in-the-loop drift gate.
 
-There is no separate `run` op. "Execute the expectation" and "gate on the
-expectation" were nearly the same thing, so they are one op: **`expect check`
-always doctors the spec first, then runs it against the system and compares to the
-golden.** It exits non-zero on a malformed spec *or* an unmet expectation *or* an
-unapproved drift. (Outside CI it still prints the verdict and writes `.received`
-for inspection; the only thing `CI=true` changes is that an unapproved drift
-becomes a hard failure instead of a prompt to `approve`.)
+**`check` decomposes into three separable verbs.** `observe` produces an
+authoritative observation of the running system (and stores it as `received`);
+`evaluate` is a *pure* function over that observation — `(observation, criteria)
+→ verdict` — touching no system and re-runnable for free; the compare then holds
+the verdict against the golden. They are separate ops because each is
+independently useful: `observe` alone records a candidate baseline for `approve`;
+`evaluate` alone re-judges a stored observation against edited criteria or a
+changed `model:` *without re-running the system*. In CI, a bare `expect check`
+exits non-zero on a malformed spec *or* an unmet expectation *or* an unapproved
+drift.
 
 **Two different things are being checked — `doctor` is the static half of
 `check`.** Checking the *expectation file* and checking the *code against the
@@ -325,7 +339,7 @@ not separate workflows: `check` is `doctor` plus execution. `doctor` exists on i
 own only because the static half is cheap enough to run constantly (on save, in
 `create`, inside `sah doctor`) without paying to drive the system.
 
-| | `expect doctor` (the static half) | `expect check` (doctor + run) |
+| | `expect doctor` (the static half) | `expect check` (doctor + observe + evaluate) |
 |---|---|---|
 | Question | Is this *spec* well-formed? | Does the *code* meet this spec? |
 | Reads | the `.expect.md` file only | the file **and** the running system |
@@ -336,11 +350,17 @@ own only because the static half is cheap enough to run constantly (on save, in
 `expect doctor` is a pure static health check on the spec files themselves —
 sah's existing diagnostic verb, applied to expectations. It parses the
 frontmatter against the closed enumeration (below), requires `description` and
-`surface`, requires a body that states intent and at least one criterion, rejects
-unknown keys, and confirms any referenced golden resolves and the named `model:`
-exists in the registry. No system is touched and no model is consulted. It
-reports findings as diagnostics (`ok` / `warning` / `error` with a fix hint), the
-same shape `sah doctor` already speaks.
+`surface`, requires a body that states intent and at least one criterion, and
+rejects unknown keys. Crucially it validates **dynamic** fields against live
+reality, not just a static schema: `model:` must name a model in the **current**
+sah registry, `setup:` must reference things that exist. No system is driven and
+no model is consulted. It returns **structured, per-field** diagnostics — for each
+field `{status, message, allowed?, suggestion?}` — next to the human rendering, so
+an authoring agent can patch exactly the red fields (the same `ok`/`warning`/
+`error`-with-fix-hint shape `sah doctor` speaks). A pinned `model:` that has gone
+missing is a **warning, not an error**: doctor flags it and grading falls back to
+the default — safe, because if the fallback model grades the approved observation
+differently, the golden compare catches it as drift.
 
 **The tool is doctorable.** Rather than living only behind `expect doctor`, the
 expectation diagnostics register into the sah doctor framework, so a plain `sah
@@ -350,8 +370,9 @@ provider. `expect check` always runs the doctor pass first and refuses to run a
 malformed spec, so a CI failure is never ambiguous between "bad spec" and "bad
 code."
 
-**Scope resolution.** Every op that takes a `<scope>` (`doctor`, `check`,
-`approve`) accepts the same three forms, resolved in this order:
+**Scope resolution.** Every op that takes a `<scope>` (`doctor`, `observe`,
+`evaluate`, `check`, `approve`) accepts the same three forms, resolved in this
+order:
 
 1. **a specific expectation** — by path to one `*.expect.md` file, or by its
    repo-relative path with the extension dropped (`src/checkout/coupon`);
@@ -392,25 +413,43 @@ the project's surfaces (CLI binary, HTTP server, desktop app, etc. — reusing t
 
 #### `expect create`
 
-The authoring op, and the one a coding agent drives on your behalf. You give it
-intent in plain language; it researches the system, writes one or more
-`*.expect.md` files with explicit intent + bounded criteria, runs `doctor` on
-what it wrote, and proposes (but does not approve) an initial golden by doing a
-first `check`.
+The authoring op, and the one a coding agent drives on your behalf — because the
+most valuable expectations are captured *from intent at the moment it's
+expressed*, not hand-written later. `create` is **context-hungry**: it reads
+whatever intent-bearing artifact it is pointed at, drafts one or more
+`*.expect.md` files with explicit intent + bounded criteria, loops them through
+`doctor` until every field is green, records a candidate observation, and leaves
+the result **unapproved** for a human to confirm.
 
 ```
 expect create "a valid coupon reduces the order total by its discount, once"
-expect create --from-session     # turn what just happened in this session into an expectation
-expect create --surface http "the /health endpoint returns 200 with {status:ok}"
+expect create --from-chat        # mine the current conversation for stated acceptance criteria
+expect create --from-task <id>   # draft from a kanban task's acceptance criteria (seed only)
+expect create --from-spec <path> # mine a design doc / PRD for "should/must/example" statements
+expect create --from-session     # turn what was just verified by hand into an expectation
 ```
 
-The agent is handed the **frontmatter enumeration** (below) as its schema and the
+Sources, all feeding one draft → doctor → confirm pipeline:
+
+- **chat** (the default in an interactive session) — the authoring **skill**
+  watches the conversation and **proactively offers** to capture
+  acceptance-criteria-shaped statements ("the coupon should only apply once").
+  This behavior lives in the skill/agent layer, not the tool: recognizing intent
+  mid-conversation is the agent's job; `create` is what it calls once you accept.
+- **task** — a kanban task's description usually *is* acceptance criteria. The
+  draft links back to the task as **provenance only** (a tag/comment); the
+  expectation then stands on its own and is not coupled to the task lifecycle.
+- **spec** / **session** — mine an existing design doc, or capture a hand-verified
+  run.
+
+The agent is handed the **resolved** frontmatter schema — the closed enums *plus*
+the live values for dynamic fields like the available `model:` set — and the
 **intent-is-mandatory / keep-criteria-bounded / state-the-right-reason** rules as
-its authoring instructions, so what it produces is valid and reviewable by
-construction. A human still owns the result: `create` leaves the file and a
-proposed-but-unapproved golden for a person to edit for *intent* and then
-`approve`. The `--from-session` flavor captures a working run as the draft
-(answering "make an expectation out of what I just verified by hand").
+its authoring instructions. Because every draft round-trips through `doctor`'s
+structured per-field diagnostics, the agent can't emit an invalid spec: it patches
+exactly the red fields and re-checks. A human still owns the result — `create`
+leaves the file and an unapproved candidate observation (ledger state `new`) for a
+person to edit for *intent* and then `approve`.
 
 #### Errors that teach (`create` ↔ `doctor`/`check` repair loop)
 
@@ -430,6 +469,9 @@ stack trace. Every finding carries four things:
 ✗ checkout/coupon.expect.md
   frontmatter: unknown key `surfce` (line 2)
     → did you mean `surface`? allowed: cli | http | browser | gui | file | db
+  frontmatter: model `qwen-flash` (line 4)
+    → not an available model. available now: claude-sonnet-4-6, qwen-coder-flash,
+      claude-haiku-4-5. suggestion: qwen-coder-flash
   body: states intended behavior ✓
   criteria: "After the first apply, the total is $40" (line 17)
     → ok, deterministic (Tier 1)
@@ -458,14 +500,15 @@ is also the schema handed to `expect create`.
 |-----|----------|-----------------------|---------|---------|
 | `description` | **yes** | string (one line) | — | what this expectation is, like a skill's `description`; shown in `list`/reports, retrieval hook for `create` |
 | `surface` | **yes** | `cli` \| `http` \| `browser` \| `gui` \| `file` \| `db` | — | how the agent perceives and acts on the system under test |
-| `model` | no | named sah model (e.g. `qwen-coder-flash`) | `[model].default`, else sah model default | the model that **grades** criteria (Tier 3) |
+| `model` | no | named sah model, **validated against the live registry** | `[model].default`, else sah model default | the model that **grades** criteria (Tier 3); missing ⇒ doctor warns + falls back |
 | `reliability` | no | `pass^N` where N ≥ 1 (e.g. `pass^1`, `pass^3`) | `pass^1` | all N repeated runs must pass |
 | `repeat` | no | integer ≥ 1 | derived from `reliability` and surface | how many times to run before judging reliability |
 | `tiers` | no | subset of `[deterministic, tolerance, judgment]` | all three | which verdict-ladder tiers may decide a criterion |
 | `similarity_threshold` | no | float 0.0–1.0 | `[embedder].similarity_threshold` (0.80) | Tier-2 cosine cutoff, per-expectation override |
 | `timeout` | no | duration (`30s`, `5m`) | `60s` | wall-clock budget for one run |
 | `tags` | no | list of kebab-case strings | `[]` | grouping for `list --tag` / glob-by-tag scope |
-| `setup` | no | string or list | — | surface-specific bootstrap (e.g. the command to launch, base URL, fixture) |
+| `setup` | no | string or list | — | **provisioning** declaration for the surface — how `expect` builds/launches the SUT and arranges fixtures (and tears down) |
+| `isolation` | no | `shared` \| `fresh` | `shared` | `fresh` gives this expectation its own provision instead of the shared per-check instance |
 
 Identity is the file path, not a frontmatter field: an expectation at
 `src/checkout/coupon.expect.md` is addressed as `src/checkout/coupon` and its
@@ -496,6 +539,14 @@ Closed enumerations, spelled out so authors and `create` have no ambiguity:
   makes an expectation fully deterministic with no model in the loop.
 - **`reliability`** — the literal form `pass^N`; `pass^1` is a single run,
   `pass^k` requires all k runs to pass (the τ-bench reliability metric).
+- **`isolation`** — `shared` (default; run against the one instance provisioned
+  per `check`) or `fresh` (provision a dedicated instance for this expectation when
+  it needs a pristine SUT).
+
+**Static vs dynamic validation.** `surface`, `tiers`, `reliability`, and
+`isolation` are *static* closed enums. `model` and `setup` are *dynamic* — `doctor`
+checks them against the live registry / the surface adapter at author time, which
+is why authoring must round-trip through `doctor`, not a frozen schema.
 
 Runtime enums (verdict/ledger, not frontmatter):
 
@@ -539,49 +590,75 @@ grading is just a named sah `model`, set per-expectation via `model:` and
 defaulting to the sah model default — the same model resolution `review` and
 `rules` already use.
 
-The verdict is structured, never a bare boolean — sparse pass/fail is too weak to
-drive the next agent edit:
+`observe` produces an `Observation` (the authoritative capture); `evaluate` is the
+pure function `(Observation, &[Criterion]) -> ExpectationVerdict`. The verdict is
+structured, never a bare boolean — sparse pass/fail is too weak to drive the next
+agent edit:
 
 ```rust
+pub struct Observation {
+    pub path: String,               // repo-relative path of the spec — its identity
+    pub final_state: FinalState,    // authoritative SUT state read by the adapter (ground truth)
+    pub trajectory: Trajectory,     // what the driver did, for `explain` — never the verdict source
+    pub artifacts: Vec<Artifact>,   // stdout / a11y tree / db rows / http response, scrubbed
+}
+
+// evaluate is pure and re-runnable: no system touched.
+pub fn evaluate(obs: &Observation, criteria: &[Criterion]) -> ExpectationVerdict;
+
 pub struct CriterionVerdict {
     pub criterion: String,
     pub tier: VerdictTier,          // which layer decided it
     pub pass: bool,
     pub score: Option<f32>,         // continuous, for tolerance bands / judge
-    pub evidence: Vec<Evidence>,    // the observed output that justifies the call
+    pub evidence: Vec<Evidence>,    // the slice of the observation that justifies the call
     pub reason: String,             // why — especially the judge's reasoning
     pub confidence: Option<f32>,    // for the human-escalation queue
 }
 
 pub struct ExpectationVerdict {
-    pub path: String,               // repo-relative path of the spec — its identity
+    pub path: String,
     pub criteria: Vec<CriterionVerdict>,
-    pub reliability: Reliability,   // pass^k result across repeated runs
-    pub trajectory: Trajectory,     // what the agent perceived/did, for `explain`
+    pub reliability: Reliability,   // pass^k result across repeated observations
 }
 ```
 
 ### The Drift Ledger (controlling drift)
 
-This is the heart of the design and the thing none of the runtime-agent vendors
-do well. We borrow the **approval-testing** workflow wholesale and adapt it for
-non-determinism.
+This is the heart of the design, and we model it directly on **snapshot UI
+testing** (Jest snapshots, Playwright `toHaveScreenshot`, Chromatic, approval
+tests), adapted for non-determinism.
 
-- **The golden is a verdict-with-tolerance, not a golden string.** We store, per
-  criterion, the approved tier, the approved pass/score, and the tolerance band —
-  not a frozen blob of model output. Storing a string would guarantee false
-  failures every run.
-- **`expect check` compares this run's verdict to the golden.** Same pass/fail at
-  each criterion within tolerance → green, silent. Any criterion that flips, or a
-  score that leaves its band, → **drift**, and the run fails (in CI) and lands in
-  the unapproved queue.
-- **Humans approve every change.** `expect approve` promotes the received run
-  (`.expect/received/…`) → golden (`.expect/goldens/…`). This is the deliberate
-  analog of `jest -u` — and, like Jest, **`expect
-  check` never auto-approves in CI** (`CI=true` ⇒ an unapproved drift is a hard
-  failure, never a silent write). A drift is either a real regression (fix the
-  code) or an intended behavior change (approve the new golden, in a reviewable
-  diff).
+- **The golden is an approved *observation*, not a frozen verdict.** `approve`
+  stores the full, scrubbed observation a human signed off on. The verdict is never
+  the stored source of truth — it is re-derived by `evaluate` on both sides, so
+  compare is `evaluate(received)` vs `evaluate(golden)`, per criterion. Storing the
+  observation keeps the baseline **re-evaluable**: change a criterion or the
+  grading `model:` and you can re-judge the approved observation without re-running
+  the system.
+- **The criteria are what a snapshot lacks — so we don't freeze raw output.** A
+  pure snapshot test has no human assertions, so the *entire* output is the
+  assertion (which is why broad snapshots become undiffable). Here the human wrote
+  the `Then` checklist, so the criteria pre-declare *which aspects matter*. Compare
+  is field-wise per criterion, by tier:
+  - **deterministic** — the golden's matched value (or scrubbed hash); drift if it
+    changes.
+  - **tolerance** — the golden's score + band; drift if the score leaves the band.
+  - **judgment** — the **approved evidence** (the actual message/state text) plus a
+    similarity threshold; a reworded-but-equivalent result stays green, a
+    changed-meaning result drifts and surfaces old-vs-new for the human (Chromatic
+    exactly).
+- **First run is strict: no approved golden ⇒ CI fails.** A `new` expectation
+  cannot pass in CI (Playwright's first-run-fails; Jest `--ci`'s
+  missing-snapshot-fails) — you can never mint a green baseline in CI. The golden
+  is created locally by `observe` + `approve` and committed in a reviewable diff.
+- **`approve` is a human gate over a diff, granular like `--update-snapshots`.**
+  `expect approve <scope>` promotes the last received observation to golden, with
+  `--missing` (only brand-new), `--changed` (only drifted), or `--all` (bulk).
+  `expect status` shows the pending old-vs-new diffs first; not approving = the
+  drift stays red until the code is fixed (Chromatic's reject). And **`CI=true`
+  never auto-approves** — an unapproved drift is always a hard failure, never a
+  silent write (the anti-`jest -u` invariant).
 - **Pin the grading model and embedder.** The named `model:`, the embedding
   model, and every threshold are pinned and recorded in the golden. Changing the
   grading model is treated with the same suspicion as a blind `jest -u`: a new
@@ -597,45 +674,207 @@ non-determinism.
 src/checkout/coupon.expect.md                     # spec, colocated with the feature
 .expect/
   config.toml                                     # pinned grading/embedder models + thresholds
-  goldens/src/checkout/coupon.golden.json         # approved verdict-with-tolerance (committed)
-  received/src/checkout/coupon.received.json       # last run (gitignored)
+  goldens/src/checkout/coupon.golden.json         # approved + scrubbed observation (committed)
+  received/src/checkout/coupon.received.json       # last observation (gitignored)
 ```
 
 The golden and received trees mirror each spec's repo-relative path, so the spec's
 location *is* its identity and moving a spec is a visible rename of its golden.
 
-### Agent Execution Model
+### The Check Loop
 
-`expect check`, after the static `doctor` pass passes, spawns a sub-agent (the
-`Expectations` use-case agent) and hands it
-one expectation plus a **surface adapter** that exposes a small, fixed tool
-vocabulary for that surface — the tool-calling-binding mechanism (Hercules /
-ZeroStep), not code-gen, because a fixed tool set is auditable and far cheaper to
-make deterministic:
+The most important architectural decision: **`expect` does not build an agent loop.
+When it needs agentic behavior, it delegates to an existing coding agent over ACP**
+(the next section makes the case). What `expect` owns is everything *around* the
+loop — the surface, the stop conditions, the capture, and the verdict.
 
-- **cli** — run the command, capture stdout/stderr/exit-code (deterministic by
-  construction; the easiest, highest-value surface to ship first).
+After the static `doctor` pass, an `expect check` runs each expectation as
+**provision → arrange → act → observe → evaluate → teardown**, with three roles
+kept strictly separate — the **driver** causes the transition, the **adapter**
+observes the authoritative state, the **grader** judges — and the driver is never
+trusted as observer or judge:
+
+1. **Provision** the SUT from the spec's `setup` (build + launch the
+   binary/service, open a fresh fixture/db). `expect` owns this lifecycle (see
+   *Provisioning and Isolation*).
+2. **Arrange (Given)** — establish the precondition state, deterministically via
+   fixtures where possible, agent-driven only where necessary.
+3. **Act (When)** — the **driver** causes the transition. For a deterministic cli
+   surface that's just running a command; for browser/gui it's a delegated ACP
+   agent driving a fixed set of surface MCP tools. The driver is handed the
+   **goal** (intent + Given + When) but **not** the `Then` criteria.
+4. **Observe** — the **surface adapter** reads the *authoritative* final state
+   directly from the SUT (exit code, stdout, files, a11y tree, db rows, http
+   response) plus the trajectory, and assembles the `Observation`. This — not the
+   driver's transcript — is the result; the *final program/DOM/DB state is ground
+   truth, not a screenshot*. If the driver was an agent, its structured output is
+   captured via a schema-forced `StructuredOutput` tool call (reuse `review`'s
+   contract + tolerant `extract_json_value`), but it is treated as a *claim*, never
+   the observation.
+5. **Evaluate** — the **grader** runs the tiered ladder (deterministic → tolerance
+   → model judgment) over the observation, and the verdict is compared to the
+   golden. This is the pure `evaluate` step; it never trusts the driver's claim of
+   success.
+6. **Teardown** the provisioned instance.
+
+The surface adapters and what each perceives/asserts:
+
+- **cli** — run the command, capture stdout/stderr/exit-code/written files
+  (deterministic by construction; the easiest, highest-value surface to ship first).
 - **http** — issue requests, assert on status/body/headers (deterministic).
 - **browser** — drive via the **accessibility tree** (role + accessible name),
   the most refactor-robust target available; reserve pixel/vision for last
-  resort. This is where Playwright MCP / Stagehand patterns plug in.
+  resort. Playwright MCP is the model — a pure perceive (`browser_snapshot`) +
+  act (`browser_click` by `ref`) substrate that contributes *none* of the loop.
+- **gui** — drive a native desktop app via the OS accessibility API
+  (AX / UIA / AT-SPI); the desktop analog of `browser`.
 - **file / db** — assert on filesystem or end-of-run DB state (the τ-bench
   pattern: compare final state to an annotated goal).
 
-The loop is perceive → act → observe, then judge against the criteria. Two
-hardening rules from the research are non-negotiable:
+**Stop conditions — `expect` owns both, because the substrate won't.** Every
+mature loop in the survey has two independent stops, and the hard caps are always
+harness-imposed (the model APIs document none):
 
-1. **The acceptance check is tamper-resistant.** The agent under evaluation can
-   *run* `expect` but cannot edit the expectation file or the golden ledger
-   within the run — closing the 13.8%-reward-hacking hole. (Mechanically: the
-   expectation + golden are read-only inputs to the run; mutations only happen
-   through `expect approve`, a separate human-gated op.)
-2. **Resolved actions are cached for deterministic replay** (Stagehand's model).
-   The first run resolves "apply the coupon" to a concrete action sequence and
-   records it; subsequent runs replay without an LLM call, re-resolving only on
-   cache miss or failure. This converts fuzzy authoring into a fast, mostly-
-   deterministic CI gate and answers the cost critique ($1.05/run doesn't scale
-   to a CI suite run on every push).
+- **Soft stop** — the agent declares it has reached the goal (returns its
+  structured result). ACP surfaces this as `stopReason: end_turn`.
+- **Hard caps** — a max-prompt-turns cap (anchor on the surveyed defaults: Claude
+  computer-use 10, LangChain 15, LangGraph 25, Skyvern 10/25/50) and the spec's
+  `timeout` wall-clock. ACP returns `max_turn_requests` / `max_tokens`.
+- **Stall detection** — the strongest pattern (Magentic-One) is a decrementing
+  stall counter plus an "are we looping?" judgment, re-planning at 3 stalls;
+  `review`'s pool already gives us the deterministic floor of this — an
+  `idle_timeout` that abandons a wedged turn and sends `session/cancel`. Reuse it.
+
+Three hardening rules from the research are non-negotiable:
+
+1. **The driver never sees the acceptance criteria.** The delegated agent gets the
+   goal (intent + Given + When) but **not** the `Then` checklist or the golden —
+   exactly as SWE-bench withholds the held-out test from the agent. The verifier
+   checks the captured result against the withheld criteria. This is the single
+   biggest defense against reward-hacking: an agent that can't see the rubric
+   can't optimize to it. (METR measured o3 reward-hacking 30% of RE-Bench runs;
+   "don't reward hack" in the prompt only moved it 80%→70% — withholding works,
+   prompting doesn't.)
+2. **The verdict is deterministic and lives in `expect`, never in the agent.** We
+   delegate *exploration*, not the pass/fail call. The agent's self-declared
+   "done" is re-validated, never trusted — Skyvern's independent `check-user-goal`
+   that can *reject* a self-declared COMPLETE is the gold standard, and SWE-bench
+   data shows 35.7% of self-verified-as-correct trajectories were still wrong.
+3. **The check is tamper-resistant.** The agent under evaluation runs in a sandbox
+   it cannot use to edit the expectation, the golden, or fixtures; mutations to the
+   ledger happen only through `expect approve`, a separate human-gated op. Detect
+   spec/fixture edits directly, not just by grading outcome.
+
+**Assert on outcomes, never on action equality.** Agent trajectories are not
+reproducible even at temperature 0 + fixed seed — batch-invariance alone produced
+80 unique completions from 1000 identical temp-0 requests, diverging by token 103.
+Pass/fail is gated on the captured *outcome* (final state + criteria), never on a
+byte-identical action sequence.
+
+**Determinism comes from not calling the model, not from temp=0.** Following
+Stagehand: cache each resolved action keyed by a hash of (normalized URL/target +
+state snapshot + method), and on replay execute the cached action without the
+model, re-resolving via the agent only on cache miss or fingerprint drift —
+"a wrong cached click is worse than a slow click." This is what turns a fuzzy
+authoring step into a fast, mostly-deterministic CI gate and answers the cost
+critique (a full agent loop is ~3–5× a single call; you don't want that per push).
+
+### Provisioning and Isolation
+
+`expect` **owns the system-under-test lifecycle** — it provisions a fresh SUT,
+drives it, and tears it down — so a `check` is a true gate on *this code, built
+now*, not on whatever happened to be running. How the SUT comes to exist is the
+`setup` declaration, per surface, leaning on `detected-projects` for build/launch
+knowledge: cli builds and spawns the binary; http builds, launches, and waits for
+ready; gui launches the app; db creates a fresh database and loads a fixture; file
+runs in a scratch dir. Each surface defines its own provision **and** teardown.
+
+**Granularity: provision once per `check`, shared.** The expensive build + launch
+happens once; every expectation and every `pass^k` repeat runs against that one
+instance, torn down at the end. This is the fast path, and the explicit trade is
+that `expect` is *not* isolating expectations for you:
+
+- **Expectations must be order-independent**, and each **`Given` must arrange its
+  own preconditions** — never assume a clean slate, because the instance is shared
+  and dirty from prior expectations.
+- For `pass^k` to mean anything against a shared instance, the `Given` must
+  **re-establish state on each `observe`** (otherwise run 1's effects bleed into
+  run 2 and the reliability number is meaningless).
+
+**Escape hatch: `isolation: fresh`.** An expectation that genuinely needs a
+pristine SUT sets `isolation: fresh` and gets its own dedicated provision +
+teardown instead of the shared instance — at the cost of the rebuild/relaunch.
+Default is `shared`.
+
+### Delegation over ACP (don't rebuild the agent)
+
+**Whenever `expect` goes out to an agent — to drive the system or to judge a
+residual criterion — it speaks ACP** (the Agent Client Protocol), the same way
+`review` does. This is a deliberate stance, and the research backs the claim that
+the alternative is a design error.
+
+**The thesis.** Most testing tools (browser-use, Skyvern, Magnitude, Hercules)
+embed their own live-LLM loop and thereby re-own — per tool — model access,
+planning, tool-calling, retries, context management, and a permission model.
+That's the M×N duplication that LSP killed for editors and that ACP exists to kill
+for agents: ACP is the *client-drives-agent* layer (a host launches a full coding
+agent as a subprocess, JSON-RPC over stdio, sibling to LSP). By delegating, a tool
+inherits an existing agent's entire capability surface for free and stays swappable
+across Claude Code (via the `claude-code-acp` adapter), Gemini CLI (native), and
+others. The pattern is not exotic — eval harnesses already work this way: HAL and
+Terminal-Bench *run* an external agent rather than embedding one; TestSprite is the
+verifier/executor while Claude Code is the delegated fixer; and **`review` already
+does precisely this inside this repo.**
+
+**The honest counter-argument, and our answer.** The one place delegation bites a
+*test* runner is determinism: an external agent is non-deterministic, and a
+runner's value is reproducible verdicts. The answer is the split this doc already
+takes — **delegate the exploration, keep the verdict deterministic and inside
+`expect`**, behind a pinned agent version. Cognition's bounded-delegation rule
+fits: the subagent answers a scoped question; the runner owns the decision.
+
+**What we reuse from `review` (verbatim, not re-derived).** The codebase already
+solved the hard parts; `expect`'s engine should sit on the same side of the
+tool/engine boundary (agent-construction-free, receiving a `DynConnectTo<Client>`
+from the tool layer):
+
+- **`AgentPool`** (`swissarmyhammer-validators/src/validators/pool.rs`) — the whole
+  `submit` / `submit_forked` / `submit_primed` / `SessionPinGuard` / `PoolError`
+  surface. Per-turn liveness, `idle_timeout` → `abandon_turn` → `session/cancel`,
+  and the fork/pin warm-reuse choreography come for free.
+- **`run_review_over_agent`** (`.../review/drive.rs`) — the reference ACP wiring:
+  `Client.builder().with_handler(TolerantResponseRouter)`, the **single** notifier
+  feed (double-feeding corrupts the JSON), **once-per-connection** `initialize`,
+  and `answer_agent_request` for mid-prompt `session/request_permission` and
+  `fs/read_text_file` (confined under repo root). Mirror it; do not re-discover its
+  deadlock/double-feed fixes.
+- **The `AgentFactory` / `AgentHandle` seam** + the process-global pipeline gate +
+  the spawn-blocking-on-a-current-thread-runtime pattern (`review_op.rs`).
+- **`extract_json_value`** (the tolerant fenced-JSON extractor) for the
+  `StructuredOutput` capture.
+- **The validator model + loader + introspection** (`types.rs` / `loader.rs` /
+  `validators.rs`) — the closest existing template for the expectation file format,
+  the three-layer builtin→user→project precedence, and the `list`/`get`/`check`
+  read ops. The expectation/criteria model is the analog of the RuleSet/Rule model.
+
+**What ACP does *not* give us, so we build it** (client-side, mirroring review):
+ACP has no native subagent type and its prompt turn returns a control signal
+(`stopReason`), not a structured payload. So the "subagent per expectation" is our
+abstraction — open one scoped `session/new`, send the goal, drain `session/update`,
+read `stopReason`, tear down — and the structured result is assembled by us from a
+forced `StructuredOutput` tool call, not handed over by the protocol.
+
+**The verifier can itself be an ACP delegation — and should be independent.** Most
+criteria resolve deterministically (the floor catches an estimated 30–60% for
+free). For the residual subjective criteria, the judge is a model call; if that
+judge needs to *act* (re-run the program, inspect state) it is another ACP
+subagent — an "Agent-as-a-Judge," which measured ~90% human alignment vs ~60–70%
+for static LLM-as-judge. Independence matters: the grading model/agent should not
+be the same one that drove the system (self-preference inflates verdicts 10–25%,
+and self-verification of one's own trajectory systematically under-detects its own
+errors). Since the subject under test is a *program*, the primary verifier —
+program execution — is structurally independent already; the rule only constrains
+the residual model-judged criteria.
 
 ### Reliability and Non-Determinism
 
@@ -644,12 +883,19 @@ hardening rules from the research are non-negotiable:
   so a 2-of-3 flake is visible, not hidden behind an average.
 - **Repeat runs default to ≥2** where the surface is non-deterministic;
   deterministic surfaces (cli/http/file/db with cached actions) can run once.
+- **`pass^k` requires a re-arranged `Given`.** Because the SUT is shared across a
+  `check` (see *Provisioning and Isolation*), each repeated `observe` must
+  re-establish its `Given` state — or set `isolation: fresh` for a clean instance.
+  Otherwise the repeats aren't independent and `pass^k` is theater.
 - **Grading hardening**: bounded binary criteria over free-form scoring (a
   rubric grades one observable criterion at a time, not a vibe), and — when a
   criterion is borderline — an optional small **panel** of named models, where
-  disagreement is itself a signal the criterion is vaguely worded. The
-  self-preference/own-family concern is dropped on purpose: the subject is a
-  program, not a sibling model.
+  disagreement is itself a signal the criterion is vaguely worded (a disjoint
+  panel correlated with humans *better* than a single GPT-4 at ~7–8× lower cost).
+  The subject under test is a program, so judge self-preference is mostly moot —
+  with one carve-out: a residual criterion that is model-judged should be graded
+  by a *different* model than the one that drove the run, since an agent grading
+  its own trajectory both inflates the verdict and misses its own errors.
 - **Human escalation queue**: criteria the ladder resolves with low confidence
   are surfaced for human review rather than auto-passed, on empirically tuned
   thresholds (LLM confidence is miscalibrated, so the threshold is per-surface,
@@ -662,6 +908,11 @@ hardening rules from the research are non-negotiable:
 [model]
 default = ""                       # named sah model for grading; empty => sah model default
 panel = []                         # optional: extra named models for borderline criteria
+on_missing = "fallback"            # pinned model gone: "fallback" (warn + use default) | "error"
+
+[provision]
+granularity = "per-check"          # one shared SUT per check; `isolation: fresh` overrides per-spec
+# per-surface build/launch/teardown is auto-detected (detected-projects); `setup:` overrides
 
 [embedder]
 model = "text-embedding-3-large"   # pinned; checkpoint matters for reproducibility
@@ -694,8 +945,9 @@ stronger one grades, or vice versa.
 | Author in | Gherkin + step defs | NL / Gherkin | NL (authoring) | NL + optional G/W/T, **intent mandatory** |
 | Glue layer | hand-written regex defs | none (LLM binds) | generated code | none (tool-calling binding) |
 | Runtime AI | no | yes (every step) | no (deterministic replay) | **hybrid: cached replay, LLM on miss** |
-| Validation | code assertions | LLM judge | literal diff | **tiered ladder, judge gated** |
-| Drift control | none built in | none | snapshot/visual diff | **approval ledger + pinned grading model + pass^k** |
+| Agent harness | n/a | **rebuilt in-house** (own loop/tools/model) | n/a | **delegated over ACP** (reuse an existing agent) |
+| Validation | code assertions | LLM judge | literal diff | **tiered ladder, judge gated, criteria withheld from driver** |
+| Drift control | none built in | none | snapshot/visual diff | **snapshot-style approval of observations + pass^k** |
 | Reward-hacking guard | n/a | weak | n/a | **tamper-resistant check** |
 | Human role | write specs (rarely) | review flakes | approve visual diffs | **own intent + approve every drift** |
 
@@ -712,39 +964,57 @@ stronger one grades, or vice versa.
    goldens/received/expectations dirs); surface auto-detection via
    `detected-projects`.
 
-### Phase 2 — CLI surface, deterministic check
-5. **cli** surface adapter (run command, capture stdout/stderr/exit).
-6. Tier 1 deterministic verdicts only (exact/regex/schema/exit-code).
-7. `expect check` (doctor pass → execute → structured `ExpectationVerdict`);
-   scope resolution (path/folder/glob); teaching error messages.
+### Phase 2 — CLI surface, deterministic observe + evaluate (no agent yet)
+5. **cli** surface adapter + provisioning: build/launch from `setup` (via
+   `detected-projects`), capture stdout/stderr/exit/files, teardown. The
+   deterministic-only path needs **no agent**.
+6. `expect observe` → `Observation`; `expect evaluate` (pure) Tier 1 only
+   (exact/regex/schema/exit-code).
+7. `expect check` = doctor + observe + evaluate; scope resolution
+   (path/folder/glob); teaching error messages.
 
 ### Phase 3 — The ledger and the human gate
-8. Golden verdict-with-tolerance format + scrubbers.
-9. `expect check` golden compare + CI-gate (no auto-approve),
-   `expect approve`, `expect status`.
-10. Drift detection: compare run verdict to golden, queue unapproved drift.
+8. Golden = approved scrubbed **observation**; per-criterion compare by tier;
+   scrubbers.
+9. `expect approve` (granular `--missing`/`--changed`/`--all`, human-gated) +
+   `expect status`; **strict first-run** (no golden ⇒ CI fails); never
+   auto-approve in CI.
+10. Drift detection: `evaluate(received)` vs `evaluate(golden)`, queue unapproved
+    drift.
 
-### Phase 4 — Authoring + semantic tiers
-11. `expect create` — agent authors specs from intent (schema + rules as its
+### Phase 4 — ACP delegation (reuse review's machinery)
+11. Stand up the agent seam by reusing `review`: `AgentPool`,
+    `run_review_over_agent` wiring (`TolerantResponseRouter`, single notifier,
+    once-per-connection `initialize`, `answer_agent_request`), the
+    `AgentFactory`/`AgentHandle` seam, pipeline gate. `AgentUseCase::Expectations`
+    wired through `ToolContext`.
+12. One scoped ACP session per expectation; goal-only prompt (criteria withheld);
+    structured-output capture via forced `StructuredOutput` + `extract_json_value`.
+13. Stop conditions: max-turns cap, `timeout`, `idle_timeout`→`session/cancel`;
+    independent re-validation of the agent's self-declared "done".
+
+### Phase 5 — Semantic tiers + authoring
+14. Tier 2 embedding tolerance bands (pinned embedder).
+15. Tier 3 model judgment against withheld criteria (named `model:`, binary,
+    different model than the driver), gated behind tiers 1–2; optional panel.
+16. `expect create` — agent authors specs from intent (schema + rules as its
     instructions), `--from-session` capture; leaves the file + an unapproved
     golden (ledger state `new`) for a human to edit and `approve`.
-12. Tier 2 embedding tolerance bands (pinned embedder).
-13. Tier 3 model judgment against stated intent (named `model:`, binary
-    criteria), gated behind tiers 1–2.
-14. `AgentUseCase::Expectations` wired through `ToolContext`.
 
-### Phase 5 — Non-determinism + more surfaces
-15. `pass^k` reliability, repeat runs, escalation queue.
-16. Resolved-action cache for deterministic replay.
-17. **http** surface, then **browser** (accessibility-tree) surface.
-18. Panel option for borderline criteria.
+### Phase 6 — Non-determinism + more surfaces
+17. `pass^k` reliability, repeat runs, escalation queue.
+18. Resolved-action cache for deterministic replay (Stagehand model).
+19. **http** surface, then **browser** (a11y-tree), then **gui** (OS a11y) surfaces.
+20. **db** / **file** state surfaces.
 
 ## Open Questions
 
-1. **Where do goldens live for non-deterministic surfaces?** A verdict-with-
-   tolerance is committable; a browser trajectory may not be. Probably: commit
-   the verdict + criteria outcomes, gitignore the raw trajectory, keep the last
-   one locally for `expect explain`.
+1. **Storing a full observation for heavy/volatile surfaces.** We approve the full
+   scrubbed observation — trivial for cli/http/db, but large and noisy for
+   browser/gui (a whole a11y tree). What gets committed vs. gitignored — the
+   criterion-relevant slice + a digest in the golden, raw trajectory kept only
+   locally for `expect explain`? Scrubbing must be aggressive enough that the
+   golden is stable yet still re-evaluable against new criteria.
 2. **Single expectation file vs. directory of small ones.** Following the project
    convention (one fact per memory, small rules), lean toward one expectation per
    file for clean PR diffs and per-file goldens.
@@ -752,15 +1022,16 @@ stronger one grades, or vice versa.
    intentionally changes the pinned `model:`, every golden's pass-boundary may
    move. Need an `expect rebaseline` that re-runs and presents the full diff for
    a single bulk human approval — explicitly, never silently.
-4. **Reusing `rules` infrastructure.** `rules check` is already agent-driven over
-   the same `ToolContext.agent_config`. How much of its caching (cache-by-source-
-   and-rule) and progress-reporting machinery can `expect` share rather than
-   reimplement?
-5. **Authoring loop.** `expect record` should turn a working session into a
-   draft expectation + a proposed golden, which a human then edits for *intent*
-   (the part the machine can't infer) before first approval. How much can be
-   auto-drafted without baking in the agent's happy-path bias (the known weakness
-   at failure/edge scenarios)?
+4. **How much of `review` to extract vs fork.** `expect` should reuse `AgentPool`,
+   `run_review_over_agent`, the `AgentFactory` seam, and `extract_json_value`. Are
+   these stable enough to factor into a shared crate both `review` and `expect`
+   depend on, or does `expect` start by copying `drive.rs`/`pool.rs` and we
+   converge later? (The engine boundary — agent-construction-free, receives
+   `DynConnectTo<Client>` — must be preserved either way.)
+5. **Happy-path bias in `create`.** Auto-drafting from chat/task/spec captures the
+   obvious criteria well, but agents are documented to be weak at failure/edge
+   scenarios. How does the authoring skill push for the negative cases (the "and it
+   does NOT do X" criteria) rather than only the stated happy path?
 6. **Default grading model choice.** When an expectation omits `model:`, it
    falls back to the sah model default. Is that the right default for *grading*,
    or should `expect` carry its own default (the way `review` defaults to
@@ -768,4 +1039,19 @@ stronger one grades, or vice versa.
    ungoverned expectation's verdict?
 7. **One model or two.** Is the split between a driving agent and a grading model
    worth the extra config, or should `expect` default them to the same named
-   model and only let advanced users separate them?
+   model and only let advanced users separate them? (The independence argument
+   only bites for *model-judged residual* criteria — most criteria are
+   deterministic and don't care.)
+8. **Withholding criteria from the driver in practice.** The driver gets intent +
+   Given + When but not the `Then` checklist. But a human writes them in one file,
+   and the intent prose may leak the criteria anyway. How aggressively do we split
+   the spec at prompt-assembly time, and is a leaky intent acceptable given the
+   deterministic verdict is what actually gates?
+9. **Replay-cache invalidation.** A resolved-action cache keyed on
+   (target + state snapshot + method) speeds CI but can replay a stale action into
+   a changed program and mask a regression. What's the fingerprint-drift threshold,
+   and should the cache auto-invalidate on any spec edit or golden change?
+10. **Sandbox boundary for the driver.** Tamper-resistance requires the driving
+    agent run where it cannot edit specs/goldens/fixtures. Does `expect` reuse an
+    existing sah sandbox, run the agent in a worktree, or rely on the ACP
+    permission model (`answer_agent_request`) to deny writes to `.expect/`?
