@@ -15,7 +15,7 @@ use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server_with_options, 
 use swissarmyhammer_tools::ToolRegistry;
 use swissarmyhammer_tools::{
     register_code_context_tools, register_file_tools, register_git_tools, register_kanban_tools,
-    register_questions_tools, register_shell_tools, register_web_tools,
+    register_questions_tools, register_review_tools, register_shell_tools, register_web_tools,
 };
 use tokio::sync::RwLock;
 
@@ -26,6 +26,19 @@ pub struct CliToolContext {
     mcp_server_handle: Option<swissarmyhammer_tools::mcp::unified_server::McpServerHandle>,
     /// In-process server for isolated execution (no HTTP, no env var mutation)
     server: Option<Arc<McpServer>>,
+}
+
+impl std::fmt::Debug for CliToolContext {
+    /// `ToolRegistry` (holds `Box<dyn McpTool>` trait objects) and `McpServer`
+    /// do not implement `Debug`, so they are rendered as opaque placeholders;
+    /// only their presence is reported.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CliToolContext")
+            .field("tool_registry", &"<ToolRegistry>")
+            .field("mcp_server_handle", &self.mcp_server_handle)
+            .field("server", &self.server.as_ref().map(|_| "<McpServer>"))
+            .finish()
+    }
 }
 
 impl CliToolContext {
@@ -136,6 +149,7 @@ impl CliToolContext {
         register_questions_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
         register_web_tools(&mut tool_registry);
+        register_review_tools(&mut tool_registry);
         tool_registry
     }
 
@@ -169,8 +183,14 @@ impl CliToolContext {
         self.tool_registry.clone()
     }
 
-    /// Create arguments map from vector of key-value pairs
-    pub fn create_arguments(&self, args: Vec<(&str, Value)>) -> Map<String, Value> {
+    /// Create arguments map from any iterable of key-value pairs.
+    ///
+    /// Accepts `impl IntoIterator` so callers may pass a `Vec`, an array
+    /// literal, or any other iterator without first allocating a `Vec`.
+    pub fn create_arguments<'a>(
+        &self,
+        args: impl IntoIterator<Item = (&'a str, Value)>,
+    ) -> Map<String, Value> {
         args.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
     }
 }
@@ -279,6 +299,46 @@ mod tests {
 
         assert_eq!(args.get("name"), Some(&json!("test")));
         assert_eq!(args.get("count"), Some(&json!(42)));
+    }
+
+    /// `create_arguments` accepts any `IntoIterator`, not just `Vec`, so callers
+    /// can pass an array literal without allocating a `Vec` first.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_create_arguments_accepts_array() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let context = CliToolContext::new_isolated(temp.path()).await.unwrap();
+
+        // Array literal (`[..]`), not `vec![..]` — only compiles if the
+        // signature takes `impl IntoIterator`.
+        let args = context.create_arguments([("name", json!("test")), ("count", json!(42))]);
+
+        assert_eq!(args.get("name"), Some(&json!("test")));
+        assert_eq!(args.get("count"), Some(&json!(42)));
+    }
+
+    /// `CliToolContext` must implement `Debug` so it can appear in diagnostic
+    /// output and `#[derive(Debug)]` on enclosing types. Its field types
+    /// (`ToolRegistry`, `McpServer`) do not implement `Debug`, so this is a
+    /// manual impl with placeholders — this test just exercises that it
+    /// formats without panicking.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_cli_tool_context_implements_debug() {
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let context = CliToolContext::new_isolated(temp.path()).await.unwrap();
+
+        let debug = format!("{context:?}");
+        assert!(
+            debug.contains("CliToolContext"),
+            "Debug output should name the struct, got: {debug}"
+        );
     }
 
     #[test]

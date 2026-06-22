@@ -108,6 +108,44 @@ async fn test_files_read_tool_integration() {
 }
 
 #[tokio::test]
+async fn review_exposed_as_sah_tool_category() {
+    let (_temp, context) = setup_isolated_context().await;
+
+    let registry = context.get_tool_registry_arc();
+    let registry = registry.read().await;
+
+    let categories = registry.get_cli_categories();
+    assert!(
+        categories.contains(&"review".to_string()),
+        "Expected CLI category 'review' to be registered. Available: {:?}",
+        categories
+    );
+    assert!(
+        !registry.get_tools_for_category("review").is_empty(),
+        "Category 'review' should have at least one tool"
+    );
+}
+
+#[tokio::test]
+async fn review_list_validators_executes_via_cli() {
+    let (_temp, context) = setup_isolated_context().await;
+
+    let args = context.create_arguments(vec![("op", json!("list validators"))]);
+    let result = context.execute_tool("review", args).await;
+
+    assert!(
+        result.is_ok(),
+        "Failed to execute review tool: {:?}",
+        result.err()
+    );
+    assert_ne!(
+        result.unwrap().is_error,
+        Some(true),
+        "review 'list validators' reported an error"
+    );
+}
+
+#[tokio::test]
 async fn test_nonexistent_tool_error() {
     let (_temp, context) = setup_isolated_context().await;
 
