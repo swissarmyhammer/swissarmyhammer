@@ -8,9 +8,10 @@
 //! calling the internal filter directly:
 //!
 //! - A **Claude** client is advertised `Shared` + `Replacement` tools — `shell`
-//!   is present, but `Agent`-category tools (web/skill/agent/files) are not.
-//! - A **llama** client is advertised `Shared` only — no `shell`, no `Agent`
-//!   tools.
+//!   and `files` are present, but `Agent`-category tools (web/skill/agent) are
+//!   not.
+//! - A **llama** client is advertised `Shared` only — no `Replacement`, no
+//!   `Agent` tools.
 //! - An **unknown** client gets the conservative default: `Shared` only.
 //!
 //! The reference pattern is `rmcp_stdio_working.rs`: an in-process HTTP MCP
@@ -26,11 +27,14 @@ use swissarmyhammer_tools::mcp::{
 
 use super::mirdan_test_support::{write_claude_agents_config, MirdanConfigGuard};
 
-/// `Replacement`-category tool: served only to Claude.
-const SHELL_TOOL: &str = "shell";
+/// `Replacement`-category tools: served only to Claude. `shell` replaces `Bash`
+/// and `files` replaces `Edit`; both supersede the host's native surface, so the
+/// primary per-client serve advertises them to Claude and serve-time deny closes
+/// the native tools.
+const REPLACEMENT_TOOLS: &[&str] = &["shell", "files"];
 
 /// `Agent`-category tools: never advertised by SAH to any host.
-const AGENT_TOOLS: &[&str] = &["web", "skill", "agent", "files"];
+const AGENT_TOOLS: &[&str] = &["web", "skill", "agent"];
 
 /// `Shared`-category tools: advertised to every host. `kanban` and
 /// `code_context` are stable domain capabilities that exercise the `Shared`
@@ -89,7 +93,7 @@ fn assert_all_present(names: &HashSet<String>, required: &[&str], context: &str)
 }
 
 /// A Claude client (`"claude-code"`) is advertised `Shared` + `Replacement`:
-/// `shell` is present, every `Agent` tool is absent.
+/// `shell` and `files` are present, every `Agent` tool is absent.
 ///
 /// Connecting a Claude client triggers the serve-time native-deny path, which
 /// reads the process-global `MIRDAN_AGENTS_CONFIG`. This test therefore joins
@@ -106,18 +110,14 @@ async fn claude_client_gets_shared_plus_shell_not_agent_tools() {
     let names = advertised_tools(&server, "claude-code").await;
 
     assert_all_present(&names, SHARED_TOOLS, "claude");
-    assert!(
-        names.contains(SHELL_TOOL),
-        "claude: the Replacement-category `shell` tool must be advertised. \
-         Advertised: {names:?}"
-    );
+    assert_all_present(&names, REPLACEMENT_TOOLS, "claude");
     assert_none_present(&names, AGENT_TOOLS, "claude");
 
     server.shutdown().await.expect("Failed to shutdown server");
 }
 
 /// A llama client (`"llama_agent_notifying_client"`) is advertised `Shared`
-/// only: no `shell` (it mounts its own), no `Agent` tools.
+/// only: no `Replacement` tools (it mounts its own), no `Agent` tools.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn llama_client_gets_shared_only() {
     let (mut server, _temp) = start_isolated_server().await;
@@ -125,18 +125,14 @@ async fn llama_client_gets_shared_only() {
     let names = advertised_tools(&server, "llama_agent_notifying_client").await;
 
     assert_all_present(&names, SHARED_TOOLS, "llama");
-    assert!(
-        !names.contains(SHELL_TOOL),
-        "llama: the Replacement-category `shell` tool must NOT be advertised \
-         (llama mounts its own). Advertised: {names:?}"
-    );
+    assert_none_present(&names, REPLACEMENT_TOOLS, "llama");
     assert_none_present(&names, AGENT_TOOLS, "llama");
 
     server.shutdown().await.expect("Failed to shutdown server");
 }
 
-/// An unknown client gets the conservative default — `Shared` only: no `shell`,
-/// no `Agent` tools.
+/// An unknown client gets the conservative default — `Shared` only: no
+/// `Replacement` tools, no `Agent` tools.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unknown_client_gets_shared_only() {
     let (mut server, _temp) = start_isolated_server().await;
@@ -144,11 +140,7 @@ async fn unknown_client_gets_shared_only() {
     let names = advertised_tools(&server, "some-unrecognized-mcp-client").await;
 
     assert_all_present(&names, SHARED_TOOLS, "unknown");
-    assert!(
-        !names.contains(SHELL_TOOL),
-        "unknown host: the Replacement-category `shell` tool must NOT be \
-         advertised. Advertised: {names:?}"
-    );
+    assert_none_present(&names, REPLACEMENT_TOOLS, "unknown");
     assert_none_present(&names, AGENT_TOOLS, "unknown");
 
     server.shutdown().await.expect("Failed to shutdown server");

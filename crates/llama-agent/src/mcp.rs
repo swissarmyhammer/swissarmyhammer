@@ -126,6 +126,44 @@ pub struct UnifiedMCPClient {
 
 // Note: Now using real rmcp services
 
+/// Flatten an MCP `CallToolResult` into the string llama-agent threads into
+/// `ToolResult.result`.
+///
+/// The default is the first text content block — the long-standing behaviour for
+/// ordinary tool results. When a tool carries `structured_content` (today only
+/// the `swissarmyhammer-tools` inline-diagnostics fold-in does), that structured
+/// payload is surfaced as JSON so the diagnostics reach `ToolResult.result` — and
+/// from there both the model-context path (the conversation) and the ACP forward
+/// (the editor gutter). The original tool text is preserved under `content` so
+/// the model still sees the action that produced the diagnostics; the structured
+/// fields (`diagnostics`/`pending`) are merged in alongside.
+fn result_to_string(result: &CallToolResult) -> String {
+    let text = first_text_content(result);
+
+    let Some(serde_json::Value::Object(structured)) = result.structured_content.as_ref() else {
+        return text;
+    };
+
+    let mut merged = structured.clone();
+    merged.insert(
+        "content".to_string(),
+        serde_json::Value::String(text.clone()),
+    );
+    serde_json::to_string(&serde_json::Value::Object(merged)).unwrap_or(text)
+}
+
+/// The first text content block of a tool result, or a placeholder describing a
+/// non-text first block / an empty result.
+fn first_text_content(result: &CallToolResult) -> String {
+    match result.content.first().map(|c| &**c) {
+        Some(RawContent::Text(text_content)) => text_content.text.clone(),
+        Some(RawContent::Image(_)) => "Image content (not displayed)".to_string(),
+        Some(RawContent::Resource(_)) => "Resource content".to_string(),
+        Some(_) => "Unknown content type".to_string(),
+        None => "No result content".to_string(),
+    }
+}
+
 impl UnifiedMCPClient {
     /// Create a test client without connection (for testing only)
     pub async fn with_no_connection() -> Result<Self, MCPError> {
@@ -373,17 +411,7 @@ impl UnifiedMCPClient {
                 MCPError::ToolCallFailed(format!("call_tool '{}' failed: {:?}", name, e))
             })?;
 
-        // Extract text content from the result
-        if let Some(content) = result.content.first() {
-            match &**content {
-                RawContent::Text(text_content) => Ok(text_content.text.clone()),
-                RawContent::Image(_) => Ok("Image content (not displayed)".to_string()),
-                RawContent::Resource(_) => Ok("Resource content".to_string()),
-                _ => Ok("Unknown content type".to_string()),
-            }
-        } else {
-            Ok("No result content".to_string())
-        }
+        Ok(result_to_string(&result))
     }
 
     /// List available prompts
@@ -984,6 +1012,45 @@ mod tests {
         assert_eq!(builder.servers.len(), 2);
         assert_eq!(builder.servers[0].name, "test_sse");
         assert_eq!(builder.servers[1].name, "test_http");
+    }
+
+    /// With no `structured_content`, the result is the first text block — the
+    /// long-standing behaviour, preserved so plain tool results are unchanged.
+    #[test]
+    fn result_to_string_returns_first_text_when_unstructured() {
+        let result = CallToolResult::success(vec![Content::text("edited file")]);
+        assert_eq!(result_to_string(&result), "edited file");
+    }
+
+    /// When a mutating tool folds diagnostics into `structured_content` (the
+    /// `swissarmyhammer-tools` inline fold-in), `call_tool` must surface them so
+    /// they reach `ToolResult.result` — otherwise neither the model-context path
+    /// nor the ACP forward sees the diagnostics. The returned string must be
+    /// parseable JSON carrying the structured `diagnostics`/`pending`, with the
+    /// original tool text preserved alongside.
+    #[test]
+    fn result_to_string_surfaces_structured_diagnostics() {
+        let mut result = CallToolResult::success(vec![Content::text("edited file")]);
+        result.structured_content = Some(serde_json::json!({
+            "diagnostics": {
+                "diagnostics": [{ "message": "mismatched types" }],
+                "counts": { "errors": 1, "warnings": 0 }
+            },
+            "pending": false,
+        }));
+
+        let surfaced = result_to_string(&result);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&surfaced).expect("surfaced diagnostics must be valid JSON");
+
+        // The structured diagnostics are extractable, exactly as the fold-in shape.
+        assert_eq!(
+            parsed["diagnostics"]["counts"]["errors"],
+            serde_json::json!(1)
+        );
+        assert_eq!(parsed["pending"], serde_json::json!(false));
+        // The original tool text is preserved so the model still sees the action.
+        assert_eq!(parsed["content"], serde_json::json!("edited file"));
     }
 
     #[tokio::test]

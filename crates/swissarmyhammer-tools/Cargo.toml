@@ -107,6 +107,13 @@ tree-sitter = { workspace = true }
 # LSP server lifecycle management
 swissarmyhammer-lsp = { workspace = true }
 
+# LSP diagnostic type carried by the in-process fan-out and the subscribable
+# diagnostics MCP resource (`mcp::diagnostics_resource`).
+lsp-types = { workspace = true }
+
+# Model-free diagnostics core (settle engine + sharp report) for the diagnostics tool
+swissarmyhammer-diagnostics = { workspace = true }
+
 # Operations pattern
 swissarmyhammer-operations = { workspace = true }
 
@@ -149,3 +156,6 @@ agent-client-protocol-extras = { workspace = true }
 # Captures `tracing` output to assert the review engine's observability traces
 # fire on the real tool path (through spawn_blocking).
 tracing-test = { workspace = true }
+# `test-helpers` exposes `cli_gen::test_support` (build_commands_from_schema /
+# collect_verb_noun_pairs) used by the review tool's CLI command-tree coverage test.
+swissarmyhammer-operations = { workspace = true, features = ["test-helpers"] }

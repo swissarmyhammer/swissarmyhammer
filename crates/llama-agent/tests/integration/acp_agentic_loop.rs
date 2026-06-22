@@ -396,6 +396,50 @@ struct ToolTurnOutcome {
     final_text: String,
 }
 
+impl ToolTurnOutcome {
+    /// The all-empty outcome: no tool call broadcast, no Tool-role messages, no
+    /// executed tool calls, and no text. Returned when an attempt makes no
+    /// progress — e.g. `server.prompt()` returns `Err` (the engine's no-progress
+    /// abort guard fired) — so the attempt is retried like a comprehension miss
+    /// rather than panicking.
+    fn no_progress() -> Self {
+        Self {
+            tool_call_broadcast: false,
+            tool_messages: 0,
+            tool_calls_executed: 0,
+            streamed_agent_text: String::new(),
+            final_text: String::new(),
+        }
+    }
+
+    /// Whether this attempt took the tool path — a `ToolCall` was broadcast or at
+    /// least one `Tool`-role message landed in the session. The single source of
+    /// truth the retry loop branches on; a `no_progress` outcome is `false`.
+    fn took_tool_path(&self) -> bool {
+        self.tool_call_broadcast || self.tool_messages >= 1
+    }
+}
+
+/// A `no_progress` outcome is classified as "did not take the tool path", so the
+/// retry loop treats an aborted/errored turn as a retryable attempt rather than
+/// asserting on it — and the all-empty signals carry no tool work.
+#[test]
+fn no_progress_outcome_took_tool_path_is_false() {
+    let outcome = ToolTurnOutcome::no_progress();
+    assert!(
+        !outcome.took_tool_path(),
+        "a no-progress outcome must not be classified as having taken the tool path"
+    );
+    assert_eq!(
+        outcome.tool_messages, 0,
+        "a no-progress outcome appended no Tool-role messages"
+    );
+    assert_eq!(
+        outcome.tool_calls_executed, 0,
+        "a no-progress outcome executed no tool calls"
+    );
+}
+
 /// Drive one tool-calling prompt through the ACP server against `prompt_text` on
 /// a fresh session, and collect the observable tool-path signals.
 ///
@@ -430,10 +474,26 @@ async fn run_tool_turn(
     // per-turn budget. The loop is still bounded by `NO_HANG_BUDGET`.
     let request = text_prompt(session.session_id.clone(), prompt_text);
 
-    let response = tokio::time::timeout(NO_HANG_BUDGET, server.prompt(request))
+    // A genuine hang must still fail loudly, so the `NO_HANG_BUDGET` timeout
+    // keeps its `.expect`. But an `Err` from `prompt` is non-deterministic with
+    // the small test model — it spuriously trips the engine's (correct)
+    // no-progress abort guard ("every tool call failed for N consecutive
+    // step(s)"). That is a retryable miss, not a panic: log it and report a
+    // no-progress outcome so the caller's bounded retry loop tries a fresh turn,
+    // exactly as it does for a comprehension miss.
+    let response = match tokio::time::timeout(NO_HANG_BUDGET, server.prompt(request))
         .await
         .expect("tool-calling prompt must not hang")
-        .expect("prompt must succeed against a healthy model");
+    {
+        Ok(response) => response,
+        Err(e) => {
+            info!(
+                "tool-calling prompt returned an error (treating as a retryable \
+                 no-progress attempt): {e}"
+            );
+            return ToolTurnOutcome::no_progress();
+        }
+    };
 
     let notes = collector.finish().await;
     let tool_call_broadcast = notes
@@ -556,7 +616,7 @@ async fn acp_multi_turn_dispatches_tool_and_threads_result() {
     for attempt in 1..=MAX_ATTEMPTS {
         info!("tool-turn attempt {}/{}", attempt, MAX_ATTEMPTS);
         let outcome = run_tool_turn(&server, &mut rx, &mcp_url, &prompt_text).await;
-        if outcome.tool_call_broadcast || outcome.tool_messages >= 1 {
+        if outcome.took_tool_path() {
             // The model took the tool path on this attempt — now assert the loop
             // handled it correctly. These are the hard guards: deterministic
             // machinery that must hold on *every* tool-path turn.

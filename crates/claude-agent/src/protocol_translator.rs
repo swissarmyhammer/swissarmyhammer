@@ -25,15 +25,101 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
 
+/// Per-turn prompt-cache usage reported by the claude CLI in a stream-json
+/// `result` message's `usage` object.
+///
+/// These distinguish a warm cache read (`cache_read_input_tokens`) from a cold
+/// prefill write (`cache_creation_input_tokens`), alongside the raw input/output
+/// token counts. Each field is `Option` because the CLI may omit individual
+/// keys; an entirely empty `usage` object is represented as `None` at the
+/// [`StreamResult`] level rather than a zeroed `CacheUsage`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CacheUsage {
+    /// Tokens served from a warm prompt cache (reuse).
+    pub cache_read_input_tokens: Option<u64>,
+    /// Tokens written to the prompt cache on a cold prefill.
+    pub cache_creation_input_tokens: Option<u64>,
+    /// Total input tokens for the turn.
+    pub input_tokens: Option<u64>,
+    /// Total output tokens for the turn.
+    pub output_tokens: Option<u64>,
+}
+
+impl CacheUsage {
+    /// JSON object keys carrying each field across the `PromptResponse._meta`
+    /// boundary. Used by both [`Self::to_meta_json`] and [`Self::from_meta_json`]
+    /// so the wire format stays symmetric and single-sourced.
+    const META_KEYS: [&'static str; 4] = [
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "input_tokens",
+        "output_tokens",
+    ];
+
+    /// Borrow the four fields in [`Self::META_KEYS`] order.
+    fn fields(&self) -> [Option<u64>; 4] {
+        [
+            self.cache_read_input_tokens,
+            self.cache_creation_input_tokens,
+            self.input_tokens,
+            self.output_tokens,
+        ]
+    }
+
+    /// Serialize into a JSON object for the response `_meta` map. Only present
+    /// (`Some`) fields are emitted; a `None` field is omitted rather than
+    /// written as `null`.
+    pub fn to_meta_json(&self) -> JsonValue {
+        let mut obj = serde_json::Map::new();
+        for (key, value) in Self::META_KEYS.iter().zip(self.fields()) {
+            if let Some(v) = value {
+                obj.insert((*key).to_string(), JsonValue::from(v));
+            }
+        }
+        JsonValue::Object(obj)
+    }
+
+    /// Reconstruct from a JSON object previously written by [`Self::to_meta_json`].
+    ///
+    /// Returns `None` when the value is not an object or carries no recognized
+    /// numeric fields, mirroring the "empty `usage` → no cache info" rule.
+    pub fn from_meta_json(value: &JsonValue) -> Option<Self> {
+        let obj = value.as_object()?;
+        let field = |key: &str| obj.get(key).and_then(JsonValue::as_u64);
+        let usage = CacheUsage {
+            cache_read_input_tokens: field("cache_read_input_tokens"),
+            cache_creation_input_tokens: field("cache_creation_input_tokens"),
+            input_tokens: field("input_tokens"),
+            output_tokens: field("output_tokens"),
+        };
+        (usage != CacheUsage::default()).then_some(usage)
+    }
+}
+
 /// Result information from stream-json result messages
 #[derive(Debug, Clone)]
 pub struct StreamResult {
     pub stop_reason: Option<String>,
+    /// Prompt-cache usage parsed from the result message's `usage` object, if
+    /// any usage fields were present. `None` when `usage` is absent or empty.
+    pub cache_usage: Option<CacheUsage>,
 }
 
 /// Protocol translator for converting between ACP and stream-json formats
 pub struct ProtocolTranslator {
     permission_engine: Arc<crate::permissions::PermissionPolicyEngine>,
+}
+
+/// Parsed Claude CLI `rate_limit_event` payload (throttling signal).
+///
+/// Defensive: `raw` retains the entire event so nothing is lost even when the
+/// CLI schema shifts; `status` is the lifted status string when present.
+#[derive(Debug, Clone, PartialEq)]
+struct RateLimitEvent {
+    /// Rate-limit status string when the payload carries one (e.g. allowed / allowed_warning / rejected).
+    status: Option<String>,
+    /// The complete event payload, retained verbatim.
+    raw: JsonValue,
 }
 
 impl ProtocolTranslator {
@@ -197,10 +283,59 @@ impl ProtocolTranslator {
                 Ok(None)
             }
             "stream_event" => self.handle_stream_event(&parsed, session_id),
+            "rate_limit_event" => self.handle_rate_limit_event(&parsed, session_id),
             _ => {
                 tracing::warn!("Unknown stream-json message type: {}", msg_type);
                 Ok(None)
             }
+        }
+    }
+
+    /// Handle the Claude CLI `rate_limit_event` stream-json message.
+    ///
+    /// These signal API throttling. We log the full payload at `info!` (never
+    /// truncated) so the signal is preserved and inspectable, and parse it
+    /// defensively. We intentionally do NOT emit a per-event ACP
+    /// `SessionNotification`: a single run can emit hundreds of these (one run
+    /// produced 294), and flooding the client message stream is worse than the
+    /// bug. Returns `Ok(None)` — but never falls through to the unknown-type
+    /// warning.
+    fn handle_rate_limit_event(
+        &self,
+        parsed: &JsonValue,
+        _session_id: &SessionId,
+    ) -> Result<Option<SessionNotification>> {
+        let event = Self::parse_rate_limit_event(parsed);
+        tracing::info!(
+            status = event.status.as_deref().unwrap_or("unknown"),
+            "Claude CLI rate_limit_event: {}",
+            parsed
+        );
+        Ok(None)
+    }
+
+    /// Defensively extract the fields of a `rate_limit_event` payload.
+    ///
+    /// The exact CLI schema is not pinned (the raw body is not captured in
+    /// existing logs), so this never hard-fails on missing/unknown fields: it
+    /// keeps the whole payload in `raw` and lifts a `status` string when present,
+    /// checking the common shapes (top-level `status`, or a nested
+    /// `rate_limit` / `rate_limit_info` object).
+    fn parse_rate_limit_event(parsed: &JsonValue) -> RateLimitEvent {
+        const STATUS_FIELD: &str = "status";
+        let status = parsed
+            .get(STATUS_FIELD)
+            .or_else(|| parsed.get("rate_limit").and_then(|r| r.get(STATUS_FIELD)))
+            .or_else(|| {
+                parsed
+                    .get("rate_limit_info")
+                    .and_then(|r| r.get(STATUS_FIELD))
+            })
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        RateLimitEvent {
+            status,
+            raw: parsed.clone(),
         }
     }
 
@@ -823,10 +958,24 @@ impl ProtocolTranslator {
                 .and_then(|s| s.as_str())
                 .map(|s| s.to_string());
 
-            return Ok(Some(StreamResult { stop_reason }));
+            let cache_usage = Self::parse_cache_usage(parsed.get("usage"));
+
+            return Ok(Some(StreamResult {
+                stop_reason,
+                cache_usage,
+            }));
         }
 
         Ok(None)
+    }
+
+    /// Parse the prompt-cache usage from a result message's `usage` object.
+    ///
+    /// Returns `None` when `usage` is absent or carries no recognized numeric
+    /// fields (e.g. an empty `"usage":{}`), so callers see "no cache info"
+    /// rather than a zeroed [`CacheUsage`].
+    fn parse_cache_usage(usage: Option<&JsonValue>) -> Option<CacheUsage> {
+        CacheUsage::from_meta_json(usage?)
     }
 
     /// Convert tool result to stream-json for claude stdin
@@ -1212,6 +1361,47 @@ mod tests {
         assert!(result.unwrap().is_none());
     }
 
+    #[tokio::test]
+    async fn test_stream_json_to_acp_rate_limit_event() {
+        // A rate_limit_event must be recognized (NOT the unknown-type warning arm)
+        // and must not inject anything into the message stream — Ok(None).
+        let translator = create_test_translator();
+        let line = r#"{"type":"rate_limit_event","rate_limit":{"status":"allowed_warning","resets_at":1750000000}}"#;
+        let session_id = SessionId::new("test_session");
+
+        let result = translator.stream_json_to_acp(line, &session_id).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_parse_rate_limit_event_nested_status() {
+        let parsed: serde_json::Value = serde_json::from_str(
+            r#"{"type":"rate_limit_event","rate_limit":{"status":"rejected"}}"#,
+        )
+        .unwrap();
+        let event = ProtocolTranslator::parse_rate_limit_event(&parsed);
+        assert_eq!(event.status.as_deref(), Some("rejected"));
+        assert_eq!(event.raw, parsed);
+    }
+
+    #[test]
+    fn test_parse_rate_limit_event_top_level_status() {
+        let parsed: serde_json::Value =
+            serde_json::from_str(r#"{"type":"rate_limit_event","status":"allowed"}"#).unwrap();
+        let event = ProtocolTranslator::parse_rate_limit_event(&parsed);
+        assert_eq!(event.status.as_deref(), Some("allowed"));
+    }
+
+    #[test]
+    fn test_parse_rate_limit_event_missing_fields_no_panic() {
+        // Fieldless / malformed event must not panic and yields no status.
+        let parsed: serde_json::Value =
+            serde_json::from_str(r#"{"type":"rate_limit_event"}"#).unwrap();
+        let event = ProtocolTranslator::parse_rate_limit_event(&parsed);
+        assert_eq!(event.status, None);
+    }
+
     #[test]
     fn test_parse_result_message_with_max_tokens() {
         // Test: Parse result message with max_tokens stop_reason
@@ -1265,6 +1455,42 @@ mod tests {
         let result = translator.parse_result_message(line);
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_parse_result_message_extracts_cache_usage() {
+        // Test: Parse result message with a populated `usage` object into CacheUsage.
+        let translator = create_test_translator();
+        let line = r#"{"type":"result","subtype":"success","stop_reason":"end_turn","usage":{"cache_read_input_tokens":1234,"cache_creation_input_tokens":56,"input_tokens":1290,"output_tokens":42}}"#;
+        let stream_result = translator
+            .parse_result_message(line)
+            .expect("parse must succeed")
+            .expect("result message must parse to Some");
+
+        assert_eq!(stream_result.stop_reason, Some("end_turn".to_string()));
+        assert_eq!(
+            stream_result.cache_usage,
+            Some(CacheUsage {
+                cache_read_input_tokens: Some(1234),
+                cache_creation_input_tokens: Some(56),
+                input_tokens: Some(1290),
+                output_tokens: Some(42),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_result_message_empty_usage_is_none() {
+        // Test: An empty `usage` object yields no cache info (None), not a zeroed struct.
+        let translator = create_test_translator();
+        let line = r#"{"type":"result","subtype":"success","stop_reason":"end_turn","usage":{}}"#;
+        let stream_result = translator
+            .parse_result_message(line)
+            .expect("parse must succeed")
+            .expect("result message must parse to Some");
+
+        assert_eq!(stream_result.stop_reason, Some("end_turn".to_string()));
+        assert_eq!(stream_result.cache_usage, None);
     }
 
     #[tokio::test]

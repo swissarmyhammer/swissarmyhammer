@@ -334,6 +334,7 @@ impl crate::agent::ClaudeAgent {
     ) -> Result<PromptResponse, agent_client_protocol::Error> {
         let session_id_str = session_id.to_string();
         let mut claude_stop_reason: Option<String> = None;
+        let mut cache_usage: Option<crate::protocol_translator::CacheUsage> = None;
         let mut accumulated_content = String::new();
         let mut output_tokens: u64 = 0;
 
@@ -347,6 +348,10 @@ impl crate::agent::ClaudeAgent {
 
             if let Some(reason) = &chunk.stop_reason {
                 claude_stop_reason = Some(reason.clone());
+            }
+
+            if let Some(usage) = chunk.cache_usage {
+                cache_usage = Some(usage);
             }
 
             if chunk.content.is_empty() && chunk.tool_call.is_none() && chunk.tool_result.is_none()
@@ -385,7 +390,7 @@ impl crate::agent::ClaudeAgent {
             }
         }
 
-        self.build_streaming_response(&session_id_str, claude_stop_reason)
+        self.build_streaming_response(&session_id_str, claude_stop_reason, cache_usage)
             .await
     }
 
@@ -733,11 +738,16 @@ impl crate::agent::ClaudeAgent {
         Ok(())
     }
 
-    /// Build final streaming response with stop reason.
+    /// Build final streaming response with stop reason and prompt-cache usage.
+    ///
+    /// `cache_usage` (when present) is serialized into the response `_meta` map
+    /// under the `cache_usage` key as a JSON object, so the `CollectedResponse`
+    /// assembled in `lib.rs` can surface the per-turn Anthropic cache metrics.
     async fn build_streaming_response(
         &self,
         session_id_str: &str,
         claude_stop_reason: Option<String>,
+        cache_usage: Option<crate::protocol_translator::CacheUsage>,
     ) -> Result<PromptResponse, agent_client_protocol::Error> {
         if self.cancellation_manager.is_cancelled(session_id_str).await {
             tracing::info!("Session {} cancelled after streaming", session_id_str);
@@ -752,6 +762,9 @@ impl crate::agent::ClaudeAgent {
         let stop_reason = Self::map_claude_stop_reason(claude_stop_reason);
         let mut meta_map = serde_json::Map::new();
         meta_map.insert("streaming".to_string(), serde_json::json!(true));
+        if let Some(usage) = cache_usage {
+            meta_map.insert("cache_usage".to_string(), usage.to_meta_json());
+        }
         Ok(PromptResponse::new(stop_reason).meta(meta_map))
     }
 
@@ -1584,6 +1597,7 @@ mod tests {
                 tool_result: None,
                 token_usage: None,
                 stop_reason: None,
+                cache_usage: None,
             })
             .collect();
         Box::pin(tokio_stream::iter(chunks))
@@ -1679,6 +1693,91 @@ mod tests {
         );
     }
 
+    /// A streamed turn whose final chunk carries `cache_usage` (the values the
+    /// translator extracted from the `result` message's `usage` object) must
+    /// surface that usage on the resulting `PromptResponse.meta`, so the
+    /// `CollectedResponse` built downstream in `lib.rs` can report it.
+    ///
+    /// This mirrors the stop_reason path: `send_final_chunk` rides
+    /// `cache_usage` alongside `stop_reason` on the last chunk, and
+    /// `process_stream_chunks` carries it onto the response meta.
+    #[tokio::test]
+    async fn test_process_stream_chunks_carries_cache_usage_to_meta() {
+        use crate::protocol_translator::CacheUsage;
+
+        let config = AgentConfig::default();
+        let (agent, _rx) = crate::agent::ClaudeAgent::new(config)
+            .await
+            .expect("agent construction must succeed");
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let session_id = agent
+            .session_manager
+            .create_session(cwd, None)
+            .expect("session creation must succeed");
+
+        // A short text chunk followed by a final metadata chunk carrying the
+        // cache usage — the shape `send_final_chunk` produces from a `result`
+        // message with a populated `usage` object.
+        let text = MessageChunk {
+            content: "hello".to_string(),
+            chunk_type: ChunkType::Text,
+            tool_call: None,
+            tool_result: None,
+            token_usage: None,
+            stop_reason: None,
+            cache_usage: None,
+        };
+        let final_chunk = MessageChunk {
+            content: String::new(),
+            chunk_type: ChunkType::Text,
+            tool_call: None,
+            tool_result: None,
+            token_usage: None,
+            stop_reason: Some("end_turn".to_string()),
+            cache_usage: Some(CacheUsage {
+                cache_read_input_tokens: Some(1234),
+                cache_creation_input_tokens: Some(56),
+                input_tokens: Some(1290),
+                output_tokens: Some(42),
+            }),
+        };
+        let mut stream: std::pin::Pin<Box<dyn Stream<Item = MessageChunk> + Send>> =
+            Box::pin(tokio_stream::iter(vec![text, final_chunk]));
+
+        let response = agent
+            .process_stream_chunks(&session_id, &mut stream, 100_000, None)
+            .await
+            .expect("process_stream_chunks must succeed");
+
+        let meta = response
+            .meta
+            .expect("response with cache usage must include meta");
+        let cache = meta
+            .get("cache_usage")
+            .expect("meta must carry cache_usage when the final chunk reported usage");
+        assert_eq!(
+            cache
+                .get("cache_read_input_tokens")
+                .and_then(|v| v.as_u64()),
+            Some(1234)
+        );
+        assert_eq!(
+            cache
+                .get("cache_creation_input_tokens")
+                .and_then(|v| v.as_u64()),
+            Some(56)
+        );
+        assert_eq!(
+            cache.get("input_tokens").and_then(|v| v.as_u64()),
+            Some(1290)
+        );
+        assert_eq!(
+            cache.get("output_tokens").and_then(|v| v.as_u64()),
+            Some(42)
+        );
+    }
+
     // =========================================================================
     // Tool-result chunk → SessionUpdate::ToolCallUpdate notification
     // =========================================================================
@@ -1701,6 +1800,7 @@ mod tests {
             }),
             token_usage: None,
             stop_reason: None,
+            cache_usage: None,
         };
         Box::pin(tokio_stream::iter(vec![chunk]))
     }
@@ -1951,6 +2051,7 @@ mod tests {
             tool_result: None,
             token_usage: None,
             stop_reason: None,
+            cache_usage: None,
         };
         let mut stream: std::pin::Pin<Box<dyn Stream<Item = MessageChunk> + Send>> =
             Box::pin(tokio_stream::iter(vec![chunk]));

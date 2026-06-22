@@ -52,6 +52,45 @@ struct WireMessage {
     frames: Vec<Vec<u8>>,
 }
 
+/// Receive timeout (milliseconds) on the subscriber's ZMQ SUB socket.
+///
+/// The recv loop wakes this often so it can notice its `Subscriber` was dropped
+/// (the next `tx.send` then fails and the thread exits); it bounds the
+/// shutdown latency to one interval. Short enough for prompt teardown, long
+/// enough to keep the loop from busy-spinning.
+const SUBSCRIBER_RECV_TIMEOUT_MS: i32 = 100;
+
+/// Drain the channel and send each queued message out the PUB socket, until the
+/// channel closes (the `Publisher` was dropped).
+///
+/// Pulled out of [`Publisher::connected`] so the socket setup (create/connect,
+/// each with its own error path) reads as flat construction and the per-message
+/// send logic lives on its own. Each message goes out as a multipart frame
+/// sequence `[topic, frame0, frame1, ...]`; a topic-send failure skips that
+/// message, a frame-send failure abandons the rest of that message — neither
+/// tears down the loop.
+fn send_messages_loop(sock: &zmq::Socket, rx: &mpsc::Receiver<WireMessage>) {
+    while let Ok(wire) = rx.recv() {
+        // Send as multipart: [topic, frame0, frame1, ...]
+        let has_frames = !wire.frames.is_empty();
+        if let Err(e) = sock.send(&wire.topic, if has_frames { zmq::SNDMORE } else { 0 }) {
+            tracing::warn!("PUB send topic failed: {}", e);
+            continue;
+        }
+        for (i, frame) in wire.frames.iter().enumerate() {
+            let flags = if i < wire.frames.len() - 1 {
+                zmq::SNDMORE
+            } else {
+                0
+            };
+            if let Err(e) = sock.send(frame, flags) {
+                tracing::warn!("PUB send frame failed: {}", e);
+                break;
+            }
+        }
+    }
+}
+
 /// Publisher handle for sending messages to the bus.
 ///
 /// Thread-safe (`Send`) — uses an internal channel to a dedicated ZMQ thread.
@@ -75,6 +114,22 @@ impl<M: BusMessage> Publisher<M> {
         }
     }
 
+    /// Create a publisher connected to a leader's bus frontend address.
+    ///
+    /// This is the public seam for a consumer that already knows the leader's
+    /// [`BusAddresses`](crate::discovery::BusAddresses) (via
+    /// [`LeaderGuard::bus_addresses`](crate::LeaderGuard::bus_addresses)) and
+    /// wants to ride the **same** proxy with a different message type `M` than
+    /// the election was parameterised with — the XPUB/XSUB proxy forwards any
+    /// multipart payload, so the wire is shared even when the typed handles
+    /// differ. It allocates its own `zmq::Context` (ipc sockets are addressed by
+    /// path, process-globally, so a fresh context still reaches the same proxy)
+    /// and connects to `frontend_addr`.
+    pub fn open(frontend_addr: &str) -> Result<Self> {
+        let ctx = zmq::Context::new();
+        Self::connected(&ctx, frontend_addr)
+    }
+
     /// Create a publisher connected to the given frontend address.
     ///
     /// Spawns a thread that owns the ZMQ PUB socket (because `zmq::Socket` is `!Send`).
@@ -95,27 +150,7 @@ impl<M: BusMessage> Publisher<M> {
                 tracing::error!("Failed to connect PUB socket to {}: {}", addr, e);
                 return;
             }
-
-            // Process messages until the channel is closed
-            while let Ok(wire) = rx.recv() {
-                // Send as multipart: [topic, frame0, frame1, ...]
-                let total = 1 + wire.frames.len();
-                if let Err(e) = sock.send(&wire.topic, if total > 1 { zmq::SNDMORE } else { 0 }) {
-                    tracing::warn!("PUB send topic failed: {}", e);
-                    continue;
-                }
-                for (i, frame) in wire.frames.iter().enumerate() {
-                    let flags = if i < wire.frames.len() - 1 {
-                        zmq::SNDMORE
-                    } else {
-                        0
-                    };
-                    if let Err(e) = sock.send(frame, flags) {
-                        tracing::warn!("PUB send frame failed: {}", e);
-                        break;
-                    }
-                }
-            }
+            send_messages_loop(&sock, &rx);
         });
 
         Ok(Self {
@@ -143,21 +178,65 @@ impl<M: BusMessage> Publisher<M> {
     }
 }
 
+/// Process one ZMQ `recv_multipart` result and forward it to the subscriber's
+/// channel; return whether the recv loop should continue.
+///
+/// Pulled out of [`Subscriber::connected`] so each receive outcome is an
+/// independent, flat arm rather than a five-branch `match` nested inside the
+/// thread closure's loop. Decodes a well-formed multipart `[topic, frame0, ...]`
+/// via [`BusMessage::from_frames`] and forwards the result; a dropped receiver,
+/// a destroyed context (`ETERM`), or a non-timeout recv error whose forward
+/// fails all stop the loop (`false`). A malformed message, a recv timeout
+/// (`EAGAIN`), and a successfully-forwarded error all keep it running (`true`).
+fn handle_recv_result<M: BusMessage>(
+    result: zmq::Result<Vec<Vec<u8>>>,
+    tx: &mpsc::Sender<Result<M>>,
+) -> bool {
+    match result {
+        // Well-formed multipart: [topic, frame0, frame1, ...].
+        Ok(parts) if parts.len() >= 2 => {
+            let decoded = M::from_frames(&parts[0], &parts[1..]);
+            tx.send(decoded).is_ok() // false => receiver dropped, stop.
+        }
+        // Malformed message — skip, keep listening.
+        Ok(_) => true,
+        // Timeout — wake to notice a dropped receiver, then keep listening.
+        Err(zmq::Error::EAGAIN) => true,
+        // Context destroyed — stop.
+        Err(zmq::Error::ETERM) => false,
+        // Any other recv error: forward it; stop only if the receiver is gone.
+        Err(e) => tx.send(Err(ElectionError::Bus(e))).is_ok(),
+    }
+}
+
 /// Subscriber handle for receiving messages from the bus.
 ///
 /// Thread-safe (`Send`) — uses an internal channel from a dedicated ZMQ thread.
 ///
-/// **Thread lifecycle**: the ZMQ thread runs a recv loop with `rcvtimeo=100ms`.
-/// When the `Subscriber` is dropped, the channel receiver is dropped first,
-/// causing the next `tx.send()` in the ZMQ thread to fail. The thread then
-/// breaks out of its loop and exits. Worst case latency is one `rcvtimeo`
-/// interval (100ms) after the subscriber is dropped.
+/// **Thread lifecycle**: the ZMQ thread runs a recv loop with its receive
+/// timeout set to [`SUBSCRIBER_RECV_TIMEOUT_MS`]. When the `Subscriber` is
+/// dropped, the channel receiver is dropped first, causing the next `tx.send()`
+/// in the ZMQ thread to fail. The thread then breaks out of its loop and exits.
+/// Worst case latency is one receive-timeout interval after the subscriber is
+/// dropped.
 pub struct Subscriber<M: BusMessage> {
     receiver: mpsc::Receiver<Result<M>>,
     _thread: JoinHandle<()>,
 }
 
 impl<M: BusMessage> Subscriber<M> {
+    /// Create a subscriber connected to a leader's bus backend address.
+    ///
+    /// The public counterpart to [`Publisher::open`]: a consumer that knows the
+    /// leader's [`BusAddresses`](crate::discovery::BusAddresses) subscribes to
+    /// the same proxy with its own message type `M`. Allocates its own
+    /// `zmq::Context` and connects to `backend_addr`, filtering by `topics`
+    /// (empty slice = all).
+    pub fn open(backend_addr: &str, topics: &[&[u8]]) -> Result<Self> {
+        let ctx = zmq::Context::new();
+        Self::connected(&ctx, backend_addr, topics)
+    }
+
     /// Create a subscriber connected to the given backend address.
     ///
     /// Subscribes to the given topics (empty slice = subscribe to all).
@@ -194,35 +273,9 @@ impl<M: BusMessage> Subscriber<M> {
             }
 
             // Set a receive timeout so we can check if the channel is still open
-            let _ = sock.set_rcvtimeo(100);
+            let _ = sock.set_rcvtimeo(SUBSCRIBER_RECV_TIMEOUT_MS);
 
-            loop {
-                // Receive multipart: [topic, frame0, frame1, ...]
-                match sock.recv_multipart(0) {
-                    Ok(parts) if parts.len() >= 2 => {
-                        let topic = &parts[0];
-                        let frames: Vec<Vec<u8>> = parts[1..].to_vec();
-                        let result = M::from_frames(topic, &frames);
-                        if tx.send(result).is_err() {
-                            break; // Receiver dropped
-                        }
-                    }
-                    Ok(_) => {
-                        // Malformed message — skip
-                    }
-                    Err(zmq::Error::EAGAIN) => {
-                        // Timeout — check if receiver is still alive by trying a zero-size send
-                        // Actually we can't easily check, just continue
-                        continue;
-                    }
-                    Err(zmq::Error::ETERM) => break, // Context destroyed
-                    Err(e) => {
-                        if tx.send(Err(ElectionError::Bus(e))).is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
+            while handle_recv_result(sock.recv_multipart(0), &tx) {}
         });
 
         Ok(Self {
@@ -464,6 +517,63 @@ mod tests {
         assert!(result.is_none());
 
         drop(subscriber);
+        drop(proxy);
+    }
+
+    #[test]
+    fn test_public_open_publisher_subscriber_reach_same_proxy() {
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        /// A message type distinct from anything the proxy/election uses.
+        #[derive(Debug, Clone, PartialEq)]
+        struct OtherMsg {
+            payload: String,
+        }
+
+        impl BusMessage for OtherMsg {
+            fn topic(&self) -> &[u8] {
+                b"other"
+            }
+            fn to_frames(&self) -> Result<Vec<Vec<u8>>> {
+                Ok(vec![self.payload.as_bytes().to_vec()])
+            }
+            fn from_frames(_topic: &[u8], frames: &[Vec<u8>]) -> Result<Self> {
+                Ok(OtherMsg {
+                    payload: String::from_utf8_lossy(&frames[0]).to_string(),
+                })
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let addrs = crate::discovery::ipc_addresses(dir.path(), "test", "openseam");
+
+        // A proxy started independently (as a leader's election would). The
+        // public `open` constructors connect to it by address with their OWN
+        // contexts — the seam a cross-crate consumer uses to ride the same bus.
+        let proxy = crate::proxy::ProxyHandle::start(&addrs).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+
+        let publisher: Publisher<OtherMsg> = Publisher::open(&addrs.frontend).unwrap();
+        let subscriber: Subscriber<OtherMsg> =
+            Subscriber::open(&addrs.backend, &[b"other"]).unwrap();
+
+        std::thread::sleep(Duration::from_millis(300));
+
+        publisher
+            .send(&OtherMsg {
+                payload: "via open".to_string(),
+            })
+            .unwrap();
+
+        let received = subscriber
+            .recv_timeout(Duration::from_millis(2000))
+            .expect("a message should arrive")
+            .expect("decode");
+        assert_eq!(received.payload, "via open");
+
+        drop(subscriber);
+        drop(publisher);
         drop(proxy);
     }
 

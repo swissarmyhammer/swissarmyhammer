@@ -88,6 +88,33 @@ pub fn create_test_message(content: &str) -> Message {
     }
 }
 
+/// Create a test [`Message`] with an explicit role.
+///
+/// Unlike [`create_test_message`], which always builds a `User` message, this
+/// helper takes the role so tests can construct full conversation frames
+/// (system / user / assistant / tool turns). It is the single canonical
+/// role-parameterized message factory; test modules that need one should import
+/// it instead of defining a local copy.
+///
+/// # Arguments
+///
+/// * `role` - The message role.
+/// * `content` - The message content string.
+///
+/// # Returns
+///
+/// A `Message` with the given role and content, no `tool_call_id` / `tool_name`,
+/// and the current timestamp.
+pub fn msg(role: MessageRole, content: &str) -> Message {
+    Message {
+        role,
+        content: content.to_string(),
+        tool_call_id: None,
+        tool_name: None,
+        timestamp: SystemTime::now(),
+    }
+}
+
 /// Create a test session with a single message.
 ///
 /// This utility function creates a Session with one message for testing

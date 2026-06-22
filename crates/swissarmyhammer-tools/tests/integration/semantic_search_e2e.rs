@@ -242,6 +242,7 @@ async fn qwen_embedding_semantic_search_e2e() {
         &root,
         Arc::clone(&shared_db),
         swissarmyhammer_code_context::noop_reporter(),
+        swissarmyhammer_code_context::new_shutdown_flag(),
     )
     .await;
 
@@ -279,12 +280,10 @@ async fn qwen_embedding_semantic_search_e2e() {
     args.insert("op".to_string(), json!("search code"));
     args.insert("query".to_string(), json!("verify user identity"));
     args.insert("top_k".to_string(), json!(3));
-    // Lower the default min_similarity (0.7) — Qwen3 cosine scores between
-    // short query strings and ~10-line chunks are typically below 0.7 even
-    // when semantically aligned. We still rely on RANK ordering to prove the
-    // embedding signal is real; the absolute floor is just there to keep the
-    // result set non-empty.
-    args.insert("min_similarity".to_string(), json!(0.0));
+    // No tuning knobs: hybrid fusion "just works" at equal weights and keeps
+    // every match the corpus yields (no fused-score floor). The MCP surface for
+    // `search code` is exactly `query`/`top_k`/`language`/`file_pattern`. We
+    // rely on RANK ordering to prove the embedding signal is real.
 
     let result = tool
         .execute(args, &context)
@@ -337,7 +336,7 @@ async fn qwen_embedding_semantic_search_e2e() {
             .iter()
             .map(|m| (
                 m.get("file_path").and_then(|v| v.as_str()).unwrap_or("?"),
-                m.get("similarity").and_then(|v| v.as_f64()).unwrap_or(0.0)
+                m.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0)
             ))
             .collect::<Vec<_>>()
     );

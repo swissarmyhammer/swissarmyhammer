@@ -106,14 +106,27 @@ fn migrate_indexed_files_add_embedded(conn: &Connection) -> rusqlite::Result<()>
     Ok(())
 }
 
-/// Enable WAL mode and foreign keys on a connection.
+/// Busy-handler timeout for cross-process write contention.
+///
+/// The leader is the single writer, but during a leadership handover there can
+/// be a brief residual overlap where a preempted old leader and the new leader
+/// both touch the shared on-disk DB. WAL allows one writer at a time; without a
+/// busy handler the loser gets an immediate `SQLITE_BUSY` and (because worker
+/// writes swallow the error) silently drops the write. A few seconds of
+/// block-and-retry lets the unavoidable residual overlap resolve instead of
+/// corrupting the index. The primary guard against overlap is the indexer's
+/// step-down flag check; this is defense in depth.
+const BUSY_TIMEOUT_MS: u32 = 5000;
+
+/// Enable WAL mode, foreign keys, and a busy timeout on a connection.
 pub fn configure_connection(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
+    conn.execute_batch(&format!(
         "
         PRAGMA journal_mode = WAL;
         PRAGMA foreign_keys = ON;
-        ",
-    )
+        PRAGMA busy_timeout = {BUSY_TIMEOUT_MS};
+        "
+    ))
 }
 
 #[cfg(test)]

@@ -18,7 +18,7 @@ use crate::project::{AddProject, DeleteProject, GetProject, ListProjects, Update
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
 use crate::task::{
     AddTask, ArchiveTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListArchived, ListTasks,
-    MoveTask, NextTask, TagTask, UnarchiveTask, UnassignTask, UntagTask, UpdateTask,
+    MoveTask, NextTask, SearchTasks, TagTask, UnarchiveTask, UnassignTask, UntagTask, UpdateTask,
 };
 use crate::types::{
     resolve_short_ref, ActorId, Noun, Operation as KanbanOperation, ResolveResult, TaskId, Verb,
@@ -30,6 +30,24 @@ use serde_json::Value;
 fn req<'a>(op: &'a KanbanOperation, key: &str) -> Result<&'a str, KanbanError> {
     op.get_string(key)
         .ok_or_else(|| KanbanError::parse(format!("missing required field: {}", key)))
+}
+
+/// Helper: require a string param accepting either `primary` or `alt` as the
+/// field name, returning a KanbanError naming both when neither is present.
+///
+/// Used where one entity field has two equally-natural names — e.g. a column's
+/// id is just as naturally passed as `column`, so `get/update/delete column`
+/// accept either. `primary` is preferred when both are supplied.
+fn req_alias<'a>(
+    op: &'a KanbanOperation,
+    primary: &str,
+    alt: &str,
+) -> Result<&'a str, KanbanError> {
+    op.get_string(primary)
+        .or_else(|| op.get_string(alt))
+        .ok_or_else(|| {
+            KanbanError::parse(format!("missing required field: {} (or {})", primary, alt))
+        })
 }
 
 /// Recognize an already-canonical full ULID reference and return its canonical
@@ -156,26 +174,63 @@ async fn resolve_opt_placement_ref(
     }
 }
 
-/// Normalize a `depends_on` JSON array of forgiving task refs to full ULIDs.
+/// Normalize a forgiving `depends_on` param to canonical full ULIDs.
 ///
-/// Each entry may be a short id, `^<short>`, prefix, or full ULID; every one
-/// is resolved through [`resolve_task_ref`] so the stored value is always the
-/// canonical 26-char ULID. Returns `Ok(None)` when the param is absent.
+/// Mirrors the single-value-or-array tolerance of [`resolve_assignees`] so
+/// clients that serialize `depends_on` as a scalar — common because the slim
+/// wire schema gives no array type-hint — are not silently dropped. Accepts:
+/// - a JSON array of refs;
+/// - a single JSON string holding one ref;
+/// - a stringified JSON array (`"[\"01K…\"]"`), which is parsed back into its
+///   elements; a string that does not parse as a JSON array is treated as one
+///   ref.
+///
+/// Every element routes through [`resolve_task_ref`], so a short id,
+/// `^<short>`, unique prefix, lowercase, or full ULID all resolve to the
+/// canonical 26-char ULID. An unresolvable ref is an error (consistent with
+/// `resolve_task_ref`), never a silent drop. Returns `Ok(None)` when the param
+/// is absent.
 async fn resolve_depends_on(
     ctx: &KanbanContext,
     op: &KanbanOperation,
 ) -> Result<Option<Vec<TaskId>>, KanbanError> {
-    let Some(deps) = op.get_param("depends_on").and_then(|v| v.as_array()) else {
+    let Some(value) = op.get_param("depends_on") else {
         return Ok(None);
     };
-    let mut resolved = Vec::with_capacity(deps.len());
-    for v in deps {
-        if let Some(s) = v.as_str() {
-            let full = resolve_task_ref(ctx, s).await?;
-            resolved.push(TaskId::from_string(full));
-        }
+    let refs = depends_on_refs(value)?;
+    let mut resolved = Vec::with_capacity(refs.len());
+    for raw in refs {
+        let full = resolve_task_ref(ctx, &raw).await?;
+        resolved.push(TaskId::from_string(full));
     }
     Ok(Some(resolved))
+}
+
+/// Extract the list of raw task refs from a forgiving `depends_on` value.
+///
+/// See [`resolve_depends_on`] for the accepted shapes. Resolution to canonical
+/// ULIDs is the caller's job; this only normalizes the wire shape to a flat
+/// list of ref strings. A value that is neither a JSON array nor a string is
+/// malformed and errors — never silently dropped (which on update would clear
+/// existing deps, the exact silent-drop bug this helper exists to prevent).
+fn depends_on_refs(value: &Value) -> Result<Vec<String>, KanbanError> {
+    if let Some(arr) = value.as_array() {
+        return Ok(arr
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect());
+    }
+    if let Some(s) = value.as_str() {
+        // A stringified JSON array (`"[\"01K…\"]"`) parses into its elements;
+        // anything else is a single ref.
+        if let Ok(parsed) = serde_json::from_str::<Vec<String>>(s) {
+            return Ok(parsed);
+        }
+        return Ok(vec![s.to_string()]);
+    }
+    Err(KanbanError::parse(format!(
+        "depends_on must be a task ref string or an array of refs, got: {value}"
+    )))
 }
 
 /// Dispatch board operations (init, get, update).
@@ -234,11 +289,11 @@ async fn execute_column_operation(
             processor.process(&cmd, ctx).await
         }
         (Verb::Get, Noun::Column) => {
-            let id = req(op, "id")?;
+            let id = req_alias(op, "id", "column")?;
             processor.process(&GetColumn::new(id), ctx).await
         }
         (Verb::Update, Noun::Column) => {
-            let id = req(op, "id")?;
+            let id = req_alias(op, "id", "column")?;
             let mut cmd = UpdateColumn::new(id);
             if let Some(name) = op.get_string("name") {
                 cmd = cmd.with_name(name);
@@ -249,7 +304,7 @@ async fn execute_column_operation(
             processor.process(&cmd, ctx).await
         }
         (Verb::Delete, Noun::Column) => {
-            let id = req(op, "id")?;
+            let id = req_alias(op, "id", "column")?;
             processor.process(&DeleteColumn::new(id), ctx).await
         }
         (Verb::List, Noun::Columns) => processor.process(&ListColumns, ctx).await,
@@ -528,7 +583,7 @@ async fn execute_task_assignment_operation(
     }
 }
 
-/// Dispatch task query operations: list, next.
+/// Dispatch task query operations: list, next, search.
 async fn execute_task_query_operation(
     processor: &KanbanOperationProcessor,
     ctx: &KanbanContext,
@@ -547,8 +602,21 @@ async fn execute_task_query_operation(
             if let Some(column) = op.get_string("column") {
                 cmd = cmd.with_column(column);
             }
-            if let Some(filter) = op.get_string("filter") {
-                cmd = cmd.with_filter(filter);
+            // `project` is forgiving sugar for the `$<project>` filter atom:
+            // resolution by id or name-slug (case-insensitive) happens inside
+            // `ListTasks::execute` via the slug registry, so we only need to
+            // fold it into the DSL here. Alone it becomes `$<project>`; with an
+            // explicit `filter` the two are AND-ed (`<filter> && $<project>`).
+            let filter = op.get_string("filter");
+            let project = op.get_string("project");
+            let effective_filter = match (filter, project) {
+                (Some(filter), Some(project)) => Some(format!("{filter} && ${project}")),
+                (Some(filter), None) => Some(filter.to_string()),
+                (None, Some(project)) => Some(format!("${project}")),
+                (None, None) => None,
+            };
+            if let Some(effective_filter) = effective_filter {
+                cmd = cmd.with_filter(effective_filter);
             }
             // Pagination — MCP callers pass `page` / `page_size` directly.
             // Anything that doesn't fit in `usize` is treated as unset (the
@@ -565,6 +633,19 @@ async fn execute_task_query_operation(
             }
             if let Some(detail) = op.get_string("detail") {
                 cmd = cmd.with_detail(detail);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        Verb::Search => {
+            // `query` is required; `filter` scopes the corpus and `top_k`
+            // caps the ranked hits (defaults applied inside SearchTasks).
+            let query = req(op, "query")?;
+            let mut cmd = SearchTasks::new(query);
+            if let Some(filter) = op.get_string("filter") {
+                cmd = cmd.with_filter(filter);
+            }
+            if let Some(top_k) = op.get_u64("top_k").and_then(|n| usize::try_from(n).ok()) {
+                cmd = cmd.with_top_k(top_k);
             }
             processor.process(&cmd, ctx).await
         }
@@ -593,7 +674,9 @@ async fn execute_task_operation(
         Verb::Assign | Verb::Unassign | Verb::Tag | Verb::Untag => {
             execute_task_assignment_operation(processor, ctx, op).await
         }
-        Verb::Next | Verb::List => execute_task_query_operation(processor, ctx, op).await,
+        Verb::Next | Verb::List | Verb::Search => {
+            execute_task_query_operation(processor, ctx, op).await
+        }
         _ => Err(KanbanError::parse(format!(
             "unsupported operation: {} {}",
             op.verb, op.noun
@@ -1135,6 +1218,55 @@ mod tests {
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["count"], 1);
         assert_eq!(result["tasks"][0]["id"], task_id);
+    }
+
+    /// Regression: a `get task` that passes the task reference under the `task`
+    /// key (the committer role's habit) must resolve to `id` and succeed through
+    /// the real dispatch + resolver path, not fail with
+    /// `missing required field: id`. Covers the full ULID and the `^<short>`
+    /// form (the exact shape from the bug report).
+    #[tokio::test]
+    async fn dispatch_get_task_accepts_task_key_alias() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Aliased fetch"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let full_id = added["id"].as_str().unwrap().to_string();
+        let short_id = added["short_id"].as_str().unwrap().to_string();
+
+        // Full ULID under `task`.
+        let ops = parse_input(json!({"op": "get task", "task": full_id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["title"], "Aliased fetch");
+        assert_eq!(result["id"].as_str().unwrap(), full_id);
+
+        // `^<short>` under `task` — the exact shape from the bug report.
+        let ops = parse_input(json!({"op": "get task", "task": format!("^{short_id}")})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"].as_str().unwrap(), full_id);
+    }
+
+    /// `search tasks` must parse to (Verb::Search, Noun::Tasks) and dispatch to
+    /// SearchTasks. On an empty board the op short-circuits before loading any
+    /// model, so this proves the wiring without an embedding model. A missing
+    /// `query` must surface a parse error.
+    #[tokio::test]
+    async fn dispatch_search_tasks_wiring() {
+        let (_temp, ctx) = setup().await;
+
+        // Parses to the Search verb and the Tasks noun.
+        let ops = parse_input(json!({"op": "search tasks", "query": "anything"})).unwrap();
+        assert_eq!(ops[0].verb, Verb::Search);
+        assert_eq!(ops[0].noun, Noun::Tasks);
+
+        // Empty board → ranked result of zero, no model loaded.
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["count"], 0);
+        assert!(result["tasks"].as_array().unwrap().is_empty());
+
+        // `query` is required.
+        let ops = parse_input(json!({"op": "search tasks"})).unwrap();
+        assert!(execute_operation(&ctx, &ops[0]).await.is_err());
     }
 
     #[tokio::test]
@@ -1687,6 +1819,66 @@ mod tests {
         let ops = parse_input(json!({"op": "get column", "id": "todo"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["id"], "todo");
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_column_accepts_column_alias() {
+        let (_temp, ctx) = setup().await;
+
+        // `column` is the natural field name for a column id; it must be
+        // accepted as an alias for `id` and return the identical result.
+        let by_alias = execute_operation(
+            &ctx,
+            &parse_input(json!({"op": "get column", "column": "todo"})).unwrap()[0],
+        )
+        .await
+        .unwrap();
+        let by_id = execute_operation(
+            &ctx,
+            &parse_input(json!({"op": "get column", "id": "todo"})).unwrap()[0],
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_alias["id"], "todo");
+        assert_eq!(by_alias, by_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_column_missing_field_names_both_aliases() {
+        let (_temp, ctx) = setup().await;
+
+        // Neither `id` nor `column` present → parse error naming both.
+        let op = crate::types::Operation::new(
+            crate::types::Verb::Get,
+            crate::types::Noun::Column,
+            serde_json::Map::new(),
+        );
+        let err = execute_operation(&ctx, &op).await.unwrap_err().to_string();
+        assert!(err.contains("id"), "error should name `id`: {err}");
+        assert!(err.contains("column"), "error should name `column`: {err}");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_column_accepts_column_alias() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "update column", "column": "todo", "name": "Backlog"}))
+            .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Backlog");
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_column_accepts_column_alias() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a new empty column then delete it via the `column` alias.
+        let ops = parse_input(json!({"op": "add column", "id": "temp", "name": "Temp"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "delete column", "column": "temp"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["deleted"], true);
     }
 
     #[tokio::test]
@@ -2419,6 +2611,102 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // Dispatch: list tasks `project` param folds into the `$<project>`
+    // filter. Regression for the silent-ignore bug where `project` was
+    // dropped and the whole board was returned.
+    // ------------------------------------------------------------------
+
+    /// `{"op": "list tasks", "project": "<id>"}` must return ONLY that
+    /// project's tasks. Before the fix the `project` param was silently
+    /// ignored and the whole board (both tasks) came back.
+    #[tokio::test]
+    async fn dispatch_list_tasks_project_param_scopes_to_project() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add project", "id": "myproj", "name": "My Project"}))
+            .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops =
+            parse_input(json!({"op": "add task", "title": "In project", "project": "myproj"}))
+                .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+        let ops = parse_input(json!({"op": "add task", "title": "Out of project"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "list tasks", "project": "myproj"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(
+            result["count"], 1,
+            "project param must scope the listing to the in-project task only"
+        );
+        assert_eq!(result["tasks"][0]["title"], "In project");
+    }
+
+    /// `project` + an explicit `filter` apply both (AND semantics): only a
+    /// task that is BOTH in the project AND carries the tag is returned.
+    #[tokio::test]
+    async fn dispatch_list_tasks_project_param_intersects_with_filter() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add project", "id": "myproj", "name": "My Project"}))
+            .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // In project AND tagged #bug — the only match.
+        let ops =
+            parse_input(json!({"op": "add task", "title": "Bug in project", "project": "myproj"}))
+                .unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let bug_id = r["id"].as_str().unwrap().to_string();
+        let ops = parse_input(json!({"op": "tag task", "id": bug_id, "tag": "bug"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // In project but NOT tagged — excluded by the filter.
+        let ops = parse_input(
+            json!({"op": "add task", "title": "Plain in project", "project": "myproj"}),
+        )
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // Tagged #bug but NOT in project — excluded by the project.
+        let ops = parse_input(json!({"op": "add task", "title": "Bug outside"})).unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let outside_id = r["id"].as_str().unwrap().to_string();
+        let ops = parse_input(json!({"op": "tag task", "id": outside_id, "tag": "bug"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "list tasks", "project": "myproj", "filter": "#bug"}))
+            .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(
+            result["count"], 1,
+            "project + filter must intersect (AND), matching only the in-project tagged task"
+        );
+        assert_eq!(result["tasks"][0]["title"], "Bug in project");
+    }
+
+    /// A `project` value naming no existing project yields an empty listing
+    /// (normal `$` filter semantics), not the whole board.
+    #[tokio::test]
+    async fn dispatch_list_tasks_unknown_project_returns_empty() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Some task"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "list tasks", "project": "nonexistent"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(
+            result["count"], 0,
+            "an unknown project must yield an empty list, not the whole board"
+        );
+    }
+
+    // ------------------------------------------------------------------
     // Dispatch: column with order
     // ------------------------------------------------------------------
 
@@ -3032,6 +3320,130 @@ mod tests {
         // The ack carries the resolved full ULID; the persisted dependency
         // is asserted via `get task`.
         assert_eq!(updated["id"].as_str().unwrap(), task_id);
+        let task = get_task(&ctx, &task_id).await;
+        let deps = task["depends_on"].as_array().unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].as_str().unwrap(), dep_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_depends_on_single_string_persists() {
+        // A bare id string (not wrapped in an array) must persist — the
+        // forgiving shape real clients frequently serialize, previously
+        // silently dropped by the `.as_array()` gate.
+        let (_temp, ctx) = setup().await;
+        let dep_id = add_one_task(&ctx, "Dep target").await;
+        let task_id = add_one_task(&ctx, "Will depend").await;
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": dep_id,
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let task = get_task(&ctx, &task_id).await;
+        let deps = task["depends_on"].as_array().unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].as_str().unwrap(), dep_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_depends_on_stringified_array_persists() {
+        // A stringified JSON array (`"[\"01K…\"]"`) must parse and persist.
+        let (_temp, ctx) = setup().await;
+        let dep_id = add_one_task(&ctx, "Dep target").await;
+        let task_id = add_one_task(&ctx, "Will depend").await;
+        let stringified = serde_json::to_string(&vec![dep_id.clone()]).unwrap();
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": stringified,
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let task = get_task(&ctx, &task_id).await;
+        let deps = task["depends_on"].as_array().unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].as_str().unwrap(), dep_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_depends_on_caret_single_string_persists_full_ulid() {
+        // A `^`-prefixed single string must resolve to the canonical ULID.
+        let (_temp, ctx) = setup().await;
+        let dep_id = add_one_task(&ctx, "Dep target").await;
+        let task_id = add_one_task(&ctx, "Will depend").await;
+        let caret_short = format!("^{}", crate::types::short_id(&dep_id));
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": caret_short,
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let task = get_task(&ctx, &task_id).await;
+        let deps = task["depends_on"].as_array().unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].as_str().unwrap(), dep_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_depends_on_unresolvable_ref_errors() {
+        // An unresolvable ref must error, not silently drop to an empty list.
+        let (_temp, ctx) = setup().await;
+        let task_id = add_one_task(&ctx, "Will depend").await;
+
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": "nosuch7",
+        }))
+        .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await;
+        assert!(
+            result.is_err(),
+            "an unresolvable depends_on ref must error, not silently drop"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_depends_on_malformed_scalar_errors_without_clearing() {
+        // A non-string, non-array value (e.g. a number) is malformed. It must
+        // error — never silently clear existing deps, which is exactly the
+        // silent-drop anti-pattern this fix exists to kill.
+        let (_temp, ctx) = setup().await;
+        let dep_id = add_one_task(&ctx, "Dep target").await;
+        let task_id = add_one_task(&ctx, "Will depend").await;
+
+        // Seed a real dependency first.
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": dep_id,
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // A malformed scalar must error, not wipe the seeded dependency.
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": 42,
+        }))
+        .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await;
+        assert!(
+            result.is_err(),
+            "a malformed (non-string, non-array) depends_on must error"
+        );
+
+        // The pre-existing dependency must survive the rejected update.
         let task = get_task(&ctx, &task_id).await;
         let deps = task["depends_on"].as_array().unwrap();
         assert_eq!(deps.len(), 1);

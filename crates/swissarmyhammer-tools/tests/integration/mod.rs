@@ -1,6 +1,7 @@
 //! Integration test modules for swissarmyhammer-tools
 
 mod code_context_ops_e2e;
+mod diagnostics_request_socket_e2e;
 mod file_rate_limiting;
 mod file_size_limits;
 mod file_tools_integrations;
@@ -10,6 +11,7 @@ mod mirdan_test_support;
 mod per_client_tool_composition;
 mod review_e2e;
 mod review_fixture;
+mod search_fusion_e2e;
 mod semantic_search_e2e;
 mod serve_time_bash_deny;
 mod session_root_resolution;

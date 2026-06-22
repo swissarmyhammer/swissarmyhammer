@@ -23,7 +23,7 @@ use crate::project::{AddProject, DeleteProject, GetProject, ListProjects, Update
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
 use crate::task::{
     AddTask, ArchiveTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListArchived, ListTasks,
-    MoveTask, NextTask, TagTask, UnarchiveTask, UnassignTask, UntagTask, UpdateTask,
+    MoveTask, NextTask, SearchTasks, TagTask, UnarchiveTask, UnassignTask, UntagTask, UpdateTask,
 };
 
 /// All kanban operations — the canonical list used for schema generation and CLI.
@@ -58,6 +58,7 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(TagTask::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(UntagTask::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(ListTasks::new())) as &dyn Operation,
+        Box::leak(Box::new(SearchTasks::new(""))) as &dyn Operation,
         Box::leak(Box::new(ArchiveTask::new(""))) as &dyn Operation,
         Box::leak(Box::new(UnarchiveTask::new(""))) as &dyn Operation,
         Box::leak(Box::new(ListArchived::new())) as &dyn Operation,
@@ -208,7 +209,7 @@ fn get_kanban_verb_aliases() -> Map<String, Value> {
         json!(["edit", "modify", "set", "patch"]),
     );
     aliases.insert("delete".to_string(), json!(["remove", "rm", "del"]));
-    aliases.insert("list".to_string(), json!(["ls", "find", "search", "query"]));
+    aliases.insert("list".to_string(), json!(["ls", "find", "query"]));
     aliases.insert("move".to_string(), json!(["mv"]));
     aliases.insert("complete".to_string(), json!(["done", "finish", "close"]));
 
@@ -253,10 +254,8 @@ mod tests {
         assert_eq!(schema["properties"]["op"]["type"], "string");
         assert!(schema["properties"]["op"]["enum"].is_array());
 
-        // The wire schema carries the per-op required-name signatures.
-        assert!(schema["x-op-signatures"].is_object());
-
-        // ...and omits every heavy CLI-facing key.
+        // The wire schema omits every CLI/documentation-facing key, including
+        // the per-op required-name map `x-op-signatures` (now full-only).
         for key in WIRE_DROPPED_KEYS {
             assert!(
                 !obj.contains_key(key),
@@ -289,6 +288,9 @@ mod tests {
         // Verify extension fields exist
         assert!(schema["x-operation-groups"].is_object());
         assert!(schema["x-forgiving-input"].is_object());
+
+        // The per-op required-name map is full-only.
+        assert!(schema["x-op-signatures"].is_object());
     }
 
     #[test]
@@ -375,12 +377,65 @@ mod tests {
         }
     }
 
+    /// `search tasks` must surface as a first-class op on both schema surfaces
+    /// (the op enum) and carry its `query`/`filter`/`top_k` params in the full
+    /// schema's `x-operation-schemas`. This is the schema-side proof that the
+    /// relevance-search op — distinct from `list tasks` — reaches MCP clients.
+    #[test]
+    fn test_schema_includes_search_tasks_with_params() {
+        let ops = kanban_operations();
+
+        // The op enum (identical on both surfaces) advertises `search tasks`,
+        // and `list tasks` is unaffected.
+        for schema in [
+            generate_kanban_mcp_schema(ops),
+            generate_kanban_mcp_schema_full(ops),
+        ] {
+            let op_strings: Vec<&str> = schema["properties"]["op"]["enum"]
+                .as_array()
+                .expect("op enum should be an array")
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect();
+            assert!(
+                op_strings.contains(&"search tasks"),
+                "op enum should contain 'search tasks', got: {op_strings:?}"
+            );
+            assert!(
+                op_strings.contains(&"list tasks"),
+                "'list tasks' must remain in the op enum, got: {op_strings:?}"
+            );
+        }
+
+        // The full schema's per-op `x-operation-schemas` entry for `search
+        // tasks` exposes the query/filter/top_k params.
+        let full = generate_kanban_mcp_schema_full(ops);
+        let op_schemas = full["x-operation-schemas"]
+            .as_array()
+            .expect("x-operation-schemas should be an array");
+        let search_schema = op_schemas
+            .iter()
+            .find(|s| s["title"] == json!("search tasks"))
+            .expect("x-operation-schemas should contain 'search tasks'");
+
+        let props = search_schema["properties"]
+            .as_object()
+            .expect("search tasks schema should have properties");
+        for param in ["query", "filter", "top_k"] {
+            assert!(
+                props.contains_key(param),
+                "search tasks schema should expose '{param}' param, got: {:?}",
+                props.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
     #[test]
     fn test_schema_includes_comment_ops() {
-        // All five comment ops land on both surfaces' op enum, and the wire
+        // All five comment ops land on both surfaces' op enum, and the FULL
         // schema carries their required-param signatures — with `add comment`
         // requiring exactly `task_id` + `text` (`actor` is optional and must
-        // not widen the wire surface).
+        // not widen the surface).
         let ops = kanban_operations();
         let expected = [
             "add comment",
@@ -406,8 +461,12 @@ mod tests {
             }
         }
 
-        let wire = generate_kanban_mcp_schema(ops);
-        let sigs = wire["x-op-signatures"].as_object().unwrap();
+        let full = generate_kanban_mcp_schema_full(ops);
+        let sigs = full["x-op-signatures"].as_object().unwrap();
+        // The wire schema must NOT carry the signatures.
+        assert!(generate_kanban_mcp_schema(ops)
+            .get("x-op-signatures")
+            .is_none());
         for expected_op in &expected {
             assert!(
                 sigs.contains_key(*expected_op),
@@ -556,10 +615,10 @@ mod tests {
     #[test]
     fn test_serde_defaulted_fields_excluded_from_required_signatures() {
         let ops = test_operations();
-        let schema = generate_kanban_mcp_schema(&ops);
+        let schema = generate_kanban_mcp_schema_full(&ops);
         let sigs = schema["x-op-signatures"]
             .as_object()
-            .expect("wire schema carries x-op-signatures");
+            .expect("full schema carries x-op-signatures");
 
         let add_task: Vec<&str> = sigs["add task"]
             .as_array()
@@ -593,16 +652,17 @@ mod tests {
         );
     }
 
-    /// The optional `detail` param must NOT widen the wire surface: the
-    /// `x-op-signatures` entries for `list tasks` and `list archived` carry
-    /// required params only, so they stay free of `detail`. The FULL/CLI
-    /// schema's `x-operation-schemas` entries, by contrast, must document it.
+    /// The optional `detail` param must NOT appear in the required-name map: the
+    /// `x-op-signatures` entries (full-only) for `list tasks` and `list
+    /// archived` carry required params only, so they stay free of `detail`. The
+    /// FULL/CLI schema's `x-operation-schemas` entries, by contrast, must
+    /// document it.
     #[test]
-    fn test_detail_param_absent_from_wire_signatures_but_in_full_schema() {
+    fn test_detail_param_absent_from_signatures_but_in_full_schema() {
         let ops = kanban_operations();
 
-        let wire = generate_kanban_mcp_schema(ops);
-        let sigs = wire["x-op-signatures"].as_object().unwrap();
+        let full = generate_kanban_mcp_schema_full(ops);
+        let sigs = full["x-op-signatures"].as_object().unwrap();
         for op_name in ["list tasks", "list archived"] {
             let required: Vec<&str> = sigs[op_name]
                 .as_array()
@@ -612,11 +672,10 @@ mod tests {
                 .collect();
             assert!(
                 !required.contains(&"detail"),
-                "{op_name:?} wire signature must not require `detail`, got: {required:?}"
+                "{op_name:?} signature must not require `detail`, got: {required:?}"
             );
         }
 
-        let full = generate_kanban_mcp_schema_full(ops);
         let op_schemas = full["x-operation-schemas"].as_array().unwrap();
         for op_name in ["list tasks", "list archived"] {
             let entry = op_schemas
@@ -634,6 +693,39 @@ mod tests {
                 "{op_name:?} `detail` description must cover both values: {desc:?}"
             );
         }
+    }
+
+    /// The optional `project` param scopes `list tasks` to one project. It is
+    /// documented in the FULL/CLI schema's `x-operation-schemas` entry but,
+    /// being optional, must NOT appear in the wire `x-op-signatures` required
+    /// list for `list tasks`.
+    #[test]
+    fn test_project_param_absent_from_signatures_but_in_full_schema() {
+        let ops = kanban_operations();
+
+        let full = generate_kanban_mcp_schema_full(ops);
+        let sigs = full["x-op-signatures"].as_object().unwrap();
+        let required: Vec<&str> = sigs["list tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(
+            !required.contains(&"project"),
+            "`list tasks` signature must not require `project`, got: {required:?}"
+        );
+
+        let op_schemas = full["x-operation-schemas"].as_array().unwrap();
+        let entry = op_schemas
+            .iter()
+            .find(|s| s["properties"]["op"]["const"] == "list tasks")
+            .expect("full schema entry for `list tasks`");
+        let project = &entry["properties"]["project"];
+        assert!(
+            project.is_object(),
+            "`list tasks` full schema must document `project`"
+        );
     }
 
     #[test]

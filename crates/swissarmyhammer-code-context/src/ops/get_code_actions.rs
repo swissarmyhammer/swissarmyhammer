@@ -328,7 +328,7 @@ fn try_resolve_action(ctx: &LayeredContext, action: &CodeAction) -> Option<Optio
 mod tests {
     use super::*;
     use crate::layered_context::LspRange;
-    use crate::test_fixtures::test_db;
+    use crate::test_fixtures::{mock_lsp_session, spawn_mock_lsp, test_db};
 
     // --- No live LSP returns empty, not error ---
 
@@ -1148,9 +1148,13 @@ mod tests {
         // process), has_live_lsp() returns false and get_code_actions should
         // return an empty result without error.
         let conn = test_db();
-        let shared: crate::lsp_worker::SharedLspClient =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
 
         let opts = GetCodeActionsOptions {
             file_path: "src/main.rs".to_string(),
@@ -1215,9 +1219,13 @@ mod tests {
         // SharedLspClient exists but wraps None (disconnected).
         // lsp_request returns Ok(None), so try_resolve_action returns None.
         let conn = test_db();
-        let shared: crate::lsp_worker::SharedLspClient =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
         let action = CodeAction {
             title: "Inline variable".to_string(),
             kind: Some("refactor.inline".to_string()),
@@ -1233,77 +1241,10 @@ mod tests {
 
     // -----------------------------------------------------------------------
     // Mock LSP helper for live-path tests
+    //
+    // `spawn_mock_lsp` / `mock_lsp_session` are the shared
+    // `crate::test_fixtures` helpers, imported above.
     // -----------------------------------------------------------------------
-
-    /// Spawn a Python process that acts as a mock LSP server.
-    ///
-    /// The script reads a sequence of JSON-RPC messages from stdin and sends
-    /// back canned responses loaded from a JSON file. Each entry in the
-    /// responses array is either `null` (read a notification, no reply) or a
-    /// JSON-RPC response object (read a request, reply with this object).
-    ///
-    /// Protocol:
-    /// - `null` entry → read one message from stdin (notification), send nothing
-    /// - object entry → read one message from stdin (request), send the object back
-    fn spawn_mock_lsp(responses: &[serde_json::Value]) -> std::process::Child {
-        let temp_dir = tempfile::tempdir().expect("failed to create temp dir for mock LSP");
-        let response_file = temp_dir.path().join("mock_responses.json");
-        std::fs::write(&response_file, serde_json::to_string(responses).unwrap())
-            .expect("failed to write mock responses file");
-
-        // Python script that reads messages and sends canned responses.
-        // `null` entries mean "read a message but don't reply" (for notifications).
-        // Non-null entries mean "read a message and reply with this object".
-        let script = "\
-            import sys, json, os\n\
-            def read_msg():\n\
-            \tcl = None\n\
-            \twhile True:\n\
-            \t\tline = sys.stdin.readline()\n\
-            \t\tif not line: return None\n\
-            \t\tline = line.strip()\n\
-            \t\tif not line: break\n\
-            \t\tif line.startswith('Content-Length:'):\n\
-            \t\t\tcl = int(line.split(':', 1)[1].strip())\n\
-            \tif cl is None: return None\n\
-            \tbody = sys.stdin.read(cl)\n\
-            \treturn json.loads(body)\n\
-            def send_msg(obj):\n\
-            \ts = json.dumps(obj)\n\
-            \tsys.stdout.write(f'Content-Length: {len(s)}\\r\\n\\r\\n{s}')\n\
-            \tsys.stdout.flush()\n\
-            with open(os.environ['MOCK_RESPONSE_FILE']) as f:\n\
-            \tresponses = json.load(f)\n\
-            for resp in responses:\n\
-            \tread_msg()\n\
-            \tif resp is not None:\n\
-            \t\tsend_msg(resp)\n";
-
-        // Keep the tempdir alive for the lifetime of the child process.
-        // We leak it intentionally — the OS cleans up temp files, and the
-        // alternative (storing it alongside the Child) would require a
-        // wrapper struct that adds complexity to every test.
-        std::mem::forget(temp_dir);
-
-        std::process::Command::new("python3")
-            .arg("-c")
-            .arg(script)
-            .env("MOCK_RESPONSE_FILE", &response_file)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("failed to spawn mock LSP python3 process")
-    }
-
-    /// Create a `SharedLspClient` from a mock LSP child process.
-    fn mock_lsp_client(child: &mut std::process::Child) -> crate::lsp_worker::SharedLspClient {
-        use crate::lsp_communication::LspJsonRpcClient;
-        let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let client = LspJsonRpcClient::new(stdin, stdout);
-        std::sync::Arc::new(std::sync::Mutex::new(Some(client)))
-    }
 
     /// Create a temp file so `lsp_request_with_document` can read it.
     fn create_temp_source_file() -> tempfile::TempDir {
@@ -1351,21 +1292,21 @@ mod tests {
             ]
         });
 
-        // null = read notification without replying; non-null = read request and reply
+        // null = read notification without replying; non-null = read request and reply.
+        // Session path sends didOpen then the request (no didClose).
         let responses = vec![
             serde_json::Value::Null, // didOpen notification
             codeaction_response,     // codeAction request
-            serde_json::Value::Null, // didClose notification
         ];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let temp_dir = create_temp_source_file();
         let file_path = temp_dir.path().join("test.rs");
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = GetCodeActionsOptions {
             file_path: file_path.to_str().unwrap().to_string(),
             start_line: 0,
@@ -1385,8 +1326,6 @@ mod tests {
 
         assert_eq!(result.actions[1].title, "Run test");
         assert!(result.actions[1].kind.is_none());
-
-        let _ = child.wait();
     }
 
     // -----------------------------------------------------------------------
@@ -1403,19 +1342,18 @@ mod tests {
         });
 
         let responses = vec![
-            serde_json::Value::Null,
-            null_response,
-            serde_json::Value::Null,
+            serde_json::Value::Null, // didOpen
+            null_response,           // codeAction request
         ];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let temp_dir = create_temp_source_file();
         let file_path = temp_dir.path().join("test.rs");
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = GetCodeActionsOptions {
             file_path: file_path.to_str().unwrap().to_string(),
             start_line: 0,
@@ -1430,8 +1368,6 @@ mod tests {
             result.actions.is_empty(),
             "null LSP response should produce empty actions"
         );
-
-        let _ = child.wait();
     }
 
     // -----------------------------------------------------------------------
@@ -1498,19 +1434,18 @@ mod tests {
         });
 
         let responses = vec![
-            serde_json::Value::Null,
-            codeaction_response,
-            serde_json::Value::Null,
+            serde_json::Value::Null, // didOpen
+            codeaction_response,     // codeAction request
         ];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let temp_dir = create_temp_source_file();
         let file_path = temp_dir.path().join("test.rs");
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = GetCodeActionsOptions {
             file_path: file_path.to_str().unwrap().to_string(),
             start_line: 0,
@@ -1528,8 +1463,6 @@ mod tests {
         );
         assert_eq!(result.actions[0].title, "Quick fix A");
         assert_eq!(result.actions[0].kind.as_deref(), Some("quickfix"));
-
-        let _ = child.wait();
     }
 
     // -----------------------------------------------------------------------
@@ -1579,21 +1512,22 @@ mod tests {
             }
         });
 
+        // Session path: one didOpen, then codeAction, then the resolve request
+        // back-to-back (no didClose between them).
         let responses = vec![
             serde_json::Value::Null, // didOpen notification
             codeaction_response,     // codeAction request
-            serde_json::Value::Null, // didClose notification
             resolve_response,        // codeAction/resolve request
         ];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let temp_dir = create_temp_source_file();
         let file_path = temp_dir.path().join("test.rs");
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = GetCodeActionsOptions {
             file_path: file_path.to_str().unwrap().to_string(),
             start_line: 5,
@@ -1618,8 +1552,6 @@ mod tests {
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].file_path, "/src/lib.rs");
         assert_eq!(edits[0].text_edits[0].new_text, "fn extracted() {}\n");
-
-        let _ = child.wait();
     }
 
     // -----------------------------------------------------------------------
@@ -1649,20 +1581,19 @@ mod tests {
         });
 
         let responses = vec![
-            serde_json::Value::Null,
-            codeaction_response,
-            serde_json::Value::Null,
-            resolve_null,
+            serde_json::Value::Null, // didOpen
+            codeaction_response,     // codeAction request
+            resolve_null,            // codeAction/resolve request
         ];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let temp_dir = create_temp_source_file();
         let file_path = temp_dir.path().join("test.rs");
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = GetCodeActionsOptions {
             file_path: file_path.to_str().unwrap().to_string(),
             start_line: 0,
@@ -1678,8 +1609,6 @@ mod tests {
             result.actions[0].edits.is_none(),
             "resolve returning null should leave edits as None"
         );
-
-        let _ = child.wait();
     }
 
     // -----------------------------------------------------------------------
@@ -1715,20 +1644,19 @@ mod tests {
         });
 
         let responses = vec![
-            serde_json::Value::Null,
-            codeaction_response,
-            serde_json::Value::Null,
-            resolve_empty_edit,
+            serde_json::Value::Null, // didOpen
+            codeaction_response,     // codeAction request
+            resolve_empty_edit,      // codeAction/resolve request
         ];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let temp_dir = create_temp_source_file();
         let file_path = temp_dir.path().join("test.rs");
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = GetCodeActionsOptions {
             file_path: file_path.to_str().unwrap().to_string(),
             start_line: 0,
@@ -1744,7 +1672,5 @@ mod tests {
             result.actions[0].edits.is_none(),
             "resolve returning empty edit should leave edits as None"
         );
-
-        let _ = child.wait();
     }
 }

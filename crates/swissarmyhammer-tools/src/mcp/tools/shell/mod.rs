@@ -3,7 +3,9 @@
 //! ## Operations
 //!
 //! Dispatches between five operations:
-//! - `execute command`: Run a shell command with timeout and output capture
+//! - `execute command`: Run a shell command with timeout and output capture.
+//!   The response includes the last 32 output lines (or the full output when
+//!   it is 32 lines or fewer); use `get lines` to retrieve the rest.
 //! - `list processes`: Show all commands with status, timing, exit codes
 //! - `kill process`: Stop a running command by ID
 //! - `grep history`: Regex pattern match across command output
@@ -702,18 +704,13 @@ mod tests {
         assert_eq!(McpTool::name(&tool), "shell");
         assert!(!tool.description().is_empty());
 
-        // Wire schema: only `op` in properties, heavy keys dropped, signatures kept.
+        // Wire schema: only `op` in properties, every heavy key dropped
+        // (including the full-only `x-op-signatures` map).
         let wire = tool.schema();
         assert!(wire.is_object());
         assert!(wire["properties"]["op"].is_object());
-        assert!(wire["x-op-signatures"].is_object());
         let wire_obj = wire.as_object().unwrap();
-        for key in [
-            "x-operation-schemas",
-            "x-operation-groups",
-            "x-forgiving-input",
-            "examples",
-        ] {
+        for key in swissarmyhammer_operations::WIRE_DROPPED_KEYS {
             assert!(!wire_obj.contains_key(key), "wire schema must omit {key:?}");
         }
 
@@ -723,6 +720,7 @@ mod tests {
         assert!(full["properties"]["op"].is_object());
         assert!(full["x-operation-schemas"].is_array());
         assert!(full["x-operation-groups"].is_object());
+        assert!(full["x-op-signatures"].is_object());
     }
 
     // =====================================================================

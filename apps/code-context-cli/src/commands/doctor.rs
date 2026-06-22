@@ -374,10 +374,10 @@ fn count_embedded_chunks(conn: &Connection) -> i64 {
 
 /// Embed the canary query, run `search_code`, classify the result.
 ///
-/// Returns `Ok` when at least one match scores above `f32::EPSILON`,
-/// `Error` when zero matches come back (signals dimension mismatch — see
-/// the function-level doc on [`check_semantic_search`] for why
-/// `min_similarity` must be strictly positive).
+/// Returns `Ok` when at least one match has a RAW cosine above `f32::EPSILON`,
+/// `Error` when none do (signals a dimension mismatch — see the function-level
+/// doc on [`check_semantic_search`] for why the raw-cosine floor, not the
+/// rank-normalized fused score, is what must be strictly positive).
 async fn run_canary_query(conn: &Connection, embedder: &Embedder, embedded_count: i64) -> Check {
     let query_embedding = match embedder.embed_text(SEMANTIC_SEARCH_CANARY_QUERY).await {
         Ok(r) => r.embedding().to_vec(),
@@ -392,14 +392,30 @@ async fn run_canary_query(conn: &Connection, embedder: &Embedder, embedded_count
         }
     };
 
+    // Cosine-only ranking: the canary is an embedding-dimension health probe.
+    // A dimension mismatch makes `cosine_similarity` return 0.0 for every stored
+    // chunk (mismatched vector lengths), so BM25/trigram are zeroed and only the
+    // cosine signal ranks. We then require the top match's RAW cosine to clear
+    // `f32::EPSILON`. The raw `signals.cosine` is what we must check — NOT the
+    // fused score (and NOT `min_fused_score`): the fused score is rank-normalized
+    // so the top chunk always normalizes to 1.0 even when its raw cosine is 0.0,
+    // which would mask the very mismatch this canary exists to detect.
     let options = SearchCodeOptions {
         top_k: 1,
-        min_similarity: f32::EPSILON,
-        language: None,
-        file_pattern: None,
+        w_bm25: 0.0,
+        w_trigram: 0.0,
+        w_cosine: 1.0,
+        ..Default::default()
     };
-    match search_code(conn, &query_embedding, &options) {
-        Ok(r) => classify_canary_matches(r.matches.len(), embedded_count),
+    match search_code(conn, "", &query_embedding, &options) {
+        Ok(r) => {
+            let cosine_matches = r
+                .matches
+                .iter()
+                .filter(|m| m.signals.cosine > f32::EPSILON)
+                .count();
+            classify_canary_matches(cosine_matches, embedded_count)
+        }
         Err(e) => semantic_search_check(
             CheckStatus::Error,
             format!("search_code() failed against the canary query: {e}"),
@@ -415,7 +431,7 @@ fn classify_canary_matches(match_count: usize, embedded_count: i64) -> Check {
             CheckStatus::Error,
             format!(
                 "Semantic search returned no results for canary query \"{SEMANTIC_SEARCH_CANARY_QUERY}\" \
-                 (searched {embedded_count} embedded chunks above min_similarity=f32::EPSILON). \
+                 (searched {embedded_count} embedded chunks, raw-cosine floor f32::EPSILON). \
                  The query embedding dimension likely does not match the stored embeddings — \
                  `cosine_similarity` returns 0.0 for mismatched vector lengths."
             ),
@@ -682,13 +698,13 @@ mod tests {
     }
 
     /// When the stored embedding's dimension does not match what the default
-    /// embedder produces, `cosine_similarity` returns `0.0` and the
-    /// `min_similarity: f32::EPSILON` filter in [`check_semantic_search`]
-    /// drops the row. The check must report `Error`, not `Ok`.
+    /// embedder produces, `cosine_similarity` returns `0.0` and the raw-cosine
+    /// `> f32::EPSILON` floor in [`check_semantic_search`] drops the row. The
+    /// check must report `Error`, not `Ok`.
     ///
-    /// This is the regression guard for the review finding: with
-    /// `min_similarity: 0.0`, a dimension-mismatched chunk slipped through
-    /// the filter as a "match" and the doctor falsely reported `Ok`.
+    /// This is the regression guard for the review finding: with a `0.0`
+    /// floor, a dimension-mismatched chunk slipped through the filter as a
+    /// "match" and the doctor falsely reported `Ok`.
     ///
     /// The embedding model is gated: if `Embedder::default()` or `load()`
     /// fails (e.g., model weights not downloaded in this environment), the

@@ -33,7 +33,11 @@ pub struct UpdateTask {
     pub description: Option<String>,
     /// Replace all assignees
     pub assignees: Option<Vec<ActorId>>,
-    /// Replace all dependencies
+    /// Replace all dependencies. Accepts a single ref or a list, in any id
+    /// format (full ULID, 7-char short id, `^<short>`, unique ULID prefix,
+    /// lowercase) — each resolves to the canonical full ULID. The derived
+    /// `blocked_by` field (the unsatisfied subset of `depends_on`) is computed,
+    /// not directly settable.
     pub depends_on: Option<Vec<TaskId>>,
     /// Replace all attachment IDs (array of entity ID strings)
     pub attachments: Option<Value>,

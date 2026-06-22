@@ -665,6 +665,9 @@ pub struct MessageChunk {
     pub token_usage: Option<TokenUsageInfo>,
     /// Stop reason from Claude (only present in final chunk from result message).
     pub stop_reason: Option<String>,
+    /// Prompt-cache usage from Claude (only present in the final chunk built
+    /// from a result message carrying a populated `usage` object).
+    pub cache_usage: Option<crate::protocol_translator::CacheUsage>,
 }
 
 /// Tool call information extracted from Claude Message::Tool responses.
@@ -782,6 +785,7 @@ impl ClaudeClient {
                 tool_result: None,
                 token_usage: None,
                 stop_reason: None,
+                cache_usage: None,
             },
             // Handle other ContentBlock variants if they exist
             _ => MessageChunk {
@@ -791,6 +795,7 @@ impl ClaudeClient {
                 tool_result: None,
                 token_usage: None,
                 stop_reason: None,
+                cache_usage: None,
             },
         }
     }
@@ -1157,10 +1162,12 @@ impl ClaudeClient {
                 tool_result: None,
                 token_usage: None,
                 stop_reason: result.stop_reason.clone(),
+                cache_usage: result.cache_usage,
             };
             tracing::debug!(
-                "Sending final chunk with stop_reason={:?}",
-                result.stop_reason
+                "Sending final chunk with stop_reason={:?} cache_usage={:?}",
+                result.stop_reason,
+                result.cache_usage
             );
             let _ = ctx.tx.send(chunk);
         }
@@ -1242,6 +1249,7 @@ impl ClaudeClient {
             tool_result: None,
             token_usage: None,
             stop_reason: None,
+            cache_usage: None,
         };
 
         if ctx.tx.send(chunk).is_err() {
@@ -1315,6 +1323,7 @@ impl ClaudeClient {
             }),
             token_usage: None,
             stop_reason: None,
+            cache_usage: None,
         })
     }
 
@@ -1603,6 +1612,7 @@ mod tests {
             tool_result: None,
             token_usage: None,
             stop_reason: None,
+            cache_usage: None,
         };
 
         let tool_call_chunk = MessageChunk {
@@ -1616,6 +1626,7 @@ mod tests {
             tool_result: None,
             token_usage: None,
             stop_reason: None,
+            cache_usage: None,
         };
 
         let tool_result_chunk = MessageChunk {
@@ -1625,6 +1636,7 @@ mod tests {
             tool_result: None,
             token_usage: None,
             stop_reason: None,
+            cache_usage: None,
         };
 
         let result_chunk = MessageChunk {
@@ -1637,6 +1649,7 @@ mod tests {
                 output_tokens: 200,
             }),
             stop_reason: None,
+            cache_usage: None,
         };
 
         assert!(matches!(text_chunk.chunk_type, ChunkType::Text));

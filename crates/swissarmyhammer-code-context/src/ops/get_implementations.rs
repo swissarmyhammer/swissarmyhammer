@@ -11,6 +11,10 @@ use serde_json::json;
 use crate::layered_context::{DefinitionLocation, LayeredContext, LspRange, SourceLayer};
 use crate::ops::lsp_helpers::{file_path_to_uri, parse_lsp_range, uri_to_file_path};
 
+/// Default cap on the number of implementation results returned when the caller
+/// does not supply an explicit `max_results`.
+const DEFAULT_MAX_IMPLEMENTATIONS: usize = 20;
+
 /// Options for the `get_implementations` operation.
 #[derive(Debug, Clone)]
 pub struct GetImplementationsOptions {
@@ -42,7 +46,7 @@ pub fn get_implementations(
     ctx: &LayeredContext,
     opts: &GetImplementationsOptions,
 ) -> Result<GetImplementationsResult, crate::error::CodeContextError> {
-    let max = opts.max_results.unwrap_or(20);
+    let max = opts.max_results.unwrap_or(DEFAULT_MAX_IMPLEMENTATIONS);
 
     // --- Layer 1: Live LSP ---
     if ctx.has_live_lsp() {
@@ -498,8 +502,6 @@ mod tests {
         // When a SharedLspClient exists but wraps None (no connected LSP process),
         // has_live_lsp() returns false and get_implementations should skip the
         // live layer entirely, falling back to tree-sitter heuristic search.
-        use std::sync::{Arc, Mutex};
-
         let conn = crate::test_fixtures::test_db();
         crate::test_fixtures::insert_file(&conn, "src/shapes.rs", 1, 0);
 
@@ -527,9 +529,14 @@ mod tests {
             Some("shapes::CircleRenderable"),
         );
 
-        // SharedLspClient present but wrapping None -- no connected LSP server
-        let empty_client: crate::lsp_worker::SharedLspClient = Arc::new(Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&empty_client));
+        // SharedLspSession present but wrapping None -- no connected LSP server
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
         assert!(!ctx.has_live_lsp());
 
         let opts = GetImplementationsOptions {
@@ -601,11 +608,14 @@ mod tests {
         // When a SharedLspClient exists but wraps None (no connected LSP
         // process) and no tree-sitter data is available, get_implementations
         // should return an empty result with SourceLayer::None -- not an error.
-        use std::sync::{Arc, Mutex};
-
         let conn = crate::test_fixtures::test_db();
-        let shared: crate::lsp_worker::SharedLspClient = Arc::new(Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
 
         let opts = GetImplementationsOptions {
             file_path: "/nonexistent.rs".to_string(),

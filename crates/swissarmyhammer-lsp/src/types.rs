@@ -1,10 +1,11 @@
 //! Core types for LSP server management.
 //!
-//! The canonical [`OwnedLspServerSpec`] lives in `swissarmyhammer-code-context`
-//! and is re-exported here for backward compatibility with existing callers.
-//! Keeping the definition in the lower-tier crate means both the indexing
-//! worker and this daemon-supervision crate share one schema; adding a new
-//! field in `builtin/lsp/*.yaml` only requires editing one struct.
+//! The canonical [`OwnedLspServerSpec`] is defined in [`crate::server_spec`]
+//! and re-exported here for the existing callers in this crate. Keeping the
+//! single definition in this crate means both this daemon-supervision crate and
+//! the lower-tier indexing worker (which depends on this crate) share one
+//! schema; adding a new field in `builtin/lsp/*.yaml` only requires editing one
+//! struct.
 
 use std::fmt;
 
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use swissarmyhammer_project_detection::ProjectType;
 
-pub use swissarmyhammer_code_context::OwnedLspServerSpec;
+pub use crate::server_spec::OwnedLspServerSpec;
 
 /// Specification for an LSP server that can be auto-detected and managed.
 pub struct LspServerSpec {

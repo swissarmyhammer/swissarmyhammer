@@ -10,8 +10,6 @@ metadata:
   version: "{{version}}"
 ---
 
-{% include "_partials/review-column" %}
-
 # Kanban
 
 Execute the tasks from the board.

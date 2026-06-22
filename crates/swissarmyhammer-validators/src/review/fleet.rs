@@ -1,74 +1,71 @@
 //! Engine stage 2 — the fan-out fleet.
 //!
-//! The shard is the validator; the **grain is the file**. This stage takes the
-//! stage-1 [`WorkList`](crate::review::WorkList) and produces one agent task per
-//! `(validator, file)` pair, submitting every task to the shared
-//! [`AgentPool`](crate::validators::AgentPool). Each task reviews ONE file
-//! against ONE validator's rules, armed with the engine-run probe evidence
-//! stage 1 already gathered, and returns a `Vec<`[`Finding`]`>` tagged with the
-//! validator (and, when the agent cites it, the rule).
-//!
-//! # Batching, not concurrency
-//!
-//! To bound the task count on a large diff, a handful of files are *packed* into
-//! one task ([`FleetConfig::batch_size`]); the grain stays the file (each file is
-//! rendered as its own self-contained block), the batch is just packing so a
-//! 400-file diff does not mint 400 separate sessions. The batching applied is
-//! logged via [`tracing`].
+//! The shard is the **validator**: this stage takes the stage-1
+//! [`WorkList`](crate::review::WorkList) and produces one agent task per
+//! validator, submitting every task to the shared
+//! [`AgentPool`](crate::validators::AgentPool). Each task reviews the change —
+//! every file under review, with the engine-run probe evidence stage 1 already
+//! gathered — against ONE validator's full ruleset, and returns a
+//! `Vec<`[`Finding`]`>` tagged with the validator (and, when the agent cites it,
+//! the rule).
 //!
 //! **Parallelism is not controlled here.** Every task goes to the shared
 //! [`AgentPool`], which owns the single concurrency control (worker count). This
 //! stage only submits and collects; the pool queues and drains. A task that
-//! errors or times out yields zero findings for its batch — logged, never a
+//! errors or times out yields zero findings for its validator — logged, never a
 //! panic — so one bad task never aborts the rest.
 //!
-//! # Primed prefix sessions + forks
+//! # One shared prime, fork per validator
 //!
-//! The first two prompt sections (change purpose + validator instructions) are
-//! identical across every one of a validator's batches, and on a local model
-//! they dominate the prompt (~15k tokens). So instead of re-decoding them per
-//! task, each validator's fan-out runs as:
+//! The large content of a review run — the change description and the full
+//! diffs/sources of every file under review — is identical across every
+//! validator, and on a local model it dominates the prompt. So instead of
+//! re-decoding it per task, the whole run shares ONE primed prefix and fans every
+//! validator out as a fork of it:
 //!
-//! 1. **Prime** — one session is prompted with [`render_validator_prefix`]
-//!    (the shared sections, ending with an explicit "reply OK, files arrive
-//!    next" handoff). The completed turn leaves the agent's saved state exactly
-//!    at the boundary every batch continues from.
+//! 1. **Prime once per run** — one session is prompted with [`render_run_prime`]
+//!    (the change purpose + every file's diff/source/probe evidence, ending with
+//!    an explicit "reply OK, the rules arrive next" handoff). The completed turn
+//!    leaves the agent's saved state exactly at the boundary every validator fork
+//!    continues from. There is no validator-specific text in the prime.
 //! 2. **Confirm + pin** — the `session/state_status` extension confirms the
 //!    state is actually saved ("never fork blind"), and `session/pin` protects
-//!    it from cache eviction for the fan-out's duration.
-//! 3. **Fork per batch** — each batch turn runs on a `session/fork` of the
-//!    primed session and sends ONLY [`render_file_payload`], decoding strictly
-//!    forward from the shared prefix. Warm reuse (and the reused token count)
-//!    is logged per task.
-//! 4. **Unpin** — the prefix pin is released once every batch has resolved.
-//!    The pin is held by a [`SessionPinGuard`], so a fan-out future dropped
-//!    mid-collect (cancelled review, caller timeout) still releases it.
+//!    it from cache eviction for the run's duration (fan-out AND verify).
+//! 3. **Fork per validator** — each validator turn runs on a `session/fork`
+//!    of the primed session and sends ONLY [`render_validator_suffix`] (that
+//!    validator's instructions — its full ruleset + output contract), decoding
+//!    strictly forward from the shared prefix. Each suffix is non-empty by
+//!    construction (always at least the rule bodies + the contract). Warm reuse
+//!    (and the reused token count) is logged per task.
+//! 4. **Unpin** — the prefix pin is released by [`run_review`](crate::review::run_review)
+//!    once both fan-out and verify have drained. The pin is held by a
+//!    [`SessionPinGuard`], so a future dropped mid-run (cancelled review, caller
+//!    timeout) still releases it.
 //!
 //! Any failure — the prime turn, the state confirmation, the pin, or an
-//! individual fork — degrades that scope to today's monolithic prompt
-//! ([`render_fleet_prompt`], one fresh session carrying everything) with a
-//! logged warning: degraded but correct, never a lost task. The flow is
-//! backend-agnostic; the extension contract lives in
+//! individual fork — degrades that task to a self-contained monolithic prompt
+//! ([`render_fleet_prompt`], one fresh session carrying everything for the
+//! validator) with a logged warning: degraded but correct, never a lost task.
+//! The flow is backend-agnostic; the extension contract lives in
 //! [`agent_client_protocol_extras::session_fork`].
 //!
 //! # The prompt payload
 //!
-//! [`render_fleet_prompt`] assembles exactly the payload the task specifies,
-//! reusing the structured data stage 1 produced (no new template engine):
+//! The split renders compose byte-identically into the monolithic per-validator
+//! prompt, so the warm and degraded paths never drift. The pieces, reusing the
+//! structured data stage 1 produced (no template engine):
 //!
-//! 1. **Change purpose** — [`WorkList::change_purpose`](crate::review::WorkList).
-//! 2. **Validator instructions** — the mandate (the validator's `description`),
-//!    each rule body verbatim, the severity default, and the output contract
-//!    (every finding emits `rule` + `claim` + `evidence` + `suggestion`, matching
-//!    the [`Finding`] type).
-//! 3. **The file(s) under review** — for each file in the batch: its path, the
-//!    structured semantic diff, the bounded source slice, and the probe results
-//!    rendered as evidence blocks.
-//!
-//! Excluded by design: other validators' rules and any file outside the batch.
-//! The split renders ([`render_validator_prefix`] = sections 1–2 + handoff,
-//! [`render_file_payload`] = section 3) compose byte-identically into the
-//! monolithic prompt, so the warm and degraded paths never drift.
+//! - [`render_run_prime`] (primed once): the **change purpose** plus, for every
+//!   distinct file under review, its path, the structured semantic diff, the
+//!   bounded source slice, and the probe results rendered as evidence blocks —
+//!   then the prime handoff. No validator text.
+//! - [`render_validator_suffix`] (forked per validator): the **validator
+//!   instructions** — the mandate (the validator's `description`), the paths of
+//!   the validator's files in scope, every rule body verbatim, the severity
+//!   default, and the output contract (every finding emits `rule` + `claim` +
+//!   `evidence` + `suggestion`, matching the [`Finding`] type).
+//! - [`render_fleet_prompt`] (degraded fallback): the change purpose, the
+//!   validator's own files, and the validator suffix, in one fresh-session prompt.
 
 use std::fmt::Write as _;
 
@@ -76,39 +73,20 @@ use crate::review::probes::render_probe_evidence;
 use crate::review::scope::{FileWork, ValidatorWork, WorkList};
 use crate::review::types::{parse_findings, Finding};
 use crate::validators::{
-    AgentPool, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult, Severity,
-    ValidatorLoader,
+    AgentPool, ForkAttachment, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult,
+    Severity, ValidatorLoader,
 };
 use agent_client_protocol_extras::SessionStateStatusResponse;
 
-/// Default number of files packed into a single fan-out task.
-///
-/// Small enough that one task's prompt stays well inside an agent's context
-/// window (the grain is still the file), large enough that a big diff does not
-/// mint a separate session per file.
-pub const DEFAULT_BATCH_SIZE: usize = 4;
-
 /// Configuration for a fan-out run.
-#[derive(Debug, Clone, Copy)]
-pub struct FleetConfig {
-    /// How many files to pack into one agent task. Clamped to at least 1.
-    pub batch_size: usize,
-}
-
-impl Default for FleetConfig {
-    fn default() -> Self {
-        Self {
-            batch_size: DEFAULT_BATCH_SIZE,
-        }
-    }
-}
-
-impl FleetConfig {
-    /// The effective, clamped batch size (never zero).
-    fn effective_batch_size(&self) -> usize {
-        self.batch_size.max(1)
-    }
-}
+///
+/// The fan-out grain is the validator and the change's files live in the run's
+/// shared prime (not a per-task suffix), so there is no longer a file-batching
+/// dimension to configure. This stays a struct rather than a unit so the
+/// [`run_fleet`] / [`run_review`](crate::review::run_review) signatures keep room
+/// for future fan-out knobs without churning every caller.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FleetConfig {}
 
 /// The result of a fan-out run: the merged findings plus the task tally.
 ///
@@ -118,26 +96,51 @@ impl FleetConfig {
 /// `attempted` and `failed`. A review where most tasks fail therefore renders an
 /// empty findings set with a non-zero `failed` count, which is exactly what
 /// distinguishes a wedged run from a genuinely clean diff.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct FleetOutcome {
     /// The merged, validator-tagged findings from every task that succeeded.
     pub findings: Vec<Finding>,
-    /// How many `(validator, batch-of-files)` tasks were submitted.
+    /// How many validator tasks were submitted.
     pub attempted: usize,
     /// How many of those tasks failed (errored, were dropped, or did not parse)
     /// and so degraded to zero findings.
     pub failed: usize,
+    /// The run's shared primed-prefix pin guard, when priming succeeded.
+    ///
+    /// The change + diffs are primed ONCE per run and forked per validator here;
+    /// the same prime is then reused by the verify stage. So the pin must outlive
+    /// fan-out — it is handed back for [`run_review`](crate::review::run_review)
+    /// to keep alive across verify and release at the end. `None` when priming
+    /// failed (every task ran the monolithic fallback) so there is nothing to
+    /// release.
+    pub prime: Option<SessionPinGuard>,
+}
+
+impl std::fmt::Debug for FleetOutcome {
+    /// Hand-rolled because [`SessionPinGuard`] is not `Debug`; the guard is
+    /// summarized as the boolean "is a prime held" rather than its contents.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FleetOutcome")
+            .field("findings", &self.findings)
+            .field("attempted", &self.attempted)
+            .field("failed", &self.failed)
+            .field("primed", &self.prime.is_some())
+            .finish()
+    }
 }
 
 /// Fan a [`WorkList`] out across the shared [`AgentPool`] and collect the merged,
 /// validator-tagged findings.
 ///
-/// One task is built per `(validator, batch-of-files)`: every validator's files
-/// are packed into batches of [`FleetConfig::batch_size`], each batch rendered
-/// into one prompt by [`render_fleet_prompt`] and submitted to `pool`. As each
-/// task returns, its response is parsed by [`parse_findings`] and every finding
-/// is tagged with the validator. A task that errors or returns unparseable
-/// content contributes zero findings for its batch and is logged — never a panic.
+/// The run's large shared content — the change description and every file's
+/// diff/source/probe evidence — is primed ONCE into a single session
+/// ([`render_run_prime`]). Then one task is built per validator: each forks the
+/// shared prime and sends only that validator's instructions
+/// ([`render_validator_suffix`] — its full ruleset + output contract), decoding
+/// strictly forward from the cached prefix. As each task returns, its response is
+/// parsed by [`parse_findings`] and every finding is tagged with the validator. A
+/// task that errors or returns unparseable content contributes zero findings for
+/// its validator and is logged — never a panic.
 ///
 /// `loader` is the same fully-loaded [`ValidatorLoader`] stage 1 matched against,
 /// reused here as the authoritative source of each validator's mandate and rule
@@ -145,146 +148,138 @@ pub struct FleetOutcome {
 /// A validator in the work-list with no matching RuleSet in the loader is logged
 /// and skipped rather than rendered with empty instructions.
 ///
-/// The returned findings are ordered by validator (work-list order), then by the
-/// order the pool delivered each batch. Alongside them, the returned
-/// [`FleetOutcome`] carries the task tally — how many tasks were attempted and
-/// how many failed — so a saturated run (most tasks rejected) is distinguishable
-/// from a genuinely clean diff rather than both rendering an empty findings set.
+/// The returned findings are ordered by validator (work-list order). Alongside
+/// them, the returned [`FleetOutcome`] carries the task tally — how many tasks
+/// were attempted and how many failed — so a saturated run (most tasks rejected)
+/// is distinguishable from a genuinely clean diff rather than both rendering an
+/// empty findings set, plus the shared prime's pin guard ([`FleetOutcome::prime`])
+/// so the caller can reuse the prime for verify and release the pin once the
+/// whole run drains.
 pub async fn run_fleet(
     work: &WorkList,
     loader: &ValidatorLoader,
     pool: &AgentPool,
-    config: FleetConfig,
+    _config: FleetConfig,
 ) -> FleetOutcome {
-    let batch_size = config.effective_batch_size();
+    // Plan the fan-out BEFORE priming so an empty plan (no matching ruleset)
+    // skips the prime entirely — an empty run never prompts the agent.
+    let plan = plan_fan_out(work, loader);
+    if plan.is_empty() {
+        return FleetOutcome::default();
+    }
 
-    // One run per validator: prime its shared prefix once, then fork a payload
-    // turn per batch (see `run_validator_fleet`). The runs are driven
-    // concurrently so one validator's prime never serializes another
-    // validator's batches; the pool still owns the only real concurrency
-    // control (its worker count).
-    let mut runs = Vec::new();
+    // Prime the run's shared prefix (change + all diffs) ONCE, then submit one
+    // fork (or monolithic fallback) per planned validator and collect them all.
+    // `None` from priming → every task degrades to a self-contained monolithic
+    // prompt.
+    let prime = prime_run_prefix(work, pool).await;
+    let pending = submit_fan_out(plan, work, pool, &prime);
+    let (findings, attempted, failed) = collect_fan_out(pending, work, pool).await;
+
+    FleetOutcome {
+        findings,
+        attempted,
+        failed,
+        prime,
+    }
+}
+
+/// Plan the fan-out: one [`ValidatorTask`] per validator the `loader` knows,
+/// in work-list order. A validator with no matching RuleSet in the loader is
+/// logged and skipped (never rendered with empty instructions); each planned
+/// validator's rule names are logged so the fan-out shows exactly what ran.
+fn plan_fan_out<'w>(work: &'w WorkList, loader: &'w ValidatorLoader) -> Vec<ValidatorTask<'w>> {
+    let mut plan: Vec<ValidatorTask<'w>> = Vec::new();
     for validator in &work.validators {
         let Some(ruleset) = loader.get_ruleset(&validator.validator_name) else {
             tracing::warn!(
                 validator = %validator.validator_name,
-                "fleet fan-out: no RuleSet for validator in loader; skipping its files"
+                "fleet fan-out: no RuleSet for validator in loader; skipping it"
             );
             continue;
         };
-        let total_batches = batch_count(validator.files.len(), batch_size);
-        // The rule names being applied come from the loader's RuleSet (the
-        // authoritative source), so the log shows exactly which validator×rules
-        // ran — not just the validator name.
         let rule_names: Vec<&str> = ruleset.rules.iter().map(|r| r.name.as_str()).collect();
         tracing::info!(
             validator = %validator.validator_name,
             files = validator.files.len(),
-            batch_size,
-            batches = total_batches,
             rules = ?rule_names,
-            "fleet fan-out: batching files into agent tasks"
+            "fleet fan-out: forking one task per validator against the shared prime"
         );
-        runs.push(run_validator_fleet(
-            &work.change_purpose,
-            validator,
-            ruleset,
-            pool,
-            batch_size,
-        ));
+        plan.push(ValidatorTask { validator, ruleset });
     }
-
-    let mut outcome = FleetOutcome::default();
-    for run in futures::future::join_all(runs).await {
-        outcome.findings.extend(run.findings);
-        outcome.attempted += run.attempted;
-        outcome.failed += run.failed;
-    }
-    outcome
+    plan
 }
 
-/// One validator's slice of the [`FleetOutcome`] tally.
-struct ValidatorRun {
-    findings: Vec<Finding>,
-    attempted: usize,
-    failed: usize,
-}
-
-/// How one batch task was submitted: a payload-only prompt on a fork of the
-/// validator's primed prefix session (the warm path), or the full monolithic
-/// prompt on a fresh session (the degraded path).
-enum Submitted {
-    Forked(tokio::sync::oneshot::Receiver<SessionTurnResult>),
-    Monolithic(tokio::sync::oneshot::Receiver<crate::validators::PromptResult>),
-}
-
-/// Fan one validator's files out: prime the shared prefix session once, fork a
-/// payload-only turn per batch, collect, and unpin.
+/// Submit every planned validator task to the pool, returning the in-flight
+/// receivers paired with their context.
 ///
-/// When priming (or its saved-state confirmation/pin) fails, every batch runs
-/// as today's monolithic fresh-session prompt instead — degraded but correct.
-/// A batch whose fork fails falls back to a monolithic prompt individually.
-/// The prefix session's pin is released after every batch task has resolved,
-/// including failures — and, because the prime returns a [`SessionPinGuard`],
-/// even when this future is dropped mid-collect — so the pinned entry never
-/// outlives the fan-out.
-async fn run_validator_fleet(
-    change_purpose: &str,
-    validator: &ValidatorWork,
-    ruleset: &RuleSet,
+/// The fan-out grain is the validator: the files live in the shared prime, so a
+/// validator's task carries only its instructions (its full ruleset) as the fork
+/// suffix. With a live `prime` each task forks the shared prefix and sends just
+/// the suffix; without one (priming failed) each task degrades to a
+/// self-contained monolithic prompt on a fresh session.
+fn submit_fan_out<'w>(
+    plan: Vec<ValidatorTask<'w>>,
+    work: &WorkList,
     pool: &AgentPool,
-    batch_size: usize,
-) -> ValidatorRun {
-    let name = validator.validator_name.as_str();
+    prime: &Option<SessionPinGuard>,
+) -> Vec<PendingValidator<'w>> {
+    plan.into_iter()
+        .map(|task| {
+            tracing::debug!(
+                validator = %task.validator.validator_name,
+                warm = prime.is_some(),
+                "fleet fan-out: submitting validator task"
+            );
+            let suffix = render_validator_suffix(task.validator, task.ruleset);
+            let rx = match prime {
+                Some(guard) => Submitted::Forked(pool.submit_forked(guard.session_id(), suffix)),
+                None => Submitted::Monolithic(pool.submit(render_fleet_prompt(
+                    &work.change_purpose,
+                    task.validator,
+                    task.ruleset,
+                ))),
+            };
+            PendingValidator { task, rx }
+        })
+        .collect()
+}
 
-    // Prime the shared prefix once; `None` → degraded to monolithic prompts.
-    let prefix_session = prime_validator_prefix(change_purpose, validator, ruleset, pool).await;
-
-    struct Pending<'w> {
-        files: Vec<String>,
-        batch: &'w [FileWork],
-        rx: Submitted,
-    }
-
-    let mut pending: Vec<Pending<'_>> = Vec::new();
-    for batch in validator.files.chunks(batch_size) {
-        let files: Vec<String> = batch.iter().map(|f| f.path.clone()).collect();
-        tracing::debug!(
-            validator = %name,
-            files = ?files,
-            warm = prefix_session.is_some(),
-            "fleet fan-out: submitting validator×files task"
-        );
-        let rx = match &prefix_session {
-            Some(guard) => Submitted::Forked(
-                pool.submit_forked(guard.session_id(), render_file_payload(batch)),
-            ),
-            None => Submitted::Monolithic(pool.submit(render_fleet_prompt(
-                change_purpose,
-                validator,
-                ruleset,
-                batch,
-            ))),
-        };
-        pending.push(Pending { files, batch, rx });
-    }
-
-    // Collect every batch task in submission order; each receiver resolves
-    // independently while the pool drains in parallel up to its worker count.
+/// Collect every submitted validator task in submission order, returning the
+/// merged findings plus the `(attempted, failed)` tally.
+///
+/// Each receiver resolves independently while the pool drains in parallel up to
+/// its worker count. A task that errors, is dropped, or returns unparseable
+/// content contributes zero findings and bumps `failed` — one bad task never
+/// aborts the rest. Awaiting here (rather than in a detached task) is what keeps
+/// the run's shared-prime pin released on cancellation: dropping the `run_fleet`
+/// future drops this collect mid-await.
+async fn collect_fan_out(
+    pending: Vec<PendingValidator<'_>>,
+    work: &WorkList,
+    pool: &AgentPool,
+) -> (Vec<Finding>, usize, usize) {
     let attempted = pending.len();
     let mut findings: Vec<Finding> = Vec::new();
     let mut failed = 0usize;
-    for task in pending {
-        let collected = match task.rx {
-            Submitted::Monolithic(rx) => collect_task(rx.await, name, &task.files),
+    for pending in pending {
+        let name = pending.task.validator.validator_name.as_str();
+        let files: Vec<String> = pending
+            .task
+            .validator
+            .files
+            .iter()
+            .map(|f| f.path.clone())
+            .collect();
+        let collected = match pending.rx {
+            Submitted::Monolithic(rx) => collect_task(rx.await, name, &files),
             Submitted::Forked(rx) => {
                 collect_forked_task(
                     rx.await,
-                    change_purpose,
-                    validator,
-                    ruleset,
-                    task.batch,
-                    &task.files,
+                    &work.change_purpose,
+                    pending.task.validator,
+                    pending.task.ruleset,
+                    &files,
                     pool,
                 )
                 .await
@@ -295,54 +290,60 @@ async fn run_validator_fleet(
             Err(()) => failed += 1,
         }
     }
-
-    // Release the prefix pin now that every batch task has resolved (success
-    // or failure), so the pinned entry never outlives this validator's fan-out.
-    if let Some(guard) = prefix_session {
-        unpin_prefix_session(guard, name).await;
-    }
-
-    ValidatorRun {
-        findings,
-        attempted,
-        failed,
-    }
+    (findings, attempted, failed)
 }
 
-/// Prime one validator's shared prompt prefix in a dedicated session, confirm
+/// One planned validator task: the work-list/ruleset context needed to render its
+/// prompt, attribute its findings, and (on fork failure) re-render the monolithic
+/// fallback.
+struct ValidatorTask<'w> {
+    validator: &'w ValidatorWork,
+    ruleset: &'w RuleSet,
+}
+
+/// A submitted [`ValidatorTask`]: its context plus the in-flight receiver.
+struct PendingValidator<'w> {
+    task: ValidatorTask<'w>,
+    rx: Submitted,
+}
+
+/// How one validator task was submitted: a suffix-only prompt on a fork of the
+/// run's primed prefix session (the warm path), or the full monolithic prompt on
+/// a fresh session (the degraded path).
+enum Submitted {
+    Forked(tokio::sync::oneshot::Receiver<SessionTurnResult>),
+    Monolithic(tokio::sync::oneshot::Receiver<crate::validators::PromptResult>),
+}
+
+/// Prime the run's shared prompt prefix (change purpose + every file's
+/// diff/source/probe evidence — no rule text) in a dedicated session, confirm
 /// the agent saved restorable state for it ("never fork blind"), and acquire
-/// the scoped pin guard that governs the fan-out's pin lifecycle.
+/// the scoped pin guard that governs the run's pin lifecycle.
 ///
 /// The prime turn is submitted with a born-pinned save intent
 /// ([`AgentPool::submit_primed`] carries `pin_on_save` in `_meta`), so the
 /// prefix is pinned **atomically at save time** — never an unpinned eviction
-/// candidate, so a concurrent session's save cannot evict it before the fan-out
+/// candidate, so a concurrent session's save cannot evict it before fan-out
 /// forks from it. That is the structural close of the prime→pin eviction race.
 ///
 /// The post-turn [`AgentPool::pin_session_scoped`] is therefore no longer the
 /// load-bearing pin: it is an **idempotent re-pin / confirm** that (a) verifies
 /// the state is still resident and (b) returns the [`SessionPinGuard`] whose
-/// `release()`/`Drop` performs the matching unpin when the validator's batches
-/// complete (or the fan-out future is dropped mid-flight). There is one pin
-/// protocol — born-pinned at save, unpinned by the guard — not two competing
+/// `release()`/`Drop` performs the matching unpin once the whole run (fan-out
+/// AND verify) completes or the run future is dropped mid-flight. There is one
+/// pin protocol — born-pinned at save, unpinned by the guard — not two competing
 /// ones. A backend without a KV cache (claude) born-pins as a no-op and reports
-/// `pinned: false`; forking still works, consistent with the pin=no-op
-/// contract.
+/// `pinned: false`; forking still works, consistent with the pin=no-op contract.
 ///
 /// Returns the guard for the primed session (carrying its id, the fork parent),
-/// or `None` when any step failed — the caller degrades to monolithic prompts
+/// or `None` when any step failed — fan-out degrades to monolithic prompts
 /// (correct, just cold), never a lost task.
-async fn prime_validator_prefix(
-    change_purpose: &str,
-    validator: &ValidatorWork,
-    ruleset: &RuleSet,
-    pool: &AgentPool,
-) -> Option<SessionPinGuard> {
-    let name = validator.validator_name.as_str();
-    let prefix = render_validator_prefix(change_purpose, validator, ruleset);
-    let turn = submit_prime(pool, name, prefix).await?;
-    let status = confirm_saved_state(pool, name, &turn).await?;
-    pin_prefix(pool, name, &turn, &status).await
+async fn prime_run_prefix(work: &WorkList, pool: &AgentPool) -> Option<SessionPinGuard> {
+    const RUN: &str = "<run>";
+    let prefix = render_run_prime(work);
+    let turn = submit_prime(pool, RUN, prefix).await?;
+    let status = confirm_saved_state(pool, RUN, &turn).await?;
+    pin_prefix(pool, RUN, &turn, &status).await
 }
 
 /// Submit the born-pinned prime turn for a validator's shared prefix.
@@ -422,18 +423,18 @@ async fn pin_prefix(
     match pool.pin_session_scoped(&turn.session_id).await {
         Ok((pin, guard)) => {
             tracing::info!(
-                validator = %name,
+                scope = %name,
                 session = %turn.session_id,
                 prefix_tokens = ?status.prompt_tokens,
                 born_pinned = status.pinned,
                 pinned = pin.pinned,
-                "primed validator prefix session (born pinned at save; pin confirmed)"
+                "primed shared run prefix session (born pinned at save; pin confirmed)"
             );
             Some(guard)
         }
         Err(err) => {
             tracing::warn!(
-                validator = %name,
+                scope = %name,
                 session = %turn.session_id,
                 error = %err,
                 "failed to pin primed prefix state; falling back to monolithic prompts"
@@ -443,63 +444,162 @@ async fn pin_prefix(
     }
 }
 
-/// Release a primed prefix session's pin once its validator's batches have all
-/// resolved, so the pinned cache entry does not outlive the fan-out. A failed
-/// unpin is logged, never fatal — the entry falls back to normal eviction.
-/// (Cancellation is covered separately: a fan-out future dropped before
+/// Release the run's shared primed-prefix pin once the whole run (fan-out AND
+/// verify) has drained, so the pinned cache entry does not outlive the run. A
+/// failed unpin is logged, never fatal — the entry falls back to normal
+/// eviction. (Cancellation is covered separately: a run future dropped before
 /// reaching this point releases the pin from the guard's `Drop`.)
-async fn unpin_prefix_session(guard: SessionPinGuard, validator: &str) {
+pub async fn unpin_prefix_session(guard: SessionPinGuard) {
     let session = guard.session_id().to_string();
     match guard.release().await {
         Ok(_) => tracing::debug!(
-            validator = %validator,
             session = %session,
-            "unpinned validator prefix session"
+            "unpinned shared run prefix session"
         ),
         Err(err) => tracing::warn!(
-            validator = %validator,
             session = %session,
             error = %err,
-            "failed to unpin validator prefix session"
+            "failed to unpin shared run prefix session"
         ),
     }
 }
 
-/// Resolve one forked batch task's delivered result into tagged findings.
+/// How a turn reused the shared file-context prefix, classified from the two
+/// reuse signals the two backends report.
+///
+/// The native KV (llama/qwen) backend reports reuse as a fork attaching the
+/// parent's saved generation state with a prefix token count
+/// ([`ForkAttachment::prefix_tokens`]); the claude backend's fork attaches no
+/// token counts and instead reports Anthropic prompt-cache reads/writes on the
+/// turn's [`SessionTurn::cache_usage`]. This enum unifies both so warm vs cold
+/// reuse is observable on either backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrefixReuse {
+    /// A native KV fork attached the parent's saved state, reusing
+    /// `reused_tokens` prompt tokens (the llama/qwen warm path).
+    WarmKv {
+        /// Prompt tokens the attached parent state covered.
+        reused_tokens: u64,
+    },
+    /// The Anthropic prompt cache served the prefix warm: `read` tokens came
+    /// from a cache read, `created` tokens were (re)written this turn.
+    WarmCache {
+        /// Tokens served from the warm prompt cache (`cache_read_input_tokens`).
+        read: u64,
+        /// Tokens written to the prompt cache this turn
+        /// (`cache_creation_input_tokens`).
+        created: u64,
+    },
+    /// No warm reuse observed: a cold prefill (cache write only, or native
+    /// degraded fork), or no reuse signal at all.
+    Cold,
+}
+
+/// Classify how a turn reused the primed prefix, from the fork attachment and
+/// the turn's prompt-cache usage. Pure so the warm/cold decision is unit-tested
+/// without asserting on log strings.
+///
+/// Precedence:
+/// 1. A native KV fork with a prefix token count → [`PrefixReuse::WarmKv`]
+///    (the llama/qwen path, whose `fork.prefix_tokens` is authoritative).
+/// 2. Otherwise a claude turn reporting `cache_read_input_tokens > 0` →
+///    [`PrefixReuse::WarmCache`] (the hosted prefix cache served it warm).
+/// 3. Otherwise [`PrefixReuse::Cold`] — a cold write (`cache_creation_input_tokens
+///    > 0` with no reads), a degraded fork, or no reuse signal at all.
+pub fn classify_reuse(
+    fork: Option<ForkAttachment>,
+    usage: Option<claude_agent::protocol_translator::CacheUsage>,
+) -> PrefixReuse {
+    if let Some(reused_tokens) = fork.and_then(|f| f.prefix_tokens) {
+        return PrefixReuse::WarmKv { reused_tokens };
+    }
+    if let Some(usage) = usage {
+        let read = usage.cache_read_input_tokens.unwrap_or(0);
+        if read > 0 {
+            return PrefixReuse::WarmCache {
+                read,
+                created: usage.cache_creation_input_tokens.unwrap_or(0),
+            };
+        }
+    }
+    PrefixReuse::Cold
+}
+
+impl PrefixReuse {
+    /// A short human label for the reuse outcome, for log messages.
+    pub fn label(&self) -> &'static str {
+        match self {
+            PrefixReuse::WarmKv { .. } => "warm KV fork",
+            PrefixReuse::WarmCache { .. } => "warm prompt cache",
+            PrefixReuse::Cold => "cold (no reuse)",
+        }
+    }
+
+    /// The native KV reused token count, when this is a [`PrefixReuse::WarmKv`].
+    pub fn reused_tokens(&self) -> Option<u64> {
+        match self {
+            PrefixReuse::WarmKv { reused_tokens } => Some(*reused_tokens),
+            _ => None,
+        }
+    }
+
+    /// The Anthropic prompt-cache read token count, when this is a
+    /// [`PrefixReuse::WarmCache`].
+    pub fn cache_read(&self) -> Option<u64> {
+        match self {
+            PrefixReuse::WarmCache { read, .. } => Some(*read),
+            _ => None,
+        }
+    }
+
+    /// The Anthropic prompt-cache created (cold write) token count, when this is
+    /// a [`PrefixReuse::WarmCache`].
+    pub fn cache_created(&self) -> Option<u64> {
+        match self {
+            PrefixReuse::WarmCache { created, .. } => Some(*created),
+            _ => None,
+        }
+    }
+}
+
+/// Resolve one forked validator task's delivered result into tagged findings.
 ///
 /// A delivered turn is parsed exactly like the monolithic path, after logging
 /// whether the fork was warm (parent state attached — with the reused token
 /// count, so a run's prefill savings are measurable from the log) or degraded
 /// (history cloned, cold prefill). A turn whose FORK failed falls back to the
-/// monolithic fresh-session prompt for the batch — degraded but correct, never
-/// a lost task. Any other failure degrades to zero findings like
+/// monolithic fresh-session prompt for the validator — degraded but correct,
+/// never a lost task. Any other failure degrades to zero findings like
 /// [`collect_task`].
 async fn collect_forked_task(
     delivered: Result<SessionTurnResult, tokio::sync::oneshot::error::RecvError>,
     change_purpose: &str,
     validator: &ValidatorWork,
     ruleset: &RuleSet,
-    batch: &[FileWork],
     files: &[String],
     pool: &AgentPool,
 ) -> Result<Vec<Finding>, ()> {
     let name = validator.validator_name.as_str();
     match delivered {
         Ok(Ok(turn)) => {
-            match turn.fork {
-                Some(fork) if fork.state_attached => tracing::info!(
+            let reuse = classify_reuse(turn.fork, turn.cache_usage);
+            tracing::info!(
+                validator = %name,
+                files = ?files,
+                session = %turn.session_id,
+                reuse = reuse.label(),
+                reused_tokens = ?reuse.reused_tokens(),
+                cache_read_input_tokens = ?reuse.cache_read(),
+                cache_creation_input_tokens = ?reuse.cache_created(),
+                "fleet task prefix reuse"
+            );
+            if matches!(reuse, PrefixReuse::Cold) {
+                tracing::warn!(
                     validator = %name,
                     files = ?files,
                     session = %turn.session_id,
-                    reused_tokens = ?fork.prefix_tokens,
-                    "fleet task ran on a warm fork of the primed prefix session"
-                ),
-                _ => tracing::warn!(
-                    validator = %name,
-                    files = ?files,
-                    session = %turn.session_id,
-                    "fleet task fork was degraded (no parent state attached); proceeding cold"
-                ),
+                    "fleet task fork was degraded (no warm prefix reuse); proceeding cold"
+                );
             }
             parse_task_response(&turn.content, name, files)
         }
@@ -514,7 +614,7 @@ async fn collect_forked_task(
                 error = %message,
                 "fleet task fork failed; falling back to a monolithic fresh-session prompt"
             );
-            let prompt = render_fleet_prompt(change_purpose, validator, ruleset, batch);
+            let prompt = render_fleet_prompt(change_purpose, validator, ruleset);
             collect_task(pool.submit(prompt).await, name, files)
         }
         Ok(Err(err)) => {
@@ -522,7 +622,7 @@ async fn collect_forked_task(
                 validator = %name,
                 files = ?files,
                 error = %err,
-                "fleet task failed; yielding zero findings for this batch"
+                "fleet task failed; yielding zero findings for this validator"
             );
             Err(())
         }
@@ -542,9 +642,10 @@ async fn collect_forked_task(
 /// Returns `Ok(findings)` for a task that delivered a parseable response (the
 /// findings may legitimately be empty), and `Err(())` for any failure — a task
 /// error, a dropped channel, or a response that did not parse. A failure is
-/// logged and degrades the batch to zero findings (one bad task never aborts the
-/// rest); the `Err` lets the caller tally it as failed rather than silently
-/// conflating it with a clean batch.
+/// logged and degrades the validator to zero findings (one bad task never aborts
+/// the rest); the `Err` lets the caller tally it as failed rather than silently
+/// conflating it with a clean validator. `files` are the validator's files the
+/// failure is attributed to in the log.
 fn collect_task(
     delivered: Result<crate::validators::PromptResult, tokio::sync::oneshot::error::RecvError>,
     validator: &str,
@@ -557,7 +658,7 @@ fn collect_task(
                 validator = %validator,
                 files = ?files,
                 error = %err,
-                "fleet task failed; yielding zero findings for this batch"
+                "fleet task failed; yielding zero findings for this validator"
             );
             return Err(());
         }
@@ -571,6 +672,18 @@ fn collect_task(
         }
     };
 
+    // A monolithic task runs on a fresh session (no fork), so any reuse is
+    // hosted-cache only; classify with `fork = None` and log it so the cold
+    // fallback path also reports cache usage.
+    let reuse = classify_reuse(None, response.cache_usage);
+    tracing::info!(
+        validator = %validator,
+        files = ?files,
+        reuse = reuse.label(),
+        cache_read_input_tokens = ?reuse.cache_read(),
+        cache_creation_input_tokens = ?reuse.cache_created(),
+        "fleet monolithic task prefix reuse"
+    );
     parse_task_response(&response.content, validator, files)
 }
 
@@ -605,24 +718,21 @@ fn tag_findings(mut findings: Vec<Finding>, validator: &str) -> Vec<Finding> {
     findings
 }
 
-/// How many batches `file_count` files split into at `batch_size` per batch.
-fn batch_count(file_count: usize, batch_size: usize) -> usize {
-    file_count.div_ceil(batch_size.max(1))
-}
-
-/// Render the fan-out prompt for one `(validator, batch-of-files)` task — the
-/// monolithic fallback shape (one fresh session, everything in one prompt).
+/// Render the fan-out prompt for one validator task — the monolithic fallback
+/// shape (one fresh session, everything for the validator in one prompt).
 ///
-/// The payload is assembled directly from the structured stage-1 data — there is
-/// no template engine. The three sections are, in order: the change purpose, the
-/// validator's instructions (mandate + rule bodies + severity default + the
-/// output contract), and one self-contained block per file in the batch (path +
-/// semantic diff + bounded source slice + probe evidence).
+/// Self-contained and scoped exactly as the old per-validator prompt was: the
+/// change purpose, that validator's own files (path + semantic diff + bounded
+/// source slice + probe evidence), and the validator's instructions (mandate +
+/// every rule body + severity default + output contract). It is the cold fallback
+/// when priming or this validator's fork fails — correct, just not warm.
 ///
-/// The warm path splits the same bytes across two turns instead:
-/// [`render_validator_prefix`] (the first two sections, primed once per
-/// validator) and [`render_file_payload`] (the third, sent on each fork). This
-/// function composes from the identical pieces, so the two paths never drift.
+/// The warm path splits the run's large shared content into the run prime
+/// ([`render_run_prime`], every file, primed once) and per-validator forks
+/// ([`render_validator_suffix`], one full ruleset each). The fallback re-renders
+/// both halves for the validator in one prompt, so a degraded task is
+/// byte-for-byte the same review of the validator against its files — only the
+/// session reuse differs.
 ///
 /// `validator` is the work-list entry (its name and the file work); `ruleset` is
 /// the same validator's loaded [`RuleSet`], the authoritative source of the
@@ -631,75 +741,67 @@ pub fn render_fleet_prompt(
     change_purpose: &str,
     validator: &ValidatorWork,
     ruleset: &RuleSet,
-    files: &[FileWork],
-) -> String {
-    let mut out = render_shared_sections(change_purpose, validator, ruleset);
-    out.push_str(&render_file_payload(files));
-    out
-}
-
-/// The sentence the prime turn ends with: an explicit completed-turn handoff so
-/// the parent session's end-of-turn KV snapshot lands exactly at the boundary
-/// every fork's payload prompt continues from.
-///
-/// Crate-visible so the scripted test agent (`review::test_support`) recognizes
-/// prime turns by this exact constant rather than a re-typed fragment — the
-/// handoff wording changes in exactly one place.
-pub(crate) const PRIME_HANDOFF: &str =
-    "Reply with exactly OK. The files to review arrive in the next message.\n";
-
-/// Render the shared per-validator prompt prefix the prime turn decodes once:
-/// the change purpose + the validator's instructions (mandate, rule bodies,
-/// severity default, output contract), ending with [`PRIME_HANDOFF`].
-///
-/// The render is a pure function of its inputs — byte-stable across calls — so
-/// every batch fork of the primed session shares the exact prefix bytes the
-/// parent decoded, and the fork's first decode reuses the full saved state.
-pub fn render_validator_prefix(
-    change_purpose: &str,
-    validator: &ValidatorWork,
-    ruleset: &RuleSet,
-) -> String {
-    let mut out = render_shared_sections(change_purpose, validator, ruleset);
-    out.push_str(PRIME_HANDOFF);
-    out
-}
-
-/// Render the per-batch payload a forked session is prompted with: ONLY the
-/// file blocks (path + semantic diff + bounded source slice + probe evidence).
-/// The rules and contract are already in the fork's inherited prefix.
-pub fn render_file_payload(files: &[FileWork]) -> String {
-    let mut out = String::new();
-    out.push_str("# Files under review\n\n");
-    for file in files {
-        render_file_block(&mut out, file);
-    }
-    out
-}
-
-/// Render the sections every prompt shape shares: the change purpose followed by
-/// the validator's instructions. Both the monolithic prompt and the primed
-/// prefix are built on these exact bytes.
-fn render_shared_sections(
-    change_purpose: &str,
-    validator: &ValidatorWork,
-    ruleset: &RuleSet,
 ) -> String {
     let mut out = String::new();
     out.push_str("# Change purpose\n\n");
     out.push_str(change_purpose.trim());
     out.push_str("\n\n");
-    render_validator_instructions(&mut out, validator, ruleset);
+    out.push_str(&render_file_payload(&validator.files));
+    out.push_str(&render_validator_suffix(validator, ruleset));
     out
 }
 
-/// Append the validator-instructions section: mandate, rule bodies, severity
-/// default, and the finding output contract.
-fn render_validator_instructions(out: &mut String, validator: &ValidatorWork, ruleset: &RuleSet) {
+/// The sentence the prime turn ends with: an explicit completed-turn handoff so
+/// the parent session's end-of-turn KV snapshot lands exactly at the boundary
+/// every fork's validator prompt continues from.
+///
+/// Crate-visible so the scripted test agent (`review::test_support`) recognizes
+/// prime turns by this exact constant rather than a re-typed fragment — the
+/// handoff wording changes in exactly one place.
+pub(crate) const PRIME_HANDOFF: &str =
+    "Reply with exactly OK. The rules to review against arrive in the next message.\n";
+
+/// Render the run's shared primed prefix the prime turn decodes ONCE per review
+/// run: the change purpose + every distinct file under review (path + semantic
+/// diff + bounded source slice + probe evidence), ending with [`PRIME_HANDOFF`].
+///
+/// This is the large content shared across every validator — the diffs are primed
+/// and cached once, never re-sent per validator. It carries NO validator-specific
+/// text; the validator's rules arrive on each fork as [`render_validator_suffix`].
+/// Files are de-duplicated by path (a file matched by several validators is
+/// inlined once), so the prime stays a single rendering of the whole change.
+///
+/// The render is a pure function of its inputs — byte-stable across calls — so
+/// every validator fork of the primed session shares the exact prefix bytes the
+/// parent decoded, and the fork's first decode reuses the full saved state.
+pub fn render_run_prime(work: &WorkList) -> String {
+    let mut out = String::new();
+    out.push_str("# Change purpose\n\n");
+    out.push_str(work.change_purpose.trim());
+    out.push_str("\n\n");
+    let distinct: Vec<FileWork> = work.distinct_files().cloned().collect();
+    out.push_str(&render_file_payload(&distinct));
+    out.push_str(PRIME_HANDOFF);
+    out
+}
+
+/// Render the per-validator suffix a forked session is prompted with: the
+/// validator header, mandate, the files this validator must focus on, every one
+/// of the validator's rule bodies, the severity default, and the output contract.
+/// The files' contents are already in the fork's inherited prime; only their
+/// paths are named here so the validator stays scoped to its matched files (not
+/// every file in the prime), without re-sending any diff.
+///
+/// Always non-empty: it carries at least the rule bodies and the output contract,
+/// so a fork turn never degenerates to a full reprocess (`lcp == new_len`).
+pub fn render_validator_suffix(validator: &ValidatorWork, ruleset: &RuleSet) -> String {
+    let mut out = String::new();
     let _ = writeln!(out, "# Validator: {}\n", validator.validator_name);
     out.push_str("## Mandate\n\n");
     out.push_str(ruleset.description().trim());
     out.push_str("\n\n");
+
+    render_focus_files(&mut out, &validator.files);
 
     out.push_str("## Rules\n\n");
     for rule in &ruleset.rules {
@@ -716,6 +818,34 @@ fn render_validator_instructions(out: &mut String, validator: &ValidatorWork, ru
 
     out.push_str(OUTPUT_CONTRACT);
     out.push('\n');
+    out
+}
+
+/// Append the "files in scope for this validator" list: the paths of the
+/// validator's matched files. The contents are in the inherited prime; this just
+/// scopes the validator to those files so it does not flag files another
+/// validator matched.
+fn render_focus_files(out: &mut String, files: &[FileWork]) {
+    out.push_str(
+        "## Files in scope\n\nReview the change against the rules below, focusing on these \
+         files (their full contents are already provided above):\n\n",
+    );
+    for file in files {
+        let _ = writeln!(out, "- `{}`", file.path);
+    }
+    out.push('\n');
+}
+
+/// Render the file payload — one self-contained block per file (path + semantic
+/// diff + bounded source slice + probe evidence). Used by the run prime (every
+/// distinct file) and the monolithic fallback (one validator's files).
+pub fn render_file_payload(files: &[FileWork]) -> String {
+    let mut out = String::new();
+    out.push_str("# Files under review\n\n");
+    for file in files {
+        render_file_block(&mut out, file);
+    }
+    out
 }
 
 /// The validator's default severity as the `blocker`/`warning`/`nit` word the
@@ -745,8 +875,8 @@ fn severity_default(severity: Severity) -> &'static str {
 const OUTPUT_CONTRACT: &str = "\
 ## Reading files
 
-The changed files under review are already provided in full below — their \
-COMPLETE current contents are inlined, so do NOT `read_file` (or `glob`/`grep`) \
+The changed files under review are already provided in full — their \
+COMPLETE current contents are inlined above, so do NOT `read_file` (or `glob`/`grep`) \
 the changed files; you already have them. `read_file`/`glob`/`grep` remain \
 available, but only for OTHER files: cross-file duplication evidence, a changed \
 symbol's callers, or a type defined elsewhere. Reach for them only when a \
@@ -847,8 +977,14 @@ mod tests {
         Rule, RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch,
     };
     use crate::validators::{PoolConfig, ValidatorLoader, ValidatorSource};
+    use claude_agent::protocol_translator::CacheUsage;
 
     // ---- fixtures --------------------------------------------------------
+
+    /// The 1-based source line every scripted finding fixture points at. The
+    /// exact value is immaterial to these tests (none assert on the line); naming
+    /// it keeps the fixtures from sprinkling an unexplained literal.
+    const TEST_FINDING_LINE: u32 = 42;
 
     /// A RuleSet whose mandate (description) and rule bodies are distinctive so
     /// the rendered prompt can be asserted against them verbatim.
@@ -975,10 +1111,30 @@ mod tests {
         )
     }
 
+    /// Run the fleet and then release its shared-prime pin, exactly as
+    /// `run_review` drives the prime lifecycle (fan-out primes once, the caller
+    /// unpins when the run drains). The returned outcome has its `prime` cleared
+    /// so the orchestrator tests can assert the full pin→unpin cycle while the
+    /// pool/connection is still live.
+    async fn run_fleet_and_unpin(
+        work: &WorkList,
+        loader: &ValidatorLoader,
+        pool: &AgentPool,
+    ) -> FleetOutcome {
+        let outcome = run_fleet(work, loader, pool, FleetConfig::default()).await;
+        if let Some(guard) = outcome.prime {
+            unpin_prefix_session(guard).await;
+        }
+        FleetOutcome {
+            prime: None,
+            ..outcome
+        }
+    }
+
     // ---- renderer tests (pure) -------------------------------------------
 
     #[test]
-    fn prompt_contains_change_purpose_mandate_rules_and_output_contract() {
+    fn monolithic_prompt_contains_change_purpose_mandate_rules_and_output_contract() {
         let rs = ruleset(
             "deduplicate",
             "DEDUP_MANDATE: never copy-paste logic.",
@@ -992,7 +1148,10 @@ mod tests {
             vec![file_work("src/a.rs", "alpha", "src/x.rs")],
         );
 
-        let prompt = render_fleet_prompt("PURPOSE: scaffolding the parser.", &vw, &rs, &vw.files);
+        // The monolithic fallback for one validator: change purpose + the
+        // validator's files + the validator's instructions (its full ruleset),
+        // all in one self-contained prompt.
+        let prompt = render_fleet_prompt("PURPOSE: scaffolding the parser.", &vw, &rs);
 
         assert!(
             prompt.contains("PURPOSE: scaffolding the parser."),
@@ -1006,6 +1165,9 @@ mod tests {
             prompt.contains("RULE_BODY: extract shared helpers verbatim."),
             "rule body must appear verbatim: {prompt}"
         );
+        // The validator's file is inlined (the cold fallback is self-contained).
+        assert!(prompt.contains("## File: src/a.rs"), "{prompt}");
+        assert!(prompt.contains("// slice for src/a.rs"), "{prompt}");
         // Output contract: the four load-bearing finding fields.
         assert!(prompt.contains("`rule`"), "{prompt}");
         assert!(prompt.contains("`claim`"), "{prompt}");
@@ -1016,22 +1178,33 @@ mod tests {
     }
 
     #[test]
-    fn prompt_renders_the_files_probe_evidence_and_excludes_other_files() {
-        let rs = ruleset("deduplicate", "mandate", &[("r", "rule body")]);
-        let vw = validator_work(
+    fn monolithic_prompt_renders_all_of_the_validators_rules() {
+        // A multi-rule validator: the per-validator monolithic prompt carries
+        // EVERY one of the validator's rules.
+        let rs = ruleset(
             "deduplicate",
-            vec![
-                file_work("src/a.rs", "alpha", "src/dup_of_a.rs"),
-                file_work("src/b.rs", "beta", "src/dup_of_b.rs"),
+            "mandate",
+            &[
+                ("no-copy-paste", "FIRST_RULE_BODY"),
+                ("prefer-reuse", "SECOND_RULE_BODY"),
             ],
         );
+        let vw = validator_work(
+            "deduplicate",
+            vec![file_work("src/a.rs", "alpha", "src/dup_of_a.rs")],
+        );
 
-        // Render a batch of JUST the first file.
-        let prompt = render_fleet_prompt("purpose", &vw, &rs, &vw.files[..1]);
+        let prompt = render_fleet_prompt("purpose", &vw, &rs);
 
-        // This file's path, symbol, slice, and probe evidence are present.
-        assert!(prompt.contains("src/a.rs"), "{prompt}");
-        assert!(prompt.contains("alpha"), "{prompt}");
+        assert!(
+            prompt.contains("FIRST_RULE_BODY"),
+            "the validator's first rule body must appear: {prompt}"
+        );
+        assert!(
+            prompt.contains("SECOND_RULE_BODY"),
+            "the validator's second rule body must also appear: {prompt}"
+        );
+        // The validator's file, slice, and probe evidence are present.
         assert!(prompt.contains("// slice for src/a.rs"), "{prompt}");
         assert!(
             prompt.contains("probe `duplicates`"),
@@ -1039,79 +1212,121 @@ mod tests {
         );
         assert!(prompt.contains("src/dup_of_a.rs:88"), "{prompt}");
         assert!(prompt.contains("@ 0.94"), "{prompt}");
-
-        // The OTHER file's content is excluded from this task's prompt.
-        assert!(
-            !prompt.contains("src/b.rs"),
-            "other file must be excluded: {prompt}"
-        );
-        assert!(
-            !prompt.contains("beta"),
-            "other file's symbol must be excluded: {prompt}"
-        );
-        assert!(!prompt.contains("src/dup_of_b.rs"), "{prompt}");
     }
 
+    /// The run prime carries the change + every diff and NOT any validator text;
+    /// the per-validator suffix carries that validator's full ruleset and NOT any
+    /// file content. Both renders are byte-stable so every fork shares the exact
+    /// primed prefix.
     #[test]
-    fn prefix_and_payload_split_is_byte_stable_and_composes_the_monolithic_prompt() {
+    fn run_prime_holds_change_and_diffs_only_and_validator_suffix_holds_the_full_ruleset() {
         let rs = ruleset(
             "deduplicate",
             "DEDUP_MANDATE: never copy-paste logic.",
-            &[("no-copy-paste", "RULE_BODY: extract shared helpers.")],
+            &[
+                ("no-copy-paste", "RULE_BODY: extract shared helpers."),
+                ("prefer-reuse", "OTHER_RULE_BODY: reuse first."),
+            ],
         );
         let vw = validator_work(
             "deduplicate",
             vec![file_work("src/a.rs", "alpha", "src/x.rs")],
         );
+        let work = WorkList {
+            change_purpose: "PURPOSE: scaffolding the parser.".to_string(),
+            validators: vec![vw.clone()],
+        };
 
         // Byte-stable: two renders of the same inputs are identical, so every
-        // fork shares the exact prefix the prime turn decoded.
-        let prefix = render_validator_prefix("purpose", &vw, &rs);
+        // validator fork shares the exact prefix the prime turn decoded.
+        let prime = render_run_prime(&work);
         assert_eq!(
-            prefix,
-            render_validator_prefix("purpose", &vw, &rs),
-            "the prefix render must be byte-stable across calls"
+            prime,
+            render_run_prime(&work),
+            "the run prime render must be byte-stable across calls"
         );
-        let payload = render_file_payload(&vw.files);
-        assert_eq!(payload, render_file_payload(&vw.files));
+        let suffix = render_validator_suffix(&vw, &rs);
+        assert_eq!(suffix, render_validator_suffix(&vw, &rs));
 
-        // The prefix carries the shared sections and ends with the prime
-        // handoff — a completed turn whose KV lands where continuations begin.
-        assert!(prefix.contains("DEDUP_MANDATE"), "{prefix}");
-        assert!(prefix.contains("RULE_BODY"), "{prefix}");
-        assert!(prefix.contains("## Output contract"), "{prefix}");
+        // The PRIME carries the change purpose and the file diff/source, ending
+        // with the handoff — and carries NO validator text or contract.
         assert!(
-            prefix.ends_with(PRIME_HANDOFF),
-            "the prefix must end with the prime handoff: {prefix}"
+            prime.contains("PURPOSE: scaffolding the parser."),
+            "{prime}"
+        );
+        assert!(prime.contains("# Files under review"), "{prime}");
+        assert!(prime.contains("## File: src/a.rs"), "{prime}");
+        assert!(prime.contains("// slice for src/a.rs"), "{prime}");
+        assert!(prime.contains("probe `duplicates`"), "{prime}");
+        assert!(
+            prime.ends_with(PRIME_HANDOFF),
+            "the prime must end with the prime handoff: {prime}"
         );
         assert!(
-            !prefix.contains("# Files under review"),
-            "the prefix must not carry any file payload: {prefix}"
-        );
-        // The cached/primed prefix must not carry the per-file source — that
-        // (now full-file) content lives only in the forked payload, so the
-        // shared prefix bytes (and their cache) are unaffected by file size.
-        assert!(
-            !prefix.contains("// slice for src/a.rs") && !prefix.contains("fn alpha"),
-            "the prefix must not carry the file's source contents: {prefix}"
+            !prime.contains("DEDUP_MANDATE")
+                && !prime.contains("RULE_BODY")
+                && !prime.contains("## Output contract"),
+            "the prime must carry NO validator text or contract: {prime}"
         );
 
-        // The payload carries ONLY the file blocks — no rules, no contract.
-        assert!(payload.starts_with("# Files under review"), "{payload}");
-        assert!(payload.contains("## File: src/a.rs"), "{payload}");
-        assert!(!payload.contains("## Mandate"), "{payload}");
-        assert!(!payload.contains("## Output contract"), "{payload}");
+        // The SUFFIX carries the validator + mandate + EVERY rule + contract,
+        // and NOT the file's source contents (those live in the prime).
+        assert!(suffix.contains("# Validator: deduplicate"), "{suffix}");
+        assert!(suffix.contains("DEDUP_MANDATE"), "{suffix}");
+        assert!(
+            suffix.contains("RULE_BODY") && suffix.contains("OTHER_RULE_BODY"),
+            "the suffix must carry ALL of the validator's rules: {suffix}"
+        );
+        assert!(suffix.contains("## Output contract"), "{suffix}");
+        // The suffix names the focus file (path only) but never re-sends its
+        // source — the cached prime already has it.
+        assert!(
+            suffix.contains("`src/a.rs`"),
+            "the suffix must name the focus file path: {suffix}"
+        );
+        assert!(
+            !suffix.contains("// slice for src/a.rs"),
+            "the suffix must NOT re-send the file's source: {suffix}"
+        );
+        // Non-empty by construction — a fork turn never degenerates to a full
+        // reprocess.
+        assert!(
+            !suffix.is_empty(),
+            "the per-validator suffix must be non-empty"
+        );
 
-        // The monolithic fallback prompt is exactly the shared sections (the
-        // prefix minus the handoff) followed by the payload.
-        let monolithic = render_fleet_prompt("purpose", &vw, &rs, &vw.files);
-        let shared = prefix
-            .strip_suffix(PRIME_HANDOFF)
-            .expect("prefix ends with the handoff");
+        // The monolithic fallback for the validator is self-contained: change +
+        // validator's files + the validator suffix (path-scoped, contract, all
+        // rules).
+        let monolithic = render_fleet_prompt(&work.change_purpose, &vw, &rs);
+        assert!(
+            monolithic.contains("PURPOSE: scaffolding the parser."),
+            "{monolithic}"
+        );
+        assert!(monolithic.contains("## File: src/a.rs"), "{monolithic}");
+        assert!(monolithic.contains("// slice for src/a.rs"), "{monolithic}");
+        assert!(monolithic.contains("RULE_BODY"), "{monolithic}");
+        assert!(monolithic.contains("OTHER_RULE_BODY"), "{monolithic}");
+        assert!(monolithic.ends_with(&suffix), "{monolithic}");
+    }
+
+    /// The run prime de-duplicates files matched by several validators: a file
+    /// in two validators' work appears ONCE in the cached prefix.
+    #[test]
+    fn run_prime_dedups_files_shared_across_validators() {
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![
+                validator_work("val-a", vec![file_work("src/shared.rs", "s", "src/x.rs")]),
+                validator_work("val-b", vec![file_work("src/shared.rs", "s", "src/x.rs")]),
+            ],
+        };
+
+        let prime = render_run_prime(&work);
         assert_eq!(
-            monolithic,
-            format!("{shared}{payload}"),
-            "monolithic prompt must compose from the same shared sections + payload"
+            prime.matches("## File: src/shared.rs").count(),
+            1,
+            "a file matched by two validators is inlined once in the prime: {prime}"
         );
     }
 
@@ -1192,24 +1407,14 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         assert_eq!(severity_default(Severity::Info), "nit");
     }
 
-    // ---- batching tests (pure) -------------------------------------------
-
-    #[test]
-    fn batch_count_packs_files_into_bounded_batches() {
-        assert_eq!(batch_count(0, 4), 0);
-        assert_eq!(batch_count(1, 4), 1);
-        assert_eq!(batch_count(4, 4), 1);
-        assert_eq!(batch_count(5, 4), 2);
-        assert_eq!(batch_count(8, 4), 2);
-        assert_eq!(batch_count(9, 4), 3);
-        // A zero batch size is clamped to 1 (one task per file), never a panic.
-        assert_eq!(batch_count(3, 0), 3);
-    }
-
     // ---- orchestrator tests (scripted mock agent) ------------------------
 
     #[tokio::test]
-    async fn fan_out_two_validators_two_files_submits_at_most_four_tasks() {
+    async fn fan_out_two_validators_two_files_submits_one_prime_and_one_fork_per_validator() {
+        // Two validators over the same two files. Under the new grain — fork per
+        // VALIDATOR, files in the shared prime — the run primes ONCE and forks ONE
+        // task per validator: 2 validators = 2 forks, regardless of how many files
+        // each validator reviews or how many rules it carries.
         let rs_a = ruleset("val-a", "mandate a", &[("ra", "body a")]);
         let rs_b = ruleset("val-b", "mandate b", &[("rb", "body b")]);
         let loader = loader_with(vec![rs_a, rs_b]);
@@ -1234,40 +1439,57 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
             ],
         };
 
-        // Script: a finding for val-a on src/a.rs, a finding for val-b on
-        // src/b.rs, empty for the rest (matched by validator + file in prompt).
+        // Script: a finding for each validator. The fork inherits the shared
+        // prime (all files) and appends the validator suffix carrying the
+        // validator header, so we key on that header.
         let agent = forking_agent(vec![
             (
                 "# Validator: val-a".to_string() + "\n\n## Mandate",
-                ScriptedReply::Text(findings_json("src/a.rs", 42, "ra", "warning", "dup in a")),
+                ScriptedReply::Text(findings_json(
+                    "src/a.rs",
+                    TEST_FINDING_LINE,
+                    "ra",
+                    "warning",
+                    "dup in a",
+                )),
             ),
             (
                 "# Validator: val-b".to_string() + "\n\n## Mandate",
-                ScriptedReply::Text(findings_json("src/b.rs", 42, "rb", "warning", "dup in b")),
+                ScriptedReply::Text(findings_json(
+                    "src/b.rs",
+                    TEST_FINDING_LINE,
+                    "rb",
+                    "warning",
+                    "dup in b",
+                )),
             ),
         ]);
         let agent_probe = Arc::clone(&agent);
 
-        // batch_size=1 → file-grain: 2 validators × 2 files = 4 tasks (plus one
-        // prefix prime per validator).
         let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 })
+            run_fleet(&work, &loader, &pool, FleetConfig::default())
                 .await
                 .findings
         })
         .await;
 
         let seen = agent_probe.seen_prompts();
-        let payloads = seen
+        // Exactly ONE shared prime for the whole run (not one per validator).
+        let primes = seen.iter().filter(|p| p.contains(PRIME_HANDOFF)).count();
+        assert_eq!(
+            primes, 1,
+            "the run primes the shared prefix exactly once: {seen:#?}"
+        );
+        // One forked validator task per validator: 2 validators = 2 forks.
+        let validator_tasks = seen
             .iter()
-            .filter(|p| p.starts_with("# Files under review"))
+            .filter(|p| p.starts_with("# Validator:"))
             .count();
         assert_eq!(
-            payloads, 4,
-            "2 validators × 2 files at batch_size 1 = 4 payload tasks: {seen:#?}"
+            validator_tasks, 2,
+            "one forked task per validator: {seen:#?}"
         );
-        let primes = seen.iter().filter(|p| p.contains(PRIME_HANDOFF)).count();
-        assert_eq!(primes, 2, "one prefix prime per validator: {seen:#?}");
+        assert_eq!(agent_probe.fork_count(), 2, "one fork per validator task");
 
         // Every finding is tagged with its validator (overriding the agent's
         // self-reported `ignored-by-agent`), and the rule tag survives.
@@ -1290,11 +1512,22 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
     }
 
     #[tokio::test]
-    async fn many_small_files_collapse_into_fewer_batched_tasks() {
-        let rs = ruleset("val", "mandate", &[("r", "body")]);
+    async fn multi_rule_validator_forks_one_task_carrying_all_rules_against_one_prime() {
+        // One validator with three rules over ten files. The files all live in
+        // the single shared prime; the fan-out is per VALIDATOR, so this mints
+        // exactly one prime + ONE validator fork carrying ALL THREE rules — never
+        // per-rule, per-file, or per-batch.
+        let rs = ruleset(
+            "val",
+            "mandate",
+            &[
+                ("r1", "RULE1_MARKER body 1"),
+                ("r2", "RULE2_MARKER body 2"),
+                ("r3", "RULE3_MARKER body 3"),
+            ],
+        );
         let loader = loader_with(vec![rs]);
 
-        // 10 files for one validator.
         let files: Vec<FileWork> = (0..10)
             .map(|i| file_work(&format!("src/f{i}.rs"), &format!("sym{i}"), "src/x.rs"))
             .collect();
@@ -1306,55 +1539,49 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         let agent = forking_agent(vec![]);
         let agent_probe = Arc::clone(&agent);
 
-        // batch_size=4 → 10 files collapse into ceil(10/4) = 3 tasks.
-        let _findings = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 4 }).await
+        let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
+            run_fleet(&work, &loader, &pool, FleetConfig::default()).await
         })
         .await;
 
         let seen = agent_probe.seen_prompts();
-        let payloads: Vec<&String> = seen
+        let primes = seen.iter().filter(|p| p.contains(PRIME_HANDOFF)).count();
+        assert_eq!(primes, 1, "one shared prime for the whole run: {seen:#?}");
+        let validator_tasks = seen
             .iter()
-            .filter(|p| p.starts_with("# Files under review"))
-            .collect();
+            .filter(|p| p.starts_with("# Validator:"))
+            .count();
         assert_eq!(
-            payloads.len(),
-            3,
-            "10 small files at batch_size 4 collapse into 3 tasks, not 10: {seen:#?}"
+            validator_tasks, 1,
+            "one validator → one forked validator task (not three rule tasks, not ten file tasks): {seen:#?}"
         );
-        // Each batched task carries multiple files (the grain stays the file:
-        // each is its own block, the batch just packs them).
-        let file_blocks = payloads[0].matches("## File: ").count();
-        assert_eq!(file_blocks, 4, "the first batch packs 4 file blocks");
-    }
+        assert_eq!(outcome.attempted, 1, "one validator task attempted");
 
-    #[tokio::test]
-    #[tracing_test::traced_test]
-    async fn batching_applied_is_logged() {
-        let rs = ruleset("val", "mandate", &[("r", "body")]);
-        let loader = loader_with(vec![rs]);
-
-        let files: Vec<FileWork> = (0..5)
-            .map(|i| file_work(&format!("src/f{i}.rs"), &format!("sym{i}"), "src/x.rs"))
-            .collect();
-        let work = WorkList {
-            change_purpose: "purpose".to_string(),
-            validators: vec![validator_work("val", files)],
-        };
-
-        let agent = forking_agent(vec![]);
-        let _findings = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 2 }).await
-        })
-        .await;
-
-        // The fan-out logs the batching it applied: 5 files at batch_size 2 → 3
-        // batches, attributed to the validator.
-        assert!(logs_contain(
-            "fleet fan-out: batching files into agent tasks"
-        ));
-        assert!(logs_contain("batches=3"));
-        assert!(logs_contain("batch_size=2"));
+        // The single prime carries ALL ten files' diffs; the validator fork
+        // carries every rule of the validator (no file content re-sent).
+        let prime = seen
+            .iter()
+            .find(|p| p.contains(PRIME_HANDOFF))
+            .expect("the run prime");
+        assert_eq!(
+            prime.matches("## File: ").count(),
+            10,
+            "the shared prime inlines every file once: {prime}"
+        );
+        let validator_suffix = seen
+            .iter()
+            .find(|p| p.starts_with("# Validator:"))
+            .expect("a validator fork");
+        assert!(
+            validator_suffix.contains("RULE1_MARKER")
+                && validator_suffix.contains("RULE2_MARKER")
+                && validator_suffix.contains("RULE3_MARKER"),
+            "the validator fork must carry ALL of its rules: {validator_suffix}"
+        );
+        assert!(
+            !validator_suffix.contains("## File: "),
+            "a validator fork must NOT re-send file content (it is in the prime): {validator_suffix}"
+        );
     }
 
     #[tokio::test]
@@ -1392,11 +1619,16 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
 
     #[tokio::test]
     #[tracing_test::traced_test]
-    async fn prefix_is_primed_once_per_validator_and_batches_fork_payload_only() {
+    async fn prefix_is_primed_once_per_run_and_validators_fork_suffix_only() {
+        // One validator, two rules, over four files. The new grain: the change +
+        // every file diff is primed ONCE for the whole run, and each VALIDATOR
+        // forks it sending only its validator suffix (its full ruleset). So: 1
+        // prime + 1 validator fork carrying BOTH rules, never one fork per rule
+        // and never one fork per file/batch.
         let rs = ruleset(
             "val",
             "MANDATE_MARKER mandate",
-            &[("r", "RULE_MARKER body")],
+            &[("r1", "RULE1_MARKER body"), ("r2", "RULE2_MARKER body")],
         );
         let loader = loader_with(vec![rs]);
 
@@ -1408,23 +1640,32 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
             validators: vec![validator_work("val", files)],
         };
 
-        // The scripted response is keyed on a file in the FIRST batch; the fork
-        // inherits the prefix, so the script context is prefix + payload.
+        // The validator's fork emits a finding. The fork inherits the shared
+        // prime (all files) and appends the validator suffix (which carries the
+        // mandate marker), so we key on that marker.
         let agent = forking_agent(vec![(
-            "## File: src/f0.rs".to_string(),
+            "MANDATE_MARKER".to_string(),
             ScriptedReply::Text(findings_json(
                 "src/f0.rs",
-                42,
-                "r",
+                TEST_FINDING_LINE,
+                "r1",
                 "warning",
                 "warm finding",
             )),
         )]);
         let agent_probe = Arc::clone(&agent);
 
-        // 4 files at batch_size 2 → 1 prime + 2 forked payload tasks.
+        // Drive the prime lifecycle the way `run_review` does: run the fleet,
+        // then release the returned shared-prime guard once the run drains.
         let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 2 }).await
+            let outcome = run_fleet(&work, &loader, &pool, FleetConfig::default()).await;
+            if let Some(guard) = outcome.prime {
+                unpin_prefix_session(guard).await;
+            }
+            FleetOutcome {
+                prime: None,
+                ..outcome
+            }
         })
         .await;
 
@@ -1433,59 +1674,73 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         assert_eq!(
             primes.len(),
             1,
-            "the shared prefix is primed exactly once per validator: {seen:#?}"
+            "the shared prefix is primed exactly once per RUN: {seen:#?}"
+        );
+        // The prime carries the change + every file diff, and NO validator text.
+        assert!(
+            primes[0].contains("# Files under review") && primes[0].contains("## File: src/f0.rs"),
+            "the prime carries the diffs: {}",
+            primes[0]
         );
         assert!(
-            primes[0].contains("MANDATE_MARKER") && primes[0].contains("RULE_MARKER"),
-            "the prime carries the validator's rules: {}",
+            !primes[0].contains("MANDATE_MARKER")
+                && !primes[0].contains("RULE1_MARKER")
+                && !primes[0].contains("RULE2_MARKER"),
+            "the prime must NOT carry any validator text: {}",
             primes[0]
         );
 
-        let payloads: Vec<&String> = seen
+        // One forked task per validator, carrying ONLY its validator suffix (the
+        // validator/mandate/full-ruleset/contract) and never re-sending file
+        // content.
+        let validator_tasks: Vec<&String> = seen
             .iter()
-            .filter(|p| p.starts_with("# Files under review"))
+            .filter(|p| p.starts_with("# Validator:"))
             .collect();
         assert_eq!(
-            payloads.len(),
-            2,
-            "each batch forks the primed session and sends ONLY the payload: {seen:#?}"
+            validator_tasks.len(),
+            1,
+            "the validator forks the primed session and sends ONLY its validator suffix: {seen:#?}"
         );
         assert!(
-            payloads
-                .iter()
-                .all(|p| !p.contains("MANDATE_MARKER") && !p.contains("RULE_MARKER")),
-            "payload prompts must not re-send the rules: {payloads:#?}"
+            validator_tasks.iter().all(|p| !p.contains("## File: ")),
+            "validator forks must not re-send the file diffs: {validator_tasks:#?}"
         );
-        assert_eq!(agent_probe.fork_count(), 2, "one fork per batch");
+        // The single validator fork carries BOTH of the validator's rules.
+        assert!(validator_tasks[0].contains("RULE1_MARKER"));
+        assert!(validator_tasks[0].contains("RULE2_MARKER"));
+        assert_eq!(agent_probe.fork_count(), 1, "one fork per validator");
 
-        assert_eq!(outcome.attempted, 2);
+        assert_eq!(outcome.attempted, 1);
         assert_eq!(outcome.failed, 0);
         assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
         assert_eq!(outcome.findings[0].claim, "warm finding");
         assert_eq!(outcome.findings[0].validator, "val");
 
-        // The prefix state was pinned for the fan-out and unpinned at the end.
+        // The shared prime was pinned for the run and unpinned when it drained.
         assert_eq!(
             agent_probe.pin_calls(),
             vec![("sess-0".to_string(), true), ("sess-0".to_string(), false)],
-            "pin for the fan-out, unpin when the validator's batches complete"
+            "pin the shared prime for the run, unpin when it drains"
         );
 
-        // Observability: each fork task logs the warm reuse and token count.
-        assert!(logs_contain("fleet task ran on a warm fork"));
+        // Observability: each fork task logs the warm reuse and token count,
+        // classified as a warm KV fork (the native llama/qwen path).
+        assert!(logs_contain("fleet task prefix reuse"));
+        assert!(logs_contain("reuse=\"warm KV fork\""));
         assert!(logs_contain(&format!(
             "reused_tokens=Some({MOCK_PREFIX_TOKENS})"
         )));
-        assert!(logs_contain("primed validator prefix session"));
+        assert!(logs_contain("primed shared run prefix session"));
     }
 
-    /// The primed prefix is born pinned through the PRODUCTION prime path:
-    /// `prime_validator_prefix` → `submit_primed` → the prompt's `_meta`
-    /// pin-on-save intent → the agent saving its prefix pinned atomically at
-    /// turn completion — BEFORE any separate `session/pin` confirm runs. This is
-    /// the end-to-end (scripted agent, no real model) assertion for the
-    /// structural close of the prime→pin eviction race: the prefix is never an
-    /// unpinned eviction candidate, independent of any post-turn pin.
+    /// The shared run prime is born pinned through the PRODUCTION prime path:
+    /// `prime_run_prefix` → `submit_primed` → the prompt's `_meta` pin-on-save
+    /// intent → the agent saving its prefix pinned atomically at turn completion
+    /// — BEFORE any separate `session/pin` confirm runs. This is the end-to-end
+    /// (scripted agent, no real model) assertion for the structural close of the
+    /// prime→pin eviction race: the prefix is never an unpinned eviction
+    /// candidate, independent of any post-turn pin.
     #[tokio::test]
     async fn primed_prefix_is_born_pinned_through_the_production_path() {
         let rs = ruleset("val", "mandate", &[("r", "body")]);
@@ -1502,19 +1757,19 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         let agent_probe = Arc::clone(&agent);
 
         with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 2 }).await
+            run_fleet_and_unpin(&work, &loader, &pool).await
         })
         .await;
 
-        // The prefix session the validator primed (`sess-0`) was born pinned by
-        // the prime turn's `_meta` intent — recorded at turn completion, before
-        // the post-turn `session/pin` confirm. Forked batch sessions are NOT
-        // born pinned (they save their own cold state unpinned).
+        // The shared prime session (`sess-0`) was born pinned by the prime turn's
+        // `_meta` intent — recorded at turn completion, before the post-turn
+        // `session/pin` confirm. Forked validator sessions are NOT born pinned
+        // (they save their own cold state unpinned).
         assert_eq!(
             agent_probe.born_pinned_sessions(),
             vec!["sess-0".to_string()],
-            "the primed prefix must be born pinned through the production prime path, \
-             and only the prefix (not the forked batch sessions)"
+            "the run prime must be born pinned through the production prime path, \
+             and only the prime (not the forked validator sessions)"
         );
     }
 
@@ -1534,14 +1789,14 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
             )],
         };
 
-        // Every `session/fork` is rejected; the batch tasks must fall back to
-        // fresh-session monolithic prompts and still deliver their findings.
+        // Every `session/fork` is rejected; the validator task must fall back to
+        // a fresh-session monolithic prompt and still deliver its findings.
         let agent = agent_with_fork_mode(
             vec![(
                 "## File: src/a.rs".to_string(),
                 ScriptedReply::Text(findings_json(
                     "src/a.rs",
-                    42,
+                    TEST_FINDING_LINE,
                     "r",
                     "warning",
                     "found despite fork failure",
@@ -1552,28 +1807,28 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         let agent_probe = Arc::clone(&agent);
 
         let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+            run_fleet_and_unpin(&work, &loader, &pool).await
         })
         .await;
 
-        assert_eq!(outcome.attempted, 2);
+        assert_eq!(outcome.attempted, 1, "one validator task");
         assert_eq!(outcome.failed, 0, "a failed fork is never a lost task");
         assert_eq!(outcome.findings.len(), 1);
         assert_eq!(outcome.findings[0].claim, "found despite fork failure");
 
-        // The fallback prompts are the full monolithic shape (rules + files).
+        // The fallback prompt is the full monolithic shape (rules + files).
         let seen = agent_probe.seen_prompts();
         let monolithic = seen
             .iter()
             .filter(|p| p.contains("## Mandate") && p.contains("# Files under review"))
             .count();
         assert_eq!(
-            monolithic, 2,
-            "each batch fell back to a monolithic prompt: {seen:#?}"
+            monolithic, 1,
+            "the validator fell back to a monolithic prompt: {seen:#?}"
         );
         assert!(logs_contain("falling back to a monolithic"));
 
-        // The prime succeeded, so it was pinned and is still unpinned at the end.
+        // The prime succeeded, so it was pinned and is unpinned when the run drains.
         assert_eq!(
             agent_probe.pin_calls(),
             vec![("sess-0".to_string(), true), ("sess-0".to_string(), false)],
@@ -1597,14 +1852,14 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         };
 
         // The backend implements NO extension methods: the prime turn runs but
-        // its state can never be confirmed, so the whole validator degrades to
-        // monolithic prompts — never a lost task.
+        // its state can never be confirmed, so the whole run degrades to
+        // monolithic per-validator prompts — never a lost task.
         let agent = agent_with_fork_mode(
             vec![(
                 "## File: src/b.rs".to_string(),
                 ScriptedReply::Text(findings_json(
                     "src/b.rs",
-                    42,
+                    TEST_FINDING_LINE,
                     "r",
                     "warning",
                     "found without forks",
@@ -1615,11 +1870,11 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         let agent_probe = Arc::clone(&agent);
 
         let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+            run_fleet_and_unpin(&work, &loader, &pool).await
         })
         .await;
 
-        assert_eq!(outcome.attempted, 2);
+        assert_eq!(outcome.attempted, 1, "one validator task");
         assert_eq!(outcome.failed, 0);
         assert_eq!(outcome.findings.len(), 1);
         assert_eq!(outcome.findings[0].claim, "found without forks");
@@ -1629,7 +1884,7 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
             .iter()
             .filter(|p| p.contains("## Mandate") && p.contains("# Files under review"))
             .count();
-        assert_eq!(monolithic, 2, "{seen:#?}");
+        assert_eq!(monolithic, 1, "{seen:#?}");
         assert_eq!(
             agent_probe.fork_count(),
             0,
@@ -1662,7 +1917,7 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                 "## File: src/a.rs".to_string(),
                 ScriptedReply::Text(findings_json(
                     "src/a.rs",
-                    42,
+                    TEST_FINDING_LINE,
                     "r",
                     "warning",
                     "cold but correct",
@@ -1672,7 +1927,7 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         );
 
         let outcome = with_pool(agent, PoolConfig::local(), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+            run_fleet_and_unpin(&work, &loader, &pool).await
         })
         .await;
 
@@ -1683,39 +1938,105 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         assert!(logs_contain("fleet task fork was degraded"));
     }
 
+    /// The claude backend shape: a fork that attaches no native KV state
+    /// (`fork.prefix_tokens == None`) but whose turn reports Anthropic
+    /// prompt-cache reads. The forked task must resolve through the real
+    /// `collect_forked_task` path without error AND log the warm-cache reuse
+    /// (`classify_reuse` → `WarmCache`), so warm/cold is observable on claude
+    /// even though the native KV reuse log is blind.
     #[tokio::test]
-    async fn prefix_session_is_unpinned_even_when_a_batch_task_errors() {
+    #[tracing_test::traced_test]
+    async fn forked_task_with_claude_cache_usage_logs_warm_cache() {
         let rs = ruleset("val", "mandate", &[("r", "body")]);
         let loader = loader_with(vec![rs]);
         let work = WorkList {
             change_purpose: "purpose".to_string(),
             validators: vec![validator_work(
                 "val",
-                vec![
-                    file_work("src/good.rs", "good", "src/x.rs"),
-                    file_work("src/bad.rs", "bad", "src/y.rs"),
-                ],
+                vec![file_work("src/a.rs", "alpha", "src/x.rs")],
             )],
         };
 
-        // One forked batch task errors; the unpin must still happen.
-        let agent = forking_agent(vec![(
-            "## File: src/bad.rs".to_string(),
-            ScriptedReply::Error,
-        )]);
-        let agent_probe = Arc::clone(&agent);
+        // Forks succeed but attach no native parent state (claude shape:
+        // `prefix_tokens == None`); the turn's `_meta` reports a warm cache read,
+        // which is what makes the reuse observable on claude.
+        let agent = ScriptedAgent::with_config(
+            vec![(
+                "## File: src/a.rs".to_string(),
+                ScriptedReply::Text(findings_json(
+                    "src/a.rs",
+                    TEST_FINDING_LINE,
+                    "r",
+                    "warning",
+                    "warm on claude",
+                )),
+            )],
+            ScriptedAgentConfig {
+                fork_mode: ForkMode::DegradedAttach,
+                cache_usage: Some(CacheUsage {
+                    cache_read_input_tokens: Some(2048),
+                    cache_creation_input_tokens: Some(16),
+                    input_tokens: Some(2064),
+                    output_tokens: Some(40),
+                }),
+                ..ScriptedAgentConfig::default()
+            },
+        );
 
-        let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+        let outcome = with_pool(agent, PoolConfig::local(), move |pool| async move {
+            run_fleet_and_unpin(&work, &loader, &pool).await
         })
         .await;
 
-        assert_eq!(outcome.attempted, 2);
-        assert_eq!(outcome.failed, 1, "the erroring fork task is a failed task");
+        assert_eq!(outcome.attempted, 1);
+        assert_eq!(
+            outcome.failed, 0,
+            "the forked task resolved through collect_forked_task without error"
+        );
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].claim, "warm on claude");
+        assert!(
+            logs_contain("warm prompt cache"),
+            "the warm-cache reuse must be logged so claude reuse is observable"
+        );
+    }
+
+    #[tokio::test]
+    async fn prefix_session_is_unpinned_even_when_a_validator_task_errors() {
+        // Two validators; the second's fork errors. The shared-prime pin must
+        // still be released once the run drains, regardless of a failed validator
+        // task.
+        let rs_ok = ruleset("val-ok", "mandate ok", &[("ok-rule", "OK_BODY")]);
+        let rs_bad = ruleset("val-bad", "mandate bad", &[("bad-rule", "BAD_BODY")]);
+        let loader = loader_with(vec![rs_ok, rs_bad]);
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![
+                validator_work("val-ok", vec![file_work("src/a.rs", "alpha", "src/x.rs")]),
+                validator_work("val-bad", vec![file_work("src/b.rs", "beta", "src/y.rs")]),
+            ],
+        };
+
+        // The `val-bad` fork carries the `bad-rule` body and errors; the `val-ok`
+        // one is empty. One forked validator task errors → the unpin must still
+        // happen.
+        let agent = forking_agent(vec![("BAD_BODY".to_string(), ScriptedReply::Error)]);
+        let agent_probe = Arc::clone(&agent);
+
+        let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
+            run_fleet_and_unpin(&work, &loader, &pool).await
+        })
+        .await;
+
+        assert_eq!(outcome.attempted, 2, "two validator tasks");
+        assert_eq!(
+            outcome.failed, 1,
+            "the erroring validator task is a failed task"
+        );
         assert_eq!(
             agent_probe.pin_calls(),
             vec![("sess-0".to_string(), true), ("sess-0".to_string(), false)],
-            "the prefix pin is released even when a batch task errors"
+            "the prefix pin is released even when a validator task errors"
         );
     }
 
@@ -1735,13 +2056,13 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         panic!("timed out waiting for {what}");
     }
 
-    /// Cancellation-safety regression: a fan-out future dropped mid-collect
+    /// Cancellation-safety regression: a run future dropped mid-collect
     /// (review cancelled, caller timeout) must STILL release the prefix pin —
     /// a pinned session is exempt from cache eviction, so a leaked pin
     /// outlives the review until process restart.
     #[tokio::test]
     async fn prefix_pin_is_released_when_the_fanout_future_is_dropped_mid_collect() {
-        let rs = ruleset("val", "mandate", &[("r", "body")]);
+        let rs = ruleset("val", "mandate", &[("r", "WEDGE_BODY")]);
         let loader = loader_with(vec![rs]);
         let work = WorkList {
             change_purpose: "purpose".to_string(),
@@ -1751,28 +2072,26 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
             )],
         };
 
-        // The payload turn wedges forever, holding the fan-out mid-collect.
-        let agent = forking_agent(vec![(
-            "# Files under review".to_string(),
-            ScriptedReply::Stall,
-        )]);
+        // The validator fork turn wedges forever (its suffix carries the rule
+        // body), holding the fan-out mid-collect AFTER the prime has been pinned.
+        let agent = forking_agent(vec![("WEDGE_BODY".to_string(), ScriptedReply::Stall)]);
         let agent_probe = Arc::clone(&agent);
 
         with_pool(agent, PoolConfig::remote(2), move |pool| async move {
             let fanout = tokio::spawn(async move {
-                run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+                run_fleet(&work, &loader, &pool, FleetConfig::default()).await
             });
 
-            // Wait until the prefix is pinned and the wedged payload fork is
-            // in flight — the fan-out is now mid-collect.
-            wait_for("the prefix pin and the wedged payload fork", || {
+            // Wait until the prefix is pinned and the wedged validator fork is in
+            // flight — the run is now mid-collect.
+            wait_for("the prefix pin and the wedged validator fork", || {
                 agent_probe
                     .pin_calls()
                     .contains(&("sess-0".to_string(), true))
                     && agent_probe
                         .seen_prompts()
                         .iter()
-                        .any(|p| p.starts_with("# Files under review"))
+                        .any(|p| p.starts_with("# Validator:"))
             })
             .await;
 
@@ -1794,30 +2113,30 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
 
     #[tokio::test]
     async fn one_failing_task_yields_zero_findings_without_aborting_the_rest() {
-        let rs = ruleset("val", "mandate", &[("r", "body")]);
-        let loader = loader_with(vec![rs]);
+        // Two validators: the `val-bad` fork errors, the `val-good` fork finds an
+        // issue. One bad validator task never aborts the rest.
+        let rs_good = ruleset("val-good", "mandate good", &[("good-rule", "GOOD_BODY")]);
+        let rs_bad = ruleset("val-bad", "mandate bad", &[("bad-rule", "BAD_BODY")]);
+        let loader = loader_with(vec![rs_good, rs_bad]);
 
         let work = WorkList {
             change_purpose: "purpose".to_string(),
-            validators: vec![validator_work(
-                "val",
-                vec![
-                    file_work("src/good.rs", "good", "src/x.rs"),
-                    file_work("src/bad.rs", "bad", "src/y.rs"),
-                ],
-            )],
+            validators: vec![
+                validator_work("val-good", vec![file_work("src/a.rs", "alpha", "src/x.rs")]),
+                validator_work("val-bad", vec![file_work("src/b.rs", "beta", "src/y.rs")]),
+            ],
         };
 
-        // The task whose prompt mentions src/bad.rs errors; the good one returns
-        // a finding.
+        // The fork carrying `BAD_BODY` errors; the `GOOD_BODY` one returns a
+        // finding. Both keys appear only in their own validator's suffix.
         let agent = forking_agent(vec![
-            ("## File: src/bad.rs".to_string(), ScriptedReply::Error),
+            ("BAD_BODY".to_string(), ScriptedReply::Error),
             (
-                "## File: src/good.rs".to_string(),
+                "GOOD_BODY".to_string(),
                 ScriptedReply::Text(findings_json(
-                    "src/good.rs",
-                    42,
-                    "r",
+                    "src/a.rs",
+                    TEST_FINDING_LINE,
+                    "good-rule",
                     "warning",
                     "real issue",
                 )),
@@ -1825,7 +2144,7 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         ]);
 
         let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+            run_fleet_and_unpin(&work, &loader, &pool).await
         })
         .await;
 
@@ -1836,37 +2155,36 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
             "the failing task degrades to zero findings"
         );
         assert_eq!(outcome.findings[0].claim, "real issue");
-        assert_eq!(outcome.findings[0].validator, "val");
+        assert_eq!(outcome.findings[0].validator, "val-good");
         // The tally records both tasks attempted and exactly the one that failed.
-        assert_eq!(
-            outcome.attempted, 2,
-            "two (validator, file) tasks attempted"
-        );
+        assert_eq!(outcome.attempted, 2, "two validator tasks attempted");
         assert_eq!(outcome.failed, 1, "the erroring task is counted as failed");
     }
 
     #[tokio::test]
     async fn all_tasks_failing_yields_zero_findings_and_a_full_failure_tally() {
-        let rs = ruleset("val", "mandate", &[("r", "body")]);
-        let loader = loader_with(vec![rs]);
+        // Three validators; every validator fork errors.
+        let loader = loader_with(vec![
+            ruleset("val-a", "mandate a", &[("r1", "body 1")]),
+            ruleset("val-b", "mandate b", &[("r2", "body 2")]),
+            ruleset("val-c", "mandate c", &[("r3", "body 3")]),
+        ]);
 
         let work = WorkList {
             change_purpose: "purpose".to_string(),
-            validators: vec![validator_work(
-                "val",
-                vec![
-                    file_work("src/a.rs", "a", "src/x.rs"),
-                    file_work("src/b.rs", "b", "src/y.rs"),
-                    file_work("src/c.rs", "c", "src/z.rs"),
-                ],
-            )],
+            validators: vec![
+                validator_work("val-a", vec![file_work("src/a.rs", "a", "src/x.rs")]),
+                validator_work("val-b", vec![file_work("src/b.rs", "b", "src/y.rs")]),
+                validator_work("val-c", vec![file_work("src/c.rs", "c", "src/z.rs")]),
+            ],
         };
 
-        // Every (validator, file) task errors.
-        let agent = forking_agent(vec![("## File:".to_string(), ScriptedReply::Error)]);
+        // Every validator fork errors (every validator suffix carries the
+        // validator header).
+        let agent = forking_agent(vec![("# Validator:".to_string(), ScriptedReply::Error)]);
 
         let outcome = with_pool(agent, PoolConfig::remote(3), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig { batch_size: 1 }).await
+            run_fleet_and_unpin(&work, &loader, &pool).await
         })
         .await;
 
@@ -1874,7 +2192,7 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
             outcome.findings.is_empty(),
             "every task failed, so there are no findings"
         );
-        assert_eq!(outcome.attempted, 3, "three tasks attempted");
+        assert_eq!(outcome.attempted, 3, "three validator tasks attempted");
         assert_eq!(outcome.failed, 3, "all three failed");
     }
 
@@ -1911,5 +2229,63 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
             agent_probe.seen_prompts().is_empty(),
             "no task is submitted for a validator missing from the loader"
         );
+    }
+
+    // ---- classify_reuse --------------------------------------------------
+
+    /// A native KV fork that attached its parent's saved state with a token
+    /// count classifies as `WarmKv` carrying that count — the llama/qwen path.
+    #[test]
+    fn test_classify_reuse_kv_fork_is_warm_kv() {
+        let fork = Some(ForkAttachment {
+            state_attached: true,
+            prefix_tokens: Some(MOCK_PREFIX_TOKENS),
+        });
+        assert_eq!(
+            classify_reuse(fork, None),
+            PrefixReuse::WarmKv {
+                reused_tokens: MOCK_PREFIX_TOKENS
+            }
+        );
+    }
+
+    /// A claude turn with `cache_read_input_tokens > 0` classifies as
+    /// `WarmCache` carrying the read/created split — even though the fork
+    /// attached no native KV token count (the production blind spot this task
+    /// closes).
+    #[test]
+    fn test_classify_reuse_claude_cache_read_is_warm_cache() {
+        let usage = Some(CacheUsage {
+            cache_read_input_tokens: Some(900),
+            cache_creation_input_tokens: Some(100),
+            input_tokens: Some(1000),
+            output_tokens: Some(20),
+        });
+        assert_eq!(
+            classify_reuse(None, usage),
+            PrefixReuse::WarmCache {
+                read: 900,
+                created: 100
+            }
+        );
+    }
+
+    /// A claude turn that only wrote the cache (`cache_creation_input_tokens >
+    /// 0`, no reads) is a cold prefill — `Cold` (no warm reuse to report).
+    #[test]
+    fn test_classify_reuse_claude_cold_write_is_cold() {
+        let usage = Some(CacheUsage {
+            cache_read_input_tokens: Some(0),
+            cache_creation_input_tokens: Some(1000),
+            input_tokens: Some(1000),
+            output_tokens: Some(20),
+        });
+        assert_eq!(classify_reuse(None, usage), PrefixReuse::Cold);
+    }
+
+    /// No fork and no usage is unknown/cold.
+    #[test]
+    fn test_classify_reuse_empty_is_cold() {
+        assert_eq!(classify_reuse(None, None), PrefixReuse::Cold);
     }
 }

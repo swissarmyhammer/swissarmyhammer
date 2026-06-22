@@ -650,6 +650,146 @@ mod tests {
         assert_eq!(task["title"], "Updated Title");
     }
 
+    /// Real-path e2e: `depends_on` must persist through the served
+    /// `KanbanTool::execute()` boundary regardless of input shape — a JSON
+    /// array, a single id string, or a stringified JSON array — and each
+    /// element must round-trip back as the canonical full ULID. This is the
+    /// test that would have caught the silent-drop bug: the dispatch unit
+    /// tests only fed perfect `json!([dep])` arrays and never crossed the MCP
+    /// tool boundary nor the string/stringified-array shapes real clients send.
+    #[tokio::test]
+    async fn test_depends_on_persists_across_input_shapes_via_served_tool() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        // Create the dependency task once; reuse it across every shape.
+        let mut dep_args = serde_json::Map::new();
+        dep_args.insert("op".to_string(), json!("add task"));
+        dep_args.insert("title".to_string(), json!("Dependency"));
+        let dep_result = tool.execute(dep_args, &context).await.unwrap();
+        let dep_id = extract_task_id(&dep_result);
+
+        // The id formats resolve_task_ref must normalize to the canonical ULID.
+        let short = swissarmyhammer_kanban::types::short_id(&dep_id);
+        let caret_short = format!("^{short}");
+        let prefix = dep_id[..12].to_string();
+        let lowercase = dep_id.to_lowercase();
+
+        // For each id format, and for each wire shape (single string, JSON
+        // array, stringified JSON array), set depends_on through the served
+        // tool and assert it round-trips as the full canonical ULID.
+        for id_form in [
+            dep_id.clone(),
+            short.clone(),
+            caret_short.clone(),
+            prefix.clone(),
+            lowercase.clone(),
+        ] {
+            let shapes = [
+                ("single string", json!(id_form)),
+                ("json array", json!([id_form])),
+                (
+                    "stringified array",
+                    json!(serde_json::to_string(&vec![id_form.clone()]).unwrap()),
+                ),
+            ];
+
+            for (shape_name, depends_on_value) in shapes {
+                // Fresh dependent task per case so prior state can't mask a drop.
+                let mut add_args = serde_json::Map::new();
+                add_args.insert("op".to_string(), json!("add task"));
+                add_args.insert("title".to_string(), json!("Dependent"));
+                let add_result = tool.execute(add_args, &context).await.unwrap();
+                let task_id = extract_task_id(&add_result);
+
+                let mut update_args = serde_json::Map::new();
+                update_args.insert("op".to_string(), json!("update task"));
+                update_args.insert("id".to_string(), json!(task_id));
+                update_args.insert("depends_on".to_string(), depends_on_value.clone());
+                tool.execute(update_args, &context).await.unwrap();
+
+                let task = get_task(&tool, &context, &task_id).await;
+                let deps = task["depends_on"].as_array().unwrap_or_else(|| {
+                    panic!("depends_on missing for id_form={id_form} shape={shape_name}")
+                });
+                assert_eq!(
+                    deps.len(),
+                    1,
+                    "depends_on dropped for id_form={id_form} shape={shape_name}: {task}"
+                );
+                assert_eq!(
+                    deps[0].as_str().unwrap(),
+                    dep_id,
+                    "depends_on not normalized to canonical ULID for id_form={id_form} shape={shape_name}"
+                );
+            }
+        }
+    }
+
+    /// Real-path e2e: `add task` must also honor `depends_on` as a single
+    /// string through the served tool — the create path shares the same
+    /// `resolve_depends_on` helper as update.
+    #[tokio::test]
+    async fn test_add_task_depends_on_single_string_persists_via_served_tool() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut dep_args = serde_json::Map::new();
+        dep_args.insert("op".to_string(), json!("add task"));
+        dep_args.insert("title".to_string(), json!("Dependency"));
+        let dep_result = tool.execute(dep_args, &context).await.unwrap();
+        let dep_id = extract_task_id(&dep_result);
+
+        // depends_on as a bare string at create time.
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Dependent"));
+        add_args.insert("depends_on".to_string(), json!(dep_id));
+        let add_result = tool.execute(add_args, &context).await.unwrap();
+        let task_id = extract_task_id(&add_result);
+
+        let task = get_task(&tool, &context, &task_id).await;
+        let deps = task["depends_on"].as_array().unwrap();
+        assert_eq!(deps.len(), 1, "depends_on dropped at create time: {task}");
+        assert_eq!(deps[0].as_str().unwrap(), dep_id);
+    }
+
+    /// Real-path e2e: an unresolvable `depends_on` ref must surface as an
+    /// error through the served tool, not silently drop to an empty list.
+    #[tokio::test]
+    async fn test_depends_on_unresolvable_ref_errors_via_served_tool() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        let mut add_args = serde_json::Map::new();
+        add_args.insert("op".to_string(), json!("add task"));
+        add_args.insert("title".to_string(), json!("Dependent"));
+        let add_result = tool.execute(add_args, &context).await.unwrap();
+        let task_id = extract_task_id(&add_result);
+
+        let mut update_args = serde_json::Map::new();
+        update_args.insert("op".to_string(), json!("update task"));
+        update_args.insert("id".to_string(), json!(task_id));
+        update_args.insert("depends_on".to_string(), json!("nosuch7"));
+        let result = tool.execute(update_args, &context).await;
+        assert!(
+            result.is_err(),
+            "an unresolvable depends_on ref must error through the served tool"
+        );
+    }
+
     /// Mutation responses still drive the `_plan` attachment: the thin ack's
     /// top-level `id` is what populates `_plan._meta.affected_task_id`.
     #[tokio::test]

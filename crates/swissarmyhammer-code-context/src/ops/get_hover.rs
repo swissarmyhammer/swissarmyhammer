@@ -211,28 +211,35 @@ pub fn parse_hover_contents(response: &serde_json::Value) -> String {
 
     // Case 3: Array of MarkedString
     if let Some(arr) = contents.as_array() {
-        let parts: Vec<String> = arr
-            .iter()
-            .filter_map(|item| {
-                // Each item is either a string or { language, value }
-                if let Some(s) = item.as_str() {
-                    Some(s.to_string())
-                } else if let Some(value) = item.get("value").and_then(|v| v.as_str()) {
-                    let lang = item.get("language").and_then(|l| l.as_str()).unwrap_or("");
-                    if lang.is_empty() {
-                        Some(value.to_string())
-                    } else {
-                        Some(format!("```{}\n{}\n```", lang, value))
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect();
-        return parts.join("\n\n");
+        return parse_marked_string_array(arr).join("\n\n");
     }
 
     String::new()
+}
+
+/// Parse an array of LSP `MarkedString` values into a list of rendered strings.
+///
+/// Each array item is either a plain string or a `{ language, value }` object;
+/// an object with a non-empty `language` is rendered as a fenced code block.
+/// Items that match neither shape are skipped.
+fn parse_marked_string_array(arr: &[serde_json::Value]) -> Vec<String> {
+    arr.iter().filter_map(parse_marked_string).collect()
+}
+
+/// Render a single LSP `MarkedString` value (a plain string or a
+/// `{ language, value }` object) into its display string, or `None` if the
+/// value is neither shape.
+fn parse_marked_string(item: &serde_json::Value) -> Option<String> {
+    if let Some(s) = item.as_str() {
+        return Some(s.to_string());
+    }
+    let value = item.get("value").and_then(|v| v.as_str())?;
+    let lang = item.get("language").and_then(|l| l.as_str()).unwrap_or("");
+    if lang.is_empty() {
+        Some(value.to_string())
+    } else {
+        Some(format!("```{lang}\n{value}\n```"))
+    }
 }
 
 /// Parse the `range` field from an LSP hover response into an `LspRange`.
@@ -632,9 +639,13 @@ mod tests {
         let conn = test_db();
         insert_file(&conn, "src/main.rs", 0, 0);
 
-        let shared: crate::lsp_worker::SharedLspClient =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
 
         let opts = GetHoverOptions {
             file_path: "src/main.rs".to_string(),
@@ -668,9 +679,13 @@ mod tests {
             1,
         );
 
-        let shared: crate::lsp_worker::SharedLspClient =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(
+            &conn,
+            Some(crate::layered_context::SharedLspSession::new(
+                std::sync::Arc::new(std::sync::Mutex::new(None)),
+                "rust",
+            )),
+        );
 
         let opts = GetHoverOptions {
             file_path: "src/main.rs".to_string(),

@@ -533,7 +533,9 @@ fn find_ts_symbol_at_cursor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_fixtures::{insert_call_edge, insert_file, insert_ts_chunk, test_db};
+    use crate::test_fixtures::{
+        insert_call_edge, insert_file, insert_ts_chunk, mock_lsp_session, spawn_mock_lsp, test_db,
+    };
     use rusqlite::Connection;
 
     /// Insert an LSP symbol (without detail, for inbound_calls tests).
@@ -1635,65 +1637,8 @@ mod tests {
     }
 
     // --- Live LSP with mock server ---
-
-    /// Spawn a Python process that acts as a mock LSP server.
-    ///
-    /// The script reads JSON-RPC messages from stdin and sends back canned
-    /// responses loaded from a JSON file. `null` entries consume a
-    /// notification without replying; non-null entries reply to a request.
-    fn spawn_mock_lsp(responses: &[serde_json::Value]) -> std::process::Child {
-        let temp_dir = tempfile::tempdir().expect("failed to create temp dir for mock LSP");
-        let response_file = temp_dir.path().join("mock_responses.json");
-        std::fs::write(&response_file, serde_json::to_string(responses).unwrap())
-            .expect("failed to write mock responses file");
-
-        let script = "\
-            import sys, json, os\n\
-            def read_msg():\n\
-            \tcl = None\n\
-            \twhile True:\n\
-            \t\tline = sys.stdin.readline()\n\
-            \t\tif not line: return None\n\
-            \t\tline = line.strip()\n\
-            \t\tif not line: break\n\
-            \t\tif line.startswith('Content-Length:'):\n\
-            \t\t\tcl = int(line.split(':', 1)[1].strip())\n\
-            \tif cl is None: return None\n\
-            \tbody = sys.stdin.read(cl)\n\
-            \treturn json.loads(body)\n\
-            def send_msg(obj):\n\
-            \ts = json.dumps(obj)\n\
-            \tsys.stdout.write(f'Content-Length: {len(s)}\\r\\n\\r\\n{s}')\n\
-            \tsys.stdout.flush()\n\
-            with open(os.environ['MOCK_RESPONSE_FILE']) as f:\n\
-            \tresponses = json.load(f)\n\
-            for resp in responses:\n\
-            \tread_msg()\n\
-            \tif resp is not None:\n\
-            \t\tsend_msg(resp)\n";
-
-        // Leak the tempdir so it outlives the child process.
-        std::mem::forget(temp_dir);
-
-        std::process::Command::new("python3")
-            .arg("-c")
-            .arg(script)
-            .env("MOCK_RESPONSE_FILE", &response_file)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("failed to spawn mock LSP python3 process")
-    }
-
-    /// Create a `SharedLspClient` from a mock LSP child process.
-    fn mock_lsp_client(child: &mut std::process::Child) -> crate::lsp_worker::SharedLspClient {
-        use crate::lsp_communication::LspJsonRpcClient;
-        let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let client = LspJsonRpcClient::new(stdin, stdout);
-        std::sync::Arc::new(std::sync::Mutex::new(Some(client)))
-    }
+    // `spawn_mock_lsp` / `mock_lsp_session` are the shared
+    // `crate::test_fixtures` helpers, imported above.
 
     /// Create a temp file so `lsp_request_with_document` can read it.
     fn create_temp_source_file() -> tempfile::TempDir {
@@ -1753,21 +1698,22 @@ mod tests {
             }]
         });
 
+        // Session path: didOpen, then prepareCallHierarchy, then incomingCalls
+        // back-to-back (no didClose between them).
         let responses = vec![
             serde_json::Value::Null, // didOpen notification
             prepare_response,        // prepareCallHierarchy request
-            serde_json::Value::Null, // didClose notification
             incoming_response,       // incomingCalls request
         ];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let temp_dir = create_temp_source_file();
         let file_path = temp_dir.path().join("test.rs");
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = GetInboundCallsOptions {
             file_path: file_path.to_str().unwrap().to_string(),
             line: 0,
@@ -1784,8 +1730,6 @@ mod tests {
         assert_eq!(result.callers[0].symbol_name, "caller_fn");
         assert_eq!(result.callers[0].call_sites.len(), 1);
         assert_eq!(result.callers[0].call_sites[0].start_line, 7);
-
-        let _ = child.wait();
     }
 
     #[test]
@@ -1801,17 +1745,16 @@ mod tests {
         let responses = vec![
             serde_json::Value::Null, // didOpen notification
             null_prepare,            // prepareCallHierarchy returns null
-            serde_json::Value::Null, // didClose notification
         ];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let temp_dir = create_temp_source_file();
         let file_path = temp_dir.path().join("test.rs");
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = GetInboundCallsOptions {
             file_path: file_path.to_str().unwrap().to_string(),
             line: 0,
@@ -1824,8 +1767,6 @@ mod tests {
             result.is_none(),
             "expected None when prepareCallHierarchy returns null"
         );
-
-        let _ = child.wait();
     }
 
     #[test]
@@ -1840,17 +1781,16 @@ mod tests {
         let responses = vec![
             serde_json::Value::Null, // didOpen notification
             empty_prepare,           // prepareCallHierarchy returns []
-            serde_json::Value::Null, // didClose notification
         ];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let temp_dir = create_temp_source_file();
         let file_path = temp_dir.path().join("test.rs");
 
         let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = GetInboundCallsOptions {
             file_path: file_path.to_str().unwrap().to_string(),
             line: 0,
@@ -1863,8 +1803,6 @@ mod tests {
             result.is_none(),
             "expected None when prepareCallHierarchy returns empty array"
         );
-
-        let _ = child.wait();
     }
 
     #[test]
@@ -1910,15 +1848,16 @@ mod tests {
             }]
         });
 
+        // Session path: didOpen, then prepareCallHierarchy, then incomingCalls
+        // back-to-back (no didClose between them).
         let responses = vec![
             serde_json::Value::Null, // didOpen
             prepare_response,        // prepareCallHierarchy
-            serde_json::Value::Null, // didClose
             incoming_response,       // incomingCalls
         ];
 
         let mut child = spawn_mock_lsp(&responses);
-        let shared = mock_lsp_client(&mut child);
+        let session = mock_lsp_session(&mut child);
 
         let temp_dir = create_temp_source_file();
         let file_path = temp_dir.path().join("test.rs");
@@ -1962,7 +1901,7 @@ mod tests {
             "[]",
         );
 
-        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let ctx = LayeredContext::new(&conn, Some(session));
         let opts = GetInboundCallsOptions {
             file_path: file_path_str,
             line: 0,
@@ -1993,7 +1932,5 @@ mod tests {
             names.contains(&"indexed_caller"),
             "should contain indexed_caller from cross-reference"
         );
-
-        let _ = child.wait();
     }
 }

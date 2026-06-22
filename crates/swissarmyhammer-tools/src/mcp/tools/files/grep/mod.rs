@@ -4,15 +4,22 @@
 use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
 use crate::mcp::tools::files::shared_utils::{reject_filesystem_root, FilePathValidator};
 use grep::regex::RegexMatcher;
-use grep::searcher::sinks::UTF8;
-use grep::searcher::{BinaryDetection, Searcher, SearcherBuilder};
+use grep::searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
 use ignore::WalkBuilder;
 use rmcp::model::{CallToolResult, LoggingLevel};
 use rmcp::ErrorData as McpError;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
+
+/// Default number of context lines shown around each match in `content` mode
+/// when the caller does not specify `context_lines`.
+///
+/// Plain ripgrep defaults to zero context, but a bare matching line is rarely
+/// enough for an agent to act on, so `grep files` leans toward ripgrep's common
+/// `-C2` invocation: two lines before and after. Callers wanting the terse
+/// one-line-per-match output pass `context_lines: 0` explicitly.
+pub const DEFAULT_CONTEXT_LINES: usize = 2;
 
 /// Operation metadata for grep content search
 #[derive(Debug, Default)]
@@ -36,7 +43,7 @@ static GREP_FILES_PARAMS: &[ParamMeta] = &[
         .description("Case-insensitive search (optional)")
         .param_type(ParamType::Boolean),
     ParamMeta::new("context_lines")
-        .description("Number of context lines around matches (optional)")
+        .description("Lines of context before and after each match in 'content' mode (optional; defaults to 2, like ripgrep -C2; pass 0 for one line per match)")
         .param_type(ParamType::Integer),
     ParamMeta::new("output_mode")
         .description("Output format: content, files_with_matches, or count (optional)")
@@ -58,12 +65,68 @@ impl Operation for GrepFiles {
     }
 }
 
-/// Represents a single grep match
+/// Represents a single emitted line — either a matching line or a surrounding
+/// context line (when `context_lines > 0`).
 #[derive(Debug, Clone)]
 pub struct GrepMatch {
     pub file_path: PathBuf,
     pub line_number: u64,
     pub matched_text: String,
+    /// `true` for a line that matched the pattern, `false` for a context line
+    /// emitted around a match.
+    pub is_match: bool,
+}
+
+/// Sink that collects both matching lines and the surrounding context lines the
+/// searcher emits when before/after context is configured. The stock
+/// `sinks::UTF8` sink only forwards matches (and errors when context is on), so
+/// supporting `context_lines` requires implementing [`Sink`] directly.
+struct CollectSink<'a> {
+    path: &'a Path,
+    out: &'a mut Vec<GrepMatch>,
+}
+
+/// Decode a line emitted by the searcher into trimmed UTF-8, matching the
+/// previous `line.trim_end()` behavior.
+fn decode_line(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).trim_end().to_string()
+}
+
+impl Sink for CollectSink<'_> {
+    type Error = std::io::Error;
+
+    fn matched(
+        &mut self,
+        _searcher: &Searcher,
+        mat: &SinkMatch<'_>,
+    ) -> Result<bool, std::io::Error> {
+        let start = mat.line_number().unwrap_or(0);
+        // A single SinkMatch can span multiple lines; number them sequentially
+        // from the match's starting line.
+        for (offset, line) in mat.lines().enumerate() {
+            self.out.push(GrepMatch {
+                file_path: self.path.to_path_buf(),
+                line_number: start + offset as u64,
+                matched_text: decode_line(line),
+                is_match: true,
+            });
+        }
+        Ok(true)
+    }
+
+    fn context(
+        &mut self,
+        _searcher: &Searcher,
+        ctx: &SinkContext<'_>,
+    ) -> Result<bool, std::io::Error> {
+        self.out.push(GrepMatch {
+            file_path: self.path.to_path_buf(),
+            line_number: ctx.line_number().unwrap_or(0),
+            matched_text: decode_line(ctx.bytes()),
+            is_match: false,
+        });
+        Ok(true)
+    }
 }
 
 /// Results from a grep operation
@@ -87,29 +150,18 @@ impl GrepFileTool {
         searcher: &mut Searcher,
         path: &Path,
     ) -> Result<Vec<GrepMatch>, McpError> {
-        let matches: Arc<Mutex<Vec<GrepMatch>>> = Arc::new(Mutex::new(Vec::new()));
-        let path_buf = path.to_path_buf();
-        let matches_clone = Arc::clone(&matches);
-
+        let mut out: Vec<GrepMatch> = Vec::new();
         let result = searcher.search_path(
             matcher,
             path,
-            UTF8(|line_num, line| {
-                let mut m = matches_clone.lock().unwrap();
-                m.push(GrepMatch {
-                    file_path: path_buf.clone(),
-                    line_number: line_num,
-                    matched_text: line.trim_end().to_string(),
-                });
-                Ok(true)
-            }),
+            CollectSink {
+                path,
+                out: &mut out,
+            },
         );
 
         match result {
-            Ok(_) => {
-                let m = matches.lock().unwrap();
-                Ok(m.clone())
-            }
+            Ok(_) => Ok(out),
             Err(_) => Ok(vec![]), // Skip files that can't be searched
         }
     }
@@ -149,7 +201,10 @@ struct GrepRequest {
     #[serde(rename = "type")]
     file_type: Option<String>,
     case_insensitive: Option<bool>,
-    #[allow(dead_code)]
+    #[serde(
+        default,
+        deserialize_with = "crate::mcp::tools::files::shared_utils::deserialize_flexible_usize"
+    )]
     context_lines: Option<usize>,
     output_mode: Option<String>,
 }
@@ -204,13 +259,29 @@ pub async fn execute_grep(
     }
     .map_err(|e| McpError::invalid_request(format!("Invalid regex pattern: {}", e), None))?;
 
-    // Build the searcher
-    let mut searcher = SearcherBuilder::new()
-        .binary_detection(BinaryDetection::quit(0))
-        .line_number(true)
-        .build();
-
     let output_mode = request.output_mode.as_deref().unwrap_or("content");
+
+    // Context lines only make sense for `content` output; `count` and
+    // `files_with_matches` summarize and never print surrounding lines, so we
+    // skip the extra work there. Default to ripgrep-style -C2 when unspecified.
+    let context_lines = if output_mode == "content" {
+        request.context_lines.unwrap_or(DEFAULT_CONTEXT_LINES)
+    } else {
+        0
+    };
+
+    // Build the searcher
+    let mut searcher_builder = SearcherBuilder::new();
+    searcher_builder
+        .binary_detection(BinaryDetection::quit(0))
+        .line_number(true);
+    if context_lines > 0 {
+        searcher_builder
+            .before_context(context_lines)
+            .after_context(context_lines);
+    }
+    let mut searcher = searcher_builder.build();
+
     let mut all_matches: Vec<GrepMatch> = Vec::new();
     let mut files_with_matches = std::collections::HashSet::new();
 
@@ -266,7 +337,9 @@ pub async fn execute_grep(
         }
 
         let matches = GrepFileTool::search_file(&matcher, &mut searcher, path)?;
-        if !matches.is_empty() {
+        // `matches` may include context-only lines; a file counts as a hit only
+        // when it has at least one actual matching line.
+        if matches.iter().any(|m| m.is_match) {
             files_with_matches.insert(path.to_path_buf());
             all_matches.extend(matches);
         }
@@ -280,14 +353,15 @@ pub async fn execute_grep(
         search_time_ms,
     };
 
+    // Only matching lines count toward totals; context lines are presentation.
+    let match_count = results.matches.iter().filter(|m| m.is_match).count();
+
     // Format response
     let response = match output_mode {
         "count" => {
             format!(
                 "{} matches in {} files | Time: {}ms",
-                results.matches.len(),
-                results.files_searched,
-                results.search_time_ms
+                match_count, results.files_searched, results.search_time_ms
             )
         }
         "files_with_matches" => {
@@ -311,27 +385,40 @@ pub async fn execute_grep(
         }
         _ => {
             // content mode
-            if results.matches.is_empty() {
+            if match_count == 0 {
                 format!("No matches found | Time: {}ms", results.search_time_ms)
             } else {
-                let match_lines: Vec<String> = results
-                    .matches
-                    .iter()
-                    .map(|m| {
-                        format!(
-                            "{}:{}: {}",
-                            m.file_path.display(),
-                            m.line_number,
-                            m.matched_text
-                        )
-                    })
-                    .collect();
+                // ripgrep-style rendering: matching lines use a `:` separator,
+                // context lines use `-`, and a `--` divider marks a break
+                // between non-adjacent hunks (different file or a line gap).
+                // The divider is only meaningful when context is shown.
+                let mut out_lines: Vec<String> = Vec::new();
+                let mut prev: Option<(&Path, u64)> = None;
+                for m in &results.matches {
+                    if context_lines > 0 {
+                        if let Some((prev_path, prev_line)) = prev {
+                            if prev_path != m.file_path.as_path() || m.line_number > prev_line + 1 {
+                                out_lines.push("--".to_string());
+                            }
+                        }
+                    }
+                    let sep = if m.is_match { ':' } else { '-' };
+                    out_lines.push(format!(
+                        "{}{}{}{} {}",
+                        m.file_path.display(),
+                        sep,
+                        m.line_number,
+                        sep,
+                        m.matched_text
+                    ));
+                    prev = Some((m.file_path.as_path(), m.line_number));
+                }
                 format!(
                     "Found {} matches in {} files | Time: {}ms\n\n{}",
-                    results.matches.len(),
+                    match_count,
                     results.files_searched,
                     results.search_time_ms,
-                    match_lines.join("\n")
+                    out_lines.join("\n")
                 )
             }
         }
@@ -343,8 +430,7 @@ pub async fn execute_grep(
         "grep",
         format!(
             "Complete: {} matches in {}ms",
-            results.matches.len(),
-            results.search_time_ms
+            match_count, results.search_time_ms
         ),
     )
     .await;
@@ -685,5 +771,152 @@ mod tests {
             _ => panic!("Expected text"),
         };
         assert!(text.contains("No files found") || text.contains("0"));
+    }
+
+    /// Extract the text payload from a grep `CallToolResult`.
+    fn result_text(result: Result<CallToolResult, McpError>) -> String {
+        let call_result = result.expect("grep should succeed");
+        match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        }
+    }
+
+    async fn grep_content(
+        context: &ToolContext,
+        file: &Path,
+        args: &[(&str, serde_json::Value)],
+    ) -> String {
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("charlie".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(file.display().to_string()),
+        );
+        for (k, v) in args {
+            arguments.insert(k.to_string(), v.clone());
+        }
+        result_text(execute_grep(arguments, context).await)
+    }
+
+    /// With no `context_lines`, content mode defaults to ripgrep-style -C2:
+    /// the match prints with a `:` separator and surrounding lines with `-`.
+    #[tokio::test]
+    async fn test_grep_default_context_lines() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file = temp_dir.path().join("ctx.txt");
+        std::fs::write(&file, "alpha\nbravo\ncharlie\ndelta\necho\n").unwrap();
+
+        let text = grep_content(&context, &file, &[]).await;
+
+        // The match line uses `:`; context lines use `-`.
+        assert!(
+            text.contains(":3: charlie"),
+            "match line with ':' separator: {text}"
+        );
+        assert!(text.contains("-1- alpha"), "context before: {text}");
+        assert!(text.contains("-2- bravo"), "context before: {text}");
+        assert!(text.contains("-4- delta"), "context after: {text}");
+        assert!(text.contains("-5- echo"), "context after: {text}");
+        // Only one actual match.
+        assert!(
+            text.contains("Found 1 matches"),
+            "match count excludes context: {text}"
+        );
+    }
+
+    /// `context_lines: 0` restores terse one-line-per-match output: only the
+    /// matching line, no surrounding lines and no `--` hunk dividers.
+    #[tokio::test]
+    async fn test_grep_context_lines_zero() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file = temp_dir.path().join("ctx.txt");
+        std::fs::write(&file, "alpha\nbravo\ncharlie\ndelta\necho\n").unwrap();
+
+        let text = grep_content(&context, &file, &[("context_lines", serde_json::json!(0))]).await;
+
+        assert!(text.contains(":3: charlie"), "match present: {text}");
+        assert!(!text.contains("bravo"), "no context line: {text}");
+        assert!(!text.contains("delta"), "no context line: {text}");
+        assert!(
+            !text.contains("--"),
+            "no hunk divider without context: {text}"
+        );
+    }
+
+    /// An explicit `context_lines` is honored exactly.
+    #[tokio::test]
+    async fn test_grep_context_lines_explicit() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file = temp_dir.path().join("ctx.txt");
+        std::fs::write(&file, "alpha\nbravo\ncharlie\ndelta\necho\n").unwrap();
+
+        let text = grep_content(&context, &file, &[("context_lines", serde_json::json!(1))]).await;
+
+        assert!(text.contains("-2- bravo"), "one line before: {text}");
+        assert!(text.contains(":3: charlie"), "match: {text}");
+        assert!(text.contains("-4- delta"), "one line after: {text}");
+        // Lines outside the 1-line window are not shown.
+        assert!(!text.contains("alpha"), "line 1 outside window: {text}");
+        assert!(!text.contains("echo"), "line 5 outside window: {text}");
+    }
+
+    /// Language models stringify numeric arguments, sending `context_lines` as
+    /// `"1"` instead of `1`. The string form must be coerced and behave
+    /// identically to the integer form — this pins the `deserialize_with`
+    /// wiring on `GrepRequest.context_lines`, not just the shared helper.
+    #[tokio::test]
+    async fn test_grep_string_context_lines() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file = temp_dir.path().join("ctx.txt");
+        std::fs::write(&file, "alpha\nbravo\ncharlie\ndelta\necho\n").unwrap();
+
+        let text = grep_content(
+            &context,
+            &file,
+            &[("context_lines", serde_json::json!("1"))],
+        )
+        .await;
+
+        // Identical to the integer-input twin (test_grep_context_lines_explicit).
+        assert!(text.contains("-2- bravo"), "one line before: {text}");
+        assert!(text.contains(":3: charlie"), "match: {text}");
+        assert!(text.contains("-4- delta"), "one line after: {text}");
+        assert!(!text.contains("alpha"), "line 1 outside window: {text}");
+        assert!(!text.contains("echo"), "line 5 outside window: {text}");
+    }
+
+    /// Two matches separated by a gap produce a `--` divider between hunks.
+    #[tokio::test]
+    async fn test_grep_context_hunk_divider() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file = temp_dir.path().join("gap.txt");
+        std::fs::write(&file, "charlie\nx\nx\nx\nx\nx\ncharlie\n").unwrap();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("charlie".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(file.display().to_string()),
+        );
+        arguments.insert("context_lines".to_string(), serde_json::json!(1));
+        let text = result_text(execute_grep(arguments, &context).await);
+
+        assert!(text.contains("Found 2 matches"), "two matches: {text}");
+        assert!(
+            text.contains("\n--\n"),
+            "hunk divider between non-adjacent matches: {text}"
+        );
     }
 }

@@ -57,10 +57,13 @@
 //! ```
 //!
 // Module declarations
+pub mod diagnostics_resource;
 pub mod error_handling;
 pub mod file_watcher;
 pub mod host;
+pub mod inline_diagnostics;
 pub mod notify_types;
+pub mod op_tool_helpers;
 pub mod plan_notifications;
 pub mod plugin_bridge;
 pub mod progress;
@@ -89,9 +92,9 @@ pub use plan_notifications::{
 pub use server::McpServer;
 pub use tool_handlers::ToolHandlers;
 pub use tool_registry::{
-    register_code_context_tools, register_file_tools, register_git_tools, register_kanban_tools,
-    register_questions_tools, register_ralph_tools, register_review_tools, register_shell_tools,
-    register_web_tools, ToolContext, ToolRegistry,
+    register_code_context_tools, register_diagnostics_tools, register_file_tools,
+    register_git_tools, register_kanban_tools, register_questions_tools, register_ralph_tools,
+    register_review_tools, register_shell_tools, register_web_tools, ToolContext, ToolRegistry,
 };
 pub use types::{GetPromptRequest, ListPromptsRequest};
 pub use unified_server::{

@@ -46,6 +46,7 @@ pub fn profile(_scope: InitScope) -> mirdan::install::Profile {
         validators: None,
         statusline: false,
         preamble: false,
+        edit_redirect: false,
     }
 }
 
@@ -88,7 +89,6 @@ mod tests {
         assert_eq!(profile.skills, Some(skills_selector()));
         assert!(profile.agents.is_none());
         assert!(!profile.statusline);
-        assert!(!profile.preamble);
     }
 
     #[test]

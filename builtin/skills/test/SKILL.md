@@ -24,7 +24,7 @@ metadata:
 1. **Run the full test suite** using project detection to pick the right command.
 2. **Type-check + lint** with warnings as errors (`cargo clippy -- -D warnings`).
 3. **Check for skipped/ignored tests** — fix or delete each. Skips are not acceptable.
-4. **Fix every failure and warning**, re-running after each fix. Trace before editing: `get symbol` on the failing function, `get callgraph` (inbound) to see callers, `get blastradius` on the file to avoid breaking a passing test elsewhere.
+4. **Fix every failure and warning**, re-running after each fix. Trace before editing: `get symbol` on the failing function, `get callgraph` (inbound) to see callers, and — if you're changing a shared symbol — `get blastradius` on the file to spot passing tests elsewhere that the change could break.
 5. **Track remaining failures on kanban.** Ensure tag exists:
 
    ```json
@@ -50,11 +50,15 @@ metadata:
 
 ## Troubleshooting
 
+### No Tests
+
+Make one to get started. 
+
 ### A single test hangs and the suite never finishes
 
 Test waits on something CI can't deliver (network, child process, file watcher, deadlock). Run with a hard per-test timeout and isolate the offender via the `shell` tool's `timeout`:
 
-- Rust: `cargo nextest run --test-threads=1 --timeout 60`
+- Rust: `timeout 60 cargo nextest run --test-threads=1 <test_name>` — nextest has no `--timeout` flag; its per-test budget is config-only via `slow-timeout`/`terminate-after` in `.config/nextest.toml`, so wrap the invocation with the shell `timeout` to bound a single suspect test
 - Python: `pytest --timeout=60` (needs `pytest-timeout`)
 - Node: `jest --testTimeout=60000`
 
