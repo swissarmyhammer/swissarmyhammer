@@ -71,6 +71,26 @@ function makeTask(id: string, column = "col-1"): Entity {
 }
 
 /**
+ * Serve the host-driven context-menu wire shape for a `command_tool_call`
+ * invocation, mirroring production `openContextMenu` (see `lib/context-menu.ts`).
+ *
+ * The right-click no longer reads `useCommandList` client-side; it fetches the
+ * registry through the Command MCP tool (`op: "list command"`) and pops the
+ * native menu through the `window` MCP tool (`op: "show context menu"`). Tests
+ * drive the registry through `mockRegistry` and assert the `show context menu`
+ * payload. `list command` returns the current `mockRegistry`; every other op
+ * (notably `show context menu`) resolves to `undefined` as the real bridge does
+ * for a fire-and-forget call.
+ */
+function serveContextMenuCommandTool(args: unknown): unknown {
+  const a = args as { op?: string } | undefined;
+  if (a?.op === "list command") {
+    return { ok: true, commands: mockRegistry };
+  }
+  return undefined;
+}
+
+/**
  * Wrap component with required providers. The spatial provider stack
  * (`SpatialFocusProvider` + `FocusLayer`) is required since `ColumnView`
  * mounts `<FocusScope>`-using descendants and the no-spatial-context
@@ -272,7 +292,8 @@ describe("ColumnView — Do This Next command", () => {
             ],
           };
         }
-        if (cmd === "show_context_menu") return undefined;
+        if (cmd === "command_tool_call")
+          return serveContextMenuCommandTool(args);
         return "ok";
       },
     );
@@ -324,8 +345,9 @@ describe("ColumnView — Do This Next command", () => {
 
   it("context menu scope chain contains the task moniker", async () => {
     mockInvoke.mockImplementation(
-      async (cmd: string, _args?: unknown): Promise<unknown> => {
-        if (cmd === "show_context_menu") return undefined;
+      async (cmd: string, args?: unknown): Promise<unknown> => {
+        if (cmd === "command_tool_call")
+          return serveContextMenuCommandTool(args);
         return "ok";
       },
     );

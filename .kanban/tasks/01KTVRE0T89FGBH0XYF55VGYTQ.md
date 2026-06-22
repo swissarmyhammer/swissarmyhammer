@@ -1,8 +1,29 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ee80
+comments:
+- actor: claude-code
+  id: 01kvqrra3r7epyatrvapf0ek57
+  text: |-
+    Picked up. Repro: after `npx playwright install chromium` (browser was missing), the repro command showed only 2/7 genuinely failing — both in column-view.test.tsx ("...dispatches task.doThisNext through the backend, not task.move" and "...scope chain contains the task moniker"). The entity-inspector.field-enter-drill (2) and column-view.virtualized-nav (3) tests were already green against current production once the browser was installed (their prior failures were the missing-playwright unhandled-error, not stale wire-shape).
+
+    Root cause (the 2 real failures): production `openContextMenu` in src/lib/context-menu.ts no longer reads the client-side `useCommandList` hook. It fetches the registry via `callCommandTool("list command")` → invoke("command_tool_call", {module:"commands", op:"list command", ...}) and pops via `callMcpTool("window","show context menu",...)` → invoke("command_tool_call", {module:"window", op:"show context menu", ...}). The tests' mockInvoke returned "ok" for command_tool_call, so result.commands was undefined → 0 matching items → "show context menu" never fired → showCall undefined.
+
+    Fix (test-harness only): added helper `serveContextMenuCommandTool(args)` that returns `{ ok: true, commands: mockRegistry }` for op "list command" and undefined otherwise (matching the real fire-and-forget bridge), and routed `cmd === "command_tool_call"` through it in both tests. The assertions (already on the production wire shape: c[0]==="command_tool_call" && c[1].op==="show context menu") now pass without weakening behavior pinned (task.doThisNext surfaced, task.move NOT dispatched, scope_chain contains task:tN).
+
+    No production code changed.
+  timestamp: 2026-06-22T13:36:40.568250+00:00
+- actor: claude-code
+  id: 01kvqrtz51st31p1yv656wpam9
+  text: |-
+    Gates green. Repro `npx vitest run --project browser src/components/entity-inspector.field-enter-drill.browser.test.tsx src/components/column-view.test.tsx src/components/column-view.virtualized-nav.browser.test.tsx` → "Test Files 3 passed (3); Tests 24 passed (24)" (all 7 originally-named tests included). `npx tsc --noEmit` in apps/kanban-app/ui → exit 0, clean.
+
+    double-check (adversarial) verdict: PASS — change is test-only (only column-view.test.tsx modified under src; context-menu.ts and mcp-transport.ts untouched), exercises the real production openContextMenu end-to-end, and pins all three behaviors without weakening (task.doThisNext surfaced via live wire, task.move never dispatched, scope_chain contains task moniker). Non-blocking note: the vi.mock("@/hooks/use-command-list",...) at the top of the file is now dead weight for the context-menu path (production only imports types from it) — harmless, removal left out of scope.
+
+    Moving to review.
+  timestamp: 2026-06-22T13:38:07.649145+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffd780
 title: 'Pre-existing vitest browser failures: entity-inspector.field-enter-drill (2), column-view.test (2), column-view.virtualized-nav (3)'
 ---
 ## What
