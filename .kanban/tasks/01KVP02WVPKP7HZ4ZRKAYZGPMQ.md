@@ -4,8 +4,8 @@ comments:
   id: 01kvp0yyb95armkbcanxmx9vfv
   text: 'Implemented in parse/mod.rs `normalize_params` + `infer_operation`. Verified: 3 new parse tests pass, dispatch real-path test `dispatch_get_task_accepts_task_key_alias` passes (full ULID + `^<short>` under the `task` key), `cargo fmt --check` and `cargo clippy --lib --tests -D warnings` clean. (This very comment hit the bug on the running pre-fix MCP server: `add comment {task: ...}` failed with `missing required field: task_id` — exactly what the member-op `task`→`task_id` alias fixes.)'
   timestamp: 2026-06-21T21:21:37.641029+00:00
-position_column: review
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffd380
 title: 'kanban tool: accept `task` as alias for `id` on task ops'
 ---
 ## Problem

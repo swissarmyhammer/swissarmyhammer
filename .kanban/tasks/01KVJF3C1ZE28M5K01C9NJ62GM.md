@@ -64,8 +64,8 @@ comments:
 
     Leaving task in `doing`. The refactor cannot proceed until a write tool (native Edit/Write, or the `files` MCP tool) is enabled for this session. The complete patch (table + infer_operation + rewritten execute body + the new test) is specified verbatim in the orchestrator transcript and can be applied in one shot once a write surface exists.
   timestamp: 2026-06-20T13:52:56.228695+00:00
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffd480
 project: agent-builtins
 title: Serve the `files` write/edit replacement to Claude Code and drop the edit_redirect PreToolUse hook (deny alone closes the surface)
 ---

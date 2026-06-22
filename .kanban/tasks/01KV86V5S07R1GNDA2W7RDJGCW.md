@@ -29,8 +29,8 @@ comments:
 
     (Also a near-identical watcher at crates/swissarmyhammer-code-context/src/watcher.rs is dirty in the tree — check whether the same dedup applies there.)
   timestamp: 2026-06-20T13:47:30.080218+00:00
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffd280
 project: diagnostics
 title: Rewire code-context onto the shared LSP session; collapse its get_diagnostics
 ---
