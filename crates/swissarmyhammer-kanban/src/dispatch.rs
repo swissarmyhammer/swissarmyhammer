@@ -213,12 +213,20 @@ async fn resolve_depends_on(
 /// list of ref strings. A value that is neither a JSON array nor a string is
 /// malformed and errors — never silently dropped (which on update would clear
 /// existing deps, the exact silent-drop bug this helper exists to prevent).
+/// A non-string entry inside an array is likewise an error naming the offending
+/// entry, rather than being silently skipped.
 fn depends_on_refs(value: &Value) -> Result<Vec<String>, KanbanError> {
     if let Some(arr) = value.as_array() {
-        return Ok(arr
+        return arr
             .iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect());
+            .map(|v| {
+                v.as_str().map(str::to_string).ok_or_else(|| {
+                    KanbanError::parse(format!(
+                        "depends_on array entries must be task ref strings, got: {v}"
+                    ))
+                })
+            })
+            .collect();
     }
     if let Some(s) = value.as_str() {
         // A stringified JSON array (`"[\"01K…\"]"`) parses into its elements;
@@ -3441,6 +3449,44 @@ mod tests {
         assert!(
             result.is_err(),
             "a malformed (non-string, non-array) depends_on must error"
+        );
+
+        // The pre-existing dependency must survive the rejected update.
+        let task = get_task(&ctx, &task_id).await;
+        let deps = task["depends_on"].as_array().unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].as_str().unwrap(), dep_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task_depends_on_non_string_array_entry_errors_without_clearing() {
+        // An array with a non-string entry (e.g. a number) is malformed. It
+        // must error naming the offending entry — never silently skip the entry,
+        // which is the same silent-drop anti-pattern this fix exists to kill.
+        let (_temp, ctx) = setup().await;
+        let dep_id = add_one_task(&ctx, "Dep target").await;
+        let task_id = add_one_task(&ctx, "Will depend").await;
+
+        // Seed a real dependency first.
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": dep_id,
+        }))
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // A non-string array entry must error, not silently skip it.
+        let ops = parse_input(json!({
+            "op": "update task",
+            "id": task_id,
+            "depends_on": [dep_id, 42],
+        }))
+        .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await;
+        assert!(
+            result.is_err(),
+            "a non-string depends_on array entry must error, not be silently skipped"
         );
 
         // The pre-existing dependency must survive the rejected update.
