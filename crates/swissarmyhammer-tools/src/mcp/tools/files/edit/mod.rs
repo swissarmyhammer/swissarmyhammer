@@ -23,23 +23,275 @@ use tracing::{debug, info};
 #[derive(Debug, Default)]
 pub struct EditFile;
 
+/// Alias keys that resolve to the canonical `file_path` parameter.
+static FILE_PATH_ALIASES: &[&str] = &["path", "filePath", "absolute_path"];
+
+/// Alias keys that resolve to the canonical `find` parameter (the text to match).
+///
+/// `old_string`/`oldText` are the legacy MCP names, kept here as aliases so the
+/// historical single-edit and `edits[]` shapes keep working. The remaining
+/// entries are the natural-language synonyms a model is likely to emit.
+static FIND_ALIASES: &[&str] = &[
+    "search",
+    "old",
+    "old_string",
+    "oldText",
+    "old_text",
+    "from",
+    "target",
+    "match",
+];
+
+/// Alias keys that resolve to the canonical `replace` parameter (the new text).
+///
+/// `new_string`/`newText` are the legacy MCP names, kept here as aliases. The
+/// remaining entries are natural-language synonyms.
+static REPLACE_ALIASES: &[&str] = &[
+    "new",
+    "new_string",
+    "newText",
+    "new_text",
+    "to",
+    "with",
+    "replacement",
+];
+
 static EDIT_FILE_PARAMS: &[ParamMeta] = &[
     ParamMeta::new("file_path")
         .description("Absolute path to the file to modify")
         .param_type(ParamType::String)
+        .aliases(FILE_PATH_ALIASES)
         .required(),
-    ParamMeta::new("old_string")
+    ParamMeta::new("find")
         .description("Exact text to replace")
         .param_type(ParamType::String)
+        .aliases(FIND_ALIASES)
         .required(),
-    ParamMeta::new("new_string")
+    ParamMeta::new("replace")
         .description("Replacement text")
         .param_type(ParamType::String)
+        .aliases(REPLACE_ALIASES)
         .required(),
     ParamMeta::new("replace_all")
         .description("Replace all occurrences (default: false)")
         .param_type(ParamType::Boolean),
+    ParamMeta::new("edits")
+        .description("Array of {find, replace} edit pairs to apply sequentially")
+        .param_type(ParamType::Array),
 ];
+
+/// One canonical edit: replace `find` with `replace`, optionally every occurrence.
+///
+/// This is the normalized form every accepted input shape collapses to. It
+/// carries no IO — [`normalize_edit_args`] produces it purely from arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditPair {
+    /// Exact text to match in the target file.
+    pub find: String,
+    /// Replacement text.
+    pub replace: String,
+    /// Replace every occurrence (`true`) instead of just the first (`false`).
+    pub replace_all: bool,
+}
+
+/// Read the first present key among `keys` from `map`.
+fn first_present<'a>(
+    map: &'a serde_json::Map<String, serde_json::Value>,
+    canonical: &str,
+    aliases: &[&str],
+) -> Option<&'a serde_json::Value> {
+    if let Some(v) = map.get(canonical) {
+        return Some(v);
+    }
+    aliases.iter().find_map(|alias| map.get(*alias))
+}
+
+/// Coerce a JSON value into a list of strings: a scalar string yields one entry,
+/// an array yields each element as a string. Returns `None` for absent input and
+/// an error for a non-string / non-array value (or a non-string array element).
+fn collect_strings(value: Option<&serde_json::Value>) -> Result<Option<Vec<String>>, McpError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value {
+        serde_json::Value::String(s) => Ok(Some(vec![s.clone()])),
+        serde_json::Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    serde_json::Value::String(s) => out.push(s.clone()),
+                    other => {
+                        return Err(McpError::invalid_request(
+                            format!("find/replace array entries must be strings, got {other}"),
+                            None,
+                        ))
+                    }
+                }
+            }
+            Ok(Some(out))
+        }
+        other => Err(McpError::invalid_request(
+            format!("find/replace must be a string or array of strings, got {other}"),
+            None,
+        )),
+    }
+}
+
+/// Read an optional `replace_all` boolean from a map (canonical name only —
+/// there are no aliases for this flag).
+fn read_replace_all(map: &serde_json::Map<String, serde_json::Value>) -> bool {
+    map.get("replace_all")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Pair a list of finds with a list of replaces using the forgiving rules:
+/// - N finds + N replaces → zip.
+/// - N finds + 1 replace → broadcast the single replace to every find.
+/// - anything else (including 1 find + N replaces) → zip what lines up cleanly
+///   and surface the unpaired remainder in the error; never silently drop.
+fn pair_finds_replaces(
+    finds: Vec<String>,
+    replaces: Vec<String>,
+    replace_all: bool,
+) -> Result<Vec<EditPair>, McpError> {
+    // Broadcast a single replace across many finds (the delete-many shape).
+    if replaces.len() == 1 && finds.len() > 1 {
+        let replace = &replaces[0];
+        return Ok(finds
+            .into_iter()
+            .map(|find| EditPair {
+                find,
+                replace: replace.clone(),
+                replace_all,
+            })
+            .collect());
+    }
+
+    if finds.len() == replaces.len() {
+        return Ok(finds
+            .into_iter()
+            .zip(replaces)
+            .map(|(find, replace)| EditPair {
+                find,
+                replace,
+                replace_all,
+            })
+            .collect());
+    }
+
+    // Mismatch: pair what zips, then report the unpaired remainder.
+    let paired = finds.len().min(replaces.len());
+    let leftover_finds = &finds[paired..];
+    let leftover_replaces = &replaces[paired..];
+    let mut remainder = Vec::new();
+    if !leftover_finds.is_empty() {
+        remainder.push(format!("unpaired finds: {leftover_finds:?}"));
+    }
+    if !leftover_replaces.is_empty() {
+        remainder.push(format!("unpaired replaces: {leftover_replaces:?}"));
+    }
+    Err(McpError::invalid_request(
+        format!(
+            "mismatched find/replace counts ({} finds, {} replaces); {}",
+            finds.len(),
+            replaces.len(),
+            remainder.join("; ")
+        ),
+        None,
+    ))
+}
+
+/// Whether a no-`op` argument map should be dispatched to the edit operation.
+///
+/// True when any find-ish or replace-ish key (canonical name or alias) is
+/// present, or when an `edits` array is supplied. The dispatcher in
+/// [`super::FilesTool`] consults this BEFORE the `content`→write branch so a
+/// canonical `{find, replace}` call is never misrouted to write.
+pub fn looks_like_edit(args: &serde_json::Map<String, serde_json::Value>) -> bool {
+    args.contains_key("edits")
+        || first_present(args, "find", FIND_ALIASES).is_some()
+        || first_present(args, "replace", REPLACE_ALIASES).is_some()
+}
+
+/// Normalize the forgiving `edit files` argument surface into a canonical list
+/// of [`EditPair`]s.
+///
+/// Accepts three input shapes — which may be combined — under any of the
+/// `find`/`replace` aliases (see [`FIND_ALIASES`] / [`REPLACE_ALIASES`]):
+///
+/// 1. Top-level scalar `find`/`replace`.
+/// 2. Top-level parallel arrays `find: [...]` / `replace: [...]`.
+/// 3. An `edits: [{ find, replace, replace_all? }, ...]` array.
+///
+/// Top-level finds/replaces are paired via [`pair_finds_replaces`] (zip /
+/// broadcast / mismatch-remainder) and then **concatenated** with the pairs
+/// drawn from `edits[]`. This is pure: it performs no IO and never touches the
+/// filesystem, so it is unit-testable in isolation.
+pub fn normalize_edit_args(
+    args: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Vec<EditPair>, McpError> {
+    let mut pairs = Vec::new();
+
+    // Shape 1 & 2: top-level scalar or parallel arrays.
+    let finds = collect_strings(first_present(args, "find", FIND_ALIASES))?;
+    let replaces = collect_strings(first_present(args, "replace", REPLACE_ALIASES))?;
+    match (finds, replaces) {
+        (Some(finds), Some(replaces)) => {
+            pairs.extend(pair_finds_replaces(
+                finds,
+                replaces,
+                read_replace_all(args),
+            )?);
+        }
+        (Some(_), None) => {
+            return Err(McpError::invalid_request(
+                "find provided without a matching replace".to_string(),
+                None,
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(McpError::invalid_request(
+                "replace provided without a matching find".to_string(),
+                None,
+            ));
+        }
+        (None, None) => {}
+    }
+
+    // Shape 3: the edits[] array, each entry carrying its own find/replace.
+    if let Some(edits) = args.get("edits") {
+        let items = edits.as_array().ok_or_else(|| {
+            McpError::invalid_request("edits must be an array of edit objects".to_string(), None)
+        })?;
+        for (idx, item) in items.iter().enumerate() {
+            let obj = item.as_object().ok_or_else(|| {
+                McpError::invalid_request(
+                    format!("edits[{idx}] must be an object with find/replace"),
+                    None,
+                )
+            })?;
+            let finds =
+                collect_strings(first_present(obj, "find", FIND_ALIASES))?.ok_or_else(|| {
+                    McpError::invalid_request(format!("edits[{idx}] is missing find"), None)
+                })?;
+            let replaces = collect_strings(first_present(obj, "replace", REPLACE_ALIASES))?
+                .ok_or_else(|| {
+                    McpError::invalid_request(format!("edits[{idx}] is missing replace"), None)
+                })?;
+            pairs.extend(pair_finds_replaces(finds, replaces, read_replace_all(obj))?);
+        }
+    }
+
+    if pairs.is_empty() {
+        return Err(McpError::invalid_request(
+            "no edits provided: supply find/replace (or aliases), or an edits array".to_string(),
+            None,
+        ));
+    }
+
+    Ok(pairs)
+}
 
 impl Operation for EditFile {
     fn verb(&self) -> &'static str {
@@ -405,44 +657,15 @@ pub async fn execute_edit(
     arguments: serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    use serde::Deserialize;
     use swissarmyhammer_common::rate_limiter::get_rate_limiter;
 
-    /// Single edit operation with flexible parameter names
-    #[derive(Deserialize, Debug)]
-    struct EditOperation {
-        #[serde(alias = "old_string", alias = "old_text")]
-        #[serde(rename = "oldText")]
-        old_text: String,
-        #[serde(alias = "new_string", alias = "new_text")]
-        #[serde(rename = "newText")]
-        new_text: String,
-        #[serde(default)]
-        replace_all: bool,
-    }
-
-    /// Request supporting both single edit and multiple edits modes
-    #[derive(Deserialize, Debug)]
-    struct EditRequest {
-        #[serde(alias = "file_path", alias = "filePath", alias = "absolute_path")]
-        path: Option<String>,
-        // Legacy single edit mode fields
-        #[serde(alias = "oldText", alias = "old_text")]
-        old_string: Option<String>,
-        #[serde(alias = "newText", alias = "new_text")]
-        new_string: Option<String>,
-        replace_all: Option<bool>,
-        // Multiple edits mode
-        edits: Option<Vec<EditOperation>>,
-    }
-
-    // Parse arguments
-    let request: EditRequest = BaseToolImpl::parse_arguments(arguments)?;
-
-    // Extract file path
-    let file_path = request.path.ok_or_else(|| {
-        McpError::invalid_request("path/file_path/filePath is required".to_string(), None)
-    })?;
+    // Extract file path under any canonical/alias key.
+    let file_path = first_present(&arguments, "file_path", FILE_PATH_ALIASES)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            McpError::invalid_request("path/file_path/filePath is required".to_string(), None)
+        })?
+        .to_string();
 
     // Validate file path
     if file_path.trim().is_empty() {
@@ -452,33 +675,26 @@ pub async fn execute_edit(
         ));
     }
 
-    // Check rate limit using tokio task ID as client identifier
-    let rate_limiter = get_rate_limiter();
-    let client_id = format!("task_{:?}", tokio::task::try_id());
-
-    // Determine mode and prepare edit operations
-    let edit_operations: Vec<EditOperation> = if let Some(edits) = request.edits {
-        // Multiple edits mode
-        if edits.is_empty() {
+    // An explicitly empty `edits: []` (with no top-level find/replace) keeps its
+    // historical, more specific error message.
+    if let Some(serde_json::Value::Array(edits)) = arguments.get("edits") {
+        if edits.is_empty()
+            && first_present(&arguments, "find", FIND_ALIASES).is_none()
+            && first_present(&arguments, "replace", REPLACE_ALIASES).is_none()
+        {
             return Err(McpError::invalid_request(
                 "edits array cannot be empty".to_string(),
                 None,
             ));
         }
-        edits
-    } else if let (Some(old_string), Some(new_string)) = (request.old_string, request.new_string) {
-        // Single edit mode (legacy)
-        vec![EditOperation {
-            old_text: old_string,
-            new_text: new_string,
-            replace_all: request.replace_all.unwrap_or(false),
-        }]
-    } else {
-        return Err(McpError::invalid_request(
-            "Either provide old_string/new_string for single edit, or edits array for multiple edits".to_string(),
-            None,
-        ));
-    };
+    }
+
+    // Normalize every accepted input shape into canonical (find, replace) pairs.
+    let edit_operations = normalize_edit_args(&arguments)?;
+
+    // Check rate limit using tokio task ID as client identifier
+    let rate_limiter = get_rate_limiter();
+    let client_id = format!("task_{:?}", tokio::task::try_id());
 
     // Check rate limit based on number of operations
     let cost = edit_operations.len() as u32;
@@ -492,14 +708,14 @@ pub async fn execute_edit(
 
     // Validate all edit operations
     for (idx, edit_op) in edit_operations.iter().enumerate() {
-        if edit_op.old_text.is_empty() {
+        if edit_op.find.is_empty() {
             return Err(McpError::invalid_request(
                 format!("Edit operation {}: old_text cannot be empty", idx),
                 None,
             ));
         }
 
-        if edit_op.old_text == edit_op.new_text {
+        if edit_op.find == edit_op.replace {
             return Err(McpError::invalid_request(
                 format!(
                     "Edit operation {}: old_text and new_text must be different",
@@ -529,8 +745,8 @@ pub async fn execute_edit(
             path = %file_path,
             operation = idx + 1,
             total_operations = edit_operations.len(),
-            old_text_len = edit_op.old_text.len(),
-            new_text_len = edit_op.new_text.len(),
+            old_text_len = edit_op.find.len(),
+            new_text_len = edit_op.replace.len(),
             replace_all = edit_op.replace_all,
             "Applying edit operation"
         );
@@ -538,8 +754,8 @@ pub async fn execute_edit(
         let edit_result = tool.edit_file_atomic(
             &base_dir,
             &file_path,
-            &edit_op.old_text,
-            &edit_op.new_text,
+            &edit_op.find,
+            &edit_op.replace,
             edit_op.replace_all,
         )?;
 
@@ -1020,11 +1236,12 @@ mod tests {
 
         let error = result.unwrap_err();
         let error_str = format!("{:?}", error);
-        // Should error because it's missing new_string for single edit mode
+        // A find (old_string is now an alias of `find`) with no matching replace
+        // must error rather than silently dropping the unpaired find.
         assert!(
-            error_str.contains("Invalid arguments")
-                || error_str.contains("provide old_string/new_string")
-                || error_str.contains("edits")
+            error_str.contains("find provided without a matching replace")
+                || error_str.contains("replace"),
+            "unexpected error: {error_str}"
         );
     }
 
@@ -1359,6 +1576,187 @@ mod tests {
         };
         // Multiple edits response says "OK: Applied N edit operations"
         assert!(text.contains("OK") && text.contains("2") || text.contains("Applied"));
+    }
+
+    // =========================================================================
+    // normalize_edit_args — pure argument shaping (no IO)
+    // =========================================================================
+
+    /// Build a JSON arg map from a serde_json::json! object literal.
+    fn args(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        value.as_object().expect("object literal").clone()
+    }
+
+    fn pair(find: &str, replace: &str, replace_all: bool) -> EditPair {
+        EditPair {
+            find: find.to_string(),
+            replace: replace.to_string(),
+            replace_all,
+        }
+    }
+
+    #[test]
+    fn normalize_canonical_scalar_find_replace() {
+        let got = normalize_edit_args(&args(serde_json::json!({
+            "file_path": "/x", "find": "a", "replace": "b"
+        })))
+        .unwrap();
+        assert_eq!(got, vec![pair("a", "b", false)]);
+    }
+
+    #[test]
+    fn normalize_legacy_old_new_string_resolves_same_as_find_replace() {
+        let canonical = normalize_edit_args(&args(serde_json::json!({
+            "find": "a", "replace": "b"
+        })))
+        .unwrap();
+        let legacy = normalize_edit_args(&args(serde_json::json!({
+            "old_string": "a", "new_string": "b"
+        })))
+        .unwrap();
+        assert_eq!(legacy, canonical);
+    }
+
+    #[test]
+    fn normalize_legacy_oldtext_newtext_resolves_same_as_find_replace() {
+        let canonical = normalize_edit_args(&args(serde_json::json!({
+            "find": "a", "replace": "b"
+        })))
+        .unwrap();
+        let legacy = normalize_edit_args(&args(serde_json::json!({
+            "oldText": "a", "newText": "b"
+        })))
+        .unwrap();
+        assert_eq!(legacy, canonical);
+    }
+
+    #[test]
+    fn normalize_search_with_alias_pair() {
+        // edits[] entries using {search, with} aliases.
+        let got = normalize_edit_args(&args(serde_json::json!({
+            "edits": [{ "search": "a", "with": "b" }, { "search": "c", "with": "d" }]
+        })))
+        .unwrap();
+        assert_eq!(got, vec![pair("a", "b", false), pair("c", "d", false)]);
+    }
+
+    #[test]
+    fn normalize_scalar_array_and_edits_yield_same_pairs() {
+        let scalar = normalize_edit_args(&args(serde_json::json!({
+            "find": "a", "replace": "b"
+        })))
+        .unwrap();
+        let arrays = normalize_edit_args(&args(serde_json::json!({
+            "find": ["a"], "replace": ["b"]
+        })))
+        .unwrap();
+        let edits = normalize_edit_args(&args(serde_json::json!({
+            "edits": [{ "find": "a", "replace": "b" }]
+        })))
+        .unwrap();
+        assert_eq!(scalar, vec![pair("a", "b", false)]);
+        assert_eq!(arrays, scalar);
+        assert_eq!(edits, scalar);
+    }
+
+    #[test]
+    fn normalize_parallel_arrays_zip() {
+        let got = normalize_edit_args(&args(serde_json::json!({
+            "find": ["a", "c"], "replace": ["b", "d"]
+        })))
+        .unwrap();
+        assert_eq!(got, vec![pair("a", "b", false), pair("c", "d", false)]);
+    }
+
+    #[test]
+    fn normalize_broadcast_single_replace_to_many_finds() {
+        // Delete-many: many finds + one empty replace.
+        let got = normalize_edit_args(&args(serde_json::json!({
+            "find": ["a", "b", "c"], "replace": [""]
+        })))
+        .unwrap();
+        assert_eq!(
+            got,
+            vec![
+                pair("a", "", false),
+                pair("b", "", false),
+                pair("c", "", false)
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_broadcast_scalar_replace_to_array_finds() {
+        let got = normalize_edit_args(&args(serde_json::json!({
+            "find": ["a", "b"], "replace": "X"
+        })))
+        .unwrap();
+        assert_eq!(got, vec![pair("a", "X", false), pair("b", "X", false)]);
+    }
+
+    #[test]
+    fn normalize_toplevel_and_edits_concatenate() {
+        let got = normalize_edit_args(&args(serde_json::json!({
+            "find": "a", "replace": "b",
+            "edits": [{ "find": "c", "replace": "d" }]
+        })))
+        .unwrap();
+        assert_eq!(got, vec![pair("a", "b", false), pair("c", "d", false)]);
+    }
+
+    #[test]
+    fn normalize_replace_all_scalar_applies_to_toplevel_pair() {
+        let got = normalize_edit_args(&args(serde_json::json!({
+            "find": "a", "replace": "b", "replace_all": true
+        })))
+        .unwrap();
+        assert_eq!(got, vec![pair("a", "b", true)]);
+    }
+
+    #[test]
+    fn normalize_replace_all_per_edit_entry() {
+        let got = normalize_edit_args(&args(serde_json::json!({
+            "edits": [
+                { "find": "a", "replace": "b", "replace_all": true },
+                { "find": "c", "replace": "d" }
+            ]
+        })))
+        .unwrap();
+        assert_eq!(got, vec![pair("a", "b", true), pair("c", "d", false)]);
+    }
+
+    #[test]
+    fn normalize_mismatched_array_lengths_errors_with_remainder() {
+        // 3 finds, 2 replaces (not a broadcast): zip the first 2, surface the
+        // unpaired remainder in the error — never silently drop.
+        let err = normalize_edit_args(&args(serde_json::json!({
+            "find": ["a", "b", "c"], "replace": ["x", "y"]
+        })))
+        .unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains('c'),
+            "error must name the unpaired find: {msg}"
+        );
+    }
+
+    #[test]
+    fn normalize_one_find_many_replaces_errors_with_remainder() {
+        let err = normalize_edit_args(&args(serde_json::json!({
+            "find": ["a"], "replace": ["x", "y"]
+        })))
+        .unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains('y'),
+            "error must name the unpaired replace: {msg}"
+        );
+    }
+
+    #[test]
+    fn normalize_no_find_or_replace_or_edits_errors() {
+        let err = normalize_edit_args(&args(serde_json::json!({ "file_path": "/x" }))).unwrap_err();
+        let _ = format!("{err:?}");
     }
 
     #[tokio::test]

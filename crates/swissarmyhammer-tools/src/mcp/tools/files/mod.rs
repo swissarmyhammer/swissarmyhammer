@@ -200,9 +200,12 @@ impl McpTool for FilesTool {
                             None,
                         ))
                     }
-                } else if arguments.contains_key("old_string")
-                    || arguments.contains_key("new_string")
-                {
+                } else if edit::looks_like_edit(&arguments) {
+                    // Any find-ish/replace-ish key (canonical or alias) or an
+                    // `edits` array routes to edit. This must precede the
+                    // `content`→write branch so a canonical `{find, replace}`
+                    // call is not misrouted to write or to "Cannot determine
+                    // operation".
                     edit::execute_edit(args, context).await
                 } else if arguments.contains_key("content") {
                     write::execute_write(args, context).await
@@ -699,6 +702,57 @@ mod tests {
             std::fs::read_to_string(&test_file).unwrap(),
             "goodbye world"
         );
+    }
+
+    #[tokio::test]
+    async fn test_infer_edit_from_canonical_find_replace() {
+        let tool = FilesTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("infer_find_replace.txt");
+        std::fs::write(&test_file, "hello world").unwrap();
+
+        // No "op" key, canonical {find, replace} — must route to edit.
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "file_path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("find".to_string(), serde_json::json!("hello"));
+        args.insert("replace".to_string(), serde_json::json!("goodbye"));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            std::fs::read_to_string(&test_file).unwrap(),
+            "goodbye world"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_infer_edit_from_edits_array() {
+        let tool = FilesTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("infer_edits_array.txt");
+        std::fs::write(&test_file, "foo bar").unwrap();
+
+        // No "op" key, an edits[] array — must route to edit, not error.
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "file_path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert(
+            "edits".to_string(),
+            serde_json::json!([{ "find": "foo", "replace": "FOO" }]),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+        assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "FOO bar");
     }
 
     #[tokio::test]

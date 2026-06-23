@@ -2356,12 +2356,15 @@ async fn test_write_tool_error_handling() {
 #[tokio::test]
 async fn test_edit_tool_discovery_and_registration() {
     let registry = create_test_registry().await;
+    // `find`/`replace` are the canonical schema properties; the legacy
+    // `old_string`/`new_string` names are now aliases resolved by the
+    // normalizer at parse time and are not separate schema properties.
     verify_tool_registration(
         &registry,
         "files",
         &["file"],
         &["op"],
-        &["file_path", "old_string", "new_string", "replace_all"],
+        &["file_path", "find", "replace", "edits", "replace_all"],
     );
 }
 

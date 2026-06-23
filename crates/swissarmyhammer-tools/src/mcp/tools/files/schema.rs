@@ -164,10 +164,23 @@ mod tests {
         // Write params
         assert!(props.contains_key("file_path"));
         assert!(props.contains_key("content"));
-        // Edit params
-        assert!(props.contains_key("old_string"));
-        assert!(props.contains_key("new_string"));
+        // Edit params: `find`/`replace`/`edits` are the canonical top-level
+        // properties; the legacy `old_string`/`new_string` names are demoted to
+        // aliases and resolve via `normalize_edit_args` at parse time, so they
+        // must NOT appear as separate schema properties. (Do not assert property
+        // ordering — `collect_all_parameters` dedups into a HashMap.)
+        assert!(props.contains_key("find"));
+        assert!(props.contains_key("replace"));
+        assert!(props.contains_key("edits"));
         assert!(props.contains_key("replace_all"));
+        assert!(
+            !props.contains_key("old_string"),
+            "old_string is an alias of find, not a separate schema property"
+        );
+        assert!(
+            !props.contains_key("new_string"),
+            "new_string is an alias of replace, not a separate schema property"
+        );
         // Glob params
         assert!(props.contains_key("pattern"));
         assert!(props.contains_key("case_sensitive"));
