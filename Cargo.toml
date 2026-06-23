@@ -70,6 +70,7 @@ members = [
     "apps/code-context-cli",
     "crates/swissarmyhammer-cli-completions",
     "crates/swissarmyhammer-hashline",
+    "crates/swissarmyhammer-edit-match",
 ]
 resolver = "2"
 
@@ -285,6 +286,7 @@ swissarmyhammer-common = { path = "crates/swissarmyhammer-common" }
 swissarmyhammer-config = { path = "crates/swissarmyhammer-config" }
 swissarmyhammer-diagnostics = { path = "crates/swissarmyhammer-diagnostics" }
 swissarmyhammer-directory = { path = "crates/swissarmyhammer-directory" }
+swissarmyhammer-edit-match = { path = "crates/swissarmyhammer-edit-match" }
 swissarmyhammer-doctor = { path = "crates/swissarmyhammer-doctor" }
 swissarmyhammer-embedding = { path = "crates/swissarmyhammer-embedding" }
 swissarmyhammer-entity = { path = "crates/swissarmyhammer-entity" }

@@ -42,6 +42,10 @@ comments:
   id: 01kvtz9wxyszz1zmjn9x1cc5d8
   text: 'Heads-up: an implementation of this task landed unexpectedly during the /finish $file-edit-tools batch (an implementer subagent did out-of-scope work). It''s in local commit 8c48cc703: `ensure_gitignore_entries` is now called from `KanbanContext::ensure_directories` (context.rs), made `pub(crate)` in board/init.rs, plus a `test_ensure_directories_self_heals_gitignore_entries` test. This matches this card''s spec. NOT driven through /review yet and this task is outside the file-edit-tools scope — needs a proper /test + /review pass before being marked done. Verify the change is complete/correct rather than assuming.'
   timestamp: 2026-06-23T19:28:51.646453+00:00
+- actor: claude-code
+  id: 01kvtzzf1bp3x0g1ht2zkpht2m
+  text: 'DONE via /finish. Final state: review clean (0 blockers/warnings/nits against in-scope swissarmyhammer-kanban files), tests green (1537/1537, clippy clean). 3 review iterations — each surfaced a distinct doc-comment nit (REQUIRED_GITIGNORE_ENTRIES, then ensure_gitignore_entries), now resolved. Source landed in HEAD 8c48cc703; local rollback-point commit 1d3c0d971 captures the self-healed .kanban/.gitignore + task state. NOT pushed (user''s step). Out-of-scope hashline Error/Display findings left untouched.'
+  timestamp: 2026-06-23T19:40:38.315896+00:00
 position_column: done
 position_ordinal: ffffffffffffffffffffffffffffffffffffffd380
 title: Kanban .gitignore self-heals search-cache entries on board open, not just first init

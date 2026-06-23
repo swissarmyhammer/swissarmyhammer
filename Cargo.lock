@@ -8260,6 +8260,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-edit-match"
+version = "0.16.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "swissarmyhammer-embedding"
 version = "0.16.0"
 dependencies = [

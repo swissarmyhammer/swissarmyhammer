@@ -18,8 +18,12 @@ comments:
 
     Verification (all fresh, green): nextest 17/17 passed; doctest 1/1 passed; clippy --all-targets -D warnings clean; cargo fmt --check clean; cargo build -p swissarmyhammer-edit-match OK. Wired into root Cargo.toml members + [workspace.dependencies] mirroring swissarmyhammer-hashline.
   timestamp: 2026-06-23T19:38:17.922564+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kvv00dpqjwp8h01jrb32ktk0
+  text: 'really-done complete: all verification commands green (nextest 17/17, doctest 1/1, clippy -D warnings clean, fmt --check clean). Adversarial double-check returned PASS with no findings (verified independently, probed below-threshold→NoMatch, anchor span off-by-one, line-alignment edge cases, CRLF/lone-CR/no-newline). Moved to review. Tree left clean — only the new untracked crate dir + Cargo.toml/Cargo.lock wiring are mine. Did NOT commit (orchestrator commits separately).'
+  timestamp: 2026-06-23T19:41:09.719115+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffd480
 project: file-edit-tools
 title: swissarmyhammer-edit-match crate — pure literal-find ladder
 ---
@@ -54,3 +58,13 @@ Pure: `(content, find) -> MatchOutcome`, no IO. Dependency-light.
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass.
+
+## Review Findings (2026-06-23 13:42)
+
+Substantive acceptance criteria all verified independently (nextest 17/17 green, doctest 1/1, empty `[dependencies]` / no `swissarmyhammer-tools` dep, `FUZZY_ACCEPT_THRESHOLD=0.85` + `FUZZY_RUNNER_UP_MARGIN=0.10` as named public consts, Exact span / Normalized-on-original-bytes / Ambiguous-no-silent-pick / below-threshold→NoMatch all covered by passing named tests). The remaining findings are subjective cosmetic style only — recorded here, not blocking; task advanced to `done` per review calibration.
+
+### Warnings
+- [ ] `crates/swissarmyhammer-edit-match/src/lib.rs:350` — byte_offsets_of() reimplements std::str::match_indices() from the standard library. The function manually searches for substring occurrences in a loop, but match_indices() provides exactly this functionality idomatically. Replace the function body with: `haystack.match_indices(needle).map(|(i, _)| i).collect()` — a single idiomatic call that is clearer, shorter, and relies on the standard library rather than reimplementing the same logic.
+
+### Nits
+- [ ] `crates/swissarmyhammer-edit-match/tests/properties.rs:54` — Upper bound `6` in range `1usize..6` for indentation is unexplained. This configures the maximum indentation level tested, making it a test configuration value. The `1` is a common initialization value (excepted), but `6` is not. Extract `6` as a named constant: `const MAX_INDENT_FOR_TEST: usize = 6;`, then use `1usize..MAX_INDENT_FOR_TEST`.
