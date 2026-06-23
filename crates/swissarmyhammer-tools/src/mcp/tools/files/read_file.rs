@@ -59,7 +59,7 @@ impl McpTool for ReadFileTool {
     }
 
     fn description(&self) -> &'static str {
-        "Read file contents from the local filesystem. Returns text for text files; binary files are returned as base64. Supports optional line-based offset and limit for partial reads."
+        "Read file contents from the local filesystem. Returns UTF-8 text; non-UTF-8 (binary) files are rejected with an error. Supports optional line-based offset and limit for partial reads."
     }
 
     fn schema(&self) -> serde_json::Value {

@@ -71,6 +71,40 @@ where
     }
 }
 
+/// Compute the whole-file freshness token for `content`.
+///
+/// The token is the lowercase hex MD5 digest of the full file bytes. It is the
+/// *freshness token* the `read files` tool surfaces and the `write files` /
+/// `edit files` guards re-derive from on-disk bytes to detect whole-file
+/// staleness — a model that read a file and then writes it back must present
+/// the token it saw, or the guard re-bases it against the current content.
+///
+/// MD5 is used purely for change detection (not security); a single shared
+/// function keeps the read-side token and the write-side check in lockstep.
+pub fn whole_file_hash(content: &str) -> String {
+    format!("{:x}", md5::compute(content.as_bytes()))
+}
+
+/// Apply line-based `offset`/`limit` windowing to `content`.
+///
+/// `offset` is a 1-based starting line (lines before it are skipped); `limit`
+/// caps the number of lines returned. The window is rejoined with `\n`,
+/// matching the pre-existing read behavior (original line terminators are not
+/// preserved in the plain form). `None`/`None` returns `content` unchanged.
+pub(crate) fn window_lines(content: &str, offset: Option<usize>, limit: Option<usize>) -> String {
+    match (offset, limit) {
+        (None, None) => content.to_string(),
+        (offset, limit) => {
+            let skip = offset.map(|o| o.saturating_sub(1)).unwrap_or(0);
+            let mut lines = content.lines().skip(skip);
+            match limit {
+                Some(limit) => lines.by_ref().take(limit).collect::<Vec<_>>().join("\n"),
+                None => lines.collect::<Vec<_>>().join("\n"),
+            }
+        }
+    }
+}
+
 /// Validate that a file path is absolute and within acceptable boundaries
 ///
 /// This function performs essential security validation for all file operations:
@@ -962,32 +996,9 @@ impl SecureFileAccess {
             }
         };
 
-        // Apply offset and limit if specified (same logic as existing read tool)
-        let final_content = match (offset, limit) {
-            (Some(offset), Some(limit)) => {
-                let lines: Vec<&str> = content.lines().collect();
-                lines
-                    .iter()
-                    .skip(offset.saturating_sub(1))
-                    .take(limit)
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
-            (Some(offset), None) => {
-                let lines: Vec<&str> = content.lines().collect();
-                lines
-                    .iter()
-                    .skip(offset.saturating_sub(1))
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
-            (None, Some(limit)) => content.lines().take(limit).collect::<Vec<_>>().join("\n"),
-            (None, None) => content,
-        };
-
-        Ok(final_content)
+        // Apply offset and limit if specified (shared with the read handler's
+        // hashline path via `window_lines`).
+        Ok(window_lines(&content, offset, limit))
     }
 
     /// Securely writes file content with validation

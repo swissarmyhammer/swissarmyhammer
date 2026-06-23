@@ -5,8 +5,9 @@
 //! the unified [`crate::mcp::tools::files::FilesTool`] (dispatched via
 //! `op: "read file"`) and the validator-facing
 //! [`crate::mcp::tools::files::read_file::ReadFileTool`] (called by name).
-//! It supports reading text files, binary content (with automatic base64
-//! encoding), and partial reads for large files via line-based offset/limit.
+//! It supports reading UTF-8 text files and partial reads for large files via
+//! line-based offset/limit. Non-UTF-8 (binary) content is rejected with an
+//! error rather than decoded.
 //!
 //! Note: This is an MCP tool, not an ACP operation. ACP capability checking happens at the
 //! agent layer (claude-agent, llama-agent), not at the MCP tool layer.
@@ -17,7 +18,7 @@
 //!   security framework, including workspace boundary enforcement and path traversal protection
 //! * **Partial Reading**: Efficient reading of large files using line-based offset and limit
 //!   parameters without loading the entire file into memory
-//! * **Binary Support**: Automatic detection and base64 encoding of binary file content
+//! * **Text Only**: Reads UTF-8 text; non-UTF-8 (binary) files are rejected with an error
 //! * **Performance Optimized**: Configurable limits prevent excessive resource usage
 //! * **Audit Logging**: All file access attempts are logged for security monitoring
 //!
@@ -74,7 +75,51 @@ static READ_FILE_PARAMS: &[ParamMeta] = &[
     ParamMeta::new("limit")
         .description("Maximum number of lines to read (optional)")
         .param_type(ParamType::Integer),
+    ParamMeta::new("format")
+        .description(
+            "Output form: \"hashline\" (default) prefixes each text line with a \
+             `N:HH|` anchor (absolute 1-based line number + content hash) so the \
+             line can be referenced by `edit files`; \"plain\" emits untagged \
+             content. Only UTF-8 text is read; non-UTF-8 (binary) files are \
+             rejected with an error and are never tagged.",
+        )
+        .param_type(ParamType::String)
+        .allowed_values(&["hashline", "plain"]),
 ];
+
+/// Output form for [`execute_read`]: hashline-tagged (default) or plain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadFormat {
+    /// Each text line is prefixed with a `N:HH|` hashline anchor.
+    Hashline,
+    /// Pre-existing untagged content.
+    Plain,
+}
+
+impl ReadFormat {
+    /// Parse the `format` argument, defaulting to [`ReadFormat::Hashline`].
+    ///
+    /// `allowed_values` on the param already constrains the schema; this rejects
+    /// any other value defensively with an `invalid_request` error.
+    fn parse(value: Option<&str>) -> Result<Self, McpError> {
+        match value {
+            None | Some("hashline") => Ok(ReadFormat::Hashline),
+            Some("plain") => Ok(ReadFormat::Plain),
+            Some(other) => Err(McpError::invalid_request(
+                format!("format must be \"hashline\" or \"plain\", got {other:?}"),
+                None,
+            )),
+        }
+    }
+}
+
+/// Prefix marker for the whole-file freshness-token metadata line.
+///
+/// The first line of a successful read is `#hash:<hex>` — the
+/// [`whole_file_hash`](crate::mcp::tools::files::shared_utils::whole_file_hash)
+/// of the full on-disk bytes. `write files` / `edit files` use it as a
+/// staleness token. It precedes the (optionally tagged) content.
+const HASH_LINE_PREFIX: &str = "#hash:";
 
 impl Operation for ReadFile {
     fn verb(&self) -> &'static str {
@@ -110,7 +155,7 @@ impl Operation for ReadFile {
 ///
 /// * **Configurable Limits**: Prevents excessive resource usage with offset/limit boundaries
 /// * **Memory Efficient**: Supports partial reading of large files without loading entire content
-/// * **Binary Support**: Automatic base64 encoding for binary files
+/// * **Text Only**: Reads UTF-8 text; non-UTF-8 (binary) files are rejected with an error
 /// * **Concurrent Safe**: Thread-safe operations for multiple simultaneous file reads
 ///
 /// ## Supported Parameters
@@ -122,7 +167,7 @@ pub async fn execute_read(
     arguments: serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    use crate::mcp::tools::files::shared_utils::SecureFileAccess;
+    use crate::mcp::tools::files::shared_utils::{whole_file_hash, window_lines, SecureFileAccess};
     use serde::Deserialize;
     use swissarmyhammer_common::rate_limiter::get_rate_limiter;
 
@@ -145,6 +190,8 @@ pub async fn execute_read(
             deserialize_with = "crate::mcp::tools::files::shared_utils::deserialize_flexible_usize"
         )]
         limit: Option<usize>,
+        #[serde(default)]
+        format: Option<String>,
     }
 
     // Parse arguments
@@ -225,16 +272,43 @@ pub async fn execute_read(
         "Attempting to read file"
     );
 
-    // Perform secure read operation
-    let content = secure_access.read(&request.path, request.offset, request.limit)?;
+    let format = ReadFormat::parse(request.format.as_deref())?;
+
+    // Read the full file once: the whole-file content is needed both for the
+    // freshness token (hashed over all bytes) and for hashline tagging with
+    // absolute line numbers. Windowing is applied afterward in this handler.
+    let full_content = secure_access.read(&request.path, None, None)?;
+    let hash = whole_file_hash(&full_content);
+
+    // Apply offset/limit windowing to the body that is returned.
+    let windowed = window_lines(&full_content, request.offset, request.limit);
+
+    // In hashline form, tag each line `N:HH|` with the absolute 1-based line
+    // number (the window starts at `offset`, defaulting to line 1) so anchors
+    // stay stable across `offset`/`limit` windows. Non-UTF-8 (binary) files
+    // never reach here — `read_to_string` rejects them with an error upstream —
+    // so the body is always text and binary is never tagged.
+    let body = match format {
+        ReadFormat::Hashline => {
+            let start_line = request.offset.unwrap_or(1);
+            swissarmyhammer_hashline::tag(&windowed, start_line)
+        }
+        ReadFormat::Plain => windowed,
+    };
+
+    // Prepend the freshness-token metadata line so `write files` / `edit files`
+    // can re-base against it.
+    let payload = format!("{HASH_LINE_PREFIX}{hash}\n{body}");
 
     debug!(
         path = %request.path,
-        content_length = content.len(),
+        content_length = body.len(),
+        format = ?format,
+        whole_file_hash = %hash,
         "Successfully read file content"
     );
 
-    Ok(BaseToolImpl::create_success_response(content))
+    Ok(BaseToolImpl::create_success_response(payload))
 }
 
 #[cfg(test)]
@@ -546,5 +620,207 @@ mod tests {
 
         let result = execute_read(args, &context).await;
         assert!(result.is_err());
+    }
+
+    /// Extract the text payload of a successful read result.
+    fn read_text(result: &CallToolResult) -> String {
+        match &result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        }
+    }
+
+    /// The body of a read result, with the leading `#hash:...` metadata line
+    /// removed so callers can assert on the file content alone. Preserves the
+    /// body verbatim (including any trailing newline).
+    fn read_body(result: &CallToolResult) -> String {
+        let text = read_text(result);
+        match text.split_once('\n') {
+            Some((_hash_line, body)) => body.to_string(),
+            None => String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_default_output_is_hashline_tagged() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("tagged.txt");
+        fs::write(&test_file, "alpha\nbeta\ngamma\n").unwrap();
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+
+        let result = execute_read(args, &context).await.unwrap();
+        let body = read_body(&result);
+
+        // Each line carries an absolute, 1-based hashline anchor `N:HH|line`.
+        let mut lines = body.lines();
+        let expected = swissarmyhammer_hashline::tag("alpha\nbeta\ngamma\n", 1);
+        assert_eq!(body, expected);
+        assert!(lines.next().unwrap().starts_with("1:"));
+    }
+
+    #[tokio::test]
+    async fn test_plain_format_opts_out_of_tagging() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("plain.txt");
+        fs::write(&test_file, "alpha\nbeta\ngamma\n").unwrap();
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("format".to_string(), serde_json::json!("plain"));
+
+        let result = execute_read(args, &context).await.unwrap();
+        let body = read_body(&result);
+
+        // Plain form is the pre-existing untagged content, verbatim.
+        assert_eq!(body, "alpha\nbeta\ngamma\n");
+        assert!(!body.contains('|'));
+    }
+
+    #[tokio::test]
+    async fn test_hashline_n_is_absolute_under_offset() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("offset_tag.txt");
+        fs::write(&test_file, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n").unwrap();
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("offset".to_string(), serde_json::json!(3));
+
+        let result = execute_read(args, &context).await.unwrap();
+        let body = read_body(&result);
+
+        // The first emitted line is file line 3 — its anchor must read `3:`,
+        // not `1:`, so anchors stay stable across windows.
+        let first = body.lines().next().unwrap();
+        assert!(
+            first.starts_with("3:"),
+            "expected absolute anchor 3:, got {first}"
+        );
+        assert!(first.ends_with("|Line 3"));
+        assert!(!body.contains("Line 1"));
+    }
+
+    #[tokio::test]
+    async fn test_read_result_exposes_whole_file_hash() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("hashed.txt");
+        fs::write(&test_file, "alpha\nbeta\n").unwrap();
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+
+        let result = execute_read(args, &context).await.unwrap();
+        let text = read_text(&result);
+
+        // The first line is a `#hash:<hex>` freshness token over full file bytes.
+        let first = text.lines().next().unwrap();
+        assert!(
+            first.starts_with("#hash:"),
+            "expected leading #hash: metadata line, got {first}"
+        );
+        let hash = first.strip_prefix("#hash:").unwrap();
+        assert!(!hash.is_empty());
+        // It matches the shared whole-file hash of the on-disk bytes.
+        let expected = crate::mcp::tools::files::shared_utils::whole_file_hash("alpha\nbeta\n");
+        assert_eq!(hash, expected);
+    }
+
+    #[tokio::test]
+    async fn test_whole_file_hash_is_stable_across_identical_reads() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("stable.txt");
+        fs::write(&test_file, "one\ntwo\nthree\n").unwrap();
+
+        let context = create_test_context().await;
+        let read_once = || {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "path".to_string(),
+                serde_json::json!(test_file.to_string_lossy()),
+            );
+            args
+        };
+
+        let a = execute_read(read_once(), &context).await.unwrap();
+        let b = execute_read(read_once(), &context).await.unwrap();
+
+        let hash_a = read_text(&a).lines().next().unwrap().to_string();
+        let hash_b = read_text(&b).lines().next().unwrap().to_string();
+        assert_eq!(hash_a, hash_b);
+
+        // The token reflects content: a changed file yields a different hash.
+        fs::write(&test_file, "one\ntwo\nCHANGED\n").unwrap();
+        let c = execute_read(read_once(), &context).await.unwrap();
+        let hash_c = read_text(&c).lines().next().unwrap().to_string();
+        assert_ne!(hash_a, hash_c);
+    }
+
+    #[tokio::test]
+    async fn test_binary_file_is_rejected_in_both_formats() {
+        // The read path decodes UTF-8 (`read_to_string`); non-UTF-8 bytes are
+        // rejected with an error rather than tagged or base64-encoded. This
+        // holds for both formats, so binary content is never tagged.
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("binary.bin");
+        // Invalid UTF-8 byte sequence.
+        fs::write(&test_file, [0x00u8, 0xff, 0xfe, 0x80, 0x01]).unwrap();
+
+        let context = create_test_context().await;
+        for format in ["hashline", "plain"] {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "path".to_string(),
+                serde_json::json!(test_file.to_string_lossy()),
+            );
+            args.insert("format".to_string(), serde_json::json!(format));
+
+            let result = execute_read(args, &context).await;
+            assert!(
+                result.is_err(),
+                "binary file should be rejected with format={format}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hashline_offset_and_limit_anchor_matches_true_line() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("window.txt");
+        fs::write(&test_file, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n").unwrap();
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("offset".to_string(), serde_json::json!(2));
+        args.insert("limit".to_string(), serde_json::json!(2));
+
+        let result = execute_read(args, &context).await.unwrap();
+        let body = read_body(&result);
+
+        let anchors: Vec<&str> = body.lines().collect();
+        assert_eq!(anchors.len(), 2);
+        assert!(anchors[0].starts_with("2:") && anchors[0].ends_with("|Line 2"));
+        assert!(anchors[1].starts_with("3:") && anchors[1].ends_with("|Line 3"));
     }
 }

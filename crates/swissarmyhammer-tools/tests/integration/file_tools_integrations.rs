@@ -161,6 +161,63 @@ fn extract_response_text(call_result: &rmcp::model::CallToolResult) -> &str {
     }
 }
 
+/// Recover the plain file content from a default (hashline) `read files`
+/// result.
+///
+/// The default read output is `#hash:<hex>\n` followed by hashline-tagged
+/// lines `N:HH|text`. This strips the leading freshness-token line and the
+/// per-line `N:HH|` anchors, reconstructing the original content (line endings
+/// preserved) so tests that assert on raw content can keep doing so against the
+/// new default. The whole-file hash itself is exercised separately.
+fn read_content(call_result: &rmcp::model::CallToolResult) -> String {
+    let text = extract_response_text(call_result);
+    let body = match text.split_once('\n') {
+        Some((hash_line, body)) => {
+            assert!(
+                hash_line.starts_with("#hash:"),
+                "expected leading #hash: line, got {hash_line}"
+            );
+            body
+        }
+        // A read of a truly empty file is just the `#hash:<hex>` line with no
+        // trailing newline and no body.
+        None => {
+            assert!(
+                text.starts_with("#hash:"),
+                "expected #hash: line, got {text}"
+            );
+            return String::new();
+        }
+    };
+
+    // De-tag each line by dropping the `N:HH|` anchor prefix, preserving the
+    // original line terminators.
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while !rest.is_empty() {
+        let (line, terminator, remaining) = match rest.find(['\n', '\r']) {
+            None => (rest, "", ""),
+            Some(idx) => {
+                let after = &rest[idx..];
+                let (term, remaining) = if let Some(s) = after.strip_prefix("\r\n") {
+                    ("\r\n", s)
+                } else if let Some(s) = after.strip_prefix('\r') {
+                    ("\r", s)
+                } else {
+                    ("\n", &after[1..])
+                };
+                (&rest[..idx], term, remaining)
+            }
+        };
+        // Strip the `N:HH|` anchor prefix (text after the first `|`).
+        let plain = line.split_once('|').map(|(_, t)| t).unwrap_or(line);
+        out.push_str(plain);
+        out.push_str(terminator);
+        rest = remaining;
+    }
+    out
+}
+
 /// Create a test file with given name and content, returning env, temp_dir path, and file path
 fn create_test_file(
     name: &str,
@@ -725,7 +782,21 @@ async fn test_read_with_offset_limit(
     let call_result = result.unwrap();
     let response_text = extract_response_text(&call_result);
 
-    assert_eq!(response_text, expected_content);
+    // Default read output is hashline-tagged and carries a leading
+    // `#hash:<hex>` freshness-token line. Strip that line, then compare the
+    // body against the expected window tagged with absolute 1-based line
+    // numbers (the window starts at `offset`, defaulting to line 1).
+    let (hash_line, body) = response_text
+        .split_once('\n')
+        .expect("read output must have a #hash: line then a body");
+    assert!(
+        hash_line.starts_with("#hash:"),
+        "expected leading #hash: line, got {hash_line}"
+    );
+
+    let start_line = offset.unwrap_or(1);
+    let expected_tagged = swissarmyhammer_hashline::tag(expected_content, start_line);
+    assert_eq!(body, expected_tagged);
 }
 
 /// Verify tool exists in registry
@@ -872,10 +943,9 @@ async fn test_read_tool_execution_success_cases() {
     assert_eq!(call_result.is_error, Some(false));
     assert!(!call_result.content.is_empty());
 
-    // Extract the content from the response
-    let response_text = extract_response_text(&call_result);
-
-    assert_eq!(response_text, test_content);
+    // Default read is hashline-tagged with a `#hash:` token line; recover the
+    // plain content to compare against the source.
+    assert_eq!(read_content(&call_result), test_content);
 }
 
 #[tokio::test]
@@ -1047,14 +1117,14 @@ async fn test_read_tool_handles_large_files_safely() {
     );
 
     let call_result = result.unwrap();
-    let response_text = extract_response_text(&call_result);
+    let content = read_content(&call_result);
 
     // Should only contain first 10 lines
-    let line_count = response_text.lines().count();
+    let line_count = content.lines().count();
     assert_eq!(line_count, 10);
-    assert!(response_text.starts_with("Line 1 content"));
-    assert!(response_text.contains("Line 10 content"));
-    assert!(!response_text.contains("Line 11 content"));
+    assert!(content.starts_with("Line 1 content"));
+    assert!(content.contains("Line 10 content"));
+    assert!(!content.contains("Line 11 content"));
 }
 
 // ============================================================================
@@ -1076,9 +1146,7 @@ async fn test_read_tool_empty_file() {
     assert!(result.is_ok(), "Reading empty file should succeed");
 
     let call_result = result.unwrap();
-    let response_text = extract_response_text(&call_result);
-
-    assert_eq!(response_text, "");
+    assert_eq!(read_content(&call_result), "");
 }
 
 #[tokio::test]
@@ -1096,9 +1164,7 @@ async fn test_read_tool_single_line_file() {
     assert!(result.is_ok());
 
     let call_result = result.unwrap();
-    let response_text = extract_response_text(&call_result);
-
-    assert_eq!(response_text, test_content);
+    assert_eq!(read_content(&call_result), test_content);
 }
 
 #[tokio::test]
@@ -1116,9 +1182,7 @@ async fn test_read_tool_with_unicode_content() {
     assert!(result.is_ok(), "Reading unicode file should succeed");
 
     let call_result = result.unwrap();
-    let response_text = extract_response_text(&call_result);
-
-    assert_eq!(response_text, test_content);
+    assert_eq!(read_content(&call_result), test_content);
 }
 
 #[tokio::test]
@@ -1249,10 +1313,10 @@ async fn test_read_tool_large_file_handling() {
     );
 
     let call_result = result.unwrap();
-    let response_text = extract_response_text(&call_result);
+    let content = read_content(&call_result);
 
     // Should contain exactly 100 lines worth of content
-    let line_count = response_text.lines().count();
+    let line_count = content.lines().count();
     assert_eq!(line_count, 100, "Should read exactly 100 lines");
 }
 
@@ -2851,9 +2915,8 @@ async fn test_write_then_read_workflow() {
     let read_call_result = read_result.unwrap();
     assert_eq!(read_call_result.is_error, Some(false));
 
-    // Verify content matches
-    let response_text = extract_response_text(&read_call_result);
-    assert_eq!(response_text, test_content);
+    // Verify content matches (default read is hashline-tagged; recover plain).
+    assert_eq!(read_content(&read_call_result), test_content);
 }
 
 #[tokio::test]
@@ -4214,9 +4277,11 @@ async fn test_write_read_roundtrip_properties() {
         let read_result = read_tool.execute(read_args, &context).await;
         match read_result {
             Ok(response) => {
-                let read_content = extract_text_content(&response.content[0].raw);
+                // Default read is hashline-tagged with a `#hash:` token line;
+                // recover the plain content for the round-trip comparison.
+                let recovered = read_content(&response);
                 assert_eq!(
-                    read_content, content,
+                    recovered, content,
                     "Content mismatch for file: {}",
                     file_path
                 );
@@ -4395,8 +4460,10 @@ async fn test_read_offset_limit_consistency_properties() {
 
         match read_tool.execute(read_args, &context).await {
             Ok(response) => {
-                let read_content = extract_text_content(&response.content[0].raw);
-                let read_lines: Vec<&str> = read_content.lines().collect();
+                // Default read is hashline-tagged with a `#hash:` token line;
+                // recover the plain windowed content for line comparisons.
+                let recovered = read_content(&response);
+                let read_lines: Vec<&str> = recovered.lines().collect();
 
                 // Assert that we don't exceed the requested limit
                 assert!(

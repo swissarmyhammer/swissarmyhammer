@@ -8766,6 +8766,7 @@ dependencies = [
  "swissarmyhammer-directory",
  "swissarmyhammer-embedding",
  "swissarmyhammer-git",
+ "swissarmyhammer-hashline",
  "swissarmyhammer-kanban",
  "swissarmyhammer-lsp",
  "swissarmyhammer-mcp-proxy",
