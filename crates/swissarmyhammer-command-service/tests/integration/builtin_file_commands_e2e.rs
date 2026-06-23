@@ -508,8 +508,15 @@ fn assert_new_board_metadata(cmd: &Value) {
     assert_no_scope_or_params(cmd, "file.newBoard");
 }
 
-/// `file.openBoard` — file.yaml: undoable:false, keys cua Mod+O, menu
+/// `file.openBoard` — file.yaml: undoable:false, keys cua Mod+o, menu
 /// File/0/1.
+///
+/// The key is the canonical lowercase form `normalizeKeyEvent` emits for an
+/// unshifted letter chord (`Mod+o`, not `Mod+O`): since the static React scope
+/// defs were deleted (Card I), this registry metadata is the only webview key
+/// source, and the frontend matches the string literally. `file.openBoard` has
+/// no `BINDING_TABLES` entry — it rides the native menu accelerator (which
+/// parses letters case-insensitively), so the lowercase form serves both sides.
 fn assert_open_board_metadata(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Open Board"), "file.openBoard name");
     assert_eq!(
@@ -519,7 +526,7 @@ fn assert_open_board_metadata(cmd: &Value) {
     );
     assert_eq!(
         cmd["keys"],
-        json!({ "cua": "Mod+O" }),
+        json!({ "cua": "Mod+o" }),
         "file.openBoard keys"
     );
     assert_eq!(

@@ -1448,13 +1448,21 @@ fn assert_app_help(cmd: &Value) {
     assert_no_menu(cmd, "app.help");
 }
 
-/// `app.quit` — app.yaml: keys cua:Mod+Q / vim:":q", menu {path:[App], group:2,
+/// `app.quit` — app.yaml: keys cua:Mod+q / vim:":q", menu {path:[App], group:2,
 /// order:0}.
+///
+/// The cua key is the canonical lowercase form `normalizeKeyEvent` emits for an
+/// unshifted letter chord (`Mod+q`, not `Mod+Q`): since the static React scope
+/// defs were deleted (Card I), this registry metadata is the only webview key
+/// source, and the frontend matches the string literally. `app.quit` has no
+/// `BINDING_TABLES` entry — it rides the native menu accelerator (which parses
+/// letters case-insensitively), so the lowercase form serves the accelerator
+/// AND makes the chord reachable in the webview on non-Mac.
 fn assert_app_quit(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Quit"), "app.quit name");
     assert_eq!(
         cmd["keys"],
-        json!({ "cua": "Mod+Q", "vim": ":q" }),
+        json!({ "cua": "Mod+q", "vim": ":q" }),
         "app.quit keys"
     );
     assert_eq!(
@@ -1488,13 +1496,22 @@ fn assert_app_palette(cmd: &Value) {
     assert_no_menu(cmd, "app.palette");
 }
 
-/// `app.search` — app.yaml: keys vim:"/" / cua:Mod+F / emacs:Mod+F, menu
+/// `app.search` — app.yaml: keys vim:"/" / cua:Mod+f, menu
 /// {path:[Edit], group:0, order:2}.
+///
+/// The cua key is the canonical lowercase form (`Mod+f`, not `Mod+F`) —
+/// `BINDING_TABLES.cua` agrees (`Mod+f` → app.search) so it is reachable in
+/// the webview. The emacs key is DROPPED on purpose: `BINDING_TABLES.emacs`
+/// binds `Mod+f` → `nav.right` (the non-Mac normalization of emacs
+/// forward-char Ctrl+f), so canonicalizing app.search's emacs key to `Mod+f`
+/// would hijack emacs Ctrl+F from navigate-right to Find and reopen the
+/// first-id-wins nondeterminism (cards 01KTQ6QZNB3VN4MAND7VPASM21 /
+/// 01KMT56FTBAP8PQ4QQND08MP97). Emacs Find is left to the command palette.
 fn assert_app_search(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Find"), "app.search name");
     assert_eq!(
         cmd["keys"],
-        json!({ "vim": "/", "cua": "Mod+F", "emacs": "Mod+F" }),
+        json!({ "vim": "/", "cua": "Mod+f" }),
         "app.search keys"
     );
     assert_eq!(
@@ -1514,18 +1531,20 @@ fn assert_app_dismiss(cmd: &Value) {
     assert_no_menu(cmd, "app.dismiss");
 }
 
-/// `app.undo` — app.yaml: undoable:false; keys cua:Mod+Z / vim:u /
+/// `app.undo` — app.yaml: undoable:false; keys cua:Mod+z / vim:u /
 /// emacs:Ctrl+/, menu {path:[Edit], group:0, order:0}.
 ///
-/// The emacs `Ctrl+/` binding moved here from `app-shell.tsx`'s deleted
-/// `STATIC_GLOBAL_COMMANDS` (Card I) — the registry is now the only key
-/// source for the webview hotkey path.
+/// The cua key is the canonical lowercase form (`Mod+z`, not `Mod+Z`) —
+/// `BINDING_TABLES.cua` agrees (`Mod+z` → app.undo) so it is reachable in the
+/// webview. The emacs `Ctrl+/` binding moved here from `app-shell.tsx`'s
+/// deleted `STATIC_GLOBAL_COMMANDS` (Card I) — the registry is now the only
+/// key source for the webview hotkey path.
 fn assert_app_undo(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Undo"), "app.undo name");
     assert_eq!(cmd["undoable"], json!(false), "app.undo undoable:false");
     assert_eq!(
         cmd["keys"],
-        json!({ "cua": "Mod+Z", "vim": "u", "emacs": "Ctrl+/" }),
+        json!({ "cua": "Mod+z", "vim": "u", "emacs": "Ctrl+/" }),
         "app.undo keys"
     );
     assert_eq!(
@@ -1535,14 +1554,20 @@ fn assert_app_undo(cmd: &Value) {
     );
 }
 
-/// `app.redo` — app.yaml: undoable:false; keys cua:Mod+Shift+Z / vim:Ctrl+R,
+/// `app.redo` — app.yaml: undoable:false; keys cua:Mod+Shift+Z / vim:Mod+r,
 /// menu {path:[Edit], group:0, order:1}.
+///
+/// The vim key is canonicalized to `Mod+r` per `BINDING_TABLES.vim` (`Mod+r` →
+/// app.redo): non-Mac Ctrl+R normalizes to `Mod+r` anyway, and on Mac this
+/// means Cmd+R (Ctrl stays distinct there). The literal `Ctrl+R` form is
+/// unreachable from `normalizeKeyEvent` output, so it is replaced with the
+/// canonical chord the binding table encodes.
 fn assert_app_redo(cmd: &Value) {
     assert_eq!(cmd["name"], json!("Redo"), "app.redo name");
     assert_eq!(cmd["undoable"], json!(false), "app.redo undoable:false");
     assert_eq!(
         cmd["keys"],
-        json!({ "cua": "Mod+Shift+Z", "vim": "Ctrl+R" }),
+        json!({ "cua": "Mod+Shift+Z", "vim": "Mod+r" }),
         "app.redo keys"
     );
     assert_eq!(
