@@ -19,11 +19,30 @@ descriptions a model tends to emit:
    the file's original surrounding bytes (including indentation) are preserved.
 
 Delete by giving an empty `replace`. Insert by replacing a line with itself plus
-the new content. If a `find` cannot be resolved to a single, unambiguous target,
-the edit fails and the file is left unchanged.
+the new content.
 
 The file's character encoding and line-ending convention are detected and
 preserved.
+
+## Ambiguity and `occurrence`
+
+When `replace_all` is false and a `find` has **more than one** confident match
+(several lines that resolve the same way, or a `find` that both resolves as a
+hashline anchor and occurs as literal text), the edit is *not* a failure: it
+returns a **successful** result listing each candidate with its 1-based
+`occurrence` index, line number, current text, and a few lines of surrounding
+context — and the file is left byte-identical. Re-issue the edit with
+`occurrence: N` to apply exactly that candidate, or `replace_all: true` to change
+every match. A `find` that matches nothing still fails.
+
+```json
+{
+  "file_path": "/home/user/project/src/config.rs",
+  "find": "log(\"start\")",
+  "replace": "log(\"started\")",
+  "occurrence": 2
+}
+```
 
 ## Input shapes
 

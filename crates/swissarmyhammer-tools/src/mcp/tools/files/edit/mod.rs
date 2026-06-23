@@ -78,6 +78,14 @@ static EDIT_FILE_PARAMS: &[ParamMeta] = &[
     ParamMeta::new("replace_all")
         .description("Replace all occurrences (default: false)")
         .param_type(ParamType::Boolean),
+    ParamMeta::new("occurrence")
+        .description(
+            "1-based candidate index to disambiguate when `find` has multiple confident \
+             matches and `replace_all` is false. Omit it and an ambiguous `find` returns \
+             the candidate list (line numbers + current text + context) instead of editing; \
+             supply it to apply exactly that candidate.",
+        )
+        .param_type(ParamType::Integer),
     ParamMeta::new("edits")
         .description("Array of {find, replace} edit pairs to apply sequentially")
         .param_type(ParamType::Array),
@@ -95,6 +103,13 @@ pub struct EditPair {
     pub replace: String,
     /// Replace every occurrence (`true`) instead of just the first (`false`).
     pub replace_all: bool,
+    /// 1-based candidate index that disambiguates an otherwise-ambiguous `find`.
+    ///
+    /// `None` (the default) means "no hint": an ambiguous `find` returns the
+    /// candidate listing instead of editing. When supplied and it selects exactly
+    /// one of the surfaced candidates, that candidate is applied. Ignored when the
+    /// `find` is unambiguous.
+    pub occurrence: Option<usize>,
 }
 
 /// Read the first present key among `keys` from `map`.
@@ -148,6 +163,18 @@ fn read_replace_all(map: &serde_json::Map<String, serde_json::Value>) -> bool {
         .unwrap_or(false)
 }
 
+/// Read an optional 1-based `occurrence` hint from a map (canonical name only).
+///
+/// A value `>= 1` is kept; `0`, a negative, or a non-integer is treated as
+/// absent (`None`) so a malformed hint never silently selects the wrong
+/// candidate — it simply falls back to the candidate listing.
+fn read_occurrence(map: &serde_json::Map<String, serde_json::Value>) -> Option<usize> {
+    map.get("occurrence")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|&n| n >= 1)
+        .map(|n| n as usize)
+}
+
 /// Pair a list of finds with a list of replaces using the forgiving rules:
 /// - N finds + N replaces → zip.
 /// - N finds + 1 replace → broadcast the single replace to every find.
@@ -157,6 +184,7 @@ fn pair_finds_replaces(
     finds: Vec<String>,
     replaces: Vec<String>,
     replace_all: bool,
+    occurrence: Option<usize>,
 ) -> Result<Vec<EditPair>, McpError> {
     // Broadcast a single replace across many finds (the delete-many shape).
     if replaces.len() == 1 && finds.len() > 1 {
@@ -167,6 +195,7 @@ fn pair_finds_replaces(
                 find,
                 replace: replace.clone(),
                 replace_all,
+                occurrence,
             })
             .collect());
     }
@@ -179,6 +208,7 @@ fn pair_finds_replaces(
                 find,
                 replace,
                 replace_all,
+                occurrence,
             })
             .collect());
     }
@@ -245,6 +275,7 @@ pub fn normalize_edit_args(
                 finds,
                 replaces,
                 read_replace_all(args),
+                read_occurrence(args),
             )?);
         }
         (Some(_), None) => {
@@ -282,7 +313,12 @@ pub fn normalize_edit_args(
                 .ok_or_else(|| {
                     McpError::invalid_request(format!("edits[{idx}] is missing replace"), None)
                 })?;
-            pairs.extend(pair_finds_replaces(finds, replaces, read_replace_all(obj))?);
+            pairs.extend(pair_finds_replaces(
+                finds,
+                replaces,
+                read_replace_all(obj),
+                read_occurrence(obj),
+            )?);
         }
     }
 
@@ -322,6 +358,46 @@ enum Resolution {
     },
 }
 
+/// One competing location for an ambiguous `find`. Surfaced to the model so it
+/// can disambiguate with [`EditPair::occurrence`] on the retry. Carries enough
+/// to both describe the choice (line number + current text + context) and apply
+/// it (the byte `range` to splice).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Candidate {
+    /// Byte range into the working content this candidate would overwrite.
+    range: Range<usize>,
+    /// 1-based line number where the candidate begins.
+    line: usize,
+    /// The current text covered by `range`.
+    text: String,
+    /// A few lines of surrounding context (the candidate's neighbourhood),
+    /// rendered with line-number gutters for the model to orient against.
+    context: String,
+}
+
+/// The outcome of resolving one [`EditPair`] against the working content: either
+/// it resolved to a concrete [`Resolution`] to commit, or it is ambiguous and the
+/// competing [`Candidate`]s must be surfaced for disambiguation.
+///
+/// Ambiguity is deliberately *not* an [`McpError`]: the cascade reports it up to
+/// [`execute_edit`], which turns it into a SUCCESSFUL tool result describing the
+/// choice, leaving the file byte-identical.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PairOutcome {
+    /// The pair resolved to a concrete edit to commit.
+    Resolved(Resolution),
+    /// The pair is ambiguous; these are the competing locations.
+    Ambiguous {
+        /// The text the model searched for, echoed back in the prompt.
+        find: String,
+        /// The competing candidate locations.
+        candidates: Vec<Candidate>,
+    },
+}
+
+/// Number of context lines rendered on each side of a candidate line.
+const CANDIDATE_CONTEXT_RADIUS: usize = 2;
+
 /// Trim a trailing `\r` from the byte range `start..end`, returning the adjusted
 /// end position. Excludes the `\r` of a `\r\n` terminator (or a classic-Mac final
 /// `\r`) so a line's text range stops before its terminator.
@@ -359,6 +435,69 @@ fn line_text_range(content: &str, line: usize) -> Option<Range<usize>> {
     None
 }
 
+/// The 1-based physical line number containing the byte at `offset`.
+fn line_number_at(content: &str, offset: usize) -> usize {
+    content.as_bytes()[..offset.min(content.len())]
+        .iter()
+        .filter(|&&b| b == b'\n')
+        .count()
+        + 1
+}
+
+/// Render `radius` lines of context on each side of `line` (1-based) from
+/// `content`, with a `N: ` line-number gutter so the model can orient against
+/// the file. The candidate's own line is included.
+fn render_context(content: &str, line: usize, radius: usize) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let total = lines.len();
+    if total == 0 || line == 0 {
+        return String::new();
+    }
+    let first = line.saturating_sub(radius).max(1);
+    let last = (line + radius).min(total);
+    let mut out = String::new();
+    for n in first..=last {
+        out.push_str(&format!("{n}: {}\n", lines[n - 1]));
+    }
+    out
+}
+
+/// Build a [`Candidate`] for the byte `range` in `content`.
+fn candidate_for(content: &str, range: Range<usize>) -> Candidate {
+    let line = line_number_at(content, range.start);
+    Candidate {
+        text: content[range.clone()].to_string(),
+        context: render_context(content, line, CANDIDATE_CONTEXT_RADIUS),
+        line,
+        range,
+    }
+}
+
+/// Render the human-readable disambiguation prompt for an ambiguous `find`.
+///
+/// Lists each candidate (1-based, matching the `occurrence` param) with its line
+/// number, current text, and surrounding context, and instructs the model to
+/// re-issue the edit with `occurrence: N`. This is the body of a *successful*
+/// tool result — the file is left unchanged.
+fn render_ambiguity_prompt(find: &str, candidates: &[Candidate]) -> String {
+    let mut out = format!(
+        "`find` {find:?} matches {} locations; no unique target. Re-issue the edit \
+         with `occurrence: N` (1-based) to pick one, or `replace_all: true` to \
+         change every match.\n",
+        candidates.len()
+    );
+    for (idx, candidate) in candidates.iter().enumerate() {
+        out.push_str(&format!(
+            "\noccurrence {} — line {}, current text {:?}:\n{}",
+            idx + 1,
+            candidate.line,
+            candidate.text,
+            candidate.context,
+        ));
+    }
+    out
+}
+
 /// Whether `find` parses as a hashline anchor that **resolves** against
 /// `content`: the referenced line exists and its content hashes to the anchor's
 /// expected value. Returns the resolved line's text byte range when it does.
@@ -381,18 +520,21 @@ fn resolve_anchor(content: &str, find: &str) -> Option<Range<usize>> {
 /// rung of the cascade that applies.
 ///
 /// Order (the safety rule in the task): a `replace_all` pair is always the
-/// literal global path. Otherwise:
+/// literal global path (no ambiguity prompt). Otherwise:
 /// 1. Anchor rung — `find` parses as a hashline anchor **and** resolves (line
 ///    exists, hash matches) → replace the whole line. If a resolving anchor and
-///    a literal occurrence *both* exist, that is ambiguity (a downstream task);
-///    here it is reported as an error rather than silently picking one.
+///    a literal occurrence *both* exist, both are surfaced as candidates rather
+///    than guessing.
 /// 2. Literal-substring rung — `find` occurs verbatim in `content` → replace the
 ///    first occurrence (legacy exact-substring semantics).
-/// 3. Recovery rung — [`find_match`] resolves a drifted / re-indented `find` to a
-///    unique span → replace that span.
-/// 4. Otherwise → a clear error (the seam left for the ambiguity / near-miss
-///    downstream tasks).
-fn resolve_pair(content: &str, pair: &EditPair) -> Result<Resolution, McpError> {
+/// 3. Recovery rung — [`find_match`] resolves a drifted / re-indented `find`; a
+///    unique span is spliced, multiple confident spans surface as candidates.
+/// 4. Otherwise → a clear "not found" error.
+///
+/// Ambiguity returns [`PairOutcome::Ambiguous`] (a successful disambiguation
+/// prompt upstream), unless [`EditPair::occurrence`] selects exactly one of the
+/// candidates, in which case that one is applied.
+fn resolve_pair(content: &str, pair: &EditPair) -> Result<PairOutcome, McpError> {
     if pair.replace_all {
         if !content.contains(&pair.find) {
             return Err(McpError::invalid_request(
@@ -400,66 +542,85 @@ fn resolve_pair(content: &str, pair: &EditPair) -> Result<Resolution, McpError> 
                 None,
             ));
         }
-        return Ok(Resolution::GlobalLiteral {
+        return Ok(PairOutcome::Resolved(Resolution::GlobalLiteral {
             find: pair.find.clone(),
             replace: pair.replace.clone(),
-        });
+        }));
     }
 
     let anchor = resolve_anchor(content, &pair.find);
     let literal = content.find(&pair.find);
 
     match (anchor, literal) {
-        // Ambiguity seam: a resolving anchor AND a literal occurrence both exist.
-        // The ambiguity task (^0fvjsv4) will surface candidates; the core just
-        // refuses to guess.
-        (Some(_), Some(_)) => Err(McpError::invalid_request(
-            format!(
-                "'{}' is ambiguous: it resolves as a hashline anchor and also \
-                 occurs as literal text. Disambiguate the edit",
-                pair.find
-            ),
-            None,
-        )),
+        // A resolving anchor AND a literal occurrence both exist: surface both as
+        // candidates rather than guessing. The anchor candidate replaces its whole
+        // line; the literal candidate replaces just the matched substring.
+        (Some(anchor_range), Some(start)) => {
+            let literal_range = start..start + pair.find.len();
+            let candidates = vec![
+                candidate_for(content, anchor_range),
+                candidate_for(content, literal_range),
+            ];
+            Ok(disambiguate(pair, candidates))
+        }
         // Anchor rung — replace the whole resolved line.
-        (Some(range), None) => Ok(Resolution::Splice {
+        (Some(range), None) => Ok(PairOutcome::Resolved(Resolution::Splice {
             range,
             replacement: pair.replace.clone(),
-        }),
+        })),
         // Literal-substring rung — replace the first occurrence (legacy
         // exact-substring semantics keep prevailing tests green).
-        (None, Some(start)) => Ok(Resolution::Splice {
+        (None, Some(start)) => Ok(PairOutcome::Resolved(Resolution::Splice {
             range: start..start + pair.find.len(),
             replacement: pair.replace.clone(),
-        }),
+        })),
         // Recovery rung — climb the literal-find ladder for a drifted span.
         (None, None) => resolve_via_ladder(content, pair),
     }
 }
 
 /// Recovery rung: run the [`find_match`] ladder and map its outcome to a
-/// [`Resolution`]. A unique span is spliced; anything else is a clear error,
-/// leaving the seam for the ambiguity (^0fvjsv4) and near-miss (^5tj0c9z)
-/// downstream tasks.
-fn resolve_via_ladder(content: &str, pair: &EditPair) -> Result<Resolution, McpError> {
+/// [`PairOutcome`]. A unique span is spliced; multiple confident spans surface as
+/// candidates (subject to [`EditPair::occurrence`] disambiguation); nothing
+/// confident is a clear "not found" error.
+fn resolve_via_ladder(content: &str, pair: &EditPair) -> Result<PairOutcome, McpError> {
     match find_match(content, &pair.find) {
-        MatchOutcome::Unique { span, .. } => Ok(Resolution::Splice {
+        MatchOutcome::Unique { span, .. } => Ok(PairOutcome::Resolved(Resolution::Splice {
             range: span,
             replacement: pair.replace.clone(),
-        }),
-        MatchOutcome::Ambiguous { candidates } => Err(McpError::invalid_request(
-            format!(
-                "'{}' matches {} locations; no unique target. Provide more \
-                 surrounding context or a hashline anchor",
-                pair.find,
-                candidates.len()
-            ),
-            None,
-        )),
+        })),
+        MatchOutcome::Ambiguous { candidates } => {
+            let candidates = candidates
+                .into_iter()
+                .map(|span| candidate_for(content, span.range))
+                .collect();
+            Ok(disambiguate(pair, candidates))
+        }
         MatchOutcome::NoMatch { .. } => Err(McpError::invalid_request(
             format!("String '{}' not found in file", pair.find),
             None,
         )),
+    }
+}
+
+/// Resolve an ambiguous set of `candidates` using [`EditPair::occurrence`].
+///
+/// When `occurrence` (1-based) names exactly one of the candidates, splice that
+/// candidate's range with the pair's replacement. Otherwise (no hint, or a hint
+/// out of range) keep the ambiguity so the candidate listing is surfaced — an
+/// out-of-range hint must never silently mis-apply.
+fn disambiguate(pair: &EditPair, candidates: Vec<Candidate>) -> PairOutcome {
+    if let Some(idx) = pair.occurrence {
+        if let Some(chosen) = candidates.get(idx - 1) {
+            return PairOutcome::Resolved(Resolution::Splice {
+                range: chosen.range.clone(),
+                replacement: pair.replace.clone(),
+            });
+        }
+    }
+    PairOutcome::Ambiguous {
+        find: pair.find.clone(),
+        candidates,
     }
 }
 
@@ -479,18 +640,48 @@ fn apply_resolution(content: &str, resolution: &Resolution) -> String {
     }
 }
 
+/// The outcome of applying a whole batch of pairs against an in-memory working
+/// copy: either every pair resolved and the fully-edited content is ready to
+/// commit, or some pair was ambiguous and its candidates must be surfaced.
+///
+/// Ambiguity short-circuits the batch — nothing is committed, so the file stays
+/// byte-identical (atomicity), and the candidate listing is returned upstream as
+/// a SUCCESSFUL tool result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ApplyOutcome {
+    /// Every pair resolved; this is the content to commit.
+    Applied(String),
+    /// A pair was ambiguous; surface these candidates for disambiguation.
+    Ambiguous {
+        /// The text the model searched for.
+        find: String,
+        /// The competing candidate locations.
+        candidates: Vec<Candidate>,
+    },
+}
+
 /// Resolve and apply every pair in sequence against an in-memory working copy,
 /// returning the fully-edited content. Each pair sees the result of the prior
 /// pair (matching the legacy sequential semantics), but nothing is written to
 /// disk here — the caller commits the final content in one atomic rewrite, so a
-/// failure on any pair leaves the file byte-identical.
-fn apply_all_pairs(original: &str, pairs: &[EditPair]) -> Result<String, McpError> {
+/// failure or ambiguity on any pair leaves the file byte-identical.
+///
+/// An ambiguous pair short-circuits the batch: its candidates are returned
+/// immediately, before any later pair is applied, so the working copy is
+/// discarded and the file is never partially written.
+fn apply_all_pairs(original: &str, pairs: &[EditPair]) -> Result<ApplyOutcome, McpError> {
     let mut working = original.to_string();
     for pair in pairs {
-        let resolution = resolve_pair(&working, pair)?;
-        working = apply_resolution(&working, &resolution);
+        match resolve_pair(&working, pair)? {
+            PairOutcome::Resolved(resolution) => {
+                working = apply_resolution(&working, &resolution);
+            }
+            PairOutcome::Ambiguous { find, candidates } => {
+                return Ok(ApplyOutcome::Ambiguous { find, candidates });
+            }
+        }
     }
-    Ok(working)
+    Ok(ApplyOutcome::Applied(working))
 }
 
 impl Operation for EditFile {
@@ -975,7 +1166,22 @@ pub async fn execute_edit(
 
     // Resolve + apply every pair against the working copy (no IO). The cascade
     // (anchor → literal substring → recovery ladder) runs here.
-    let new_content = apply_all_pairs(&original_content, &edit_operations)?;
+    let new_content = match apply_all_pairs(&original_content, &edit_operations)? {
+        ApplyOutcome::Applied(content) => content,
+        // Ambiguity is a SUCCESSFUL result describing the choice — NOT an error.
+        // Nothing was committed, so the file is byte-identical; the model retries
+        // with an `occurrence` hint.
+        ApplyOutcome::Ambiguous { find, candidates } => {
+            info!(
+                path = %file_path,
+                candidate_count = candidates.len(),
+                "Edit `find` is ambiguous; returning candidates for disambiguation"
+            );
+            return Ok(BaseToolImpl::create_success_response(
+                render_ambiguity_prompt(&find, &candidates),
+            ));
+        }
+    };
 
     // Commit the fully-edited content in one atomic rewrite.
     let final_result = tool.commit_content(
@@ -1809,6 +2015,7 @@ mod tests {
             find: find.to_string(),
             replace: replace.to_string(),
             replace_all,
+            occurrence: None,
         }
     }
 
@@ -2196,5 +2403,251 @@ mod tests {
         let result = execute_edit(args, &context).await;
         assert!(result.is_ok(), "delete should succeed: {result:?}");
         assert_eq!(fs::read_to_string(&test_file).unwrap(), "keep keep");
+    }
+
+    // =========================================================================
+    // Ambiguity → candidates (not an error) + occurrence disambiguation
+    // =========================================================================
+
+    /// Read the text payload of a `CallToolResult`.
+    fn result_text(result: &CallToolResult) -> String {
+        match &result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("expected text content"),
+        }
+    }
+
+    /// Build a JSON arg map with `find`/`replace` (and optional `occurrence`).
+    fn ambiguity_args(
+        file_path: &str,
+        find: &str,
+        replace: &str,
+        occurrence: Option<u64>,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "file_path".to_string(),
+            serde_json::Value::String(file_path.to_string()),
+        );
+        args.insert(
+            "find".to_string(),
+            serde_json::Value::String(find.to_string()),
+        );
+        args.insert(
+            "replace".to_string(),
+            serde_json::Value::String(replace.to_string()),
+        );
+        if let Some(n) = occurrence {
+            args.insert(
+                "occurrence".to_string(),
+                serde_json::Value::Number(n.into()),
+            );
+        }
+        args
+    }
+
+    /// Two normalized matches (find requires whitespace normalization so it is not
+    /// a literal substring) with `replace_all` false return a SUCCESSFUL result
+    /// listing each candidate's line number, current text, and context — and the
+    /// file is left byte-identical.
+    #[tokio::test]
+    async fn ambiguity_returns_candidates_not_error_and_file_unchanged() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("ambig.txt");
+        // Two identical lines. The `find` carries surrounding whitespace the
+        // content lines lack, so it is NOT a literal substring
+        // (content.find returns None) but normalizes (outer whitespace trimmed)
+        // to match both lines via the line-block rung → Ambiguous.
+        let content = "head\nfoo()\nmid\nfoo()\ntail\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = ambiguity_args(&test_file.to_string_lossy(), "  foo()  ", "bar()", None);
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "ambiguity must be a successful result, got {result:?}"
+        );
+        let call = result.unwrap();
+        assert_eq!(
+            call.is_error,
+            Some(false),
+            "ambiguity is not an error result"
+        );
+
+        let text = result_text(&call);
+        // Candidate line numbers (2 and 4), the current text, and a context hint.
+        assert!(
+            text.contains("occurrence"),
+            "must mention occurrence: {text}"
+        );
+        assert!(text.contains("line 2"), "must list line 2: {text}");
+        assert!(text.contains("line 4"), "must list line 4: {text}");
+        assert!(text.contains("foo()"), "must show current text: {text}");
+
+        // File is byte-identical — nothing was committed.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    /// Supplying `occurrence: N` selects the Nth candidate (1-based) and applies
+    /// only that edit.
+    #[tokio::test]
+    async fn occurrence_selects_nth_candidate_and_applies() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("occ.txt");
+        let content = "head\nfoo()\nmid\nfoo()\ntail\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        // occurrence 2 → the second matching line (line 4) is rewritten; line 2 is
+        // left intact (the whole matched line span is replaced).
+        let args = ambiguity_args(&test_file.to_string_lossy(), "  foo()  ", "bar()", Some(2));
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "occurrence apply should succeed: {result:?}"
+        );
+        let call = result.unwrap();
+        assert_eq!(call.is_error, Some(false));
+
+        assert_eq!(
+            fs::read_to_string(&test_file).unwrap(),
+            "head\nfoo()\nmid\nbar()\ntail\n",
+            "only the 2nd candidate line is rewritten"
+        );
+    }
+
+    /// `occurrence: 1` selects the first candidate.
+    #[tokio::test]
+    async fn occurrence_one_selects_first_candidate() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("occ1.txt");
+        let content = "head\nfoo()\nmid\nfoo()\ntail\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = ambiguity_args(&test_file.to_string_lossy(), "  foo()  ", "bar()", Some(1));
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "occurrence apply should succeed: {result:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(&test_file).unwrap(),
+            "head\nbar()\nmid\nfoo()\ntail\n",
+            "only the 1st candidate line is rewritten"
+        );
+    }
+
+    /// An out-of-range `occurrence` does not silently mis-apply: it falls back to
+    /// the candidate listing (successful result) and does not change the file.
+    #[tokio::test]
+    async fn occurrence_out_of_range_returns_candidates_unchanged() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("occ_oob.txt");
+        let content = "head\nfoo()\nmid\nfoo()\ntail\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        // Only 2 candidates exist; occurrence 5 is out of range.
+        let args = ambiguity_args(&test_file.to_string_lossy(), "  foo()  ", "bar()", Some(5));
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "out-of-range occurrence stays a successful listing"
+        );
+        let call = result.unwrap();
+        assert_eq!(call.is_error, Some(false));
+        // File unchanged — no mis-apply.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    /// A resolving anchor whose line text ALSO occurs as a literal substring is
+    /// surfaced as candidates (anchor + literal), not silently picked — the file
+    /// is unchanged.
+    #[tokio::test]
+    async fn anchor_and_literal_both_present_surfaces_candidates() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("anchor_literal.txt");
+        // Compute the anchor for line 2, then place that exact anchor string as
+        // literal text on line 1 so `content.find(find)` is Some as well.
+        let line2 = "payload";
+        let anchor = anchor_for(line2, 2);
+        let content = format!("{anchor}\n{line2}\n");
+        fs::write(&test_file, &content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = ambiguity_args(&test_file.to_string_lossy(), &anchor, "REPLACED", None);
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "anchor-vs-literal ambiguity must be a successful listing: {result:?}"
+        );
+        let call = result.unwrap();
+        assert_eq!(call.is_error, Some(false));
+        // File unchanged — the tool did not guess between anchor and literal.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    /// Atomicity on ambiguity: an earlier pair that WOULD apply, followed by an
+    /// ambiguous later pair, must leave the file byte-identical — the earlier
+    /// pair's in-memory mutation is never flushed, and the result is the
+    /// successful candidate listing.
+    #[tokio::test]
+    async fn ambiguous_later_pair_does_not_partially_write_earlier_pair() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("ambig_batch.txt");
+        // "one" applies cleanly; "  two  " is ambiguous (two normalized matches).
+        let content = "one\ntwo\nmid\ntwo\ntail\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_file.to_string_lossy().to_string()),
+        );
+        args.insert(
+            "edits".to_string(),
+            serde_json::json!([
+                { "find": "one", "replace": "ONE" },
+                { "find": "  two  ", "replace": "TWO" }
+            ]),
+        );
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "ambiguous later pair yields a successful listing: {result:?}"
+        );
+        assert_eq!(result.unwrap().is_error, Some(false));
+
+        // Byte-identical: the first pair's "one"→"ONE" mutation was NOT committed.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    /// `replace_all: true` continues to replace every match with no ambiguity
+    /// prompt, even when multiple matches exist.
+    #[tokio::test]
+    async fn replace_all_true_has_no_ambiguity_prompt() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("replace_all_ambig.txt");
+        let content = "foo\nfoo\nfoo\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_edit_arguments(&test_file.to_string_lossy(), "foo", "bar", Some(true));
+
+        let result = execute_edit(args, &context).await;
+        assert!(result.is_ok());
+        let call = result.unwrap();
+        assert_eq!(call.is_error, Some(false));
+        // All replaced, no prompt.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), "bar\nbar\nbar\n");
     }
 }
