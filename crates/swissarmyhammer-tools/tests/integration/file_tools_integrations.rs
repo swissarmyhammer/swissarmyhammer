@@ -2525,11 +2525,24 @@ async fn test_edit_tool_string_not_found_error() {
     arguments.insert("replace_all".to_string(), json!(false));
 
     let result = tool.execute(arguments, &context).await;
-    assert!(result.is_err(), "Edit with non-existent string should fail");
+    // A `find` with no confident match now returns a SUCCESSFUL structured
+    // near-miss (the model can act on it), not a bare "not found" error. The file
+    // is left byte-identical.
+    let call_result = result.expect("no-match is a successful structured near-miss");
+    assert_eq!(call_result.is_error, Some(false));
 
-    let error = result.unwrap_err();
-    let error_msg = format!("{:?}", error);
-    assert!(error_msg.contains("not found") || error_msg.contains("does not contain"));
+    let response_text = extract_response_text(&call_result);
+    assert!(
+        response_text.contains("nonexistent"),
+        "near-miss must echo the find: {response_text}"
+    );
+    assert!(
+        !response_text.contains("not found in file"),
+        "legacy bare error string must be gone: {response_text}"
+    );
+
+    // File unchanged.
+    assert_eq!(fs::read_to_string(test_file).unwrap(), initial_content);
 }
 
 #[tokio::test]

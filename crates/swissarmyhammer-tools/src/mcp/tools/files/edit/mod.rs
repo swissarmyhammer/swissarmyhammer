@@ -375,13 +375,30 @@ struct Candidate {
     context: String,
 }
 
+/// One near-miss location for a `find` that matched no rung confidently.
+/// Surfaced to the model so it sees exactly how its `find` diverged from the
+/// nearest current text and can correct in one shot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NearMiss {
+    /// 1-based line number where the near-miss span begins.
+    line: usize,
+    /// The current text at this span (the nearest text to the supplied `find`).
+    text: String,
+    /// A few lines of surrounding context, rendered with line-number gutters.
+    context: String,
+    /// A line-level diff between the supplied `find` and this span's current
+    /// text, so the model sees precisely how the two differ.
+    diff: String,
+}
+
 /// The outcome of resolving one [`EditPair`] against the working content: either
-/// it resolved to a concrete [`Resolution`] to commit, or it is ambiguous and the
-/// competing [`Candidate`]s must be surfaced for disambiguation.
+/// it resolved to a concrete [`Resolution`] to commit, it is ambiguous and the
+/// competing [`Candidate`]s must be surfaced for disambiguation, or nothing
+/// matched and the nearest [`NearMiss`]es must be surfaced.
 ///
-/// Ambiguity is deliberately *not* an [`McpError`]: the cascade reports it up to
-/// [`execute_edit`], which turns it into a SUCCESSFUL tool result describing the
-/// choice, leaving the file byte-identical.
+/// Neither ambiguity nor a no-match is an [`McpError`]: the cascade reports both
+/// up to [`execute_edit`], which turns them into SUCCESSFUL tool results the
+/// model can act on, leaving the file byte-identical.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PairOutcome {
     /// The pair resolved to a concrete edit to commit.
@@ -392,6 +409,14 @@ enum PairOutcome {
         find: String,
         /// The competing candidate locations.
         candidates: Vec<Candidate>,
+    },
+    /// No rung matched `find` confidently; these are the nearest near-misses
+    /// (may be empty when the file has nothing close, e.g. an empty file).
+    NoMatch {
+        /// The text the model searched for, echoed back in the prompt.
+        find: String,
+        /// The nearest near-miss locations, strongest first.
+        near: Vec<NearMiss>,
     },
 }
 
@@ -498,6 +523,74 @@ fn render_ambiguity_prompt(find: &str, candidates: &[Candidate]) -> String {
     out
 }
 
+/// Render a line-level diff between the supplied `find` and the nearest current
+/// `text`, so the model sees precisely how the two diverge. Lines the model
+/// supplied that are absent from the current text are prefixed `-`; current
+/// lines absent from `find` are prefixed `+`; common lines are prefixed with a
+/// space. Built on [`similar::TextDiff`] over lines.
+fn render_find_vs_text_diff(find: &str, text: &str) -> String {
+    use similar::{ChangeTag, TextDiff};
+    let diff = TextDiff::from_lines(find, text);
+    let mut out = String::new();
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => '-',
+            ChangeTag::Insert => '+',
+            ChangeTag::Equal => ' ',
+        };
+        out.push(sign);
+        out.push_str(change.value());
+        // `change.value()` keeps the line's own terminator; a final line without
+        // one still needs a newline so the gutter signs line up.
+        if !change.value().ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Build a [`NearMiss`] for the byte `range` of a near-miss span in `content`,
+/// diffed against the supplied `find`.
+fn near_miss_for(content: &str, find: &str, range: Range<usize>) -> NearMiss {
+    let line = line_number_at(content, range.start);
+    let text = content[range].to_string();
+    NearMiss {
+        diff: render_find_vs_text_diff(find, &text),
+        context: render_context(content, line, CANDIDATE_CONTEXT_RADIUS),
+        text,
+        line,
+    }
+}
+
+/// Render the human-readable near-miss prompt for a `find` that matched no rung.
+///
+/// Echoes the searched-for text, then lists each near-miss span (line number,
+/// current text, surrounding context, and a line-level diff of `find` vs that
+/// text). When the file has nothing close (e.g. an empty file), it says so. This
+/// is the body of a *successful* tool result — the file is left unchanged.
+fn render_near_miss_prompt(find: &str, near: &[NearMiss]) -> String {
+    if near.is_empty() {
+        return format!(
+            "`find` {find:?} did not match and there is no close text in the file. \
+             Re-read the file and supply text that exists, or a hashline anchor.\n"
+        );
+    }
+    let mut out = format!(
+        "`find` {find:?} did not match. Closest current text ({} near-miss{}); \
+         re-issue the edit with text that matches one of these (or a hashline \
+         anchor).\n",
+        near.len(),
+        if near.len() == 1 { "" } else { "es" },
+    );
+    for miss in near {
+        out.push_str(&format!(
+            "\nline {}, current text {:?}:\n{}\ndiff (find vs current):\n{}",
+            miss.line, miss.text, miss.context, miss.diff,
+        ));
+    }
+    out
+}
+
 /// Whether `find` parses as a hashline anchor that **resolves** against
 /// `content`: the referenced line exists and its content hashes to the anchor's
 /// expected value. Returns the resolved line's text byte range when it does.
@@ -529,7 +622,8 @@ fn resolve_anchor(content: &str, find: &str) -> Option<Range<usize>> {
 ///    first occurrence (legacy exact-substring semantics).
 /// 3. Recovery rung — [`find_match`] resolves a drifted / re-indented `find`; a
 ///    unique span is spliced, multiple confident spans surface as candidates.
-/// 4. Otherwise → a clear "not found" error.
+/// 4. Otherwise → [`PairOutcome::NoMatch`] carrying the ladder's nearest
+///    near-misses (a successful structured near-miss upstream, not an error).
 ///
 /// Ambiguity returns [`PairOutcome::Ambiguous`] (a successful disambiguation
 /// prompt upstream), unless [`EditPair::occurrence`] selects exactly one of the
@@ -537,10 +631,9 @@ fn resolve_anchor(content: &str, find: &str) -> Option<Range<usize>> {
 fn resolve_pair(content: &str, pair: &EditPair) -> Result<PairOutcome, McpError> {
     if pair.replace_all {
         if !content.contains(&pair.find) {
-            return Err(McpError::invalid_request(
-                format!("String '{}' not found in file", pair.find),
-                None,
-            ));
+            // No literal occurrence to replace globally: surface the nearest
+            // current text via the ladder's near-misses, not a bare error.
+            return Ok(no_match_outcome(content, &pair.find));
         }
         return Ok(PairOutcome::Resolved(Resolution::GlobalLiteral {
             find: pair.find.clone(),
@@ -582,7 +675,8 @@ fn resolve_pair(content: &str, pair: &EditPair) -> Result<PairOutcome, McpError>
 /// Recovery rung: run the [`find_match`] ladder and map its outcome to a
 /// [`PairOutcome`]. A unique span is spliced; multiple confident spans surface as
 /// candidates (subject to [`EditPair::occurrence`] disambiguation); nothing
-/// confident is a clear "not found" error.
+/// confident surfaces the ladder's nearest near-misses as
+/// [`PairOutcome::NoMatch`].
 fn resolve_via_ladder(content: &str, pair: &EditPair) -> Result<PairOutcome, McpError> {
     match find_match(content, &pair.find) {
         MatchOutcome::Unique { span, .. } => Ok(PairOutcome::Resolved(Resolution::Splice {
@@ -596,10 +690,37 @@ fn resolve_via_ladder(content: &str, pair: &EditPair) -> Result<PairOutcome, Mcp
                 .collect();
             Ok(disambiguate(pair, candidates))
         }
-        MatchOutcome::NoMatch { .. } => Err(McpError::invalid_request(
-            format!("String '{}' not found in file", pair.find),
-            None,
-        )),
+        // No rung matched confidently. Surface the ladder's best-effort
+        // near-misses as a structured result instead of a bare "not found"
+        // error, so the model sees how its `find` diverged.
+        MatchOutcome::NoMatch { near } => Ok(PairOutcome::NoMatch {
+            find: pair.find.clone(),
+            near: near
+                .into_iter()
+                .map(|span| near_miss_for(content, &pair.find, span.range))
+                .collect(),
+        }),
+    }
+}
+
+/// Build a [`PairOutcome::NoMatch`] for a `find` with no confident match by
+/// running [`find_match`] purely to harvest its near-miss spans. Used by the
+/// `replace_all` path, which has no ladder of its own but still owes the model a
+/// structured near-miss rather than a bare error.
+fn no_match_outcome(content: &str, find: &str) -> PairOutcome {
+    let near = match find_match(content, find) {
+        MatchOutcome::NoMatch { near } => near,
+        // The `replace_all` path only reaches here when there is no literal
+        // occurrence; any other ladder outcome still yields no near-misses to
+        // surface (the substring path already handled a literal match).
+        _ => Vec::new(),
+    };
+    PairOutcome::NoMatch {
+        find: find.to_string(),
+        near: near
+            .into_iter()
+            .map(|span| near_miss_for(content, find, span.range))
+            .collect(),
     }
 }
 
@@ -658,6 +779,14 @@ enum ApplyOutcome {
         /// The competing candidate locations.
         candidates: Vec<Candidate>,
     },
+    /// A pair matched nothing confidently; surface the nearest near-misses so the
+    /// model sees how its `find` diverged.
+    NoMatch {
+        /// The text the model searched for.
+        find: String,
+        /// The nearest near-miss locations (may be empty).
+        near: Vec<NearMiss>,
+    },
 }
 
 /// Resolve and apply every pair in sequence against an in-memory working copy,
@@ -666,9 +795,10 @@ enum ApplyOutcome {
 /// disk here — the caller commits the final content in one atomic rewrite, so a
 /// failure or ambiguity on any pair leaves the file byte-identical.
 ///
-/// An ambiguous pair short-circuits the batch: its candidates are returned
-/// immediately, before any later pair is applied, so the working copy is
-/// discarded and the file is never partially written.
+/// An ambiguous pair — or a pair with no confident match — short-circuits the
+/// batch: its candidates / near-misses are returned immediately, before any
+/// later pair is applied, so the working copy is discarded and the file is never
+/// partially written.
 fn apply_all_pairs(original: &str, pairs: &[EditPair]) -> Result<ApplyOutcome, McpError> {
     let mut working = original.to_string();
     for pair in pairs {
@@ -678,6 +808,9 @@ fn apply_all_pairs(original: &str, pairs: &[EditPair]) -> Result<ApplyOutcome, M
             }
             PairOutcome::Ambiguous { find, candidates } => {
                 return Ok(ApplyOutcome::Ambiguous { find, candidates });
+            }
+            PairOutcome::NoMatch { find, near } => {
+                return Ok(ApplyOutcome::NoMatch { find, near });
             }
         }
     }
@@ -1181,6 +1314,19 @@ pub async fn execute_edit(
                 render_ambiguity_prompt(&find, &candidates),
             ));
         }
+        // No confident match is a SUCCESSFUL near-miss describing how the `find`
+        // diverged — NOT an error. Nothing was committed, so the file is
+        // byte-identical; the model retries with corrected text.
+        ApplyOutcome::NoMatch { find, near } => {
+            info!(
+                path = %file_path,
+                near_miss_count = near.len(),
+                "Edit `find` matched nothing confidently; returning near-misses"
+            );
+            return Ok(BaseToolImpl::create_success_response(
+                render_near_miss_prompt(&find, &near),
+            ));
+        }
     };
 
     // Commit the fully-edited content in one atomic rewrite.
@@ -1353,6 +1499,11 @@ mod tests {
         assert_eq!(edited_content, "unique duplicate duplicate");
     }
 
+    /// A `find` with no confident match no longer errors with the bare
+    /// "not found in file" string: it returns a SUCCESSFUL structured near-miss
+    /// (echoing the searched-for text) and leaves the file byte-identical. Here
+    /// the lone line is too dissimilar to surface as a near-miss, so the prompt
+    /// states nothing is close — but it is still a successful structured result.
     #[tokio::test]
     async fn test_edit_string_not_found() {
         let temp_dir = TempDir::new().unwrap();
@@ -1369,10 +1520,24 @@ mod tests {
         );
 
         let result = execute_edit(args, &context).await;
-        assert!(result.is_err());
+        assert!(
+            result.is_ok(),
+            "no-match must be a successful structured near-miss, got {result:?}"
+        );
+        let call = result.unwrap();
+        assert_eq!(
+            call.is_error,
+            Some(false),
+            "near-miss is not an error result"
+        );
 
-        let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("not found in file"));
+        let text = result_text(&call);
+        // Echoes the searched-for text and is NOT the legacy "not found in file".
+        assert!(text.contains("nonexistent"), "must echo the find: {text}");
+        assert!(
+            !text.contains("not found in file"),
+            "legacy bare error string must be gone: {text}"
+        );
 
         // Verify file was not modified
         let unchanged_content = fs::read_to_string(&test_file).unwrap();
@@ -1699,6 +1864,9 @@ mod tests {
         assert!(!edited_content.contains("test content"));
     }
 
+    /// An empty file has no lines to surface, so the near-miss has no candidate
+    /// spans — but it is still a SUCCESSFUL structured result (not an error) that
+    /// echoes the searched-for text and states the file has nothing close.
     #[tokio::test]
     async fn test_edit_empty_file() {
         let temp_dir = TempDir::new().unwrap();
@@ -1714,10 +1882,23 @@ mod tests {
         );
 
         let result = execute_edit(args, &context).await;
-        assert!(result.is_err());
+        assert!(
+            result.is_ok(),
+            "empty-file no-match must be a successful near-miss, got {result:?}"
+        );
+        let call = result.unwrap();
+        assert_eq!(call.is_error, Some(false));
 
-        let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("not found in file"));
+        let text = result_text(&call);
+        assert!(text.contains("nonexistent"), "must echo the find: {text}");
+        // No near-miss spans exist in an empty file.
+        assert!(
+            text.contains("no close") || text.contains("nothing close"),
+            "must state nothing is close: {text}"
+        );
+
+        // File still empty (byte-identical).
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), "");
     }
 
     #[tokio::test]
@@ -2264,10 +2445,15 @@ mod tests {
         let args = create_edit_arguments(&test_file.to_string_lossy(), find, "X", None);
 
         let result = execute_edit(args, &context).await;
-        // Stale anchor → literal "2:00" which is not in the file → not found.
-        assert!(result.is_err(), "stale anchor must not mis-apply");
+        // Stale anchor → literal "2:00" which is not in the file → structured
+        // near-miss (a successful result), not a mis-apply.
+        assert!(
+            result.is_ok(),
+            "stale-anchor no-match is a successful near-miss: {result:?}"
+        );
+        assert_eq!(result.unwrap().is_error, Some(false));
 
-        // File is byte-identical.
+        // File is byte-identical — nothing was committed.
         assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
     }
 
@@ -2315,7 +2501,8 @@ mod tests {
         let context = crate::test_utils::create_test_context().await;
 
         // First edit would succeed; second names text that is absent → the whole
-        // batch must fail and the file must be unchanged.
+        // batch must NOT commit (structured near-miss) and the file must be
+        // unchanged.
         let mut args = serde_json::Map::new();
         args.insert(
             "path".to_string(),
@@ -2330,7 +2517,13 @@ mod tests {
         );
 
         let result = execute_edit(args, &context).await;
-        assert!(result.is_err(), "a failing pair must fail the batch");
+        // A failing pair short-circuits the batch as a successful near-miss; it
+        // never commits the earlier pair.
+        assert!(
+            result.is_ok(),
+            "a failing pair short-circuits the batch as a near-miss: {result:?}"
+        );
+        assert_eq!(result.unwrap().is_error, Some(false));
 
         // The file is byte-identical — the first (would-be-successful) pair was
         // not committed.
@@ -2649,5 +2842,222 @@ mod tests {
         assert_eq!(call.is_error, Some(false));
         // All replaced, no prompt.
         assert_eq!(fs::read_to_string(&test_file).unwrap(), "bar\nbar\nbar\n");
+    }
+
+    // =========================================================================
+    // No confident match → structured near-miss (not a "not found" error)
+    // =========================================================================
+
+    /// The near-miss payload built for a span carries the 1-based line number, the
+    /// current text at that span, surrounding context with a line-number gutter,
+    /// and a line-level diff between the supplied `find` and the current text.
+    /// This is the deterministic core, tested directly on the pure builder.
+    #[test]
+    fn near_miss_payload_has_line_number_context_and_diff() {
+        let content = "alpha\nbeta\ngamma\ndelta\nepsilon\n";
+        // Span of line 3 ("gamma"): bytes 11..16.
+        let range = 11..16;
+        assert_eq!(&content[range.clone()], "gamma");
+
+        let miss = near_miss_for(content, "gramma", range);
+
+        // Line number is 1-based.
+        assert_eq!(miss.line, 3);
+        // Current text at the span.
+        assert_eq!(miss.text, "gamma");
+        // Context shows the neighbourhood with a line-number gutter.
+        assert!(
+            miss.context.contains("3: gamma"),
+            "context: {}",
+            miss.context
+        );
+        assert!(
+            miss.context.contains("2: beta"),
+            "context: {}",
+            miss.context
+        );
+        assert!(
+            miss.context.contains("4: delta"),
+            "context: {}",
+            miss.context
+        );
+        // Line-level diff: the supplied `find` is the removed line, the current
+        // text is the added line.
+        assert!(
+            miss.diff.contains("-gramma"),
+            "diff removes the supplied find: {}",
+            miss.diff
+        );
+        assert!(
+            miss.diff.contains("+gamma"),
+            "diff adds the current text: {}",
+            miss.diff
+        );
+    }
+
+    /// The rendered no-match prompt echoes the searched-for text and the per-span
+    /// near-miss details (line, current text, diff). Tested on the pure renderer.
+    #[test]
+    fn near_miss_prompt_renders_find_and_per_span_details() {
+        let content = "alpha\nbeta\ngamma\n";
+        let near = vec![near_miss_for(content, "gramma", 11..16)];
+        let prompt = render_near_miss_prompt("gramma", &near);
+
+        assert!(prompt.contains("gramma"), "echoes find: {prompt}");
+        assert!(prompt.contains("line 3"), "names the line: {prompt}");
+        assert!(prompt.contains("\"gamma\""), "shows current text: {prompt}");
+        assert!(prompt.contains("-gramma"), "diff: {prompt}");
+        assert!(prompt.contains("+gamma"), "diff: {prompt}");
+    }
+
+    /// The empty-near-miss prompt is still a structured message (echoes the find,
+    /// states nothing is close) rather than a bare error.
+    #[test]
+    fn near_miss_prompt_with_no_spans_states_nothing_close() {
+        let prompt = render_near_miss_prompt("needle", &[]);
+        assert!(prompt.contains("needle"), "echoes find: {prompt}");
+        assert!(
+            prompt.contains("no close") || prompt.contains("nothing close"),
+            "states nothing is close: {prompt}"
+        );
+        assert!(
+            !prompt.contains("not found in file"),
+            "legacy error string is gone: {prompt}"
+        );
+    }
+
+    /// End to end: a `find` with no confident match returns a SUCCESSFUL
+    /// structured near-miss (echoes the find, not the legacy error) and leaves the
+    /// file byte-identical.
+    #[tokio::test]
+    async fn near_miss_no_match_is_successful_and_file_unchanged() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("near_miss.txt");
+        let content = "alpha\nbeta\ngamma\ndelta\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = ambiguity_args(
+            &test_file.to_string_lossy(),
+            "zzz no such needle anywhere zzz",
+            "ignored",
+            None,
+        );
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "no-match must be a successful structured near-miss: {result:?}"
+        );
+        let call = result.unwrap();
+        assert_eq!(call.is_error, Some(false));
+
+        let text = result_text(&call);
+        assert!(
+            text.contains("zzz no such needle anywhere zzz"),
+            "must echo the find: {text}"
+        );
+        assert!(
+            !text.contains("not found in file"),
+            "legacy bare error string must be gone: {text}"
+        );
+
+        // File untouched.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    /// End to end through the real ladder: a `find` that drifted into the fuzzy
+    /// near-miss band (below the accept threshold but above zero similarity)
+    /// surfaces the nearest current line with a populated line-level diff in the
+    /// rendered prompt. Guards that `MatchOutcome::NoMatch { near }` actually
+    /// flows from `find_match` through to the model-facing result.
+    #[tokio::test]
+    async fn near_miss_populated_diff_flows_through_real_ladder() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("near_miss_fuzzy.txt");
+        // "the quick brown fox" vs the find "the quick brown cat" share the long
+        // common prefix, so similarity (~0.84) lands just under the fuzzy accept
+        // threshold (0.85): no rung accepts it, but it is retained as a near-miss.
+        let content = "intro line\nthe quick brown fox\noutro line\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = ambiguity_args(
+            &test_file.to_string_lossy(),
+            "the quick brown cat",
+            "ignored",
+            None,
+        );
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "fuzzy near-miss must be a successful result: {result:?}"
+        );
+        let call = result.unwrap();
+        assert_eq!(call.is_error, Some(false));
+
+        let text = result_text(&call);
+        // The nearest line (line 2) is surfaced with its current text and a diff.
+        assert!(text.contains("line 2"), "names the nearest line: {text}");
+        assert!(
+            text.contains("the quick brown fox"),
+            "shows nearest current text: {text}"
+        );
+        assert!(
+            text.contains("-the quick brown cat"),
+            "diff removes the supplied find: {text}"
+        );
+        assert!(
+            text.contains("+the quick brown fox"),
+            "diff adds the current text: {text}"
+        );
+
+        // File untouched.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    /// In a multi-pair batch, the failing pair's near-miss is reported and the
+    /// batch stays atomic — the earlier pair that WOULD apply is never flushed, so
+    /// the file is byte-identical.
+    #[tokio::test]
+    async fn near_miss_in_batch_is_atomic_and_per_edit() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("near_miss_batch.txt");
+        // "one" applies cleanly; the second find matches nothing close.
+        let content = "one\ntwo\nthree\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_file.to_string_lossy().to_string()),
+        );
+        args.insert(
+            "edits".to_string(),
+            serde_json::json!([
+                { "find": "one", "replace": "ONE" },
+                { "find": "zzz no such needle anywhere zzz", "replace": "NOPE" }
+            ]),
+        );
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "failing pair yields a successful near-miss listing: {result:?}"
+        );
+        let call = result.unwrap();
+        assert_eq!(call.is_error, Some(false));
+
+        let text = result_text(&call);
+        // The failing pair's find is echoed (per-edit reporting).
+        assert!(
+            text.contains("zzz no such needle anywhere zzz"),
+            "must echo the failing pair's find: {text}"
+        );
+
+        // Byte-identical: the first pair's "one"→"ONE" mutation was NOT committed.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
     }
 }

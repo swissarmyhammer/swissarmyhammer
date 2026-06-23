@@ -8758,6 +8758,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "serial_test",
+ "similar",
  "swissarmyhammer-agents",
  "swissarmyhammer-code-context",
  "swissarmyhammer-common",

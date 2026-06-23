@@ -112,6 +112,10 @@ swissarmyhammer-hashline = { workspace = true }
 # have lost indentation or drifted) to a concrete byte span in the file.
 swissarmyhammer-edit-match = { workspace = true }
 
+# Line-level diffing for the `edit files` no-match near-miss: renders how the
+# supplied `find` diverged from the nearest current text.
+similar = { workspace = true }
+
 # LSP server lifecycle management
 swissarmyhammer-lsp = { workspace = true }
 

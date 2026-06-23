@@ -1,10 +1,19 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kvv8kpmkmdzbq5y3kpxrwjkz
+  text: 'Picked up. Research done. The cascade task (^tajpmp0) and ambiguity task (^0fvjsv4) are both done. The seam is `MatchOutcome::NoMatch { near: Vec<Span> }` where `Span { range, start_line, end_line, text }`. Two McpError "String not found in file" returns to replace in resolve_pair (replace_all path) and resolve_via_ladder (NoMatch path). Plan: model near-miss as a successful structured tool result exactly like the existing Candidate/PairOutcome::Ambiguous/ApplyOutcome::Ambiguous pattern — add PairOutcome::NoMatch + ApplyOutcome::NoMatch carrying `find` + near-miss spans, render a prompt with current text + line numbers + context + a line-level diff vs supplied `find`. Will use `similar` (workspace dep) for the line diff. Following /tdd.'
+  timestamp: 2026-06-23T22:11:30.067480+00:00
+- actor: claude-code
+  id: 01kvv9da66qy98qc24qp5dbfrv
+  text: "Implemented (TDD: RED confirmed 4 failing for the right reason — old McpError \"not found in file\" — then GREEN). \n\nChanges (all in edit/mod.rs + Cargo.toml + one integration test):\n- Added `NearMiss { line, text, context, diff }` (mirrors `Candidate`), `PairOutcome::NoMatch { find, near }`, `ApplyOutcome::NoMatch { find, near }`.\n- `resolve_via_ladder` now maps `MatchOutcome::NoMatch { near }` -> `PairOutcome::NoMatch` (maps each Span to a NearMiss). `resolve_pair` replace_all branch with no literal occurrence -> `no_match_outcome` helper (runs find_match to harvest near spans). Both legacy `McpError \"String '...' not found in file\"` returns on the cascade path are GONE.\n- `apply_all_pairs` short-circuits on NoMatch before flushing -> file byte-identical. `execute_edit` renders `ApplyOutcome::NoMatch` as a SUCCESSFUL CallToolResult via `render_near_miss_prompt` (mirrors the ambiguity branch).\n- Diff: `render_find_vs_text_diff` uses `similar::TextDiff::from_lines` (added `similar = { workspace = true }` to the crate); `-` = supplied find, `+` = current text. Payload = echoed find + per-span (line N, current text, gutter context, line-level diff). Empty `near` (empty file / nothing close) is still a successful structured \"nothing close\" message.\n\nTests changed/added:\n- Updated `test_edit_string_not_found` + `test_edit_empty_file` (mod.rs): now expect successful structured near-miss + byte-identical file, not the error string.\n- Updated cascade tests `cascade_stale_anchor_falls_through_to_literal` + `cascade_atomic_rollback_on_failing_pair`: they asserted is_err() on no-match (the old behavior) — flipped to is_ok()+is_error(false)+byte-identical (this is the same no-match path).\n- Updated integration `test_edit_tool_string_not_found_error` (file_tools_integrations.rs): same flip.\n- Added pure unit tests `near_miss_payload_has_line_number_context_and_diff`, `near_miss_prompt_renders_find_and_per_span_details`, `near_miss_prompt_with_no_spans_states_nothing_close`; real-pipeline tests `near_miss_no_match_is_successful_and_file_unchanged`, `near_miss_populated_diff_flows_through_real_ladder` (uses a fuzzy-band find so find_match returns populated near), `near_miss_in_batch_is_atomic_and_per_edit`.\n\nVerification (all fresh): `cargo nextest run -p swissarmyhammer-tools edit:: files::` = 233 passed; full `-p swissarmyhammer-tools` = 1366 passed, 0 failed; doctests `--doc` = 8 passed; `cargo clippy -p swissarmyhammer-tools -- -D warnings` clean; `cargo fmt --check` clean. Adversarial double-check verdict: PASS.\n\nNote: legacy `validate_edit_operation`/`edit_file_atomic` still hold the old \"not found in file\" string but are test-only (never reached by execute_edit) — out of scope per task. Moving to review."
+  timestamp: 2026-06-23T22:25:29.286051+00:00
 depends_on:
 - 01KVTVACR1W8HFKFR8DTAJPMP0
-position_column: todo
-position_ordinal: a780
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffd980
 project: file-edit-tools
 title: edit files — structured near-miss on no match (not "String not found")
 ---
