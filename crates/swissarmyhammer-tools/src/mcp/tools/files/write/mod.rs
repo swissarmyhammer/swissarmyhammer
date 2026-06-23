@@ -23,7 +23,26 @@ static WRITE_FILE_PARAMS: &[ParamMeta] = &[
         .description("Complete file content to write")
         .param_type(ParamType::String)
         .required(),
+    ParamMeta::new("expected_hash")
+        .description(
+            "Freshness token for the read-before-write guard. When the target \
+             file already exists, supply the whole-file hash from a prior `read \
+             files` (the bare hex after `#hash:`). If it matches the current \
+             on-disk content the write proceeds; if it is absent or stale the \
+             file is NOT overwritten — the tool returns the current content \
+             (hashline-tagged, with its `#hash:` token) so you can re-base. \
+             Ignored for new/nonexistent files, which write freely.",
+        )
+        .param_type(ParamType::String),
 ];
+
+/// Prefix marker for the whole-file freshness-token metadata line in a re-base
+/// payload. Mirrors the `read files` handler: the first line of the returned
+/// current content is `#hash:<hex>` — the
+/// [`whole_file_hash`](crate::mcp::tools::files::shared_utils::whole_file_hash)
+/// of the on-disk bytes — so the model can present it as the `expected_hash` on
+/// the retried write.
+const HASH_LINE_PREFIX: &str = "#hash:";
 
 impl Operation for WriteFile {
     fn verb(&self) -> &'static str {
@@ -126,6 +145,39 @@ impl WriteFileTool {
     }
 }
 
+/// Evaluate the read-before-write freshness guard for an existing file.
+///
+/// Reads the current on-disk content of `path` (as UTF-8 text, mirroring the
+/// `read files` decode policy — non-UTF-8/binary files are rejected) and
+/// re-derives the whole-file token with
+/// [`whole_file_hash`](crate::mcp::tools::files::shared_utils::whole_file_hash).
+///
+/// * Returns `Ok(None)` when `expected_hash` matches the current content — the
+///   caller proceeds with the overwrite.
+/// * Returns `Ok(Some(payload))` when the token is absent or stale — the caller
+///   returns `payload` (the current content, `#hash:`-tagged and hashline-tagged)
+///   as a SUCCESSFUL result so the model can re-base, and does NOT overwrite.
+/// * Returns `Err` only when the existing file cannot be read (e.g. it is binary
+///   or a permission error), so a non-text file surfaces a clear error rather
+///   than being silently clobbered.
+fn freshness_rebase(path: &Path, expected_hash: Option<&str>) -> Result<Option<String>, McpError> {
+    use crate::mcp::tools::files::shared_utils::{handle_file_error, whole_file_hash};
+
+    let current = std::fs::read_to_string(path)
+        .map_err(|e| handle_file_error(e, "read current content for freshness guard", path))?;
+    let current_hash = whole_file_hash(&current);
+
+    if expected_hash == Some(current_hash.as_str()) {
+        return Ok(None);
+    }
+
+    // Token absent or stale: build the re-base payload — the current freshness
+    // token followed by the current content hashline-tagged, matching what
+    // `read files` would have returned.
+    let body = swissarmyhammer_hashline::tag(&current, 1);
+    Ok(Some(format!("{HASH_LINE_PREFIX}{current_hash}\n{body}")))
+}
+
 /// Execute a file write operation
 pub async fn execute_write(
     arguments: serde_json::Map<String, serde_json::Value>,
@@ -141,6 +193,10 @@ pub async fn execute_write(
         #[serde(alias = "path", alias = "absolute_path")]
         file_path: String,
         content: String,
+        /// Freshness token from a prior `read files`. Only consulted when the
+        /// target file already exists (the read-before-write guard).
+        #[serde(default)]
+        expected_hash: Option<String>,
     }
 
     // Parse arguments
@@ -217,6 +273,22 @@ pub async fn execute_write(
         "Attempting to write file"
     );
 
+    // Read-before-write freshness guard. For an EXISTING file, the model must
+    // present the whole-file `expected_hash` it saw on its last `read files`. If
+    // the token is absent or no longer matches the on-disk content, we do NOT
+    // clobber: instead we return the current content (hashline-tagged, with its
+    // `#hash:` token) as a SUCCESSFUL result so the model can re-base. A
+    // new/nonexistent file is unguarded and writes freely.
+    if validated_path.exists() {
+        if let Some(rebase) = freshness_rebase(&validated_path, request.expected_hash.as_deref())? {
+            info!(
+                path = %validated_path.display(),
+                "write declined: stale or missing freshness token; returning current content for re-base"
+            );
+            return Ok(BaseToolImpl::create_success_response(rebase));
+        }
+    }
+
     // Perform atomic write operation
     let bytes_written = WriteFileTool::write_file_atomic(&validated_path, &request.content).await?;
 
@@ -260,6 +332,28 @@ mod tests {
         args
     }
 
+    /// Create write arguments that carry an `expected_hash` freshness token.
+    fn create_test_arguments_with_hash(
+        file_path: &str,
+        content: &str,
+        expected_hash: &str,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut args = create_test_arguments(file_path, content);
+        args.insert(
+            "expected_hash".to_string(),
+            serde_json::Value::String(expected_hash.to_string()),
+        );
+        args
+    }
+
+    /// Extract the text payload of a successful write result.
+    fn result_text(result: &CallToolResult) -> String {
+        match &result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        }
+    }
+
     #[test]
     fn test_write_tool_creation() {
         let op = WriteFile;
@@ -298,6 +392,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_overwrite_existing_file() {
+        // Overwriting an existing file now requires the freshness token the model
+        // saw on its prior read (the read-before-write guard). With a matching
+        // `expected_hash` the overwrite proceeds.
+        use crate::mcp::tools::files::shared_utils::whole_file_hash;
+
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("test_overwrite.txt");
 
@@ -306,10 +405,14 @@ mod tests {
         fs::write(&test_file, initial_content).unwrap();
         assert_eq!(fs::read_to_string(&test_file).unwrap(), initial_content);
 
-        // Overwrite with new content
+        // Overwrite with new content, presenting the current freshness token.
         let new_content = "New content that replaces the old";
         let context = crate::test_utils::create_test_context().await;
-        let args = create_test_arguments(&test_file.to_string_lossy(), new_content);
+        let args = create_test_arguments_with_hash(
+            &test_file.to_string_lossy(),
+            new_content,
+            &whole_file_hash(initial_content),
+        );
 
         let result = execute_write(args, &context).await;
         assert!(result.is_ok());
@@ -608,5 +711,137 @@ mod tests {
             "Error should mention read-only permission: {}",
             error_message
         );
+    }
+
+    // --- Read-before-write freshness guard -----------------------------------
+
+    #[tokio::test]
+    async fn test_write_new_file_is_unguarded() {
+        // A brand-new (nonexistent) file requires no freshness token and writes
+        // freely — even though no `expected_hash` is supplied.
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("guard_new.txt");
+        assert!(!test_file.exists());
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_test_arguments(&test_file.to_string_lossy(), "fresh content");
+
+        let result = execute_write(args, &context).await;
+        assert!(result.is_ok(), "new-file write should succeed unguarded");
+        assert_eq!(result.unwrap().is_error, Some(false));
+
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), "fresh content");
+    }
+
+    #[tokio::test]
+    async fn test_write_existing_file_with_matching_hash_succeeds() {
+        // Overwriting an existing file with an `expected_hash` that matches the
+        // current on-disk content proceeds with the write.
+        use crate::mcp::tools::files::shared_utils::whole_file_hash;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("guard_match.txt");
+        let initial = "old content the model has seen";
+        fs::write(&test_file, initial).unwrap();
+        let token = whole_file_hash(initial);
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_test_arguments_with_hash(
+            &test_file.to_string_lossy(),
+            "rebased new content",
+            &token,
+        );
+
+        let result = execute_write(args, &context).await;
+        assert!(result.is_ok(), "matching-hash overwrite should succeed");
+        assert_eq!(result.unwrap().is_error, Some(false));
+
+        assert_eq!(
+            fs::read_to_string(&test_file).unwrap(),
+            "rebased new content"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_existing_file_without_hash_does_not_clobber() {
+        // An existing-file write with NO `expected_hash` must NOT clobber; it
+        // returns the current content (hashline-tagged + `#hash:` token) as a
+        // SUCCESS so the model can re-base.
+        use crate::mcp::tools::files::shared_utils::whole_file_hash;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("guard_missing.txt");
+        let initial = "alpha\nbeta\ngamma\n";
+        fs::write(&test_file, initial).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_test_arguments(&test_file.to_string_lossy(), "clobbered!");
+
+        let result = execute_write(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "missing-token write returns a successful re-base, not an error"
+        );
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+
+        // File is untouched.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), initial);
+
+        // Payload carries the current `#hash:<token>` line + the current content
+        // tagged with hashline anchors so the model can re-base.
+        let text = result_text(&call_result);
+        let token = whole_file_hash(initial);
+        assert!(
+            text.starts_with(&format!("#hash:{token}\n")),
+            "payload should lead with the current freshness token, got: {text}"
+        );
+        let expected_body = swissarmyhammer_hashline::tag(initial, 1);
+        assert!(
+            text.ends_with(&expected_body),
+            "payload should carry the current content hashline-tagged"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_existing_file_with_stale_hash_does_not_clobber() {
+        // A stale `expected_hash` (does not match current on-disk content) must
+        // NOT clobber; it returns the current content for re-base.
+        use crate::mcp::tools::files::shared_utils::whole_file_hash;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("guard_stale.txt");
+        let initial = "current on-disk content";
+        fs::write(&test_file, initial).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        // A token for some OTHER content the model thought it had.
+        let stale_token = whole_file_hash("what the model thought it had");
+        let args = create_test_arguments_with_hash(
+            &test_file.to_string_lossy(),
+            "clobbered!",
+            &stale_token,
+        );
+
+        let result = execute_write(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "stale-token write returns a successful re-base"
+        );
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+
+        // File is untouched.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), initial);
+
+        // Payload carries the CURRENT token (not the stale one) so the model can
+        // re-base against reality.
+        let text = result_text(&call_result);
+        let current_token = whole_file_hash(initial);
+        assert!(
+            text.starts_with(&format!("#hash:{current_token}\n")),
+            "payload should lead with the current freshness token, got: {text}"
+        );
+        assert!(!text.contains(&stale_token));
     }
 }
