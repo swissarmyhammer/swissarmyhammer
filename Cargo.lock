@@ -8764,6 +8764,7 @@ dependencies = [
  "swissarmyhammer-config",
  "swissarmyhammer-diagnostics",
  "swissarmyhammer-directory",
+ "swissarmyhammer-edit-match",
  "swissarmyhammer-embedding",
  "swissarmyhammer-git",
  "swissarmyhammer-hashline",
