@@ -28,166 +28,35 @@ instinct twenty years ago — Given/When/Then as a shared, human-readable contra
 abandoned. An LLM dissolves the glue. What remains is exactly the part that was
 always valuable: the contract.
 
-## What Everyone Is Trying In This Space (Research)
+## What everyone is trying (and what we take)
 
-This design is grounded in a survey of the current (2024–2026) landscape. The
-short version: the market has split into three camps, and we should steal the
-best idea from each rather than pick a side.
+The 2024–2026 landscape splits three ways, and `expect` steals from each. (Full
+survey with citations in the appendix.)
 
-### The Cucumber lesson: the cost was the glue, the value was the contract
+- **Cucumber's lesson.** BDD's value was the human-readable Given/When/Then
+  *contract*; its cost was the brittle regex *step-definition glue*, which vendors
+  (SmartBear/Cucumber, Tricentis/SpecFlow) and practitioners abandoned. An LLM
+  dissolves the glue, so the contract gets cheap to keep — and Gherkin still helps
+  the LLM (97.8% vs 71% executable), so it's a useful intermediate representation,
+  not dead ceremony.
+- **The runtime-AI split.** Pro-runtime tools (QA.tech, Mabl) are flexible but
+  flaky; anti-runtime tools (Octomind, Meticulous) are deterministic but do literal
+  diffs. The winning hybrid (Stagehand): author/record once, replay deterministically,
+  fall back to the model only on a miss. We take the hybrid.
+- **Validation is tiered.** Mature tools mix deterministic assertions (catch 30–60%
+  for free), embedding tolerance bands, and LLM-as-judge *only* on the residual —
+  they never lead with the judge. We take the ladder.
+- **Drift is real and the judge is gameable.** The same endpoint shifts silently;
+  even temp-0 output varies (batch size, not seed); agents reward-hack a check they
+  can see. The proven control is the **approval-testing** workflow (received →
+  approved, with scrubbers), a **tamper-resistant** check the agent can't weaken,
+  and grading for **reliability** (`pass^k`) not average. We take all of it.
 
-Dan North created BDD in 2006 to get business, testers, and devs onto one shared
-Given/When/Then vocabulary *before* code. Gherkin binds each natural-language
-step to a method via a regex/Cucumber-expression; the `Then` step holds the
-assertion. The honest practitioner verdict on what happened next:
-
-- **Vendors abandoned it.** SmartBear handed Cucumber to the Open Source
-  Collective; Tricentis shut down SpecFlow entirely.
-- **The glue was the pain.** Cucumber's own docs flag *Feature-Coupled Step
-  Definitions* ("an explosion of step definitions, code duplication, and high
-  maintenance costs"). Steps must be "written perfectly and identically every
-  time."
-- **The collaboration rarely materialized.** Gojko Adzic's 10-year *Specification
-  by Example* retrospective: only ~12% of teams kept specs as version-controlled
-  text; ~25% cut business reps out of the conversation entirely. The living
-  documentation "didn't really work out as expected."
-- **But the conversation/contract was the real win.** Liz Keogh's hierarchy,
-  endorsed by Adzic: "having conversations is more important than capturing
-  conversations is more important than automating conversations."
-
-The synthesis every credible source converges on: **teams kept the executable
-syntax and dropped the collaboration it was a vehicle for, and that is why it
-hurt.** An LLM changes the economics by dissolving the step-definition glue — the
-exact part practitioners hated — which makes the human-auditable contract
-*cheaper to keep* and *more valuable* as a governance surface over fast AI
-codegen.
-
-Sources:
-[Adzic SbE 10 years](https://gojko.net/2020/03/17/sbe-10-years.html) ·
-[Automation Panda — Is BDD Dying?](https://automationpanda.com/2025/03/06/is-bdd-dying/) ·
-[Cucumber anti-patterns](https://cucumber.io/docs/guides/anti-patterns/) ·
-[dannorth.net — Introducing BDD](https://dannorth.net/introducing-bdd/)
-
-### LLMs already execute Gherkin with no step definitions
-
-The step-def layer is genuinely gone in shipping tools and peer-reviewed work:
-
-- **TestZeus Hercules** (open source): takes `.feature` files, "Gherkin in,
-  results out," no step definitions. A Planner agent interprets the
-  Given/When/Then; a Browser agent executes by calling pre-built tools (it does
-  not generate code). [github](https://github.com/test-zeus-ai/testzeus-hercules)
-- **Momentic's thesis**: "Natural language understanding eliminates the glue
-  code… LLMs can translate plain English directly into test actions without
-  requiring explicit programming for each scenario." [blog](https://momentic.ai/blog/behavior-driven-development)
-- **ACM A-TEST 2024**: multi-agent system executes Gherkin directly — strong on
-  happy paths, **notably weaker at detecting genuine failures.** [acm](https://dl.acm.org/doi/10.1145/3678719.3685692)
-- **Selector-free variants** that don't even need Gherkin keywords: Shortest
-  (`shortest("user can sign up and create a $5 product")`), ZeroStep, Auto
-  Playwright, Magnitude, Skyvern, Stagehand, browser-use.
-
-Three distinct runtime mechanisms to keep separate: **tool-calling binding** (LLM
-maps a step to a predefined tool — Hercules, ZeroStep), **code-gen-on-the-fly**
-(LLM writes test code per scenario), and **vision/pixel grounding** (acts on
-screenshots — Skyvern, Magnitude).
-
-But Gherkin is *not* dead ceremony — it is a high-value intermediate
-representation for the LLM itself. Measured: raw NL prompts produced 71%
-executable / 15% pass, while Gherkin-structured prompts produced **97.8%
-executable / 96.7% pass**. The Given/When/Then markers "guide generation
-reliably." [arxiv 2506.06509](https://arxiv.org/html/2506.06509)
-
-### The runtime-AI split (the central design tension)
-
-The vendor landscape divides on **whether the AI runs at test time**:
-
-- **Pro-runtime-agent** — QA.tech, Spur, CamelQA (real mobile devices),
-  Momentic's intent-locators, Mabl's GenAI Assertions. Resilient to UI change,
-  handles non-deterministic apps, judges by intent — but introduces
-  non-determinism and false-positive risk *in the judge itself*.
-- **Anti-runtime-agent** — Octomind's explicit "AI doesn't belong in test
-  runtime," Meticulous's deterministic record/replay, Ranger's freeze-to-
-  Playwright. AI authors and maintains; execution stays deterministic and
-  reproducible — at the cost of literal diffing instead of semantic judgment.
-- **The emerging hybrid consensus** (from Magnitude's own cost critique — $1.05
-  for one product search, and "if each step has a .95 chance… after not very many
-  steps you have a pretty small overall probability of success"): **author/record
-  once with the LLM, replay deterministically, fall back to the LLM only on
-  cache miss or failure.** Only **Stagehand** documents a cross-run resolved-
-  action cache that replays without an LLM call. This is the highest-leverage
-  idea in the whole survey.
-
-### SmartBear specifically
-
-SmartBear is not one new tool but three layers: **HaloAI** (a GenAI brand
-embedded across PactFlow/TestComplete/Zephyr/ReadyAPI, May 2024); **Reflect**
-(acquired 2024 — natural-language → executable web/mobile tests, the core
-relevant engine); and a **2026 agentic layer** — agentic Reflect that generates
-context-aware tests *inside the dev environment via a SmartBear MCP server*,
-framed under **"Application Integrity": continuous assurance that software
-performs as intended even as AI accelerates development cycles.** Their motivating
-stat: "70% of testing/quality leaders say software quality is already declining
-as AI accelerates code creation." The framing is the same problem this doc opens
-with; the public materials are thin on the concrete validation mechanism.
-[BusinessWire, Mar 2026](https://www.businesswire.com/news/home/20260331994897/en/SmartBear-Delivers-AI-Enhancements-Across-Entire-Software-Application-Testing-Lifecycle)
-
-### How outcomes actually get validated
-
-Validation methods cluster into three families, and the mature tools deliberately
-**mix** them rather than trust the LLM judge alone:
-
-1. **Deterministic assertions** — exact/regex/schema/JSON, and for agents the
-   single highest-signal check: tool-call/function-call validation. Sub-ms, zero
-   cost, never flaky, catches 30–60% of failures. (Promptfoo `contains`/`regex`,
-   OpenAI Evals Basic templates, SWE-bench `FAIL_TO_PASS`+`PASS_TO_PASS`,
-   WebArena state validators, τ-bench DB-state comparison.)
-2. **Embedding tolerance bands** — cosine similarity vs a golden value, threshold
-   ~0.8 (Promptfoo `similar`). Catches semantically-equivalent rewordings exact
-   match would fail. The embedding model checkpoint **must be pinned**.
-3. **LLM-as-judge** — only on the residual the cheap layers can't decide.
-   G-Eval's chain-of-thought + form-filling; Promptfoo `llm-rubric` returning
-   `{pass, score, reason}`; Mabl GenAI Assertions ("validate the outcome you
-   expect" in plain English → pass/fail); DeepEval's `TaskCompletionMetric`
-   reading the full execution trace.
-
-The hard, unsolved risk that recurs everywhere: **LLMs complete patterns well but
-infer intent poorly.** Documented failure — an agent accepted a 401 where 200 was
-expected, "satisfied simply because the test failed." The judge "checks code
-against itself, not against intent." The fix the literature keeps re-deriving:
-**state intent explicitly** (don't leave it implicit in the example), **bound it
-to ~3–5 key dimensions** (Adzic's "key examples"; rubric focus dilutes past 5),
-and **calibrate the judge against human labels.**
-
-Sources:
-[Promptfoo model-graded](https://www.promptfoo.dev/docs/configuration/expected-outputs/model-graded/) ·
-[G-Eval](https://arxiv.org/abs/2303.16634) ·
-[MT-Bench / LLM-as-judge](https://arxiv.org/abs/2306.05685) ·
-[Mabl GenAI Assertions](https://help.mabl.com/hc/en-us/articles/31576174565268-GenAI-Assertions) ·
-[SWE-bench Verified](https://openai.com/index/introducing-swe-bench-verified/) ·
-[τ-bench](https://arxiv.org/abs/2406.12045)
-
-### The drift literature
-
-- **Drift is real and silent.** The same "GPT-4" endpoint shifted measurably over
-  three months with no visible version change. Version-pinning snapshots only
-  *defers* drift (snapshots expire). [arxiv 2307.09009](https://arxiv.org/abs/2307.09009)
-- **Eval-Driven Development** (Hamel Husain): missing eval systems are the common
-  root cause of failed AI products. Tier by cost/cadence — L1 cheap assertions
-  every change, L2 human/model eval on a cadence, L3 A/B after big changes. And:
-  LLM assertions "don't necessarily need a 100% pass rate." [hamel.dev](https://hamel.dev/blog/posts/evals/)
-- **Approval testing is the drift-control workflow.** ApprovalTests / Jest
-  snapshots / Verify: a run writes `.received`, diffs against `.approved`, and a
-  human approves by promoting received → approved. The universal lever is
-  **scrubbers** that normalize volatile content (dates, GUIDs, paths) before
-  comparison. Jest's CI guard: snapshots are **not** auto-written in CI — an
-  un-committed snapshot must fail, not silently pass.
-- **The judge drifts too, and is gameable.** On SWE-bench-Verified, 88% of
-  trajectories self-verify yet 35.7% of those still fail, and ~13.8% show
-  reward-hacking ("modified tests that hide the bug"). The acceptance check must
-  be **tamper-resistant**: the agent can run it but not weaken it.
-- **Reliability ≠ average.** τ-bench's `pass^k` (all k trials succeed) is the
-  metric that matters for agents: a 90%-pass@1 agent falls to ~57% at pass^8.
-  Agents *complete* tasks but not *dependably*. Repeat runs ≥2–3; use thresholds
-  and tolerance bands, not exact match.
+The recurring unsolved risk: LLMs complete patterns well but **infer intent poorly**
+(a judge will accept a 401 where 200 was expected, "satisfied the test failed"). The
+fix the literature keeps re-deriving — state intent explicitly, bound criteria to
+~3–5, calibrate against humans — is why here intent is mandatory and criteria are a
+short checklist.
 
 ## Design: `expect`
 
@@ -217,13 +86,12 @@ Three verbs do the work, and keeping them separate is the spine of the design:
 | `review` | static | is this *diff* correct/clean? |
 | **`expect`** | **dynamic** | does the running *system* do what a human intended, and is that still true? |
 
-`expect` is the missing runtime/behavioral axis, and architecturally it is the
-closest sibling of `review`: both fan a scoped task out to a delegated agent over
-ACP, capture structured output, and verify it before recording a verdict. `expect`
-should reuse `review`'s ACP machinery wholesale rather than re-derive it (see
-[Delegation over ACP](#delegation-over-acp-dont-rebuild-the-agent)), and slots a
-new `AgentUseCase::Expectations` into the use-case-based agent assignment proposed
-in [rule_agent.md](./rule_agent.md).
+`expect` is the missing runtime/behavioral axis. It owns mechanical drive+observe
+in-process (see *Surface adapters*) and borrows an agent only for reasoning — where
+it reuses `review`'s ACP machinery rather than re-derive it (see [Delegation over
+ACP](#delegation-over-acp-dont-rebuild-the-agent)) — and slots a new
+`AgentUseCase::Expectations` into the use-case-based agent assignment proposed in
+[rule_agent.md](./rule_agent.md).
 
 ### Expectation File Format
 
@@ -294,7 +162,7 @@ Design choices in the format, each tied to a research finding:
 - **Given/When/Then optional.** A pure intent + criteria list is valid. The
   keywords are kept because they measurably improve LLM execution (97.8% vs 71%),
   not because the ceremony is sacred.
-- **`surface` declares how the agent perceives and acts.** Six concrete adapters
+- **`surface` declares how `expect` perceives and acts.** Six concrete adapters
   (defined in the reference below) — no `custom` escape hatch. This is where
   determinism is won or lost.
 - **`reliability: pass^k`** makes flakiness a first-class, declared property, not
@@ -564,7 +432,7 @@ is also the schema handed to `expect expectation create`.
 | Key | Required | Type / allowed values | Default | Meaning |
 |-----|----------|-----------------------|---------|---------|
 | `description` | **yes** | string (one line) | — | what this expectation is, like a skill's `description`; shown in `list`/reports, retrieval hook for `create` |
-| `surface` | **yes** | `cli` \| `http` \| `browser` \| `gui` \| `file` \| `db` | — | how the agent perceives and acts on the system under test |
+| `surface` | **yes** | `cli` \| `http` \| `browser` \| `gui` \| `file` \| `db` | — | how `expect` perceives and acts on the system under test |
 | `model` | no | named sah model, **validated against the live registry** | `[model].default`, else sah model default | the model that **grades** criteria (Tier 3); missing ⇒ doctor warns + falls back |
 | `reliability` | no | `pass^N` where N ≥ 1 (e.g. `pass^1`, `pass^3`) | `pass^1` | all N repeated runs must pass |
 | `repeat` | no | integer ≥ 1 | derived from `reliability` and surface | how many times to run before judging reliability |
@@ -583,22 +451,11 @@ the label).
 
 Closed enumerations, spelled out so authors and `create` have no ambiguity:
 
-- **`surface`** — exactly six, each a concrete adapter with a defined perception
-  and action vocabulary (no `custom` escape hatch):
-  - `cli` — a command-line program. Run an argv, capture stdout, stderr, exit
-    code, and files it writes; assert on those. Deterministic by construction.
-  - `http` — an HTTP service or API. Issue requests; assert on status code,
-    headers, and (JSON/text) body. Deterministic.
-  - `browser` — a web UI running in a browser. Perceive and drive via the DOM
-    **accessibility tree** (role + accessible name); assert on visible a11y state.
-  - `gui` — a platform-native desktop application (macOS, Windows, Linux).
-    Perceive and drive via the OS accessibility API — AX (macOS), UI Automation
-    (Windows), AT-SPI (Linux) — assert on native widget state. The desktop analog
-    of `browser`, not a screenshot-diff.
-  - `file` — filesystem state. Assert on files/directories and their content
-    after a run (the approval-testing surface). Deterministic.
-  - `db` — database state. Assert on rows/tables at end of run (the τ-bench
-    state-comparison surface). Deterministic.
+- **`surface`** — exactly six, no `custom` escape hatch: `cli` (command-line),
+  `http` (service/API), `browser` (web UI via the DOM accessibility tree), `gui`
+  (native desktop via the OS accessibility API), `file` (filesystem state), `db`
+  (database state). Each is a built-in drive+observe adapter; the mechanics (and the
+  no-Node/no-Python stack) are in *Surface adapters: built-in, mechanical, in-process*.
 - **`tiers`** — `deterministic` (Tier 1) · `tolerance` (Tier 2) · `judgment`
   (Tier 3). Listing a subset forbids the others; e.g. `tiers: [deterministic]`
   makes an expectation fully deterministic with no model in the loop.
@@ -643,17 +500,11 @@ criterion
                                      by the expectation's `model:`, with evidence
 ```
 
-**What's under test is the program, not a model.** `expect` validates the
-behavior of the program the LLM generated — which may or may not itself call an
-LLM at runtime. So the classic LLM-as-judge worries about a model grading *its
-own* outputs (self-preference bias, "never let it grade its own family") mostly
-don't apply: the grading model and the system under test are unrelated. Tier 3 is
-still an LLM grading a rubric, but the subject is observed program output, so the
-only judge concern that survives is that **the grading model can itself drift over
-time** — which the ledger handles by pinning (below). Which model does the
-grading is just a named sah `model`, set per-expectation via `model:` and
-defaulting to the sah model default — the same model resolution `review` and
-`rules` already use.
+**What's under test is the program, not a model.** So the LLM-as-judge
+self-preference worries don't apply — the grader and the system under test are
+unrelated. The only judge concern that survives is that the grading model itself
+drifts, which the ledger handles by pinning. The grader is just a named sah `model:`
+(default the sah model), resolved the way `review` and `rules` already do.
 
 `observe` produces an `Observation` (the authoritative capture); `evaluate` is the
 pure function `(Observation, &[Criterion]) -> ExpectationVerdict`. The observation
@@ -956,29 +807,27 @@ Three hardening rules from the research are non-negotiable:
 1. **The driver never sees the acceptance criteria.** The delegated agent gets the
    goal (intent + Given + When) but **not** the `Then` checklist or the golden —
    exactly as SWE-bench withholds the held-out test from the agent. The verifier
-   checks the captured result against the withheld criteria. This is the single
-   biggest defense against reward-hacking: an agent that can't see the rubric
-   can't optimize to it. (METR measured o3 reward-hacking 30% of RE-Bench runs;
-   "don't reward hack" in the prompt only moved it 80%→70% — withholding works,
-   prompting doesn't.) The body's stated intent is the driver's goal, but
+   checks the captured result against the withheld criteria — the main defense
+   against reward-hacking, since an agent that can't see the rubric can't optimize
+   to it (prompting an agent *not* to reward-hack barely helps; withholding does).
+   The body's stated intent is the driver's goal, but
    `Notes`/right-reason text and the `Then` checklist are themselves criteria —
    withheld from the driver and routed to the grader at prompt-assembly (Open
    Question 8 tracks how cleanly that split holds).
 2. **The verdict is deterministic and lives in `expect`, never in the agent.** We
    delegate *exploration*, not the pass/fail call. The agent's self-declared
-   "done" is re-validated, never trusted — Skyvern's independent `check-user-goal`
-   that can *reject* a self-declared COMPLETE is the gold standard, and SWE-bench
-   data shows 35.7% of self-verified-as-correct trajectories were still wrong.
+   "done" is re-validated, never trusted — an independent re-check that can *reject*
+   a self-declared COMPLETE, because self-verification is unreliable (roughly a third
+   of self-verified-correct trajectories are still wrong).
 3. **The check is tamper-resistant.** The agent under evaluation runs in a sandbox
    it cannot use to edit the expectation, the golden, or fixtures; mutations to the
    ledger happen only through `expect observation approve`, a separate human-gated op. Detect
    spec/fixture edits directly, not just by grading outcome.
 
-**Assert on outcomes, never on action equality.** Agent trajectories are not
-reproducible even at temperature 0 + fixed seed — batch-invariance alone produced
-80 unique completions from 1000 identical temp-0 requests, diverging by token 103.
-Pass/fail is gated on the captured *outcome* (checkpoint state + criteria), never on a
-byte-identical action sequence.
+**Assert on outcomes, never on action equality.** Agent trajectories aren't
+reproducible even at temp 0 + fixed seed (batch size, not the seed, decides the
+numerics). Pass/fail is gated on the captured *outcome* (checkpoint state +
+criteria), never a byte-identical action sequence.
 
 **Determinism comes from not calling the model, not from temp=0.** Following
 Stagehand: cache each resolved action keyed by a hash of (normalized URL/target +
@@ -1268,3 +1117,162 @@ stronger one grades, or vice versa.
     agent run where it cannot edit specs/goldens/fixtures. Does `expect` reuse an
     existing sah sandbox, run the agent in a worktree, or rely on the ACP
     permission model (`answer_agent_request`) to deny writes to `.expect/`?
+
+---
+
+## Appendix — Research survey
+
+### The Cucumber lesson: the cost was the glue, the value was the contract
+
+Dan North created BDD in 2006 to get business, testers, and devs onto one shared
+Given/When/Then vocabulary *before* code. Gherkin binds each natural-language
+step to a method via a regex/Cucumber-expression; the `Then` step holds the
+assertion. The honest practitioner verdict on what happened next:
+
+- **Vendors abandoned it.** SmartBear handed Cucumber to the Open Source
+  Collective; Tricentis shut down SpecFlow entirely.
+- **The glue was the pain.** Cucumber's own docs flag *Feature-Coupled Step
+  Definitions* ("an explosion of step definitions, code duplication, and high
+  maintenance costs"). Steps must be "written perfectly and identically every
+  time."
+- **The collaboration rarely materialized.** Gojko Adzic's 10-year *Specification
+  by Example* retrospective: only ~12% of teams kept specs as version-controlled
+  text; ~25% cut business reps out of the conversation entirely. The living
+  documentation "didn't really work out as expected."
+- **But the conversation/contract was the real win.** Liz Keogh's hierarchy,
+  endorsed by Adzic: "having conversations is more important than capturing
+  conversations is more important than automating conversations."
+
+The synthesis every credible source converges on: **teams kept the executable
+syntax and dropped the collaboration it was a vehicle for, and that is why it
+hurt.** An LLM changes the economics by dissolving the step-definition glue — the
+exact part practitioners hated — which makes the human-auditable contract
+*cheaper to keep* and *more valuable* as a governance surface over fast AI
+codegen.
+
+Sources:
+[Adzic SbE 10 years](https://gojko.net/2020/03/17/sbe-10-years.html) ·
+[Automation Panda — Is BDD Dying?](https://automationpanda.com/2025/03/06/is-bdd-dying/) ·
+[Cucumber anti-patterns](https://cucumber.io/docs/guides/anti-patterns/) ·
+[dannorth.net — Introducing BDD](https://dannorth.net/introducing-bdd/)
+
+### LLMs already execute Gherkin with no step definitions
+
+The step-def layer is genuinely gone in shipping tools and peer-reviewed work:
+
+- **TestZeus Hercules** (open source): takes `.feature` files, "Gherkin in,
+  results out," no step definitions. A Planner agent interprets the
+  Given/When/Then; a Browser agent executes by calling pre-built tools (it does
+  not generate code). [github](https://github.com/test-zeus-ai/testzeus-hercules)
+- **Momentic's thesis**: "Natural language understanding eliminates the glue
+  code… LLMs can translate plain English directly into test actions without
+  requiring explicit programming for each scenario." [blog](https://momentic.ai/blog/behavior-driven-development)
+- **ACM A-TEST 2024**: multi-agent system executes Gherkin directly — strong on
+  happy paths, **notably weaker at detecting genuine failures.** [acm](https://dl.acm.org/doi/10.1145/3678719.3685692)
+- **Selector-free variants** that don't even need Gherkin keywords: Shortest
+  (`shortest("user can sign up and create a $5 product")`), ZeroStep, Auto
+  Playwright, Magnitude, Skyvern, Stagehand, browser-use.
+
+Three distinct runtime mechanisms to keep separate: **tool-calling binding** (LLM
+maps a step to a predefined tool — Hercules, ZeroStep), **code-gen-on-the-fly**
+(LLM writes test code per scenario), and **vision/pixel grounding** (acts on
+screenshots — Skyvern, Magnitude).
+
+But Gherkin is *not* dead ceremony — it is a high-value intermediate
+representation for the LLM itself. Measured: raw NL prompts produced 71%
+executable / 15% pass, while Gherkin-structured prompts produced **97.8%
+executable / 96.7% pass**. The Given/When/Then markers "guide generation
+reliably." [arxiv 2506.06509](https://arxiv.org/html/2506.06509)
+
+### The runtime-AI split (the central design tension)
+
+The vendor landscape divides on **whether the AI runs at test time**:
+
+- **Pro-runtime-agent** — QA.tech, Spur, CamelQA (real mobile devices),
+  Momentic's intent-locators, Mabl's GenAI Assertions. Resilient to UI change,
+  handles non-deterministic apps, judges by intent — but introduces
+  non-determinism and false-positive risk *in the judge itself*.
+- **Anti-runtime-agent** — Octomind's explicit "AI doesn't belong in test
+  runtime," Meticulous's deterministic record/replay, Ranger's freeze-to-
+  Playwright. AI authors and maintains; execution stays deterministic and
+  reproducible — at the cost of literal diffing instead of semantic judgment.
+- **The emerging hybrid consensus** (from Magnitude's own cost critique — $1.05
+  for one product search, and "if each step has a .95 chance… after not very many
+  steps you have a pretty small overall probability of success"): **author/record
+  once with the LLM, replay deterministically, fall back to the LLM only on
+  cache miss or failure.** Only **Stagehand** documents a cross-run resolved-
+  action cache that replays without an LLM call. This is the highest-leverage
+  idea in the whole survey.
+
+### SmartBear specifically
+
+SmartBear is not one new tool but three layers: **HaloAI** (a GenAI brand
+embedded across PactFlow/TestComplete/Zephyr/ReadyAPI, May 2024); **Reflect**
+(acquired 2024 — natural-language → executable web/mobile tests, the core
+relevant engine); and a **2026 agentic layer** — agentic Reflect that generates
+context-aware tests *inside the dev environment via a SmartBear MCP server*,
+framed under **"Application Integrity": continuous assurance that software
+performs as intended even as AI accelerates development cycles.** Their motivating
+stat: "70% of testing/quality leaders say software quality is already declining
+as AI accelerates code creation." The framing is the same problem this doc opens
+with; the public materials are thin on the concrete validation mechanism.
+[BusinessWire, Mar 2026](https://www.businesswire.com/news/home/20260331994897/en/SmartBear-Delivers-AI-Enhancements-Across-Entire-Software-Application-Testing-Lifecycle)
+
+### How outcomes actually get validated
+
+Validation methods cluster into three families, and the mature tools deliberately
+**mix** them rather than trust the LLM judge alone:
+
+1. **Deterministic assertions** — exact/regex/schema/JSON, and for agents the
+   single highest-signal check: tool-call/function-call validation. Sub-ms, zero
+   cost, never flaky, catches 30–60% of failures. (Promptfoo `contains`/`regex`,
+   OpenAI Evals Basic templates, SWE-bench `FAIL_TO_PASS`+`PASS_TO_PASS`,
+   WebArena state validators, τ-bench DB-state comparison.)
+2. **Embedding tolerance bands** — cosine similarity vs a golden value, threshold
+   ~0.8 (Promptfoo `similar`). Catches semantically-equivalent rewordings exact
+   match would fail. The embedding model checkpoint **must be pinned**.
+3. **LLM-as-judge** — only on the residual the cheap layers can't decide.
+   G-Eval's chain-of-thought + form-filling; Promptfoo `llm-rubric` returning
+   `{pass, score, reason}`; Mabl GenAI Assertions ("validate the outcome you
+   expect" in plain English → pass/fail); DeepEval's `TaskCompletionMetric`
+   reading the full execution trace.
+
+The hard, unsolved risk that recurs everywhere: **LLMs complete patterns well but
+infer intent poorly.** Documented failure — an agent accepted a 401 where 200 was
+expected, "satisfied simply because the test failed." The judge "checks code
+against itself, not against intent." The fix the literature keeps re-deriving:
+**state intent explicitly** (don't leave it implicit in the example), **bound it
+to ~3–5 key dimensions** (Adzic's "key examples"; rubric focus dilutes past 5),
+and **calibrate the judge against human labels.**
+
+Sources:
+[Promptfoo model-graded](https://www.promptfoo.dev/docs/configuration/expected-outputs/model-graded/) ·
+[G-Eval](https://arxiv.org/abs/2303.16634) ·
+[MT-Bench / LLM-as-judge](https://arxiv.org/abs/2306.05685) ·
+[Mabl GenAI Assertions](https://help.mabl.com/hc/en-us/articles/31576174565268-GenAI-Assertions) ·
+[SWE-bench Verified](https://openai.com/index/introducing-swe-bench-verified/) ·
+[τ-bench](https://arxiv.org/abs/2406.12045)
+
+### The drift literature
+
+- **Drift is real and silent.** The same "GPT-4" endpoint shifted measurably over
+  three months with no visible version change. Version-pinning snapshots only
+  *defers* drift (snapshots expire). [arxiv 2307.09009](https://arxiv.org/abs/2307.09009)
+- **Eval-Driven Development** (Hamel Husain): missing eval systems are the common
+  root cause of failed AI products. Tier by cost/cadence — L1 cheap assertions
+  every change, L2 human/model eval on a cadence, L3 A/B after big changes. And:
+  LLM assertions "don't necessarily need a 100% pass rate." [hamel.dev](https://hamel.dev/blog/posts/evals/)
+- **Approval testing is the drift-control workflow.** ApprovalTests / Jest
+  snapshots / Verify: a run writes `.received`, diffs against `.approved`, and a
+  human approves by promoting received → approved. The universal lever is
+  **scrubbers** that normalize volatile content (dates, GUIDs, paths) before
+  comparison. Jest's CI guard: snapshots are **not** auto-written in CI — an
+  un-committed snapshot must fail, not silently pass.
+- **The judge drifts too, and is gameable.** On SWE-bench-Verified, 88% of
+  trajectories self-verify yet 35.7% of those still fail, and ~13.8% show
+  reward-hacking ("modified tests that hide the bug"). The acceptance check must
+  be **tamper-resistant**: the agent can run it but not weaken it.
+- **Reliability ≠ average.** τ-bench's `pass^k` (all k trials succeed) is the
+  metric that matters for agents: a 90%-pass@1 agent falls to ~57% at pass^8.
+  Agents *complete* tasks but not *dependably*. Repeat runs ≥2–3; use thresholds
+  and tolerance bands, not exact match.
