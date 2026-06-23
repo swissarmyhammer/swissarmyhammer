@@ -1,10 +1,10 @@
 // sah rule ignore acp/capability-enforcement
 //! File reading handler for MCP operations.
 //!
-//! This module provides [`execute_read`] — the read-file handler shared between
-//! the unified [`crate::mcp::tools::files::FilesTool`] (dispatched via
-//! `op: "read file"`) and the validator-facing
-//! [`crate::mcp::tools::files::read_file::ReadFileTool`] (called by name).
+//! This module provides [`execute_read`] — the read-file handler backing the
+//! unified [`crate::mcp::tools::files::FilesTool`] (dispatched via
+//! `op: "read file"`), including the read-only validator variant
+//! ([`crate::mcp::tools::files::FilesTool::read_only`]).
 //! It supports reading UTF-8 text files and partial reads for large files via
 //! line-based offset/limit. Non-UTF-8 (binary) content is rejected with an
 //! error rather than decoded.
@@ -138,10 +138,10 @@ impl Operation for ReadFile {
 
 /// Execute a file read operation
 ///
-/// This is the shared handler that backs both the unified
-/// [`crate::mcp::tools::files::FilesTool`] (dispatched via `op: "read file"`)
-/// and the validator-facing
-/// [`crate::mcp::tools::files::read_file::ReadFileTool`] (called by name).
+/// This is the shared handler that backs the unified
+/// [`crate::mcp::tools::files::FilesTool`] (dispatched via `op: "read file"`),
+/// including its read-only validator variant
+/// ([`crate::mcp::tools::files::FilesTool::read_only`]).
 ///
 /// ## Security Features
 ///

@@ -983,20 +983,17 @@ impl McpServer {
     ///
     /// The returned server shares all state (ToolContext, prompt library, etc.)
     /// but has a separate ToolRegistry containing only validator tools
-    /// (code_context + the three split read-only file tools: `read_file`,
-    /// `glob_files`, `grep_files`).
+    /// (code_context + the unified read-only `files` tool).
     ///
-    /// The split tools are exposed instead of the unified `files` tool so that
-    /// Hermes-trained validator models (e.g. Qwen3) can call them by name —
-    /// the natural shape such models emit — rather than via the
-    /// CLI-friendly `op`-dispatched form. See
-    /// [`super::tools::files::register_validator_file_tools`] for the
-    /// per-tool details.
+    /// The validator file surface is the read-only variant of the unified
+    /// `files` tool ([`FilesTool::read_only`](super::tools::files::FilesTool::read_only)):
+    /// `read file` / `glob files` / `grep files` ops only, no `write`/`edit`.
+    /// See [`super::tools::register_validator_tools`] for the profile.
     pub fn create_validator_server(&self) -> McpServer {
         // Build the validator registry from the single, data-driven validator
-        // profile (code_context + the split read-only file tools). The profile
-        // is defined once in `tools::register_validator_tools`; this is the only
-        // path that interprets it.
+        // profile (code_context + the unified read-only `files` tool). The
+        // profile is defined once in `tools::register_validator_tools`; this is
+        // the only path that interprets it.
         let mut validator_registry = ToolRegistry::new();
         super::tools::register_validator_tools(&mut validator_registry);
 
@@ -1027,8 +1024,8 @@ impl McpServer {
             tool_config_watcher: self.tool_config_watcher.clone(),
             // The validator registry is already exactly the validator profile
             // (composed by `tools::register_validator_tools`); serve it verbatim
-            // rather than re-filtering by host/category, which would strip its
-            // `Agent`-category read-only file tools.
+            // rather than re-filtering by host/category, which would apply the
+            // primary-only serve gate to its read-only `files` tool.
             compose_per_client: false,
             // Non-primary instance: the serve-time deny is gated on
             // `compose_per_client`, so this latch is never read. Its own flag.
@@ -1041,15 +1038,14 @@ impl McpServer {
     /// The returned server shares all state (ToolContext, prompt/skill/agent
     /// libraries, etc.) but has a separate `ToolRegistry` containing only the
     /// tools a base agent needs to be useful: the `Agent`-category tools
-    /// (file read/write/edit + the split `read_file`/`glob_files`/`grep_files`,
-    /// web, skill, subagent) plus the shell `Replacement` tool. This is the set
+    /// (the unified `files` tool — read/write/edit/glob/grep — web, skill,
+    /// subagent) plus the shell `Replacement` tool. This is the set
     /// `llama-agent` mounts in-process as its own built-ins, so the agent is
     /// fully tooled even when handed zero external MCP servers.
     ///
-    /// Both the unified `files` tool (CLI-style `op` dispatch) and the three
-    /// split file tools are registered — the split forms match the names a
-    /// Hermes-trained model naturally emits, mirroring
-    /// [`create_validator_server`](Self::create_validator_server).
+    /// Files are served through the single unified `files` tool (CLI-style `op`
+    /// dispatch), which keeps `write`/`edit` for the agent. The by-name split
+    /// forms are not registered.
     ///
     /// # `compose_per_client = false` — load-bearing
     ///
@@ -1064,15 +1060,12 @@ impl McpServer {
     pub fn create_agent_tools_server(&self) -> McpServer {
         // `register_file_tools`, `register_web_tools`, `register_shell_tools`,
         // `register_agent_tools`, and `register_skill_tools` are imported at
-        // module scope; only the split-file helper needs a local `use`.
-        use super::tools::files::register_validator_file_tools;
-
+        // module scope.
         let mut agent_registry = ToolRegistry::new();
 
-        // Files: both the unified `op`-dispatched tool and the split
-        // read_file/glob_files/grep_files tools models call by name.
+        // Files: the unified `op`-dispatched tool, which keeps write/edit/read/
+        // glob/grep for the agent.
         register_file_tools(&mut agent_registry);
-        register_validator_file_tools(&mut agent_registry);
         register_web_tools(&mut agent_registry);
         // Shell is the `Replacement{native:"Bash"}` tool; llama always gets its
         // shell from this mount (and only here), satisfying the "shell appears
@@ -2593,39 +2586,39 @@ mod tests {
         );
         drop(full_tools);
 
-        // Validator server should expose exactly four tools:
-        // code_context plus the three split read-only file tools.
+        // Validator server should expose exactly two tools:
+        // code_context plus the unified read-only `files` tool.
         let validator = server.create_validator_server();
         let validator_tools = validator.tool_registry.read().await;
         assert_eq!(
             validator_tools.len(),
-            4,
-            "Validator should have exactly 4 tools (code_context + read_file + glob_files + grep_files)"
+            2,
+            "Validator should have exactly 2 tools (code_context + files)"
         );
 
         // Verify the right tools are present.
         assert!(
-            validator_tools.get_tool("read_file").is_some(),
-            "Validator should have 'read_file' tool"
-        );
-        assert!(
-            validator_tools.get_tool("glob_files").is_some(),
-            "Validator should have 'glob_files' tool"
-        );
-        assert!(
-            validator_tools.get_tool("grep_files").is_some(),
-            "Validator should have 'grep_files' tool"
+            validator_tools.get_tool("files").is_some(),
+            "Validator should have the unified 'files' tool"
         );
         assert!(
             validator_tools.get_tool("code_context").is_some(),
             "Validator should have 'code_context' tool"
         );
 
-        // The unified `files` tool must NOT be served on the validator
-        // endpoint — only the per-operation split tools.
+        // The former split by-name tools must NOT be served on the validator
+        // endpoint — only the unified op-dispatched `files` tool.
         assert!(
-            validator_tools.get_tool("files").is_none(),
-            "Validator must NOT have the unified 'files' tool"
+            validator_tools.get_tool("read_file").is_none(),
+            "Validator must NOT have the split 'read_file' tool"
+        );
+        assert!(
+            validator_tools.get_tool("glob_files").is_none(),
+            "Validator must NOT have the split 'glob_files' tool"
+        );
+        assert!(
+            validator_tools.get_tool("grep_files").is_none(),
+            "Validator must NOT have the split 'grep_files' tool"
         );
 
         // Verify disallowed tools are absent
@@ -2662,27 +2655,27 @@ mod tests {
             registry.get_tool("kanban").is_none(),
             "Validator context registry should not contain 'kanban'"
         );
-        // The split tools are present; the unified `files` tool is not.
+        // The unified `files` tool is present; the former split tools are not.
         assert!(
-            registry.get_tool("read_file").is_some(),
-            "Validator context registry should contain 'read_file'"
+            registry.get_tool("files").is_some(),
+            "Validator context registry should contain the unified 'files' tool"
         );
         assert!(
-            registry.get_tool("glob_files").is_some(),
-            "Validator context registry should contain 'glob_files'"
+            registry.get_tool("read_file").is_none(),
+            "Validator context registry must NOT contain the split 'read_file' tool"
         );
         assert!(
-            registry.get_tool("grep_files").is_some(),
-            "Validator context registry should contain 'grep_files'"
+            registry.get_tool("glob_files").is_none(),
+            "Validator context registry must NOT contain the split 'glob_files' tool"
         );
         assert!(
-            registry.get_tool("files").is_none(),
-            "Validator context registry must NOT contain the unified 'files' tool"
+            registry.get_tool("grep_files").is_none(),
+            "Validator context registry must NOT contain the split 'grep_files' tool"
         );
         assert_eq!(
             registry.len(),
-            4,
-            "Validator context registry should have exactly 4 tools (code_context + read_file + glob_files + grep_files)"
+            2,
+            "Validator context registry should have exactly 2 tools (code_context + files)"
         );
     }
 
@@ -2708,34 +2701,33 @@ mod tests {
             .iter_tools()
             .map(crate::mcp::tool_registry::McpTool::name)
             .collect();
-        let expected: BTreeSet<&str> = ["code_context", "read_file", "glob_files", "grep_files"]
-            .into_iter()
-            .collect();
+        let expected: BTreeSet<&str> = ["code_context", "files"].into_iter().collect();
 
         assert_eq!(
             actual, expected,
             "Validator server must serve exactly the validator profile \
-             (code_context + read_file + glob_files + grep_files)"
+             (code_context + files)"
         );
     }
 
-    /// Read-only enforcement audit (#4 in task description).
+    /// Read-only enforcement + op-dispatched behavior audit (#4 in task
+    /// description).
     ///
-    /// The validator endpoint exposes the **split** read-only file tools
-    /// (`read_file`, `glob_files`, `grep_files`) — the unified `files` tool
-    /// is not registered, and there is no `write_file` or `edit_file` tool
-    /// at all. This test asserts both halves of that contract:
+    /// The validator endpoint exposes the unified, read-only `files` tool —
+    /// `read file` / `glob files` / `grep files` ops only. The `write file` and
+    /// `edit file` ops are rejected, and the former split by-name tools
+    /// (`read_file`, `glob_files`, `grep_files`) are not addressable at all.
+    /// This test asserts every half of that contract by EXECUTING real op
+    /// calls through the validator-facing server and inspecting the output:
     ///
-    /// 1. The unified `files` tool name is unknown to the validator server,
-    ///    and any `write_file` / `edit_file` invocations are also unknown.
-    /// 2. The three split tools succeed when called by name.
-    ///
-    /// Locks the read-only contract at the registry boundary — write and
-    /// edit operations are simply not addressable through the validator
-    /// surface, regardless of arguments.
+    /// 1. Op-dispatched `read file` / `glob files` / `grep files` succeed and
+    ///    return the expected real content.
+    /// 2. Op-dispatched `write file` / `edit file` are rejected (read-only),
+    ///    and the file on disk is unchanged.
+    /// 3. The former split by-name tool names are Unknown to the registry.
     #[tokio::test]
     #[serial_test::serial(cwd)]
-    async fn test_validator_split_file_tools_are_read_only() {
+    async fn test_validator_files_tool_is_read_only_and_op_dispatched() {
         let tmp = tempfile::tempdir().unwrap();
         let test_file = tmp.path().join("test.txt");
         std::fs::write(&test_file, "hello world").unwrap();
@@ -2750,9 +2742,8 @@ mod tests {
 
         let validator = server.create_validator_server();
 
-        // The unified `files` tool is not registered on the validator —
-        // calling it returns "Unknown tool".
-        let files_result = validator
+        // 1a. Op-dispatched `read file` succeeds and returns the file content.
+        let read_result = validator
             .execute_tool(
                 "files",
                 serde_json::json!({
@@ -2760,108 +2751,102 @@ mod tests {
                     "path": test_file.to_str().unwrap(),
                 }),
             )
-            .await;
-        let files_err = files_result
-            .expect_err("the unified 'files' tool must not be registered on the validator server");
-        let files_msg = format!("{:?}", files_err);
+            .await
+            .expect("op-dispatched 'read file' must succeed on the validator server");
+        let (_, read_text) = format_call_result_text(&read_result);
         assert!(
-            files_msg.contains("Unknown tool"),
-            "validator should reject 'files' as Unknown tool; got: {}",
-            files_msg
+            read_text.contains("hello world"),
+            "read output must contain the real file content; got: {read_text}"
         );
 
-        // No `write_file` tool exists on the validator surface. The validator
-        // model has no addressable name to perform a write through.
+        // 1b. Op-dispatched `glob files` succeeds and finds the test file.
+        let glob_result = validator
+            .execute_tool(
+                "files",
+                serde_json::json!({
+                    "op": "glob files",
+                    "pattern": "*.txt",
+                    "path": tmp.path().to_str().unwrap(),
+                }),
+            )
+            .await
+            .expect("op-dispatched 'glob files' must succeed on the validator server");
+        let (_, glob_text) = format_call_result_text(&glob_result);
+        assert!(
+            glob_text.contains("test.txt"),
+            "glob output must list the matched file; got: {glob_text}"
+        );
+
+        // 1c. Op-dispatched `grep files` succeeds and finds the matching line.
+        let grep_result = validator
+            .execute_tool(
+                "files",
+                serde_json::json!({
+                    "op": "grep files",
+                    "pattern": "hello",
+                    "path": tmp.path().to_str().unwrap(),
+                }),
+            )
+            .await
+            .expect("op-dispatched 'grep files' must succeed on the validator server");
+        let (_, grep_text) = format_call_result_text(&grep_result);
+        assert!(
+            grep_text.contains("hello"),
+            "grep output must contain the matched text; got: {grep_text}"
+        );
+
+        // 2. Write/edit ops are rejected by the read-only surface.
         let write_result = validator
             .execute_tool(
-                "write_file",
+                "files",
                 serde_json::json!({
+                    "op": "write file",
                     "file_path": tmp.path().join("written.txt").to_str().unwrap(),
                     "content": "should not be written",
                 }),
             )
             .await;
-        let write_err =
-            write_result.expect_err("'write_file' must not be addressable on the validator server");
-        let write_msg = format!("{:?}", write_err);
         assert!(
-            write_msg.contains("Unknown tool"),
-            "validator should reject 'write_file' as Unknown tool; got: {}",
-            write_msg
+            write_result.is_err(),
+            "'write file' op must be rejected on the read-only validator surface"
         );
 
-        // No `edit_file` tool exists on the validator surface either.
         let edit_result = validator
             .execute_tool(
-                "edit_file",
+                "files",
                 serde_json::json!({
+                    "op": "edit file",
                     "file_path": test_file.to_str().unwrap(),
                     "old_string": "hello",
                     "new_string": "goodbye",
                 }),
             )
             .await;
-        let edit_err =
-            edit_result.expect_err("'edit_file' must not be addressable on the validator server");
-        let edit_msg = format!("{:?}", edit_err);
         assert!(
-            edit_msg.contains("Unknown tool"),
-            "validator should reject 'edit_file' as Unknown tool; got: {}",
-            edit_msg
+            edit_result.is_err(),
+            "'edit file' op must be rejected on the read-only validator surface"
         );
 
-        // The file must remain unchanged — write/edit attempts fail at
-        // tool-name resolution, so nothing on disk changes.
+        // The file must remain unchanged — write/edit ops are refused before
+        // touching disk.
         assert_eq!(
             std::fs::read_to_string(&test_file).unwrap(),
             "hello world",
-            "rejected write/edit attempts must not modify the file on disk"
+            "rejected write/edit ops must not modify the file on disk"
         );
 
-        // The three split tools succeed when called by their natural names.
-        let read_result = validator
-            .execute_tool(
-                "read_file",
-                serde_json::json!({
-                    "path": test_file.to_str().unwrap(),
-                }),
-            )
-            .await;
-        assert!(
-            read_result.is_ok(),
-            "read_file must succeed on the validator server: {:?}",
-            read_result.err()
-        );
-
-        let glob_result = validator
-            .execute_tool(
-                "glob_files",
-                serde_json::json!({
-                    "pattern": "*.txt",
-                    "path": tmp.path().to_str().unwrap(),
-                }),
-            )
-            .await;
-        assert!(
-            glob_result.is_ok(),
-            "glob_files must succeed on the validator server: {:?}",
-            glob_result.err()
-        );
-
-        let grep_result = validator
-            .execute_tool(
-                "grep_files",
-                serde_json::json!({
-                    "pattern": "hello",
-                    "path": tmp.path().to_str().unwrap(),
-                }),
-            )
-            .await;
-        assert!(
-            grep_result.is_ok(),
-            "grep_files must succeed on the validator server: {:?}",
-            grep_result.err()
-        );
+        // 3. The former split by-name tools are not addressable.
+        for split in ["read_file", "glob_files", "grep_files"] {
+            let err = validator
+                .execute_tool(split, serde_json::json!({}))
+                .await
+                .expect_err("split by-name tools must not be registered on the validator server");
+            let msg = format!("{:?}", err);
+            assert!(
+                msg.contains("Unknown tool"),
+                "validator should reject '{split}' as Unknown tool; got: {msg}"
+            );
+        }
     }
 
     #[test]
@@ -3145,20 +3130,20 @@ mod tests {
 
         let validator = server.create_validator_server();
 
-        // Should be able to execute a validator tool by its split name
-        // (`read_file`). The unified `files` tool is no longer registered on
-        // the validator surface; only the split per-operation tools are.
+        // Should be able to execute a validator file read via the unified
+        // op-dispatched `files` tool. The split by-name tools are no longer
+        // registered; the validator surface is the unified read-only `files`.
         let result = validator
             .execute_tool(
-                "read_file",
-                serde_json::json!({"path": test_file.to_str().unwrap()}),
+                "files",
+                serde_json::json!({"op": "read file", "path": test_file.to_str().unwrap()}),
             )
             .await;
         if let Err(e) = &result {
             let msg = format!("{:?}", e);
             assert!(
                 !msg.contains("Unknown tool"),
-                "read_file tool should be available on validator: {}",
+                "files tool should be available on validator: {}",
                 msg
             );
         }

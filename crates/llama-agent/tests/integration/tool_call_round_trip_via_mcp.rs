@@ -30,8 +30,8 @@
 //!    empty-object pair the previous implementation produced).
 //! 5. Drive a single-turn prompt through `agent.generate(...)` against
 //!    the canonical Qwen3-0.6B test model. The test injects an
-//!    unambiguous user message ("use the `read_file` tool to read
-//!    /tmp/example.rs") and asserts:
+//!    unambiguous user message ("use the `files` tool with op
+//!    \"read file\" to read /tmp/example.rs") and asserts:
 //!    - the rendered tool schema makes it into the chat template (we
 //!      check it via `format_tools_for_qwen3` byte-equality);
 //!    - the model emits a parseable tool call;
@@ -271,30 +271,39 @@ async fn test_discover_tools_via_validator_mcp_server_fetches_real_schemas() {
             .collect::<Vec<_>>()
     );
 
-    // Validator-route tools should always include `read_file` — both the
-    // validator-tools partial and the runtime route advertise it. Use
-    // this as a stable anchor for the test.
-    let read_file_tool = session
+    // The validator route advertises the unified, op-dispatched `files` tool
+    // (read-only: `read file` / `glob files` / `grep files`). The former split
+    // by-name tools (`read_file`/`glob_files`/`grep_files`) are gone. Use the
+    // unified `files` tool as the stable anchor for the test.
+    let files_tool = session
         .available_tools
         .iter()
-        .find(|t| t.name == "read_file")
+        .find(|t| t.name == "files")
         .expect(
-            "Validator MCP server must advertise a `read_file` tool. \
+            "Validator MCP server must advertise the unified `files` tool. \
              If this fails, either the always-on validator server doesn't \
-             include read_file or the fetch path lost it. \
+             include files or the fetch path lost it. \
              Available tools: see tracing output above.",
         );
 
-    // The read_file schema must include a `path` property — that's the
-    // contract the model is trained to call.
-    let properties = read_file_tool
+    // The split by-name tools must no longer appear.
+    for gone in ["read_file", "glob_files", "grep_files"] {
+        assert!(
+            !session.available_tools.iter().any(|t| t.name == gone),
+            "validator must not advertise the split `{gone}` tool any more"
+        );
+    }
+
+    // The unified `files` schema must include the `op` property — that's the
+    // op-dispatched contract the validator selects operations through.
+    let properties = files_tool
         .parameters
         .get("properties")
         .and_then(|v| v.as_object())
-        .expect("read_file schema must have a `properties` object");
+        .expect("files schema must have a `properties` object");
     assert!(
-        properties.contains_key("path") || properties.contains_key("absolute_path"),
-        "read_file schema must include a path-like property; got: {:?}",
+        properties.contains_key("op"),
+        "files schema must include the op-dispatch property; got: {:?}",
         properties.keys().collect::<Vec<_>>()
     );
 
@@ -355,9 +364,10 @@ async fn test_full_round_trip_with_mcp_fetched_tools_against_real_model() {
         "Pre-condition: fetch path must populate available_tools"
     );
 
-    // Pick a tool the model should reach for — `read_file` is the
-    // canonical choice and the validator route always exposes it.
-    let target_tool_name = "read_file";
+    // Pick a tool the model should reach for — the validator route exposes the
+    // unified `files` tool (op-dispatched read/glob/grep), so that is the
+    // canonical choice now that the split by-name tools are gone.
+    let target_tool_name = "files";
     assert!(
         session
             .available_tools
@@ -367,10 +377,10 @@ async fn test_full_round_trip_with_mcp_fetched_tools_against_real_model() {
         target_tool_name
     );
 
-    // Single, direct instruction. We pin the path so the assertion below
-    // can be exact.
+    // Single, direct instruction. We pin the op and path so the assertion
+    // below can be exact.
     let user_prompt = format!(
-        "Use the {} tool to read the file at /tmp/example.rs.",
+        "Use the {} tool with op \"read file\" to read the file at /tmp/example.rs.",
         target_tool_name
     );
     let user_message = Message {
@@ -419,7 +429,7 @@ async fn test_full_round_trip_with_mcp_fetched_tools_against_real_model() {
     // AND that call targets a tool that came from the MCP fetch path.
     // If `available_tools` had been silently empty, the rendered system
     // prompt would have had no `# Tools` block and the model would have
-    // had no way to know `read_file` was available — so this assertion
+    // had no way to know the `files` tool was available — so this assertion
     // failing means the fetch path didn't deliver real schemas.
     assert!(
         !tool_calls.is_empty(),

@@ -11,18 +11,11 @@
 
 pub mod edit;
 pub mod glob;
-pub mod glob_files;
 pub mod grep;
-pub mod grep_files;
 pub mod read;
-pub mod read_file;
 pub mod schema;
 pub mod shared_utils;
 pub mod write;
-
-pub use glob_files::GlobFilesTool;
-pub use grep_files::GrepFilesTool;
-pub use read_file::ReadFileTool;
 
 use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext, ToolRegistry};
 use async_trait::async_trait;
@@ -141,11 +134,11 @@ impl McpTool for FilesTool {
         // surface, so it is a `Replacement` for `Edit`: the primary per-client
         // serve advertises it to Claude (mirroring how `shell` replaces `Bash`)
         // and serve-time deny closes the native `Edit` tool. The validator
-        // surface does not serve this unified tool at all — it serves the split
-        // read-only `read_file`/`glob_files`/`grep_files` tools via the validator
-        // profile (`tools::register_validator_tools`), and the agent-tools /
-        // validator servers serve verbatim (`compose_per_client = false`), so
-        // this category does not change what those endpoints advertise.
+        // surface serves the read-only variant of this same unified tool
+        // ([`FilesTool::read_only`]) via the validator profile
+        // (`tools::register_validator_tools`); the agent-tools and validator
+        // servers serve verbatim (`compose_per_client = false`), so this
+        // category does not change what those endpoints advertise.
         ToolCategory::Replacement { native: "Edit" }
     }
 
@@ -271,37 +264,10 @@ impl Doctorable for FilesTool {
 ///
 /// Synchronous — registration is a simple in-memory insert and does not need
 /// an async runtime. Matches the convention used by the other
-/// `register_*_tools` helpers in this crate (see [`register_validator_file_tools`]
-/// and the `register_tool_category!` macro in `tool_registry.rs`).
+/// `register_*_tools` helpers in this crate (and the `register_tool_category!`
+/// macro in `tool_registry.rs`).
 pub fn register_file_tools(registry: &mut ToolRegistry) {
     registry.register(FilesTool::new());
-}
-
-/// Register the validator-facing split file tools with the registry.
-///
-/// Validator agents (Hermes-trained models like Qwen3) call tools by **name**,
-/// not by `op` argument. This helper registers three thin wrappers around the
-/// existing read-only file handlers under the names that match what models
-/// naturally emit:
-///
-/// - `read_file` — wraps [`read::execute_read`]
-/// - `glob_files` — wraps [`glob::execute_glob`]
-/// - `grep_files` — wraps [`grep::execute_grep`]
-///
-/// The unified [`FilesTool`] is **not** registered here — the validator
-/// endpoint exposes only the per-operation tools so its `tools/list` matches
-/// the names a validator's prompt advertises.
-///
-/// This function is synchronous because registration is a simple in-memory
-/// insert; it does not need an async runtime.
-///
-/// # Arguments
-///
-/// * `registry` - The tool registry to add the validator file tools to.
-pub fn register_validator_file_tools(registry: &mut ToolRegistry) {
-    registry.register(ReadFileTool::new());
-    registry.register(GlobFilesTool::new());
-    registry.register(GrepFilesTool::new());
 }
 
 #[cfg(test)]
@@ -320,39 +286,31 @@ mod tests {
         assert!(registry.get_tool("files").is_some());
     }
 
-    /// `register_validator_file_tools` must register exactly the three split
-    /// file tools — `read_file`, `glob_files`, `grep_files` — under the
-    /// validator-friendly per-operation names. Critically, the unified `files`
-    /// tool must NOT be registered, so the validator endpoint never advertises
-    /// the op-dispatched shape that Hermes-trained models will not call.
+    /// The validator file surface is now the unified read-only `files` tool —
+    /// a single op-dispatched tool, not three split by-name tools. Registering
+    /// [`FilesTool::read_only`] adds exactly one tool named `files`, and the
+    /// former split names (`read_file`/`glob_files`/`grep_files`) are no longer
+    /// addressable anywhere.
     #[test]
-    fn test_register_validator_file_tools() {
+    fn test_register_validator_files_tool_is_unified_read_only() {
         let mut registry = ToolRegistry::new();
         assert_eq!(registry.len(), 0);
 
-        register_validator_file_tools(&mut registry);
+        registry.register(FilesTool::read_only());
 
         assert_eq!(
             registry.len(),
-            3,
-            "validator file registration must add exactly 3 tools"
+            1,
+            "the read-only validator file surface must be a single unified tool"
         );
         assert!(
-            registry.get_tool("read_file").is_some(),
-            "register_validator_file_tools must register 'read_file'"
+            registry.get_tool("files").is_some(),
+            "the validator file surface must register the unified 'files' tool"
         );
-        assert!(
-            registry.get_tool("glob_files").is_some(),
-            "register_validator_file_tools must register 'glob_files'"
-        );
-        assert!(
-            registry.get_tool("grep_files").is_some(),
-            "register_validator_file_tools must register 'grep_files'"
-        );
-        assert!(
-            registry.get_tool("files").is_none(),
-            "register_validator_file_tools must NOT register the unified 'files' tool"
-        );
+        // The split by-name forms no longer exist.
+        assert!(registry.get_tool("read_file").is_none());
+        assert!(registry.get_tool("glob_files").is_none());
+        assert!(registry.get_tool("grep_files").is_none());
     }
 
     #[test]

@@ -1,11 +1,51 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kvvcp6w0jdqjcfe0m016fj82
+  text: |-
+    Picked up. Both deps (y28jr6g read-hashline, tajpmp0 edit-cascade) are done. Research complete.
+
+    Key findings vs task description:
+    - description.md is ALREADY unified (no split-tool refs) — nothing to change there.
+    - Found an extra by-name test NOT enumerated in the task: crates/llama-agent/tests/integration/agent_tools_mount.rs:66-73 asserts the agent-tools mount serves read_file/glob_files/grep_files by name. Since create_agent_tools_server drops register_validator_file_tools, that second loop must be migrated (llama keeps files via unified op; loses by-name forms — intended).
+    - read/mod.rs:7,144 and glob_files.rs:8 / grep_files.rs:8 doc comments reference ReadFileTool — must clean up so rg returns zero.
+    - No grammar/schema special-case for the three names found in code (only kanban .md task files).
+    Starting TDD.
+  timestamp: 2026-06-23T23:22:46.528245+00:00
+- actor: claude-code
+  id: 01kvvdpfb7hvvs8ywqg1r47s0q
+  text: |-
+    Implementation landed (TDD: tests migrated first, watched the old by-name assertions fail, then implemented).
+
+    DELETED:
+    - crates/swissarmyhammer-tools/src/mcp/tools/files/{read_file.rs,glob_files.rs,grep_files.rs}
+    - pub mod glob_files/grep_files/read_file + pub use {GlobFilesTool,GrepFilesTool,ReadFileTool} in files/mod.rs
+    - register_validator_file_tools + test_register_validator_file_tools (replaced with test_register_validator_files_tool_is_unified_read_only)
+
+    CALL SITE 1 (validator profile, tools/mod.rs): register_validator_tools now does registry.register(files::FilesTool::read_only()). Doc comment updated.
+    CALL SITE 2 (server.rs create_agent_tools_server): dropped the register_validator_file_tools call + its local `use`; keeps register_file_tools (unified FilesTool::new(), write/edit retained). Doc comments at the validator-server doc, agent-tools-server doc, and the verbatim-serve comment updated.
+
+    DOC UPDATES: files/mod.rs category() doc; read/mod.rs module + execute_read docs (dropped ReadFileTool refs); tools/mod.rs register_validator_tools profile doc. description.md was ALREADY unified (no change needed).
+
+    TESTS MIGRATED (by-name -> unified files / op-dispatched):
+    - tools/mod.rs: test_validator_profile_membership expected set -> {code_context, files}
+    - server.rs: test_validator_server_has_only_validator_tools (4->2 tools, files present, split absent); test_validator_context_registry_is_isolated (same); test_validator_server_serves_exactly_the_profile (expected {code_context,files}); test_create_validator_server_tool_execution (op-dispatched read)
+    - server.rs NEW execution test: test_validator_files_tool_is_read_only_and_op_dispatched — EXECUTES op-dispatched read+glob+grep through the validator-facing server and asserts real output (hello world / test.txt / hello), asserts write+edit ops rejected + file unchanged on disk, asserts split by-name names are Unknown. Replaces the old by-name execution test.
+    - unified_server.rs: test_validator_endpoint_lists_only_validator_tools (HTTP /mcp/validator e2e) expected {files,code_context}; split names added to forbidden list.
+    - llama-agent agent_tools_mount.rs: second loop now asserts split names are ABSENT.
+    - llama-agent tool_call_round_trip_via_mcp.rs (NOT in task enumeration, found via double-check): both tests migrated read_file anchor -> unified files (op property), + negative split-tool assertions; real-model round-trip now instructs op "read file" and the model emits a `files` call.
+
+    VERIFIED: cargo nextest run -p swissarmyhammer-tools = 1358 passed 0 failed; doctests --doc 8 passed; llama-agent agent_tools_mount + tool_call_round_trip_via_mcp (incl. real Qwen3 model) green; cargo fmt --check clean; cargo clippy -p swissarmyhammer-tools --tests -D warnings clean. rg 'ReadFileTool|GlobFilesTool|GrepFilesTool|register_validator_file_tools' crates/ = ZERO hits.
+
+    Out of scope confirmed: llama-agent acp_agentic_loop.rs / acp_hooks_real_model.rs / read_file_mcp_server.rs use a self-contained ReadFileMcpServer fixture (hand-built `read_file` tool), NOT the SAH validator surface — independent of the deleted production tool. The ideas/file-edit-tools.md research doc mentions ReadFileTool only as the "before" state being removed (narrative, not code).
+  timestamp: 2026-06-23T23:40:23.783228+00:00
 depends_on:
 - 01KVTV9QTCZ47M8TVTTY28JR6G
 - 01KVTVACR1W8HFKFR8DTAJPMP0
-position_column: todo
-position_ordinal: aa80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffdc80
 project: file-edit-tools
 title: Consolidation — delete standalone read_file/glob_files/grep_files + validator registration
 ---

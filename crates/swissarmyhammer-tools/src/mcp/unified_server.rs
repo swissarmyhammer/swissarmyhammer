@@ -1895,20 +1895,18 @@ mod tests {
     /// Boots an actual HTTP MCP server, opens an RMCP client against the
     /// `/mcp/validator` sub-route, sends `tools/list`, and asserts the
     /// returned tool names are exactly the validator allowlist —
-    /// `{"read_file", "glob_files", "grep_files", "code_context"}` —
-    /// no more, no less.
+    /// `{"files", "code_context"}` — no more, no less.
     ///
-    /// The split file tools are exposed by name (rather than the unified
-    /// `files` tool with an `op` argument) so that Hermes-trained validator
-    /// models can call them directly with the natural `{"name": "read_file",
-    /// "arguments": {...}}` shape.
+    /// The validator file surface is the unified, read-only `files` tool
+    /// (op-dispatched `read file` / `glob files` / `grep files`); the former
+    /// split by-name tools (`read_file`/`glob_files`/`grep_files`) are gone.
     ///
     /// This is the durable guard against tool-set drift. If anyone adds a
     /// `register_kanban_tools(&mut registry)` call to `create_validator_server`
     /// "because it seemed harmless", the runtime list won't match and this
-    /// test fails at the boundary the actual validator agent talks to. It
-    /// also catches reverting the split: if the unified `files` tool sneaks
-    /// back onto the validator surface, the assertion fails.
+    /// test fails at the boundary the actual validator agent talks to. It also
+    /// catches a regression that re-introduces the split by-name tools or drops
+    /// the unified `files` tool from the validator surface.
     ///
     /// The validator route serves exactly the validator profile
     /// (`tools::register_validator_tools`); the full server registering the
@@ -1947,28 +1945,29 @@ mod tests {
             .expect("tools/list against /mcp/validator must succeed");
 
         let actual: BTreeSet<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
-        let expected: BTreeSet<String> = ["read_file", "glob_files", "grep_files", "code_context"]
+        let expected: BTreeSet<String> = ["files", "code_context"]
             .iter()
             .map(|s| s.to_string())
             .collect();
 
         assert_eq!(
             actual, expected,
-            "validator endpoint must expose exactly {{read_file, glob_files, grep_files, code_context}} — got: {:?}",
+            "validator endpoint must expose exactly {{files, code_context}} — got: {:?}",
             actual
         );
 
-        // The unified `files` tool must not appear — its op-dispatched shape
-        // does not match what Hermes-trained validator models naturally emit.
+        // The unified `files` tool must be present — it is the read-only file
+        // surface served to validators.
         assert!(
-            !actual.contains("files"),
-            "validator endpoint must NOT advertise the unified 'files' tool — got: {:?}",
+            actual.contains("files"),
+            "validator endpoint must advertise the unified 'files' tool — got: {:?}",
             actual
         );
 
         // Defense in depth: enumerate the categories the validator must
         // never advertise. If any of these names appear, registration has
-        // leaked a forbidden tool through the validator route.
+        // leaked a forbidden tool through the validator route. The former
+        // split file tools are included — they must no longer be served.
         for forbidden in [
             "shell",
             "git",
@@ -1980,6 +1979,9 @@ mod tests {
             "agent",
             "write_file",
             "edit_file",
+            "read_file",
+            "glob_files",
+            "grep_files",
         ] {
             assert!(
                 !actual.contains(forbidden),
