@@ -135,7 +135,15 @@ pub async fn execute_read(
     struct ReadRequest {
         #[serde(alias = "absolute_path", alias = "file_path")]
         path: String,
+        #[serde(
+            default,
+            deserialize_with = "crate::mcp::tools::files::shared_utils::deserialize_flexible_usize"
+        )]
         offset: Option<usize>,
+        #[serde(
+            default,
+            deserialize_with = "crate::mcp::tools::files::shared_utils::deserialize_flexible_usize"
+        )]
         limit: Option<usize>,
     }
 
@@ -331,6 +339,38 @@ mod tests {
 
         let result = execute_read(args, &context).await;
         assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        };
+        // Offset 2 means skip line 1, start from line 2, take 2 lines
+        assert!(!text.contains("Line 1"));
+        assert!(text.contains("Line 2"));
+        assert!(text.contains("Line 3"));
+        assert!(!text.contains("Line 4"));
+    }
+
+    #[tokio::test]
+    async fn test_read_with_string_offset_and_limit() {
+        // Language models frequently stringify numeric arguments, sending
+        // offset/limit as `"60"`/`"40"` instead of `60`/`40`. These must be
+        // coerced rather than rejected with `invalid type: string, expected usize`.
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("string_args_test.txt");
+        fs::write(&test_file, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n").unwrap();
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("offset".to_string(), serde_json::json!("2"));
+        args.insert("limit".to_string(), serde_json::json!("2"));
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_ok(), "string offset/limit should be accepted");
         let call_result = result.unwrap();
         let text = match &call_result.content[0].raw {
             rmcp::model::RawContent::Text(t) => t.text.clone(),

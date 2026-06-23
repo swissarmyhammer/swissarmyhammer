@@ -26,6 +26,51 @@ use rmcp::ErrorData as McpError;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+/// Deserialize an optional `usize` that may arrive as a JSON number OR a
+/// string-encoded number.
+///
+/// Language models routinely stringify numeric tool arguments — emitting
+/// `"60"` / `"40"` instead of `60` / `40` — which makes a plain
+/// `Option<usize>` field fail with `invalid type: string "60", expected usize`
+/// and forces the model into a recoverable-but-wasteful retry. Coercing the
+/// string form here accepts what the model actually sends.
+///
+/// Accepts: a JSON integer, a string holding an integer (surrounding whitespace
+/// tolerated), JSON `null`, an empty/whitespace-only string, or an absent field
+/// — the last three all resolve to `None`. Pair with `#[serde(default, ...)]`
+/// so an absent key is honored.
+pub(crate) fn deserialize_flexible_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NumberOrString {
+        Number(i64),
+        Text(String),
+    }
+
+    match Option::<NumberOrString>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(NumberOrString::Number(n)) => usize::try_from(n).map(Some).map_err(|_| {
+            serde::de::Error::custom(format!("expected a non-negative integer, got {n}"))
+        }),
+        Some(NumberOrString::Text(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            trimmed.parse::<usize>().map(Some).map_err(|_| {
+                serde::de::Error::custom(format!(
+                    "expected a non-negative integer string, got {s:?}"
+                ))
+            })
+        }
+    }
+}
+
 /// Validate that a file path is absolute and within acceptable boundaries
 ///
 /// This function performs essential security validation for all file operations:
@@ -1038,6 +1083,46 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// Wrapper so the field-level `deserialize_with` helper can be exercised
+    /// directly against JSON values.
+    #[derive(serde::Deserialize)]
+    struct FlexWrapper {
+        #[serde(default, deserialize_with = "deserialize_flexible_usize")]
+        value: Option<usize>,
+    }
+
+    fn flex(json: serde_json::Value) -> Result<Option<usize>, serde_json::Error> {
+        serde_json::from_value::<FlexWrapper>(json).map(|w| w.value)
+    }
+
+    #[test]
+    fn test_flexible_usize_accepts_integer() {
+        assert_eq!(flex(serde_json::json!({"value": 60})).unwrap(), Some(60));
+    }
+
+    #[test]
+    fn test_flexible_usize_accepts_string() {
+        assert_eq!(flex(serde_json::json!({"value": "60"})).unwrap(), Some(60));
+        assert_eq!(
+            flex(serde_json::json!({"value": " 40 "})).unwrap(),
+            Some(40)
+        );
+    }
+
+    #[test]
+    fn test_flexible_usize_absent_null_and_empty_are_none() {
+        assert_eq!(flex(serde_json::json!({})).unwrap(), None);
+        assert_eq!(flex(serde_json::json!({"value": null})).unwrap(), None);
+        assert_eq!(flex(serde_json::json!({"value": ""})).unwrap(), None);
+        assert_eq!(flex(serde_json::json!({"value": "   "})).unwrap(), None);
+    }
+
+    #[test]
+    fn test_flexible_usize_rejects_non_numeric_and_negative() {
+        assert!(flex(serde_json::json!({"value": "abc"})).is_err());
+        assert!(flex(serde_json::json!({"value": -5})).is_err());
+    }
 
     /// A throwaway session-root base for tests that only exercise absolute,
     /// empty, or too-long paths (where relative resolution never happens).

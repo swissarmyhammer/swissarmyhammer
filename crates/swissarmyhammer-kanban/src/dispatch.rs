@@ -1220,6 +1220,32 @@ mod tests {
         assert_eq!(result["tasks"][0]["id"], task_id);
     }
 
+    /// Regression: a `get task` that passes the task reference under the `task`
+    /// key (the committer role's habit) must resolve to `id` and succeed through
+    /// the real dispatch + resolver path, not fail with
+    /// `missing required field: id`. Covers the full ULID and the `^<short>`
+    /// form (the exact shape from the bug report).
+    #[tokio::test]
+    async fn dispatch_get_task_accepts_task_key_alias() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Aliased fetch"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let full_id = added["id"].as_str().unwrap().to_string();
+        let short_id = added["short_id"].as_str().unwrap().to_string();
+
+        // Full ULID under `task`.
+        let ops = parse_input(json!({"op": "get task", "task": full_id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["title"], "Aliased fetch");
+        assert_eq!(result["id"].as_str().unwrap(), full_id);
+
+        // `^<short>` under `task` — the exact shape from the bug report.
+        let ops = parse_input(json!({"op": "get task", "task": format!("^{short_id}")})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"].as_str().unwrap(), full_id);
+    }
+
     /// `search tasks` must parse to (Verb::Search, Noun::Tasks) and dispatch to
     /// SearchTasks. On an empty board the op short-circuits before loading any
     /// model, so this proves the wiring without an embedding model. A missing

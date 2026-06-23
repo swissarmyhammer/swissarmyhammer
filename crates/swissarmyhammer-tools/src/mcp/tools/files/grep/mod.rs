@@ -201,6 +201,10 @@ struct GrepRequest {
     #[serde(rename = "type")]
     file_type: Option<String>,
     case_insensitive: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "crate::mcp::tools::files::shared_utils::deserialize_flexible_usize"
+    )]
     context_lines: Option<usize>,
     output_mode: Option<String>,
 }
@@ -859,6 +863,32 @@ mod tests {
         assert!(text.contains(":3: charlie"), "match: {text}");
         assert!(text.contains("-4- delta"), "one line after: {text}");
         // Lines outside the 1-line window are not shown.
+        assert!(!text.contains("alpha"), "line 1 outside window: {text}");
+        assert!(!text.contains("echo"), "line 5 outside window: {text}");
+    }
+
+    /// Language models stringify numeric arguments, sending `context_lines` as
+    /// `"1"` instead of `1`. The string form must be coerced and behave
+    /// identically to the integer form — this pins the `deserialize_with`
+    /// wiring on `GrepRequest.context_lines`, not just the shared helper.
+    #[tokio::test]
+    async fn test_grep_string_context_lines() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file = temp_dir.path().join("ctx.txt");
+        std::fs::write(&file, "alpha\nbravo\ncharlie\ndelta\necho\n").unwrap();
+
+        let text = grep_content(
+            &context,
+            &file,
+            &[("context_lines", serde_json::json!("1"))],
+        )
+        .await;
+
+        // Identical to the integer-input twin (test_grep_context_lines_explicit).
+        assert!(text.contains("-2- bravo"), "one line before: {text}");
+        assert!(text.contains(":3: charlie"), "match: {text}");
+        assert!(text.contains("-4- delta"), "one line after: {text}");
         assert!(!text.contains("alpha"), "line 1 outside window: {text}");
         assert!(!text.contains("echo"), "line 5 outside window: {text}");
     }
