@@ -285,30 +285,32 @@ fn remove_config_section(config: &str, section: &str) -> String {
     }
 }
 
-/// Ensure the `.kanban/.gitignore` lists every ephemeral entry without
-/// duplicating lines.
-///
-/// The cache and undo stack are derived data that must never be committed,
-/// but `.kanban/` is only partially tracked — task `.md`/`.jsonl` files are
-/// committed source — so we list each ephemeral file explicitly rather than
-/// blanket-ignoring the directory. Idempotent and safe on existing boards:
-/// reads whatever is there, adds any missing required entries, and rewrites
-/// only when something changed.
-/// Ephemeral files that must never be committed. Listed explicitly (not as
-/// a `search-cache.sqlite3*` glob) so the guarantee is exact and the
-/// directory's tracked task files stay un-ignored.
+/// Ephemeral gitignore entries (search cache, undo state) that must not be
+/// version controlled. Listed explicitly (not as a `search-cache.sqlite3*`
+/// glob) so the guarantee is exact and the directory's tracked task files stay
+/// un-ignored.
 ///
 /// Declared at module scope (rather than inside [`ensure_gitignore_entries`])
 /// so the test suite can assert against the single source of truth instead of
 /// re-listing the literals.
-const REQUIRED_GITIGNORE_ENTRIES: &[&str] = &[
+pub(crate) const REQUIRED_GITIGNORE_ENTRIES: &[&str] = &[
     "undo_stack.yaml",
     "search-cache.sqlite3",
     "search-cache.sqlite3-wal",
     "search-cache.sqlite3-shm",
 ];
 
-fn ensure_gitignore_entries(kanban_root: &Path) -> std::io::Result<()> {
+/// Reconcile the board's `.kanban/.gitignore` so every entry in
+/// [`REQUIRED_GITIGNORE_ENTRIES`] is present, appending any that are missing.
+///
+/// The cache and undo stack are derived data that must never be committed, but
+/// `.kanban/` is only partially tracked — task `.md`/`.jsonl` files are
+/// committed source — so each ephemeral file is listed explicitly rather than
+/// blanket-ignoring the directory. Idempotent and safe on existing boards:
+/// reads whatever is already there, appends only the missing required entries
+/// without clobbering existing lines, and rewrites the file only when something
+/// changed. Returns the underlying [`std::io::Error`] if the rewrite fails.
+pub(crate) fn ensure_gitignore_entries(kanban_root: &Path) -> std::io::Result<()> {
     let gitignore_path = kanban_root.join(".gitignore");
     let existing = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
 

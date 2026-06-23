@@ -1,0 +1,19 @@
+[package]
+name = "swissarmyhammer-hashline"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Pure, IO-free hashline anchor primitives (hash/tag/parse/apply) for read and edit file tools"
+
+[dependencies]
+crc32fast.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

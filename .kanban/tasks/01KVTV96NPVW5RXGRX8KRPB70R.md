@@ -3,7 +3,7 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: a380
-project: null
+project: file-edit-tools
 title: edit files — forgiving argument normalization to canonical (find, replace) pairs
 ---
 ## What

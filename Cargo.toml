@@ -69,6 +69,7 @@ members = [
     "apps/shelltool-cli",
     "apps/code-context-cli",
     "crates/swissarmyhammer-cli-completions",
+    "crates/swissarmyhammer-hashline",
 ]
 resolver = "2"
 
@@ -159,6 +160,7 @@ tree-sitter-toml-ng = "0.7"
 tree-sitter-md = "0.5"
 tree-sitter-sequel = "0.3"
 md5 = "0.7"
+crc32fast = "1.5"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 fs2 = "0.4"
 simsimd = "6"
@@ -291,6 +293,7 @@ swissarmyhammer-fields = { path = "crates/swissarmyhammer-fields" }
 swissarmyhammer-filter-expr = { path = "crates/swissarmyhammer-filter-expr" }
 swissarmyhammer-focus = { path = "crates/swissarmyhammer-focus" }
 swissarmyhammer-git = { path = "crates/swissarmyhammer-git" }
+swissarmyhammer-hashline = { path = "crates/swissarmyhammer-hashline" }
 swissarmyhammer-js = { path = "crates/swissarmyhammer-js" }
 swissarmyhammer-kanban = { path = "crates/swissarmyhammer-kanban" }
 swissarmyhammer-mcp-proxy = { path = "crates/swissarmyhammer-mcp-proxy" }

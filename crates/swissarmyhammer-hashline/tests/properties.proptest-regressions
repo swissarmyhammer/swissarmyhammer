@@ -1,0 +1,26 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1628412cf1c18d2062430c2f94b13cbd1d0bc09f8eba4919c1c0ccaa27d7c153 # shrinks to content = ""
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 522801ad250838c15d72468920df2386a1dad434a29ef36a86da73197c3d94f1 # shrinks to content = "", seed = 0
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 42a0f5f29f226c4d5bc32b770fefaae33836cacc42e9e5e7a6d52a034e1756e8 # shrinks to content = ""
+cc 0ea44a22356f8938a65c84d175e3129ba2f3d935204567688ea3e12fe08e3347 # shrinks to content = "", seed = 0
+cc 40f530d8a2bceed5ca561f7d71183e7102f253013436118e2a9ba450c162957a # shrinks to content = ""
+cc e34b7ede7778a7b993970f00f669c0c8cd71c2cb193dbb1623c4f5c753c71ad2 # shrinks to content = "", seed = 0
+cc 0a0fb9e4a368833be7715f7ea216dfeaed77e939195f4351ee72df0475ea857c # shrinks to content = "", seed = 0
+cc 12f63d773410557518a2bf541e9665e96e38ad09d12d56e3c1d906a808b7b947 # shrinks to lines = ["", "", "", "", "", "", "", ""], seed = 4730725029275421959

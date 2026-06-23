@@ -8374,6 +8374,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-hashline"
+version = "0.16.0"
+dependencies = [
+ "crc32fast",
+ "proptest",
+]
+
+[[package]]
 name = "swissarmyhammer-js"
 version = "0.16.0"
 dependencies = [

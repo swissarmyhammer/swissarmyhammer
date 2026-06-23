@@ -5,7 +5,7 @@ depends_on:
 - 01KVTV89QPMT2Z63H2KZ8BJ3M1
 position_column: todo
 position_ordinal: a480
-project: null
+project: file-edit-tools
 title: read files — emit hashline tags + whole-file content hash
 ---
 ## What

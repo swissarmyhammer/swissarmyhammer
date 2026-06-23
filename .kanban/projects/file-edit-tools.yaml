@@ -1,0 +1,2 @@
+description: 'Decompose ideas/file-edit-tools.md: hashline anchors + forgiving find/replace edit cascade, hashline-tagged reads, read-before-write guard, tagged_content result contract, and consolidation of standalone read_file/glob_files/grep_files onto the unified files op. Two new pure crates: swissarmyhammer-hashline + swissarmyhammer-edit-match.'
+name: Best-in-Class File Edit Tools

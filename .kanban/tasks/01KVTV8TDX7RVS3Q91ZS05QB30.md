@@ -3,7 +3,7 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: a280
-project: null
+project: file-edit-tools
 title: swissarmyhammer-edit-match crate — pure literal-find ladder
 ---
 ## What

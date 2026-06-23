@@ -6,7 +6,7 @@ depends_on:
 - 01KVTVACR1W8HFKFR8DTAJPMP0
 position_column: todo
 position_ordinal: aa80
-project: null
+project: file-edit-tools
 title: Consolidation — delete standalone read_file/glob_files/grep_files + validator registration
 ---
 ## What
