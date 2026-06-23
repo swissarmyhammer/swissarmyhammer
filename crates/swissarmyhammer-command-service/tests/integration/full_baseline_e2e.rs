@@ -100,7 +100,7 @@ use swissarmyhammer_plugin::{
 use swissarmyhammer_ui_state::{UIState, UiStateServer};
 use tempfile::TempDir;
 
-use crate::support::call_command;
+use crate::support::{call_command, copy_dir_recursive};
 
 /// A generous upper bound on the discovery+load step. Loading 7
 /// TypeScript bundles through 7 Deno isolates runs well under this in
@@ -188,21 +188,6 @@ fn workspace_root() -> PathBuf {
         .nth(2)
         .expect("workspace root is two levels above the crate manifest dir")
         .to_path_buf()
-}
-
-/// Recursively copy a directory tree from `source` into `destination`.
-fn copy_dir_recursive(source: &Path, destination: &Path) {
-    std::fs::create_dir_all(destination).expect("staging directory should be created");
-    for entry in std::fs::read_dir(source).expect("bundle dir should be readable") {
-        let entry = entry.expect("a directory entry should be readable");
-        let from = entry.path();
-        let to = destination.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to);
-        } else {
-            std::fs::copy(&from, &to).expect("bundle file should copy");
-        }
-    }
 }
 
 /// Stage every committed builtin command plugin bundle into a temp

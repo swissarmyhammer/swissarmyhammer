@@ -21,6 +21,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use swissarmyhammer_plugin::{CallerId, Error, InProcessServer, McpServer, PluginHost, PluginId};
 
+#[path = "fixture/mod.rs"]
+mod fixture;
+use fixture::LoadResult;
+
 /// A generous upper bound on any single host interaction.
 const TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -66,20 +70,12 @@ fn rendered(value: &Value) -> String {
     serde_json::to_string(value).expect("a tools/call result is serializable")
 }
 
-/// Writes a one-file plugin bundle whose default-class `load()` runs `body`.
-///
-/// The entry is the bundle's `index.ts`: it imports the SDK and default-exports
-/// a `Plugin` subclass whose `load()` contains `body`. The host instantiates the
-/// default export, wraps it with the SDK's plugin Proxy, and runs its `load()` —
-/// this matches the bundle shape the host's `load(plugin_dir)` expects.
+/// Writes a one-file `index.ts` plugin bundle whose `load(): Promise<void>`
+/// runs `body` — the bundle shape the host's `load(plugin_dir)` expects. Thin
+/// adapter over the shared [`fixture::write_plugin`] binding this file's fixed
+/// bundle shape.
 fn write_plugin(dir: &std::path::Path, body: &str) {
-    let entry = format!(
-        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
-         export default class P extends Plugin {{\n\
-           async load(): Promise<void> {{\n{body}\n}}\n\
-         }}\n"
-    );
-    std::fs::write(dir.join("index.ts"), entry).expect("index.ts should be written");
+    fixture::write_plugin(dir, "index.ts", body, LoadResult::Void);
 }
 
 /// `PluginHost::load` runs a probe plugin whose `load()` registers a `rust`

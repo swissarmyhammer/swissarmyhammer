@@ -23,6 +23,10 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use swissarmyhammer_plugin::{HostDispatcher, PluginLifecycle, PluginRuntime, RuntimeConfig};
 
+#[path = "fixture/mod.rs"]
+mod fixture;
+use fixture::LoadResult;
+
 /// A generous upper bound on any single runtime interaction.
 const TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -96,19 +100,11 @@ fn config_with(dispatcher: Arc<dyn HostDispatcher>) -> RuntimeConfig {
     }
 }
 
-/// Writes a one-file plugin bundle whose `load` export runs `body`.
-///
-/// The entry imports the SDK, declares a `Plugin` subclass whose `load`
-/// contains `body`, and exports a `load` lifecycle function that constructs the
-/// subclass — wrapped in the SDK's plugin Proxy — and awaits its `load`.
+/// Writes a one-file `index.ts` plugin bundle whose `load(): Promise<void>`
+/// runs `body` for its side effects (no result capture). Thin adapter over the
+/// shared [`fixture::write_plugin`] binding this file's fixed bundle shape.
 fn write_plugin(dir: &std::path::Path, body: &str) {
-    let entry = format!(
-        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
-         export default class P extends Plugin {{\n\
-           async load(): Promise<void> {{\n{body}\n}}\n\
-         }}\n"
-    );
-    std::fs::write(dir.join("index.ts"), entry).expect("index.ts should be written");
+    fixture::write_plugin(dir, "index.ts", body, LoadResult::Void);
 }
 
 /// Reads the single `$callback` id at `payload[field]`.

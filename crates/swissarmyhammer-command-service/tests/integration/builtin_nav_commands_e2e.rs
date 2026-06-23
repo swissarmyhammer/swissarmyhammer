@@ -50,10 +50,10 @@ use swissarmyhammer_focus::{
 use swissarmyhammer_plugin::{
     CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR,
 };
-use swissarmyhammer_ui_state::{UIState, UiStateServer};
+use swissarmyhammer_ui_state::{UiState, UiStateServer};
 use tempfile::TempDir;
 
-use crate::support::{call_command, execute_result, try_call_command};
+use crate::support::{call_command, copy_dir_recursive, execute_result, try_call_command};
 
 /// A generous upper bound on any single host or isolate interaction.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -94,21 +94,6 @@ fn workspace_root() -> PathBuf {
         .nth(2)
         .expect("workspace root is two levels above the crate manifest dir")
         .to_path_buf()
-}
-
-/// Recursively copy a directory tree from `source` to `destination`.
-fn copy_dir_recursive(source: &Path, destination: &Path) {
-    std::fs::create_dir_all(destination).expect("staging directory should be created");
-    for entry in std::fs::read_dir(source).expect("bundle dir should be readable") {
-        let entry = entry.expect("a directory entry should be readable");
-        let from = entry.path();
-        let to = destination.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to);
-        } else {
-            std::fs::copy(&from, &to).expect("bundle file should copy");
-        }
-    }
 }
 
 /// Stage the committed `builtin/plugins/nav-commands` bundle into a temp builtin
@@ -294,11 +279,11 @@ async fn expose_focus_with_provider(
 }
 
 /// Expose a real `ui_state` server under id `"ui_state"`, returning the shared
-/// [`UIState`] so the test can drive and observe it. `nav.drillOut` needs this
+/// [`UiState`] so the test can drive and observe it. `nav.drillOut` needs this
 /// backend: its `ensureServices` requires `ui_state`, and its dismiss
 /// fallthrough (echo / no-parent_zone) routes to the `dismiss ui` op here.
-async fn expose_ui_state(host: &PluginHost, dir: &Path) -> Arc<UIState> {
-    let ui_state = Arc::new(UIState::load(dir.join("ui_state.yaml")));
+async fn expose_ui_state(host: &PluginHost, dir: &Path) -> Arc<UiState> {
+    let ui_state = Arc::new(UiState::load(dir.join("ui_state.yaml")));
     let server = UiStateServer::new(Arc::clone(&ui_state));
     let module = InProcessServer::new(server)
         .await

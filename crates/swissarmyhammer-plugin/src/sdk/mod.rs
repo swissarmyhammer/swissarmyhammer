@@ -138,6 +138,10 @@ mod tests {
             SDK_COMMANDS_SOURCE.contains("export function targetId"),
             "the SDK must export the targetId moniker helper"
         );
+        assert!(
+            SDK_COMMANDS_SOURCE.contains("export function bindCommandRun"),
+            "the SDK must export the bindCommandRun spec-binding helper"
+        );
     }
 
     /// The combined SDK source carries every file's surface end to end.

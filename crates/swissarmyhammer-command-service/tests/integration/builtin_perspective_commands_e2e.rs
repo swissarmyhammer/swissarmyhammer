@@ -36,12 +36,12 @@ use swissarmyhammer_plugin::{
     CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR,
 };
 use swissarmyhammer_store::StoreContext;
-use swissarmyhammer_ui_state::UIState;
+use swissarmyhammer_ui_state::UiState;
 use swissarmyhammer_views::{ViewsContext, ViewsServer};
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 
-use crate::support::call_command;
+use crate::support::{call_command, copy_dir_recursive};
 
 /// A generous upper bound on any single host or isolate interaction.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -57,21 +57,6 @@ fn workspace_root() -> PathBuf {
         .nth(2)
         .expect("workspace root is two levels above the crate manifest dir")
         .to_path_buf()
-}
-
-/// Recursively copy a directory tree from `source` to `destination`.
-fn copy_dir_recursive(source: &Path, destination: &Path) {
-    std::fs::create_dir_all(destination).expect("staging directory should be created");
-    for entry in std::fs::read_dir(source).expect("bundle dir should be readable") {
-        let entry = entry.expect("a directory entry should be readable");
-        let from = entry.path();
-        let to = destination.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to);
-        } else {
-            std::fs::copy(&from, &to).expect("bundle file should copy");
-        }
-    }
 }
 
 /// Stage the committed `builtin/plugins/perspective-commands` bundle (entry +
@@ -107,7 +92,7 @@ struct ExposedViews {
     /// The shared per-window UI state the activation commands
     /// (`perspective.switch` / `.next` / `.prev`) write through the exposed
     /// `entity` module — observed directly by the activation pins.
-    ui_state: Arc<UIState>,
+    ui_state: Arc<UiState>,
 }
 
 /// Build ONE `KanbanContext` board substrate and expose BOTH backends the
@@ -116,7 +101,7 @@ struct ExposedViews {
 /// - `views` — `ViewsServer` over the board's own perspective + views
 ///   kernels (resolution + perspective CRUD).
 /// - `entity` — clipboard-wired `EntityServer` over the same
-///   `KanbanContext` plus a shared `UIState` (the board-bundle server the
+///   `KanbanContext` plus a shared `UiState` (the board-bundle server the
 ///   three activation commands route to).
 ///
 /// Sharing one substrate mirrors the production wiring in
@@ -153,7 +138,7 @@ async fn expose_views_module(host: &PluginHost) -> ExposedViews {
     .await
     .expect("exposing the views module should succeed");
 
-    let ui_state = Arc::new(UIState::new());
+    let ui_state = Arc::new(UiState::new());
     let entity_server = EntityServer::with_clipboard(
         Arc::clone(&kanban),
         Arc::new(InMemoryClipboard::new()) as Arc<dyn ClipboardProvider>,
@@ -1063,13 +1048,13 @@ fn metadata_specs() -> Vec<MetaSpec> {
 //
 // The plugin port routed `perspective.switch` / `perspective.next` /
 // `perspective.prev` to the `views` server's RESOLUTION ops, which hold no
-// UIState — so dispatching them stopped writing the window's
+// UiState — so dispatching them stopped writing the window's
 // `active_perspective_id` + `filtered_task_ids` and clicking a tab no longer
 // activated anything. These tests pin the restored contract over the
 // PRODUCTION substrate shape: one `KanbanContext` board backing BOTH the
 // `views` module (perspective storage) and the `entity` module (the
-// board-bundle server that holds the `KanbanContext` + `UIState` pair, same
-// wiring as `apps/kanban-app/src/commands.rs`), with a shared `UIState`
+// board-bundle server that holds the `KanbanContext` + `UiState` pair, same
+// wiring as `apps/kanban-app/src/commands.rs`), with a shared `UiState`
 // observed directly.
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -1114,7 +1099,7 @@ async fn dispatch_with_window(fx: &PluginFixture, id: &str, args: Value) -> Valu
 /// `active_perspective_id` + `filtered_task_ids` atomically and surface the
 /// `PerspectiveSwitch` change envelope the host's `ui-state-changed` emit
 /// unwraps (`structuredContent.change`). This is the click-a-tab /
-/// Enter-on-a-tab live bug: routing to the views RESOLUTION op left UIState
+/// Enter-on-a-tab live bug: routing to the views RESOLUTION op left UiState
 /// untouched, so the bar never switched and the board never re-filtered.
 #[tokio::test]
 async fn perspective_switch_activates_the_perspective_for_the_window() {
@@ -1150,7 +1135,7 @@ async fn perspective_switch_activates_the_perspective_for_the_window() {
 
 /// `perspective.next` / `perspective.prev` must cycle the window's visible
 /// perspectives — including wrap-around in both directions — and ACTIVATE
-/// the resolved target (UIState write, not just resolution).
+/// the resolved target (UiState write, not just resolution).
 #[tokio::test]
 async fn perspective_next_prev_cycle_visible_perspectives_with_wraparound() {
     let fx = boot_perspective_plugin().await;
@@ -1224,7 +1209,7 @@ async fn perspective_next_is_a_noop_with_a_single_visible_perspective() {
 // `usePerspectiveScopeChain` in perspective-tab-bar.tsx). The plugin port
 // resolves the id off that moniker and routes to the `entity` server's
 // `delete perspective` op (NOT views — the entity server holds the per-window
-// UIState the active-selection fallback writes). These pins drive the LIVE
+// UiState the active-selection fallback writes). These pins drive the LIVE
 // shape end-to-end through the real plugin path.
 // ───────────────────────────────────────────────────────────────────────────
 

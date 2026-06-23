@@ -65,7 +65,7 @@ async fn save_then_load_round_trip() {
 
 /// list reflects saved perspectives; rename mutates the set. (Delete is NOT a
 /// views op — it routes to the `entity` server, which holds the per-window
-/// UIState the active-selection fallback writes; see
+/// UiState the active-selection fallback writes; see
 /// `swissarmyhammer-entity-mcp`.)
 #[tokio::test]
 async fn list_rename_lifecycle() {

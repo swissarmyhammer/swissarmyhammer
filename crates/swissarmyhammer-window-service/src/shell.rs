@@ -269,7 +269,7 @@ use tauri::{AppHandle, Manager, Runtime};
 /// requested board path, returning the new window's label and resolved board.
 ///
 /// Window creation in the production app is async and threads through
-/// `AppState` (board resolution, geometry restore, UIState persistence), none
+/// `AppState` (board resolution, geometry restore, UiState persistence), none
 /// of which this crate can — or should — reimplement. The bootstrap site
 /// (the app-shell cut-over) supplies this closure wired to `create_window_impl`;
 /// the shape here is the minimal contract the seam needs.

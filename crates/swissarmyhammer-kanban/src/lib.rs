@@ -140,12 +140,12 @@ pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
     Vec::new()
 }
 
-/// File name for the UIState YAML config, used under every consumer's
+/// File name for the UiState YAML config, used under every consumer's
 /// XDG subdirectory. Private to this module: callers go through
 /// [`default_ui_state`] rather than constructing paths by hand.
 const UI_STATE_FILE_NAME: &str = "ui-state.yaml";
 
-/// Resolve the per-consumer UIState config path under the XDG config
+/// Resolve the per-consumer UiState config path under the XDG config
 /// hierarchy: `$XDG_CONFIG_HOME/sah/<app_subdir>/ui-state.yaml`.
 ///
 /// Falls back to `./{app_subdir}/ui-state.yaml` when the XDG base
@@ -165,7 +165,7 @@ pub(crate) fn ui_state_xdg_config_path(app_subdir: &str) -> std::path::PathBuf {
         })
 }
 
-/// Load a [`swissarmyhammer_ui_state::UIState`] from the per-consumer
+/// Load a [`swissarmyhammer_ui_state::UiState`] from the per-consumer
 /// XDG config file, or return defaults if the file is missing or
 /// malformed.
 ///
@@ -173,18 +173,18 @@ pub(crate) fn ui_state_xdg_config_path(app_subdir: &str) -> std::path::PathBuf {
 /// use at startup. It resolves
 /// `$XDG_CONFIG_HOME/sah/<app_subdir>/ui-state.yaml` — keeping XDG
 /// awareness out of the Tier 0 `swissarmyhammer-commands` crate — and
-/// delegates the actual file I/O to [`UIState::load`], which remains
+/// delegates the actual file I/O to [`UiState::load`], which remains
 /// path-driven and consumer-agnostic.
 ///
 /// The `app_subdir` identifies the consumer (e.g. `"kanban-app"`,
 /// `"kanban-cli"`) so each one gets its own config without stepping on
 /// the others. Subsequent mutations auto-save to the resolved path
-/// just as with [`UIState::load`].
+/// just as with [`UiState::load`].
 ///
-/// [`UIState`]: swissarmyhammer_ui_state::UIState
-/// [`UIState::load`]: swissarmyhammer_ui_state::UIState::load
-pub fn default_ui_state(app_subdir: &str) -> swissarmyhammer_ui_state::UIState {
-    swissarmyhammer_ui_state::UIState::load(ui_state_xdg_config_path(app_subdir))
+/// [`UiState`]: swissarmyhammer_ui_state::UiState
+/// [`UiState::load`]: swissarmyhammer_ui_state::UiState::load
+pub fn default_ui_state(app_subdir: &str) -> swissarmyhammer_ui_state::UiState {
+    swissarmyhammer_ui_state::UiState::load(ui_state_xdg_config_path(app_subdir))
 }
 
 // Re-export commonly used types

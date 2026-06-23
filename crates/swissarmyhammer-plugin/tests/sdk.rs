@@ -20,6 +20,10 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use swissarmyhammer_plugin::{HostDispatcher, PluginLifecycle, PluginRuntime, RuntimeConfig};
 
+#[path = "fixture/mod.rs"]
+mod fixture;
+use fixture::LoadResult;
+
 /// A generous upper bound on any single runtime interaction.
 const TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -145,23 +149,14 @@ fn config_with(dispatcher: Arc<dyn HostDispatcher>) -> RuntimeConfig {
     }
 }
 
-/// Write a one-file plugin bundle whose default-class `load()` runs `body`.
-///
-/// The entry imports the SDK and default-exports a `Plugin` subclass whose
-/// `load()` contains `body`. The host instantiates the default export, wraps it
-/// with the SDK's plugin Proxy, and runs its `load()`. The hook returns
-/// `globalThis.__result ?? null` so a test that records a value on
-/// `globalThis.__result` observes it as the lifecycle call's return value.
+/// Write a one-file `entry.ts` plugin bundle whose
+/// `load(): Promise<unknown>` runs `body` then returns
+/// `globalThis.__result ?? null` — so a body that records a value on
+/// `globalThis.__result` observes it as the lifecycle call's return value. Thin
+/// adapter over the shared [`fixture::write_plugin`] binding this file's fixed
+/// bundle shape.
 fn write_plugin(dir: &std::path::Path, body: &str) {
-    let entry = format!(
-        "import {{ Plugin }} from '@swissarmyhammer/plugin';\n\
-         export default class P extends Plugin {{\n\
-           async load(): Promise<unknown> {{\n{body}\n\
-             return globalThis.__result ?? null;\n\
-           }}\n\
-         }}\n"
-    );
-    std::fs::write(dir.join("entry.ts"), entry).expect("entry.ts should be written");
+    fixture::write_plugin(dir, "entry.ts", body, LoadResult::Captured);
 }
 
 /// A path-form operation call compiles to `tools/call(tool, {op, ...args})`.
@@ -416,6 +411,96 @@ async fn plugin_subclass_exposes_metadata_props() {
         result.get("bareDescription").and_then(Value::as_str),
         Some(""),
         "a subclass that omits `description` must inherit the base default, got: {result}"
+    );
+}
+
+/// The SDK's `bindCommandRun` helper turns a `{ run, ...metadata }` spec into a
+/// `CommandRegistration` whose `execute` calls `run` with the coalesced context
+/// and the bound dispatch surface.
+///
+/// This is the shared extraction the `app-shell-commands` and `file-commands`
+/// bundles both delegate their data-table `.map(...)` bind step to: each row's
+/// `run(ctx, surface)` becomes `execute(rawCtx)`, with the metadata spread
+/// through verbatim. The test imports `bindCommandRun` into a real isolate and
+/// asserts:
+///
+///   * the metadata fields (`id`, `keys`) survive the spread onto the
+///     registration, and `run` is NOT among them (it became `execute`);
+///   * `execute` forwards the bound surface and coalesces an absent context to
+///     `{}` (the `(rawCtx ?? {}) as CommandContext` convention);
+///   * `execute` threads the real context through to `run` when one is passed.
+#[tokio::test]
+async fn bind_command_run_wraps_run_as_execute() {
+    let bundle = tempfile::TempDir::new().expect("temp dir");
+    let entry = "import { Plugin, bindCommandRun } from '@swissarmyhammer/plugin';\n\
+         export default class BindProbe extends Plugin {\n\
+           async load(): Promise<unknown> {\n\
+             const surface = { tag: 'SURFACE' };\n\
+             const reg = bindCommandRun(\n\
+               {\n\
+                 id: 'demo.cmd',\n\
+                 name: 'Demo',\n\
+                 keys: { cua: 'Mod+d' },\n\
+                 run: (ctx: { args?: Record<string, unknown> }, s: { tag: string }) =>\n\
+                   Promise.resolve({ seenTag: s.tag, seenArg: ctx.args?.x ?? 'NONE' }),\n\
+               },\n\
+               surface,\n\
+             );\n\
+             const hasRun = 'run' in reg;\n\
+             const absent = await reg.execute(undefined);\n\
+             const passed = await reg.execute({ args: { x: 'V' } });\n\
+             return {\n\
+               id: reg.id,\n\
+               keysCua: reg.keys?.cua,\n\
+               hasRun,\n\
+               absentTag: (absent as { seenTag: string }).seenTag,\n\
+               absentArg: (absent as { seenArg: string }).seenArg,\n\
+               passedArg: (passed as { seenArg: string }).seenArg,\n\
+             };\n\
+           }\n\
+         }\n";
+    std::fs::write(bundle.path().join("entry.ts"), entry).expect("entry.ts should be written");
+
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let runtime = PluginRuntime::new(config_with(dispatcher.clone())).expect("runtime starts");
+
+    let result = tokio::time::timeout(
+        TIMEOUT,
+        runtime.call_plugin_lifecycle(bundle.path(), "entry.ts", PluginLifecycle::Load),
+    )
+    .await
+    .expect("loading the plugin should not hang")
+    .expect("the plugin's load should succeed");
+
+    assert_eq!(
+        result.get("id").and_then(Value::as_str),
+        Some("demo.cmd"),
+        "bindCommandRun must spread the spec's metadata onto the registration, got: {result}"
+    );
+    assert_eq!(
+        result.get("keysCua").and_then(Value::as_str),
+        Some("Mod+d"),
+        "bindCommandRun must preserve nested metadata (keys), got: {result}"
+    );
+    assert_eq!(
+        result.get("hasRun").and_then(Value::as_bool),
+        Some(false),
+        "bindCommandRun must strip `run` from the produced registration, got: {result}"
+    );
+    assert_eq!(
+        result.get("absentTag").and_then(Value::as_str),
+        Some("SURFACE"),
+        "execute must forward the bound surface to run, got: {result}"
+    );
+    assert_eq!(
+        result.get("absentArg").and_then(Value::as_str),
+        Some("NONE"),
+        "execute must coalesce an absent context to {{}} before calling run, got: {result}"
+    );
+    assert_eq!(
+        result.get("passedArg").and_then(Value::as_str),
+        Some("V"),
+        "execute must thread a passed context through to run, got: {result}"
     );
 }
 

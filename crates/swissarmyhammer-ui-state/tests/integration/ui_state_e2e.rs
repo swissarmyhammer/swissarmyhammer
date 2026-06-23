@@ -1,7 +1,7 @@
 //! End-to-end tests for the `ui_state` MCP server's verbs.
 //!
 //! Each test drives a verb through the real `UiStateServer` /
-//! `ServerHandler::call_tool` path over a temp-file-backed `UIState`, then
+//! `ServerHandler::call_tool` path over a temp-file-backed `UiState`, then
 //! asserts both the structured response and the observed persisted state. The
 //! verbs cover every group the `_meta` tree advertises: inspector, palette,
 //! keymap, rename, drag, and the app-UI toggles.

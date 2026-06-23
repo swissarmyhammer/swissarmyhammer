@@ -7,7 +7,7 @@
 //! two cannot drift.
 //!
 //! Every operation is a 1:1 port of a mutating method on
-//! [`crate::state::UIState`]. They divide into five groups:
+//! [`crate::state::UiState`]. They divide into five groups:
 //!
 //! - **inspector** — [`Inspect`], [`InspectorClose`], [`InspectorCloseAll`],
 //!   [`InspectorSetWidth`].
@@ -21,7 +21,7 @@
 //!   [`Dismiss`].
 //!
 //! There is deliberately **no** focus / `set_focus` operation here. Spatial
-//! focus is owned by the separate `focus` MCP server; `UIState`'s
+//! focus is owned by the separate `focus` MCP server; `UiState`'s
 //! `set_scope_chain` setter is intentionally left unwrapped.
 
 use rmcp::schemars::{self, JsonSchema};
@@ -33,7 +33,7 @@ use swissarmyhammer_operations::{notification, operation, Notification, Operatio
 
 /// Open the inspector for a moniker in a window.
 ///
-/// Ports [`crate::state::UIState::inspect`]. Pushes the moniker onto the
+/// Ports [`crate::state::UiState::inspect`]. Pushes the moniker onto the
 /// window's inspector stack (moving it to the top if already present).
 ///
 /// Returns the new inspector stack: `{ ok: true, inspector_stack: [...] }`.
@@ -55,7 +55,7 @@ pub struct Inspect {
 
 /// Close the topmost inspector entry for a window.
 ///
-/// Ports [`crate::state::UIState::inspector_close`]. No-op when the stack is
+/// Ports [`crate::state::UiState::inspector_close`]. No-op when the stack is
 /// already empty.
 ///
 /// Returns the new inspector stack (or `null` when nothing changed):
@@ -75,7 +75,7 @@ pub struct InspectorClose {
 
 /// Close all inspector entries for a window.
 ///
-/// Ports [`crate::state::UIState::inspector_close_all`]. No-op when the stack
+/// Ports [`crate::state::UiState::inspector_close_all`]. No-op when the stack
 /// is already empty.
 ///
 /// Returns the (now empty) inspector stack, or `null` when nothing changed.
@@ -94,7 +94,7 @@ pub struct InspectorCloseAll {
 
 /// Persist the user-chosen inspector panel width for a window.
 ///
-/// Ports [`crate::state::UIState::set_inspector_width`]. No-op when the width
+/// Ports [`crate::state::UiState::set_inspector_width`]. No-op when the width
 /// is unchanged.
 ///
 /// Returns the change payload, or `null` when nothing changed.
@@ -118,7 +118,7 @@ pub struct InspectorSetWidth {
 
 /// Open the command palette for a window in a given mode.
 ///
-/// Ports [`crate::state::UIState::set_palette_open_with_mode`]. `mode` is
+/// Ports [`crate::state::UiState::set_palette_open_with_mode`]. `mode` is
 /// `"command"` or `"search"`. No-op when both flag and mode are unchanged.
 ///
 /// Returns the change payload, or `null` when nothing changed.
@@ -154,7 +154,7 @@ fn default_palette_mode() -> String {
 
 /// Close the command palette for a window.
 ///
-/// Ports [`crate::state::UIState::set_palette_open`] with `open = false`.
+/// Ports [`crate::state::UiState::set_palette_open`] with `open = false`.
 /// No-op when the palette is already closed.
 ///
 /// Returns the change payload, or `null` when nothing changed.
@@ -175,7 +175,7 @@ pub struct PaletteClose {
 
 /// Set the active keymap mode.
 ///
-/// Ports [`crate::state::UIState::set_keymap_mode`]. The `mode` param covers
+/// Ports [`crate::state::UiState::set_keymap_mode`]. The `mode` param covers
 /// `settings.keymap.vim` / `cua` / `emacs`. No-op when unchanged. Persisted
 /// to the config file.
 ///
@@ -196,7 +196,7 @@ pub struct SetKeymapMode {
 
 /// Set the focus scope chain (the routing target for `app.setFocus`).
 ///
-/// Ports [`crate::state::UIState::set_scope_chain`]. The frontend computes the
+/// Ports [`crate::state::UiState::set_scope_chain`]. The frontend computes the
 /// chain by walking the focus registry from the focused scope to the root
 /// (leaf-first) and sends it on every focus change; recording it here is what
 /// drives command gating's scope fallback and the `scope_chain` UI-state echo.
@@ -206,7 +206,7 @@ pub struct SetKeymapMode {
 /// `scope_chain` the frontend already sends; there is no separate `fq` to
 /// supply (the focus target is the chain's leaf).
 ///
-/// Returns the change payload: `{ ok: true, change: <UIStateChange> }`.
+/// Returns the change payload: `{ ok: true, change: <UiStateChange> }`.
 #[operation(
     verb = "set",
     noun = "scope_chain",
@@ -223,7 +223,7 @@ pub struct SetScopeChain {
 
 /// Set the active view for a window (the `view.set` command).
 ///
-/// Ports [`crate::state::UIState::set_active_view`]: records the per-window
+/// Ports [`crate::state::UiState::set_active_view`]: records the per-window
 /// active view id AND rewrites every `view:*` moniker in the recorded focus
 /// scope chain to point at the new view, so the palette / context menu keep
 /// offering the right view-scoped commands until the next `app.setFocus`. The
@@ -274,7 +274,7 @@ pub struct StartRename {
 
 /// Start a cross-window drag session.
 ///
-/// Ports [`crate::state::UIState::start_drag`] (cancelling any existing
+/// Ports [`crate::state::UiState::start_drag`] (cancelling any existing
 /// session first, as the original `DragStartCmd` does). Stores a focus-chain
 /// drag session keyed on the source entity. Transient — not persisted.
 ///
@@ -311,7 +311,7 @@ pub struct DragStart {
 
 /// Cancel the active drag session.
 ///
-/// Ports [`crate::state::UIState::cancel_drag`]. Clears the session without
+/// Ports [`crate::state::UiState::cancel_drag`]. Clears the session without
 /// returning it. Transient — not persisted.
 ///
 /// Returns `{ ok: true }`.
@@ -325,7 +325,7 @@ pub struct DragCancel {}
 
 /// Complete (take) the active drag session.
 ///
-/// Ports [`crate::state::UIState::take_drag`]. Returns and clears the active
+/// Ports [`crate::state::UiState::take_drag`]. Returns and clears the active
 /// session. Transient — not persisted.
 ///
 /// Returns `{ ok: true, session: <DragSession> | null }`.

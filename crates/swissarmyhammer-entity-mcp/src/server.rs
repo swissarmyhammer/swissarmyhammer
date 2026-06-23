@@ -42,7 +42,7 @@ use swissarmyhammer_kanban::commands::perspective_commands::{
 };
 use swissarmyhammer_kanban::commands_core::{Command, CommandContext};
 use swissarmyhammer_kanban::KanbanContext;
-use swissarmyhammer_ui_state::UIState;
+use swissarmyhammer_ui_state::UiState;
 
 use crate::operations::{
     operations, AddEntity, ArchiveEntity, Copy, Cut, DeleteEntity, DeletePerspective,
@@ -70,7 +70,7 @@ pub struct EntityBoardServices {
     pub clipboard: Option<Arc<dyn ClipboardProvider>>,
     /// The UI-state used to track palette/paste affordances — clipboard
     /// ops only.
-    pub ui_state: Option<Arc<UIState>>,
+    pub ui_state: Option<Arc<UiState>>,
 }
 
 /// Resolves the [`EntityBoardServices`] to drive for the current task.
@@ -192,7 +192,7 @@ impl EntityServer {
     pub async fn with_clipboard(
         kanban: Arc<KanbanContext>,
         clipboard_provider: Arc<dyn ClipboardProvider>,
-        ui_state: Arc<UIState>,
+        ui_state: Arc<UiState>,
     ) -> Result<Self, McpError> {
         // Resolve the entity context up-front — the previous body did the
         // same and we preserve that side-effect (store setup / cache
@@ -457,7 +457,7 @@ impl EntityServer {
     /// The shared clipboard commands resolve their services from the
     /// context's extension map: the [`KanbanContext`] (paste handlers read
     /// `entity_context()` and run sub-ops against it) and the
-    /// [`ClipboardProviderExt`] (the clipboard seam), plus the [`UIState`]
+    /// [`ClipboardProviderExt`] (the clipboard seam), plus the [`UiState`]
     /// that copy/cut flag with the clipboard entity type. `scope` is the
     /// innermost-first moniker chain; `target` is the entity / destination
     /// moniker the command operates on.
@@ -556,7 +556,7 @@ impl EntityServer {
     ///
     /// Mirrors [`Self::build_clipboard_command_context`] but wires only what
     /// the shared perspective commands need: the [`KanbanContext`]
-    /// (perspective lookup + filter evaluation) and the [`UIState`] (the
+    /// (perspective lookup + filter evaluation) and the [`UiState`] (the
     /// per-window slots the activation writes). The scope chain MUST carry
     /// the dispatching `window:<label>` moniker — activation is per-window
     /// state, and a silent "main" fallback would bleed one window's switch
@@ -696,7 +696,7 @@ impl EntityServer {
     ///
     /// This is the event-driven replacement for routing `perspective.filter`
     /// to the `views` server's storage-only `set filter` op (card
-    /// 01KV0MJYA58GW5PRXGVXWHQK32): that path never wrote `UIState`, so a
+    /// 01KV0MJYA58GW5PRXGVXWHQK32): that path never wrote `UiState`, so a
     /// filter edit did not re-filter the view until a later switch. Here the
     /// `{ ok, change }` envelope carries the `PerspectiveSwitch` change the
     /// host's `ui-state-changed` emit unwraps — `change` is null when the

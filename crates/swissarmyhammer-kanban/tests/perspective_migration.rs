@@ -24,7 +24,7 @@ use swissarmyhammer_kanban::dynamic_sources::{build_dynamic_sources, DynamicSour
 use swissarmyhammer_kanban::{
     board::InitBoard, dispatch::execute_operation, parse::parse_input, Execute, KanbanContext,
 };
-use swissarmyhammer_ui_state::UIState;
+use swissarmyhammer_ui_state::UiState;
 use swissarmyhammer_views::{ViewDef, ViewKind};
 use tempfile::TempDir;
 use tracing_test::traced_test;
@@ -243,7 +243,7 @@ async fn legacy_perspective_ambiguous_emits_one_time_log() {
     // though both calls inspect the same legacy perspective.
     let board_path_str = kanban_dir.display().to_string();
     for _ in 0..2 {
-        let ui = UIState::new();
+        let ui = UiState::new();
         ui.add_open_board(&board_path_str);
         ui.set_active_view("main", "01VIEW000000000000GRIDX0");
 

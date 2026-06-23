@@ -1,6 +1,6 @@
 //! File (board management) command implementations.
 //!
-//! These commands update UIState tracking for open boards and active board.
+//! These commands update UiState tracking for open boards and active board.
 //! The actual BoardHandle lifecycle (opening/closing KanbanContext) is managed
 //! by the Tauri layer, which hooks into dispatch_command results to perform
 //! side effects.
@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 /// Switch the current window to a different board.
 ///
-/// Updates UIState: sets the per-window board assignment via `windows[label].board_path`.
+/// Updates UiState: sets the per-window board assignment via `windows[label].board_path`.
 /// Required arg: `path` (canonical path to the .kanban directory).
 /// The window is resolved from the scope chain's `window:<label>` moniker
 /// (via `window_label_required()`); there is no silent "main" fallback.
@@ -30,7 +30,7 @@ impl Command for SwitchBoardCmd {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         let path = ctx
             .args
@@ -109,7 +109,7 @@ impl Command for NewWindowCmd {
     }
 }
 
-/// Close a board, removing it from the open boards list in UIState.
+/// Close a board, removing it from the open boards list in UiState.
 ///
 /// Optional arg: `path`. If omitted, closes the currently active board.
 ///
@@ -127,7 +127,7 @@ impl Command for CloseBoardCmd {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         // `path` can be explicitly provided, or resolved from the window's board_path.
         let window_label = ctx.window_label_required()?;
@@ -163,11 +163,11 @@ mod tests {
     use crate::commands_core::CommandContext;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_ui_state::UIState;
+    use swissarmyhammer_ui_state::UiState;
 
-    /// Build a minimal CommandContext with the given UIState, scope, and args.
+    /// Build a minimal CommandContext with the given UiState, scope, and args.
     fn make_ctx(
-        ui: Arc<UIState>,
+        ui: Arc<UiState>,
         scope: Vec<String>,
         args: HashMap<String, serde_json::Value>,
     ) -> CommandContext {
@@ -245,7 +245,7 @@ mod tests {
 
     #[tokio::test]
     async fn switch_board_cmd_updates_ui_state() {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("path".into(), json!("/tmp/myboard/.kanban"));
         // Per-window op: the scope chain must carry a `window:` moniker.
@@ -264,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn switch_board_cmd_uses_scope_window_label() {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("path".into(), json!("/tmp/board/.kanban"));
         let ctx = make_ctx(Arc::clone(&ui), vec!["window:secondary".into()], args);
@@ -278,7 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn switch_board_cmd_missing_window_label_returns_error() {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("path".into(), json!("/tmp/board/.kanban"));
         // No `window:` moniker in the scope chain — must fail loudly rather
@@ -293,7 +293,7 @@ mod tests {
 
     #[tokio::test]
     async fn switch_board_cmd_missing_path_returns_error() {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let ctx = make_ctx(Arc::clone(&ui), vec!["window:main".into()], HashMap::new());
         let result = SwitchBoardCmd.execute(&ctx).await;
         assert!(result.is_err(), "SwitchBoardCmd with no path should fail");
@@ -307,13 +307,13 @@ mod tests {
         let result = SwitchBoardCmd.execute(&ctx).await;
         assert!(
             result.is_err(),
-            "SwitchBoardCmd without UIState should return an error"
+            "SwitchBoardCmd without UiState should return an error"
         );
     }
 
     #[tokio::test]
     async fn switch_board_cmd_sets_most_recent_board() {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let path = "/tmp/recent/.kanban";
         let mut args = HashMap::new();
         args.insert("path".into(), json!(path));
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(
             ui.most_recent_board().as_deref(),
             Some(path),
-            "UIState most_recent_board should be updated after switch"
+            "UiState most_recent_board should be updated after switch"
         );
     }
 
@@ -335,12 +335,12 @@ mod tests {
     /// Without this reset the new board renders against a stale filter
     /// (perspective IDs and task IDs from the previous board), so every
     /// column looks empty until the user toggles a perspective tab. The
-    /// reset lives in `UIState::set_window_board` (the natural seam — same
+    /// reset lives in `UiState::set_window_board` (the natural seam — same
     /// write lock, single `try_save()`); this test pins the cross-crate
     /// behaviour through the command boundary.
     #[tokio::test]
     async fn switch_board_cmd_clears_stale_perspective_state() {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         // Seed: window "main" is on the previous board with a perspective
         // selected and a non-empty filtered list.
         ui.set_window_board("main", "/boards/previous/.kanban");
@@ -391,7 +391,7 @@ mod tests {
     /// auto-select repair path is never raced.
     #[tokio::test]
     async fn switch_board_cmd_same_path_preserves_perspective_state() {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let path = "/boards/same/.kanban";
         ui.set_window_board("main", path);
         ui.switch_perspective("main", "p-keep", vec!["t1".to_string()]);
@@ -419,7 +419,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_board_cmd_with_explicit_path() {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let path = "/tmp/closeable/.kanban";
         ui.add_open_board(path);
 
@@ -435,7 +435,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_board_cmd_uses_window_board_when_no_path_arg() {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let path = "/tmp/window-board/.kanban";
         ui.set_window_board("main", path);
 
@@ -450,13 +450,13 @@ mod tests {
         let result = CloseBoardCmd.execute(&ctx).await;
         assert!(
             result.is_err(),
-            "CloseBoardCmd without UIState should return an error"
+            "CloseBoardCmd without UiState should return an error"
         );
     }
 
     #[tokio::test]
     async fn close_board_cmd_no_path_and_no_window_board_returns_error() {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let ctx = make_ctx(Arc::clone(&ui), vec![], HashMap::new());
         let result = CloseBoardCmd.execute(&ctx).await;
         assert!(

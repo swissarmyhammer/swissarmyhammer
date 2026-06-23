@@ -327,8 +327,8 @@ pub struct ToggleSort {
 // NOTE: perspective activation (next / prev / switch) lives on the `entity`
 // tool, not here — see card 01KTYQY0ZB62KHN6BPK3FBMBD7. Activation must write
 // the dispatching window's `active_perspective_id` + `filtered_task_ids`, which
-// requires the shared `UIState` that only the board-bundle (`entity`) server
-// holds. This server holds no UIState, so it exposes only the `goto`
+// requires the shared `UiState` that only the board-bundle (`entity`) server
+// holds. This server holds no UiState, so it exposes only the `goto`
 // RESOLUTION op below (used by the visible-false `perspective.goto` command).
 
 /// Resolve a perspective by id, optionally validating it belongs to a view.

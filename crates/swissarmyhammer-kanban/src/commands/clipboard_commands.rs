@@ -413,7 +413,7 @@ impl Command for CutEntityCmd {
 /// Paste whatever is on the clipboard onto the targeted entity.
 ///
 /// Cross-cutting command: reads `ctx.target` to pick the destination
-/// moniker, reads `UIState::clipboard_entity_type()` (for availability
+/// moniker, reads `UiState::clipboard_entity_type()` (for availability
 /// gating) and the clipboard text (for execution). Dispatches through a
 /// [`PasteMatrix`] keyed by `(clipboard_type, target_type)`. Registers
 /// the production matrix lazily on first use via `once_cell` so callers
@@ -508,13 +508,13 @@ mod tests {
     use crate::Execute;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_ui_state::UIState;
+    use swissarmyhammer_ui_state::UiState;
 
     async fn setup() -> (
         tempfile::TempDir,
         Arc<KanbanContext>,
         Arc<ClipboardProviderExt>,
-        Arc<UIState>,
+        Arc<UiState>,
     ) {
         let temp = tempfile::TempDir::new().unwrap();
         let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
@@ -524,7 +524,7 @@ mod tests {
             .into_result()
             .unwrap();
         let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         (temp, kanban, clipboard, ui)
     }
 
@@ -534,7 +534,7 @@ mod tests {
         target: Option<&str>,
         kanban: &Arc<KanbanContext>,
         clipboard: &Arc<ClipboardProviderExt>,
-        ui: &Arc<UIState>,
+        ui: &Arc<UiState>,
     ) -> CommandContext {
         let mut ctx = CommandContext::new(
             command_id,
@@ -1230,7 +1230,7 @@ mod tests {
         task_id: &str,
         kanban: &Arc<KanbanContext>,
         clipboard: &Arc<ClipboardProviderExt>,
-        ui: &Arc<UIState>,
+        ui: &Arc<UiState>,
     ) -> CommandContext {
         make_ctx(
             command_id,
@@ -1260,7 +1260,7 @@ mod tests {
             .into_result()
             .unwrap();
         let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let task = AddTask::new("Has attachment")
             .execute(kanban.as_ref())
@@ -1325,7 +1325,7 @@ mod tests {
             .into_result()
             .unwrap();
         let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let task = AddTask::new("Cut me")
             .execute(kanban.as_ref())
@@ -1404,7 +1404,7 @@ mod tests {
             .into_result()
             .unwrap();
         let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let source_task = AddTask::new("Source")
             .execute(kanban.as_ref())
@@ -1484,7 +1484,7 @@ mod tests {
             .into_result()
             .unwrap();
         let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let source_task = AddTask::new("Source")
             .execute(kanban.as_ref())
@@ -1561,7 +1561,7 @@ mod tests {
             .into_result()
             .unwrap();
         let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let source_task = AddTask::new("Source")
             .execute(kanban.as_ref())

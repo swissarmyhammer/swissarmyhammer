@@ -140,7 +140,7 @@ export interface CommandRegistration {
  * Every field is optional: the Rust struct serialises with
  * `skip_serializing_if` for each, so an empty context arrives as `{}`. Callbacks
  * conventionally coalesce the raw value to `{}` before reading it
- * (`(rawCtx ?? {}) as CommandContext`).
+ * (`(rawContext ?? {}) as CommandContext`).
  */
 export interface CommandContext {
   /** Active scope monikers, leaf-last (e.g. `["board:01A", "task:42"]`). */
@@ -229,6 +229,62 @@ export function targetId(
   if (target === undefined) return undefined;
   const prefix = `${entityType}:`;
   return target.startsWith(prefix) ? target.slice(prefix.length) : undefined;
+}
+
+/**
+ * A command-table row: a {@link CommandRegistration} whose `execute` is deferred
+ * to a `run(ctx, surface)` function plus a bound dispatch `surface`.
+ *
+ * The builtin command plugins hold their registrations as module-level data
+ * tables (so the keymap drift guards can parse the static metadata from source),
+ * where each row carries its UI metadata as literals and its effect as a `run`
+ * that takes the dispatch context and the plugin's dispatch surface. `run`
+ * replaces {@link CommandRegistration.execute}; {@link bindCommandRun} binds the
+ * surface and rewrites `run` back into `execute`.
+ *
+ * `Surface` is the plugin's dispatch bundle (e.g. the app-shell `app`/`store`/
+ * `ui_state` trio, or the file plugin's `window` board surface).
+ */
+export type CommandRunSpec<Surface> = Omit<CommandRegistration, "execute"> & {
+  /**
+   * The command's effect, given the coalesced dispatch context and the bound
+   * dispatch surface. Replaces {@link CommandRegistration.execute}, which
+   * {@link bindCommandRun} synthesizes from this.
+   */
+  run: (ctx: CommandContext, surface: Surface) => Promise<unknown>;
+};
+
+/**
+ * Bind a {@link CommandRunSpec}'s dispatch `surface`, turning its `run` into a
+ * {@link CommandRegistration.execute} and spreading the remaining metadata
+ * through verbatim.
+ *
+ * This is the shared bind step the command-plugin data tables map over: a row's
+ * `run(ctx, surface)` becomes `execute(rawContext)`, with the raw context
+ * coalesced to `{}` per the SDK convention (`(rawContext ?? {}) as
+ * CommandContext`) before it
+ * reaches `run`. The `run` field is stripped from the produced registration;
+ * every other field (`id`, `name`, `keys`, `menu`, `undoable`, …) is preserved.
+ *
+ * Without this helper, each plugin re-wrote the same destructure-and-bind
+ * (`const { run, ...metadata } = spec; return { ...metadata, execute: ... }`)
+ * inside its own `.map(...)`; this centralizes it so the convention lives once.
+ *
+ * @param spec - one command row: the static metadata plus the `run` effect.
+ * @param surface - the dispatch surface to bind into every `run` invocation.
+ * @returns the registration with `run` rewritten as `execute`, ready for
+ *   {@link registerCommands}.
+ */
+export function bindCommandRun<Surface>(
+  spec: CommandRunSpec<Surface>,
+  surface: Surface,
+): CommandRegistration {
+  const { run, ...metadata } = spec;
+  return {
+    ...metadata,
+    execute: async (rawContext: unknown) =>
+      run((rawContext ?? {}) as CommandContext, surface),
+  };
 }
 
 /**

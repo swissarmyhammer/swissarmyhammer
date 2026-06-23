@@ -8,10 +8,10 @@
 //! doesn't refresh until click-away/back" live bug (card
 //! 01KV0MJYA58GW5PRXGVXWHQK32): the `perspective.filter` command used to route
 //! to the `views` server's storage-only `set filter` op, which never wrote
-//! `UIState`, so no event ever fired.
+//! `UiState`, so no event ever fired.
 //!
 //! These tests drive the verb through the real `ServerHandler` surface against
-//! a full board substrate + `UIState`, reusing the shared
+//! a full board substrate + `UiState`, reusing the shared
 //! `SetFilterAndRefreshCmd` (no duplicate filter-eval logic in this crate).
 
 use std::collections::HashMap;
@@ -101,10 +101,10 @@ async fn filter_perspective_on_active_recomputes_filtered_ids_and_returns_change
 
     assert_eq!(resp.get("ok"), Some(&Value::Bool(true)));
     let change = resp.get("change").expect("envelope carries change");
-    let change: swissarmyhammer_ui_state::UIStateChange =
-        serde_json::from_value(change.clone()).expect("change is a UIStateChange");
+    let change: swissarmyhammer_ui_state::UiStateChange =
+        serde_json::from_value(change.clone()).expect("change is a UiStateChange");
     match change {
-        swissarmyhammer_ui_state::UIStateChange::PerspectiveSwitch {
+        swissarmyhammer_ui_state::UiStateChange::PerspectiveSwitch {
             perspective_id,
             filtered_task_ids,
         } => {

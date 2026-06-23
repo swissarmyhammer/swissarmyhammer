@@ -1,7 +1,7 @@
 //! Shared test helpers for the `ui_state` MCP server end-to-end tests.
 //!
 //! Provides a [`Harness`] that owns a `TempDir` and a `UiStateServer` over a
-//! `UIState` loaded from a temp file (so persisted state is observable and no
+//! `UiState` loaded from a temp file (so persisted state is observable and no
 //! real home dir is touched), plus an rmcp `Peer<RoleServer>` minted against a
 //! closed transport so tests can build a real `RequestContext` and drive
 //! `UiStateServer::call_tool` without a live GUI or transport pair.
@@ -17,34 +17,34 @@ use rmcp::service::{serve_directly, Peer, RequestContext, RxJsonRpcMessage, TxJs
 use rmcp::transport::Transport;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::Value;
-use swissarmyhammer_ui_state::{UIState, UiStateServer};
+use swissarmyhammer_ui_state::{UiState, UiStateServer};
 use tempfile::TempDir;
 
-/// A fully wired `ui_state` service over a temp-file-backed `UIState`.
+/// A fully wired `ui_state` service over a temp-file-backed `UiState`.
 ///
 /// Holds the `TempDir` so the backing file outlives the test, and the shared
-/// `Arc<UIState>` so tests can read persisted state back after driving the
+/// `Arc<UiState>` so tests can read persisted state back after driving the
 /// service.
 pub struct Harness {
-    /// Temp dir backing the `UIState` config file; kept alive for the test.
+    /// Temp dir backing the `UiState` config file; kept alive for the test.
     pub _dir: TempDir,
     /// The shared UI state the service mutates.
-    pub ui_state: Arc<UIState>,
+    pub ui_state: Arc<UiState>,
 }
 
 impl Harness {
-    /// Build a harness over a fresh temp-file-backed `UIState`.
+    /// Build a harness over a fresh temp-file-backed `UiState`.
     pub fn new() -> Self {
         let dir = TempDir::new().expect("temp dir");
         let path = dir.path().join("ui-state.yaml");
-        let ui_state = Arc::new(UIState::load(path));
+        let ui_state = Arc::new(UiState::load(path));
         Self {
             _dir: dir,
             ui_state,
         }
     }
 
-    /// Build a `UiStateServer` over the harness's shared `UIState`.
+    /// Build a `UiStateServer` over the harness's shared `UiState`.
     pub fn service(&self) -> UiStateServer {
         UiStateServer::new(Arc::clone(&self.ui_state))
     }

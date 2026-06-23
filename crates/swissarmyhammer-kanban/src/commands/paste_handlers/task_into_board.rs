@@ -184,7 +184,7 @@ mod tests {
     use crate::task::AddTask;
     use crate::Execute;
     use std::sync::Arc;
-    use swissarmyhammer_ui_state::UIState;
+    use swissarmyhammer_ui_state::UiState;
 
     /// Bring up the default-board set of fixtures shared by most
     /// `task_into_board` tests. Wraps the shared `setup()` helper so each
@@ -194,14 +194,14 @@ mod tests {
         tempfile::TempDir,
         Arc<KanbanContext>,
         Arc<crate::clipboard::ClipboardProviderExt>,
-        Arc<UIState>,
+        Arc<UiState>,
     ) {
         let (temp, kanban) = setup().await;
         (
             temp,
             kanban,
             in_memory_clipboard_ext(),
-            Arc::new(UIState::new()),
+            Arc::new(UiState::new()),
         )
     }
 
@@ -211,14 +211,14 @@ mod tests {
         tempfile::TempDir,
         Arc<KanbanContext>,
         Arc<crate::clipboard::ClipboardProviderExt>,
-        Arc<UIState>,
+        Arc<UiState>,
     ) {
         let (temp, kanban) = setup_uninitialized().await;
         (
             temp,
             kanban,
             in_memory_clipboard_ext(),
-            Arc::new(UIState::new()),
+            Arc::new(UiState::new()),
         )
     }
 

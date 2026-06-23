@@ -26,7 +26,7 @@ use swissarmyhammer_kanban::board::InitBoard;
 use swissarmyhammer_kanban::clipboard::InMemoryClipboard;
 use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor, OperationProcessor};
 use swissarmyhammer_store::{StoreContext, StoreHandle};
-use swissarmyhammer_ui_state::UIState;
+use swissarmyhammer_ui_state::UiState;
 use tempfile::TempDir;
 
 /// A transport that yields no messages and closes immediately, used solely
@@ -153,7 +153,7 @@ pub struct ClipboardHarness {
     pub kanban: Arc<KanbanContext>,
     pub entity_ctx: Arc<EntityContext>,
     pub clipboard: Arc<InMemoryClipboard>,
-    pub ui_state: Arc<UIState>,
+    pub ui_state: Arc<UiState>,
 }
 
 impl ClipboardHarness {
@@ -177,7 +177,7 @@ impl ClipboardHarness {
         let entity_ctx = kanban.entity_context().await.expect("entity_context");
 
         let clipboard = Arc::new(InMemoryClipboard::new());
-        let ui_state = Arc::new(UIState::new());
+        let ui_state = Arc::new(UiState::new());
 
         Self {
             dir,

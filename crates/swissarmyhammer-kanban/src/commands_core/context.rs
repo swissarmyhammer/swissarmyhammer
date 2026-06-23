@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
-use swissarmyhammer_ui_state::UIState;
+use swissarmyhammer_ui_state::UiState;
 
 /// Context passed to every command — provides scope chain, target, args, and
 /// service accessors.
@@ -20,7 +20,7 @@ pub struct CommandContext {
     pub target: Option<String>,
     pub args: HashMap<String, Value>,
     /// Shared UI state (inspector stack, palette, keymap, etc.).
-    pub ui_state: Option<Arc<UIState>>,
+    pub ui_state: Option<Arc<UiState>>,
     /// Extension point for domain-specific services (e.g., KanbanContext).
     /// Keyed by TypeId for stability across crates and compiler versions.
     extensions: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
@@ -57,7 +57,7 @@ impl CommandContext {
     }
 
     /// Builder method to set the UI state.
-    pub fn with_ui_state(mut self, ui_state: Arc<UIState>) -> Self {
+    pub fn with_ui_state(mut self, ui_state: Arc<UiState>) -> Self {
         self.ui_state = Some(ui_state);
         self
     }
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn with_ui_state_sets_field() {
-        let ui = Arc::new(UIState::default());
+        let ui = Arc::new(UiState::default());
         let ctx = test_ctx(&[]).with_ui_state(Arc::clone(&ui));
         assert!(ctx.ui_state.is_some());
         assert!(Arc::ptr_eq(ctx.ui_state.as_ref().unwrap(), &ui));

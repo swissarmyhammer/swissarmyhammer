@@ -5,7 +5,7 @@
 // │  through the swissarmyhammer-commands system. This is REQUIRED for:     │
 // │                                                                        │
 // │    ✅  Undo / Redo support                                             │
-// │    ✅  UIState persistence                                             │
+// │    ✅  UiState persistence                                             │
 // │    ✅  Event emission (ui-state-changed)                               │
 // │    ✅  Command logging and observability                               │
 // │                                                                        │
@@ -179,9 +179,9 @@ pub(crate) async fn list_open_boards_impl(state: &AppState) -> Result<Value, Str
     Ok(json!(list))
 }
 
-/// Return the full UIState as JSON for the frontend.
+/// Return the full UiState as JSON for the frontend.
 ///
-/// Returns a snapshot of all UIState fields including transient ones
+/// Returns a snapshot of all UiState fields including transient ones
 /// (`palette_open`, `scope_chain`). The frontend uses this on mount
 /// to initialise the UIStateProvider.
 #[tauri::command]
@@ -785,7 +785,7 @@ pub async fn create_window(
 
 /// Window position and size used when creating or restoring a board window.
 ///
-/// Populated from persisted `UIState` on app start, then passed to
+/// Populated from persisted `UiState` on app start, then passed to
 /// [`create_window_impl`]. All fields are in logical pixels relative to the
 /// primary display's top-left origin, matching what Tauri's window APIs
 /// return from `outer_position()` / `outer_size()`.
@@ -805,7 +805,7 @@ pub struct WindowGeometry {
 /// Resolve which board path a newly-created window should display.
 ///
 /// Precedence: explicit `board_path` argument wins; otherwise falls back
-/// to the most-recently-focused board from `UIState`, and finally to any
+/// to the most-recently-focused board from `UiState`, and finally to any
 /// currently-open board. Returns `None` only when no board is available
 /// at all — a window with no board still renders (empty state).
 fn resolve_window_board_path(state: &AppState, board_path: Option<String>) -> Option<String> {
@@ -834,7 +834,7 @@ fn apply_saved_geometry(window: &tauri::WebviewWindow, geometry: Option<&WindowG
     }
 }
 
-/// Persist a window's geometry into `UIState` so the window can be
+/// Persist a window's geometry into `UiState` so the window can be
 /// restored on next launch.
 ///
 /// Uses the provided `geometry` directly when present (restore path,
@@ -922,7 +922,7 @@ async fn apply_board_title(app: &AppHandle, state: &AppState, label: &str, board
 ///
 /// This is the single code path for all window creation — both user-initiated
 /// (`window.new`) and startup restore. Every window created through this
-/// function gets logged, persisted to UIState, and shows up in the command log.
+/// function gets logged, persisted to UiState, and shows up in the command log.
 ///
 /// - `board_path`: board to display. Falls back to most recent / first open.
 /// - `label`: reuse a saved window label (for restore). `None` generates a new ULID.
@@ -959,7 +959,7 @@ pub async fn create_window_impl(
         tracing::info!(
             label = %label,
             board_path = %bp,
-            "persisting window state to UIState"
+            "persisting window state to UiState"
         );
         state.ui_state.set_window_board(&label, bp);
         persist_window_geometry(state, &label, &window, geometry.as_ref());
@@ -1080,7 +1080,7 @@ struct RewriteResult {
     early_return: Option<Value>,
 }
 
-/// Handle `window.focus:*` — pure OS side-effect with no undo/UIState implications.
+/// Handle `window.focus:*` — pure OS side-effect with no undo/UiState implications.
 fn handle_window_focus(app: &AppHandle, label: &str) -> Value {
     tracing::info!(label = %label, "window.focus — bringing window to front");
     if let Some(window) = app.get_webview_window(label) {
@@ -1242,7 +1242,7 @@ fn apply_prefix_rewrite(
 ///
 /// This is the single path for all state-mutating command execution.
 /// It handles: command lookup, context building, execution, undo tracking,
-/// entity flush, event emission, and UIState change broadcasting.
+/// entity flush, event emission, and UiState change broadcasting.
 ///
 /// Dynamic prefix commands (`board.switch:*`, `entity.add:*`) are rewritten
 /// to their canonical command IDs via a single-pass loop. The rewrite is
@@ -1255,14 +1255,14 @@ fn apply_prefix_rewrite(
 ///
 /// The `window.focus:*` prefix is a pure side-effect (unminimize + focus) that
 /// returns early without entering the standard result-processing pipeline.
-/// This is intentional: window focus is OS-level and has no undo, UIState, or
+/// This is intentional: window focus is OS-level and has no undo, UiState, or
 /// entity implications.
 ///
 /// # Parameters
 /// - `app` - Tauri application handle for event emission
 /// - `state` - Application state with command registry, impls, and board handles
 /// - `cmd` - Command ID string (e.g. "task.move")
-/// - `scope_chain` - Optional explicit scope; falls back to stored UIState focus
+/// - `scope_chain` - Optional explicit scope; falls back to stored UiState focus
 /// - `target` - Optional target entity ID
 /// - `args` - Optional JSON object of command arguments
 /// - `board_path` - Optional board path for multi-window targeting
@@ -1877,14 +1877,14 @@ async fn perform_cross_board_drag_transfer(
 }
 
 /// Emit a fresh `ui-state-changed` event when the command either returned a
-/// `UIStateChange` result envelope or mutated board open/close state (which
-/// is not typed as a `UIStateChange` but still affects what the React
+/// `UiStateChange` result envelope or mutated board open/close state (which
+/// is not typed as a `UiStateChange` but still affects what the React
 /// `UIStateProvider` renders).
 ///
 /// The emitted payload is a wrapper of the form
-/// `{ "kind": "<discriminator>", "state": <full UIState snapshot> }`.
+/// `{ "kind": "<discriminator>", "state": <full UiState snapshot> }`.
 /// `kind` names which slice of UI state changed — one of the seven
-/// `UIStateChange` variants plus the two board result shapes — so the
+/// `UiStateChange` variants plus the two board result shapes — so the
 /// frontend can skip `setState` for events it doesn't care about (e.g.
 /// every `app.setFocus` arrow-key fires a `scope_chain` event; the
 /// frontend owns that slice via `FocusedScopeContext` and ignores the
@@ -1904,7 +1904,7 @@ fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Va
     // never hears it, so the panel stays open — the keystone behind "Esc / the
     // (x) button don't close the inspector" and "the palette won't open".
     //
-    // The payload carries the FULL per-window-keyed UIState snapshot plus the
+    // The payload carries the FULL per-window-keyed UiState snapshot plus the
     // `kind` discriminator, and each window's `UIStateProvider` reads only its
     // own `windows[<label>]` slice — so emitting the snapshot to every webview
     // is correct (each window self-selects) and introduces no cross-window
@@ -1919,14 +1919,14 @@ fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Va
 /// `None` if the result does not trigger a UI state event.
 ///
 /// Returns the `kind` string used on the wire:
-/// - One per `UIStateChange` variant (`scope_chain`, `palette_open`,
+/// - One per `UiStateChange` variant (`scope_chain`, `palette_open`,
 ///   `keymap_mode`, `inspector_stack`, `active_view`,
 ///   `active_perspective`, `app_mode`, `inspector_width`,
 ///   `perspective_switch`).
 fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
     // Commands dispatched through the CommandService / builtin plugins return
     // a `CallToolResult`-shaped value: `{ content, structuredContent: { ok,
-    // change } }`, where the typed `UIStateChange` lives at
+    // change } }`, where the typed `UiStateChange` lives at
     // `structuredContent.change` (and is `null` when the command made no
     // UI-state change). Some paths return the bare `{ ok, change }` envelope,
     // and the test paths return the bare `UIStateChange` directly. Unwrap in
@@ -1943,23 +1943,23 @@ fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
         .or_else(|| result.get("change"))
         .unwrap_or(result);
     if let Ok(change) =
-        serde_json::from_value::<swissarmyhammer_ui_state::UIStateChange>(change_candidate.clone())
+        serde_json::from_value::<swissarmyhammer_ui_state::UiStateChange>(change_candidate.clone())
     {
         return Some(match change {
-            swissarmyhammer_ui_state::UIStateChange::ScopeChain(_) => "scope_chain",
-            swissarmyhammer_ui_state::UIStateChange::PaletteOpen(_) => "palette_open",
-            swissarmyhammer_ui_state::UIStateChange::KeymapMode(_) => "keymap_mode",
-            swissarmyhammer_ui_state::UIStateChange::InspectorStack(_) => "inspector_stack",
-            swissarmyhammer_ui_state::UIStateChange::ActiveView(_) => "active_view",
-            swissarmyhammer_ui_state::UIStateChange::ActivePerspective(_) => "active_perspective",
-            swissarmyhammer_ui_state::UIStateChange::AppMode(_) => "app_mode",
-            swissarmyhammer_ui_state::UIStateChange::InspectorWidth { .. } => "inspector_width",
+            swissarmyhammer_ui_state::UiStateChange::ScopeChain(_) => "scope_chain",
+            swissarmyhammer_ui_state::UiStateChange::PaletteOpen(_) => "palette_open",
+            swissarmyhammer_ui_state::UiStateChange::KeymapMode(_) => "keymap_mode",
+            swissarmyhammer_ui_state::UiStateChange::InspectorStack(_) => "inspector_stack",
+            swissarmyhammer_ui_state::UiStateChange::ActiveView(_) => "active_view",
+            swissarmyhammer_ui_state::UiStateChange::ActivePerspective(_) => "active_perspective",
+            swissarmyhammer_ui_state::UiStateChange::AppMode(_) => "app_mode",
+            swissarmyhammer_ui_state::UiStateChange::InspectorWidth { .. } => "inspector_width",
             // `PerspectiveSwitch` is the atomic id+filtered-ids update emitted
             // by `perspective.switch`. We classify it as `perspective_switch`
             // so the frontend can register its own debounce/skip policy
             // independently of the legacy `active_perspective` kind (which
             // covered id-only mutations).
-            swissarmyhammer_ui_state::UIStateChange::PerspectiveSwitch { .. } => {
+            swissarmyhammer_ui_state::UiStateChange::PerspectiveSwitch { .. } => {
                 "perspective_switch"
             }
         });
@@ -3035,50 +3035,50 @@ mod tests {
     // re-renders through every `useUIState()` consumer).
 
     use super::ui_state_change_kind;
-    use swissarmyhammer_ui_state::UIStateChange;
+    use swissarmyhammer_ui_state::UiStateChange;
 
     #[test]
     fn ui_state_change_kind_scope_chain() {
-        let value = serde_json::to_value(UIStateChange::ScopeChain(vec!["board:main".to_string()]))
+        let value = serde_json::to_value(UiStateChange::ScopeChain(vec!["board:main".to_string()]))
             .unwrap();
         assert_eq!(ui_state_change_kind(&value), Some("scope_chain"));
     }
 
     #[test]
     fn ui_state_change_kind_palette_open() {
-        let value = serde_json::to_value(UIStateChange::PaletteOpen(true)).unwrap();
+        let value = serde_json::to_value(UiStateChange::PaletteOpen(true)).unwrap();
         assert_eq!(ui_state_change_kind(&value), Some("palette_open"));
     }
 
     #[test]
     fn ui_state_change_kind_keymap_mode() {
-        let value = serde_json::to_value(UIStateChange::KeymapMode("vim".into())).unwrap();
+        let value = serde_json::to_value(UiStateChange::KeymapMode("vim".into())).unwrap();
         assert_eq!(ui_state_change_kind(&value), Some("keymap_mode"));
     }
 
     #[test]
     fn ui_state_change_kind_inspector_stack() {
         let value =
-            serde_json::to_value(UIStateChange::InspectorStack(vec!["task:1".into()])).unwrap();
+            serde_json::to_value(UiStateChange::InspectorStack(vec!["task:1".into()])).unwrap();
         assert_eq!(ui_state_change_kind(&value), Some("inspector_stack"));
     }
 
     #[test]
     fn ui_state_change_kind_active_view() {
-        let value = serde_json::to_value(UIStateChange::ActiveView("board".into())).unwrap();
+        let value = serde_json::to_value(UiStateChange::ActiveView("board".into())).unwrap();
         assert_eq!(ui_state_change_kind(&value), Some("active_view"));
     }
 
     #[test]
     fn ui_state_change_kind_active_perspective() {
         let value =
-            serde_json::to_value(UIStateChange::ActivePerspective("sprint-01".into())).unwrap();
+            serde_json::to_value(UiStateChange::ActivePerspective("sprint-01".into())).unwrap();
         assert_eq!(ui_state_change_kind(&value), Some("active_perspective"));
     }
 
     #[test]
     fn ui_state_change_kind_app_mode() {
-        let value = serde_json::to_value(UIStateChange::AppMode("normal".into())).unwrap();
+        let value = serde_json::to_value(UiStateChange::AppMode("normal".into())).unwrap();
         assert_eq!(ui_state_change_kind(&value), Some("app_mode"));
     }
 
@@ -3087,7 +3087,7 @@ mod tests {
         // Pinned for the resizable-inspector pipeline. The frontend
         // listens for `inspector_width` events to learn the persisted
         // width set in another window or session.
-        let value = serde_json::to_value(UIStateChange::InspectorWidth {
+        let value = serde_json::to_value(UiStateChange::InspectorWidth {
             window_label: "main".into(),
             width: 540,
         })
@@ -3102,7 +3102,7 @@ mod tests {
         // update must serialize to the `perspective_switch` wire kind so
         // the frontend can apply its own debounce/skip policy
         // independently of the legacy `active_perspective` id-only kind.
-        let value = serde_json::to_value(UIStateChange::PerspectiveSwitch {
+        let value = serde_json::to_value(UiStateChange::PerspectiveSwitch {
             perspective_id: "p1".into(),
             filtered_task_ids: vec!["t1".into(), "t2".into()],
         })
@@ -3112,7 +3112,7 @@ mod tests {
 
     #[test]
     fn ui_state_change_kind_unrelated_result_is_none() {
-        // Results that are neither a UIStateChange nor a board side-effect
+        // Results that are neither a UiStateChange nor a board side-effect
         // must NOT trigger a ui-state-changed emit. Null, plain strings,
         // and arbitrary objects all fall through to None.
         assert_eq!(ui_state_change_kind(&serde_json::Value::Null), None);
@@ -3126,7 +3126,7 @@ mod tests {
     // ── PRODUCTION ENVELOPE SHAPE ──────────────────────────────────
     //
     // Commands dispatched through the CommandService / builtin plugins do NOT
-    // return a bare `UIStateChange`; they return the `{ ok, change }` envelope
+    // return a bare `UiStateChange`; they return the `{ ok, change }` envelope
     // the `ui_state` MCP ops produce. The bare-enum tests above pass against a
     // shape production never emits — so they stayed green while pressing `:`
     // (palette) and clicking inspect (inspector) silently failed to emit a

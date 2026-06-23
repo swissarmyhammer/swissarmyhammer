@@ -10,7 +10,7 @@
 //!
 //! The exposed server is built with FULL clipboard wiring
 //! (`EntityServer::with_clipboard`) over a real `KanbanContext` board
-//! substrate plus an `InMemoryClipboard` and `UIState` — the exact harness the
+//! substrate plus an `InMemoryClipboard` and `UiState` — the exact harness the
 //! entity-mcp crate's `entity_clipboard_e2e` uses. The clipboard wiring is
 //! load-bearing: `entity.cut` / `entity.copy` / `entity.paste` are inert on a
 //! bare `EntityServer::new`. CRUD / archive verbs work on either, so one
@@ -44,10 +44,12 @@ use swissarmyhammer_plugin::{
     CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost, PLUGINS_SUBDIR,
 };
 use swissarmyhammer_store::StoreContext;
-use swissarmyhammer_ui_state::UIState;
+use swissarmyhammer_ui_state::UiState;
 use tempfile::TempDir;
 
-use crate::support::{assert_operable_applies_to, assert_paste_target_applies_to, call_command};
+use crate::support::{
+    assert_operable_applies_to, assert_paste_target_applies_to, call_command, copy_dir_recursive,
+};
 
 /// A generous upper bound on any single host or isolate interaction.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -63,21 +65,6 @@ fn workspace_root() -> PathBuf {
         .nth(2)
         .expect("workspace root is two levels above the crate manifest dir")
         .to_path_buf()
-}
-
-/// Recursively copy a directory tree from `source` to `destination`.
-fn copy_dir_recursive(source: &Path, destination: &Path) {
-    std::fs::create_dir_all(destination).expect("staging directory should be created");
-    for entry in std::fs::read_dir(source).expect("bundle dir should be readable") {
-        let entry = entry.expect("a directory entry should be readable");
-        let from = entry.path();
-        let to = destination.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to);
-        } else {
-            std::fs::copy(&from, &to).expect("bundle file should copy");
-        }
-    }
 }
 
 /// Stage the committed `builtin/plugins/entity-commands` bundle into a temp
@@ -151,7 +138,7 @@ async fn expose_entity_module(host: &PluginHost) -> ExposedEntity {
     let entity_ctx = kanban.entity_context().await.expect("entity_context");
 
     let clipboard = Arc::new(InMemoryClipboard::new());
-    let ui_state = Arc::new(UIState::new());
+    let ui_state = Arc::new(UiState::new());
 
     // Clipboard-wired so copy/cut/paste are live; CRUD/archive work too.
     let server = EntityServer::with_clipboard(
