@@ -1,8 +1,25 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a280
+comments:
+- actor: claude-code
+  id: 01kvtzbtfg7cprdgr25awwxw09
+  text: 'Picked up. Moved to doing. Studied sibling crate swissarmyhammer-hashline as the reference: pure IO-free crate, Cargo.toml uses `version.workspace = true` etc + `[lints] workspace = true`, doctest uses `Box<dyn std::error::Error>` with `?`, proptest in dev-deps + tests/ property file. Plan: hand-roll normalized-Levenshtein similarity (zero deps) rather than adding strsim to the workspace, since task says hand-roll is acceptable and it keeps deps minimal. Will follow /tdd: failing tests first.'
+  timestamp: 2026-06-23T19:29:54.672653+00:00
+- actor: claude-code
+  id: 01kvtzv5y290fejhtyfsp7sya6
+  text: |-
+    Implementation landed. Created crates/swissarmyhammer-edit-match (zero runtime deps, proptest dev-dep). Public API: find_match(content, find) -> MatchOutcome {Unique{span,rung,confidence}|Ambiguous{candidates}|NoMatch{near}}, Rung {Exact|Normalized|Anchor|Fuzzy}, Span{range,start_line,end_line,text}, pub similarity(a,b)->f32 (normalized Levenshtein), and pub consts FUZZY_ACCEPT_THRESHOLD=0.85, FUZZY_RUNNER_UP_MARGIN=0.10, FUZZY_BOUNDARY_EPSILON=1e-4.
+
+    Design notes for next agent:
+    - Single-line `find` exact match must be LINE-ALIGNED (bounded by start/end or \n); a mid-line substring (e.g. un-indented form of an indented line) is rejected at Exact so Normalized recovers the full ORIGINAL indented line. Multi-line find = raw substring. This satisfies the acceptance criterion that dropped-indentation misses Exact but matches Normalized on original bytes.
+    - FUZZY_BOUNDARY_EPSILON added because f32 makes 0.95-0.85 = 0.099999964 (an ULP below 0.10); threshold+margin comparisons use `>= CONST - EPSILON` so a candidate sitting exactly on the boundary counts as meeting it. Boundary tests assert with the same epsilon.
+    - mcp files-edit tool does NOT bump mtime in a way cargo fingerprinting detects -> had to `touch` files to force recompiles. Watch for stale builds.
+
+    Verification (all fresh, green): nextest 17/17 passed; doctest 1/1 passed; clippy --all-targets -D warnings clean; cargo fmt --check clean; cargo build -p swissarmyhammer-edit-match OK. Wired into root Cargo.toml members + [workspace.dependencies] mirroring swissarmyhammer-hashline.
+  timestamp: 2026-06-23T19:38:17.922564+00:00
+position_column: doing
+position_ordinal: '8280'
 project: file-edit-tools
 title: swissarmyhammer-edit-match crate — pure literal-find ladder
 ---
