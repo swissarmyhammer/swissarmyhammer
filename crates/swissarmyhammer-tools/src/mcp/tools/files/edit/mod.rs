@@ -1280,7 +1280,7 @@ pub async fn execute_edit(
     // A failure on any pair leaves the file byte-identical. Relative paths
     // resolve against the session working directory (the board dir), never the
     // process CWD.
-    use crate::mcp::tools::files::shared_utils::validate_file_path;
+    use crate::mcp::tools::files::shared_utils::{mutation_success_response, validate_file_path};
     let base_dir = context.session_root();
     let tool = EditFileTool::new();
 
@@ -1341,7 +1341,9 @@ pub async fn execute_edit(
 
     // Record the mutated path on the typed side-channel so the dispatch
     // chokepoint can fold inline diagnostics into this result (no content
-    // parsing). The path was already validated above.
+    // parsing). This is DISTINCT from the `mutated_paths` carried in the result
+    // body below — the side-channel drives inline diagnostics; the body surfaces
+    // the paths to the model. Keep both.
     context.record_mutated_path(path.clone());
 
     // Create success response
@@ -1362,7 +1364,23 @@ pub async fn execute_edit(
         "Edit operation(s) completed successfully"
     );
 
-    Ok(BaseToolImpl::create_success_response(success_message))
+    // Carry the mutating-result envelope: the post-edit file re-tagged with
+    // hashline anchors (so the model can chain the next edit without re-reading)
+    // plus the mutated path, layered on top of the existing typed EditResult
+    // fields. ONLY this committed/Applied path carries the envelope — the
+    // ambiguity and near-miss returns above did not mutate, so they do not.
+    Ok(mutation_success_response(
+        success_message,
+        &new_content,
+        vec![path.to_string_lossy().into_owned()],
+        serde_json::json!({
+            "bytes_written": final_result.bytes_written,
+            "replacements_made": final_result.replacements_made,
+            "encoding_detected": final_result.encoding_detected,
+            "line_endings_preserved": final_result.line_endings_preserved,
+            "metadata_preserved": final_result.metadata_preserved,
+        }),
+    ))
 }
 
 #[cfg(test)]
@@ -1749,13 +1767,33 @@ mod tests {
         assert_eq!(call_result.is_error, Some(false));
         assert!(!call_result.content.is_empty());
 
-        // Check response message format contains expected information
+        // The first content block stays the plain "OK" success message.
         let response_text = match &call_result.content[0].raw {
             rmcp::model::RawContent::Text(text_content) => &text_content.text,
             _ => panic!("Expected text content in response"),
         };
-
         assert_eq!(response_text, "OK");
+
+        // …and a successful edit now also carries the mutating-result envelope:
+        // the hashline-tagged post-edit content and the mutated path. Verify the
+        // mutation really happened, then assert the envelope describes it.
+        assert_eq!(
+            fs::read_to_string(&test_file).unwrap(),
+            "Hello universe!",
+            "the edit must have been committed"
+        );
+        let structured = call_result
+            .structured_content
+            .expect("successful edit sets structured content");
+        let mutation = &structured["mutation"];
+        assert_eq!(
+            mutation["tagged_content"].as_str().unwrap(),
+            swissarmyhammer_hashline::tag("Hello universe!", 1)
+        );
+        let paths = mutation["mutated_paths"].as_array().unwrap();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].as_str().unwrap().ends_with("response_test.txt"));
+        assert_eq!(mutation["replacements_made"], serde_json::json!(1));
     }
 
     #[test]
@@ -3058,6 +3096,179 @@ mod tests {
         );
 
         // Byte-identical: the first pair's "one"→"ONE" mutation was NOT committed.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    // =========================================================================
+    // Mutating-result envelope: tagged_content + mutated_paths on SUCCESS only
+    // =========================================================================
+
+    /// Join every text content block of a result (the success message block AND
+    /// the appended envelope block), so envelope assertions can scan the whole
+    /// surfaced text — not just `content[0]`.
+    fn all_text(result: &CallToolResult) -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|c| match &c.raw {
+                rmcp::model::RawContent::Text(t) => Some(t.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// A successful single-pair edit carries the mutation envelope:
+    /// `tagged_content` (the hashline-tagged post-edit file) and `mutated_paths`
+    /// in the structured surface, plus an appended text block, while the first
+    /// content block stays the plain "OK" message.
+    #[tokio::test]
+    async fn successful_edit_carries_tagged_content_and_mutated_paths() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("envelope.txt");
+        fs::write(&test_file, "Hello world!").unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_edit_arguments(&test_file.to_string_lossy(), "world", "universe", None);
+
+        let call = execute_edit(args, &context).await.unwrap();
+        assert_eq!(call.is_error, Some(false));
+
+        // The first block is still the plain success message.
+        assert_eq!(result_text(&call), "OK");
+
+        // Structured surface carries the envelope.
+        let structured = call
+            .structured_content
+            .clone()
+            .expect("successful edit sets structured content");
+        let mutation = &structured["mutation"];
+        // tagged_content is the hashline tag of the POST-edit file.
+        let expected_tagged = swissarmyhammer_hashline::tag("Hello universe!", 1);
+        assert_eq!(
+            mutation["tagged_content"].as_str().unwrap(),
+            expected_tagged
+        );
+        // mutated_paths carries the absolute path that was changed.
+        let paths = mutation["mutated_paths"].as_array().unwrap();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].as_str().unwrap().ends_with("envelope.txt"));
+        // Existing EditResult fields are preserved in the structured surface.
+        assert_eq!(mutation["replacements_made"], serde_json::json!(1));
+        assert!(mutation["bytes_written"].as_u64().unwrap() > 0);
+        assert!(mutation.get("encoding_detected").is_some());
+        assert!(mutation.get("line_endings_preserved").is_some());
+        assert!(mutation.get("metadata_preserved").is_some());
+
+        // The appended text block also carries the tagged content so text-only
+        // hosts deliver it to the model.
+        assert!(
+            all_text(&call).contains(&expected_tagged),
+            "envelope text block carries the tagged content"
+        );
+    }
+
+    /// Round-trip: an anchor taken from a prior edit's `tagged_content` resolves
+    /// against the on-disk file in an immediately-following `edit files` call,
+    /// with NO intervening read.
+    #[tokio::test]
+    async fn anchor_from_prior_envelope_resolves_in_next_edit() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("roundtrip.txt");
+        fs::write(&test_file, "alpha\nbeta\ngamma\n").unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+
+        // First edit changes line 2.
+        let args = create_edit_arguments(&test_file.to_string_lossy(), "beta", "BETA", None);
+        let call = execute_edit(args, &context).await.unwrap();
+        let structured = call.structured_content.expect("structured content");
+        let tagged = structured["mutation"]["tagged_content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Pull the `N:HH` anchor for the third line (gamma) straight from the
+        // returned tagged_content — no intervening read.
+        let anchor = tagged
+            .lines()
+            .find(|l| l.contains("|gamma"))
+            .and_then(|l| l.split('|').next())
+            .expect("gamma line present in tagged_content")
+            .to_string();
+        assert!(
+            anchor.starts_with("3:"),
+            "anchor should target line 3: {anchor}"
+        );
+
+        // Use that anchor as the `find` in a chained edit — it must resolve.
+        let mut args2 = serde_json::Map::new();
+        args2.insert(
+            "file_path".to_string(),
+            serde_json::Value::String(test_file.to_string_lossy().to_string()),
+        );
+        args2.insert("find".to_string(), serde_json::Value::String(anchor));
+        args2.insert(
+            "replace".to_string(),
+            serde_json::Value::String("GAMMA".to_string()),
+        );
+
+        let call2 = execute_edit(args2, &context).await.unwrap();
+        assert_eq!(
+            call2.is_error,
+            Some(false),
+            "anchor must resolve: {call2:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(&test_file).unwrap(),
+            "alpha\nBETA\nGAMMA\n"
+        );
+    }
+
+    /// An ambiguity result (no mutation) does NOT carry the envelope.
+    #[tokio::test]
+    async fn ambiguous_result_has_no_mutation_envelope() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("ambig_no_env.txt");
+        let content = "head\nfoo()\nmid\nfoo()\ntail\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = ambiguity_args(&test_file.to_string_lossy(), "  foo()  ", "bar()", None);
+
+        let call = execute_edit(args, &context).await.unwrap();
+        assert_eq!(call.is_error, Some(false));
+        // No structured envelope — nothing mutated.
+        assert!(
+            call.structured_content.is_none(),
+            "ambiguity result carries no mutation envelope"
+        );
+        // File untouched.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    /// A near-miss result (no mutation) does NOT carry the envelope.
+    #[tokio::test]
+    async fn near_miss_result_has_no_mutation_envelope() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("near_miss_no_env.txt");
+        let content = "the quick brown fox\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_edit_arguments(
+            &test_file.to_string_lossy(),
+            "the quick brown cat",
+            "replacement",
+            None,
+        );
+
+        let call = execute_edit(args, &context).await.unwrap();
+        assert_eq!(call.is_error, Some(false));
+        assert!(
+            call.structured_content.is_none(),
+            "near-miss result carries no mutation envelope"
+        );
         assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
     }
 }

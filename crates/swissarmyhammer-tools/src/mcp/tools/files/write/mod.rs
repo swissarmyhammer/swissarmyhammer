@@ -183,7 +183,9 @@ pub async fn execute_write(
     arguments: serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    use crate::mcp::tools::files::shared_utils::ensure_directory_exists;
+    use crate::mcp::tools::files::shared_utils::{
+        ensure_directory_exists, mutation_success_response,
+    };
     use serde::Deserialize;
     use std::path::PathBuf;
     use swissarmyhammer_common::rate_limiter::get_rate_limiter;
@@ -294,7 +296,10 @@ pub async fn execute_write(
 
     // Record the mutated path on the typed side-channel so the dispatch
     // chokepoint can fold inline diagnostics into this result (no content
-    // parsing). `validated_path` is already the absolute path that was written.
+    // parsing). This is DISTINCT from the `mutated_paths` carried in the result
+    // body below — the side-channel drives inline diagnostics; the body surfaces
+    // the paths to the model. Keep both. `validated_path` is already the absolute
+    // path that was written.
     context.record_mutated_path(validated_path.clone());
 
     let success_message = "OK".to_string();
@@ -305,7 +310,16 @@ pub async fn execute_write(
         "File write operation completed successfully"
     );
 
-    Ok(BaseToolImpl::create_success_response(success_message))
+    // Carry the mutating-result envelope: the just-written content re-tagged with
+    // hashline anchors (so the model can chain the next edit without re-reading)
+    // plus the mutated path. ONLY this write-committed path carries the envelope —
+    // the freshness-guard re-base return above did not mutate, so it does not.
+    Ok(mutation_success_response(
+        success_message,
+        &request.content,
+        vec![validated_path.to_string_lossy().into_owned()],
+        serde_json::json!({ "bytes_written": bytes_written }),
+    ))
 }
 
 #[cfg(test)]
@@ -676,13 +690,32 @@ mod tests {
         assert_eq!(call_result.is_error, Some(false));
         assert!(!call_result.content.is_empty());
 
-        // Check response message format
+        // The first content block stays the plain "OK" success message.
         let response_text = match &call_result.content[0].raw {
             rmcp::model::RawContent::Text(text_content) => &text_content.text,
             _ => panic!("Expected text content in response"),
         };
-
         assert_eq!(response_text, "OK");
+
+        // …and a successful write now also carries the mutating-result envelope:
+        // the hashline-tagged content just written and the mutated path. Verify
+        // the write really happened, then assert the envelope describes it.
+        assert_eq!(
+            fs::read_to_string(&test_file).unwrap(),
+            test_content,
+            "the write must have been committed"
+        );
+        let structured = call_result
+            .structured_content
+            .expect("successful write sets structured content");
+        let mutation = &structured["mutation"];
+        assert_eq!(
+            mutation["tagged_content"].as_str().unwrap(),
+            swissarmyhammer_hashline::tag(test_content, 1)
+        );
+        let paths = mutation["mutated_paths"].as_array().unwrap();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].as_str().unwrap().ends_with("response_test.txt"));
     }
 
     #[tokio::test]
@@ -843,5 +876,134 @@ mod tests {
             "payload should lead with the current freshness token, got: {text}"
         );
         assert!(!text.contains(&stale_token));
+    }
+
+    // --- Mutating-result envelope: tagged_content + mutated_paths ------------
+
+    /// Join every text content block of a result, so envelope assertions can
+    /// scan the whole surfaced text — not just `content[0]`.
+    fn all_text(result: &CallToolResult) -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|c| match &c.raw {
+                rmcp::model::RawContent::Text(t) => Some(t.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// A successful write (here a brand-new file) carries the mutation envelope:
+    /// `tagged_content` (hashline-tagged content just written) + `mutated_paths`
+    /// in the structured surface, plus an appended text block; the first content
+    /// block stays the plain "OK".
+    #[tokio::test]
+    async fn successful_write_carries_tagged_content_and_mutated_paths() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("write_envelope.txt");
+        let content = "first\nsecond\nthird\n";
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_test_arguments(&test_file.to_string_lossy(), content);
+
+        let call = execute_write(args, &context).await.unwrap();
+        assert_eq!(call.is_error, Some(false));
+
+        // First block stays the plain success message.
+        match &call.content[0].raw {
+            rmcp::model::RawContent::Text(t) => assert_eq!(t.text, "OK"),
+            _ => panic!("expected text content"),
+        }
+
+        let structured = call
+            .structured_content
+            .clone()
+            .expect("successful write sets structured content");
+        let mutation = &structured["mutation"];
+        let expected_tagged = swissarmyhammer_hashline::tag(content, 1);
+        assert_eq!(
+            mutation["tagged_content"].as_str().unwrap(),
+            expected_tagged
+        );
+        let paths = mutation["mutated_paths"].as_array().unwrap();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].as_str().unwrap().ends_with("write_envelope.txt"));
+        assert!(mutation["bytes_written"].as_u64().unwrap() > 0);
+
+        assert!(
+            all_text(&call).contains(&expected_tagged),
+            "envelope text block carries the tagged content"
+        );
+    }
+
+    /// A guard-divergence write (existing file, missing/stale token) does NOT
+    /// carry the mutation envelope — nothing mutated. The result is the re-base
+    /// payload (current content), with no `mutation` structured surface.
+    #[tokio::test]
+    async fn guard_divergence_write_has_no_mutation_envelope() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("write_divergence.txt");
+        let initial = "alpha\nbeta\n";
+        fs::write(&test_file, initial).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        // No expected_hash → divergence → re-base, no clobber.
+        let args = create_test_arguments(&test_file.to_string_lossy(), "clobbered!");
+
+        let call = execute_write(args, &context).await.unwrap();
+        assert_eq!(call.is_error, Some(false));
+        // File untouched.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), initial);
+        // No mutation envelope — the write did not mutate.
+        assert!(
+            call.structured_content.is_none(),
+            "guard-divergence carries no mutation envelope"
+        );
+    }
+
+    /// Round-trip: an anchor taken from a successful write's `tagged_content`
+    /// resolves against the on-disk file in an immediately-following `edit files`
+    /// call, with NO intervening read.
+    #[tokio::test]
+    async fn anchor_from_write_envelope_resolves_in_edit() {
+        use crate::mcp::tools::files::edit::execute_edit;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("write_roundtrip.txt");
+        let content = "one\ntwo\nthree\n";
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_test_arguments(&test_file.to_string_lossy(), content);
+        let call = execute_write(args, &context).await.unwrap();
+        let structured = call.structured_content.expect("structured content");
+        let tagged = structured["mutation"]["tagged_content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Pull the anchor for line 2 (two) directly from tagged_content.
+        let anchor = tagged
+            .lines()
+            .find(|l| l.contains("|two"))
+            .and_then(|l| l.split('|').next())
+            .expect("two line present")
+            .to_string();
+        assert!(anchor.starts_with("2:"), "anchor targets line 2: {anchor}");
+
+        let mut edit_args = serde_json::Map::new();
+        edit_args.insert(
+            "file_path".to_string(),
+            serde_json::Value::String(test_file.to_string_lossy().to_string()),
+        );
+        edit_args.insert("find".to_string(), serde_json::Value::String(anchor));
+        edit_args.insert(
+            "replace".to_string(),
+            serde_json::Value::String("TWO".to_string()),
+        );
+
+        let edit_call = execute_edit(edit_args, &context).await.unwrap();
+        assert_eq!(edit_call.is_error, Some(false), "anchor must resolve");
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), "one\nTWO\nthree\n");
     }
 }

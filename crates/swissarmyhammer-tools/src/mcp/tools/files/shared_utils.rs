@@ -85,6 +85,82 @@ pub fn whole_file_hash(content: &str) -> String {
     format!("{:x}", md5::compute(content.as_bytes()))
 }
 
+/// Build the SUCCESS result for a mutating file op, carrying the chaining
+/// envelope so the model can issue its next edit without re-reading.
+///
+/// Only a SUCCESSFUL MUTATION calls this (an `edit files` commit, a `write files`
+/// write). Non-mutating successes — an ambiguity / near-miss listing, a
+/// freshness-guard re-base — return a plain success response and never carry the
+/// envelope.
+///
+/// The envelope rides on BOTH surfaces, mirroring the inline-diagnostics
+/// fold-in convention so the model sees it regardless of how the host renders
+/// tool results:
+///
+/// * `structured_content.mutation` — an object carrying `tagged_content`
+///   (the post-mutation file re-tagged with [`swissarmyhammer_hashline::tag`],
+///   so fresh `N:HH` anchors are immediately available), `mutated_paths` (the
+///   absolute paths changed, surfaced to the model — distinct from the typed
+///   `record_mutated_path` diagnostics side-channel), plus any operation-specific
+///   `extra` fields (e.g. an edit's `bytes_written` / `replacements_made`).
+/// * An appended text block carrying the `#hash:<token>` line and the same
+///   tagged content, for hosts that only forward result text.
+///
+/// `message` is the plain first text block (`"OK"` / `"OK: Applied N…"`), kept
+/// intact so existing semantics hold; the envelope is layered on top.
+pub(crate) fn mutation_success_response(
+    message: String,
+    content: &str,
+    mutated_paths: Vec<String>,
+    extra: serde_json::Value,
+) -> rmcp::model::CallToolResult {
+    use crate::mcp::tool_registry::BaseToolImpl;
+    use rmcp::model::Content;
+
+    let tagged_content = swissarmyhammer_hashline::tag(content, 1);
+    let hash = whole_file_hash(content);
+
+    // Build the structured `mutation` object: the envelope fields plus any
+    // operation-specific `extra` fields, so existing typed result fields survive.
+    let mut mutation = match extra {
+        serde_json::Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    mutation.insert(
+        "tagged_content".to_string(),
+        serde_json::Value::String(tagged_content.clone()),
+    );
+    mutation.insert(
+        "mutated_paths".to_string(),
+        serde_json::Value::Array(
+            mutated_paths
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        ),
+    );
+
+    let mut result = BaseToolImpl::create_success_response(message);
+
+    // Structured surface for structured-aware hosts.
+    result.structured_content = Some(serde_json::json!({ "mutation": mutation }));
+
+    // Text surface: a delimited block carrying the freshness token + the
+    // hashline-tagged post-mutation content, so a chained edit can lift an anchor
+    // straight from result text with no intervening read.
+    let text_block = format!(
+        "--- updated file (hashline-tagged for chaining) ---\n{HASH_LINE_PREFIX}{hash}\n{tagged_content}"
+    );
+    result.content.push(Content::text(text_block));
+
+    result
+}
+
+/// Prefix marker for the whole-file freshness-token metadata line, matching the
+/// `read files` / `write files` re-base payload form so a chained edit can
+/// re-derive a staleness token from the envelope's text block.
+const HASH_LINE_PREFIX: &str = "#hash:";
+
 /// Apply line-based `offset`/`limit` windowing to `content`.
 ///
 /// `offset` is a 1-based starting line (lines before it are skipped); `limit`
