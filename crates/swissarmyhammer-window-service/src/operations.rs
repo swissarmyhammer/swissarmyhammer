@@ -455,6 +455,90 @@ pub struct BoardClosed {
     pub path: String,
 }
 
+// Raw OS-window-lifecycle notifications ─────────────────────────────────
+//
+// The sibling family to the board-lifecycle events above: where `board.*`
+// tracks the board-file ↔ window association, these track the *raw OS window*
+// itself — a window is created, gains focus, or is closed. A plugin subscribes
+// with `this.window.on("window.created")` / `"window.focused"` /
+// `"window.closed"`.
+//
+// Like the `board.*` family, each declares an explicit two-segment short
+// `event` (`window.created` / `window.focused` / `window.closed`). The
+// notifications `_meta` tree is keyed by the SHORT event name with
+// last-insert-wins, so the DEFAULT last-path-segment short event would make
+// `window/closed` and the sibling `board/closed` BOTH key as `"closed"` and
+// silently overwrite one another. The explicit `window.*` / `board.*` short
+// events keep the two families distinct in the shared `window` tool's flat
+// `_meta`. Both families hang off the same `#[notification] struct == payload`
+// declaration pattern.
+//
+// Each carries the window's `label` plus the `board_path` it shows (`None` for
+// a boardless window) — a thin event: the publisher has both in hand at the
+// create / focus / close site, so there is no enrichment re-fetch.
+//
+// Geometry (move / resize) is deliberately NOT raised: those events fire
+// continuously while a user drags or resizes a window — far too chatty to be a
+// useful lifecycle signal, and no plugin consumer needs per-pixel motion. The
+// three create / focus / close transitions are the observable lifecycle.
+
+/// The `notifications/window/created` event payload — an application window was
+/// created.
+///
+/// `label` is the new window's Tauri label; `board_path` is the board it was
+/// pointed at (`None` when no board resolved). Published from the app's single
+/// window-creation path once the window is built and its board mapping is set.
+#[notification(
+    method = "notifications/window/created",
+    event = "window.created",
+    description = "An application window was created."
+)]
+#[derive(Debug, Default, Serialize)]
+pub struct WindowCreated {
+    /// The created window's Tauri label.
+    pub label: String,
+    /// Filesystem path of the board the window displays, if any.
+    pub board_path: Option<String>,
+}
+
+/// The `notifications/window/focused` event payload — an application window
+/// gained OS focus.
+///
+/// `label` is the focused window's Tauri label; `board_path` is the board it
+/// shows (`None` when no board resolved). Published from the OS window-event
+/// handler on `Focused(true)`.
+#[notification(
+    method = "notifications/window/focused",
+    event = "window.focused",
+    description = "An application window gained focus."
+)]
+#[derive(Debug, Default, Serialize)]
+pub struct WindowFocused {
+    /// The focused window's Tauri label.
+    pub label: String,
+    /// Filesystem path of the board the window displays, if any.
+    pub board_path: Option<String>,
+}
+
+/// The `notifications/window/closed` event payload — an application window was
+/// closed.
+///
+/// `label` is the closed window's Tauri label; `board_path` is the board it was
+/// showing (`None` when no board resolved). Published from the OS window-event
+/// handler when the user closes a secondary window mid-session.
+#[notification(
+    method = "notifications/window/closed",
+    event = "window.closed",
+    description = "An application window was closed."
+)]
+#[derive(Debug, Default, Serialize)]
+pub struct WindowClosed {
+    /// The closed window's Tauri label.
+    pub label: String,
+    /// Filesystem path of the board the window was showing, if any.
+    pub board_path: Option<String>,
+}
+
 /// The canonical slice of notifications the `window` tool emits.
 ///
 /// Mirrors [`operations`]: a leaked `Default` instance per notification, used
@@ -466,6 +550,9 @@ static WINDOW_NOTIFICATIONS: LazyLock<Vec<&'static dyn Notification>> = LazyLock
         Box::leak(Box::<BoardOpened>::default()) as &dyn Notification,
         Box::leak(Box::<BoardSwitched>::default()) as &dyn Notification,
         Box::leak(Box::<BoardClosed>::default()) as &dyn Notification,
+        Box::leak(Box::<WindowCreated>::default()) as &dyn Notification,
+        Box::leak(Box::<WindowFocused>::default()) as &dyn Notification,
+        Box::leak(Box::<WindowClosed>::default()) as &dyn Notification,
     ]
 });
 
@@ -523,6 +610,51 @@ pub fn board_closed_notification(
     )
 }
 
+/// Generate a window-lifecycle publish helper. Each helper serializes its
+/// declared payload via [`from_declared`](swissarmyhammer_plugin::McpNotification::from_declared)
+/// (so the `_meta` schema and the wire payload share one source) and stamps
+/// `user` provenance. Living in the crate that DECLARES the notification keeps
+/// the wire method coming from the `#[notification]` attribute rather than a
+/// string literal at the call site, so the declared schema and the published
+/// payload cannot drift. The three window-lifecycle payloads share one shape
+/// (`{ label, board_path }`), so one macro generates all three identical
+/// helpers instead of three verbatim copies.
+macro_rules! window_lifecycle_helper {
+    ($(#[$doc:meta])* $name:ident => $payload:ident) => {
+        $(#[$doc])*
+        pub fn $name(
+            label: impl Into<String>,
+            board_path: Option<String>,
+        ) -> swissarmyhammer_plugin::McpNotification {
+            let payload = $payload {
+                label: label.into(),
+                board_path,
+            };
+            swissarmyhammer_plugin::McpNotification::from_declared(
+                payload.method(),
+                &payload,
+                swissarmyhammer_plugin::Provenance::user(),
+            )
+        }
+    };
+}
+
+window_lifecycle_helper! {
+    /// Build the `notifications/window/created` notification carrying the new
+    /// window's label and the board path it displays.
+    window_created_notification => WindowCreated
+}
+window_lifecycle_helper! {
+    /// Build the `notifications/window/focused` notification carrying the
+    /// focused window's label and the board path it displays.
+    window_focused_notification => WindowFocused
+}
+window_lifecycle_helper! {
+    /// Build the `notifications/window/closed` notification carrying the closed
+    /// window's label and the board path it was showing.
+    window_closed_notification => WindowClosed
+}
+
 #[cfg(test)]
 mod notification_tests {
     use super::*;
@@ -552,6 +684,57 @@ mod notification_tests {
             "notifications/board/closed"
         );
         assert_eq!(BoardClosed::default().event(), "board.closed");
+    }
+
+    /// Each raw-window-lifecycle notification declares its wire method and an
+    /// explicit two-segment short event (`window.created` / `window.focused` /
+    /// `window.closed`) a plugin subscribes to with
+    /// `this.window.on("window.created", …)`. The explicit `event` override (NOT
+    /// the default last-path-segment) keeps the `closed` event from colliding
+    /// with the sibling board lifecycle's `board.closed` in the shared `window`
+    /// tool's flat-keyed notifications `_meta`.
+    #[test]
+    fn window_notifications_declare_method_and_event() {
+        assert_eq!(
+            WindowCreated::default().method(),
+            "notifications/window/created"
+        );
+        assert_eq!(WindowCreated::default().event(), "window.created");
+        assert_eq!(
+            WindowFocused::default().method(),
+            "notifications/window/focused"
+        );
+        assert_eq!(WindowFocused::default().event(), "window.focused");
+        assert_eq!(
+            WindowClosed::default().method(),
+            "notifications/window/closed"
+        );
+        assert_eq!(WindowClosed::default().event(), "window.closed");
+    }
+
+    /// Each window publish helper builds the `{ label, board_path }` payload
+    /// under the declared method — the struct == payload publish path.
+    #[test]
+    fn window_notifications_build_label_and_board_path_payload() {
+        let created = window_created_notification("board-1", Some("/boards/alpha".into()));
+        assert_eq!(created.method, "notifications/window/created");
+        let params = created.params.as_object().expect("params is an object");
+        assert_eq!(params["label"], "board-1");
+        assert_eq!(params["board_path"], "/boards/alpha");
+
+        let focused = window_focused_notification("board-2", Some("/boards/beta".into()));
+        assert_eq!(focused.method, "notifications/window/focused");
+        assert_eq!(
+            focused.params.as_object().expect("params is an object")["label"],
+            "board-2"
+        );
+
+        // A boardless window carries an explicit null board_path.
+        let closed = window_closed_notification("board-3", None);
+        assert_eq!(closed.method, "notifications/window/closed");
+        let params = closed.params.as_object().expect("params is an object");
+        assert_eq!(params["label"], "board-3");
+        assert!(params["board_path"].is_null());
     }
 
     /// Each publish helper builds the single-field `{ path }` payload under the
@@ -584,8 +767,15 @@ mod notification_tests {
     /// emits MUST be one the `window` service declares in its notification
     /// `_meta`. Pins the declared==published contract so a new helper or a
     /// renamed method can never publish an undeclared event.
+    ///
+    /// Covers BOTH lifecycle families that share the `window` tool — the three
+    /// `board.*` siblings AND the three `window.*` events this exercises — so it
+    /// also guards the flat-keyed `_meta` against collision: the `board.*` and
+    /// `window.*` short events are distinct, so all six leaves survive and every
+    /// emitted method resolves. If `window.closed` and `board.closed` keyed the
+    /// same `_meta` slot, one family's method would be missing here.
     #[test]
-    fn published_board_methods_are_declared() {
+    fn published_lifecycle_methods_are_declared() {
         let declared: std::collections::BTreeSet<String> =
             generate_notifications_meta(notifications())
                 .as_object()
@@ -603,12 +793,45 @@ mod notification_tests {
             board_opened_notification("/x"),
             board_switched_notification("/x"),
             board_closed_notification("/x"),
+            window_created_notification("w", Some("/x".into())),
+            window_focused_notification("w", Some("/x".into())),
+            window_closed_notification("w", None),
         ] {
             assert!(
                 declared.contains(&note.method),
                 "emitted method {:?} is not declared in _meta ({:?})",
                 note.method,
                 declared,
+            );
+        }
+    }
+
+    /// The shared `window` tool's flat-keyed notifications `_meta` keeps BOTH
+    /// the board lifecycle (`board.opened` / `board.switched` / `board.closed`)
+    /// AND the raw-window lifecycle (`window.created` / `window.focused` /
+    /// `window.closed`) as six DISTINCT leaves — neither family's `closed`
+    /// overwrites the other's. Directly asserts the collision-free keying the
+    /// explicit two-segment short events buy.
+    #[test]
+    fn meta_keeps_board_and_window_families_distinct() {
+        let meta = generate_notifications_meta(notifications());
+        let tree = meta.as_object().expect("notifications meta is an object");
+
+        for (event, method) in [
+            ("board.opened", "notifications/board/opened"),
+            ("board.switched", "notifications/board/switched"),
+            ("board.closed", "notifications/board/closed"),
+            ("window.created", "notifications/window/created"),
+            ("window.focused", "notifications/window/focused"),
+            ("window.closed", "notifications/window/closed"),
+        ] {
+            let leaf = tree
+                .get(event)
+                .unwrap_or_else(|| panic!("_meta must declare the {event:?} event leaf"));
+            assert_eq!(
+                leaf["method"].as_str(),
+                Some(method),
+                "_meta leaf {event:?}.method must equal {method:?}",
             );
         }
     }

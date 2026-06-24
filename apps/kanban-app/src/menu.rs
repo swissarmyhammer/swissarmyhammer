@@ -929,7 +929,7 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
                 // notification reaches a live forwarder rather than one still
                 // bound to the previous board.
                 crate::commands::bind_window_forwarder(handle, &state, label).await;
-                crate::commands::publish_board_lifecycle(&state, label, notification).await;
+                crate::commands::publish_window_lifecycle(&state, label, notification).await;
             } else {
                 // No resolvable window (OS focus shifted during a native dialog,
                 // or no window is open): publish on the global host's bridge so

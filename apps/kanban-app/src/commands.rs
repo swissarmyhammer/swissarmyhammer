@@ -969,6 +969,23 @@ pub async fn create_window_impl(
     // Menu rebuild is handled by the frontend dispatching app.setFocus
     // when the new window mounts — no explicit rebuild needed here.
 
+    // Publish the raw-window-lifecycle `created` event onto this window's
+    // effective bridge so plugins subscribed with
+    // `this.window.on("window.created", …)` observe the new window. This is the
+    // single creation path (user-initiated `window.new` AND startup restore both
+    // route through here), and the window→board mapping was just set above, so
+    // `resolve_window_bridge` resolves the new window's board bridge. Thin event:
+    // the label + resolved board path are already in hand — no enrichment fetch.
+    publish_window_lifecycle(
+        state,
+        &label,
+        swissarmyhammer_window_service::window_created_notification(
+            label.clone(),
+            resolved_path.clone(),
+        ),
+    )
+    .await;
+
     Ok(json!({
         "label": label,
         "board_path": resolved_path,
@@ -2651,23 +2668,24 @@ pub(crate) async fn resolve_window_bridge(
     }
 }
 
-/// Publish a board-lifecycle notification onto `label`'s effective bridge so it
-/// reaches that window (and any plugin subscribed to its board's bridge).
+/// Publish a window-facing lifecycle notification onto `label`'s effective
+/// bridge so it reaches that window (and any plugin subscribed to its board's
+/// bridge).
 ///
-/// The board-lifecycle events (`notifications/board/opened|switched|closed`,
-/// built by the publish helpers the `window` service DECLARES) are window-facing
-/// "the board this window shows changed" signals, so they target the same
-/// per-window bridge a focus or store change does — resolved via
-/// [`resolve_window_bridge`]. The host's per-window forwarder re-broadcasts each
-/// as the Tauri event named by the notification `method`, which the webview's
-/// `WindowContainer` listens for; a plugin sees the same `this.window.on(...)`
-/// stream.
+/// Both window-facing lifecycle families — the board lifecycle
+/// (`notifications/board/opened|switched|closed`) and the raw OS-window
+/// lifecycle (`notifications/window/created|focused|closed`), built by the
+/// publish helpers the `window` service DECLARES — target the same per-window
+/// bridge a focus or store change does, resolved via [`resolve_window_bridge`].
+/// The host's per-window forwarder re-broadcasts each as the Tauri event named
+/// by the notification `method`, which the webview's `WindowContainer` listens
+/// for; a plugin sees the same `this.window.on(...)` stream.
 ///
-/// Call AFTER the window's board assignment is updated (so the resolved bridge
-/// is the destination board's) and AFTER [`bind_window_forwarder`] rebinds the
-/// forwarder onto it, so the just-published notification is delivered to a live
-/// forwarder rather than a stale one.
-pub(crate) async fn publish_board_lifecycle(
+/// For a board switch, call AFTER the window's board assignment is updated (so
+/// the resolved bridge is the destination board's) and AFTER
+/// [`bind_window_forwarder`] rebinds the forwarder onto it, so the just-published
+/// notification is delivered to a live forwarder rather than a stale one.
+pub(crate) async fn publish_window_lifecycle(
     state: &AppState,
     label: &str,
     notification: swissarmyhammer_plugin::McpNotification,

@@ -146,3 +146,58 @@ async fn window_tool_meta_advertises_board_lifecycle_notifications() {
         );
     }
 }
+
+/// The `_meta` tree under `io.swissarmyhammer/notifications` advertises every
+/// raw-window-lifecycle event a plugin resolves with
+/// `this.window.on("window.created")` (and `window.focused` / `window.closed`),
+/// AND keeps them as distinct leaves alongside the sibling `board.*` family.
+///
+/// Production-path assertion: it drives the real `WindowService::list_tools`,
+/// so it pins the discovery surface the SDK's `.on()` resolves against. The
+/// `_meta` tree is keyed by the SHORT event name with last-insert-wins, so this
+/// is also the live proof the explicit two-segment `window.*` / `board.*` short
+/// events do NOT collide — all six leaves survive, neither family's `closed`
+/// overwrites the other's.
+#[tokio::test]
+async fn window_tool_meta_advertises_window_lifecycle_notifications() {
+    let h = Harness::new();
+    let service = h.service();
+
+    let listed = service
+        .list_tools(None, request_context())
+        .await
+        .expect("list_tools should succeed");
+    let tool = &listed.tools[0];
+    assert_eq!(tool.name.as_ref(), "window");
+
+    let meta = tool
+        .meta
+        .as_ref()
+        .expect("window tool advertises a _meta tree");
+    let notifications_tree = meta
+        .0
+        .get("io.swissarmyhammer/notifications")
+        .and_then(Value::as_object)
+        .expect("_meta carries io.swissarmyhammer/notifications");
+
+    // Both families must be present as distinct leaves — the collision-free
+    // keying the explicit two-segment short events buy.
+    let expected: Vec<(&str, &str)> = vec![
+        ("window.created", "notifications/window/created"),
+        ("window.focused", "notifications/window/focused"),
+        ("window.closed", "notifications/window/closed"),
+        ("board.opened", "notifications/board/opened"),
+        ("board.switched", "notifications/board/switched"),
+        ("board.closed", "notifications/board/closed"),
+    ];
+    for (event, method) in &expected {
+        let leaf = notifications_tree
+            .get(*event)
+            .unwrap_or_else(|| panic!("_meta must declare the {event:?} event"));
+        assert_eq!(
+            leaf.get("method"),
+            Some(&Value::String((*method).to_string())),
+            "_meta notification {event:?}.method must equal {method:?}",
+        );
+    }
+}

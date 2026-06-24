@@ -482,11 +482,44 @@ fn on_window_geometry_changed(window: &tauri::Window, label: &str) {
 /// capture and commands without an explicit `board_path` target the right
 /// board. Menu rebuild is handled by the frontend re-dispatching `app.setFocus`
 /// on window focus.
+///
+/// Also raises the raw-window-lifecycle `notifications/window/focused` event on
+/// the window's bridge so plugins subscribed with
+/// `this.window.on("window.focused", …)` observe the focus change. The publish
+/// is async (it resolves the window's board bridge), so it is spawned off this
+/// synchronous OS event handler — see [`spawn_window_lifecycle_publish`].
 fn on_window_focused(window: &tauri::Window, label: &str) {
     let state = window.app_handle().state::<AppState>();
-    if let Some(board_path) = state.ui_state.window_board(label) {
-        state.ui_state.set_most_recent_board(&board_path);
+    let board_path = state.ui_state.window_board(label);
+    if let Some(ref bp) = board_path {
+        state.ui_state.set_most_recent_board(bp);
     }
+    spawn_window_lifecycle_publish(
+        window.app_handle(),
+        label,
+        swissarmyhammer_window_service::window_focused_notification(label, board_path),
+    );
+}
+
+/// Spawn the async publish of a window-lifecycle notification onto `label`'s
+/// effective bridge, off a synchronous OS window-event handler.
+///
+/// The OS `WindowEvent` callbacks run synchronously on the main event loop, but
+/// resolving the window's board bridge ([`resolve_window_bridge`]) is async
+/// (it takes the board/platform locks). Cloning the `AppHandle` (cheap, `Arc`-
+/// backed) and re-resolving `AppState` inside the spawned task keeps the event
+/// loop unblocked while still publishing the declared notification.
+fn spawn_window_lifecycle_publish(
+    app: &tauri::AppHandle,
+    label: &str,
+    notification: swissarmyhammer_plugin::McpNotification,
+) {
+    let app = app.clone();
+    let label = label.to_string();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        crate::commands::publish_window_lifecycle(&state, &label, notification).await;
+    });
 }
 
 /// Mid-session close: user clicked X on a secondary window. Remove the UiState
@@ -498,11 +531,35 @@ fn on_window_close_requested(window: &tauri::Window, label: &str) {
     if state.shutting_down.load(Ordering::SeqCst) {
         return;
     }
+    // Read the board this window was showing BEFORE removing the window entry —
+    // `remove_window` clears the label→board mapping, so the lifecycle event
+    // would otherwise lose its board_path.
+    let board_path = state.ui_state.window_board(label);
+    // Remove the UiState entry synchronously so it won't resurrect on restart.
     state.ui_state.remove_window(label);
-    // Abort and drop this window's notification forwarder so the per-window
-    // forwarder map never grows unbounded across a session and a reused Tauri
-    // label re-binds cleanly on its next `mcp_subscribe`.
-    crate::commands::unbind_window_forwarder(label);
+
+    // Publish the raw-window-lifecycle `closed` event on the window's bridge so
+    // plugins subscribed with `this.window.on("window.closed", …)` observe the
+    // close, then abort this window's forwarder. Both run on ONE spawned task in
+    // that order: the per-window forwarder re-broadcasts bridge notifications as
+    // the Tauri event a plugin listens for, so the forwarder MUST stay live
+    // until AFTER `bridge.publish(...)` actually runs. Spawning the publish then
+    // synchronously aborting the forwarder would race — the abort wins and the
+    // notification is dropped with no subscriber. Sequencing the abort after the
+    // awaited publish on the same task makes delivery-before-teardown
+    // deterministic.
+    let app = window.app_handle().clone();
+    let label_owned = label.to_string();
+    let notification =
+        swissarmyhammer_window_service::window_closed_notification(label, board_path);
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        crate::commands::publish_window_lifecycle(&state, &label_owned, notification).await;
+        // Abort and drop this window's notification forwarder so the per-window
+        // forwarder map never grows unbounded across a session and a reused
+        // Tauri label re-binds cleanly on its next `mcp_subscribe`.
+        crate::commands::unbind_window_forwarder(&label_owned);
+    });
     tracing::info!(label = %label, "removed window entry on mid-session close");
 }
 

@@ -2812,6 +2812,135 @@ mod tests {
         );
     }
 
+    /// Real-pipeline: publishing a raw-window-lifecycle notification through
+    /// `commands::publish_window_lifecycle` (the production publish helper the
+    /// OS window-event handler and the window-creation path call) routes the
+    /// DECLARED `notifications/window/created|focused|closed` event — carrying
+    /// the window label + board_path — onto the window's effective bridge.
+    ///
+    /// Drives the actual `resolve_window_bridge` → bridge publish path for a
+    /// window mapped to an open board (a lite board has no per-board platform,
+    /// so its effective bridge is the global host's), subscribing to that bridge
+    /// and asserting each declared notification shows up — not a hand-built one.
+    /// The methods/payloads come from the `window` service's publish helpers, so
+    /// this guards the window-lifecycle publish wiring end to end.
+    #[tokio::test]
+    async fn window_lifecycle_publish_routes_declared_notifications() {
+        let tmp = TempDir::new().unwrap();
+        create_board_at(tmp.path(), "Window Lifecycle Board");
+
+        let state = AppState::new_for_test();
+        let canonical = state.open_board_for_test(tmp.path()).await.unwrap();
+        let canonical_str = canonical.display().to_string();
+
+        // Map a window label to the open board so `resolve_window_bridge`
+        // resolves that board's effective (here: global) bridge.
+        let label = "board-window-1";
+        state.ui_state.set_window_board(label, &canonical_str);
+
+        let bridge = state
+            .plugin_platform
+            .lock()
+            .await
+            .host()
+            .notification_bridge();
+        let mut sub = bridge.subscribe();
+
+        // created — carries label + board_path.
+        crate::commands::publish_window_lifecycle(
+            &state,
+            label,
+            swissarmyhammer_window_service::window_created_notification(
+                label,
+                Some(canonical_str.clone()),
+            ),
+        )
+        .await;
+        let created = sub.recv().await.expect("created notification published");
+        assert_eq!(created.method, "notifications/window/created");
+        let params = created.params.as_object().expect("params is an object");
+        assert_eq!(params["label"], serde_json::json!(label));
+        assert_eq!(params["board_path"], serde_json::json!(canonical_str));
+
+        // focused — same shape.
+        crate::commands::publish_window_lifecycle(
+            &state,
+            label,
+            swissarmyhammer_window_service::window_focused_notification(
+                label,
+                Some(canonical_str.clone()),
+            ),
+        )
+        .await;
+        let focused = sub.recv().await.expect("focused notification published");
+        assert_eq!(focused.method, "notifications/window/focused");
+
+        // closed — board_path null is preserved for a boardless close.
+        crate::commands::publish_window_lifecycle(
+            &state,
+            label,
+            swissarmyhammer_window_service::window_closed_notification(label, None),
+        )
+        .await;
+        let closed = sub.recv().await.expect("closed notification published");
+        assert_eq!(closed.method, "notifications/window/closed");
+        assert!(closed.params.as_object().expect("params is an object")["board_path"].is_null());
+    }
+
+    /// Regression: the window-close path publishes `window.closed` BEFORE it
+    /// tears down the window's notification forwarder.
+    ///
+    /// `on_window_close_requested` must `publish_window_lifecycle(...).await`
+    /// and only THEN `unbind_window_forwarder(...)` — both on one spawned task,
+    /// in that order. The earlier (buggy) shape spawned the publish and then
+    /// synchronously aborted the forwarder, so the abort won the race and the
+    /// `window.closed` notification was dropped with no live subscriber. This
+    /// asserts the contract directly: a subscriber live during the publish
+    /// receives the notification even though the forwarder is unbound right
+    /// after. (`unbind_window_forwarder` on an unbound label is a harmless
+    /// no-op, so this needs no `AppHandle`-backed forwarder.)
+    #[tokio::test]
+    async fn window_close_publishes_before_forwarder_teardown() {
+        let tmp = TempDir::new().unwrap();
+        create_board_at(tmp.path(), "Close Order Board");
+
+        let state = AppState::new_for_test();
+        let canonical = state.open_board_for_test(tmp.path()).await.unwrap();
+        let canonical_str = canonical.display().to_string();
+
+        let label = "closing-window";
+        state.ui_state.set_window_board(label, &canonical_str);
+
+        let bridge = state
+            .plugin_platform
+            .lock()
+            .await
+            .host()
+            .notification_bridge();
+        let mut sub = bridge.subscribe();
+
+        // Mirror the production close ordering: awaited publish, THEN unbind.
+        crate::commands::publish_window_lifecycle(
+            &state,
+            label,
+            swissarmyhammer_window_service::window_closed_notification(
+                label,
+                Some(canonical_str.clone()),
+            ),
+        )
+        .await;
+        crate::commands::unbind_window_forwarder(label);
+
+        // The subscriber, live during the awaited publish, still receives it —
+        // proving publish is ordered before teardown.
+        let closed = sub.recv().await.expect("closed notification published");
+        assert_eq!(closed.method, "notifications/window/closed");
+        assert_eq!(
+            closed.params.as_object().expect("params is an object")["board_path"],
+            serde_json::json!(canonical_str),
+        );
+    }
+
     #[test]
     fn test_deterministic_color_is_stable() {
         let c1 = deterministic_color("alice");
