@@ -10,7 +10,6 @@
 
 use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 use encoding_rs::{Encoding, UTF_8};
-use filetime::{set_file_times, FileTime};
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use std::fs;
@@ -903,8 +902,6 @@ pub struct EditResult {
     pub encoding_detected: String,
     /// The line ending format that was preserved
     pub line_endings_preserved: String,
-    /// Whether file metadata (permissions, timestamps) was successfully preserved
-    pub metadata_preserved: bool,
 }
 
 /// Validation result for edit operations
@@ -1113,14 +1110,17 @@ impl EditFileTool {
     }
 
     /// Commit fully-rewritten `content` to `path` in one atomic rewrite,
-    /// preserving the original encoding, permissions, and timestamps.
+    /// preserving the original encoding and permissions.
     ///
     /// This is the shared temp-write + fsync-free rename core both the legacy
     /// single-pair [`edit_file_atomic`](Self::edit_file_atomic) and the
     /// shape-inferred batch path ([`execute_edit`]) commit through, so the
-    /// encoding / line-ending / metadata preservation lives in exactly one place.
-    /// On any failure the temporary file is removed and the original is left
-    /// untouched (byte-identical).
+    /// encoding / line-ending / permission preservation lives in exactly one
+    /// place. The modification time is intentionally NOT preserved: an edit
+    /// changes the file, so the rename's fresh mtime must stand, keeping
+    /// downstream mtime-based staleness checks (cargo/make, file watchers,
+    /// rust-analyzer) correct. On any failure the temporary file is removed and
+    /// the original is left untouched (byte-identical).
     fn commit_content(
         &self,
         path: &Path,
@@ -1131,12 +1131,10 @@ impl EditFileTool {
     ) -> Result<EditResult, McpError> {
         use crate::mcp::tools::files::shared_utils::handle_file_error;
 
-        // Capture the original metadata to preserve permissions and timestamps.
+        // Capture the original metadata to preserve permissions.
         let original_metadata =
             fs::metadata(path).map_err(|e| handle_file_error(e, "read metadata", path))?;
         let original_permissions = original_metadata.permissions();
-        let original_modified = FileTime::from_last_modification_time(&original_metadata);
-        let original_accessed = FileTime::from_last_access_time(&original_metadata);
 
         // Create temporary file in same directory as original.
         let temp_file_name = format!("{}.tmp.{}", path.display(), std::process::id());
@@ -1166,7 +1164,10 @@ impl EditFileTool {
             }
         };
 
-        // Set permissions on temporary file to match original.
+        // Re-apply the original permissions to the temp file before rename.
+        // The temp-write+rename gives the new file default permissions, so
+        // without this an executable script (e.g. 0755) would silently downgrade
+        // to 0644. This is silent behavior — not reported in the result.
         if let Err(e) = fs::set_permissions(&temp_path, original_permissions.clone()) {
             let _ = fs::remove_file(&temp_path);
             return Err(handle_file_error(
@@ -1186,24 +1187,10 @@ impl EditFileTool {
             ));
         }
 
-        // Restore file timestamps (best-effort).
-        let metadata_preserved = match set_file_times(path, original_accessed, original_modified) {
-            Ok(()) => true,
-            Err(e) => {
-                debug!(
-                    path = %path.display(),
-                    error = %e,
-                    "Failed to preserve file timestamps, continuing anyway"
-                );
-                false
-            }
-        };
-
         debug!(
             path = %path.display(),
             bytes_written = bytes_written,
             replacements_made = replacements_made,
-            metadata_preserved = metadata_preserved,
             "Atomic edit operation completed successfully"
         );
 
@@ -1212,7 +1199,6 @@ impl EditFileTool {
             replacements_made,
             encoding_detected: encoding.name().to_string(),
             line_endings_preserved: line_ending.as_str().to_string(),
-            metadata_preserved,
         })
     }
 
@@ -1447,7 +1433,6 @@ pub async fn execute_edit(
         total_replacements = total_replacements,
         encoding = %final_result.encoding_detected,
         line_endings = %final_result.line_endings_preserved,
-        metadata_preserved = final_result.metadata_preserved,
         "Edit operation(s) completed successfully"
     );
 
@@ -1465,7 +1450,6 @@ pub async fn execute_edit(
             "replacements_made": final_result.replacements_made,
             "encoding_detected": final_result.encoding_detected,
             "line_endings_preserved": final_result.line_endings_preserved,
-            "metadata_preserved": final_result.metadata_preserved,
         }),
     ))
 }
@@ -1835,6 +1819,43 @@ mod tests {
             let final_content = fs::read_to_string(&test_file).unwrap();
             assert_eq!(final_content, "updated content");
         }
+    }
+
+    /// Editing a file IS modifying it: the post-edit modification time must
+    /// advance past the pre-edit mtime. Preserving the old mtime defeats every
+    /// mtime-based staleness check downstream (cargo/make rebuilds, file
+    /// watchers, rust-analyzer). Seed a fixed past mtime (no wall-clock sleep)
+    /// and assert the edit produces a strictly greater mtime.
+    #[tokio::test]
+    async fn test_edit_file_advances_modification_time() {
+        use filetime::{set_file_mtime, FileTime};
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("mtime_test.txt");
+        fs::write(&test_file, "test content").unwrap();
+
+        // Seed a clearly-old mtime well in the past (2001-09-09 01:46:40 UTC).
+        let old_mtime = FileTime::from_unix_time(1_000_000_000, 0);
+        set_file_mtime(&test_file, old_mtime).unwrap();
+        let seeded = FileTime::from_last_modification_time(&fs::metadata(&test_file).unwrap());
+        assert_eq!(seeded, old_mtime, "mtime seed should be applied");
+
+        let tool = EditFileTool::new();
+        let edit_result = tool.edit_file_atomic(
+            temp_dir.path(),
+            &test_file.to_string_lossy(),
+            "test",
+            "updated",
+            false,
+        );
+        assert!(edit_result.is_ok());
+
+        let new_mtime = FileTime::from_last_modification_time(&fs::metadata(&test_file).unwrap());
+        assert!(
+            new_mtime > old_mtime,
+            "edit must advance the file's modification time \
+             (old={old_mtime:?}, new={new_mtime:?})"
+        );
     }
 
     #[tokio::test]
@@ -3383,7 +3404,6 @@ mod tests {
         assert!(mutation["bytes_written"].as_u64().unwrap() > 0);
         assert!(mutation.get("encoding_detected").is_some());
         assert!(mutation.get("line_endings_preserved").is_some());
-        assert!(mutation.get("metadata_preserved").is_some());
 
         // The appended text block also carries the tagged content so text-only
         // hosts deliver it to the model.
