@@ -38,7 +38,7 @@ use swissarmyhammer_command_service::bootstrap::install_commands_module;
 use swissarmyhammer_command_service::CommandService;
 use swissarmyhammer_directory::KanbanConfig;
 use swissarmyhammer_plugin::{CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost};
-use swissarmyhammer_ui_state::{ai_streaming_notification, UIState, UiStateServer};
+use swissarmyhammer_ui_state::{ai_streaming_notification, UiState, UiStateServer};
 use tempfile::TempDir;
 
 use super::support::try_call_command;
@@ -91,10 +91,10 @@ fn stage_ai_commands(layer_root: &Path) {
 }
 
 /// Expose the real `ui_state` in-process MCP server (over a temp-file-backed
-/// `UIState`) on `host` under its public id, kept alive by the returned guard.
-async fn expose_ui_state(host: &PluginHost) -> (TempDir, Arc<UIState>) {
+/// `UiState`) on `host` under its public id, kept alive by the returned guard.
+async fn expose_ui_state(host: &PluginHost) -> (TempDir, Arc<UiState>) {
     let dir = TempDir::new().expect("ui_state substrate temp dir");
-    let ui_state = Arc::new(UIState::load(dir.path().join("ui_state.yaml")));
+    let ui_state = Arc::new(UiState::load(dir.path().join("ui_state.yaml")));
     let ui_state_server = UiStateServer::new(Arc::clone(&ui_state));
     let ui_state_module = InProcessServer::new(ui_state_server)
         .await
@@ -150,7 +150,7 @@ struct AiCommandsHost {
     /// Keeps the staged builtin layer, user root, and `ui_state` substrate dirs
     /// alive for the host's lifetime — dropping them would pull the rug out from
     /// under the running isolate.
-    _guards: (TempDir, TempDir, TempDir, Arc<UIState>),
+    _guards: (TempDir, TempDir, TempDir, Arc<UiState>),
 }
 
 /// Build a fresh `ai-commands` host: stage the committed bundle into a temp

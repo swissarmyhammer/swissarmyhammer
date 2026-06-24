@@ -896,7 +896,7 @@ fn persp_switch_rows_for_scope(
     let registry = compose_registry![swissarmyhammer_kanban];
     let impls: HashMap<String, Arc<dyn swissarmyhammer_kanban::commands_core::Command>> =
         HashMap::new();
-    let ui_arc = Arc::new(UIState::new());
+    let ui_arc = Arc::new(UiState::new());
     commands_for_scope(
         scope,
         &registry,

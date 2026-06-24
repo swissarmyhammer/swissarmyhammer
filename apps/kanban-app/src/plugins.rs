@@ -777,6 +777,10 @@ mod tests {
     #[allow(dead_code)]
     async fn open_temp_board(state: &AppState) -> (TempDir, std::path::PathBuf) {
         let dir = TempDir::new().expect("board temp dir");
+        // Seed the board entity (boards/board.yaml) BEFORE open so `open_board`'s
+        // Defense-1 board-entity validation accepts the fresh temp dir — same as
+        // `open_temp_board_seeded` and the `state.rs` `create_board_at` tests.
+        seed_board(dir.path(), "Temp Board");
         let canonical = state
             .open_board(dir.path(), None)
             .await
@@ -1218,6 +1222,10 @@ mod tests {
         seed: impl FnOnce(&std::path::Path),
     ) -> (TempDir, std::path::PathBuf) {
         let dir = TempDir::new().expect("board temp dir");
+        // Seed the board entity (boards/board.yaml) so `open_board`'s Defense-1
+        // validation accepts the dir, THEN run the caller's project-layer seed
+        // (which drops plugin bundles under `.kanban/plugins/`).
+        seed_board(dir.path(), "Temp Board");
         seed(dir.path());
         let canonical = state
             .open_board(dir.path(), None)

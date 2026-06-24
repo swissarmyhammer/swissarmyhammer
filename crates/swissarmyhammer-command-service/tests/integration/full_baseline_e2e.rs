@@ -97,7 +97,7 @@ use swissarmyhammer_plugin::{
     CallerId, InProcessServer, McpServer as PluginMcpServer, PluginHost, Result as PluginResult,
     ToolMetadata, PLUGINS_SUBDIR,
 };
-use swissarmyhammer_ui_state::{UIState, UiStateServer};
+use swissarmyhammer_ui_state::{UiState, UiStateServer};
 use tempfile::TempDir;
 
 use crate::support::{call_command, copy_dir_recursive};
@@ -224,7 +224,7 @@ async fn expose_stub_backends(host: &PluginHost, dir: &TempDir) {
         .unwrap_or_else(|e| panic!("exposing stub backend {module_id:?} should succeed: {e:?}"));
     }
 
-    let ui_state = Arc::new(UIState::load(dir.path().join("ui_state.yaml")));
+    let ui_state = Arc::new(UiState::load(dir.path().join("ui_state.yaml")));
     let ui_state_server = UiStateServer::new(ui_state);
     let ui_state_module = InProcessServer::new(ui_state_server)
         .await
@@ -398,7 +398,7 @@ struct BootedBuiltins {
     _user_root: TempDir,
     _builtin_root: TempDir,
     /// Temp-file substrate for the real `ui_state` backend, kept alive so its
-    /// `UIState` file outlives the plugin loads.
+    /// `UiState` file outlives the plugin loads.
     _ui_state_dir: TempDir,
 }
 

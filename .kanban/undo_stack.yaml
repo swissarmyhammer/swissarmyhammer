@@ -1,8 +1,4 @@
 entries:
-- id: 01KTRTYHHHZ0WWG7HZX4GCWNSP
-  label: create perspective 01KTRTYHHGCE3HKSVKDK2NC1WX
-  item_id: 01KTRTYHHGCE3HKSVKDK2NC1WX
-  group_id: null
 - id: 01KTRV2PR6MYHF8SRAVFTYT8P4
   label: create perspective 01KTRV2PR6EG4VFYR2CCFAKB4H
   item_id: 01KTRV2PR6EG4VFYR2CCFAKB4H
@@ -398,6 +394,10 @@ entries:
 - id: 01KVQM0HGPVMB30NXWR0J3DR24
   label: delete task 01KTC2VQM8RH0WKFH6F21S8M2N
   item_id: 01KTC2VQM8RH0WKFH6F21S8M2N
+  group_id: null
+- id: 01KVTZWHHZ8XWGRMNT6AX27A24
+  label: update actor wballard
+  item_id: wballard
   group_id: null
 pointer: 100
 max_size: 100

@@ -2497,6 +2497,58 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_auto_open_board_restores_all_prior_open_boards() {
+        // Regression guard for the recurring "boards not loading on app start"
+        // class of bug: drive the REAL production entry point
+        // `AppState::auto_open_board` (not the lower-level
+        // `restore_persisted_boards` helper) with MULTIPLE persisted boards and
+        // assert every prior-open board is restored. The existing restore tests
+        // only cover a single board through the helper, so a regression in
+        // `auto_open_board` itself (the deep-link guard, the call ordering, or
+        // the `self.boards.is_empty()` early-return) or in multi-board restore
+        // would slip through.
+        //
+        // Two distinct valid boards in two separate temp dirs are seeded into
+        // `ui_state.open_boards()`; because both are valid and existing, the
+        // restore short-circuits CWD discovery, so this test does not depend on
+        // process CWD.
+        let tmp_a = TempDir::new().unwrap();
+        create_board_at(tmp_a.path(), "Board A");
+        let kanban_a = tmp_a.path().join(".kanban");
+
+        let tmp_b = TempDir::new().unwrap();
+        create_board_at(tmp_b.path(), "Board B");
+        let kanban_b = tmp_b.path().join(".kanban");
+
+        let state = AppState::new_for_test();
+        let persisted_a = kanban_a.display().to_string();
+        let persisted_b = kanban_b.display().to_string();
+        state.ui_state.add_open_board(&persisted_a);
+        state.ui_state.add_open_board(&persisted_b);
+
+        // Drive the production startup entry point, not the helper.
+        state.auto_open_board().await;
+
+        // Every prior-open board must be in the live registry.
+        let board_count = state.boards.read().await.len();
+        assert_eq!(
+            board_count, 2,
+            "auto_open_board must restore both prior-open boards, found {board_count}"
+        );
+
+        // No valid board may be pruned from the persisted list.
+        let open_boards = state.ui_state.open_boards();
+        assert!(
+            open_boards.contains(&persisted_a),
+            "board A must remain persisted after restore, have: {open_boards:?}"
+        );
+        assert!(
+            open_boards.contains(&persisted_b),
+            "board B must remain persisted after restore, have: {open_boards:?}"
+        );
+    }
+
     #[test]
     fn test_open_board_error_discriminates_malformed_from_transient() {
         // The WARNING fix (task 01KTYVB3TBB6G8FA1J7CKEQ9RG): restore must prune
@@ -2813,6 +2865,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_open_board_serves_full_sah_mcp_toolset() {
         let tmp = TempDir::new().unwrap();
+        // Seed the board entity so `open_board`'s Defense-1 validation accepts it.
+        create_board_at(tmp.path(), "MCP Toolset Board");
         let state = AppState::new_for_test();
         let canonical = state
             .open_board(tmp.path(), None)
@@ -2870,7 +2924,9 @@ mod tests {
         }
 
         // A `kanban` call routed through this server must mutate THIS board.
-        // Init the board first, then add a task.
+        // The board is already initialized (seeded via `create_board_at` so
+        // `open_board`'s Defense-1 validation accepts it) but has no columns, so
+        // add a column first, then a task — both routed through the MCP server.
         let kanban_call = |args: serde_json::Value| {
             rmcp::model::CallToolRequestParams::new("kanban").with_arguments(
                 args.as_object()
@@ -2880,10 +2936,10 @@ mod tests {
         };
         client
             .call_tool(kanban_call(
-                serde_json::json!({ "op": "init board", "name": "MCP Board" }),
+                serde_json::json!({ "op": "add column", "id": "todo", "name": "To Do" }),
             ))
             .await
-            .expect("kanban init board should succeed over MCP");
+            .expect("kanban add column should succeed over MCP");
         client
             .call_tool(kanban_call(
                 serde_json::json!({ "op": "add task", "title": "Served via MCP" }),

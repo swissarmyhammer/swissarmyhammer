@@ -327,9 +327,12 @@ where
     let module = InProcessServer::new(server)
         .await
         .unwrap_or_else(|e| panic!("wrapping the {name} server in an InProcessServer: {e}"));
-    host.expose_rust_module(name.to_string(), Arc::new(module) as Arc<dyn PluginMcpServer>)
-        .await
-        .unwrap_or_else(|e| panic!("exposing the {name} module: {e}"));
+    host.expose_rust_module(
+        name.to_string(),
+        Arc::new(module) as Arc<dyn PluginMcpServer>,
+    )
+    .await
+    .unwrap_or_else(|e| panic!("exposing the {name} module: {e}"));
 }
 
 /// Build the `app`, `ui_state`, `store`, `window`, and `focus` backends over a
