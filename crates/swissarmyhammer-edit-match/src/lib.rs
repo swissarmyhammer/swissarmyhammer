@@ -283,16 +283,17 @@ fn is_line_aligned(content: &str, start: usize, len: usize) -> bool {
 
 /// All byte offsets where `needle` occurs in `haystack` (overlapping not
 /// required; we advance past each full match).
+///
+/// `needle` is always non-empty here — the sole caller [`try_exact`] returns
+/// early on an empty `find` — so advancing by `needle.len()` never exceeds
+/// `haystack.len()` and no overflow guard is needed.
 fn byte_offsets_of(haystack: &str, needle: &str) -> Vec<usize> {
     let mut offsets = Vec::new();
     let mut from = 0;
     while let Some(rel) = haystack[from..].find(needle) {
         let at = from + rel;
         offsets.push(at);
-        from = at + needle.len().max(1);
-        if from > haystack.len() {
-            break;
-        }
+        from = at + needle.len();
     }
     offsets
 }
