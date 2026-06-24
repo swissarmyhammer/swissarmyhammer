@@ -18,7 +18,7 @@ use std::io::{BufWriter, Write};
 use std::ops::Range;
 use std::path::Path;
 use swissarmyhammer_edit_match::{find_match, MatchOutcome};
-use swissarmyhammer_hashline::{hash_line, parse_anchor};
+use swissarmyhammer_hashline::{parse_anchor, resolve_anchor_range_in};
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 use tracing::{debug, info};
 
@@ -427,43 +427,6 @@ enum PairOutcome {
 /// Number of context lines rendered on each side of a candidate line.
 const CANDIDATE_CONTEXT_RADIUS: usize = 2;
 
-/// Trim a trailing `\r` from the byte range `start..end`, returning the adjusted
-/// end position. Excludes the `\r` of a `\r\n` terminator (or a classic-Mac final
-/// `\r`) so a line's text range stops before its terminator.
-fn trim_trailing_cr(bytes: &[u8], start: usize, end: usize) -> usize {
-    if end > start && bytes[end - 1] == b'\r' {
-        end - 1
-    } else {
-        end
-    }
-}
-
-/// Locate the byte range of the 1-based physical `line` in `content`, excluding
-/// the line terminator. Returns `None` when the line number is out of range.
-fn line_text_range(content: &str, line: usize) -> Option<Range<usize>> {
-    if line == 0 {
-        return None;
-    }
-    let mut start = 0usize;
-    let mut current = 1usize;
-    let bytes = content.as_bytes();
-    for idx in 0..bytes.len() {
-        if bytes[idx] != b'\n' {
-            continue;
-        }
-        if current == line {
-            return Some(start..trim_trailing_cr(bytes, start, idx));
-        }
-        current += 1;
-        start = idx + 1;
-    }
-    // Final line without a trailing newline.
-    if current == line {
-        return Some(start..trim_trailing_cr(bytes, start, bytes.len()));
-    }
-    None
-}
-
 /// The 1-based physical line number containing the byte at `offset`.
 fn line_number_at(content: &str, offset: usize) -> usize {
     content.as_bytes()[..offset.min(content.len())]
@@ -626,21 +589,30 @@ fn render_consumed_target_prompt(find: &str, line: usize) -> String {
 }
 
 /// Whether `find` parses as a hashline anchor that **resolves** against
-/// `content`: the referenced line exists and its content hashes to the anchor's
-/// expected value. Returns the resolved line's text byte range when it does.
+/// `content`, tolerating small drift. Returns the resolved line's text byte
+/// range (terminator excluded) when it does.
 ///
-/// A stale anchor (well-formed `N:HH` but the line's hash differs) returns
-/// `None` so the caller falls through to literal interpretation — the safety
-/// rule that a structured interpretation only *wins* when it resolves.
+/// Resolution is delegated to
+/// [`swissarmyhammer_hashline::resolve_anchor_range_in`]: the exact line `N` if
+/// its content hashes to the anchor's expected value, else a proximity search
+/// (±`PROXIMITY_WINDOW`) for the nearest line that does. An optional `|text`
+/// suffix is used as verification/tie-breaker — preferring the in-window
+/// candidate whose line text matches `text`. Resolution and the returned byte
+/// range share one line model, so the span is correct on CR/CRLF/LF endings.
+///
+/// A truly stale anchor (nothing in the proximity window hashes to the expected
+/// value) returns `None` so the caller falls through to literal interpretation —
+/// the safety rule that a structured interpretation only *wins* when it resolves.
 fn resolve_anchor(content: &str, find: &str) -> Option<Range<usize>> {
     let (line, expected_hash) = parse_anchor(find)?;
-    let range = line_text_range(content, line)?;
-    let line_text = &content[range.clone()];
-    if hash_line(line_text) == expected_hash {
-        Some(range)
-    } else {
-        None
-    }
+    // The optional `|text` suffix verifies/relocates the anchor; everything after
+    // the first `|` is the text (which may itself contain `|`), matching how
+    // `read files` renders `N:HH|line`.
+    let text = find.split_once('|').map(|(_, t)| t);
+    // Resolution and the resolved byte range share one line model (the hashline
+    // crate's `\r`/`\r\n`/`\n`-aware splitter), so the span we splice is exactly
+    // the line that resolved — even on CR-only or mixed line endings.
+    resolve_anchor_range_in(content, line, expected_hash, text)
 }
 
 /// Resolve a single [`EditPair`] against the current `content`, choosing the
@@ -2608,6 +2580,144 @@ mod tests {
 
         // File is byte-identical — nothing was committed.
         assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    /// A drifted anchor (correct HH, but the line moved a few lines from N within
+    /// the proximity window) relocates to the moved line and replaces it.
+    #[tokio::test]
+    async fn cascade_drifted_anchor_relocates_and_edits() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("drifted_anchor.txt");
+        // Anchor was created when "beta gamma" was on line 2; the file then gained
+        // two leading lines so "beta gamma" now lives on line 4 — within window.
+        let original_content = "alpha\nbeta gamma\ndelta\n";
+        let find = anchor_for("beta gamma", 2);
+        let drifted_content = "inserted-1\ninserted-2\nalpha\nbeta gamma\ndelta\n";
+        fs::write(&test_file, drifted_content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_edit_arguments(&test_file.to_string_lossy(), &find, "BETA", None);
+
+        let result = execute_edit(args, &context).await;
+        assert!(result.is_ok(), "drifted anchor should relocate: {result:?}");
+        assert_eq!(result.unwrap().is_error, Some(false));
+
+        // The relocated line (now line 4) is replaced; nothing else changes.
+        let edited = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(edited, "inserted-1\ninserted-2\nalpha\nBETA\ndelta\n");
+        // Precondition sanity: anchor referenced line 2 but resolved at line 4.
+        let _ = original_content;
+    }
+
+    /// A `N:HH|text` anchor whose line drifted relocates using `|text` as
+    /// verification, and the relocated line is replaced.
+    #[tokio::test]
+    async fn cascade_text_suffix_relocates_drifted_anchor() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("drifted_text_anchor.txt");
+        // Anchor `2:HH|beta gamma`, but "beta gamma" drifted to line 4.
+        let find = format!("{}|beta gamma", anchor_for("beta gamma", 2));
+        let drifted_content = "inserted-1\ninserted-2\nalpha\nbeta gamma\ndelta\n";
+        fs::write(&test_file, drifted_content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_edit_arguments(&test_file.to_string_lossy(), &find, "BETA", None);
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "|text anchor should relocate drifted line: {result:?}"
+        );
+        assert_eq!(result.unwrap().is_error, Some(false));
+
+        let edited = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(edited, "inserted-1\ninserted-2\nalpha\nBETA\ndelta\n");
+    }
+
+    /// A `N:HH|text` anchor whose hash matches no in-window line must NOT
+    /// mis-apply: it falls through to the literal/near-miss path exactly as a
+    /// plain stale anchor does. The file stays byte-identical.
+    #[tokio::test]
+    async fn cascade_text_suffix_no_inwindow_match_does_not_misapply() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("stale_text_anchor.txt");
+        let content = "alpha\nbeta gamma\ndelta\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        // Hash 0x00 matches no line in the file; |text "ghost" matches none either.
+        let find = "2:00|ghost";
+        assert_ne!(
+            find,
+            format!("{}|ghost", anchor_for("beta gamma", 2)),
+            "test precondition: chosen anchor must be stale"
+        );
+        let args = create_edit_arguments(&test_file.to_string_lossy(), find, "X", None);
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "stale |text anchor no-match is a successful near-miss: {result:?}"
+        );
+        assert_eq!(result.unwrap().is_error, Some(false));
+        // File is byte-identical — nothing was committed.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    /// A proximity-relocated anchor whose anchor string ALSO occurs literally in
+    /// the file must surface BOTH as candidates rather than guess — the same
+    /// safety rule the exact-line case already enforces, now for the drifted case.
+    #[tokio::test]
+    async fn cascade_proximity_anchor_and_literal_both_present_surfaces_candidates() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("proximity_anchor_literal.txt");
+        // Anchor for line 1 of "payload"; place the anchor STRING literally on
+        // line 1 and the actual "payload" line drifted to line 3 (within window),
+        // so the anchor both resolves (by proximity to line 3) and occurs as a
+        // literal substring (on line 1).
+        let line_text = "payload";
+        let anchor = anchor_for(line_text, 1);
+        let content = format!("{anchor}\nfiller\n{line_text}\n");
+        fs::write(&test_file, &content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = ambiguity_args(&test_file.to_string_lossy(), &anchor, "REPLACED", None);
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "proximity-anchor-vs-literal must be a successful listing: {result:?}"
+        );
+        let call = result.unwrap();
+        assert_eq!(call.is_error, Some(false));
+        // File unchanged — the tool did not guess between anchor and literal.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    /// A valid (non-stale) anchor against a CR-only (classic-Mac) file must
+    /// replace ONLY its referenced line, never clobber the rest of the file.
+    /// Guards the line-model agreement between anchor resolution (CR-aware) and
+    /// the byte-range mapping.
+    #[tokio::test]
+    async fn cascade_anchor_on_cr_only_file_replaces_single_line() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("cr_anchor.txt");
+        // Classic-Mac CR-only line endings; "read files"/tag treats `\r` as a
+        // line break, so the line-1 anchor is computed over "a" alone.
+        let content = "a\rb\rc";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let find = anchor_for("a", 1);
+        let args = create_edit_arguments(&test_file.to_string_lossy(), &find, "A", None);
+
+        let result = execute_edit(args, &context).await;
+        assert!(result.is_ok(), "CR-only anchor should resolve: {result:?}");
+        assert_eq!(result.unwrap().is_error, Some(false));
+
+        // ONLY line 1 is replaced; lines 2 and 3 survive with CR endings.
+        let edited = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(edited, "A\rb\rc");
     }
 
     /// A bare-string `find` that lost its leading indentation is recovered by the

@@ -6,11 +6,15 @@ descriptions a model tends to emit:
 
 1. **Hashline anchor** — if `find` is shaped like `N:HH` (a 1-based line number
    and a two-hex-digit content hash, e.g. `42:a3`, optionally with a `|text`
-   suffix) **and it resolves** (line `N` still hashes to `HH`), the whole
-   referenced **line** is replaced with `replace`. A stale anchor — well-formed
-   but line `N`'s content changed — is *not* applied as an anchor; it falls
-   through and is treated as literal text. These anchors are exactly what
-   `read file` emits when it tags lines `N:HH|…`.
+   suffix) **and it resolves**, the whole referenced **line** is replaced with
+   `replace`. Resolution tolerates small drift: line `N` is tried first, and if
+   it no longer hashes to `HH`, nearby lines (up to 50 on each side) are searched
+   for the nearest one that does, so an anchor still applies after the file
+   shifts by a few lines. When a `|text` suffix is present it verifies and
+   relocates the anchor — the in-window line whose text matches `|text` is
+   preferred. A *stale* anchor — no line within that window hashes to `HH` — is
+   *not* applied as an anchor; it falls through and is treated as literal text.
+   These anchors are exactly what `read file` emits when it tags lines `N:HH|…`.
 2. **Literal substring** — if `find` occurs verbatim in the file, the first
    occurrence (or every occurrence with `replace_all: true`) is replaced.
 3. **Recovery** — otherwise the `find` is treated as a description of a span and

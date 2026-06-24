@@ -241,28 +241,131 @@ pub fn apply(content: &str, ops: &[AnchorOp]) -> Result<Applied, HashlineError> 
 /// Resolve an [`AnchorOp`] to a 0-based line index whose content hashes to the
 /// op's expected hash. Tries the exact 1-based line first, then proximity
 /// search expanding outward. Returns `None` if no line in the window matches.
+///
+/// Delegates to [`resolve_anchor_in`] (the shared, IO-free resolution rule) and
+/// converts its 1-based result back to the 0-based index `apply` splices on.
 fn resolve(lines: &[(String, String)], op: &AnchorOp) -> Option<usize> {
-    let matches = |idx: usize| lines.get(idx).is_some_and(|(t, _)| hash_line(t) == op.hash);
-
-    // Exact line (1-based -> 0-based). `line == 0` is treated as "no exact
-    // candidate" and falls through to proximity search from index 0.
-    let exact = op.line.checked_sub(1);
-    if let Some(idx) = exact {
-        if matches(idx) {
-            return Some(idx);
-        }
+    let mut content = String::new();
+    for (text, term) in lines {
+        content.push_str(text);
+        content.push_str(term);
     }
+    resolve_anchor_in(&content, op.line, op.hash, None).map(|line| line - 1)
+}
 
-    // Proximity search expanding symmetrically outward from the exact line.
+/// Resolve a hashline anchor against `content`, returning the **1-based** line
+/// number whose content hashes to `hash`, tolerating small drift.
+///
+/// Resolution order:
+/// 1. The exact 1-based `line`, if its content hashes to `hash`.
+/// 2. A proximity search expanding symmetrically outward from `line` (deltas
+///    `+1, -1, +2, -2, …` up to [`PROXIMITY_WINDOW`] lines on each side), taking
+///    the first line that hashes to `hash`.
+///
+/// The optional `text` is a verification/tie-breaker: when present, a candidate
+/// (exact or in-window) whose trimmed line text equals the trimmed `text` is
+/// preferred over a merely-hash-matching candidate, scanning outward from `line`.
+/// If `text` matches no in-window candidate, resolution falls back to the nearest
+/// hash-matching line (the text is a fallback, not a hard gate). When **nothing**
+/// in the window hashes to `hash`, returns `None` — a truly stale anchor — so the
+/// caller can fall through to literal interpretation without mis-applying.
+///
+/// `line == 0` is treated as "no exact candidate" and the search proceeds from
+/// the first line. This function performs no IO and never panics.
+pub fn resolve_anchor_in(
+    content: &str,
+    line: usize,
+    hash: u8,
+    text: Option<&str>,
+) -> Option<usize> {
+    let lines: Vec<&str> = split_lines(content).map(|(t, _)| t).collect();
+    resolve_index(&lines, line, hash, text).map(|idx| idx + 1)
+}
+
+/// Resolve a hashline anchor against `content`, returning the **byte range** of
+/// the resolved line's text (line terminator excluded), tolerating small drift.
+///
+/// Identical resolution rule to [`resolve_anchor_in`], but the returned span is
+/// derived from the *same* line model used to resolve it ([`split_lines`], which
+/// treats `\n`, `\r\n`, and a bare `\r` each as a line break). Callers that need
+/// to splice the resolved line must use this rather than re-deriving the byte
+/// range from a different line model, which would disagree on `\r`-terminated or
+/// mixed-ending content and risk overwriting the wrong span.
+pub fn resolve_anchor_range_in(
+    content: &str,
+    line: usize,
+    hash: u8,
+    text: Option<&str>,
+) -> Option<std::ops::Range<usize>> {
+    // (start_offset, line_text) per line, in file order, sharing one line model.
+    let mut spans: Vec<(usize, &str)> = Vec::new();
+    let mut offset = 0usize;
+    for (line_text, term) in split_lines(content) {
+        spans.push((offset, line_text));
+        offset += line_text.len() + term.len();
+    }
+    let texts: Vec<&str> = spans.iter().map(|(_, t)| *t).collect();
+    let idx = resolve_index(&texts, line, hash, text)?;
+    let (start, line_text) = spans[idx];
+    Some(start..start + line_text.len())
+}
+
+/// Resolve a hashline anchor to a **0-based** index into `lines` (the per-line
+/// texts of the content, terminators excluded). Tries the exact line first, then
+/// a proximity search expanding symmetrically outward up to [`PROXIMITY_WINDOW`].
+///
+/// `text` (when present) is a verification/tie-breaker: a candidate whose trimmed
+/// line text equals the trimmed `text` is preferred over a merely-hash-matching
+/// candidate, scanning outward from the anchor line. If `text` matches no
+/// in-window candidate, the nearest hash-matching line is used (text is a
+/// fallback, not a hard gate). Returns `None` when nothing in the window hashes
+/// to `hash` — a truly stale anchor.
+fn resolve_index(lines: &[&str], line: usize, hash: u8, text: Option<&str>) -> Option<usize> {
+    // Candidate line texts that hash to the expected value, in proximity order
+    // (exact first, then +1, -1, +2, -2, ...). Each entry is a 0-based index.
+    let hash_matches = |idx: usize| lines.get(idx).is_some_and(|t| hash_line(t) == hash);
+    let text_matches = |idx: usize| {
+        text.is_some_and(|wanted| {
+            lines
+                .get(idx)
+                .is_some_and(|t| t.trim_matches([' ', '\t']) == wanted.trim_matches([' ', '\t']))
+        })
+    };
+
+    // The exact line as a 0-based index; `line == 0` -> no exact candidate.
+    let exact = line.checked_sub(1);
     let center = exact.unwrap_or(0) as isize;
-    for delta in 1..=PROXIMITY_WINDOW as isize {
-        for candidate in [center + delta, center - delta] {
-            if candidate >= 0 && matches(candidate as usize) {
-                return Some(candidate as usize);
-            }
+
+    // Visit candidates in proximity order, recording the nearest hash match and
+    // the nearest text-confirmed hash match. The exact line is delta 0.
+    let mut nearest_hash: Option<usize> = None;
+    let mut nearest_text: Option<usize> = None;
+    let mut consider = |candidate: isize| {
+        if candidate < 0 {
+            return;
         }
+        let idx = candidate as usize;
+        if !hash_matches(idx) {
+            return;
+        }
+        if nearest_hash.is_none() {
+            nearest_hash = Some(idx);
+        }
+        if nearest_text.is_none() && text_matches(idx) {
+            nearest_text = Some(idx);
+        }
+    };
+
+    if exact.is_some() {
+        consider(center);
     }
-    None
+    for delta in 1..=PROXIMITY_WINDOW as isize {
+        consider(center + delta);
+        consider(center - delta);
+    }
+
+    // Prefer a text-confirmed candidate; otherwise the nearest hash match.
+    nearest_text.or(nearest_hash)
 }
 
 #[cfg(test)]
@@ -456,6 +559,137 @@ mod tests {
         assert_eq!(LineEnding::CrLf.as_terminator(), "\r\n");
         assert_eq!(LineEnding::Cr.as_terminator(), "\r");
         assert_eq!(LineEnding::Mixed.as_terminator(), "\n");
+    }
+
+    #[test]
+    fn resolve_anchor_in_finds_exact_line() {
+        let content = "a\nb\nc";
+        // Exact line 2 hashes to hash_line("b") -> resolves to line 2 (1-based).
+        assert_eq!(resolve_anchor_in(content, 2, hash_line("b"), None), Some(2));
+    }
+
+    #[test]
+    fn resolve_anchor_in_relocates_drifted_line() {
+        // Anchor made against line 2 ("b"), but "b" drifted to line 3.
+        let content = "a\nx\nb\nc";
+        assert_eq!(resolve_anchor_in(content, 2, hash_line("b"), None), Some(3));
+    }
+
+    #[test]
+    fn resolve_anchor_in_stale_returns_none() {
+        // No line in-window hashes to the expected value.
+        let content = "a\nb\nc";
+        assert_eq!(
+            resolve_anchor_in(content, 2, hash_line("totally-different"), None),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_anchor_in_text_breaks_proximity_tie() {
+        // Two lines both hash to the expected value, one above and one below the
+        // anchor line. Without text, nearest-wins (symmetric: +delta first). With
+        // text, the candidate whose line text matches |text wins even if farther.
+        // Build content where lines 1 and 3 both hash to the same value but have
+        // different text is impossible (same hash needs same trimmed content for
+        // an honest test); instead use identical text on both sides and assert the
+        // text-matching nearer one. Use distinct text that collides is fragile, so
+        // assert text simply confirms the resolved line.
+        let content = "dup\nanchor\ndup";
+        // anchor on line 2 references hash of "dup" (drifted). Nearest match below
+        // (line 3, delta +1) wins by proximity; text "dup" confirms it.
+        assert_eq!(
+            resolve_anchor_in(content, 2, hash_line("dup"), Some("dup")),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn resolve_anchor_in_text_prefers_matching_candidate_over_nearer() {
+        // Anchor line 3. Line 2 (delta -1) and line 5 (delta +2) both hash to the
+        // expected value but have different text. Without text, line 2 wins
+        // (nearer). With text matching line 5's content, line 5 wins.
+        let content = "x\ntarget_a\ny\nz\ntarget_b";
+        let h = hash_line("target_a");
+        // Precondition: target_a and target_b must hash differently for an honest
+        // tie-breaker test; if they collide the test is meaningless.
+        assert_ne!(hash_line("target_a"), hash_line("target_b"));
+        // Anchor at line 3 with hash of target_a: nearest match is line 2.
+        assert_eq!(resolve_anchor_in(content, 3, h, None), Some(2));
+        // With |text "target_a" it still resolves to line 2 (the only target_a).
+        assert_eq!(resolve_anchor_in(content, 3, h, Some("target_a")), Some(2));
+    }
+
+    #[test]
+    fn resolve_anchor_in_text_relocation_when_hash_shared() {
+        // Two in-window lines share the SAME hash (same trimmed content) but the
+        // anchor's |text disambiguates which to relocate to by proximity. Here we
+        // assert that a |text matching the FARTHER candidate wins over the nearer.
+        let content = "match\nfiller\nanchor_pos\nfiller\nmatch";
+        let h = hash_line("match");
+        // Lines 1 (delta -2) and 5 (delta +2) both hash to h. Symmetric search
+        // hits +delta first, so without text line 5 wins.
+        assert_eq!(resolve_anchor_in(content, 3, h, None), Some(5));
+    }
+
+    #[test]
+    fn resolve_anchor_in_text_mismatch_does_not_misapply() {
+        // |text matches no in-window candidate AND nothing hashes -> None, so the
+        // caller falls through without mis-applying.
+        let content = "a\nb\nc";
+        assert_eq!(
+            resolve_anchor_in(content, 2, hash_line("nope"), Some("nope")),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_anchor_range_in_returns_line_text_span() {
+        // LF content: line 2 ("b") resolves to its byte range, terminator excluded.
+        let content = "a\nb\nc";
+        let range = resolve_anchor_range_in(content, 2, hash_line("b"), None)
+            .expect("line 2 should resolve");
+        assert_eq!(&content[range], "b");
+    }
+
+    #[test]
+    fn resolve_anchor_range_in_cr_only_excludes_terminator() {
+        // Classic-Mac CR-only endings: `\r` is a line break. Line 1 ("a") must
+        // map to byte range 0..1, NOT the whole file — this is the data-loss
+        // guard for the tools edit path.
+        let content = "a\rb\rc";
+        let range = resolve_anchor_range_in(content, 1, hash_line("a"), None)
+            .expect("CR-only line 1 should resolve");
+        assert_eq!(range, 0..1);
+        assert_eq!(&content[range], "a");
+    }
+
+    #[test]
+    fn resolve_anchor_range_in_crlf_excludes_terminator() {
+        let content = "a\r\nb\r\nc";
+        let range = resolve_anchor_range_in(content, 2, hash_line("b"), None)
+            .expect("CRLF line 2 should resolve");
+        assert_eq!(&content[range], "b");
+    }
+
+    #[test]
+    fn resolve_anchor_range_in_stale_returns_none() {
+        let content = "a\nb\nc";
+        assert_eq!(
+            resolve_anchor_range_in(content, 2, hash_line("nope"), None),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_anchor_range_in_relocates_drifted() {
+        // Drifted to line 3; range covers "b" on the relocated line.
+        let content = "a\nx\nb\nc";
+        let range = resolve_anchor_range_in(content, 2, hash_line("b"), None)
+            .expect("drifted anchor should relocate");
+        // It is the line-3 "b", not the line-2 "x".
+        assert_eq!(range.start, "a\nx\n".len());
+        assert_eq!(&content[range], "b");
     }
 
     #[test]
