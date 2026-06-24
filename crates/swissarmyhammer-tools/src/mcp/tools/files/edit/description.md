@@ -33,7 +33,26 @@ returns a **successful** result listing each candidate with its 1-based
 `occurrence` index, line number, current text, and a few lines of surrounding
 context — and the file is left byte-identical. Re-issue the edit with
 `occurrence: N` to apply exactly that candidate, or `replace_all: true` to change
-every match. A `find` that matches nothing still fails.
+every match.
+
+## Safety and idempotency
+
+These guard against common no-op and re-run mistakes. None of them mutate the
+file:
+
+- **No-op rejection** — an edit whose `find` and `replace` are identical changes
+  nothing and is rejected up front with a clear error.
+- **Already applied** — if `find` is absent but `replace` is already present, the
+  edit was very likely already applied. This returns a **successful**
+  informational result saying so (not a hard "not found" error); the file is left
+  unchanged.
+- **Consumed target** — in a multi-pair batch, if a later pair's target was
+  overwritten by an earlier pair in the *same* batch, that pair returns a
+  **successful** per-edit message naming the consumed target, instead of a generic
+  miss. The batch stays atomic, so the file is byte-identical.
+
+A `find` that matches nothing else still returns a structured near-miss (the
+nearest current text plus a diff) rather than a bare failure.
 
 ```json
 {

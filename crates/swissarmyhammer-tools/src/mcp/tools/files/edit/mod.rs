@@ -412,6 +412,10 @@ enum PairOutcome {
     },
     /// No rung matched `find` confidently; these are the nearest near-misses
     /// (may be empty when the file has nothing close, e.g. an empty file).
+    ///
+    /// A bare no-match is later reclassified by [`reclassify_no_match`] (which has
+    /// the batch- and idempotency-aware context [`resolve_pair`] lacks) into the
+    /// more specific already-applied / consumed-target [`ApplyOutcome`]s.
     NoMatch {
         /// The text the model searched for, echoed back in the prompt.
         find: String,
@@ -589,6 +593,36 @@ fn render_near_miss_prompt(find: &str, near: &[NearMiss]) -> String {
         ));
     }
     out
+}
+
+/// Render the human-readable "likely already applied" prompt for a pair whose
+/// `find` was absent but whose `replace` is already present in the content.
+///
+/// This is the body of a *successful* tool result — the file is left unchanged.
+/// The edit was very likely a re-run of one already committed, so we report the
+/// idempotent no-op rather than failing with "not found".
+fn render_already_applied_prompt(find: &str, replace: &str) -> String {
+    format!(
+        "`find` {find:?} did not match, but `replace` {replace:?} is already \
+         present — this edit was likely already applied. The file is unchanged; \
+         no action is needed.\n"
+    )
+}
+
+/// Render the human-readable "consumed target" prompt for a later pair whose
+/// target span was overwritten by an earlier pair in the same batch.
+///
+/// This is the body of a *successful* tool result — the file is left unchanged
+/// (the batch is atomic). It names the specific consumed-target case per-edit so
+/// the model understands the later `find` no longer exists *because an earlier
+/// edit in the same call replaced it*, not because the file never contained it.
+fn render_consumed_target_prompt(find: &str, line: usize) -> String {
+    format!(
+        "`find` {find:?} did not match: its target around line {line} was consumed \
+         by an earlier edit in this same batch. Re-issue this edit against the \
+         already-edited text (or fold it into the earlier edit). The file is \
+         unchanged.\n"
+    )
 }
 
 /// Whether `find` parses as a hashline anchor that **resolves** against
@@ -787,6 +821,59 @@ enum ApplyOutcome {
         /// The nearest near-miss locations (may be empty).
         near: Vec<NearMiss>,
     },
+    /// A pair's `find` was absent but its `replace` was already present: the edit
+    /// was very likely already applied. Reported as an informational success.
+    AlreadyApplied {
+        /// The text the model searched for.
+        find: String,
+        /// The replacement text already present in the content.
+        replace: String,
+    },
+    /// A later pair's target span was consumed by an earlier pair in the same
+    /// batch. Reported per-edit instead of as a generic miss.
+    ConsumedTarget {
+        /// The text the later pair searched for.
+        find: String,
+        /// 1-based line number where the consumed span began in the original.
+        line: usize,
+    },
+}
+
+/// Reclassify a bare [`PairOutcome::NoMatch`] using batch- and idempotency-aware
+/// context, so the model gets the most specific reason its `find` did not match.
+///
+/// Precedence (most-benign first):
+/// 1. **Already applied** — the pair's `replace` is non-empty and present in the
+///    current `working` content while `find` is absent. The edit was very likely
+///    a re-run of one already committed; report the idempotent no-op.
+/// 2. **Consumed target** — `find` was absent from `working` but present in the
+///    pre-batch `original`, *and* an earlier pair already mutated the content
+///    (`working != original`). An earlier edit in this batch overwrote the span;
+///    report that per-edit.
+/// 3. Otherwise the original near-miss stands.
+fn reclassify_no_match(
+    original: &str,
+    working: &str,
+    pair: &EditPair,
+    find: String,
+    near: Vec<NearMiss>,
+) -> ApplyOutcome {
+    let find_absent = !working.contains(&pair.find);
+    if find_absent && !pair.replace.is_empty() && working.contains(&pair.replace) {
+        return ApplyOutcome::AlreadyApplied {
+            find,
+            replace: pair.replace.clone(),
+        };
+    }
+    if find_absent && working != original {
+        if let Some(start) = original.find(&pair.find) {
+            return ApplyOutcome::ConsumedTarget {
+                find,
+                line: line_number_at(original, start),
+            };
+        }
+    }
+    ApplyOutcome::NoMatch { find, near }
 }
 
 /// Resolve and apply every pair in sequence against an in-memory working copy,
@@ -798,7 +885,8 @@ enum ApplyOutcome {
 /// An ambiguous pair — or a pair with no confident match — short-circuits the
 /// batch: its candidates / near-misses are returned immediately, before any
 /// later pair is applied, so the working copy is discarded and the file is never
-/// partially written.
+/// partially written. A no-match is reclassified by [`reclassify_no_match`] into
+/// the more specific already-applied / consumed-target cases when they apply.
 fn apply_all_pairs(original: &str, pairs: &[EditPair]) -> Result<ApplyOutcome, McpError> {
     let mut working = original.to_string();
     for pair in pairs {
@@ -810,7 +898,7 @@ fn apply_all_pairs(original: &str, pairs: &[EditPair]) -> Result<ApplyOutcome, M
                 return Ok(ApplyOutcome::Ambiguous { find, candidates });
             }
             PairOutcome::NoMatch { find, near } => {
-                return Ok(ApplyOutcome::NoMatch { find, near });
+                return Ok(reclassify_no_match(original, &working, pair, find, near));
             }
         }
     }
@@ -1257,11 +1345,15 @@ pub async fn execute_edit(
             ));
         }
 
+        // No-op rejection: `find == replace` would change nothing. Reject it up
+        // front with a clear message — this is the single, coherent home for the
+        // no-op concept (the historical "must be different" check IS the no-op
+        // rejection, not a separate code path).
         if edit_op.find == edit_op.replace {
             return Err(McpError::invalid_request(
                 format!(
-                    "Edit operation {}: old_text and new_text must be different",
-                    idx
+                    "Edit operation {idx}: no-op edit — `find` and `replace` are identical, so \
+                     they must be different"
                 ),
                 None,
             ));
@@ -1325,6 +1417,29 @@ pub async fn execute_edit(
             );
             return Ok(BaseToolImpl::create_success_response(
                 render_near_miss_prompt(&find, &near),
+            ));
+        }
+        // `find` absent but `replace` already present: the edit was likely already
+        // applied. Informational SUCCESS — nothing committed, file byte-identical.
+        ApplyOutcome::AlreadyApplied { find, replace } => {
+            info!(
+                path = %file_path,
+                "Edit `find` absent but `replace` present; reporting likely-already-applied"
+            );
+            return Ok(BaseToolImpl::create_success_response(
+                render_already_applied_prompt(&find, &replace),
+            ));
+        }
+        // A later pair's target span was consumed by an earlier pair in this same
+        // batch. Per-edit SUCCESS — nothing committed, file byte-identical.
+        ApplyOutcome::ConsumedTarget { find, line } => {
+            info!(
+                path = %file_path,
+                consumed_line = line,
+                "Edit `find` target was consumed by an earlier edit in the batch"
+            );
+            return Ok(BaseToolImpl::create_success_response(
+                render_consumed_target_prompt(&find, line),
             ));
         }
     };
@@ -3269,6 +3384,128 @@ mod tests {
             call.structured_content.is_none(),
             "near-miss result carries no mutation envelope"
         );
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    // =========================================================================
+    // Idempotency / safety: no-op rejection, already-applied, consumed-target
+    // =========================================================================
+
+    /// No-op rejection: a single pair where `find == replace` is rejected with a
+    /// clear message and the file is left byte-identical. This is the coherent
+    /// reconciliation of the legacy "must be different" check.
+    #[tokio::test]
+    async fn no_op_find_equals_replace_is_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("noop.txt");
+        let content = "alpha\nbeta\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_edit_arguments(&test_file.to_string_lossy(), "alpha", "alpha", None);
+
+        let result = execute_edit(args, &context).await;
+        assert!(result.is_err(), "no-op edit must be rejected: {result:?}");
+        let err = format!("{:?}", result.unwrap_err());
+        // Clear message: still says the two must differ (no-op).
+        assert!(
+            err.contains("no-op") || err.contains("must be different") || err.contains("different"),
+            "no-op message must be clear: {err}"
+        );
+        // File untouched.
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    /// Already-applied detection: when a pair's `replace` text is already present
+    /// in the file and its `find` is absent, report "likely already applied" as an
+    /// informational SUCCESS — not a hard "not found" error — and leave the file
+    /// byte-identical.
+    #[tokio::test]
+    async fn already_applied_is_informational_success_not_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("already.txt");
+        // The replacement target is already in the file; the original `find` is gone.
+        let content = "let renamed = compute();\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_edit_arguments(
+            &test_file.to_string_lossy(),
+            "let original = compute();",
+            "let renamed = compute();",
+            None,
+        );
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "already-applied must be a successful informational result: {result:?}"
+        );
+        let call = result.unwrap();
+        assert_eq!(
+            call.is_error,
+            Some(false),
+            "already-applied is not an error"
+        );
+        let text = result_text(&call);
+        assert!(
+            text.contains("already applied"),
+            "must report likely-already-applied: {text}"
+        );
+        // No mutation: the file is byte-identical and carries no envelope.
+        assert!(
+            call.structured_content.is_none(),
+            "already-applied result carries no mutation envelope"
+        );
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    /// Consumed-target detection: in a multi-pair batch, a later pair whose target
+    /// span was consumed/overwritten by an earlier pair in the SAME batch is
+    /// detected and reported per-edit as a consumed target — distinct from a
+    /// generic near-miss — and the batch stays atomic (file byte-identical).
+    #[tokio::test]
+    async fn consumed_target_in_batch_is_detected_and_atomic() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("consumed.txt");
+        // The first pair rewrites the whole line; the second pair's `find` targeted
+        // a substring of that ORIGINAL line, which the first pair consumed.
+        let content = "value = old_token;\nother = keep;\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_file.to_string_lossy().to_string()),
+        );
+        args.insert(
+            "edits".to_string(),
+            serde_json::json!([
+                { "find": "value = old_token;", "replace": "value = replaced_line;" },
+                { "find": "old_token", "replace": "new_token" }
+            ]),
+        );
+
+        let result = execute_edit(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "consumed-target must be a successful per-edit report: {result:?}"
+        );
+        let call = result.unwrap();
+        assert_eq!(call.is_error, Some(false));
+        let text = result_text(&call);
+        // The failing pair's find is echoed (per-edit reporting).
+        assert!(
+            text.contains("old_token"),
+            "must echo the consumed pair's find: {text}"
+        );
+        // Specifically reports the consumed-target case, not a generic miss.
+        assert!(
+            text.contains("consumed") || text.contains("earlier edit"),
+            "must report the consumed-target case specifically: {text}"
+        );
+        // Atomic: the earlier pair's mutation was NOT committed.
         assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
     }
 }
