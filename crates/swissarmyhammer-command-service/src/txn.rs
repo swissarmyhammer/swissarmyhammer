@@ -122,6 +122,41 @@ impl ActionSink for NoopActionSink {
     fn commands_executed(&self, _notification: McpNotification) {}
 }
 
+/// Delivers the debounced `notifications/commands/changed` event when the
+/// registry changes.
+///
+/// The command service's [`ChangeNotifier`](crate::notifications::ChangeNotifier)
+/// coalesces a burst of register / unregister / purge mutations into a single
+/// emission; that emission is handed here. The production implementation
+/// publishes onto the platform's
+/// [`NotificationBridge`](swissarmyhammer_plugin::NotificationBridge) so the
+/// palette / availability cache refreshes and plugins can react; tests record
+/// the events. The struct == payload publish path is the same as
+/// [`ActionSink`]: the engine hands a fully-formed [`McpNotification`] built by
+/// the declared [`commands_changed_notification`](crate::operations::commands_changed_notification)
+/// helper, so the declared schema and the published payload cannot drift.
+pub trait NotifierSink: Send + Sync + std::fmt::Debug {
+    /// Deliver the debounced `commands/changed` notification.
+    fn commands_changed(&self, notification: McpNotification);
+}
+
+/// Shared handle to the notifier sink stored on the service.
+pub type SharedNotifierSink = Arc<dyn NotifierSink>;
+
+/// A notifier sink that drops every event on the floor.
+///
+/// The default for [`CommandService::new`](crate::CommandService::new): a
+/// service with no notification wiring still runs register / unregister
+/// end-to-end; the `commands/changed` event simply reaches no subscriber. The
+/// production bootstrap replaces it with one that publishes onto the host's
+/// notification bridge.
+#[derive(Debug, Default)]
+pub struct NoopNotifierSink;
+
+impl NotifierSink for NoopNotifierSink {
+    fn commands_changed(&self, _notification: McpNotification) {}
+}
+
 /// Build the `commands/executed` notification for one finished `execute`.
 ///
 /// Centralizes the shape so the engine's emission point and any test that
@@ -151,7 +186,7 @@ pub(crate) fn build_commands_executed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operations::command_notifications;
+    use crate::operations::{command_notifications, commands_changed_notification};
     use std::collections::BTreeSet;
     use swissarmyhammer_operations::generate_notifications_meta;
 
@@ -171,30 +206,66 @@ mod tests {
             .collect()
     }
 
-    /// Coverage guard (declared ⟺ raised). The method the production emission
-    /// path actually publishes MUST be one the service declares — so
-    /// `commands/executed` can never be raised without appearing in `_meta`,
-    /// nor declared without this path producing it. Every notification-migration
-    /// card reuses this shape for its own service.
-    #[test]
-    fn emitted_method_is_declared() {
-        let note = build_commands_executed(
+    /// The complete set of methods the service's production emission paths
+    /// actually raise — the "raised" side of the coverage guard. Each entry is
+    /// produced by building the notification through its real helper, NOT a
+    /// string literal, so a renamed method is caught here too.
+    fn raised_methods() -> BTreeSet<String> {
+        let executed = build_commands_executed(
             "task.move",
             serde_json::json!({ "scope_chain": ["task:1"] }),
             serde_json::json!({ "ok": true }),
             &CallerId::HostInternal,
             Some("txn-1".to_string()),
         );
-        assert!(
-            declared_methods().contains(&note.method),
-            "emitted method {:?} is not declared in _meta ({:?})",
-            note.method,
+        let changed = commands_changed_notification();
+        BTreeSet::from([executed.method, changed.method])
+    }
+
+    /// Coverage guard (declared ⟺ raised). The methods the production emission
+    /// paths actually publish MUST be exactly the methods the service declares
+    /// in `_meta` — so neither `commands/executed` nor `commands/changed` can be
+    /// raised without appearing in `_meta`, nor declared without a path
+    /// producing it. Every notification-migration card reuses this shape for its
+    /// own service.
+    #[test]
+    fn raised_methods_equal_declared_methods() {
+        assert_eq!(
+            raised_methods(),
             declared_methods(),
+            "the methods this service raises must be exactly the methods it declares in _meta",
         );
-        // And the declared set is exactly the methods this service raises.
+        // And the set is exactly the two events this service emits.
         assert_eq!(
             declared_methods(),
-            BTreeSet::from(["notifications/commands/executed".to_string()]),
+            BTreeSet::from([
+                "notifications/commands/changed".to_string(),
+                "notifications/commands/executed".to_string(),
+            ]),
+        );
+    }
+
+    /// The `commands/changed` helper builds the declared, thin epoch-bump
+    /// payload: an empty domain payload plus universal provenance, under the
+    /// declared method — proving the struct == payload publish path even when
+    /// the struct has no fields.
+    #[test]
+    fn commands_changed_is_a_thin_provenance_only_payload() {
+        let note = commands_changed_notification();
+        assert_eq!(note.method, "notifications/commands/changed");
+        let params = note.params.as_object().expect("params is an object");
+        // Provenance is stamped on top of the (empty) declared payload; there is
+        // no per-command enrichment — the consumer refetches the registry.
+        assert_eq!(params["origin"], "user");
+        // No domain fields beyond provenance: the only keys are the universal
+        // correlation fields.
+        let domain_keys: Vec<&String> = params
+            .keys()
+            .filter(|k| k.as_str() != "txn" && k.as_str() != "origin")
+            .collect();
+        assert!(
+            domain_keys.is_empty(),
+            "commands/changed carries no per-command payload, got extra keys {domain_keys:?}",
         );
     }
 

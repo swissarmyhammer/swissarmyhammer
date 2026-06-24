@@ -44,13 +44,13 @@ use crate::latency::{
 use crate::lifecycle::{NoopCallerLifecycle, SharedCallerLifecycle};
 use crate::notifications::ChangeNotifier;
 use crate::operations::{
-    command_notifications, operations, AvailableCommand, ExecuteCommand, ListCommand,
-    RegisterCommand, SchemaCommand, UnregisterCommand,
+    command_notifications, commands_changed_notification, operations, AvailableCommand,
+    ExecuteCommand, ListCommand, RegisterCommand, SchemaCommand, UnregisterCommand,
 };
 use crate::registry::{CommandRegistry, StackEntry};
 use crate::txn::{
     build_commands_executed, NoopActionSink, NoopTransactionSeam, SharedActionSink,
-    SharedTransactionSeam,
+    SharedNotifierSink, SharedTransactionSeam,
 };
 use crate::types::{
     is_valid_chord, CallbackMarker, CommandContext, CommandError, CommandMetadata, CommandSchema,
@@ -75,10 +75,10 @@ pub struct CommandService {
     /// the hook outlives the borrow on the service and runs when the
     /// platform's unload path drains the caller's ledger entry.
     registry: Arc<Mutex<CommandRegistry>>,
-    /// Debounced emitter for `notifications/commands/changed`. The wired
-    /// closure is intentionally a no-op at this layer — the platform's
-    /// integration layer (subsequent task) replaces it with one that emits
-    /// an rmcp notification to the connected peer.
+    /// Debounced emitter for `notifications/commands/changed`. The default
+    /// wired closure is a no-op; the production bootstrap replaces it via
+    /// [`Self::with_notifier_publish`] with one that publishes a declared
+    /// `notifications/commands/changed` onto the host's notification bridge.
     notifier: Arc<ChangeNotifier>,
     /// Callback dispatcher used by `execute` / `available` to route a
     /// callback invocation back to the registering caller's isolate.
@@ -148,9 +148,12 @@ impl CommandService {
     /// Construct a service whose change notifier invokes `sink` on every
     /// debounced flush.
     ///
-    /// The sink is the platform integration seam — subsequent tasks wire
-    /// it to an rmcp `notifications/commands/changed` send. Keeping it as
-    /// a plain `Fn()` here decouples this crate from the transport layer.
+    /// The sink is the lowest-level integration seam — a plain `Fn()` that
+    /// fires once per coalesced registry-change batch. Keeping it transport-
+    /// agnostic here decouples this crate from rmcp; tests use it to count
+    /// emissions. Production wiring uses [`Self::with_notifier_publish`], which
+    /// layers a [`NotifierSink`](crate::NotifierSink) on top of this so the
+    /// emission publishes a declared `notifications/commands/changed`.
     pub fn with_notifier_sink<F>(sink: F) -> Self
     where
         F: Fn() + Send + Sync + 'static,
@@ -217,6 +220,29 @@ impl CommandService {
     /// delivered events.
     pub fn with_action_sink(mut self, action_sink: SharedActionSink) -> Self {
         self.action_sink = action_sink;
+        self
+    }
+
+    /// Wire the debounced change notifier to publish a declared
+    /// `notifications/commands/changed` through `sink`.
+    ///
+    /// Returns `self` so construction can be chained. This replaces the
+    /// notifier with one whose coalesced emission builds the declared
+    /// [`commands_changed_notification`](crate::operations::commands_changed_notification)
+    /// (struct == payload, the wire method coming from the `#[notification]`
+    /// attribute) and hands it to `sink`. The production bootstrap supplies a
+    /// sink that publishes onto the host's notification bridge, so a
+    /// register / unregister / plugin load / unload that mutates the registry
+    /// refreshes the palette and reaches every subscribed plugin.
+    ///
+    /// Must be called from inside a tokio runtime (it constructs a fresh
+    /// [`ChangeNotifier`], which spawns a debounce task). Because it rebuilds
+    /// the notifier, call it BEFORE handing out any [`Self::notifier`] handle.
+    pub fn with_notifier_publish(mut self, sink: SharedNotifierSink) -> Self {
+        self.notifier = Arc::new(ChangeNotifier::new(
+            DEFAULT_CHANGE_NOTIFICATION_DEBOUNCE,
+            move || sink.commands_changed(commands_changed_notification()),
+        ));
         self
     }
 

@@ -132,19 +132,22 @@ fn meta_tree_register_exposes_full_registration_payload() {
     }
 }
 
-/// The command tool declares exactly one notification — `commands/executed` —
-/// keyed by its event name, carrying the full wire method and its domain
-/// params. (The emission↔declaration coverage guard lives in `txn.rs`'s unit
-/// tests, where the production builder is reachable.)
+/// The command tool declares exactly two notifications — `commands/executed`
+/// and `commands/changed` — each keyed by its event name, carrying the full wire
+/// method and (for `executed`) its domain params. (The emission↔declaration
+/// coverage guard lives in `txn.rs`'s unit tests, where the production builders
+/// are reachable.)
 #[test]
-fn notifications_meta_declares_commands_executed() {
+fn notifications_meta_declares_executed_and_changed() {
     let meta = generate_notifications_meta(command_notifications());
     let obj = meta.as_object().expect("notifications meta is an object");
 
+    let mut events = obj.keys().collect::<Vec<_>>();
+    events.sort();
     assert_eq!(
-        obj.keys().collect::<Vec<_>>(),
-        vec!["executed"],
-        "command tool should declare exactly the `executed` event"
+        events,
+        vec!["changed", "executed"],
+        "command tool should declare exactly the `executed` and `changed` events"
     );
 
     let executed = &meta["executed"];
@@ -157,4 +160,18 @@ fn notifications_meta_declares_commands_executed() {
     assert_eq!(params["id"]["required"], true);
     assert!(params["ctx"].is_object());
     assert!(params["result"].is_object());
+
+    // `changed` is the thin epoch-bump event: full wire method, a description,
+    // and no domain params (the consumer refetches the registry).
+    let changed = &meta["changed"];
+    assert_eq!(changed["method"], "notifications/commands/changed");
+    assert!(changed["description"].is_string());
+    assert_eq!(
+        changed["parameters"]
+            .as_object()
+            .expect("parameters is an object")
+            .len(),
+        0,
+        "commands/changed declares no domain params — it is a thin epoch bump"
+    );
 }

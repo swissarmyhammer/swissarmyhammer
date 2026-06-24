@@ -320,13 +320,64 @@ pub(crate) struct CommandsExecuted {
     pub result: Value,
 }
 
+/// The `notifications/commands/changed` event payload.
+///
+/// Raised when the set of registered commands changes — a `register` /
+/// `unregister` verb, or the command churn of a plugin load / unload. It is a
+/// thin "the registry changed, refetch" epoch bump: subscribers (the palette /
+/// command-availability cache, and plugins via `this.commands.on("changed", …)`)
+/// re-read their slice of the registry when it fires. It deliberately carries
+/// NO per-command payload — a debounced burst would otherwise have to enrich and
+/// re-fetch the whole command set, and the consumer re-fetches anyway. Coalesced
+/// by the command service's [`ChangeNotifier`](crate::notifications::ChangeNotifier)
+/// so one tick lands per logical batch.
+///
+/// Like every notification, this struct is the single source of truth: it IS the
+/// published payload (it serializes — to an empty object — to the notification's
+/// `params` via
+/// [`McpNotification::from_declared`](swissarmyhammer_plugin::McpNotification::from_declared))
+/// AND the declaration the SDK reads (it drives the
+/// `io.swissarmyhammer/notifications` `_meta`). The two cannot drift.
+///
+/// Provenance (`txn`/`origin`) is universal cross-cutting metadata stamped on
+/// every notification at publish time; it is intentionally NOT a field here.
+#[notification(
+    method = "notifications/commands/changed",
+    description = "The set of registered commands changed; refetch the command list."
+)]
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct CommandsChanged {}
+
+/// Build the `notifications/commands/changed` notification.
+///
+/// The single production publish helper for the registry-changed event: it
+/// serializes the declared [`CommandsChanged`] payload (so the `_meta` schema
+/// and the wire payload share one source — even though the payload is empty) and
+/// stamps `user` provenance. Lives here, in the crate that DECLARES the
+/// notification, so the wire method comes from the `#[notification]` attribute
+/// rather than a string literal at the call site — the service's debounced
+/// notifier sink calls this so the declared schema and the published payload
+/// cannot drift.
+pub fn commands_changed_notification() -> swissarmyhammer_plugin::McpNotification {
+    let payload = CommandsChanged {};
+    swissarmyhammer_plugin::McpNotification::from_declared(
+        payload.method(),
+        &payload,
+        swissarmyhammer_plugin::Provenance::user(),
+    )
+}
+
 /// The canonical slice of notifications the `command` tool emits.
 ///
 /// Mirrors [`operations`]: a leaked `Default` instance per notification, used
 /// only for its static metadata. Fed to `operation_tool!`'s `notifications:`
 /// field so the tool advertises its events in `_meta`.
-static COMMAND_NOTIFICATIONS: LazyLock<Vec<&'static dyn Notification>> =
-    LazyLock::new(|| vec![Box::leak(Box::<CommandsExecuted>::default()) as &dyn Notification]);
+static COMMAND_NOTIFICATIONS: LazyLock<Vec<&'static dyn Notification>> = LazyLock::new(|| {
+    vec![
+        Box::leak(Box::<CommandsExecuted>::default()) as &dyn Notification,
+        Box::leak(Box::<CommandsChanged>::default()) as &dyn Notification,
+    ]
+});
 
 /// Get the canonical slice of all command notifications.
 pub fn command_notifications() -> &'static [&'static dyn Notification] {

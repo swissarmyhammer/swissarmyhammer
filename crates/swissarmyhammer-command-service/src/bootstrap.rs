@@ -39,7 +39,7 @@ use crate::callbacks::CallbackHandle;
 use crate::invoke::{CallbackDispatcher, CallbackInvokeError};
 use crate::lifecycle::{CallerLifecycle, UnloadHook};
 use crate::service::CommandService;
-use crate::txn::{ActionSink, SharedTransactionSeam};
+use crate::txn::{ActionSink, NotifierSink, SharedTransactionSeam};
 
 /// The module id the command service is exposed under.
 ///
@@ -110,11 +110,14 @@ pub async fn install_commands_module_with(
     let lifecycle: Arc<dyn CallerLifecycle> = Arc::new(HostCallerLifecycle::new(host.clone()));
     let action_sink: Arc<dyn ActionSink> =
         Arc::new(BridgeActionSink::new(host.notification_bridge()));
+    let notifier_sink: Arc<dyn NotifierSink> =
+        Arc::new(BridgeNotifierSink::new(host.notification_bridge()));
 
     let mut service = CommandService::new()
         .with_dispatcher(dispatcher)
         .with_lifecycle(lifecycle)
-        .with_action_sink(action_sink);
+        .with_action_sink(action_sink)
+        .with_notifier_publish(notifier_sink);
     if let Some(transaction) = transaction {
         service = service.with_transaction(transaction);
     }
@@ -153,6 +156,41 @@ impl std::fmt::Debug for BridgeActionSink {
 
 impl ActionSink for BridgeActionSink {
     fn commands_executed(&self, notification: McpNotification) {
+        self.bridge.publish(notification);
+    }
+}
+
+/// Notifier sink that publishes the debounced `commands/changed` onto a
+/// [`NotificationBridge`].
+///
+/// The production delivery seam for the registry-changed event: when the
+/// command service's [`ChangeNotifier`](crate::notifications::ChangeNotifier)
+/// coalesces a register / unregister / plugin-load / plugin-unload churn into a
+/// single emission, the service hands the declared
+/// `notifications/commands/changed` here and this sink fans it out to every
+/// subscriber (the in-process webview's palette / availability cache, and any
+/// external agent or plugin via `this.commands.on("changed", …)`) through
+/// [`NotificationBridge::publish`].
+pub struct BridgeNotifierSink {
+    /// Cheap clone of the host's one bridge; every clone shares the channel.
+    bridge: NotificationBridge,
+}
+
+impl BridgeNotifierSink {
+    /// Construct a sink that publishes onto `bridge`.
+    pub fn new(bridge: NotificationBridge) -> Self {
+        Self { bridge }
+    }
+}
+
+impl std::fmt::Debug for BridgeNotifierSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BridgeNotifierSink").finish()
+    }
+}
+
+impl NotifierSink for BridgeNotifierSink {
+    fn commands_changed(&self, notification: McpNotification) {
         self.bridge.publish(notification);
     }
 }

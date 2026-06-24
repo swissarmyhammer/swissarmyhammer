@@ -36,14 +36,14 @@ pub use latency::{
 pub use lifecycle::{CallerLifecycle, NoopCallerLifecycle, SharedCallerLifecycle, UnloadHook};
 pub use notifications::ChangeNotifier;
 pub use operations::{
-    command_notifications, operations, AvailableCommand, ExecuteCommand, ListCommand,
-    RegisterCommand, SchemaCommand, UnregisterCommand,
+    command_notifications, commands_changed_notification, operations, AvailableCommand,
+    ExecuteCommand, ListCommand, RegisterCommand, SchemaCommand, UnregisterCommand,
 };
 pub use registry::{CommandRegistry, StackEntry};
 pub use service::{CommandService, DEFAULT_CHANGE_NOTIFICATION_DEBOUNCE};
 pub use txn::{
-    ActionSink, NoopActionSink, NoopTransactionSeam, SharedActionSink, SharedTransactionSeam,
-    TransactionSeam,
+    ActionSink, NoopActionSink, NoopNotifierSink, NoopTransactionSeam, NotifierSink,
+    SharedActionSink, SharedNotifierSink, SharedTransactionSeam, TransactionSeam,
 };
 pub use types::{
     is_valid_chord, CallbackMarker, CommandContext, CommandError, CommandMetadata, CommandSchema,

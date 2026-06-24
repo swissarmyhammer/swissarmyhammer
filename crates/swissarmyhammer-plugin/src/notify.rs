@@ -280,20 +280,16 @@ impl McpNotification {
         Self::new("notifications/store/changed", Value::Object(params))
     }
 
-    /// Plane 2 — `notifications/commands/executed` is built via
-    /// [`from_declared`](Self::from_declared) from the command service's
-    /// `CommandsExecuted` payload struct (the single-source-of-truth path), so
-    /// there is no bespoke constructor here.
-    ///
-    /// Plane 3 — `notifications/commands/changed` (command registry changed).
-    ///
-    /// Signals the palette to refresh; carries no per-item payload beyond the
-    /// correlation fields.
-    pub fn commands_changed(prov: Provenance) -> Self {
-        let mut params = Map::new();
-        prov.stamp_into(&mut params);
-        Self::new("notifications/commands/changed", Value::Object(params))
-    }
+    // Plane 2 — `notifications/commands/executed` is built via `from_declared`
+    // from the command service's `CommandsExecuted` payload struct (the
+    // single-source-of-truth path), so there is no bespoke constructor here.
+    //
+    // Plane 3 — `notifications/commands/changed` (the command registry changed,
+    // signalling the palette to refresh) is likewise built via `from_declared`
+    // from the command service's `CommandsChanged` payload struct, through the
+    // `commands_changed_notification` helper that crate exposes — so there is no
+    // bespoke constructor here either (the wire method lives with the
+    // `#[notification]` declaration, not as a string literal in this crate).
 
     /// Plane 3 — `notifications/tools/list_changed` (server tool set changed).
     pub fn tools_list_changed() -> Self {
@@ -714,11 +710,21 @@ mod tests {
             tokio::task::yield_now().await;
         }
 
-        bridge.publish(McpNotification::commands_changed(Provenance::user()));
+        // Two arbitrary notifications, used here only to assert the forwarder
+        // delivers every published notification in order. `commands/changed` is
+        // declared (struct == payload) by the command-service crate, which this
+        // crate does not depend on, so it is built inline by method here.
+        bridge.publish(McpNotification::new(
+            "notifications/commands/changed",
+            serde_json::json!({}),
+        ));
         bridge.publish(McpNotification::tools_list_changed());
 
-        // Let the forwarder drain.
-        for _ in 0..50 {
+        // Let the forwarder drain. Bounded poll: at 5ms/iter this waits up to
+        // ~250ms for both notifications to arrive on the spawned forwarder task
+        // before asserting, then breaks early as soon as they have.
+        const FORWARDER_DRAIN_POLL_ITERATIONS: usize = 50;
+        for _ in 0..FORWARDER_DRAIN_POLL_ITERATIONS {
             if seen.lock().await.len() == 2 {
                 break;
             }

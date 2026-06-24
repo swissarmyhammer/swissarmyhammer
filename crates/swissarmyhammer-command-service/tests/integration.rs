@@ -56,6 +56,8 @@ mod builtin_nav_commands_e2e;
 mod builtin_perspective_commands_e2e;
 #[path = "integration/builtin_task_commands_e2e.rs"]
 mod builtin_task_commands_e2e;
+#[path = "integration/commands_changed_e2e.rs"]
+mod commands_changed_e2e;
 #[path = "integration/execute_emits_action_event.rs"]
 mod execute_emits_action_event;
 #[path = "integration/execute_error_closes_txn.rs"]
