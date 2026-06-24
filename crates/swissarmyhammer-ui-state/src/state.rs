@@ -292,6 +292,31 @@ pub enum UiStateChange {
     },
 }
 
+impl UiStateChange {
+    /// The wire discriminator string for this change — the single source of
+    /// truth for the `kind` field carried by the `notifications/ui_state/changed`
+    /// notification (and the legacy `ui-state-changed` Tauri event before it).
+    ///
+    /// One string per variant; kept in lockstep with the frontend
+    /// `UIStateChangeKind` union and the declared `UiStateChanged` notification's
+    /// `kind` value-space. Living on the enum keeps the classification beside the
+    /// data it classifies, so the app's UI-state side-effect and the notification
+    /// builder cannot disagree.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            UiStateChange::ScopeChain(_) => "scope_chain",
+            UiStateChange::ActiveView(_) => "active_view",
+            UiStateChange::ActivePerspective(_) => "active_perspective",
+            UiStateChange::PaletteOpen(_) => "palette_open",
+            UiStateChange::KeymapMode(_) => "keymap_mode",
+            UiStateChange::InspectorStack(_) => "inspector_stack",
+            UiStateChange::AppMode(_) => "app_mode",
+            UiStateChange::InspectorWidth { .. } => "inspector_width",
+            UiStateChange::PerspectiveSwitch { .. } => "perspective_switch",
+        }
+    }
+}
+
 /// Pure state machine for UI state: inspector stack, active view, palette, keymap.
 ///
 /// Thread-safe via internal `RwLock`. All mutation methods return a
@@ -1448,6 +1473,46 @@ mod tests {
     use super::*;
     use std::env;
     use std::fs;
+
+    /// `UiStateChange::kind()` returns the wire discriminator string for every
+    /// variant — the single source of truth the `ui_state/changed`
+    /// notification's `kind` field carries. Pins every variant so a new variant
+    /// cannot be added without a discriminator.
+    #[test]
+    fn ui_state_change_kind_maps_every_variant() {
+        assert_eq!(UiStateChange::ScopeChain(vec![]).kind(), "scope_chain");
+        assert_eq!(UiStateChange::PaletteOpen(true).kind(), "palette_open");
+        assert_eq!(
+            UiStateChange::KeymapMode("vim".into()).kind(),
+            "keymap_mode"
+        );
+        assert_eq!(
+            UiStateChange::InspectorStack(vec![]).kind(),
+            "inspector_stack"
+        );
+        assert_eq!(UiStateChange::ActiveView("v".into()).kind(), "active_view");
+        assert_eq!(
+            UiStateChange::ActivePerspective("p".into()).kind(),
+            "active_perspective"
+        );
+        assert_eq!(UiStateChange::AppMode("normal".into()).kind(), "app_mode");
+        assert_eq!(
+            UiStateChange::InspectorWidth {
+                window_label: "main".into(),
+                width: 420
+            }
+            .kind(),
+            "inspector_width"
+        );
+        assert_eq!(
+            UiStateChange::PerspectiveSwitch {
+                perspective_id: "p".into(),
+                filtered_task_ids: vec![]
+            }
+            .kind(),
+            "perspective_switch"
+        );
+    }
 
     #[test]
     fn inspect_pushes_onto_stack() {

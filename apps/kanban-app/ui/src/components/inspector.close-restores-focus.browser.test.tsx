@@ -82,6 +82,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // ---------------------------------------------------------------------------
 
 import "@/components/fields/registrations";
+import { UI_STATE_CHANGED_EVENT } from "@/lib/mcp-notifications";
 import { AppShell } from "./app-shell";
 import { InspectorsContainer } from "./inspectors-container";
 import { FocusLayer } from "./focus-layer";
@@ -188,13 +189,13 @@ function uiStateSnapshot() {
 }
 
 /**
- * Emit a synthetic `ui-state-changed` event so the UIStateProvider
+ * Emit a synthetic `notifications/ui_state/changed` bridge event so the UIStateProvider
  * picks up the new `inspector_stack`.
  */
 function emitUiStateChanged() {
-  const cbs = listeners.get("ui-state-changed") ?? [];
+  const cbs = listeners.get(UI_STATE_CHANGED_EVENT) ?? [];
   for (const cb of cbs) {
-    cb({ payload: { kind: "InspectorClosed", state: uiStateSnapshot() } });
+    cb({ payload: { kind: "inspector_stack", state: uiStateSnapshot() } });
   }
 }
 
@@ -226,7 +227,7 @@ async function defaultInvokeImpl(
     const a = (args ?? {}) as { cmd?: string };
     if (a.cmd === "app.inspector.close" || a.cmd === "app.dismiss") {
       // Pop the topmost panel from the inspector stack and emit the
-      // ui-state-changed event the React tree subscribes to. This
+      // notifications/ui_state/changed event the React tree subscribes to. This
       // simulates the Rust-side close path.
       backendState.inspector_stack.pop();
       emitUiStateChanged();
@@ -342,7 +343,7 @@ describe("Inspector layer simplification — close panel restores focus", () => 
     expect(registeredBefore.length).toBeGreaterThan(0);
 
     // Close the panel by mutating the backend state and emitting the
-    // ui-state-changed event.
+    // notifications/ui_state/changed event.
     await act(async () => {
       backendState.inspector_stack = [];
       emitUiStateChanged();

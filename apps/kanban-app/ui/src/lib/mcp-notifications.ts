@@ -90,14 +90,26 @@ export interface UndoChanged {
   redo_label?: string | null;
 }
 
-/** One `notifications/ui_state/changed` notification's params. */
+/**
+ * One `notifications/ui_state/changed` notification's params.
+ *
+ * Mirrors the declared `UiStateChanged` payload struct in
+ * `swissarmyhammer-ui-state` (`crates/swissarmyhammer-ui-state/src/operations.rs`):
+ * a `kind` discriminator naming which UI-state slice changed plus `state`, the
+ * full per-window-keyed UI-state snapshot after the change. A consumer
+ * self-selects the slice it cares about (the webview's `UIStateProvider` reads
+ * only its own `windows[<label>]`). Provenance (`txn`/`origin`) is stamped on
+ * top by the publish path but is not consumed here.
+ */
 export interface UiStateChanged {
-  /** The window the change is scoped to; absent for global state. */
-  window?: string;
-  /** The UI surface that changed (e.g. "palette_open", "keymap_mode"). */
-  key: string;
-  /** The surface's new value. */
-  value: unknown;
+  /**
+   * Which UI-state slice changed — one discriminator per backend
+   * `UiStateChange` variant (e.g. "palette_open", "keymap_mode",
+   * "inspector_stack", "perspective_switch").
+   */
+  kind: string;
+  /** The full UI-state snapshot after the change. */
+  state: unknown;
 }
 
 /** A batch of `store/changed` notifications that share one `txn`. */

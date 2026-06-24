@@ -490,14 +490,68 @@ pub struct AiStreamingChanged {
     pub streaming: bool,
 }
 
+/// The `notifications/ui_state/changed` event payload.
+///
+/// The single observable change-stream for ephemeral UI state — inspector
+/// stack, palette open/mode, keymap mode, active view/perspective, app mode,
+/// inspector width, and the atomic perspective+filter switch. A `kind`
+/// discriminator names which slice changed; `state` carries the full
+/// per-window-keyed UI-state snapshot after the change so a consumer self-selects
+/// the slice it cares about (the webview reads only its own
+/// `windows[<label>]`).
+///
+/// This struct is the single source of truth for the event: it IS the published
+/// payload (it serializes to the notification's `params` via
+/// [`McpNotification::from_declared`](swissarmyhammer_plugin::McpNotification::from_declared))
+/// AND the declaration the SDK reads (its fields drive the
+/// `io.swissarmyhammer/notifications` `_meta`, resolved by
+/// `this.ui_state.on("changed", …)`). The two cannot drift.
+///
+/// Carrying the already-computed snapshot is NOT an enrichment re-fetch: the
+/// publisher has the snapshot in hand at publish time (the UI-state mutation
+/// just produced it). Provenance (`txn`/`origin`) is universal cross-cutting
+/// metadata stamped at publish time; it is intentionally NOT a field here —
+/// ephemeral UI state is not undoable and carries no transaction.
+///
+/// # `kind` value-space
+///
+/// One discriminator per [`crate::state::UiStateChange`] variant the
+/// production publish path classifies:
+/// `scope_chain`, `palette_open`, `keymap_mode`, `inspector_stack`,
+/// `active_view`, `active_perspective`, `app_mode`, `inspector_width`,
+/// `perspective_switch`. The classification lives at the publish point (the
+/// kanban app's UI-state side-effect) so this struct stays a thin, transport-
+/// agnostic declaration.
+#[notification(
+    method = "notifications/ui_state/changed",
+    description = "An ephemeral UI-state slice changed (palette, inspector, keymap, active view/perspective, app mode)."
+)]
+#[derive(Debug, Default, Serialize)]
+pub struct UiStateChanged {
+    /// Which UI-state slice changed — one discriminator per
+    /// [`crate::state::UiStateChange`] variant the publisher classifies
+    /// (e.g. `"palette_open"`, `"inspector_stack"`, `"perspective_switch"`).
+    pub kind: String,
+    /// The full per-window-keyed UI-state snapshot after the change.
+    ///
+    /// A consumer self-selects the slice it cares about (the webview reads only
+    /// its own `windows[<label>]`); carrying the whole snapshot avoids a
+    /// follow-up read.
+    pub state: serde_json::Value,
+}
+
 /// The canonical slice of notifications the `ui_state` tool emits.
 ///
 /// Mirrors [`operations`]: a leaked `Default` instance per notification, used
 /// only for its static metadata. Fed to `operation_tool!`'s `notifications:`
 /// field so the tool advertises its events in `_meta` and `.on()` can resolve
 /// them.
-static UI_STATE_NOTIFICATIONS: LazyLock<Vec<&'static dyn Notification>> =
-    LazyLock::new(|| vec![Box::leak(Box::<AiStreamingChanged>::default()) as &dyn Notification]);
+static UI_STATE_NOTIFICATIONS: LazyLock<Vec<&'static dyn Notification>> = LazyLock::new(|| {
+    vec![
+        Box::leak(Box::<AiStreamingChanged>::default()) as &dyn Notification,
+        Box::leak(Box::<UiStateChanged>::default()) as &dyn Notification,
+    ]
+});
 
 /// Get the canonical slice of all `ui_state` notifications.
 pub fn notifications() -> &'static [&'static dyn Notification] {
@@ -515,6 +569,34 @@ pub fn notifications() -> &'static [&'static dyn Notification] {
 /// published payload cannot drift.
 pub fn ai_streaming_notification(streaming: bool) -> swissarmyhammer_plugin::McpNotification {
     let payload = AiStreamingChanged { streaming };
+    swissarmyhammer_plugin::McpNotification::from_declared(
+        payload.method(),
+        &payload,
+        swissarmyhammer_plugin::Provenance::user(),
+    )
+}
+
+/// Build the `notifications/ui_state/changed` notification for `kind` + `state`.
+///
+/// The single production publish helper: serializes the declared
+/// [`UiStateChanged`] payload (so the `_meta` schema and the wire payload share
+/// one source) and stamps `user` provenance. `kind` is the slice discriminator
+/// classified at the publish point from a [`crate::state::UiStateChange`]; `state`
+/// is the full UI-state snapshot after the change (`UiState::to_json()`).
+///
+/// Lives here, in the crate that DECLARES the notification, so the wire method
+/// comes from the `#[notification]` attribute (via the [`Notification`] trait)
+/// rather than being repeated as a string literal at the call site — the kanban
+/// app's UI-state side-effect calls this so the declared schema and the
+/// published payload cannot drift.
+pub fn ui_state_changed_notification(
+    kind: impl Into<String>,
+    state: serde_json::Value,
+) -> swissarmyhammer_plugin::McpNotification {
+    let payload = UiStateChanged {
+        kind: kind.into(),
+        state,
+    };
     swissarmyhammer_plugin::McpNotification::from_declared(
         payload.method(),
         &payload,
@@ -562,5 +644,133 @@ mod tests {
             .get("aiStreaming")
             .expect("aiStreaming event must be declared in the _meta tree");
         assert_eq!(leaf["method"], "notifications/ui_state/ai_streaming");
+    }
+
+    /// The `changed` notification declares the wire method and the short event
+    /// a plugin subscribes to with `this.ui_state.on("changed", …)` — the
+    /// method's last segment, so no `event` override is needed.
+    #[test]
+    fn ui_state_changed_notification_declares_method_and_event() {
+        let note = UiStateChanged::default();
+        assert_eq!(note.method(), "notifications/ui_state/changed");
+        assert_eq!(
+            note.event(),
+            "changed",
+            "the short event must be the method's last segment so the plugin \
+             subscribes with `.on(\"changed\")`"
+        );
+    }
+
+    /// The notification serializes to its declared `params` shape — a `kind`
+    /// discriminator plus the full UI-state `state` snapshot — so
+    /// `from_declared` produces the right payload.
+    #[test]
+    fn ui_state_changed_payload_serializes_to_kind_and_state() {
+        let payload = UiStateChanged {
+            kind: "palette_open".to_string(),
+            state: serde_json::json!({ "keymap_mode": "vim" }),
+        };
+        let value = serde_json::to_value(&payload).expect("UiStateChanged serializes");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "kind": "palette_open",
+                "state": { "keymap_mode": "vim" },
+            })
+        );
+    }
+
+    /// The `changed` notification appears in the generated `_meta` tree under
+    /// its short event name with its wire method.
+    #[test]
+    fn ui_state_notifications_meta_advertises_changed() {
+        let meta = generate_notifications_meta(notifications());
+        let obj = meta.as_object().expect("notifications meta is an object");
+        let leaf = obj
+            .get("changed")
+            .expect("changed event must be declared in the _meta tree");
+        assert_eq!(leaf["method"], "notifications/ui_state/changed");
+    }
+
+    /// Coverage guard (declared ⟺ raised). The method the production helper
+    /// actually publishes MUST be one the `ui_state` service declares — so
+    /// `ui_state/changed` can never be raised without appearing in `_meta`.
+    #[test]
+    fn ui_state_changed_emitted_method_is_declared() {
+        let note = ui_state_changed_notification("palette_open", serde_json::json!({ "a": 1 }));
+        let declared: std::collections::BTreeSet<String> =
+            generate_notifications_meta(notifications())
+                .as_object()
+                .expect("notifications meta is an object")
+                .values()
+                .map(|leaf| {
+                    leaf["method"]
+                        .as_str()
+                        .expect("each notification leaf carries a method")
+                        .to_string()
+                })
+                .collect();
+        assert!(
+            declared.contains(&note.method),
+            "emitted method {:?} is not declared in _meta ({:?})",
+            note.method,
+            declared,
+        );
+    }
+
+    /// The production helper builds the `{ kind, state }` payload under the
+    /// declared method — the struct=payload publish path.
+    #[test]
+    fn ui_state_changed_notification_builds_kind_and_state_payload() {
+        let note =
+            ui_state_changed_notification("active_view", serde_json::json!({ "windows": {} }));
+        assert_eq!(note.method, "notifications/ui_state/changed");
+        let params = note.params.as_object().expect("params is an object");
+        assert_eq!(params["kind"], "active_view");
+        assert_eq!(params["state"], serde_json::json!({ "windows": {} }));
+    }
+
+    /// Real-pipeline loop: a genuine `UiState` mutation → its `UiStateChange`
+    /// classification + full snapshot → the declared notification → a real
+    /// `NotificationBridge` → a live subscriber. No mock boundary: the same
+    /// path the app's UI-state side-effect drives, minus the Tauri shell.
+    ///
+    /// Proves a plugin doing `this.ui_state.on("changed", cb)` receives the
+    /// real `{ kind, state }` carrying the mutated slice.
+    #[tokio::test]
+    async fn mutation_publishes_ui_state_changed_on_the_bridge() {
+        use crate::state::UiState;
+        use swissarmyhammer_plugin::notify::NotificationBridge;
+
+        let ui_state = UiState::new();
+        let bridge = NotificationBridge::new();
+        let mut sub = bridge.subscribe();
+
+        // A real mutation produces a typed change…
+        let change = ui_state
+            .set_palette_open("main", true)
+            .expect("opening the palette is a real change");
+
+        // …which the publish path classifies and snapshots, then publishes the
+        // declared notification onto the bridge (exactly as the app side-effect
+        // does).
+        let note = ui_state_changed_notification(change.kind(), ui_state.to_json());
+        let reached = bridge.publish(note);
+        assert_eq!(reached, 1, "the live subscriber must receive the publish");
+
+        // The subscriber (a plugin's `.on(\"changed\")`) sees the real payload.
+        let received = sub
+            .recv()
+            .await
+            .expect("subscriber receives the notification");
+        assert_eq!(received.method, "notifications/ui_state/changed");
+        assert_eq!(received.params["kind"], "palette_open");
+        assert_eq!(
+            received.params["state"]["windows"]["main"]["palette_open"], true,
+            "the published snapshot carries the mutated slice"
+        );
+        // Ephemeral UI state is not undoable → no transaction.
+        assert_eq!(received.params["txn"], serde_json::Value::Null);
+        assert_eq!(received.params["origin"], "user");
     }
 }

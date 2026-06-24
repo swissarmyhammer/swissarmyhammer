@@ -18,7 +18,7 @@
  *    the palette keeps offering view-scoped commands.
  *
  * 2. **Consumer loop** — the backend answers a successful `view.set` with
- *    a `ui-state-changed` event (`kind: "active_view"`, full per-window
+ *    a `notifications/ui_state/changed` event (`kind: "active_view"`, full per-window
  *    snapshot). The frontend must apply it (NOT treat `active_view` as a
  *    frontend-authoritative kind), `ViewsProvider` must read THIS window's
  *    `active_view_id` slice, and the left-nav highlight must move.
@@ -81,6 +81,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 
 // Import after mocks so the mocked module bindings are the ones used.
 import { LeftNav } from "./left-nav";
+import { UI_STATE_CHANGED_EVENT } from "@/lib/mcp-notifications";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import type { UIStateSnapshot } from "@/lib/ui-state-context";
 import { ViewsProvider } from "@/lib/views-context";
@@ -293,7 +294,7 @@ describe("LeftNav — view-switch loop (view.set)", () => {
   });
 
   /**
-   * Consumer loop: a backend `ui-state-changed` event with
+   * Consumer loop: a backend `notifications/ui_state/changed` event with
    * `kind: "active_view"` must move the rendered active highlight — the
    * frontend is NOT authoritative for `active_view`, so the event must be
    * applied, and `ViewsProvider` must read this window's slice.
@@ -312,7 +313,7 @@ describe("LeftNav — view-switch loop (view.set)", () => {
     // with the full per-window snapshot tagged `active_view`.
     fireEvent.click(viewTwo);
     await act(async () => {});
-    emitTauriEvent("ui-state-changed", {
+    emitTauriEvent(UI_STATE_CHANGED_EVENT, {
       kind: "active_view",
       state: uiStateSnapshot("v2"),
     });

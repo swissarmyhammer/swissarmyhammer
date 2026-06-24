@@ -31,7 +31,10 @@ pub mod operations;
 pub mod service;
 pub mod state;
 
-pub use operations::{ai_streaming_notification, notifications, operations, AiStreamingChanged};
+pub use operations::{
+    ai_streaming_notification, notifications, operations, ui_state_changed_notification,
+    AiStreamingChanged, UiStateChanged,
+};
 pub use service::UiStateServer;
 pub use state::{
     DragDestination, DragSession, DragSource, RecentBoard, UiState, UiStateChange, WindowState,

@@ -152,6 +152,46 @@ async fn ui_state_tool_meta_advertises_ai_streaming_notification() {
     );
 }
 
+/// The `ui_state` tool advertises the `changed` notification in its live
+/// `io.swissarmyhammer/notifications` `_meta`, so a plugin can resolve and
+/// subscribe to ephemeral UI-state changes with `this.ui_state.on("changed", …)`.
+///
+/// Production-path assertion (drives the real `UiStateServer::list_tools`, not
+/// just the `_meta` generator): pins the discovery surface the SDK's `.on()`
+/// resolves against, complementing the declared⟺raised coverage guard in
+/// `operations.rs`.
+#[tokio::test]
+async fn ui_state_tool_meta_advertises_changed_notification() {
+    let h = Harness::new();
+    let service = h.service();
+
+    let listed = service
+        .list_tools(None, request_context())
+        .await
+        .expect("list_tools should succeed");
+    let tool = &listed.tools[0];
+    assert_eq!(tool.name.as_ref(), "ui_state");
+
+    let meta = tool
+        .meta
+        .as_ref()
+        .expect("ui_state tool advertises a _meta tree");
+    let notifications_tree = meta
+        .0
+        .get("io.swissarmyhammer/notifications")
+        .and_then(Value::as_object)
+        .expect("_meta carries io.swissarmyhammer/notifications");
+
+    let leaf = notifications_tree
+        .get("changed")
+        .expect("the changed event must be declared so .on(\"changed\") resolves");
+    assert_eq!(
+        leaf.get("method"),
+        Some(&Value::String("notifications/ui_state/changed".to_string())),
+        "the changed leaf must carry its full wire method",
+    );
+}
+
 /// Hard constraint: the `ui_state` tool owns no spatial-focus op.
 ///
 /// The spatial focus KERNEL is owned by the separate `focus` MCP server. The

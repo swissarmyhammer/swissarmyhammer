@@ -146,7 +146,7 @@ export function InspectorsContainer() {
    * (`onResize` callback) so every panel re-renders at 60 fps without
    * any backend round-trip; only the final value is dispatched on
    * `mouseup` via `app.inspector.set_width`. The dispatch echoes back as
-   * an `inspector_width` `ui-state-changed` event, which updates
+   * an `inspector_width` `notifications/ui_state/changed` event, which updates
    * `winState.inspector_width` and clears the transient state on the
    * next render.
    */
@@ -159,7 +159,7 @@ export function InspectorsContainer() {
   // clears it on release.
   const isDraggingRef = useRef(false);
   // Reset transient state whenever the persisted value changes (e.g.
-  // after dispatch echoes back through ui-state-changed) — otherwise a
+  // after dispatch echoes back through notifications/ui_state/changed) — otherwise a
   // stale `liveWidth` would shadow the new persisted value. Skip the
   // reset while a drag is in progress so a backend echo arriving
   // mid-drag (e.g. a future cross-window broadcast) does not clobber

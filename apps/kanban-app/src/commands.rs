@@ -6,7 +6,7 @@
 // │                                                                        │
 // │    ✅  Undo / Redo support                                             │
 // │    ✅  UiState persistence                                             │
-// │    ✅  Event emission (ui-state-changed)                               │
+// │    ✅  Event emission (notifications/ui_state/changed)                 │
 // │    ✅  Command logging and observability                               │
 // │                                                                        │
 // │  Adding a new #[tauri::command] that mutates state BYPASSES all of     │
@@ -1588,7 +1588,7 @@ async fn apply_post_command_side_effects(
 ) {
     handle_ui_trigger_results(app, state, result).await;
     handle_drag_events(app, state, active_handle, result).await;
-    emit_ui_state_change_if_needed(app, state, result);
+    publish_ui_state_change_if_needed(app, state, result).await;
     maybe_rebuild_menu_after_cmd(app, effective_cmd).await;
     flush_and_sync_after_command(app, state, effective_cmd, undoable, active_handle).await;
 }
@@ -1876,42 +1876,92 @@ async fn perform_cross_board_drag_transfer(
     ok
 }
 
-/// Emit a fresh `ui-state-changed` event when the command either returned a
-/// `UiStateChange` result envelope or mutated board open/close state (which
-/// is not typed as a `UiStateChange` but still affects what the React
-/// `UIStateProvider` renders).
+/// Publish a `notifications/ui_state/changed` notification on the bridge when a
+/// command returned a `UiStateChange` result envelope.
 ///
-/// The emitted payload is a wrapper of the form
-/// `{ "kind": "<discriminator>", "state": <full UiState snapshot> }`.
-/// `kind` names which slice of UI state changed — one of the seven
-/// `UiStateChange` variants plus the two board result shapes — so the
-/// frontend can skip `setState` for events it doesn't care about (e.g.
-/// every `app.setFocus` arrow-key fires a `scope_chain` event; the
-/// frontend owns that slice via `FocusedScopeContext` and ignores the
-/// echo). No UI-specific policy lives here — the backend just tells the
-/// truth about which change it made.
-fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Value) {
+/// The published payload is the declared `UiStateChanged` struct serialized to
+/// `{ "kind": "<discriminator>", "state": <full UiState snapshot> }` (plus
+/// universal `txn`/`origin` provenance stamped by the publish path). `kind`
+/// names which slice of UI state changed — one per `UiStateChange` variant — so
+/// the frontend can skip `setState` for slices it owns (e.g. every
+/// `app.setFocus` arrow-key fires a `scope_chain` event; the frontend owns that
+/// slice via `FocusedScopeContext` and ignores the echo). No UI-specific policy
+/// lives here — the backend just tells the truth about which change it made.
+///
+/// This routes UI-state changes onto the SAME notification bridge every other
+/// change plane uses, so a plugin can `this.ui_state.on("changed", cb)` and the
+/// webview consumes it as a pure MCP client (the host's per-window forwarder
+/// re-broadcasts each bridge notification as the `notifications/ui_state/changed`
+/// Tauri event). The snapshot is already in hand at publish time, so carrying it
+/// is not an enrichment re-fetch.
+async fn publish_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Value) {
     let Some(kind) = ui_state_change_kind(result) else {
         return;
     };
-    let payload = serde_json::json!({ "kind": kind, "state": state.ui_state.to_json() });
-    // Deliver per-window with `emit_to`, NOT the global `app.emit`. In Tauri v2
-    // a global `Emitter::emit` does NOT reach the dynamically-created board
-    // webviews' `listen("ui-state-changed")` subscribers (the same reason the
-    // focus kernel uses `emit_to(window_label, "focus-changed", …)` and the
-    // per-board notification forwarder uses `emit_to`). With a global emit the
-    // backend would pop the inspector stack / close the palette but the webview
-    // never hears it, so the panel stays open — the keystone behind "Esc / the
-    // (x) button don't close the inspector" and "the palette won't open".
-    //
-    // The payload carries the FULL per-window-keyed UiState snapshot plus the
-    // `kind` discriminator, and each window's `UIStateProvider` reads only its
-    // own `windows[<label>]` slice — so emitting the snapshot to every webview
-    // is correct (each window self-selects) and introduces no cross-window
-    // leakage.
-    tracing::debug!(kind, "emitting ui-state-changed to all webviews");
-    for label in app.webview_windows().keys() {
-        let _ = app.emit_to(label.as_str(), "ui-state-changed", &payload);
+    let snapshot = state.ui_state.to_json();
+    tracing::debug!(
+        kind,
+        "publishing notifications/ui_state/changed on the bridge"
+    );
+    publish_ui_state_changed(app, state, kind, snapshot).await;
+}
+
+/// Publish a `ui_state/changed` notification to every distinct bridge backing a
+/// webview window.
+///
+/// UI-state changes are global (the payload is the full per-window-keyed
+/// snapshot; each window's `UIStateProvider` self-selects its own
+/// `windows[<label>]` slice). Different windows may forward from different
+/// bridges (a board's per-board host bridge, or the global host's bridge for
+/// boardless windows), so this resolves each window's bridge and publishes once
+/// per distinct bridge — every window's forwarder then delivers the
+/// `notifications/ui_state/changed` Tauri event to its webview. Mirrors how
+/// `publish_ai_streaming` resolves a window's bridge, generalized to fan out to
+/// all windows.
+pub(crate) async fn publish_ui_state_changed(
+    app: &AppHandle,
+    state: &AppState,
+    kind: &str,
+    snapshot: Value,
+) {
+    let labels: Vec<String> = app
+        .webview_windows()
+        .keys()
+        .map(|l| l.to_string())
+        .collect();
+    publish_ui_state_changed_to(state, &labels, kind, snapshot).await;
+}
+
+/// Publish a `ui_state/changed` notification to the distinct bridges backing the
+/// given window `labels`.
+///
+/// The per-window-targeting primitive behind [`publish_ui_state_changed`]: the
+/// command path passes every webview label (a global UI-state change reaches all
+/// windows, which self-select their slice); the watcher's perspective-recompute
+/// passes only the windows whose `filtered_task_ids` actually moved.
+///
+/// Windows on the same bridge (same board, or all boardless windows on the
+/// global bridge) receive exactly one publish — dedup is on the resolved
+/// `BindKey`, which uniquely names a bridge (the canonical board path, or `None`
+/// for the global bridge).
+pub(crate) async fn publish_ui_state_changed_to(
+    state: &AppState,
+    labels: &[String],
+    kind: &str,
+    snapshot: Value,
+) {
+    use swissarmyhammer_plugin::notify::NotificationBridge;
+
+    let mut published: HashMap<BindKey, ()> = HashMap::new();
+    for label in labels {
+        let (key, bridge): (BindKey, NotificationBridge) =
+            resolve_window_bridge(state, label).await;
+        if published.contains_key(&key) {
+            continue;
+        }
+        let note = swissarmyhammer_ui_state::ui_state_changed_notification(kind, snapshot.clone());
+        bridge.publish(note);
+        published.insert(key, ());
     }
 }
 
@@ -1942,29 +1992,15 @@ fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
         .and_then(|sc| sc.get("change"))
         .or_else(|| result.get("change"))
         .unwrap_or(result);
-    if let Ok(change) =
-        serde_json::from_value::<swissarmyhammer_ui_state::UiStateChange>(change_candidate.clone())
-    {
-        return Some(match change {
-            swissarmyhammer_ui_state::UiStateChange::ScopeChain(_) => "scope_chain",
-            swissarmyhammer_ui_state::UiStateChange::PaletteOpen(_) => "palette_open",
-            swissarmyhammer_ui_state::UiStateChange::KeymapMode(_) => "keymap_mode",
-            swissarmyhammer_ui_state::UiStateChange::InspectorStack(_) => "inspector_stack",
-            swissarmyhammer_ui_state::UiStateChange::ActiveView(_) => "active_view",
-            swissarmyhammer_ui_state::UiStateChange::ActivePerspective(_) => "active_perspective",
-            swissarmyhammer_ui_state::UiStateChange::AppMode(_) => "app_mode",
-            swissarmyhammer_ui_state::UiStateChange::InspectorWidth { .. } => "inspector_width",
-            // `PerspectiveSwitch` is the atomic id+filtered-ids update emitted
-            // by `perspective.switch`. We classify it as `perspective_switch`
-            // so the frontend can register its own debounce/skip policy
-            // independently of the legacy `active_perspective` kind (which
-            // covered id-only mutations).
-            swissarmyhammer_ui_state::UiStateChange::PerspectiveSwitch { .. } => {
-                "perspective_switch"
-            }
-        });
-    }
-    None
+    // The wire discriminator is owned by `UiStateChange::kind()` (single source
+    // of truth, in the ui-state crate beside the data it classifies) so the
+    // app's UI-state side-effect and the declared `UiStateChanged` notification
+    // cannot disagree. `PerspectiveSwitch` classifies as `perspective_switch`
+    // (its own kind), distinct from the id-only `active_perspective`, so the
+    // frontend can apply its own debounce/skip policy.
+    serde_json::from_value::<swissarmyhammer_ui_state::UiStateChange>(change_candidate.clone())
+        .ok()
+        .map(|change| change.kind())
 }
 
 /// Rebuild the native menu after commands whose effects change what items

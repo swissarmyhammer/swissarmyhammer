@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { UIStateProvider, useUIState } from "./ui-state-context";
+import { UI_STATE_CHANGED_EVENT } from "./mcp-notifications";
 
 // Mock Tauri
 vi.mock("@tauri-apps/api/core", () => ({
@@ -65,13 +66,30 @@ describe("useUIState", () => {
     expect(result.current.windows["main"]?.active_view_id).toBe("board");
   });
 
-  it("updates on ui-state-changed event", async () => {
+  it("subscribes to the bridge notifications/ui_state/changed event, not the legacy direct event", async () => {
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(makeState());
+    const events: string[] = [];
+    (listen as ReturnType<typeof vi.fn>).mockImplementation(
+      (event: string) => {
+        events.push(event);
+        return Promise.resolve(() => {});
+      },
+    );
+
+    renderHook(() => useUIState(), { wrapper: UIStateProvider });
+    await act(async () => {});
+
+    expect(events).toContain(UI_STATE_CHANGED_EVENT);
+    expect(events).not.toContain("ui-state-changed");
+  });
+
+  it("updates on the bridge notifications/ui_state/changed event", async () => {
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(makeState());
 
-    let eventCallback: ((event: { payload: unknown }) => void) | undefined;
+    const callbacks = new Map<string, (event: { payload: unknown }) => void>();
     (listen as ReturnType<typeof vi.fn>).mockImplementation(
-      (_event: string, cb: (event: { payload: unknown }) => void) => {
-        eventCallback = cb;
+      (event: string, cb: (event: { payload: unknown }) => void) => {
+        callbacks.set(event, cb);
         return Promise.resolve(() => {});
       },
     );
@@ -83,10 +101,10 @@ describe("useUIState", () => {
     await act(async () => {});
     expect(result.current.keymap_mode).toBe("cua");
 
-    // Simulate event from backend: the wire format is `{ kind, state }`
-    // where `state` is the full UIState snapshot.
+    // The bridge notification's params are `{ kind, state }` (the declared
+    // `UiStateChanged` payload) where `state` is the full UIState snapshot.
     act(() => {
-      eventCallback?.({
+      callbacks.get(UI_STATE_CHANGED_EVENT)?.({
         payload: {
           kind: "keymap_mode",
           state: makeState({
@@ -110,10 +128,13 @@ describe("useUIState", () => {
    */
   async function mountWithEventListener() {
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(makeState());
-    let eventCallback: ((event: { payload: unknown }) => void) | undefined;
+    const callbacks = new Map<
+      string,
+      (event: { payload: unknown }) => void
+    >();
     (listen as ReturnType<typeof vi.fn>).mockImplementation(
-      (_event: string, cb: (event: { payload: unknown }) => void) => {
-        eventCallback = cb;
+      (event: string, cb: (event: { payload: unknown }) => void) => {
+        callbacks.set(event, cb);
         return Promise.resolve(() => {});
       },
     );
@@ -124,7 +145,7 @@ describe("useUIState", () => {
     await act(async () => {});
     const emit = (payload: unknown) => {
       act(() => {
-        eventCallback?.({ payload });
+        callbacks.get(UI_STATE_CHANGED_EVENT)?.({ payload });
       });
     };
     return { result, emit };

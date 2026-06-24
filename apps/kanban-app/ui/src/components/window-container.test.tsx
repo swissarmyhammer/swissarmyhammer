@@ -105,6 +105,10 @@ vi.mock("@/lib/views-context", () => ({
 // Import after mocks
 import { RustEngineContainer } from "./rust-engine-container";
 import {
+  STORE_CHANGED_EVENT,
+  UI_STATE_CHANGED_EVENT,
+} from "@/lib/mcp-notifications";
+import {
   WindowContainer,
   useOpenBoards,
   useActiveBoardPath,
@@ -312,7 +316,7 @@ describe("WindowContainer", () => {
     // Wait for the lazy `subscribeStoreChanged` import to register.
     await waitFor(() => {
       const calls = mockListen.mock.calls.map((c: unknown[]) => c[0]);
-      expect(calls).toContain("notifications/store/changed");
+      expect(calls).toContain(STORE_CHANGED_EVENT);
     });
 
     const listenCalls = mockListen.mock.calls.map(
@@ -435,12 +439,12 @@ describe("WindowContainer", () => {
     // Let the lazy subscribeStoreChanged import register its listener.
     await waitFor(() => {
       const calls = mockListen.mock.calls.map((c: unknown[]) => c[0]);
-      expect(calls).toContain("notifications/store/changed");
+      expect(calls).toContain(STORE_CHANGED_EVENT);
     });
 
     // Emit a structural store/changed (the MCP replacement for board-changed).
     await act(async () => {
-      emitTauriEvent("notifications/store/changed", {
+      emitTauriEvent(STORE_CHANGED_EVENT, {
         store: "board",
         item: "b1",
         op: "updated",
@@ -625,7 +629,7 @@ describe("WindowContainer", () => {
    *      `file.switchBoard` and the backend writes `board_path` for the
    *      window. The backend reset (in `UIState::set_window_board`) clears
    *      `active_perspective_id` and `filtered_task_ids` when the path
-   *      differs, then emits `ui-state-changed { kind: "board_switch" }`
+   *      differs, then emits `notifications/ui_state/changed { kind: "board_switch" }`
    *      carrying the new snapshot.
    *   2. `UIStateProvider` applies the new snapshot. With the new board's
    *      perspectives loaded and `active_perspective_id === ""`,
@@ -652,7 +656,7 @@ describe("WindowContainer", () => {
       if (cmd === "get_ui_state") {
         // Initial snapshot: window has a board with a stale perspective
         // — this is the pre-switch state that should be replaced by the
-        // ui-state-changed event below.
+        // notifications/ui_state/changed event below.
         return Promise.resolve({
           palette_open: false,
           palette_mode: "command",
@@ -735,7 +739,7 @@ describe("WindowContainer", () => {
     // forward, active_perspective_id cleared to "", filtered_task_ids
     // gone (None on the wire → key omitted).
     await act(async () => {
-      emitTauriEvent("ui-state-changed", {
+      emitTauriEvent(UI_STATE_CHANGED_EVENT, {
         kind: "board_switch",
         state: {
           palette_open: false,

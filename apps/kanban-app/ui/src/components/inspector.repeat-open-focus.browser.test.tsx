@@ -131,6 +131,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // ---------------------------------------------------------------------------
 
 import "@/components/fields/registrations";
+import { UI_STATE_CHANGED_EVENT } from "@/lib/mcp-notifications";
 import { AppShell } from "./app-shell";
 import { InspectorsContainer } from "./inspectors-container";
 import { FocusLayer } from "./focus-layer";
@@ -242,12 +243,12 @@ function uiStateSnapshot() {
 }
 
 /**
- * Emit a synthetic `ui-state-changed` event so the UIStateProvider
- * picks up the new `inspector_stack`. The `kind` is informational —
- * the React side reacts to the snapshot, not the kind.
+ * Emit a synthetic `notifications/ui_state/changed` bridge event so the
+ * UIStateProvider picks up the new `inspector_stack`. The `kind` is
+ * informational — the React side reacts to the snapshot, not the kind.
  */
 function emitUiStateChanged(kind: string) {
-  const cbs = listeners.get("ui-state-changed") ?? [];
+  const cbs = listeners.get(UI_STATE_CHANGED_EVENT) ?? [];
   for (const cb of cbs) {
     cb({ payload: { kind, state: uiStateSnapshot() } });
   }
@@ -281,7 +282,7 @@ async function defaultInvokeImpl(
     const a = (args ?? {}) as { cmd?: string };
     if (a.cmd === "app.inspector.close" || a.cmd === "app.dismiss") {
       backendState.inspector_stack.pop();
-      emitUiStateChanged("InspectorClosed");
+      emitUiStateChanged("inspector_stack");
       return null;
     }
     return null;
@@ -391,14 +392,14 @@ async function flushAsync() {
 }
 
 /**
- * Mutate the backend's `inspector_stack` and emit a `ui-state-changed`
- * so the React tree reacts. Wrapped in `act` so all state work flushes
- * before the assertion.
+ * Mutate the backend's `inspector_stack` and emit a
+ * `notifications/ui_state/changed` so the React tree reacts. Wrapped in `act`
+ * so all state work flushes before the assertion.
  */
 async function setInspectorStack(next: string[]) {
   await act(async () => {
     backendState.inspector_stack = next;
-    emitUiStateChanged("InspectorOpened");
+    emitUiStateChanged("inspector_stack");
     await Promise.resolve();
   });
 }
@@ -475,7 +476,7 @@ describe("Inspector — auto-focus on every inspect (not only the first)", () =>
       // which (in production) round-trips through the backend and
       // mutates `inspector_stack`. The test fakes the backend mutation
       // by pushing the entity moniker onto the stack and emitting
-      // `ui-state-changed`. No flush between focus claim and inspector
+      // `notifications/ui_state/changed`. No flush between focus claim and inspector
       // open — production fires both from the same gesture, so the
       // React commits land back-to-back.
       await setInspectorStack([...backendState.inspector_stack, taskMoniker]);
@@ -485,7 +486,7 @@ describe("Inspector — auto-focus on every inspect (not only the first)", () =>
     async function dismissTop() {
       await act(async () => {
         backendState.inspector_stack.pop();
-        emitUiStateChanged("InspectorClosed");
+        emitUiStateChanged("inspector_stack");
         await Promise.resolve();
       });
     }

@@ -16,7 +16,8 @@
 //! 2. **Filtered-window perspective recompute.** A task create / remove /
 //!    field-change can move tasks into or out of a filtered window's
 //!    perspective; the bridge recomputes each filtered window's
-//!    `filtered_task_ids` snapshot and emits `ui-state-changed` per window.
+//!    `filtered_task_ids` snapshot and publishes
+//!    `notifications/ui_state/changed` on the notification bridge per window.
 //!
 //! The resolved `WatchEvent`s (and the per-task dependency fan-out the
 //! enrichment produces) feed only those two consumers; they are not serialized
@@ -30,7 +31,7 @@ use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_kanban::task_helpers::enrich_task_entity;
 use swissarmyhammer_kanban::virtual_tags::default_virtual_tag_registry;
 use swissarmyhammer_kanban::KanbanContext;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, RwLock};
 
@@ -596,8 +597,9 @@ fn raw_changed_event(
 ///   a task write touches `position_column` or `depends_on`.
 /// - Updates the shared `EntitySearchIndex` in lockstep with every resolved
 ///   change so full-text search results don't drift behind the data plane.
-/// - Recomputes each filtered window's `filtered_task_ids` and emits the
-///   `ui-state-changed` Tauri event (the one event seam this bridge keeps).
+/// - Recomputes each filtered window's `filtered_task_ids` and publishes a
+///   `notifications/ui_state/changed` notification on the bridge per changed
+///   window (the one UI-state seam this bridge keeps).
 /// - Logs and continues on `Lagged` — dropping events keeps the bridge
 ///   alive at the cost of a momentary index drift, which self-heals on the
 ///   next write.
@@ -651,7 +653,8 @@ pub async fn run_bridge(
 /// `BoardHandle::start_notification_fanin`). This bridge retains the two
 /// server-side concerns the fan-in does not cover — keeping the in-memory
 /// search index in lockstep with every entity change, and recomputing each
-/// filtered window's `filtered_task_ids` snapshot (emitted as `ui-state-changed`).
+/// filtered window's `filtered_task_ids` snapshot (published as
+/// `notifications/ui_state/changed`).
 async fn process_cache_event(
     evt: EntityEvent,
     ctx: &Arc<KanbanContext>,
@@ -673,7 +676,8 @@ async fn process_cache_event(
     // A task create/remove/field-change can move tasks into or out of a
     // filtered window's perspective. `filtered_task_ids` is a snapshot taken
     // at `perspective.switch` time and nothing else refreshes it — so recompute
-    // it here, server-side, and push a `ui-state-changed` event per window.
+    // it here, server-side, and publish a `notifications/ui_state/changed`
+    // notification on the bridge per window.
     if cache_event_touches_task(&resolved) {
         recompute_and_emit_perspective_filters(ctx, app).await;
     }
@@ -701,33 +705,32 @@ fn watch_event_touches_task(evt: &WatchEvent) -> bool {
     )
 }
 
-/// Recompute every filtered window's perspective filter and emit a
-/// `ui-state-changed` event for each window whose id list actually moved.
+/// Recompute every filtered window's perspective filter and publish a
+/// `notifications/ui_state/changed` notification (`kind: "perspective_switch"`)
+/// on the bridge for each window whose id list actually moved.
 ///
-/// Reaches `UiState` through the app's managed [`AppState`] and mirrors the
-/// `ui-state-changed` payload shape produced by `emit_ui_state_change_if_needed`
-/// in `commands.rs` — `{ "kind": "perspective_switch", "state": <UiState> }`.
+/// Reaches `UiState` through the app's managed [`AppState`] and routes onto the
+/// SAME notification bridge the command path uses
+/// (`crate::commands::publish_ui_state_changed_to`) — the host's per-window
+/// forwarder re-broadcasts each bridge notification as the
+/// `notifications/ui_state/changed` Tauri event the webview's `UIStateProvider`
+/// consumes. The payload is the declared `UiStateChanged` struct —
+/// `{ "kind": "perspective_switch", "state": <UiState snapshot> }` plus
+/// provenance.
 async fn recompute_and_emit_perspective_filters(ctx: &Arc<KanbanContext>, app: &tauri::AppHandle) {
     let app_state = app.state::<crate::state::AppState>();
-    let ui_state = &app_state.ui_state;
-    let changed_windows = recompute_perspective_filters(ctx.as_ref(), ui_state).await;
+    let changed_windows = recompute_perspective_filters(ctx.as_ref(), &app_state.ui_state).await;
     if changed_windows.is_empty() {
         return;
     }
-    let snapshot = serde_json::json!({
-        "kind": "perspective_switch",
-        "state": ui_state.to_json(),
-    });
-    for window_label in changed_windows {
-        if let Some(window) = app.get_webview_window(&window_label) {
-            if let Err(e) = window.emit("ui-state-changed", &snapshot) {
-                tracing::warn!(
-                    window_label, error = %e,
-                    "failed to emit ui-state-changed after perspective recompute"
-                );
-            }
-        }
-    }
+    let snapshot = app_state.ui_state.to_json();
+    crate::commands::publish_ui_state_changed_to(
+        &app_state,
+        &changed_windows,
+        "perspective_switch",
+        snapshot,
+    )
+    .await;
 }
 
 /// Re-evaluate the perspective filter for every window whose `filtered_task_ids`
@@ -736,9 +739,10 @@ async fn recompute_and_emit_perspective_filters(ctx: &Arc<KanbanContext>, app: &
 ///
 /// Returns the label of every window whose id list actually changed —
 /// `switch_perspective` is idempotent and yields `None` when the recompute
-/// produces the same set, so unchanged windows are absent. The caller emits a
-/// full `UiState` snapshot per changed window (mirroring
-/// `emit_ui_state_change_if_needed`), so only the labels are needed here.
+/// produces the same set, so unchanged windows are absent. The caller publishes a
+/// full `UiState` snapshot on the bridge per changed window (via
+/// `crate::commands::publish_ui_state_changed_to`), so only the labels are needed
+/// here.
 ///
 /// Windows whose `filtered_task_ids` is `None` (never switched perspective)
 /// are skipped: `None` means "no filter, show all", and populating it would

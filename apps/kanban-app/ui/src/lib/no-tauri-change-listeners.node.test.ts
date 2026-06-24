@@ -22,6 +22,10 @@ const FORBIDDEN_EVENTS = [
   "entity-removed",
   "board-changed",
   "attachment-changed",
+  // UI-state changes now flow through the MCP bridge plane
+  // `notifications/ui_state/changed`, consumed via `subscribeUiStateChanged`
+  // in `mcp-notifications.ts` — never the direct Tauri `ui-state-changed`.
+  "ui-state-changed",
 ];
 
 /**

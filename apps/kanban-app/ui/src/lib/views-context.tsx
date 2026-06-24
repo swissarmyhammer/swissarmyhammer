@@ -30,7 +30,7 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
   const [views, setViews] = useState<ViewDef[]>([]);
 
   // active_view_id comes from UIState per-window data — it is the single source of truth.
-  // UIStateProvider keeps it in sync via the "ui-state-changed" event.
+  // UIStateProvider keeps it in sync via the "notifications/ui_state/changed" bridge event.
   const uiState = useUIState();
   const active_view_id = uiState.windows?.[WINDOW_LABEL]?.active_view_id ?? "";
 
