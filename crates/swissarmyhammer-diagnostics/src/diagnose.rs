@@ -230,14 +230,23 @@ where
         per_report_cap: usize::MAX,
         ..config.clone()
     };
-    let (records, pending) = match settle(session, &watched_uris, &settle_config, timer).await {
+    let (records, settle_pending) = match settle(session, &watched_uris, &settle_config, timer).await
+    {
         SettleOutcome::Settled(records) => (records, false),
         SettleOutcome::Pending => (Vec::new(), true),
     };
 
+    // A running server that has signalled it is still loading (a pull answered
+    // with ServerCancelled / ContentModified / retrigger — see
+    // [`LspSession::is_ready`]) cannot give an authoritative "clean": an empty
+    // settled set then reflects "not analyzed yet", not "no problems". Report
+    // `pending` so the consumer (e.g. the inline fold-in) surfaces that instead
+    // of mistaking a not-yet-loaded server's silence for a clean file.
+    let not_ready = session.is_running() && !session.is_ready();
+
     DiagnoseOutcome {
         report: build_report(records, &targets, &dependent_files, config),
-        pending,
+        pending: settle_pending || not_ready,
     }
 }
 
@@ -651,5 +660,48 @@ mod tests {
 
         assert!(!outcome.pending, "a settled run is not pending");
         assert_eq!(outcome.report.counts.errors, 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn outcome_pending_when_running_server_is_not_ready() {
+        use crate::test_support::RecordingTransport;
+        // A live client (is_running == true) whose `textDocument/diagnostic`
+        // pull is answered with a ServerCancelled/retrigger error: the session
+        // records the server as not-ready. `diagnose` must then report
+        // `pending` even though the settled set is empty — a not-yet-loaded
+        // server's silence is NOT an authoritative "clean".
+        let client = Arc::new(Mutex::new(Some(RecordingTransport {
+            diagnostic_response: Some(json!({
+                "error": { "code": -32802, "data": { "retriggerRequest": true } }
+            })),
+            ..RecordingTransport::default()
+        })));
+        let session = LspSession::new(Arc::clone(&client), "rust");
+
+        // A pull (as the watcher drives) flips the session to not-ready.
+        let _ = session.pull_diagnostics(Path::new("src/a.rs"));
+        assert!(!session.is_ready(), "the cancelled pull marks not-ready");
+
+        let timer = ManualTimer::default();
+        let driver = timer.clone();
+        let config = DiagnosticsConfig::default();
+        let window = config.settle_window;
+        let paths = vec!["src/a.rs".to_string()];
+        let deps = stub(&[]);
+        let handle = tokio::spawn(async move {
+            diagnose_with_outcome(&session, &paths, &config, &deps, &timer).await
+        });
+        tokio::task::yield_now().await;
+        driver.advance(window);
+        let outcome = handle.await.unwrap();
+
+        assert!(
+            outcome.pending,
+            "a running-but-not-ready server must report pending, not clean"
+        );
+        assert!(
+            outcome.report.diagnostics.is_empty(),
+            "no diagnostics are available while the server is still loading"
+        );
     }
 }

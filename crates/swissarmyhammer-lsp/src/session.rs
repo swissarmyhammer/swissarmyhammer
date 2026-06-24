@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use lsp_types::Diagnostic;
@@ -62,6 +63,31 @@ fn file_uri(path: &Path) -> String {
     format!("file://{}", path.to_string_lossy())
 }
 
+/// Whether a `textDocument/diagnostic` pull response is the server's "not ready
+/// yet, retrigger later" answer rather than a real report.
+///
+/// rust-analyzer answers a pull issued before it has finished loading the
+/// workspace with a JSON-RPC error — `ServerCancelled` (-32802) or
+/// `ContentModified` (-32801), commonly carrying `data.retriggerRequest: true`
+/// — instead of a report. Accepts both the bare error object and a full
+/// JSON-RPC envelope (`{ "error": { ... } }`).
+fn pull_response_is_not_ready(response: &Value) -> bool {
+    let Some(error) = response.get("error") else {
+        return false;
+    };
+    if let Some(code) = error.get("code").and_then(|c| c.as_i64()) {
+        // ServerCancelled / ContentModified: the canonical "still loading" codes.
+        if code == -32802 || code == -32801 {
+            return true;
+        }
+    }
+    error
+        .get("data")
+        .and_then(|d| d.get("retriggerRequest"))
+        .and_then(|r| r.as_bool())
+        .unwrap_or(false)
+}
+
 /// The shared interior of an [`LspSession`]: the single client handle plus the
 /// open-document set. Every clone of the session points at the same `Arc`.
 struct SessionInner<C: LspTransport> {
@@ -81,6 +107,14 @@ struct SessionInner<C: LspTransport> {
     /// In-process fan-out of diagnostic updates. Both push and pull feed this
     /// one channel so every consumer sees the same stream.
     diagnostics_tx: broadcast::Sender<DiagnosticUpdate>,
+    /// Whether the server is ready to report diagnostics, or is still loading.
+    ///
+    /// Starts `true`. A pull answered with the server's "still loading"
+    /// signal (ServerCancelled / ContentModified / `retriggerRequest`) flips it
+    /// `false`; the next real answer flips it back. See
+    /// [`is_ready`](LspSession::is_ready) and
+    /// [`pull_diagnostics`](LspSession::pull_diagnostics).
+    ready: AtomicBool,
 }
 
 /// A single owned LSP session with a shared open-document set.
@@ -121,6 +155,7 @@ impl<C: LspTransport> LspSession<C> {
                 docs: Mutex::new(HashMap::new()),
                 diagnostics: Mutex::new(HashMap::new()),
                 diagnostics_tx,
+                ready: AtomicBool::new(true),
             }),
             language_id: language_id.into(),
         }
@@ -334,6 +369,25 @@ impl<C: LspTransport> LspSession<C> {
             .is_some()
     }
 
+    /// Whether the server is ready to report diagnostics for the workspace.
+    ///
+    /// Starts `true` and stays `true` for a server that always answers a pull
+    /// with a real report. A pull answered with the server's "still loading"
+    /// signal (ServerCancelled / ContentModified / `retriggerRequest`) flips
+    /// this `false` (see [`pull_diagnostics`](Self::pull_diagnostics)); the next
+    /// real answer flips it back. Consumers such as `diagnose` use this to
+    /// report "pending" rather than mistaking a not-yet-loaded server's silence
+    /// for a clean file. A genuinely clean file (a real, empty report) keeps the
+    /// server `ready` — only the not-ready signal flips it.
+    pub fn is_ready(&self) -> bool {
+        self.inner.ready.load(Ordering::Relaxed)
+    }
+
+    /// Record the server's readiness, observed from a pull response.
+    fn set_ready(&self, ready: bool) {
+        self.inner.ready.store(ready, Ordering::Relaxed);
+    }
+
     /// Run a closure against the one client, holding the client lock for the
     /// whole sequence.
     ///
@@ -419,6 +473,20 @@ impl<C: LspTransport> LspSession<C> {
             json!({ "textDocument": { "uri": uri } }),
         )?;
 
+        // A pull issued before the server finished loading is answered with its
+        // "still loading, retrigger later" error (ServerCancelled /
+        // ContentModified), NOT a real report. Record the server as not-ready
+        // and return empty WITHOUT caching/broadcasting — caching the empty body
+        // would let a consumer read "no diagnostics" as "the file is clean"
+        // while the server was merely still indexing.
+        if pull_response_is_not_ready(&response) {
+            self.set_ready(false);
+            return Ok(Vec::new());
+        }
+
+        // A real answer — even an empty report for a genuinely clean file —
+        // means the server is ready to speak about this document.
+        self.set_ready(true);
         // The result may be nested under "result" (full JSON-RPC envelope) or be
         // the bare report; parse whichever is present.
         let result = response.get("result").unwrap_or(&response);
@@ -914,6 +982,71 @@ mod tests {
             .expect("subscriber should receive pull update");
         assert_eq!(update.uri, uri);
         assert_eq!(update.diagnostics[0].message, "unused import");
+    }
+
+    #[test]
+    fn pull_not_ready_response_marks_session_not_ready_without_caching() {
+        // rust-analyzer answers a pull issued during workspace load with a
+        // ServerCancelled error + retriggerRequest, NOT a report. The session
+        // must record not-ready and must NOT cache/broadcast an empty (clean)
+        // set for the document — otherwise a consumer reads "still loading" as
+        // "the file is clean".
+        let client = Arc::new(Mutex::new(Some(FakeTransport::default().with_response(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32802,
+                    "message": "server cancelled the request",
+                    "data": { "retriggerRequest": true }
+                }
+            }),
+        ))));
+        let session = LspSession::new(Arc::clone(&client), "rust");
+        let path = PathBuf::from("/src/lib.rs");
+        let uri = file_uri(&path);
+
+        assert!(session.is_ready(), "a fresh session starts ready");
+        let pulled = session
+            .pull_diagnostics(&path)
+            .expect("a not-ready pull still returns Ok(empty)");
+        assert!(pulled.is_empty(), "a not-ready pull yields no diagnostics");
+        assert!(
+            !session.is_ready(),
+            "a ServerCancelled/retrigger pull must mark the session not-ready"
+        );
+        assert!(
+            session.diagnostics_for(&uri).is_empty(),
+            "a not-ready pull must NOT cache an empty (clean) set"
+        );
+    }
+
+    #[test]
+    fn real_pull_answer_marks_session_ready_again() {
+        // After a not-ready pull, a real report answer (even an empty one for a
+        // genuinely clean file) flips readiness back to true.
+        let client = Arc::new(Mutex::new(Some(
+            FakeTransport::default()
+                .with_response(json!({
+                    "jsonrpc": "2.0", "id": 1,
+                    "error": { "code": -32802, "data": { "retriggerRequest": true } }
+                }))
+                .with_response(json!({
+                    "jsonrpc": "2.0", "id": 2,
+                    "result": { "kind": "full", "items": [] }
+                })),
+        )));
+        let session = LspSession::new(Arc::clone(&client), "rust");
+        let path = PathBuf::from("/src/lib.rs");
+
+        session.pull_diagnostics(&path).expect("first (cancelled) pull");
+        assert!(!session.is_ready(), "not-ready after the cancelled pull");
+
+        session.pull_diagnostics(&path).expect("second (real) pull");
+        assert!(
+            session.is_ready(),
+            "a real (even empty) report means the server is ready and the file is clean"
+        );
     }
 
     #[test]
