@@ -67,9 +67,10 @@ pub mod service;
 pub mod shell;
 
 pub use operations::{
-    operations, ActivateWindow, CloseBoard, CloseWindow, GetBoardData, GetMonitors,
-    GetWindowPosition, ListOpenBoards, NewBoard, OpenBoard, OpenNewWindow, OpenPath, RevealPath,
-    SetWindowPosition, ShowContextMenu, SwitchBoard,
+    board_closed_notification, board_opened_notification, board_switched_notification,
+    notifications, operations, ActivateWindow, BoardClosed, BoardOpened, BoardSwitched, CloseBoard,
+    CloseWindow, GetBoardData, GetMonitors, GetWindowPosition, ListOpenBoards, NewBoard, OpenBoard,
+    OpenNewWindow, OpenPath, RevealPath, SetWindowPosition, ShowContextMenu, SwitchBoard,
 };
 pub use service::WindowService;
 pub use shell::{

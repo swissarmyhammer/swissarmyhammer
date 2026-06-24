@@ -871,7 +871,6 @@ fn resolve_target_window(app: &AppHandle, source: Option<&str>) -> Option<String
 /// initiated the open, when it is still open) so only that window switches.
 async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: Option<&str>) {
     use serde_json::json;
-    use tauri::Emitter;
 
     let state = handle.state::<AppState>();
     let path_str = path.display().to_string();
@@ -914,16 +913,35 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
                 .and_then(|p| p.canonicalize().ok().or(Some(p)))
                 .unwrap_or_else(|| path.to_path_buf());
 
-            // Emit board-opened so the originating window switches its active
-            // board. Use emit_to when a real target window resolved; fall back
-            // to a global emit so the event always reaches at least one listener
-            // (no window resolvable when OS focus shifts during native dialogs,
-            // or when no window is open).
-            let payload = json!({ "path": canonical.display().to_string() });
+            // Publish the board-opened lifecycle event onto the bridge so the
+            // originating window switches its active board, and any plugin
+            // subscribed with `this.window.on("board.opened", …)` observes it.
+            // This replaces the former direct `emit_to(label, "board-opened", …)`
+            // Tauri emit: the host's per-window forwarder re-broadcasts the
+            // `notifications/board/opened` notification as the Tauri event of the
+            // same name that `WindowContainer` listens for.
+            let canonical_str = canonical.display().to_string();
+            let notification =
+                swissarmyhammer_window_service::board_opened_notification(canonical_str);
             if let Some(ref label) = target_window {
-                let _ = handle.emit_to(label.as_str(), "board-opened", &payload);
+                // The board assignment just changed for this window; rebind its
+                // forwarder onto the new board's bridge BEFORE publishing so the
+                // notification reaches a live forwarder rather than one still
+                // bound to the previous board.
+                crate::commands::bind_window_forwarder(handle, &state, label).await;
+                crate::commands::publish_board_lifecycle(&state, label, notification).await;
             } else {
-                let _ = handle.emit("board-opened", &payload);
+                // No resolvable window (OS focus shifted during a native dialog,
+                // or no window is open): publish on the global host's bridge so
+                // the event still reaches any boardless window's forwarder and
+                // subscribing plugins.
+                let bridge = state
+                    .plugin_platform
+                    .lock()
+                    .await
+                    .host()
+                    .notification_bridge();
+                bridge.publish(notification);
             }
         }
         Err(e) => {

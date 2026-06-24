@@ -10,7 +10,8 @@
  * - ActiveBoardPathProvider
  * - AppShell (global keybindings -- must work even with no board loaded)
  * - Window-level state: openBoards, activeBoardPath, board, loading
- * - Board-level Tauri event listeners: board-opened, board-changed
+ * - Board-level MCP bridge listeners: notifications/board/opened (replaces the
+ *   legacy board-opened Tauri emit) + the store-change plane (replaces board-changed)
  * - Board switching logic (handleSwitchBoard)
  * - Calls refreshEntities(boardPath) from RustEngineContainer context on board switch
  *
@@ -35,8 +36,13 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { listOpenBoards } from "@/lib/window-mcp";
-import { subscribeStoreChanged } from "@/lib/mcp-notifications";
+import {
+  subscribeStoreChanged,
+  BOARD_OPENED_EVENT,
+  type BoardLifecycle,
+} from "@/lib/mcp-notifications";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "sonner";
 import { InitProgressListener } from "@/components/init-progress-listener";
@@ -520,19 +526,29 @@ async function runBoardChanged(deps: WindowBoardDeps): Promise<void> {
 /**
  * Registers board-level listeners for the lifetime of the window:
  *
- * - `board-opened` — a Tauri window-lifecycle event (this window was assigned
- *   a board), not a data-change event, so it stays on the window event API.
+ * - `notifications/board/opened` — the board-lifecycle event the `window`
+ *   service publishes onto this window's notification bridge when a board is
+ *   opened into it; the host's per-window forwarder re-broadcasts it as the
+ *   Tauri event named by its method, scoped to this window. This replaces the
+ *   former direct `board-opened` Tauri emit — the webview consumes board
+ *   lifecycle as a pure MCP client now. A plugin reads the same stream with
+ *   `this.window.on("board.opened", …)`.
  * - structural `notifications/store/changed` (board/column) — the MCP
  *   replacement for the former `board-changed` event; a board rename, column
  *   add/remove, or board switch triggers a window-level board reconcile.
  *
  * Entity-level changes are owned by `RustEngineContainer`'s store reducer.
+ *
+ * The board-opened listener uses a statically-imported `listen()` (not the
+ * lazy `subscribeBoardOpened` seam) so it registers synchronously on mount —
+ * mirroring the spatial-focus provider; a deferred dynamic-import registration
+ * would miss an event the test harness fires immediately.
  */
 function useBoardEventListeners(deps: WindowBoardDeps): void {
   useEffect(() => {
     let disposed = false;
-    const openedPromise = getCurrentWindow().listen<{ path: string }>(
-      "board-opened",
+    const openedPromise = listen<BoardLifecycle>(
+      BOARD_OPENED_EVENT,
       async (event) => {
         await adoptBoard(deps, event.payload.path, true);
       },

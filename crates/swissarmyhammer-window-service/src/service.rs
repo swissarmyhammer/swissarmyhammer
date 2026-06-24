@@ -33,7 +33,7 @@ use serde_json::Value;
 use swissarmyhammer_operations_macros::operation_tool;
 
 use crate::operations::{
-    operations, ActivateWindow, CloseBoard, CloseWindow, GetBoardData, GetMonitors,
+    notifications, operations, ActivateWindow, CloseBoard, CloseWindow, GetBoardData, GetMonitors,
     GetWindowPosition, ListOpenBoards, NewBoard, OpenBoard, OpenNewWindow, OpenPath, RevealPath,
     SetWindowPosition, ShowContextMenu, SwitchBoard,
 };
@@ -75,6 +75,7 @@ impl WindowService {
             name: "window",
             description: "Window-manager actions (open, activate, position, monitors, close) and OS file actions (open, reveal).",
             operations: operations(),
+            notifications: notifications(),
         }
     }
 

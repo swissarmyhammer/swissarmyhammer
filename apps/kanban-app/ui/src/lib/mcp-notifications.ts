@@ -57,6 +57,12 @@ export const DRAG_CANCELLED_EVENT =
 /** The Tauri event the host raises for `notifications/ui_state/drag_completed`. */
 export const DRAG_COMPLETED_EVENT =
   "notifications/ui_state/drag_completed" as const;
+/** The Tauri event the host raises for `notifications/board/opened`. */
+export const BOARD_OPENED_EVENT = "notifications/board/opened" as const;
+/** The Tauri event the host raises for `notifications/board/switched`. */
+export const BOARD_SWITCHED_EVENT = "notifications/board/switched" as const;
+/** The Tauri event the host raises for `notifications/board/closed`. */
+export const BOARD_CLOSED_EVENT = "notifications/board/closed" as const;
 
 /** A single field-level change inside a `store/changed` notification. */
 export interface StoreFieldChange {
@@ -191,6 +197,23 @@ export interface DragCompleted {
   session_id: string;
   /** Whether the drop's side-effects (transfer / flush) succeeded. */
   success: boolean;
+}
+
+/**
+ * One `notifications/board/opened` | `…/switched` | `…/closed` notification's
+ * params.
+ *
+ * Mirrors the declared `BoardOpened` / `BoardSwitched` / `BoardClosed` payload
+ * structs in `swissarmyhammer-window-service`
+ * (`crates/swissarmyhammer-window-service/src/operations.rs`): each is the thin
+ * board-lifecycle event carrying only the board's filesystem `path`. Board
+ * lifecycle is window-service territory (a board file ↔ the window showing it),
+ * so the three events are declared and published there; a plugin subscribes with
+ * `this.window.on("board.opened", …)` / `"board.switched"` / `"board.closed"`.
+ */
+export interface BoardLifecycle {
+  /** Canonical filesystem path of the board this lifecycle event concerns. */
+  path: string;
 }
 
 /** A batch of `store/changed` notifications that share one `txn`. */
@@ -454,4 +477,54 @@ export function subscribeDragCompleted(
   onCompleted: (payload: DragCompleted) => void,
 ): Promise<() => void> {
   return subscribeBridgeEvent(DRAG_COMPLETED_EVENT, onCompleted);
+}
+
+/**
+ * Subscribe to the `board/opened` plane (a board was opened into a window).
+ *
+ * Board lifecycle is declared and published by the `window` service, so a plugin
+ * subscribes with `this.window.on("board.opened", …)`. The webview consumes it as
+ * a pure MCP client — the host re-broadcasts the bridge notification as the Tauri
+ * event named by its method.
+ *
+ * This is the public, lazy seam for plugins and other MCP-client consumers. The
+ * `WindowContainer` does NOT use this helper — it `listen`s for
+ * {@link BOARD_OPENED_EVENT} directly so its handler registers synchronously on
+ * mount (mirroring the spatial-focus provider; a deferred dynamic-import
+ * registration would flake under the chromium test harness). Both target the same
+ * event name, so a consumer here sees exactly what the container sees.
+ *
+ * @param onOpened - Receives the opened board's `{ path }` payload.
+ * @returns A promise resolving to an unsubscribe function.
+ */
+export function subscribeBoardOpened(
+  onOpened: (payload: BoardLifecycle) => void,
+): Promise<() => void> {
+  return subscribeBridgeEvent(BOARD_OPENED_EVENT, onOpened);
+}
+
+/**
+ * Subscribe to the `board/switched` plane (a window's active board switched to
+ * another already-open board). See {@link subscribeBoardOpened}.
+ *
+ * @param onSwitched - Receives the now-active board's `{ path }` payload.
+ * @returns A promise resolving to an unsubscribe function.
+ */
+export function subscribeBoardSwitched(
+  onSwitched: (payload: BoardLifecycle) => void,
+): Promise<() => void> {
+  return subscribeBridgeEvent(BOARD_SWITCHED_EVENT, onSwitched);
+}
+
+/**
+ * Subscribe to the `board/closed` plane (a board was closed). See
+ * {@link subscribeBoardOpened}.
+ *
+ * @param onClosed - Receives the closed board's `{ path }` payload.
+ * @returns A promise resolving to an unsubscribe function.
+ */
+export function subscribeBoardClosed(
+  onClosed: (payload: BoardLifecycle) => void,
+): Promise<() => void> {
+  return subscribeBridgeEvent(BOARD_CLOSED_EVENT, onClosed);
 }

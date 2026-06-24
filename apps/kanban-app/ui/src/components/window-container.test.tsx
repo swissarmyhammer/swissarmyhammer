@@ -107,6 +107,7 @@ import { RustEngineContainer } from "./rust-engine-container";
 import {
   STORE_CHANGED_EVENT,
   UI_STATE_CHANGED_EVENT,
+  BOARD_OPENED_EVENT,
 } from "@/lib/mcp-notifications";
 import {
   WindowContainer,
@@ -172,13 +173,6 @@ function emitTauriEvent(eventName: string, payload: unknown) {
   }
 }
 
-/** Emit a window-scoped Tauri event to registered listeners. */
-function emitWindowEvent(eventName: string, payload: unknown) {
-  const cbs = windowListeners.get(eventName) ?? [];
-  for (const cb of cbs) {
-    cb({ payload });
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Probe components
@@ -282,7 +276,7 @@ describe("WindowContainer", () => {
     expect(screen.getByTestId("open-boards-count").textContent).toBe("0");
   });
 
-  it("registers board-opened window listener on mount", async () => {
+  it("registers the board-opened bridge listener on mount (not the legacy window event)", async () => {
     await act(async () => {
       render(
         withSpatialFocus(
@@ -295,10 +289,17 @@ describe("WindowContainer", () => {
       );
     });
 
+    // Board lifecycle now rides the MCP bridge: the container `listen`s for the
+    // `notifications/board/opened` Tauri event the host forwards, NOT the legacy
+    // direct `board-opened` window event.
+    await waitFor(() => {
+      const calls = mockListen.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calls).toContain(BOARD_OPENED_EVENT);
+    });
     const windowListenCalls = mockWindowListen.mock.calls.map(
       (c: unknown[]) => c[0],
     ) as string[];
-    expect(windowListenCalls).toContain("board-opened");
+    expect(windowListenCalls).not.toContain("board-opened");
   });
 
   it("subscribes to the MCP store-change plane on mount (not board-changed)", async () => {
@@ -325,7 +326,7 @@ describe("WindowContainer", () => {
     expect(listenCalls).not.toContain("board-changed");
   });
 
-  it("board-opened event updates activeBoardPath", async () => {
+  it("board-opened bridge event updates activeBoardPath", async () => {
     // Mock refreshEntities to return board data
     installInvoke((cmd: string) => {
       if (cmd === "get_ui_state")
@@ -375,9 +376,14 @@ describe("WindowContainer", () => {
       );
     });
 
-    // Emit board-opened window event
+    // Wait for the container's bridge listener to register, then emit the
+    // `notifications/board/opened` Tauri event the host forwards.
+    await waitFor(() => {
+      const calls = mockListen.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calls).toContain(BOARD_OPENED_EVENT);
+    });
     await act(async () => {
-      emitWindowEvent("board-opened", { path: "/new/board" });
+      emitTauriEvent(BOARD_OPENED_EVENT, { path: "/new/board" });
     });
 
     await waitFor(() => {

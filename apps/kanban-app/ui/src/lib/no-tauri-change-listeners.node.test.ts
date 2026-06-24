@@ -21,6 +21,11 @@ const FORBIDDEN_EVENTS = [
   "entity-created",
   "entity-removed",
   "board-changed",
+  // Board-open lifecycle now flows through the MCP bridge plane
+  // `notifications/board/opened`, consumed via the statically-imported
+  // `listen(BOARD_OPENED_EVENT)` in `window-container.tsx` (public seam:
+  // `subscribeBoardOpened`) — never the direct Tauri `board-opened` emit.
+  "board-opened",
   "attachment-changed",
   // UI-state changes now flow through the MCP bridge plane
   // `notifications/ui_state/changed`, consumed via `subscribeUiStateChanged`

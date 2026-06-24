@@ -1187,15 +1187,30 @@ impl AppState {
         Ok(canonical)
     }
 
-    /// If the board is already open, bump its MRU position and return `true`.
+    /// If the board is already open, bump its MRU position, publish a
+    /// `notifications/board/switched` lifecycle event, and return `true`.
+    ///
+    /// Re-opening an already-open board is a *switch* (a window's active board
+    /// changing to another open board), not a fresh open — so it publishes the
+    /// declared `switched` notification onto the board's bridge, where any
+    /// plugin subscribed with `this.window.on("board.switched", …)` and the
+    /// per-window forwarder observe it.
     async fn touch_if_already_open(&self, canonical: &Path) -> bool {
-        let boards = self.boards.read().await;
-        if boards.contains_key(canonical) {
-            self.ui_state
-                .set_most_recent_board(&canonical.display().to_string());
-            true
-        } else {
-            false
+        let handle = {
+            let boards = self.boards.read().await;
+            boards.get(canonical).cloned()
+        };
+        match handle {
+            Some(handle) => {
+                let canonical_str = canonical.display().to_string();
+                self.ui_state.set_most_recent_board(&canonical_str);
+                let bridge = self.board_bridge(&handle).await;
+                bridge.publish(swissarmyhammer_window_service::board_switched_notification(
+                    canonical_str,
+                ));
+                true
+            }
+            None => false,
         }
     }
 
@@ -1461,6 +1476,22 @@ impl AppState {
     pub async fn close_board(&self, path: &Path) -> Result<(), String> {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
+        // Publish the `notifications/board/closed` lifecycle event onto the
+        // board's bridge BEFORE the handle (and its per-board host's bridge) is
+        // dropped, so the buffered notification still reaches current
+        // subscribers — the per-window forwarder and any plugin subscribed with
+        // `this.window.on("board.closed", …)`. Resolve the handle without
+        // holding the write lock across the async bridge publish.
+        if let Some(handle) = {
+            let boards = self.boards.read().await;
+            boards.get(&canonical).cloned()
+        } {
+            let bridge = self.board_bridge(&handle).await;
+            bridge.publish(swissarmyhammer_window_service::board_closed_notification(
+                canonical.display().to_string(),
+            ));
+        }
+
         {
             let mut boards = self.boards.write().await;
             if boards.remove(&canonical).is_none() {
@@ -1516,6 +1547,29 @@ impl AppState {
             .unwrap_or_else(|_| PathBuf::from(&path_str));
         let boards = self.boards.read().await;
         boards.get(&canonical).cloned()
+    }
+
+    /// Resolve the notification bridge a given board publishes onto: its
+    /// per-board host's bridge when it has one, else the global host's bridge.
+    ///
+    /// Mirrors [`start_notification_fanin`](Self::start_notification_fanin) — the
+    /// same per-board-else-global choice — so board-lifecycle notifications land
+    /// on the bridge every other change for that board uses. `handle` is the
+    /// board's already-resolved handle (the caller holds it at the lifecycle
+    /// site, so no path re-lookup is needed).
+    pub(crate) async fn board_bridge(
+        &self,
+        handle: &BoardHandle,
+    ) -> swissarmyhammer_plugin::notify::NotificationBridge {
+        match handle.platform() {
+            Some(per_board) => per_board.lock().await.host().notification_bridge(),
+            None => self
+                .plugin_platform
+                .lock()
+                .await
+                .host()
+                .notification_bridge(),
+        }
     }
 }
 
@@ -2706,6 +2760,55 @@ mod tests {
         assert_eq!(
             state.ui_state.most_recent_board(),
             Some(path_b.display().to_string())
+        );
+    }
+
+    /// Real-pipeline: re-opening an already-open board PUBLISHES a
+    /// `notifications/board/switched` lifecycle notification (carrying the
+    /// board's path) onto the board's bridge, and closing it publishes
+    /// `notifications/board/closed`.
+    ///
+    /// Drives the actual `touch_if_already_open` / `close_board` publish path —
+    /// subscribing to the board's effective bridge (the global host's, since a
+    /// lite board has no per-board platform) and asserting the declared
+    /// notification shows up — not a hand-built notification. The declared
+    /// methods come from the `window` service's publish helpers, so this guards
+    /// the publish wiring end to end.
+    #[tokio::test]
+    async fn board_switch_and_close_publish_lifecycle_notifications() {
+        let tmp = TempDir::new().unwrap();
+        create_board_at(tmp.path(), "Lifecycle Board");
+
+        let state = AppState::new_for_test();
+        let canonical = state.open_board_for_test(tmp.path()).await.unwrap();
+        let canonical_str = canonical.display().to_string();
+
+        // Subscribe to the bridge the board publishes onto BEFORE triggering the
+        // switch/close so no notification is missed.
+        let bridge = state
+            .plugin_platform
+            .lock()
+            .await
+            .host()
+            .notification_bridge();
+        let mut sub = bridge.subscribe();
+
+        // Re-opening the same path is a switch (already-open → touch branch).
+        state.open_board_for_test(tmp.path()).await.unwrap();
+        let switched = sub.recv().await.expect("switched notification published");
+        assert_eq!(switched.method, "notifications/board/switched");
+        assert_eq!(
+            switched.params.as_object().expect("params is an object")["path"],
+            serde_json::json!(canonical_str),
+        );
+
+        // Closing publishes the closed notification with the same path.
+        state.close_board(&canonical).await.unwrap();
+        let closed = sub.recv().await.expect("closed notification published");
+        assert_eq!(closed.method, "notifications/board/closed");
+        assert_eq!(
+            closed.params.as_object().expect("params is an object")["path"],
+            serde_json::json!(canonical_str),
         );
     }
 

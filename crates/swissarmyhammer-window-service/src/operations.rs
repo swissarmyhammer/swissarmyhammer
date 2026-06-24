@@ -34,7 +34,7 @@
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
-use swissarmyhammer_operations::{operation, Operation};
+use swissarmyhammer_operations::{notification, operation, Notification, Operation};
 
 use crate::shell::ContextMenuItem;
 
@@ -378,4 +378,238 @@ static WINDOW_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
 /// Get the canonical slice of all window operations.
 pub fn operations() -> &'static [&'static dyn Operation] {
     &WINDOW_OPERATIONS
+}
+
+// Board-lifecycle notifications ─────────────────────────────────────────
+//
+// Each board a window displays is, from a plugin's point of view, the "window
+// change" it cares about: a board is opened into a window, switched within a
+// window, or closed. These three notifications make that lifecycle observable
+// on the MCP bridge — a plugin subscribes with `this.window.on("board.opened")`
+// / `"board.switched"` / `"board.closed"`.
+//
+// The methods live under the `board/*` path segment AND each declares an
+// explicit two-segment short `event` (`board.opened` / `board.switched` /
+// `board.closed`) so they share this `window` tool with the sibling raw
+// OS-window lifecycle (`notifications/window/created|focused|closed`, short
+// events `window.created` / `window.focused` / `window.closed`) without
+// colliding. The notifications `_meta` tree is keyed by the SHORT event name
+// (a duplicate key silently overwrites), so the default last-path-segment short
+// event would make `board/closed` and a future `window/closed` BOTH key as
+// `"closed"` and clash; the explicit `board.*` / `window.*` short events keep
+// the two families distinct. A plugin subscribes with
+// `this.window.on("board.opened", …)`. Both families hang off the single
+// window-service `#[notification] struct == payload` declaration pattern.
+//
+// All three carry only the board's filesystem path — a thin event (the
+// publisher has the path in hand at the open/switch/close site; no enrichment
+// re-fetch). The payload struct IS the published `params` (serialized via
+// [`McpNotification::from_declared`](swissarmyhammer_plugin::McpNotification::from_declared))
+// AND the declaration the SDK reads for `_meta`, so the two cannot drift.
+
+/// The `notifications/board/opened` event payload — a board was opened into a
+/// window.
+///
+/// `path` is the opened board's canonical filesystem path. Published from the
+/// app's board-open site once the board is registered and its window is
+/// switched to it.
+#[notification(
+    method = "notifications/board/opened",
+    event = "board.opened",
+    description = "A board was opened into a window."
+)]
+#[derive(Debug, Default, Serialize)]
+pub struct BoardOpened {
+    /// Canonical filesystem path of the opened board.
+    pub path: String,
+}
+
+/// The `notifications/board/switched` event payload — a window's active board
+/// changed to another already-open board.
+///
+/// `path` is the now-active board's canonical filesystem path. Published from
+/// the app's board-switch site once the window is rebound to the board.
+#[notification(
+    method = "notifications/board/switched",
+    event = "board.switched",
+    description = "A window's active board switched to another open board."
+)]
+#[derive(Debug, Default, Serialize)]
+pub struct BoardSwitched {
+    /// Canonical filesystem path of the now-active board.
+    pub path: String,
+}
+
+/// The `notifications/board/closed` event payload — a board was closed.
+///
+/// `path` is the closed board's canonical filesystem path. Published from the
+/// app's board-close site once the board is removed from the open set.
+#[notification(
+    method = "notifications/board/closed",
+    event = "board.closed",
+    description = "A board was closed."
+)]
+#[derive(Debug, Default, Serialize)]
+pub struct BoardClosed {
+    /// Canonical filesystem path of the closed board.
+    pub path: String,
+}
+
+/// The canonical slice of notifications the `window` tool emits.
+///
+/// Mirrors [`operations`]: a leaked `Default` instance per notification, used
+/// only for its static metadata. Fed to `operation_tool!`'s `notifications:`
+/// field so the tool advertises its events in `_meta` and `.on()` can resolve
+/// them.
+static WINDOW_NOTIFICATIONS: LazyLock<Vec<&'static dyn Notification>> = LazyLock::new(|| {
+    vec![
+        Box::leak(Box::<BoardOpened>::default()) as &dyn Notification,
+        Box::leak(Box::<BoardSwitched>::default()) as &dyn Notification,
+        Box::leak(Box::<BoardClosed>::default()) as &dyn Notification,
+    ]
+});
+
+/// Get the canonical slice of all `window` notifications.
+pub fn notifications() -> &'static [&'static dyn Notification] {
+    &WINDOW_NOTIFICATIONS
+}
+
+/// Build the `notifications/board/opened` notification carrying the opened
+/// board's path.
+///
+/// The single production publish helper for the board-opened event: it
+/// serializes the declared [`BoardOpened`] payload (so the `_meta` schema and
+/// the wire payload share one source) and stamps `user` provenance. Lives here,
+/// in the crate that DECLARES the notification, so the wire method comes from
+/// the `#[notification]` attribute rather than a string literal at the call
+/// site — the app's board-open sink calls this so the declared schema and the
+/// published payload cannot drift.
+pub fn board_opened_notification(
+    path: impl Into<String>,
+) -> swissarmyhammer_plugin::McpNotification {
+    let payload = BoardOpened { path: path.into() };
+    swissarmyhammer_plugin::McpNotification::from_declared(
+        payload.method(),
+        &payload,
+        swissarmyhammer_plugin::Provenance::user(),
+    )
+}
+
+/// Build the `notifications/board/switched` notification carrying the
+/// now-active board's path. See [`board_opened_notification`] for the
+/// struct == payload contract.
+pub fn board_switched_notification(
+    path: impl Into<String>,
+) -> swissarmyhammer_plugin::McpNotification {
+    let payload = BoardSwitched { path: path.into() };
+    swissarmyhammer_plugin::McpNotification::from_declared(
+        payload.method(),
+        &payload,
+        swissarmyhammer_plugin::Provenance::user(),
+    )
+}
+
+/// Build the `notifications/board/closed` notification carrying the closed
+/// board's path. See [`board_opened_notification`] for the struct == payload
+/// contract.
+pub fn board_closed_notification(
+    path: impl Into<String>,
+) -> swissarmyhammer_plugin::McpNotification {
+    let payload = BoardClosed { path: path.into() };
+    swissarmyhammer_plugin::McpNotification::from_declared(
+        payload.method(),
+        &payload,
+        swissarmyhammer_plugin::Provenance::user(),
+    )
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+    use swissarmyhammer_operations::generate_notifications_meta;
+
+    /// Each board-lifecycle notification declares its wire method and an
+    /// explicit two-segment short event (`board.opened` / `board.switched` /
+    /// `board.closed`) a plugin subscribes to with
+    /// `this.window.on("board.opened", …)`. The explicit `event` override (NOT
+    /// the default last-path-segment) keeps the `closed` event from colliding
+    /// with the sibling raw-window lifecycle's `window.closed` in the shared
+    /// `window` tool's flat-keyed notifications `_meta`.
+    #[test]
+    fn board_notifications_declare_method_and_event() {
+        assert_eq!(
+            BoardOpened::default().method(),
+            "notifications/board/opened"
+        );
+        assert_eq!(BoardOpened::default().event(), "board.opened");
+        assert_eq!(
+            BoardSwitched::default().method(),
+            "notifications/board/switched"
+        );
+        assert_eq!(BoardSwitched::default().event(), "board.switched");
+        assert_eq!(
+            BoardClosed::default().method(),
+            "notifications/board/closed"
+        );
+        assert_eq!(BoardClosed::default().event(), "board.closed");
+    }
+
+    /// Each publish helper builds the single-field `{ path }` payload under the
+    /// declared method — the struct == payload publish path.
+    #[test]
+    fn board_notifications_build_path_payload() {
+        let opened = board_opened_notification("/boards/alpha");
+        assert_eq!(opened.method, "notifications/board/opened");
+        assert_eq!(
+            opened.params.as_object().expect("params is an object")["path"],
+            "/boards/alpha"
+        );
+
+        let switched = board_switched_notification("/boards/beta");
+        assert_eq!(switched.method, "notifications/board/switched");
+        assert_eq!(
+            switched.params.as_object().expect("params is an object")["path"],
+            "/boards/beta"
+        );
+
+        let closed = board_closed_notification("/boards/gamma");
+        assert_eq!(closed.method, "notifications/board/closed");
+        assert_eq!(
+            closed.params.as_object().expect("params is an object")["path"],
+            "/boards/gamma"
+        );
+    }
+
+    /// Declared ⟺ raised coverage guard: every method a publish helper actually
+    /// emits MUST be one the `window` service declares in its notification
+    /// `_meta`. Pins the declared==published contract so a new helper or a
+    /// renamed method can never publish an undeclared event.
+    #[test]
+    fn published_board_methods_are_declared() {
+        let declared: std::collections::BTreeSet<String> =
+            generate_notifications_meta(notifications())
+                .as_object()
+                .expect("notifications meta is an object")
+                .values()
+                .map(|leaf| {
+                    leaf["method"]
+                        .as_str()
+                        .expect("each notification leaf carries a method")
+                        .to_string()
+                })
+                .collect();
+
+        for note in [
+            board_opened_notification("/x"),
+            board_switched_notification("/x"),
+            board_closed_notification("/x"),
+        ] {
+            assert!(
+                declared.contains(&note.method),
+                "emitted method {:?} is not declared in _meta ({:?})",
+                note.method,
+                declared,
+            );
+        }
+    }
 }
