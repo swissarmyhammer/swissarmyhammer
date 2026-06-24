@@ -37,8 +37,23 @@ comments:
 
     Binary rebuilt + installed via `just sah`. Known residual ambiguity (documented, not fixable at the response layer): the earliest pure-indexing pulls return true-empty and still look clean until RA starts emitting -32802 / a report; on a large cold workspace RA emits -32802 throughout the long load, so the gate fires. Single-warm-leader (Layer 2 / nfprqm9) remains the path to "edit → immediately see the error".
   timestamp: 2026-06-24T12:52:05.768494+00:00
-position_column: todo
-position_ordinal: a180
+- actor: claude-code
+  id: 01kvxefxewdbqcf06th2ha0pvb
+  text: |-
+    DONE + manually verified end to end.
+
+    The readiness gate alone was necessary-not-sufficient: the manual test exposed that diagnose_with_outcome never pulled — it did sync_open + settle and read only the in-process cache, which for rust-analyzer is populated solely by the watcher's async pulls. So check file / inline-edit returned empty even on warm broken code.
+
+    Fix (commit f16754c75): diagnose_with_outcome now pulls each target file directly (after the already-blocking sync_open). Warm -> report cached -> surfaced; cold -> ServerCancelled/-32802 -> is_ready false -> pending.
+
+    Manual test on the rebuilt binary: editing `render_hash(hash: u8) -> String { hash }` folded the E0308 ("expected String, found u8") straight into the edit-tool result with pending:false; reverting it produced a silent (no-diagnostics) envelope. Joy, not debugging.
+
+    Commits: bce7d48e2 (readiness gate + Layer-1 unavailable signal + real-RA integration test), f16754c75 (pull fix). All gates green: lsp lib 221, diagnostics lib 73(+1), tools inline_diagnostics 10, clippy clean, adversarial review PASS, real-RA integration stable.
+
+    Follow-up still open: en0jq4h (code-context get_diagnostics readiness — same class on a different surface).
+  timestamp: 2026-06-24T18:32:46.300677+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffe180
 project: diagnostics
 title: 'Inline diagnostics: distinguish "analyzed & clean" from "not analyzed / unavailable" instead of silently returning 0 errors'
 ---

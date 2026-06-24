@@ -217,6 +217,15 @@ where
             if let Ok(text) = std::fs::read_to_string(path.as_str()) {
                 let _ = session.sync_open(Path::new(path.as_str()), &text);
             }
+            // Pull this file so the cache and the session's readiness reflect the
+            // server's CURRENT answer, instead of depending on the watcher's
+            // asynchronous pulls having already populated the cache. A real
+            // report is cached (and `settle` below reads it); a "still loading"
+            // answer (ServerCancelled / ContentModified / retrigger) leaves
+            // `is_ready()` false, which the pending mapping below surfaces. This
+            // is a blocking round-trip, matching the already-blocking `sync_open`
+            // above.
+            let _ = session.pull_diagnostics(Path::new(path.as_str()));
         }
     }
 
@@ -702,6 +711,58 @@ mod tests {
         assert!(
             outcome.report.diagnostics.is_empty(),
             "no diagnostics are available while the server is still loading"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn running_session_pulls_targets_so_report_is_populated_without_prior_seed() {
+        use crate::test_support::RecordingTransport;
+        // A live client whose `textDocument/diagnostic` pull returns a real
+        // report. The cache is NOT pre-seeded and nothing pulled beforehand —
+        // `diagnose` must pull the target itself so the report is populated.
+        // This is the fix for the diagnose path depending on the watcher's
+        // asynchronous pulls: `check file` / inline-edit now reflect the
+        // server's current answer directly.
+        let client = Arc::new(Mutex::new(Some(RecordingTransport {
+            diagnostic_response: Some(json!({
+                "kind": "full",
+                "items": [{
+                    "range": {
+                        "start": { "line": 1, "character": 4 },
+                        "end": { "line": 1, "character": 5 }
+                    },
+                    "severity": 1,
+                    "message": "expected String, found integer"
+                }]
+            })),
+            ..RecordingTransport::default()
+        })));
+        let session = LspSession::new(Arc::clone(&client), "rust");
+
+        let timer = ManualTimer::default();
+        let driver = timer.clone();
+        let config = DiagnosticsConfig::default();
+        let window = config.settle_window;
+        let paths = vec!["src/a.rs".to_string()];
+        let deps = stub(&[]);
+        let handle = tokio::spawn(async move {
+            diagnose_with_outcome(&session, &paths, &config, &deps, &timer).await
+        });
+        tokio::task::yield_now().await;
+        driver.advance(window);
+        let outcome = handle.await.unwrap();
+
+        assert!(!outcome.pending, "a real report means ready, not pending");
+        let messages: Vec<&str> = outcome
+            .report
+            .diagnostics
+            .iter()
+            .map(|r| r.message.as_str())
+            .collect();
+        assert_eq!(
+            messages,
+            vec!["expected String, found integer"],
+            "diagnose must pull the target itself and surface the report without a prior seed"
         );
     }
 }
