@@ -43,8 +43,8 @@ use tokio::sync::Mutex;
 
 use crate::observer::{FocusEventSink, NoopSink};
 use crate::operations::{
-    operations, ClearFocus, DrillIn, DrillOut, Focus, FocusLost, GenerateSneakCodes, Navigate,
-    PopLayer, PushLayer, QueryFocus, QueryGeometry, QueryScopeChain,
+    notifications, operations, ClearFocus, DrillIn, DrillOut, Focus, FocusLost, GenerateSneakCodes,
+    Navigate, PopLayer, PushLayer, QueryFocus, QueryGeometry, QueryScopeChain,
 };
 use crate::provider::{NoopProvider, UiGeometryProvider};
 use crate::registry::SpatialRegistry;
@@ -67,9 +67,10 @@ pub struct FocusServer {
     /// Per-window focus tracker. Locked after `spatial_registry`.
     spatial_state: Arc<Mutex<SpatialState>>,
     /// Optional observer that mirrors every produced `FocusChangedEvent`
-    /// onto an external transport (e.g. the Tauri app's
-    /// `app.emit_to("focus-changed", ...)` path). Defaults to [`NoopSink`]
-    /// so unit tests that only consume return-value events stay unaffected.
+    /// onto an external transport (e.g. the Tauri app's bridge-publishing
+    /// sink, which publishes each as a `notifications/focus/changed`
+    /// notification). Defaults to [`NoopSink`] so unit tests that only consume
+    /// return-value events stay unaffected.
     sink: Arc<dyn FocusEventSink>,
     /// On-demand pull seam into the webview's live UI geometry. The
     /// host-driven nav ops (`navigate`/`drill_in`/`drill_out` with a
@@ -122,11 +123,12 @@ impl FocusServer {
     /// Attach a [`FocusEventSink`] so every produced [`FocusChangedEvent`]
     /// is mirrored onto an external transport.
     ///
-    /// Production wiring (the kanban app) passes a sink that calls
-    /// `app.emit_to(event.window_label, "focus-changed", event)` so the
-    /// React `SpatialFocusProvider` keeps receiving the same Tauri event
-    /// it did when the legacy `spatial_*` Tauri commands emitted on the
-    /// host side. Tests and unwired callers default to [`NoopSink`].
+    /// Production wiring (the kanban app) passes a sink that publishes each
+    /// event as the declared `notifications/focus/changed` notification onto
+    /// the originating window's notification bridge (via
+    /// [`crate::focus_changed_notification`]); the host's per-window forwarder
+    /// re-broadcasts it to the React `SpatialFocusProvider`, which consumes it
+    /// as a pure MCP client. Tests and unwired callers default to [`NoopSink`].
     ///
     /// Returns `self` so this fits in the builder-style construction the
     /// bootstrap uses.
@@ -180,6 +182,7 @@ impl FocusServer {
             name: "focus",
             description: "Spatial focus and keyboard-navigation actions over the per-window focus kernel.",
             operations: operations(),
+            notifications: notifications(),
         }
     }
 

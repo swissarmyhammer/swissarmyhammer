@@ -31,6 +31,8 @@
  * intentionally returned `undefined`" from "handler doesn't apply, keep
  * looking".
  */
+import { FOCUS_CHANGED_EVENT } from "@/lib/mcp-notifications";
+
 export const UNHANDLED = Symbol("unhandled");
 
 /** The `focus-changed` event the kernel emits, in the loose mock wire shape. */
@@ -231,7 +233,7 @@ export function emitToListenerMap(
   listeners: Map<string, Array<(event: { payload: unknown }) => void>>,
 ): FocusChangedEmit {
   return (event) => {
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get(FOCUS_CHANGED_EVENT) ?? [];
     for (const handler of handlers) handler(event);
   };
 }
@@ -247,7 +249,7 @@ export function emitToCallbackRecord(
   listenCallbacks: Record<string, (event: { payload: unknown }) => void>,
 ): FocusChangedEmit {
   return (event) => {
-    const cb = listenCallbacks["focus-changed"];
+    const cb = listenCallbacks[FOCUS_CHANGED_EVENT];
     if (cb) cb(event);
   };
 }

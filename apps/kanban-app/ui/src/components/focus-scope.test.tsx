@@ -15,7 +15,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((event: string, cb: ListenCallback) => {
-    if (event === "focus-changed") focusListeners.push(cb);
+    if (event === "notifications/focus/changed") focusListeners.push(cb);
     return Promise.resolve(() => {
       const idx = focusListeners.indexOf(cb);
       if (idx >= 0) focusListeners.splice(idx, 1);

@@ -249,7 +249,7 @@ describe("NavBar search button — Enter activates app.search via Pressable", ()
 
     // Drive a focus-changed event for the search leaf so the
     // entity-focus bridge populates the focused-scope chain.
-    const cb = listenCallbacks["focus-changed"];
+    const cb = listenCallbacks["notifications/focus/changed"];
     expect(cb).toBeTruthy();
     await act(async () => {
       cb({

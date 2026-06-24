@@ -27,7 +27,7 @@
  *
  * Mock pattern matches `grid-view.nav-is-eventdriven.test.tsx`:
  * `vi.hoisted` builds an invoke / listen mock pair; `mockListen` records
- * every `listen("focus-changed", cb)` callback so `fireFocusChanged(key)`
+ * every `listen("notifications/focus/changed", cb)` callback so `fireFocusChanged(key)`
  * can drive the React tree as if the Rust kernel had emitted the event.
  *
  * Runs under the browser project (real Chromium via Playwright) — every
@@ -240,7 +240,7 @@ async function fireFocusChanged({
     next_fq,
     next_segment: null,
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get("notifications/focus/changed") ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();

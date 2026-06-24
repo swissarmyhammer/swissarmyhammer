@@ -325,7 +325,7 @@ export function installKernelSimulator(
       next_segment: nextSegment,
     };
     queueMicrotask(() => {
-      const handlers = listeners.get("focus-changed") ?? [];
+      const handlers = listeners.get("notifications/focus/changed") ?? [];
       for (const h of handlers) h({ payload });
     });
   };

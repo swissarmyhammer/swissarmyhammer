@@ -284,7 +284,7 @@ async function flushSetup() {
 }
 
 async function fireFocus(key: FullyQualifiedMoniker, moniker: string) {
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get("notifications/focus/changed") ?? [];
   await act(async () => {
     for (const h of handlers) {
       h({

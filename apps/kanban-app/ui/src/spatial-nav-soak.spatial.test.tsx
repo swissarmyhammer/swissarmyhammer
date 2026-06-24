@@ -234,7 +234,7 @@ function setFocused(fq: FullyQualifiedMoniker, segment: SegmentMoniker) {
     next_segment: segment,
   };
   act(() => {
-    const handlers = listenHandlers["focus-changed"] ?? [];
+    const handlers = listenHandlers["notifications/focus/changed"] ?? [];
     for (const h of handlers) h({ payload });
   });
 }

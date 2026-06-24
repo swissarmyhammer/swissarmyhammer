@@ -46,6 +46,8 @@ export const STORE_UNDO_CHANGED_EVENT =
   "notifications/store/undo_changed" as const;
 /** The Tauri event the host raises for `notifications/ui_state/changed`. */
 export const UI_STATE_CHANGED_EVENT = "notifications/ui_state/changed" as const;
+/** The Tauri event the host raises for `notifications/focus/changed`. */
+export const FOCUS_CHANGED_EVENT = "notifications/focus/changed" as const;
 
 /** A single field-level change inside a `store/changed` notification. */
 export interface StoreFieldChange {
@@ -110,6 +112,33 @@ export interface UiStateChanged {
   kind: string;
   /** The full UI-state snapshot after the change. */
   state: unknown;
+}
+
+/**
+ * One `notifications/focus/changed` notification's params.
+ *
+ * Mirrors the declared `FocusChanged` payload struct in `swissarmyhammer-focus`
+ * (`crates/swissarmyhammer-focus/src/operations.rs`), whose fields ARE the
+ * kernel's `FocusChangedEvent`: the window the move belongs to plus the
+ * fully-qualified monikers on either side of the transition (and the new
+ * focus's trailing segment). Field names are snake_case to match Rust's serde
+ * defaults. Provenance (`txn`/`origin`) is stamped on top by the publish path
+ * but is not consumed here.
+ *
+ * Structurally identical to `FocusChangedPayload` in `@/types/spatial`; the
+ * `SpatialFocusProvider` consumes this stream as that type. Kept as a local
+ * declaration so this module stays decoupled from the spatial type graph,
+ * mirroring the other `subscribe*` payload interfaces here.
+ */
+export interface FocusChanged {
+  /** Window in which focus changed. */
+  window_label: string;
+  /** Previously focused fully-qualified moniker, or `null`. */
+  prev_fq: string | null;
+  /** Newly focused fully-qualified moniker, or `null` when focus is cleared. */
+  next_fq: string | null;
+  /** Trailing segment of the newly focused FQM, or `null`. */
+  next_segment: string | null;
 }
 
 /** A batch of `store/changed` notifications that share one `txn`. */
@@ -274,6 +303,39 @@ export function subscribeUiStateChanged(
         `[mcp-notifications] ${UI_STATE_CHANGED_EVENT} failed:`,
         err,
       );
+      return () => {};
+    });
+}
+
+/**
+ * Subscribe to the `focus/changed` plane (per-window spatial focus moves).
+ *
+ * The webview consumes spatial focus as a pure MCP client: the host
+ * re-broadcasts each `notifications/focus/changed` bridge notification as the
+ * Tauri event named by its method, scoped to the originating window.
+ *
+ * This is the public, lazy seam for plugins and other MCP-client consumers of
+ * the focus plane (mirroring {@link subscribeUiStateChanged}). The
+ * `SpatialFocusProvider` does NOT use this helper — it `listen`s for
+ * {@link FOCUS_CHANGED_EVENT} directly so its handler registers synchronously
+ * on mount (the spatial test harness fires focus events immediately and a
+ * deferred dynamic-import registration would miss them). Both target the same
+ * event name, so a consumer here sees exactly what the provider sees.
+ *
+ * @param onChanged - Receives the changed focus payload (window + prev/next FQM).
+ * @returns A promise resolving to an unsubscribe function.
+ */
+export function subscribeFocusChanged(
+  onChanged: (change: FocusChanged) => void,
+): Promise<() => void> {
+  return importListen()
+    .then((listen) =>
+      listen<FocusChanged>(FOCUS_CHANGED_EVENT, (event) =>
+        onChanged(event.payload),
+      ),
+    )
+    .catch((err) => {
+      console.error(`[mcp-notifications] ${FOCUS_CHANGED_EVENT} failed:`, err);
       return () => {};
     });
 }

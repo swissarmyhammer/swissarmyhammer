@@ -238,7 +238,7 @@ describe("InspectorsContainer — auto-focus on mount", () => {
             ? ((a.params as { fq?: FullyQualifiedMoniker } | undefined)?.fq)
             : undefined;
       if (fq) {
-        const handlers = listeners.get("focus-changed") ?? [];
+        const handlers = listeners.get("notifications/focus/changed") ?? [];
         for (const h of handlers) {
           h({
             payload: {

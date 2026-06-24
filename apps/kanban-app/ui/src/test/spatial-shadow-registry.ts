@@ -83,6 +83,7 @@ import {
   type SegmentMoniker,
   type WindowLabel,
 } from "@/types/spatial";
+import { FOCUS_CHANGED_EVENT } from "@/lib/mcp-notifications";
 
 // Re-export `asFq` directly from `@/types/spatial` so test files can build
 // FQM literals without importing from `@/types/spatial`. This pass-through
@@ -470,7 +471,7 @@ export async function fireFocusChanged({
     next_fq,
     next_segment,
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get(FOCUS_CHANGED_EVENT) ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();
@@ -784,7 +785,7 @@ export function installShadowNavigator(
         next_segment: entry?.segment ?? null,
       };
       queueMicrotask(() => {
-        const handlers = listeners.get("focus-changed") ?? [];
+        const handlers = listeners.get("notifications/focus/changed") ?? [];
         for (const h of handlers) h({ payload });
       });
       return undefined;
@@ -800,7 +801,7 @@ export function installShadowNavigator(
         next_segment: null,
       };
       queueMicrotask(() => {
-        const handlers = listeners.get("focus-changed") ?? [];
+        const handlers = listeners.get("notifications/focus/changed") ?? [];
         for (const h of handlers) h({ payload });
       });
       return undefined;
@@ -826,7 +827,7 @@ export function installShadowNavigator(
         next_segment: result.nextSegment,
       };
       queueMicrotask(() => {
-        const handlers = listeners.get("focus-changed") ?? [];
+        const handlers = listeners.get("notifications/focus/changed") ?? [];
         for (const h of handlers) h({ payload });
       });
       return undefined;
@@ -877,7 +878,7 @@ export function installShadowNavigator(
           next_segment: result.nextSegment,
         };
         queueMicrotask(() => {
-          const handlers = listeners.get("focus-changed") ?? [];
+          const handlers = listeners.get("notifications/focus/changed") ?? [];
           for (const h of handlers) h({ payload });
         });
         return undefined;

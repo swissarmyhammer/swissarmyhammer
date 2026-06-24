@@ -179,7 +179,7 @@ async function defaultInvokeImpl(
     const a = (args ?? {}) as { fq?: FullyQualifiedMoniker };
     const fq = a.fq ?? null;
     if (fq) {
-      const handlers = listeners.get("focus-changed") ?? [];
+      const handlers = listeners.get("notifications/focus/changed") ?? [];
       queueMicrotask(() => {
         for (const h of handlers) {
           h({

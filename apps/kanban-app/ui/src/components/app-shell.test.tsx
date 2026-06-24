@@ -627,7 +627,7 @@ describe("AppShell", () => {
     nextKey: string | null,
     nextMoniker: string | null = nextKey,
   ): void {
-    const cb = listenCallbacks["focus-changed"];
+    const cb = listenCallbacks["notifications/focus/changed"];
     expect(cb).toBeTruthy();
     cb({
       payload: {

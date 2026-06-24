@@ -333,7 +333,7 @@ describe("Inspector entity-zone barrier — boundary navigation", () => {
     expect(last, "body field zone must register").toBeDefined();
 
     // Seed focus on the last field via a focus-changed event.
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     await act(async () => {
       for (const h of handlers) {
         h({
@@ -389,7 +389,7 @@ describe("Inspector entity-zone barrier — boundary navigation", () => {
     const first = sim.findBySegment("field:task:T1.title");
     expect(first, "title field zone must register").toBeDefined();
 
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     await act(async () => {
       for (const h of handlers) {
         h({
@@ -436,7 +436,7 @@ describe("Inspector entity-zone barrier — boundary navigation", () => {
 
     const last = sim.findBySegment("field:task:T1.body");
     expect(last).toBeDefined();
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     await act(async () => {
       for (const h of handlers) {
         h({

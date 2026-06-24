@@ -30,8 +30,8 @@ use swissarmyhammer_entity_mcp::server::{
     task_local_resolver as entity_task_local_resolver, EntityServer,
 };
 use swissarmyhammer_focus::{
-    FocusChangedEvent, FocusEventSink, FocusServer, FullyQualifiedMoniker, NavSnapshot,
-    UiGeometryProvider, WindowLabel,
+    focus_changed_notification, FocusChangedEvent, FocusEventSink, FocusServer,
+    FullyQualifiedMoniker, NavSnapshot, UiGeometryProvider, WindowLabel,
 };
 use swissarmyhammer_kanban::command_seam::{task_local_store_resolver, StoreTransactionSeam};
 use swissarmyhammer_plugin::{InProcessServer, McpServer, PluginHost};
@@ -39,7 +39,7 @@ use swissarmyhammer_store::StoreServer;
 use swissarmyhammer_ui_state::{UiState, UiStateServer};
 use swissarmyhammer_views::{task_local_resolver as views_task_local_resolver, ViewsServer};
 use swissarmyhammer_window_service::{WindowService, WindowShell};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Manager};
 
 /// Deferred [`AppHandle`] cell used by the focus event sink.
 ///
@@ -55,8 +55,8 @@ use tauri::{AppHandle, Emitter};
 /// either before a window existed.
 static FOCUS_EVENT_APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 
-/// Install the [`AppHandle`] the focus event sink uses to emit
-/// `focus-changed` Tauri events.
+/// Install the [`AppHandle`] the focus event sink uses to resolve the
+/// originating window's notification bridge.
 ///
 /// Idempotent — only the first call wins. Call from `setup_app` once the
 /// AppHandle is available.
@@ -64,35 +64,48 @@ pub fn install_focus_event_app_handle(app_handle: AppHandle) {
     let _ = FOCUS_EVENT_APP_HANDLE.set(app_handle);
 }
 
-/// [`FocusEventSink`] that mirrors every [`FocusChangedEvent`] onto the
-/// Tauri `focus-changed` event, targeting the originating window.
+/// [`FocusEventSink`] that publishes every produced [`FocusChangedEvent`] onto
+/// the originating window's notification bridge as the declared
+/// `notifications/focus/changed` notification.
 ///
-/// Ports the side-effecting `emit` the legacy `spatial_*` Tauri commands
-/// did (`apps/kanban-app/src/commands.rs::emit_focus_changed`). The
-/// kernel directs each event to a single window via `emit_to`, keyed on
-/// the event's `window_label` — which is now derived from the explicit
-/// `window` the React client sends (or the window-rooted layer FQM,
-/// `/<label>/window`), never a clobbered side field. The targeted emit
-/// stays in place as defense in depth so a focus move only ever paints in
-/// its originating window.
-struct TauriFocusEventSink;
+/// This routes focus changes onto the SAME notification bridge every other
+/// change uses, so a plugin can `this.focus.on("changed", cb)` and the webview
+/// consumes it as a pure MCP client: the host's per-window forwarder
+/// re-broadcasts each bridge notification as the `notifications/focus/changed`
+/// Tauri event the React `SpatialFocusProvider` listens on. This replaces the
+/// former direct `app.emit_to(window_label, "focus-changed", …)` emit — there
+/// is no bespoke focus Tauri event anymore.
+///
+/// The kernel produces the event synchronously; resolving a window's effective
+/// bridge ([`crate::commands::resolve_window_bridge`] — its per-board host's
+/// bridge when the window has a board open, else the global host's bridge) is
+/// async, so the publish runs on a spawned task. The event already carries its
+/// `window_label`, derived from the window-rooted layer FQM, so the resolve
+/// targets exactly the originating window's bridge — whose per-window forwarder
+/// emits only to that window. The already-built notification is in hand at
+/// publish time, so carrying it is not an enrichment re-fetch.
+struct TauriFocusBridgeSink;
 
-impl FocusEventSink for TauriFocusEventSink {
+impl FocusEventSink for TauriFocusBridgeSink {
     fn emit(&self, event: &FocusChangedEvent) {
         // The cell may not be filled yet during the brief platform-wiring
         // → setup_app window. Drop the event in that case — matches the
-        // legacy behavior (Tauri commands couldn't emit before a window
-        // existed either).
+        // legacy behavior (the focus kernel couldn't reach a window before
+        // one existed either).
         let Some(app_handle) = FOCUS_EVENT_APP_HANDLE.get() else {
             return;
         };
-        if let Err(e) = app_handle.emit_to(event.window_label.as_str(), "focus-changed", event) {
-            tracing::warn!(
-                window = %event.window_label,
-                error = %e,
-                "TauriFocusEventSink: failed to emit focus-changed"
-            );
-        }
+        // The declared notification is built synchronously, here, from the
+        // event in hand — bridge resolution is the only async step.
+        let notification = focus_changed_notification(event);
+        let window_label = event.window_label.as_str().to_string();
+        let app_handle = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app_handle.state::<crate::state::AppState>();
+            let (_key, bridge) =
+                crate::commands::resolve_window_bridge(&state, &window_label).await;
+            bridge.publish(notification);
+        });
     }
 }
 
@@ -101,7 +114,7 @@ impl FocusEventSink for TauriFocusEventSink {
 /// ([`crate::ui_request::request_from_ui`]) and awaiting the reply.
 ///
 /// This is the app-layer half of the kernel's pull seam — the mirror image of
-/// [`TauriFocusEventSink`] (the push seam). The kernel defines the
+/// [`TauriFocusBridgeSink`] (the push seam). The kernel defines the
 /// [`UiGeometryProvider`] trait and knows nothing about Tauri; this impl
 /// translates each query into a `ui/request` to the named window:
 ///
@@ -275,10 +288,11 @@ pub async fn install_app_command_services(
     // hook; they are wired later from there via [`expose_apphandle_modules`].
     expose_apphandle_modules(host, window_shell, app_shell).await?;
 
-    // focus — app-wide. Attach a Tauri-event sink so every produced
-    // `FocusChangedEvent` is mirrored onto the `focus-changed` Tauri
-    // event the React `SpatialFocusProvider` listens on — restoring the
-    // side-effecting `emit` the legacy `spatial_*` Tauri commands did.
+    // focus — app-wide. Attach a bridge-publishing sink so every produced
+    // `FocusChangedEvent` is published onto the originating window's
+    // notification bridge as `notifications/focus/changed`; the host's
+    // per-window forwarder re-broadcasts it to the React `SpatialFocusProvider`,
+    // which listens on `notifications/focus/changed` as a pure MCP client.
     // The sink reads its AppHandle from a deferred cell that
     // `setup_app` fills via [`install_focus_event_app_handle`].
     // The sink is the kernel's PUSH seam (events out); the provider is its
@@ -288,7 +302,7 @@ pub async fn install_app_command_services(
     let focus_server: Arc<dyn McpServer> = Arc::new(
         InProcessServer::from_arc(Arc::new(
             FocusServer::new()
-                .with_sink(Arc::new(TauriFocusEventSink))
+                .with_sink(Arc::new(TauriFocusBridgeSink))
                 .with_provider(Arc::new(TauriUiGeometryProvider)),
         ))
         .await

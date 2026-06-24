@@ -126,8 +126,9 @@ pub use layer::FocusLayer;
 pub use navigate::{drill_in, drill_out, pick_target};
 pub use observer::{FocusEventSink, NoopSink, RecordingSink};
 pub use operations::{
-    operations, ClearFocus, DrillIn, DrillOut, Focus, FocusLost, Navigate, PopLayer, PushLayer,
-    QueryFocus, QueryGeometry, QueryScopeChain,
+    focus_changed_notification, notifications, operations, ClearFocus, DrillIn, DrillOut, Focus,
+    FocusChanged, FocusLost, Navigate, PopLayer, PushLayer, QueryFocus, QueryGeometry,
+    QueryScopeChain,
 };
 pub use provider::{NoopProvider, UiGeometryProvider};
 pub use registry::SpatialRegistry;

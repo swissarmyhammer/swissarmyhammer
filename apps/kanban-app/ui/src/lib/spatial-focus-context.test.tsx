@@ -87,7 +87,7 @@ function makePayload(
  * Wait one microtask for the provider's `listen()` promise to resolve and
  * register its handler in the mock map. The provider's `useEffect` calls
  * `listen(...).then(...)` to capture the unlisten callback; the next tick
- * is when the handler is reachable from `listenHandlers["focus-changed"]`.
+ * is when the handler is reachable from `listenHandlers["notifications/focus/changed"]`.
  */
 async function flushListenSetup() {
   await act(async () => {
@@ -117,7 +117,7 @@ describe("SpatialFocusProvider", () => {
     // Dispatch an event whose `next_fq` is NOT registered. The unknown
     // lookup must be a silent no-op — no claim fires anywhere.
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({ next_fq: asFq("ghost") }),
       });
     });
@@ -127,7 +127,7 @@ describe("SpatialFocusProvider", () => {
     // The known scope can still receive its own events — sanity-check
     // that the registry isn't broken by the unknown lookup.
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({ next_fq: knownKey }),
       });
     });
@@ -227,13 +227,13 @@ describe("SpatialFocusProvider", () => {
     );
     await flushListenSetup();
 
-    const unlisten = listenUnsubscribers["focus-changed"];
+    const unlisten = listenUnsubscribers["notifications/focus/changed"];
     expect(unlisten).toBeDefined();
     expect(unlisten).not.toHaveBeenCalled();
 
     unmount();
     expect(unlisten).toHaveBeenCalledTimes(1);
-    expect(listenHandlers["focus-changed"]).toBeUndefined();
+    expect(listenHandlers["notifications/focus/changed"]).toBeUndefined();
   });
 
   it("removes a scope from the claim registry on unmount", async () => {
@@ -273,7 +273,7 @@ describe("SpatialFocusProvider", () => {
 
     // After unmount, dispatching the same event must not call the claim.
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({ next_fq: key }),
       });
     });
@@ -300,7 +300,7 @@ describe("SpatialFocusProvider", () => {
     await flushListenSetup();
 
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({ prev_fq: aKey, next_fq: bKey }),
       });
     });
@@ -338,7 +338,7 @@ describe("SpatialFocusProvider", () => {
     );
 
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({ next_fq: key }),
       });
     });
@@ -744,7 +744,7 @@ describe("useFocusClaim listener identity", () => {
     );
 
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({ next_fq: key }),
       });
     });
@@ -905,14 +905,14 @@ describe("focusedKey", () => {
     const bKey: FullyQualifiedMoniker = asFq("b");
 
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({ next_fq: aKey }),
       });
     });
     expect(result.current.focusedFq()).toBe(aKey);
 
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({ prev_fq: aKey, next_fq: bKey }),
       });
     });
@@ -929,14 +929,14 @@ describe("focusedKey", () => {
 
     const key: FullyQualifiedMoniker = asFq("k");
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({ next_fq: key }),
       });
     });
     expect(result.current.focusedFq()).toBe(key);
 
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({ prev_fq: key, next_fq: null }),
       });
     });
@@ -966,7 +966,7 @@ describe("subscribeFocusChanged", () => {
       next_segment: asSegment("task:b"),
     });
     act(() => {
-      listenHandlers["focus-changed"]?.({ payload });
+      listenHandlers["notifications/focus/changed"]?.({ payload });
     });
 
     expect(subscriberA).toHaveBeenCalledWith(payload);
@@ -987,7 +987,7 @@ describe("subscribeFocusChanged", () => {
     const unsub = result.current.subscribeFocusChanged(subscriber);
 
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({ next_fq: asFq("a") }),
       });
     });
@@ -996,7 +996,7 @@ describe("subscribeFocusChanged", () => {
     unsub();
 
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({ next_fq: asFq("b") }),
       });
     });
@@ -1020,7 +1020,7 @@ describe("subscribeFocusChanged", () => {
     });
 
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({
           next_fq: asFq("k1"),
           next_segment: asSegment("task:01ABC"),
@@ -1028,7 +1028,7 @@ describe("subscribeFocusChanged", () => {
       });
     });
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: makePayload({
           prev_fq: asFq("k1"),
           next_fq: null,

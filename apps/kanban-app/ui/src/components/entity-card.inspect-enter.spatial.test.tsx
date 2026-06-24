@@ -260,7 +260,7 @@ describe("EntityCard inspect button — Enter activates app.inspect via Pressabl
 
     // Drive a focus-changed event for the inspect leaf so the
     // entity-focus bridge populates the focused-scope chain.
-    const cb = listenCallbacks["focus-changed"];
+    const cb = listenCallbacks["notifications/focus/changed"];
     expect(cb).toBeTruthy();
     await act(async () => {
       cb({

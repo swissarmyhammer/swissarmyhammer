@@ -175,7 +175,7 @@ function installHarness(jumpCodes: string[]): Harness {
     prev: FullyQualifiedMoniker | null,
     next: FullyQualifiedMoniker | null,
   ) {
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     for (const h of handlers) {
       h({
         payload: {
@@ -466,7 +466,7 @@ describe("<JumpToOverlay>", () => {
       onClose,
     });
     // Pre-emit focus-changed so the provider's focusedFqRef holds seed:0.
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     await act(async () => {
       for (const h of handlers) {
         h({
@@ -545,7 +545,7 @@ describe("<JumpToOverlay>", () => {
       onClose,
     });
     // Seed prior focus on scope:0 via a synthetic emit.
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     await act(async () => {
       for (const h of handlers) {
         h({
@@ -643,7 +643,7 @@ describe("<JumpToOverlay>", () => {
       open: true,
       onClose,
     });
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     await act(async () => {
       for (const h of handlers) {
         h({
@@ -687,7 +687,7 @@ describe("<JumpToOverlay>", () => {
       open: true,
       onClose,
     });
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     await act(async () => {
       for (const h of handlers) {
         h({
@@ -735,7 +735,7 @@ describe("<JumpToOverlay>", () => {
       open: true,
       onClose,
     });
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     await act(async () => {
       for (const h of handlers) {
         h({

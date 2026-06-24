@@ -162,7 +162,7 @@ describe("spatial_focus_lost IPC", () => {
       next_segment: asSegment("focused"),
     };
     act(() => {
-      listenHandlers["focus-changed"]?.({ payload });
+      listenHandlers["notifications/focus/changed"]?.({ payload });
     });
 
     mockInvoke.mockClear();
@@ -206,7 +206,7 @@ describe("spatial_focus_lost IPC", () => {
 
     // Set focus to focusedFq.
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: {
           window_label: "main" as FocusChangedPayload["window_label"],
           prev_fq: null,
@@ -243,7 +243,7 @@ describe("spatial_focus_lost IPC", () => {
     registry.add(sibFq, sibEntry);
 
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: {
           window_label: "main" as FocusChangedPayload["window_label"],
           prev_fq: null,
@@ -281,7 +281,7 @@ describe("spatial_focus_lost IPC", () => {
     const { entry } = makeEntry(layerFq);
     registry.add(fq, entry);
     act(() => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: {
           window_label: "main" as FocusChangedPayload["window_label"],
           prev_fq: null,
@@ -411,12 +411,12 @@ describe("spatial_focus_lost real unmount lifecycle", () => {
       // The focus-changed handler must be wired up by now — guard the
       // test against a silent miss where the listener fires into the
       // void.
-      expect(listenHandlers["focus-changed"]).toBeDefined();
+      expect(listenHandlers["notifications/focus/changed"]).toBeDefined();
 
       // Tell the provider the focused FQM so the deletion listener
       // recognises this scope as the focused one.
       act(() => {
-        listenHandlers["focus-changed"]?.({
+        listenHandlers["notifications/focus/changed"]?.({
           payload: {
             window_label: "main" as FocusChangedPayload["window_label"],
             prev_fq: null,

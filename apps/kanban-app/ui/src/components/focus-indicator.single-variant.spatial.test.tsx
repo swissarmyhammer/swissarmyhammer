@@ -29,7 +29,7 @@
  *
  * Mock pattern matches `nav-bar.spatial-nav.test.tsx`:
  *   - `vi.hoisted` builds an invoke / listen mock pair the test owns.
- *   - `mockListen` records every `listen("focus-changed", cb)` callback
+ *   - `mockListen` records every `listen("notifications/focus/changed", cb)` callback
  *     so `fireFocusChanged(key)` drives the React tree as if the Rust
  *     kernel had emitted the event.
  *
@@ -253,7 +253,7 @@ async function fireFocusChanged({
     next_fq,
     next_segment: null,
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get("notifications/focus/changed") ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();

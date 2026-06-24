@@ -438,7 +438,7 @@ describe("EntityCard — field icon lives inside the field's <FocusScope>", () =
     expect(zoneArgs).toBeTruthy();
 
     // Drive a focus claim for the field zone.
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     await act(async () => {
       for (const handler of handlers)
         handler({

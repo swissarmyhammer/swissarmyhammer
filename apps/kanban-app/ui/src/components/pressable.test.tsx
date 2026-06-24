@@ -170,7 +170,7 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
  * in `nav-bar.spatial-nav.test.tsx`.
  */
 async function fireFocusChangedTo(fq: string, segment: string | null) {
-  const cb = listenCallbacks["focus-changed"];
+  const cb = listenCallbacks["notifications/focus/changed"];
   if (!cb) throw new Error("focus-changed listener not registered yet");
   await act(async () => {
     cb({

@@ -256,7 +256,7 @@ function emitFocusChanged(nextFq: string | null, nextSegment: string | null) {
   const prev = currentFocusKey.key;
   currentFocusKey.key = nextFq;
   queueMicrotask(() => {
-    const handler = listenHandlers["focus-changed"];
+    const handler = listenHandlers["notifications/focus/changed"];
     if (handler) {
       handler({
         payload: {

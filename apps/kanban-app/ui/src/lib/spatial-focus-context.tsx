@@ -55,6 +55,10 @@ import {
 } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  FOCUS_CHANGED_EVENT,
+  type FocusChanged,
+} from "@/lib/mcp-notifications";
 /**
  * Read this window's Tauri label via the static `getCurrentWindow()` import.
  *
@@ -368,21 +372,38 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
   // kernel itself tolerates — don't corrupt the React-side view.
   const layerStackRef = useRef<FullyQualifiedMoniker[]>([]);
 
-  // Subscribe to the global `focus-changed` event exactly once for the
-  // provider's lifetime. The cleanup is critical: an unmounted provider
-  // that left its listener live would receive every focus-changed event
-  // for the rest of the process and call into the now-empty registry,
-  // leaking memory holding the closure references.
+  // Subscribe to focus changes over the MCP notification bridge exactly once
+  // for the provider's lifetime. The webview is a pure MCP client: it reads
+  // `notifications/focus/changed` (the host re-broadcasts each bridge
+  // notification as a Tauri event named by its method, scoped to the
+  // originating window) rather than a bespoke direct `focus-changed` event.
+  // The bridge notification's params ARE the kernel's `FocusChangedEvent`
+  // (the declared `FocusChanged` payload, structurally `FocusChangedPayload`).
+  //
+  // We `listen` directly (rather than through `subscribeFocusChanged`) so the
+  // handler registers SYNCHRONOUSLY on mount — the spatial test harness fires
+  // focus events immediately after render and a deferred (dynamic-import)
+  // registration would miss them. `subscribeFocusChanged` in
+  // `mcp-notifications.ts` remains the documented seam for plugins / other
+  // consumers; both target the same `FOCUS_CHANGED_EVENT`.
+  //
+  // The cleanup is critical: an unmounted provider that left its listener live
+  // would receive every focus event for the rest of the process and call into
+  // the now-empty registry, leaking memory holding the closure references.
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let cancelled = false;
 
-    listen<FocusChangedPayload>("focus-changed", ({ payload }) => {
-      // Window scoping: the kernel targets one window via `emit_to`, but a
-      // multi-window app's global `listen` receives events for EVERY window
-      // (same Tauri behavior the `ui/request` responder bus guards against).
-      // Without this filter, another window's focus event overwrites
-      // `focusedFqRef` — the value the kernel's `focus.current` /
+    listen<FocusChanged>(FOCUS_CHANGED_EVENT, ({ payload: change }) => {
+      // The declared `FocusChanged` payload is structurally the legacy
+      // `FocusChangedPayload` (the kernel's `FocusChangedEvent` fields); read
+      // it as such.
+      const payload = change as unknown as FocusChangedPayload;
+      // Window scoping: the host's per-window forwarder emits only to the
+      // originating window, but keep the own-window guard as defense in depth
+      // (a multi-window app's global listener historically received events for
+      // EVERY window). Without this filter, another window's focus event could
+      // overwrite `focusedFqRef` — the value the kernel's `focus.current` /
       // `focus.geometry` pulls answer from — so a host-driven drill in THIS
       // window resolved the OTHER window's focus (the two-windows-on-one-board
       // "drill-in/Escape do nothing" bug). The event's `window_label` is

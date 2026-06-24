@@ -26,6 +26,10 @@ const FORBIDDEN_EVENTS = [
   // `notifications/ui_state/changed`, consumed via `subscribeUiStateChanged`
   // in `mcp-notifications.ts` — never the direct Tauri `ui-state-changed`.
   "ui-state-changed",
+  // Spatial focus changes now flow through the MCP bridge plane
+  // `notifications/focus/changed`, consumed via `subscribeFocusChanged` in
+  // `mcp-notifications.ts` — never the direct Tauri `focus-changed`.
+  "focus-changed",
 ];
 
 /**

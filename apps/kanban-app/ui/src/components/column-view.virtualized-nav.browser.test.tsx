@@ -691,7 +691,7 @@ describe("<ColumnView> — scroll-on-edge fall-through for virtualized nav", () 
       const a = (args ?? {}) as Record<string, unknown>;
       const fromFq = a.focusedFq as FullyQualifiedMoniker;
       // Stay-put echo — mirrors the kernel's no-silent-dropout emit.
-      const handlers = listeners.get("focus-changed") ?? [];
+      const handlers = listeners.get("notifications/focus/changed") ?? [];
       const segment = rightmostCard.getAttribute("data-segment") ?? null;
       queueMicrotask(() => {
         for (const h of handlers) {

@@ -3,8 +3,9 @@
 //! [`FocusEventSink`] is an optional sugar layer over the existing
 //! [`Option<FocusChangedEvent>`] return values from the [`SpatialState`]
 //! mutators. Adapters that prefer push-based event delivery (e.g. the
-//! Tauri app's `app.emit("focus-changed", payload)` path) can route
-//! every produced event through a sink rather than threading
+//! Tauri app's bridge-publishing sink, which publishes each event as the
+//! declared `notifications/focus/changed` notification) can route every
+//! produced event through a sink rather than threading
 //! `Option<FocusChangedEvent>` through call sites.
 //!
 //! Two ready-made impls ship with the kernel:

@@ -41,9 +41,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
-use swissarmyhammer_operations::{operation, Operation};
+use swissarmyhammer_operations::{notification, operation, Notification, Operation};
 
 use crate::snapshot::NavSnapshot;
+use crate::state::FocusChangedEvent;
 use crate::types::{
     Direction, FullyQualifiedMoniker, LayerName, Pixels, Rect, SegmentMoniker, WindowLabel,
 };
@@ -503,4 +504,215 @@ fn proto_query_focus() -> QueryFocus {
 /// Get the canonical slice of all focus operations.
 pub fn operations() -> &'static [&'static dyn Operation] {
     &FOCUS_OPERATIONS
+}
+
+/// The `notifications/focus/changed` event payload.
+///
+/// The single observable change-stream for spatial focus: every time the focus
+/// kernel moves the focused fully-qualified moniker (FQM) for a window, it
+/// publishes one of these. The fields ARE the [`FocusChangedEvent`] the kernel
+/// produces — `window_label` names the window the move belongs to, `prev_fq` /
+/// `next_fq` are the FQMs on either side of the transition (`None` on either
+/// side for a focus acquisition / clear), and `next_segment` is the trailing
+/// segment of the new focus so display consumers skip a path parse.
+///
+/// This struct is the single source of truth for the event: it IS the published
+/// payload (it serializes to the notification's `params` via
+/// [`McpNotification::from_declared`](swissarmyhammer_plugin::McpNotification::from_declared))
+/// AND the declaration the SDK reads (its fields drive the
+/// `io.swissarmyhammer/notifications` `_meta`, resolved by
+/// `this.focus.on("changed", …)`). The two cannot drift.
+///
+/// Carrying the already-computed event is NOT an enrichment re-fetch: the
+/// publisher has the [`FocusChangedEvent`] in hand at publish time (the focus
+/// mutation just produced it). Provenance (`txn`/`origin`) is universal
+/// cross-cutting metadata stamped at publish time; it is intentionally NOT a
+/// field here — a spatial focus move is not undoable and carries no
+/// transaction.
+#[notification(
+    method = "notifications/focus/changed",
+    description = "The focused fully-qualified moniker for a window changed (spatial focus moved)."
+)]
+#[derive(Debug, Serialize)]
+pub struct FocusChanged {
+    /// Window in which the focus changed. The frontend's per-window claim
+    /// registry ignores events for other windows, so this is the routing key.
+    pub window_label: WindowLabel,
+    /// Previously focused FQM in this window, or `None` on cold-start /
+    /// focus acquisition.
+    pub prev_fq: Option<FullyQualifiedMoniker>,
+    /// Newly focused FQM in this window, or `None` when focus is being cleared.
+    pub next_fq: Option<FullyQualifiedMoniker>,
+    /// Trailing segment of the newly focused FQM, present iff `next_fq` is
+    /// `Some`.
+    pub next_segment: Option<SegmentMoniker>,
+}
+
+impl FocusChanged {
+    /// Build the declared payload from a kernel [`FocusChangedEvent`].
+    ///
+    /// A field-for-field move so the published `params` ARE the event the
+    /// kernel produced — the same wire shape the React `SpatialFocusProvider`
+    /// has always consumed off the `focus-changed` event.
+    fn from_event(event: &FocusChangedEvent) -> Self {
+        Self {
+            window_label: event.window_label.clone(),
+            prev_fq: event.prev_fq.clone(),
+            next_fq: event.next_fq.clone(),
+            next_segment: event.next_segment.clone(),
+        }
+    }
+}
+
+impl Default for FocusChanged {
+    /// A zero-valued prototype used ONLY for the static notification metadata
+    /// (`method`/`event`/`description`/`parameters`); its field values are
+    /// never read. Hand-written because the spatial newtypes do not derive
+    /// `Default`.
+    fn default() -> Self {
+        Self {
+            window_label: WindowLabel::from_string(""),
+            prev_fq: None,
+            next_fq: None,
+            next_segment: None,
+        }
+    }
+}
+
+/// The canonical slice of notifications the `focus` tool emits.
+///
+/// Mirrors [`operations`]: a leaked `Default` instance per notification, used
+/// only for its static metadata. Fed to `operation_tool!`'s `notifications:`
+/// field so the tool advertises its events in `_meta` and `.on()` can resolve
+/// them.
+static FOCUS_NOTIFICATIONS: LazyLock<Vec<&'static dyn Notification>> =
+    LazyLock::new(|| vec![Box::leak(Box::<FocusChanged>::default()) as &dyn Notification]);
+
+/// Get the canonical slice of all `focus` notifications.
+pub fn notifications() -> &'static [&'static dyn Notification] {
+    &FOCUS_NOTIFICATIONS
+}
+
+/// Build the `notifications/focus/changed` notification for a kernel
+/// [`FocusChangedEvent`].
+///
+/// The single production publish helper: serializes the declared
+/// [`FocusChanged`] payload (so the `_meta` schema and the wire payload share
+/// one source) and stamps `user` provenance. Lives here, in the crate that
+/// DECLARES the notification, so the wire method comes from the
+/// `#[notification]` attribute (via the [`Notification`] trait) rather than
+/// being repeated as a string literal at the call site — the kanban app's
+/// focus sink calls this so the declared schema and the published payload
+/// cannot drift.
+pub fn focus_changed_notification(
+    event: &FocusChangedEvent,
+) -> swissarmyhammer_plugin::McpNotification {
+    let payload = FocusChanged::from_event(event);
+    swissarmyhammer_plugin::McpNotification::from_declared(
+        payload.method(),
+        &payload,
+        swissarmyhammer_plugin::Provenance::user(),
+    )
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+    use swissarmyhammer_operations::generate_notifications_meta;
+
+    fn sample_event() -> FocusChangedEvent {
+        FocusChangedEvent {
+            window_label: WindowLabel::from_string("main"),
+            prev_fq: Some(FullyQualifiedMoniker::from_string("/main/a")),
+            next_fq: Some(FullyQualifiedMoniker::from_string("/main/b")),
+            next_segment: Some(SegmentMoniker::from_string("b")),
+        }
+    }
+
+    /// The `changed` notification declares the wire method and the short event
+    /// a plugin subscribes to with `this.focus.on("changed", …)` — the
+    /// method's last segment, so no `event` override is needed.
+    #[test]
+    fn focus_changed_notification_declares_method_and_event() {
+        let note = FocusChanged::default();
+        assert_eq!(note.method(), "notifications/focus/changed");
+        assert_eq!(
+            note.event(),
+            "changed",
+            "the short event must be the method's last segment so the plugin \
+             subscribes with `.on(\"changed\")`"
+        );
+    }
+
+    /// The notification serializes to its declared `params` shape — the four
+    /// `FocusChangedEvent` fields — so `from_declared` produces the right
+    /// payload.
+    #[test]
+    fn focus_changed_payload_serializes_to_event_fields() {
+        let payload = FocusChanged::from_event(&sample_event());
+        let value = serde_json::to_value(&payload).expect("FocusChanged serializes");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "window_label": "main",
+                "prev_fq": "/main/a",
+                "next_fq": "/main/b",
+                "next_segment": "b",
+            })
+        );
+    }
+
+    /// The `changed` notification appears in the generated `_meta` tree under
+    /// its short event name with its wire method.
+    #[test]
+    fn focus_notifications_meta_advertises_changed() {
+        let meta = generate_notifications_meta(notifications());
+        let obj = meta.as_object().expect("notifications meta is an object");
+        let leaf = obj
+            .get("changed")
+            .expect("changed event must be declared in the _meta tree");
+        assert_eq!(leaf["method"], "notifications/focus/changed");
+    }
+
+    /// Coverage guard (declared ⟺ raised). The method the production helper
+    /// actually publishes MUST be one the `focus` service declares — so
+    /// `focus/changed` can never be raised without appearing in `_meta`.
+    #[test]
+    fn focus_changed_emitted_method_is_declared() {
+        let note = focus_changed_notification(&sample_event());
+        let declared: std::collections::BTreeSet<String> =
+            generate_notifications_meta(notifications())
+                .as_object()
+                .expect("notifications meta is an object")
+                .values()
+                .map(|leaf| {
+                    leaf["method"]
+                        .as_str()
+                        .expect("each notification leaf carries a method")
+                        .to_string()
+                })
+                .collect();
+        assert!(
+            declared.contains(&note.method),
+            "emitted method {:?} is not declared in _meta ({:?})",
+            note.method,
+            declared,
+        );
+    }
+
+    /// The production helper builds the four-field event payload under the
+    /// declared method — the struct=payload publish path.
+    #[test]
+    fn focus_changed_notification_builds_event_payload() {
+        let note = focus_changed_notification(&sample_event());
+        assert_eq!(note.method, "notifications/focus/changed");
+        let params = note.params.as_object().expect("params is an object");
+        assert_eq!(params["window_label"], "main");
+        assert_eq!(params["prev_fq"], "/main/a");
+        assert_eq!(params["next_fq"], "/main/b");
+        assert_eq!(params["next_segment"], "b");
+        // A spatial focus move is not undoable → no transaction.
+        assert_eq!(params["txn"], serde_json::Value::Null);
+        assert_eq!(params["origin"], "user");
+    }
 }

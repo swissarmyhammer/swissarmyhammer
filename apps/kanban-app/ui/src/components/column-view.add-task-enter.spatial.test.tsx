@@ -257,7 +257,7 @@ describe("ColumnView add-task button — Enter activates onAddTask via Pressable
 
     // Drive a focus-changed event for the add-task leaf so the
     // entity-focus bridge populates the focused-scope chain.
-    const cb = listenCallbacks["focus-changed"];
+    const cb = listenCallbacks["notifications/focus/changed"];
     expect(cb).toBeTruthy();
     await act(async () => {
       cb({

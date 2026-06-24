@@ -374,7 +374,7 @@ async function fireFocusChanged({
     next_fq,
     next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get("notifications/focus/changed") ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();

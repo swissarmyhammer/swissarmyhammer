@@ -147,7 +147,7 @@ describe("SpatialFocusProvider host→UI geometry responders", () => {
 
     // Drive a focus-changed so the provider records `k1` as the focused FQM.
     await act(async () => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: {
           window_label: "main",
           prev_fq: null,
@@ -198,7 +198,7 @@ describe("SpatialFocusProvider host→UI geometry responders", () => {
 
     // Own-window focus event: recorded.
     await act(async () => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: {
           window_label: "main",
           prev_fq: null,
@@ -213,7 +213,7 @@ describe("SpatialFocusProvider host→UI geometry responders", () => {
     // it must be IGNORED — `focus.current` keeps answering this window's
     // own focus, never the foreign window's FQ.
     await act(async () => {
-      listenHandlers["focus-changed"]?.({
+      listenHandlers["notifications/focus/changed"]?.({
         payload: {
           window_label: "board-other",
           prev_fq: null,

@@ -7,10 +7,35 @@
 //! op — so the behavior is pinned to match the original `spatial_*` Tauri
 //! commands.
 
+use std::sync::Arc;
+
 use serde_json::{json, Value};
-use swissarmyhammer_focus::FocusServer;
+use swissarmyhammer_focus::{
+    focus_changed_notification, FocusChangedEvent, FocusEventSink, FocusServer,
+};
+use swissarmyhammer_plugin::notify::NotificationBridge;
 
 use super::common::call_tool;
+
+/// A [`FocusEventSink`] that publishes every produced [`FocusChangedEvent`] onto
+/// a [`NotificationBridge`] as the declared `notifications/focus/changed`
+/// notification.
+///
+/// This is the headless twin of the kanban app's production bridge-publishing
+/// sink (`TauriFocusBridgeSink` in `apps/kanban-app/src/command_services.rs`),
+/// minus the per-window bridge resolution and the Tauri shell — the same
+/// `focus_changed_notification` builder, the same `bridge.publish`. It lets the
+/// e2e test drive the WHOLE pipeline (real kernel mutation → sink → declared
+/// notification → real bridge → live subscriber) without standing up Tauri.
+struct BridgePublishingSink {
+    bridge: NotificationBridge,
+}
+
+impl FocusEventSink for BridgePublishingSink {
+    fn emit(&self, event: &FocusChangedEvent) {
+        self.bridge.publish(focus_changed_notification(event));
+    }
+}
 
 /// Build a single-scope snapshot under `layer_fq` containing `fq` at the
 /// zero rect (no parent zone / overrides) — the minimal shape `focus`
@@ -68,6 +93,55 @@ async fn set_focus_routes_and_emits_event() {
     assert_eq!(event["prev_fq"], Value::Null);
     assert_eq!(event["next_fq"], json!("/main/window/k1"));
     assert_eq!(event["next_segment"], json!("k1"));
+}
+
+/// Real-pipeline loop: a genuine `set focus` kernel mutation → its
+/// [`FocusChangedEvent`] → the attached [`FocusEventSink`] → the declared
+/// `notifications/focus/changed` notification → a real [`NotificationBridge`]
+/// → a live subscriber. No mock boundary: the same path the app's focus sink
+/// drives, minus the Tauri shell.
+///
+/// Proves a plugin doing `this.focus.on("changed", cb)` receives the real
+/// per-window focus event off the bridge.
+#[tokio::test]
+async fn focus_change_publishes_changed_on_the_bridge() {
+    let bridge = NotificationBridge::new();
+    let mut sub = bridge.subscribe();
+
+    // The kernel publishes onto the bridge through its sink — exactly as the
+    // app's `TauriFocusBridgeSink` does, minus per-window resolution + Tauri.
+    let server = FocusServer::new().with_sink(Arc::new(BridgePublishingSink {
+        bridge: bridge.clone(),
+    }));
+    // Window-rooted layer/fq so the owning window "main" is derived from the
+    // fq root segment, exactly as production composes it.
+    push_root_layer(&server, "/main/window", "main").await;
+
+    // A real `set focus` produces a real `FocusChangedEvent`, which the sink
+    // publishes as the declared notification.
+    let res = call_tool(
+        &server,
+        "set focus",
+        json!({ "op": "set focus", "fq": "/main/window/k1", "snapshot": snapshot_one("/main/window", "/main/window/k1") }),
+    )
+    .await
+    .expect("set focus should succeed");
+    assert_eq!(res["event"]["next_fq"], json!("/main/window/k1"));
+
+    // The subscriber (a plugin's `.on("changed")`) sees the real payload — the
+    // four `FocusChangedEvent` fields plus provenance.
+    let received = sub
+        .recv()
+        .await
+        .expect("subscriber receives the notification");
+    assert_eq!(received.method, "notifications/focus/changed");
+    assert_eq!(received.params["window_label"], json!("main"));
+    assert_eq!(received.params["prev_fq"], Value::Null);
+    assert_eq!(received.params["next_fq"], json!("/main/window/k1"));
+    assert_eq!(received.params["next_segment"], json!("k1"));
+    // A spatial focus move is not undoable → no transaction.
+    assert_eq!(received.params["txn"], Value::Null);
+    assert_eq!(received.params["origin"], json!("user"));
 }
 
 /// `set focus` with no snapshot drops the commit silently (transient unmount

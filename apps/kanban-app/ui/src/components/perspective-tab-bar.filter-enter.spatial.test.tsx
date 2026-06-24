@@ -355,7 +355,7 @@ describe("PerspectiveTabBar filter button — Enter claims focus on the filter e
 
     // Drive a focus-changed event for the leaf so the entity-focus
     // bridge populates the focused-scope chain.
-    const cb = listenCallbacks["focus-changed"];
+    const cb = listenCallbacks["notifications/focus/changed"];
     expect(cb).toBeTruthy();
     await act(async () => {
       cb({
@@ -460,7 +460,7 @@ describe("PerspectiveTabBar filter button — Enter claims focus on the filter e
     // entity-focus bridge populates the focused chain AND the focus-gated
     // bus registration (`useFocusedWebviewCommandHandlers`) installs the
     // live drill-in handler.
-    const cb = listenCallbacks["focus-changed"];
+    const cb = listenCallbacks["notifications/focus/changed"];
     expect(cb).toBeTruthy();
     await act(async () => {
       cb({

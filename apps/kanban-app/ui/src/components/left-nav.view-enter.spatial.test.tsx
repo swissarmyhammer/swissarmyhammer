@@ -257,7 +257,7 @@ describe("LeftNav view button — Enter activates view.set via Pressable", () =>
 
     // Drive a focus-changed event for the v1 leaf so the entity-focus
     // bridge populates the focused-scope chain.
-    const cb = listenCallbacks["focus-changed"];
+    const cb = listenCallbacks["notifications/focus/changed"];
     expect(cb).toBeTruthy();
     await act(async () => {
       cb({

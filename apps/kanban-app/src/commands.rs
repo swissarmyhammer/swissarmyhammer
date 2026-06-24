@@ -2297,9 +2297,10 @@ use swissarmyhammer_focus::{
 // `FOCUS_CHANGED_EVENT`, `window_label_from`, `with_spatial`, and
 // `emit_focus_changed` were REMOVED in Stage 3 of the kanban cut-over.
 // Focus event emission now flows through the `focus` MCP server's
-// `FocusEventSink` (see `TauriFocusEventSink` in `command_services.rs`),
-// which re-emits `focus-changed` onto the same Tauri event the React
-// `SpatialFocusProvider` always listened on.
+// `FocusEventSink` (see `TauriFocusBridgeSink` in `command_services.rs`),
+// which publishes `notifications/focus/changed` onto the originating
+// window's notification bridge; the host's per-window forwarder
+// re-broadcasts it to the React `SpatialFocusProvider`.
 
 // ── Pure inner logic, kept here so unit tests can drive the same kernel
 // code path against `&mut SpatialRegistry` without spinning up Tauri.
@@ -2338,10 +2339,10 @@ fn spatial_push_layer_inner(
 // reaches the focus kernel through the in-process `focus` MCP server
 // (`swissarmyhammer_focus::FocusServer`) routed via the generic
 // `command_tool_call` Tauri bridge. The kernel's `FocusChangedEvent`
-// stream is re-emitted onto the `focus-changed` Tauri event by the
-// `TauriFocusEventSink` installed in `command_services.rs`, so the
-// React `SpatialFocusProvider` keeps receiving the same Tauri event
-// it always did.
+// stream is published as `notifications/focus/changed` onto the
+// originating window's notification bridge by the `TauriFocusBridgeSink`
+// installed in `command_services.rs`; the host's per-window forwarder
+// re-broadcasts it to the React `SpatialFocusProvider`.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Generic MCP transport: `command_tool_call` + `mcp_subscribe`.

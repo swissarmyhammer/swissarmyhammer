@@ -59,7 +59,7 @@ import { render, fireEvent, act, waitFor } from "@testing-library/react";
 // The hoisted bag captures `mockInvoke` (every IPC the providers fire) and
 // `mockListen` (every `listen("event", cb)` callback) plus a `listeners`
 // map keyed by event name. Tests drive `focus-changed` events by reaching
-// into `listeners.get("focus-changed")` and invoking each registered
+// into `listeners.get("notifications/focus/changed")` and invoking each registered
 // callback — the same shape `grid-view.nav-is-eventdriven.test.tsx` and
 // `perspective-bar.spatial.test.tsx` use.
 // ---------------------------------------------------------------------------
@@ -305,7 +305,7 @@ async function fireFocusChanged({
     next_fq,
     next_segment: next_segment === null ? null : asSegment(next_segment),
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get("notifications/focus/changed") ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();
@@ -785,7 +785,7 @@ describe("GridView (spatial-nav)", () => {
 
     // Listener slot has at least one entry (the SpatialFocusProvider's
     // global `focus-changed` listener) before unmount.
-    const beforeUnmount = listeners.get("focus-changed")?.length ?? 0;
+    const beforeUnmount = listeners.get("notifications/focus/changed")?.length ?? 0;
     expect(beforeUnmount).toBeGreaterThan(0);
 
     // Tear down. Wrap in act() so React's cleanup-effect chain runs.
@@ -813,7 +813,7 @@ describe("GridView (spatial-nav)", () => {
     // `listeners` map. A non-empty slot here would indicate a leaked
     // listener — every focus change for the rest of the process would
     // call into the now-stale closure references.
-    const afterUnmount = listeners.get("focus-changed")?.length ?? 0;
+    const afterUnmount = listeners.get("notifications/focus/changed")?.length ?? 0;
     expect(afterUnmount).toBe(0);
   });
 

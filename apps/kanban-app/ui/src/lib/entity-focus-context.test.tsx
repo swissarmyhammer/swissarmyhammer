@@ -856,7 +856,7 @@ async function flushListenSetup() {
  * `spatial_focus` / `spatial_navigate` invocation.
  */
 function emitFocusChanged(payload: FocusChangedPayload): void {
-  const cb = listenCallbacks["focus-changed"];
+  const cb = listenCallbacks["notifications/focus/changed"];
   expect(cb).toBeTruthy();
   cb({ payload });
 }

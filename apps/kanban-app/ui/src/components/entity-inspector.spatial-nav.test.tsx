@@ -23,7 +23,7 @@
  *   - The Tauri mocks capture `spatial_register_scope` /
  *     `spatial_register_scope` payloads so we know which `FullyQualifiedMoniker`
  *     each zone and pill owns.
- *   - The `listen("focus-changed", cb)` mock records the React-side
+ *   - The `listen("notifications/focus/changed", cb)` mock records the React-side
  *     handler so `fireFocusChanged(key)` can simulate the kernel
  *     emitting a focus event back to the renderer.
  */
@@ -286,7 +286,7 @@ async function fireFocusChanged({
     next_fq,
     next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get("notifications/focus/changed") ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();
