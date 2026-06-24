@@ -1,8 +1,14 @@
 /**
  * Cross-window drag session context.
  *
- * Listens to Tauri drag-session events and exposes the active session
- * (if any) plus helpers for starting/cancelling/completing sessions.
+ * Subscribes to the drag lifecycle on the MCP notification bridge
+ * (`notifications/ui_state/drag_started | drag_cancelled | drag_completed`) and
+ * exposes the active session (if any) plus helpers for starting/cancelling/
+ * completing sessions. The provider registers via the statically-imported
+ * `listen` (synchronous registration); the `subscribeDrag*` seams in
+ * `mcp-notifications.ts` remain the public plugin/MCP-client subscription API.
+ * The webview consumes drag as a pure MCP client — never the legacy direct
+ * Tauri `drag-session-*` events.
  */
 
 import {
@@ -13,9 +19,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useDispatchCommand, type DispatchOptions } from "@/lib/command-scope";
+import {
+  DRAG_STARTED_EVENT,
+  DRAG_CANCELLED_EVENT,
+  DRAG_COMPLETED_EVENT,
+  type DragStarted,
+} from "@/lib/mcp-notifications";
 
 type DispatchFn = (cmd: string, opts?: DispatchOptions) => Promise<unknown>;
 
@@ -43,7 +55,7 @@ export type DragSource =
     };
 
 /**
- * Payload emitted by `drag-session-active`.
+ * Payload carried by `notifications/ui_state/drag_started`.
  *
  * The wire payload carries both the legacy flat fields (`task_id`,
  * `source_board_path`, `source_window_label`) and the new `from`
@@ -128,36 +140,43 @@ export function useDragSession() {
   return useContext(DragSessionContext);
 }
 
-/** Subscribes to the Tauri drag-session event stream and keeps local state in sync. */
+/** Subscribes to the drag lifecycle on the MCP bridge and keeps local state in sync. */
 function useDragSessionEvents(
   setSession: (s: DragSession | null) => void,
   setIsSource: (b: boolean) => void,
 ) {
   useEffect(() => {
     const myLabel = getCurrentWindow().label;
-    const unlisteners = [
-      listen<DragSession>("drag-session-active", (event) => {
-        setSession(event.payload);
-        // Source is identified by window label (not board path — multiple
-        // windows can show the same board).
-        setIsSource(event.payload.source_window_label === myLabel);
-      }),
-      listen<{ session_id: string }>("drag-session-cancelled", () => {
-        setSession(null);
-        setIsSource(false);
-      }),
-      listen<{ session_id: string; success: boolean }>(
-        "drag-session-completed",
-        () => {
-          setSession(null);
-          setIsSource(false);
-        },
-      ),
-    ];
+    let cancelled = false;
+    const unlisteners: UnlistenFn[] = [];
+    const clear = () => {
+      setSession(null);
+      setIsSource(false);
+    };
+    // Register the bridge listeners via the statically-imported `listen` (NOT
+    // the `subscribeDrag*` seams, which resolve `listen` through a dynamic
+    // `import()` — a macrotask hop that registers a tick late and races the
+    // event in the chromium test harness; same fix the focus provider applies).
+    // `subscribeDrag*` remains the public plugin/MCP-client seam.
+    const register = (event: string, handler: (payload: unknown) => void) => {
+      listen(event, ({ payload }) => handler(payload)).then((fn) => {
+        if (cancelled) fn();
+        else unlisteners.push(fn);
+      });
+    };
+    register(DRAG_STARTED_EVENT, (payload) => {
+      // The started payload IS the session wire shape (`DragSession`).
+      const session = payload as DragStarted as unknown as DragSession;
+      setSession(session);
+      // Source is identified by window label (not board path — multiple
+      // windows can show the same board).
+      setIsSource(session.source_window_label === myLabel);
+    });
+    register(DRAG_CANCELLED_EVENT, clear);
+    register(DRAG_COMPLETED_EVENT, clear);
     return () => {
-      for (const p of unlisteners) {
-        p.then((fn) => fn());
-      }
+      cancelled = true;
+      for (const fn of unlisteners) fn();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

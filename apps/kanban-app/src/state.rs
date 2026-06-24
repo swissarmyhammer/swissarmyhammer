@@ -2823,8 +2823,8 @@ mod tests {
         let session = make_drag_session("task-1", "/board/a");
         let json = serde_json::to_value(&session).unwrap();
         // The session's source is now nested under `from` as a tagged enum
-        // (`kind: "focus_chain"`). The frontend's `drag-session-active`
-        // wire payload still ships the legacy flat shape; that wire payload
+        // (`kind: "focus_chain"`). The frontend's `drag_started` bridge
+        // notification still ships the legacy flat shape; that wire payload
         // is built by `DragStartCmd` directly and is exercised by the
         // drag_start_cmd_returns_drag_start_result test in mod.rs.
         assert_eq!(json["from"]["kind"], "focus_chain");

@@ -30,6 +30,13 @@ const FORBIDDEN_EVENTS = [
   // `notifications/focus/changed`, consumed via `subscribeFocusChanged` in
   // `mcp-notifications.ts` — never the direct Tauri `focus-changed`.
   "focus-changed",
+  // Cross-window drag lifecycle now flows through the MCP bridge planes
+  // `notifications/ui_state/drag_started | drag_cancelled | drag_completed`,
+  // consumed via the `subscribeDrag*` seams in `mcp-notifications.ts` — never
+  // the direct Tauri `drag-session-*` events.
+  "drag-session-active",
+  "drag-session-cancelled",
+  "drag-session-completed",
 ];
 
 /**

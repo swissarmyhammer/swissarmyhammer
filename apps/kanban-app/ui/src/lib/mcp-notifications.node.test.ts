@@ -30,6 +30,15 @@ import {
   subscribeFocusChanged,
   FOCUS_CHANGED_EVENT,
   type FocusChanged,
+  subscribeDragStarted,
+  subscribeDragCancelled,
+  subscribeDragCompleted,
+  DRAG_STARTED_EVENT,
+  DRAG_CANCELLED_EVENT,
+  DRAG_COMPLETED_EVENT,
+  type DragStarted,
+  type DragCancelled,
+  type DragCompleted,
 } from "./mcp-notifications";
 
 beforeEach(() => {
@@ -61,5 +70,64 @@ describe("subscribeFocusChanged", () => {
 
     unsubscribe();
     expect(listenHandlers[FOCUS_CHANGED_EVENT]).toBeUndefined();
+  });
+});
+
+describe("drag lifecycle subscribers", () => {
+  it("subscribeDragStarted targets the bridge event, never the legacy Tauri event", async () => {
+    const received: DragStarted[] = [];
+    const unsubscribe = await subscribeDragStarted((s) => received.push(s));
+
+    expect(DRAG_STARTED_EVENT).toBe("notifications/ui_state/drag_started");
+    expect(listenHandlers[DRAG_STARTED_EVENT]).toBeDefined();
+    expect(listenHandlers["drag-session-active"]).toBeUndefined();
+
+    const payload: DragStarted = {
+      session_id: "sess-1",
+      source_board_path: "/board/a",
+      source_window_label: "main",
+      task_id: "task-1",
+      task_fields: {},
+      copy_mode: false,
+      started_at_ms: 7,
+      from: { kind: "focus_chain", entity_id: "task-1" },
+    } as unknown as DragStarted;
+    listenHandlers[DRAG_STARTED_EVENT]({ payload });
+    expect(received).toEqual([payload]);
+
+    unsubscribe();
+    expect(listenHandlers[DRAG_STARTED_EVENT]).toBeUndefined();
+  });
+
+  it("subscribeDragCancelled targets the bridge event, never the legacy Tauri event", async () => {
+    const received: DragCancelled[] = [];
+    const unsubscribe = await subscribeDragCancelled((s) => received.push(s));
+
+    expect(DRAG_CANCELLED_EVENT).toBe("notifications/ui_state/drag_cancelled");
+    expect(listenHandlers[DRAG_CANCELLED_EVENT]).toBeDefined();
+    expect(listenHandlers["drag-session-cancelled"]).toBeUndefined();
+
+    const payload: DragCancelled = { session_id: "sess-1" };
+    listenHandlers[DRAG_CANCELLED_EVENT]({ payload });
+    expect(received).toEqual([payload]);
+
+    unsubscribe();
+    expect(listenHandlers[DRAG_CANCELLED_EVENT]).toBeUndefined();
+  });
+
+  it("subscribeDragCompleted targets the bridge event, never the legacy Tauri event", async () => {
+    const received: DragCompleted[] = [];
+    const unsubscribe = await subscribeDragCompleted((s) => received.push(s));
+
+    expect(DRAG_COMPLETED_EVENT).toBe("notifications/ui_state/drag_completed");
+    expect(listenHandlers[DRAG_COMPLETED_EVENT]).toBeDefined();
+    expect(listenHandlers["drag-session-completed"]).toBeUndefined();
+
+    const payload: DragCompleted = { session_id: "sess-1", success: true };
+    listenHandlers[DRAG_COMPLETED_EVENT]({ payload });
+    expect(received).toEqual([payload]);
+
+    unsubscribe();
+    expect(listenHandlers[DRAG_COMPLETED_EVENT]).toBeUndefined();
   });
 });

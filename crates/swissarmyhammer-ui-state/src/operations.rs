@@ -540,6 +540,95 @@ pub struct UiStateChanged {
     pub state: serde_json::Value,
 }
 
+/// The `notifications/ui_state/drag_started` event payload.
+///
+/// Announces that the cross-window drag state machine started a session — the
+/// observable form of [`crate::state::UiState::start_drag`]. The drag machine
+/// lives in this `ui_state` service, so the lifecycle is declared here beside
+/// it (the same way `ai_streaming` is, distinct from the per-slice `changed`
+/// stream).
+///
+/// The payload IS the full session wire shape the frontend's `DragSession`
+/// consumes — the exact fields the legacy direct `drag-session-active` Tauri
+/// event carried, so the only change for an existing focus-chain task drag is
+/// the transport. `from` is the discriminated-union source envelope mirroring
+/// [`crate::state::DragSource`]; the flat `task_*` fields stay for focus-chain
+/// listeners that read them.
+///
+/// This struct is the single source of truth: it IS the published payload (via
+/// [`McpNotification::from_declared`](swissarmyhammer_plugin::McpNotification::from_declared))
+/// AND the declaration the SDK reads (its fields drive the
+/// `io.swissarmyhammer/notifications` `_meta`, resolved by
+/// `this.ui_state.on("drag_started", …)`). The two cannot drift. Provenance
+/// (`txn`/`origin`) is stamped at publish time and is intentionally NOT a field
+/// — a transient drag carries no transaction.
+#[notification(
+    method = "notifications/ui_state/drag_started",
+    description = "A cross-window drag session started (the drag state machine stored a source session)."
+)]
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DragStarted {
+    /// Unique session id (ULID) for the drag.
+    pub session_id: String,
+    /// Filesystem path of the source board (empty for file drags).
+    pub source_board_path: String,
+    /// Tauri window label of the source window.
+    pub source_window_label: String,
+    /// The dragged task id (empty for file drags).
+    pub task_id: String,
+    /// Serialized source entity field snapshot for ghost preview.
+    pub task_fields: serde_json::Value,
+    /// Whether Alt/Option was held (copy mode).
+    pub copy_mode: bool,
+    /// When the session started (epoch millis).
+    pub started_at_ms: u64,
+    /// Discriminated-union drag source mirroring [`crate::state::DragSource`].
+    pub from: serde_json::Value,
+}
+
+/// The `notifications/ui_state/drag_cancelled` event payload.
+///
+/// Announces that the active drag session was cancelled — the observable form
+/// of [`crate::state::UiState::cancel_drag`] / `take_drag` on the cancel path.
+/// Carries only the `session_id`, exactly as the legacy direct
+/// `drag-session-cancelled` Tauri event did, so a subscriber can clear the
+/// matching local session.
+///
+/// Single source of truth for the event (see [`DragStarted`]); resolved by
+/// `this.ui_state.on("drag_cancelled", …)`.
+#[notification(
+    method = "notifications/ui_state/drag_cancelled",
+    description = "The active cross-window drag session was cancelled."
+)]
+#[derive(Debug, Default, Serialize)]
+pub struct DragCancelled {
+    /// The cancelled session's id (ULID).
+    pub session_id: String,
+}
+
+/// The `notifications/ui_state/drag_completed` event payload.
+///
+/// Announces that the active drag session was completed (dropped) — the
+/// observable form of [`crate::state::UiState::take_drag`] on the complete
+/// path, after the drop's side-effects (same-board flush or cross-board
+/// transfer) ran. Carries the `session_id` and a `success` flag, exactly as the
+/// legacy direct `drag-session-completed` Tauri event did.
+///
+/// Single source of truth for the event (see [`DragStarted`]); resolved by
+/// `this.ui_state.on("drag_completed", …)`.
+#[notification(
+    method = "notifications/ui_state/drag_completed",
+    description = "A cross-window drag session completed (the drop's side-effects ran)."
+)]
+#[derive(Debug, Default, Serialize)]
+pub struct DragCompleted {
+    /// The completed session's id (ULID).
+    pub session_id: String,
+    /// Whether the drop's side-effects (transfer / flush) succeeded.
+    pub success: bool,
+}
+
 /// The canonical slice of notifications the `ui_state` tool emits.
 ///
 /// Mirrors [`operations`]: a leaked `Default` instance per notification, used
@@ -550,6 +639,9 @@ static UI_STATE_NOTIFICATIONS: LazyLock<Vec<&'static dyn Notification>> = LazyLo
     vec![
         Box::leak(Box::<AiStreamingChanged>::default()) as &dyn Notification,
         Box::leak(Box::<UiStateChanged>::default()) as &dyn Notification,
+        Box::leak(Box::<DragStarted>::default()) as &dyn Notification,
+        Box::leak(Box::<DragCancelled>::default()) as &dyn Notification,
+        Box::leak(Box::<DragCompleted>::default()) as &dyn Notification,
     ]
 });
 
@@ -596,6 +688,74 @@ pub fn ui_state_changed_notification(
     let payload = UiStateChanged {
         kind: kind.into(),
         state,
+    };
+    swissarmyhammer_plugin::McpNotification::from_declared(
+        payload.method(),
+        &payload,
+        swissarmyhammer_plugin::Provenance::user(),
+    )
+}
+
+/// Build the `notifications/ui_state/drag_started` notification from the drag
+/// session wire `Value` (the full [`DragStarted`] shape).
+///
+/// The single production publish helper for the drag-start lifecycle event: it
+/// reshapes the already-built session wire payload (the same `Value` the legacy
+/// `drag-session-active` Tauri event carried) into the declared [`DragStarted`]
+/// struct and stamps `user` provenance. Lives here, in the crate that DECLARES
+/// the notification, so the wire method comes from the `#[notification]`
+/// attribute rather than a string literal at the call site — the kanban app's
+/// drag side-effect calls this so the declared schema and the published payload
+/// cannot drift.
+pub fn drag_started_notification(
+    session: serde_json::Value,
+) -> swissarmyhammer_plugin::McpNotification {
+    let payload: DragStarted = serde_json::from_value(session).unwrap_or_else(|error| {
+        // The session wire shape is built by the app's drag side-effect from the
+        // live `DragStart` envelope and round-trips cleanly in production; a
+        // deserialization failure means a malformed envelope reached the publish
+        // path, so log it rather than silently publishing an empty-session event.
+        tracing::warn!(%error, "drag_started: malformed session payload, publishing empty drag_started");
+        DragStarted::default()
+    });
+    swissarmyhammer_plugin::McpNotification::from_declared(
+        payload.method(),
+        &payload,
+        swissarmyhammer_plugin::Provenance::user(),
+    )
+}
+
+/// Build the `notifications/ui_state/drag_cancelled` notification for a session.
+///
+/// The single production publish helper for the drag-cancel lifecycle event:
+/// serializes the declared [`DragCancelled`] payload and stamps `user`
+/// provenance, so the `_meta` schema and the wire payload share one source.
+pub fn drag_cancelled_notification(
+    session_id: impl Into<String>,
+) -> swissarmyhammer_plugin::McpNotification {
+    let payload = DragCancelled {
+        session_id: session_id.into(),
+    };
+    swissarmyhammer_plugin::McpNotification::from_declared(
+        payload.method(),
+        &payload,
+        swissarmyhammer_plugin::Provenance::user(),
+    )
+}
+
+/// Build the `notifications/ui_state/drag_completed` notification for a session.
+///
+/// The single production publish helper for the drag-complete lifecycle event:
+/// serializes the declared [`DragCompleted`] payload (session id + `success`
+/// flag) and stamps `user` provenance, so the `_meta` schema and the wire
+/// payload share one source.
+pub fn drag_completed_notification(
+    session_id: impl Into<String>,
+    success: bool,
+) -> swissarmyhammer_plugin::McpNotification {
+    let payload = DragCompleted {
+        session_id: session_id.into(),
+        success,
     };
     swissarmyhammer_plugin::McpNotification::from_declared(
         payload.method(),
@@ -772,5 +932,235 @@ mod tests {
         // Ephemeral UI state is not undoable → no transaction.
         assert_eq!(received.params["txn"], serde_json::Value::Null);
         assert_eq!(received.params["origin"], "user");
+    }
+
+    // Drag lifecycle notifications ──────────────────────────────────────
+
+    /// Each drag-lifecycle notification declares its wire method and the short
+    /// event a plugin subscribes to with `this.ui_state.on("drag_started", …)`
+    /// — the method's last segment, so no `event` override is needed.
+    #[test]
+    fn drag_notifications_declare_method_and_event() {
+        assert_eq!(
+            DragStarted::default().method(),
+            "notifications/ui_state/drag_started"
+        );
+        assert_eq!(DragStarted::default().event(), "drag_started");
+        assert_eq!(
+            DragCancelled::default().method(),
+            "notifications/ui_state/drag_cancelled"
+        );
+        assert_eq!(DragCancelled::default().event(), "drag_cancelled");
+        assert_eq!(
+            DragCompleted::default().method(),
+            "notifications/ui_state/drag_completed"
+        );
+        assert_eq!(DragCompleted::default().event(), "drag_completed");
+    }
+
+    /// The `drag_started` payload serializes to the full session wire shape the
+    /// frontend's `DragSession` consumes — the same fields the direct
+    /// `drag-session-active` event carried.
+    #[test]
+    fn drag_started_payload_serializes_to_session_wire_shape() {
+        let payload = DragStarted {
+            session_id: "sess-1".to_string(),
+            source_board_path: "/board/a".to_string(),
+            source_window_label: "main".to_string(),
+            task_id: "task-1".to_string(),
+            task_fields: serde_json::json!({ "title": "x" }),
+            copy_mode: true,
+            started_at_ms: 42,
+            from: serde_json::json!({ "kind": "focus_chain", "entity_id": "task-1" }),
+        };
+        let value = serde_json::to_value(&payload).expect("DragStarted serializes");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "session_id": "sess-1",
+                "source_board_path": "/board/a",
+                "source_window_label": "main",
+                "task_id": "task-1",
+                "task_fields": { "title": "x" },
+                "copy_mode": true,
+                "started_at_ms": 42,
+                "from": { "kind": "focus_chain", "entity_id": "task-1" },
+            })
+        );
+    }
+
+    /// The `drag_cancelled` payload serializes to `{ session_id }` — the same
+    /// shape the direct `drag-session-cancelled` event carried.
+    #[test]
+    fn drag_cancelled_payload_serializes_to_session_id() {
+        let value = serde_json::to_value(DragCancelled {
+            session_id: "sess-1".to_string(),
+        })
+        .expect("DragCancelled serializes");
+        assert_eq!(value, serde_json::json!({ "session_id": "sess-1" }));
+    }
+
+    /// The `drag_completed` payload serializes to `{ session_id, success }` —
+    /// the same shape the direct `drag-session-completed` event carried.
+    #[test]
+    fn drag_completed_payload_serializes_to_session_id_and_success() {
+        let value = serde_json::to_value(DragCompleted {
+            session_id: "sess-1".to_string(),
+            success: true,
+        })
+        .expect("DragCompleted serializes");
+        assert_eq!(
+            value,
+            serde_json::json!({ "session_id": "sess-1", "success": true })
+        );
+    }
+
+    /// Each drag-lifecycle notification appears in the generated
+    /// `io.swissarmyhammer/notifications` `_meta` tree under its short event
+    /// name with its wire method — the surface `this.ui_state.on(...)` resolves.
+    #[test]
+    fn ui_state_notifications_meta_advertises_drag_lifecycle() {
+        let meta = generate_notifications_meta(notifications());
+        let obj = meta.as_object().expect("notifications meta is an object");
+        for (event, method) in [
+            ("drag_started", "notifications/ui_state/drag_started"),
+            ("drag_cancelled", "notifications/ui_state/drag_cancelled"),
+            ("drag_completed", "notifications/ui_state/drag_completed"),
+        ] {
+            let leaf = obj
+                .get(event)
+                .unwrap_or_else(|| panic!("{event} must be declared in the _meta tree"));
+            assert_eq!(leaf["method"], method);
+        }
+    }
+
+    /// Coverage guard (declared ⟺ raised). Every method the drag publish helpers
+    /// actually publish MUST be one the `ui_state` service declares — so no drag
+    /// notification can be raised without appearing in `_meta`.
+    #[test]
+    fn drag_emitted_methods_are_declared() {
+        let declared: std::collections::BTreeSet<String> =
+            generate_notifications_meta(notifications())
+                .as_object()
+                .expect("notifications meta is an object")
+                .values()
+                .map(|leaf| {
+                    leaf["method"]
+                        .as_str()
+                        .expect("each notification leaf carries a method")
+                        .to_string()
+                })
+                .collect();
+        for note in [
+            drag_started_notification(serde_json::json!({ "session_id": "s" })),
+            drag_cancelled_notification("s"),
+            drag_completed_notification("s", true),
+        ] {
+            assert!(
+                declared.contains(&note.method),
+                "emitted method {:?} is not declared in _meta ({:?})",
+                note.method,
+                declared,
+            );
+        }
+    }
+
+    /// The drag publish helpers build the declared payloads under the declared
+    /// methods — the struct=payload publish path.
+    #[test]
+    fn drag_notification_helpers_build_declared_payloads() {
+        let started = drag_started_notification(serde_json::json!({
+            "session_id": "sess-1",
+            "source_window_label": "main",
+        }));
+        assert_eq!(started.method, "notifications/ui_state/drag_started");
+        assert_eq!(started.params["session_id"], "sess-1");
+        assert_eq!(started.params["source_window_label"], "main");
+
+        let cancelled = drag_cancelled_notification("sess-1");
+        assert_eq!(cancelled.method, "notifications/ui_state/drag_cancelled");
+        assert_eq!(cancelled.params["session_id"], "sess-1");
+
+        let completed = drag_completed_notification("sess-1", false);
+        assert_eq!(completed.method, "notifications/ui_state/drag_completed");
+        assert_eq!(completed.params["session_id"], "sess-1");
+        assert_eq!(completed.params["success"], false);
+    }
+
+    /// Real-pipeline loop: a genuine `UiState` drag mutation → the declared
+    /// notification built from the live session → a real `NotificationBridge` →
+    /// a live subscriber. No mock boundary: the same path the app's drag
+    /// side-effect drives, minus the Tauri shell.
+    ///
+    /// Proves a plugin doing `this.ui_state.on("drag_started", cb)` receives the
+    /// real session payload, and that cancelling then publishes `drag_cancelled`.
+    #[tokio::test]
+    async fn drag_transitions_publish_on_the_bridge() {
+        use crate::state::{DragSession, DragSource, UiState};
+        use swissarmyhammer_plugin::notify::NotificationBridge;
+
+        let ui_state = UiState::new();
+        let bridge = NotificationBridge::new();
+        let mut sub = bridge.subscribe();
+
+        // A real start_drag mutation stores a session…
+        let session = DragSession {
+            session_id: "sess-1".to_string(),
+            from: DragSource::FocusChain {
+                entity_type: "task".to_string(),
+                entity_id: "task-1".to_string(),
+                fields: serde_json::json!({}),
+                source_board_path: "/board/a".to_string(),
+                source_window_label: "main".to_string(),
+            },
+            copy_mode: false,
+            started_at_ms: 7,
+        };
+        ui_state.start_drag(session.clone());
+
+        // The publish path reads the session back OUT of the mutated `UiState`
+        // (never off the local `session` variable) and reshapes it into the
+        // `DragStarted` wire payload — exactly as the app's drag side-effect
+        // builds the notification from the live `DragStart` envelope. Reading
+        // back through `drag_session()` is what couples this loop to the real
+        // mutation: if `start_drag` were a no-op the read-back would be `None`
+        // and the test would fail here rather than silently restating its input.
+        let stored = ui_state
+            .drag_session()
+            .expect("start_drag stored the session");
+        let started = drag_started_notification(serde_json::json!({
+            "session_id": stored.session_id,
+            "source_board_path": stored.source_board_path(),
+            "source_window_label": stored.source_window_label(),
+            "task_id": stored.entity_id(),
+            "copy_mode": stored.copy_mode,
+            "started_at_ms": stored.started_at_ms,
+            "from": stored.from,
+        }));
+        assert_eq!(
+            bridge.publish(started),
+            1,
+            "subscriber receives the publish"
+        );
+        let received = sub.recv().await.expect("subscriber receives the start");
+        assert_eq!(received.method, "notifications/ui_state/drag_started");
+        assert_eq!(received.params["session_id"], "sess-1");
+        assert_eq!(received.params["source_board_path"], "/board/a");
+        assert_eq!(received.params["source_window_label"], "main");
+        assert_eq!(received.params["task_id"], "task-1");
+        assert_eq!(received.params["started_at_ms"], 7);
+        assert_eq!(received.params["origin"], "user");
+
+        // A real cancel_drag clears the session and publishes drag_cancelled —
+        // the cancelled payload's `session_id` is read back from the session the
+        // mutation actually stored, so a no-op `cancel_drag` would leave the
+        // session present and fail the `is_none` assertion.
+        ui_state.cancel_drag();
+        assert!(ui_state.drag_session().is_none());
+        let cancelled = drag_cancelled_notification(stored.session_id);
+        assert_eq!(bridge.publish(cancelled), 1);
+        let received = sub.recv().await.expect("subscriber receives the cancel");
+        assert_eq!(received.method, "notifications/ui_state/drag_cancelled");
+        assert_eq!(received.params["session_id"], "sess-1");
     }
 }

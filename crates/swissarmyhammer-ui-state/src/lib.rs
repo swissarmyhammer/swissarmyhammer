@@ -32,8 +32,9 @@ pub mod service;
 pub mod state;
 
 pub use operations::{
-    ai_streaming_notification, notifications, operations, ui_state_changed_notification,
-    AiStreamingChanged, UiStateChanged,
+    ai_streaming_notification, drag_cancelled_notification, drag_completed_notification,
+    drag_started_notification, notifications, operations, ui_state_changed_notification,
+    AiStreamingChanged, DragCancelled, DragCompleted, DragStarted, UiStateChanged,
 };
 pub use service::UiStateServer;
 pub use state::{

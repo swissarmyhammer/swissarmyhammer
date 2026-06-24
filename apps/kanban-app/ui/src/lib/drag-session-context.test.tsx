@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import type { ReactNode } from "react";
+import {
+  DRAG_STARTED_EVENT,
+  DRAG_CANCELLED_EVENT,
+  DRAG_COMPLETED_EVENT,
+} from "./mcp-notifications";
 
 /* ---- Tauri mocks ---- */
 
@@ -84,10 +89,40 @@ function makeFileSession(overrides: Partial<DragSession> = {}): DragSession {
   };
 }
 
-/** Simulate a Tauri event by calling the registered listener. */
+/** The bridge event names the drag lifecycle now flows through (single
+ * source of truth: the exported constants from `mcp-notifications`). */
+const DRAG_STARTED = DRAG_STARTED_EVENT;
+const DRAG_CANCELLED = DRAG_CANCELLED_EVENT;
+const DRAG_COMPLETED = DRAG_COMPLETED_EVENT;
+
+/**
+ * Simulate a bridge notification by calling the registered listener.
+ *
+ * The `subscribeDrag*` seams register their `listen` handler asynchronously
+ * (via a lazy dynamic import of the Tauri event API), so callers must
+ * {@link flushSubscriptions} after mounting the provider before emitting.
+ */
 function emitEvent(name: string, payload: unknown) {
   const handler = listenHandlers[name];
   if (handler) handler({ payload });
+}
+
+/** Let the provider's deferred `subscribeDrag*` registrations resolve. */
+async function flushSubscriptions() {
+  await act(async () => {
+    // The `subscribeDrag*` seams register via a lazy dynamic `import()`, whose
+    // resolution lands on the macrotask queue. The three seams register
+    // INDEPENDENTLY, so wait until ALL THREE handlers are present — waiting on
+    // only `drag_started` races a test that emits `drag_cancelled`/`drag_completed`
+    // before that seam's handler has registered. Yield a real macrotask, bounded.
+    const allRegistered = () =>
+      Boolean(listenHandlers[DRAG_STARTED]) &&
+      Boolean(listenHandlers[DRAG_CANCELLED]) &&
+      Boolean(listenHandlers[DRAG_COMPLETED]);
+    for (let i = 0; i < 20 && !allRegistered(); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  });
 }
 
 describe("DragSessionProvider", () => {
@@ -102,52 +137,57 @@ describe("DragSessionProvider", () => {
     expect(result.current.isSource).toBe(false);
   });
 
-  it("sets session on drag-session-active event", () => {
+  it("sets session on drag_started bridge notification", async () => {
     const { result } = renderHook(() => useDragSession(), { wrapper });
+    await flushSubscriptions();
     const session = makeSession();
 
-    act(() => emitEvent("drag-session-active", session));
+    act(() => emitEvent(DRAG_STARTED, session));
 
     expect(result.current.session).toEqual(session);
   });
 
-  it("sets isSource true when source_window_label matches this window", () => {
+  it("sets isSource true when source_window_label matches this window", async () => {
     const { result } = renderHook(() => useDragSession(), { wrapper });
+    await flushSubscriptions();
     const session = makeSession({ source_window_label: "main" });
 
-    act(() => emitEvent("drag-session-active", session));
+    act(() => emitEvent(DRAG_STARTED, session));
 
     expect(result.current.isSource).toBe(true);
   });
 
-  it("sets isSource false when source_window_label is a different window", () => {
+  it("sets isSource false when source_window_label is a different window", async () => {
     const { result } = renderHook(() => useDragSession(), { wrapper });
+    await flushSubscriptions();
     const session = makeSession({ source_window_label: "board-1" });
 
-    act(() => emitEvent("drag-session-active", session));
+    act(() => emitEvent(DRAG_STARTED, session));
 
     expect(result.current.isSource).toBe(false);
   });
 
-  it("clears session on drag-session-cancelled event", () => {
+  it("clears session on drag_cancelled bridge notification", async () => {
     const { result } = renderHook(() => useDragSession(), { wrapper });
+    await flushSubscriptions();
 
-    act(() => emitEvent("drag-session-active", makeSession()));
+    act(() => emitEvent(DRAG_STARTED, makeSession()));
     expect(result.current.session).not.toBeNull();
 
-    act(() => emitEvent("drag-session-cancelled", { session_id: "sess-1" }));
+    act(() => emitEvent(DRAG_CANCELLED, { session_id: "sess-1" }));
     expect(result.current.session).toBeNull();
     expect(result.current.isSource).toBe(false);
   });
 
-  it("clears session on drag-session-completed event", () => {
+  it("clears session on drag_completed bridge notification", async () => {
     const { result } = renderHook(() => useDragSession(), { wrapper });
+    await flushSubscriptions();
 
-    act(() => emitEvent("drag-session-active", makeSession()));
+    act(() => emitEvent(DRAG_STARTED, makeSession()));
     expect(result.current.session).not.toBeNull();
 
     act(() =>
-      emitEvent("drag-session-completed", {
+      emitEvent(DRAG_COMPLETED, {
         session_id: "sess-1",
         success: true,
       }),
@@ -245,13 +285,14 @@ describe("DragSessionProvider", () => {
   // `from.kind === "file"` envelope is the authoritative shape.
   // ---------------------------------------------------------------------
 
-  it("exposes from.kind: 'file' on a file-source drag-session-active event", () => {
+  it("exposes from.kind: 'file' on a file-source drag_started notification", async () => {
     const { result } = renderHook(() => useDragSession(), { wrapper });
+    await flushSubscriptions();
     const fileSession = makeFileSession({
       from: { kind: "file", path: "/tmp/example/screenshot.png" },
     });
 
-    act(() => emitEvent("drag-session-active", fileSession));
+    act(() => emitEvent(DRAG_STARTED, fileSession));
 
     const session = result.current.session;
     expect(session).not.toBeNull();
@@ -265,11 +306,12 @@ describe("DragSessionProvider", () => {
     expect(session.source_board_path).toBe("");
   });
 
-  it("preserves from.kind: 'focus_chain' on a task drag-session-active event", () => {
+  it("preserves from.kind: 'focus_chain' on a task drag_started notification", async () => {
     const { result } = renderHook(() => useDragSession(), { wrapper });
+    await flushSubscriptions();
     const taskSession = makeSession();
 
-    act(() => emitEvent("drag-session-active", taskSession));
+    act(() => emitEvent(DRAG_STARTED, taskSession));
 
     const session = result.current.session;
     expect(session).not.toBeNull();
@@ -344,13 +386,14 @@ describe("DragSessionProvider", () => {
     });
   });
 
-  it("isSource uses window label not board path for same-board multi-window", () => {
+  it("isSource uses window label not board path for same-board multi-window", async () => {
     const { result } = renderHook(() => useDragSession(), { wrapper });
+    await flushSubscriptions();
 
     // Same board path, different window label → NOT source
     act(() =>
       emitEvent(
-        "drag-session-active",
+        DRAG_STARTED,
         makeSession({
           source_board_path: "/board/a/.kanban",
           source_window_label: "board-2",

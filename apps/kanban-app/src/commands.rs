@@ -1699,44 +1699,112 @@ fn handle_quit(app: &AppHandle, result: &Value) {
     }
 }
 
-/// Emit all drag-session events. `DragStart`/`DragCancel` are simple
-/// forwarding emits; `DragComplete` delegates to `handle_drag_complete`
-/// which flushes the affected boards and emits `drag-session-completed`.
+/// Publish all drag-session lifecycle events onto the MCP notification bridge.
+///
+/// `DragStart`/`DragCancel` publish the started/cancelled notifications;
+/// `DragComplete` delegates to `handle_drag_complete` which flushes the
+/// affected boards and publishes `drag_completed`. Each transition is routed
+/// onto the SAME notification bridge every other change uses — a plugin
+/// subscribes with `this.ui_state.on("drag_started" | "drag_cancelled" |
+/// "drag_completed", …)`, and the webview consumes it as a pure MCP client (the
+/// per-window forwarder re-broadcasts each bridge notification as a Tauri event
+/// named by its method). The drag state machine lives in the `ui_state` service,
+/// so the lifecycle is declared and built there.
 async fn handle_drag_events(
     app: &AppHandle,
     state: &AppState,
     active_handle: Option<&Arc<BoardHandle>>,
     result: &Value,
 ) {
-    handle_drag_start(app, result);
-    handle_drag_cancel(app, result);
+    handle_drag_start(app, state, result).await;
+    handle_drag_cancel(app, state, result).await;
     if let Some(drag_complete) = result.get("DragComplete") {
         handle_drag_complete(app, state, active_handle, drag_complete).await;
     }
 }
 
-/// Forward the `DragStart` payload to the frontend on the
-/// `drag-session-active` channel. No-op when the result does not carry a
-/// `DragStart` envelope.
-fn handle_drag_start(app: &AppHandle, result: &Value) {
-    if let Some(drag_start) = result.get("DragStart") {
-        let _ = app.emit("drag-session-active", drag_start);
+/// Build the `notifications/ui_state/drag_started` notification from a command
+/// result envelope, or `None` when the result carries no `DragStart`.
+///
+/// The published payload is the full session wire shape the frontend's
+/// `DragSession` consumes — exactly the `Value` the legacy `drag-session-active`
+/// Tauri event carried. The declared schema and the wire payload share one
+/// source (the `DragStarted` struct in `swissarmyhammer-ui-state`), so they
+/// cannot drift.
+fn drag_started_note(result: &Value) -> Option<swissarmyhammer_plugin::McpNotification> {
+    result
+        .get("DragStart")
+        .map(|session| swissarmyhammer_ui_state::drag_started_notification(session.clone()))
+}
+
+/// Build the `notifications/ui_state/drag_cancelled` notification from a command
+/// result envelope, or `None` when the result carries no `DragCancel`.
+///
+/// The published payload is `{ session_id }` — exactly what the legacy
+/// `drag-session-cancelled` Tauri event carried.
+fn drag_cancelled_note(result: &Value) -> Option<swissarmyhammer_plugin::McpNotification> {
+    let session_id = result
+        .get("DragCancel")?
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some(swissarmyhammer_ui_state::drag_cancelled_notification(
+        session_id,
+    ))
+}
+
+/// Publish the `drag_started` notification onto every distinct window bridge.
+/// No-op when the result does not carry a `DragStart` envelope.
+async fn handle_drag_start(app: &AppHandle, state: &AppState, result: &Value) {
+    if let Some(note) = drag_started_note(result) {
+        publish_drag_to_all_windows(app, state, note).await;
     }
 }
 
-/// Forward the `DragCancel` payload to the frontend on the
-/// `drag-session-cancelled` channel. No-op when the result does not carry a
-/// `DragCancel` envelope.
-fn handle_drag_cancel(app: &AppHandle, result: &Value) {
-    if let Some(drag_cancel) = result.get("DragCancel") {
-        let _ = app.emit("drag-session-cancelled", drag_cancel);
+/// Publish the `drag_cancelled` notification onto every distinct window bridge.
+/// No-op when the result does not carry a `DragCancel` envelope.
+async fn handle_drag_cancel(app: &AppHandle, state: &AppState, result: &Value) {
+    if let Some(note) = drag_cancelled_note(result) {
+        publish_drag_to_all_windows(app, state, note).await;
+    }
+}
+
+/// Publish a drag-lifecycle notification onto every distinct bridge backing a
+/// webview window.
+///
+/// A drag is global: every window must observe the active session (the source
+/// window self-identifies by `source_window_label`). Different windows may
+/// forward from different bridges (a board's per-board host bridge, or the
+/// global host's bridge for boardless windows), so this resolves each window's
+/// bridge and publishes once per distinct bridge — mirroring
+/// [`publish_ui_state_changed_to`]. Every window's forwarder then delivers the
+/// notification's Tauri event to its webview.
+async fn publish_drag_to_all_windows(
+    app: &AppHandle,
+    state: &AppState,
+    note: swissarmyhammer_plugin::McpNotification,
+) {
+    let labels: Vec<String> = app
+        .webview_windows()
+        .keys()
+        .map(|l| l.to_string())
+        .collect();
+    let mut published: HashMap<BindKey, ()> = HashMap::new();
+    for label in &labels {
+        let (key, bridge) = resolve_window_bridge(state, label).await;
+        if published.contains_key(&key) {
+            continue;
+        }
+        bridge.publish(note.clone());
+        published.insert(key, ());
     }
 }
 
 /// Handle the `drag.complete` side-effects: same-board flushes the single
 /// board (the task.move already ran inside `DragCompleteCmd`), cross-board
-/// routes through `transfer_task` and flushes both boards. Always emits
-/// `drag-session-completed` with a success flag.
+/// routes through `transfer_task` and flushes both boards. Always publishes
+/// `notifications/ui_state/drag_completed` with a success flag.
 ///
 /// Same-board: `undoable=false` on `drag.complete`, so the regular
 /// post-command flush at the bottom of `dispatch_command_internal` would
@@ -1769,13 +1837,8 @@ async fn handle_drag_complete(
         true
     };
 
-    let _ = app.emit(
-        "drag-session-completed",
-        json!({
-            "session_id": session_id,
-            "success": transfer_ok,
-        }),
-    );
+    let note = swissarmyhammer_ui_state::drag_completed_notification(session_id, transfer_ok);
+    publish_drag_to_all_windows(app, state, note).await;
 }
 
 /// Parsed parameters for a cross-board drag transfer. The drag-complete
@@ -3289,5 +3352,61 @@ mod tests {
         assert!(decoded.cmd.is_empty());
         assert!(decoded.target.is_none());
         assert!(decoded.scope_chain.is_empty());
+    }
+
+    // ── drag lifecycle → bridge notification mapping ───────────────────
+    //
+    // The drag state machine's transitions are now observable on the MCP
+    // notification bridge as `notifications/ui_state/drag_started |
+    // drag_cancelled | drag_completed`, replacing the direct Tauri
+    // `drag-session-*` emits. These pin the result-envelope → declared
+    // notification mapping the kanban-app side owns; the ui-state crate proves
+    // the publish reaches a live subscriber.
+
+    use super::{drag_cancelled_note, drag_started_note};
+
+    /// A `DragStart` result envelope builds the `drag_started` notification
+    /// carrying the full session wire payload (the same payload the legacy
+    /// `drag-session-active` event carried).
+    #[test]
+    fn drag_start_envelope_builds_started_notification() {
+        let result = json!({
+            "DragStart": {
+                "session_id": "sess-1",
+                "source_board_path": "/board/a",
+                "source_window_label": "main",
+                "task_id": "task-1",
+                "task_fields": { "title": "x" },
+                "copy_mode": false,
+                "started_at_ms": 7,
+                "from": { "kind": "focus_chain", "entity_id": "task-1" },
+            }
+        });
+        let note = drag_started_note(&result).expect("DragStart envelope yields a started note");
+        assert_eq!(note.method, "notifications/ui_state/drag_started");
+        assert_eq!(note.params["session_id"], "sess-1");
+        assert_eq!(note.params["source_window_label"], "main");
+        assert_eq!(note.params["from"]["kind"], "focus_chain");
+    }
+
+    /// A `DragCancel` result envelope builds the `drag_cancelled` notification
+    /// carrying the `session_id` (the same payload the legacy
+    /// `drag-session-cancelled` event carried).
+    #[test]
+    fn drag_cancel_envelope_builds_cancelled_notification() {
+        let result = json!({ "DragCancel": { "session_id": "sess-1" } });
+        let note =
+            drag_cancelled_note(&result).expect("DragCancel envelope yields a cancelled note");
+        assert_eq!(note.method, "notifications/ui_state/drag_cancelled");
+        assert_eq!(note.params["session_id"], "sess-1");
+    }
+
+    /// A result envelope that carries neither drag key yields no notification —
+    /// non-drag commands must not publish a drag event.
+    #[test]
+    fn non_drag_envelope_builds_no_drag_notification() {
+        let result = json!({ "ok": true, "change": { "PaletteOpen": true } });
+        assert!(drag_started_note(&result).is_none());
+        assert!(drag_cancelled_note(&result).is_none());
     }
 }

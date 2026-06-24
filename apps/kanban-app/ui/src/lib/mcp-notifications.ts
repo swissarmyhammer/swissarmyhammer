@@ -48,6 +48,15 @@ export const STORE_UNDO_CHANGED_EVENT =
 export const UI_STATE_CHANGED_EVENT = "notifications/ui_state/changed" as const;
 /** The Tauri event the host raises for `notifications/focus/changed`. */
 export const FOCUS_CHANGED_EVENT = "notifications/focus/changed" as const;
+/** The Tauri event the host raises for `notifications/ui_state/drag_started`. */
+export const DRAG_STARTED_EVENT =
+  "notifications/ui_state/drag_started" as const;
+/** The Tauri event the host raises for `notifications/ui_state/drag_cancelled`. */
+export const DRAG_CANCELLED_EVENT =
+  "notifications/ui_state/drag_cancelled" as const;
+/** The Tauri event the host raises for `notifications/ui_state/drag_completed`. */
+export const DRAG_COMPLETED_EVENT =
+  "notifications/ui_state/drag_completed" as const;
 
 /** A single field-level change inside a `store/changed` notification. */
 export interface StoreFieldChange {
@@ -139,6 +148,49 @@ export interface FocusChanged {
   next_fq: string | null;
   /** Trailing segment of the newly focused FQM, or `null`. */
   next_segment: string | null;
+}
+
+/**
+ * One `notifications/ui_state/drag_started` notification's params.
+ *
+ * Mirrors the declared `DragStarted` payload struct in `swissarmyhammer-ui-state`
+ * (`crates/swissarmyhammer-ui-state/src/operations.rs`) — the full cross-window
+ * drag session wire shape, structurally the `DragSession` the drag context
+ * consumes. The drag state machine lives in the `ui_state` service, so the
+ * lifecycle is declared and published there. Provenance (`txn`/`origin`) is
+ * stamped on top by the publish path but is not consumed here.
+ */
+export interface DragStarted {
+  /** Unique session id (ULID) for the drag. */
+  session_id: string;
+  /** Filesystem path of the source board (empty for file drags). */
+  source_board_path: string;
+  /** Tauri window label of the source window. */
+  source_window_label: string;
+  /** The dragged task id (empty for file drags). */
+  task_id: string;
+  /** Serialized source entity field snapshot for ghost preview. */
+  task_fields: Record<string, unknown>;
+  /** Whether Alt/Option was held (copy mode). */
+  copy_mode: boolean;
+  /** When the session started (epoch millis). */
+  started_at_ms: number;
+  /** Discriminated-union drag source mirroring the Rust `DragSource` enum. */
+  from: unknown;
+}
+
+/** One `notifications/ui_state/drag_cancelled` notification's params. */
+export interface DragCancelled {
+  /** The cancelled session's id (ULID). */
+  session_id: string;
+}
+
+/** One `notifications/ui_state/drag_completed` notification's params. */
+export interface DragCompleted {
+  /** The completed session's id (ULID). */
+  session_id: string;
+  /** Whether the drop's side-effects (transfer / flush) succeeded. */
+  success: boolean;
 }
 
 /** A batch of `store/changed` notifications that share one `txn`. */
@@ -338,4 +390,68 @@ export function subscribeFocusChanged(
       console.error(`[mcp-notifications] ${FOCUS_CHANGED_EVENT} failed:`, err);
       return () => {};
     });
+}
+
+/**
+ * Subscribe to a single bridge-forwarded notification plane by its method name,
+ * forwarding each notification's `params` to `onPayload`.
+ *
+ * The shared seam behind the drag-lifecycle subscribers: each `listen`s for the
+ * bridge event named by the notification `method`, never a legacy direct Tauri
+ * event, and degrades a transport hiccup to a no-op unsubscribe so the caller's
+ * cleanup stays uniform.
+ */
+function subscribeBridgeEvent<T>(
+  eventName: string,
+  onPayload: (payload: T) => void,
+): Promise<() => void> {
+  return importListen()
+    .then((listen) =>
+      listen<T>(eventName, (event) => onPayload(event.payload)),
+    )
+    .catch((err) => {
+      console.error(`[mcp-notifications] ${eventName} failed:`, err);
+      return () => {};
+    });
+}
+
+/**
+ * Subscribe to the `ui_state/drag_started` plane (a cross-window drag began).
+ *
+ * The drag state machine lives in the `ui_state` service; a plugin subscribes
+ * with `this.ui_state.on("drag_started", …)`. The webview consumes it as a pure
+ * MCP client — the host re-broadcasts the bridge notification as the Tauri event
+ * named by its method.
+ *
+ * @param onStarted - Receives the started session payload.
+ * @returns A promise resolving to an unsubscribe function.
+ */
+export function subscribeDragStarted(
+  onStarted: (session: DragStarted) => void,
+): Promise<() => void> {
+  return subscribeBridgeEvent(DRAG_STARTED_EVENT, onStarted);
+}
+
+/**
+ * Subscribe to the `ui_state/drag_cancelled` plane (the drag session cancelled).
+ *
+ * @param onCancelled - Receives the cancelled session id payload.
+ * @returns A promise resolving to an unsubscribe function.
+ */
+export function subscribeDragCancelled(
+  onCancelled: (payload: DragCancelled) => void,
+): Promise<() => void> {
+  return subscribeBridgeEvent(DRAG_CANCELLED_EVENT, onCancelled);
+}
+
+/**
+ * Subscribe to the `ui_state/drag_completed` plane (the drag session dropped).
+ *
+ * @param onCompleted - Receives the completed session id + success payload.
+ * @returns A promise resolving to an unsubscribe function.
+ */
+export function subscribeDragCompleted(
+  onCompleted: (payload: DragCompleted) => void,
+): Promise<() => void> {
+  return subscribeBridgeEvent(DRAG_COMPLETED_EVENT, onCompleted);
 }
