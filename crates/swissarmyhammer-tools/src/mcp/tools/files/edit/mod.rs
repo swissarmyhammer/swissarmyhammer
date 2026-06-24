@@ -1017,12 +1017,7 @@ impl EditFileTool {
         // Use the bytes after BOM for decoding
         let bytes_to_decode = &bytes[bom_length..];
 
-        debug!(
-            path = %file_path.display(),
-            encoding = encoding.name(),
-            bom_length = bom_length,
-            "Detected file encoding"
-        );
+        debug!(path = %file_path.display(), encoding = encoding.name(), bom_length = bom_length, "Detected file encoding");
 
         // Decode to string
         let (content, _, had_decode_errors) = encoding.decode(bytes_to_decode);
@@ -1065,13 +1060,7 @@ impl EditFileTool {
         // resolve against the session working directory, never the process CWD.
         let path = validate_file_path(base_dir, file_path)?;
 
-        info!(
-            path = %path.display(),
-            old_string_len = old_string.len(),
-            new_string_len = new_string.len(),
-            replace_all = replace_all,
-            "Starting atomic edit operation"
-        );
+        info!(path = %path.display(), old_string_len = old_string.len(), new_string_len = new_string.len(), replace_all = replace_all, "Starting atomic edit operation");
 
         // Step 2: Read original file with encoding detection
         let (original_content, detected_encoding) = self.read_with_encoding_detection(&path)?;
@@ -1148,12 +1137,7 @@ impl EditFileTool {
             })?
             .join(&temp_file_name);
 
-        debug!(
-            temp_path = %temp_path.display(),
-            content_length = content.len(),
-            encoding = encoding.name(),
-            "Writing content to temporary file"
-        );
+        debug!(temp_path = %temp_path.display(), content_length = content.len(), encoding = encoding.name(), "Writing content to temporary file");
 
         // Write new content to temporary file with original encoding.
         let bytes_written = match self.write_with_encoding(&temp_path, content, encoding) {
@@ -1187,12 +1171,7 @@ impl EditFileTool {
             ));
         }
 
-        debug!(
-            path = %path.display(),
-            bytes_written = bytes_written,
-            replacements_made = replacements_made,
-            "Atomic edit operation completed successfully"
-        );
+        debug!(path = %path.display(), bytes_written = bytes_written, replacements_made = replacements_made, "Atomic edit operation completed successfully");
 
         Ok(EditResult {
             bytes_written,
@@ -1245,8 +1224,6 @@ pub async fn execute_edit(
     arguments: serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
-    use swissarmyhammer_common::rate_limiter::get_rate_limiter;
-
     // Extract file path under any canonical/alias key.
     let file_path = first_present(&arguments, "file_path", FILE_PATH_ALIASES)
         .and_then(serde_json::Value::as_str)
@@ -1280,19 +1257,9 @@ pub async fn execute_edit(
     // Normalize every accepted input shape into canonical (find, replace) pairs.
     let edit_operations = normalize_edit_args(&arguments)?;
 
-    // Check rate limit using tokio task ID as client identifier
-    let rate_limiter = get_rate_limiter();
-    let client_id = format!("task_{:?}", tokio::task::try_id());
-
-    // Check rate limit based on number of operations
+    // Check rate limit, costed by the number of edit operations (shared helper).
     let cost = edit_operations.len() as u32;
-    if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_edit", cost) {
-        tracing::warn!("Rate limit exceeded for file_edit: {}", e);
-        return Err(McpError::invalid_request(
-            format!("Rate limit exceeded: {}", e),
-            None,
-        ));
-    }
+    crate::mcp::tools::files::shared_utils::enforce_rate_limit("file_edit", cost)?;
 
     // Validate all edit operations
     for (idx, edit_op) in edit_operations.iter().enumerate() {
@@ -1319,11 +1286,7 @@ pub async fn execute_edit(
     }
 
     // Log edit attempt for security auditing
-    info!(
-        path = %file_path,
-        num_operations = edit_operations.len(),
-        "Attempting atomic edit operation(s)"
-    );
+    info!(path = %file_path, num_operations = edit_operations.len(), "Attempting atomic edit operation(s)");
 
     // Apply the whole batch atomically: read the file once, resolve and apply
     // every pair against an in-memory working copy, then commit in ONE rewrite.
@@ -1355,11 +1318,7 @@ pub async fn execute_edit(
         // Nothing was committed, so the file is byte-identical; the model retries
         // with an `occurrence` hint.
         ApplyOutcome::Ambiguous { find, candidates } => {
-            info!(
-                path = %file_path,
-                candidate_count = candidates.len(),
-                "Edit `find` is ambiguous; returning candidates for disambiguation"
-            );
+            info!(path = %file_path, candidate_count = candidates.len(), "Edit `find` is ambiguous; returning candidates for disambiguation");
             return Ok(BaseToolImpl::create_success_response(
                 render_ambiguity_prompt(&find, &candidates),
             ));
@@ -1368,11 +1327,7 @@ pub async fn execute_edit(
         // diverged — NOT an error. Nothing was committed, so the file is
         // byte-identical; the model retries with corrected text.
         ApplyOutcome::NoMatch { find, near } => {
-            info!(
-                path = %file_path,
-                near_miss_count = near.len(),
-                "Edit `find` matched nothing confidently; returning near-misses"
-            );
+            info!(path = %file_path, near_miss_count = near.len(), "Edit `find` matched nothing confidently; returning near-misses");
             return Ok(BaseToolImpl::create_success_response(
                 render_near_miss_prompt(&find, &near),
             ));
@@ -1380,10 +1335,7 @@ pub async fn execute_edit(
         // `find` absent but `replace` already present: the edit was likely already
         // applied. Informational SUCCESS — nothing committed, file byte-identical.
         ApplyOutcome::AlreadyApplied { find, replace } => {
-            info!(
-                path = %file_path,
-                "Edit `find` absent but `replace` present; reporting likely-already-applied"
-            );
+            info!(path = %file_path, "Edit `find` absent but `replace` present; reporting likely-already-applied");
             return Ok(BaseToolImpl::create_success_response(
                 render_already_applied_prompt(&find, &replace),
             ));
@@ -1391,11 +1343,7 @@ pub async fn execute_edit(
         // A later pair's target span was consumed by an earlier pair in this same
         // batch. Per-edit SUCCESS — nothing committed, file byte-identical.
         ApplyOutcome::ConsumedTarget { find, line } => {
-            info!(
-                path = %file_path,
-                consumed_line = line,
-                "Edit `find` target was consumed by an earlier edit in the batch"
-            );
+            info!(path = %file_path, consumed_line = line, "Edit `find` target was consumed by an earlier edit in the batch");
             return Ok(BaseToolImpl::create_success_response(
                 render_consumed_target_prompt(&find, line),
             ));
@@ -1426,14 +1374,7 @@ pub async fn execute_edit(
         format!("OK: Applied {} edit operations", edit_operations.len())
     };
 
-    debug!(
-        path = %file_path,
-        num_operations = edit_operations.len(),
-        bytes_written = final_result.bytes_written,
-        total_replacements = total_replacements,
-        encoding = %final_result.encoding_detected,
-        line_endings = %final_result.line_endings_preserved,
-        "Edit operation(s) completed successfully"
+    debug!(path = %file_path, num_operations = edit_operations.len(), bytes_written = final_result.bytes_written, total_replacements = total_replacements, encoding = %final_result.encoding_detected, line_endings = %final_result.line_endings_preserved, "Edit operation(s) completed successfully"
     );
 
     // Carry the mutating-result envelope: the post-edit file re-tagged with
@@ -3637,5 +3578,373 @@ mod tests {
         );
         // Atomic: the earlier pair's mutation was NOT committed.
         assert_eq!(fs::read_to_string(&test_file).unwrap(), content);
+    }
+
+    // =====================================================================
+    // Pure-function argument normalization error arms
+    // =====================================================================
+
+    /// `collect_strings` rejects a non-string array element, naming the offender.
+    #[test]
+    fn test_collect_strings_rejects_non_string_array_element() {
+        let value = serde_json::json!(["ok", 42]);
+        let err = collect_strings(Some(&value)).unwrap_err();
+        assert!(format!("{err:?}").contains("array entries must be strings"));
+    }
+
+    /// `collect_strings` rejects a value that is neither string nor array.
+    #[test]
+    fn test_collect_strings_rejects_non_string_non_array() {
+        let value = serde_json::json!({ "not": "a string" });
+        let err = collect_strings(Some(&value)).unwrap_err();
+        assert!(format!("{err:?}").contains("string or array of strings"));
+    }
+
+    /// `collect_strings` returns `None` for absent input and a one-element vec for
+    /// a scalar string.
+    #[test]
+    fn test_collect_strings_absent_and_scalar() {
+        assert!(collect_strings(None).unwrap().is_none());
+        let scalar = serde_json::json!("hello");
+        assert_eq!(
+            collect_strings(Some(&scalar)).unwrap().unwrap(),
+            vec!["hello".to_string()]
+        );
+    }
+
+    /// A top-level `replace` with no matching `find` is rejected.
+    #[test]
+    fn test_normalize_replace_without_find() {
+        let mut args = serde_json::Map::new();
+        args.insert("replace".to_string(), serde_json::json!("x"));
+        let err = normalize_edit_args(&args).unwrap_err();
+        assert!(format!("{err:?}").contains("replace provided without a matching find"));
+    }
+
+    /// A top-level `find` with no matching `replace` is rejected.
+    #[test]
+    fn test_normalize_find_without_replace() {
+        let mut args = serde_json::Map::new();
+        args.insert("find".to_string(), serde_json::json!("x"));
+        let err = normalize_edit_args(&args).unwrap_err();
+        assert!(format!("{err:?}").contains("find provided without a matching replace"));
+    }
+
+    /// `edits` that is not an array is rejected.
+    #[test]
+    fn test_normalize_edits_not_an_array() {
+        let mut args = serde_json::Map::new();
+        args.insert("edits".to_string(), serde_json::json!("not an array"));
+        let err = normalize_edit_args(&args).unwrap_err();
+        assert!(format!("{err:?}").contains("edits must be an array"));
+    }
+
+    /// An `edits[]` entry that is not an object is rejected, naming the index.
+    #[test]
+    fn test_normalize_edits_entry_not_an_object() {
+        let mut args = serde_json::Map::new();
+        args.insert("edits".to_string(), serde_json::json!(["scalar"]));
+        let err = normalize_edit_args(&args).unwrap_err();
+        assert!(format!("{err:?}").contains("edits[0] must be an object"));
+    }
+
+    /// An `edits[]` entry missing `find` (or `replace`) is rejected, naming it.
+    #[test]
+    fn test_normalize_edits_entry_missing_find_and_replace() {
+        let mut missing_find = serde_json::Map::new();
+        missing_find.insert("edits".to_string(), serde_json::json!([{ "replace": "x" }]));
+        let err = normalize_edit_args(&missing_find).unwrap_err();
+        assert!(format!("{err:?}").contains("edits[0] is missing find"));
+
+        let mut missing_replace = serde_json::Map::new();
+        missing_replace.insert("edits".to_string(), serde_json::json!([{ "find": "x" }]));
+        let err = normalize_edit_args(&missing_replace).unwrap_err();
+        assert!(format!("{err:?}").contains("edits[0] is missing replace"));
+    }
+
+    /// A mismatched find/replace count (2 finds, 1 replace is broadcast, but
+    /// 2 finds + 3 replaces cannot pair) surfaces the unpaired remainder.
+    #[test]
+    fn test_pair_finds_replaces_mismatch_reports_remainder() {
+        let finds = vec!["a".to_string(), "b".to_string()];
+        let replaces = vec!["1".to_string(), "2".to_string(), "3".to_string()];
+        let err = pair_finds_replaces(finds, replaces, false, None).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("mismatched find/replace counts"));
+        assert!(msg.contains("unpaired replaces"));
+    }
+
+    /// An empty arg map (no find/replace/edits) reports "no edits provided".
+    #[test]
+    fn test_normalize_no_edits_provided() {
+        let args = serde_json::Map::new();
+        let err = normalize_edit_args(&args).unwrap_err();
+        assert!(format!("{err:?}").contains("no edits provided"));
+    }
+
+    // =====================================================================
+    // Pure helpers: context rendering, diff equal-line, line-ending label
+    // =====================================================================
+
+    /// `render_context` returns an empty string for empty content or a 0 line.
+    #[test]
+    fn test_render_context_empty_and_zero_line() {
+        assert_eq!(render_context("", 1, 2), "");
+        assert_eq!(render_context("a\nb\n", 0, 2), "");
+    }
+
+    /// The find-vs-text diff marks common (Equal) lines with a leading space,
+    /// deletions with `-`, and insertions with `+`.
+    #[test]
+    fn test_render_find_vs_text_diff_marks_equal_lines() {
+        let diff = render_find_vs_text_diff("same\nold\n", "same\nnew\n");
+        assert!(
+            diff.contains(" same"),
+            "equal line keeps a space sign: {diff}"
+        );
+        assert!(diff.contains("-old"));
+        assert!(diff.contains("+new"));
+    }
+
+    /// `LineEnding::as_str` renders the `Mixed` variant label.
+    #[test]
+    fn test_line_ending_mixed_as_str() {
+        assert_eq!(LineEnding::detect("a\nb\r\nc\r").as_str(), "Mixed");
+        assert_eq!(LineEnding::Lf.as_str(), "LF");
+        assert_eq!(LineEnding::CrLf.as_str(), "CRLF");
+        assert_eq!(LineEnding::Cr.as_str(), "CR");
+    }
+
+    // =====================================================================
+    // Legacy single-pair API error arms (validate_edit_operation)
+    // =====================================================================
+
+    /// `validate_edit_operation` rejects a path that does not exist on disk.
+    #[test]
+    fn test_validate_edit_operation_file_does_not_exist() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing = temp_dir.path().join("absent.txt");
+        let tool = EditFileTool::new();
+        let err = tool
+            .validate_edit_operation(
+                temp_dir.path(),
+                &missing.to_string_lossy(),
+                "content",
+                "content",
+                false,
+            )
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("File does not exist"));
+    }
+
+    /// `validate_edit_operation` rejects an `old_string` absent from the content.
+    #[test]
+    fn test_validate_edit_operation_string_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("present.txt");
+        fs::write(&file, "hello world").unwrap();
+        let tool = EditFileTool::new();
+        let err = tool
+            .validate_edit_operation(
+                temp_dir.path(),
+                &file.to_string_lossy(),
+                "hello world",
+                "absent-substring",
+                false,
+            )
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("not found in file"));
+    }
+
+    /// `edit_file_atomic` with `replace_all` rewrites every occurrence and reports
+    /// the count (covering the replace-all replacement branch).
+    #[tokio::test]
+    async fn test_edit_file_atomic_replace_all_counts() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("repeat.txt");
+        fs::write(&file, "x x x").unwrap();
+
+        let tool = EditFileTool::new();
+        let result = tool
+            .edit_file_atomic(temp_dir.path(), &file.to_string_lossy(), "x", "y", true)
+            .unwrap();
+        assert_eq!(result.replacements_made, 3);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "y y y");
+    }
+
+    // =====================================================================
+    // Encoding/decoding error arms
+    // =====================================================================
+
+    /// `read_with_encoding_detection` rejects bytes that cannot be decoded with
+    /// the detected encoding (a UTF-16LE BOM followed by an odd trailing byte
+    /// yields a decode error).
+    #[test]
+    fn test_read_with_encoding_detection_decode_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("bad_utf16.txt");
+        // UTF-16LE BOM (0xFF 0xFE), then a lone trailing byte → malformed unit.
+        fs::write(&file, [0xFFu8, 0xFE, 0x41]).unwrap();
+
+        let tool = EditFileTool::new();
+        let result = tool.read_with_encoding_detection(&file);
+        // A lone trailing byte after a UTF-16LE BOM is a malformed code unit, so
+        // encoding_rs reports a decode error and this arm must reject it.
+        let err = result.expect_err("a malformed UTF-16LE byte sequence must be rejected");
+        assert!(format!("{err:?}").contains("Failed to decode"));
+    }
+
+    /// `read_with_encoding_detection` surfaces a file-read error when the path is
+    /// missing.
+    #[test]
+    fn test_read_with_encoding_detection_missing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing = temp_dir.path().join("nope.txt");
+        let tool = EditFileTool::new();
+        let err = tool.read_with_encoding_detection(&missing).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("read file for encoding detection") || msg.contains("not found"));
+    }
+
+    // =====================================================================
+    // commit_content cleanup arms (real fault injection)
+    // =====================================================================
+
+    /// When the atomic rename cannot complete because the target path is a
+    /// directory, `commit_content` removes its temp file and surfaces an error,
+    /// leaving no `.tmp.` debris.
+    #[test]
+    fn test_commit_content_cleans_temp_on_rename_failure() {
+        let temp_dir = TempDir::new().unwrap();
+        // Target is an existing directory: rename(temp_file, dir) fails.
+        let target = temp_dir.path().join("a_directory");
+        fs::create_dir(&target).unwrap();
+
+        let tool = EditFileTool::new();
+        let result = tool.commit_content(
+            &target,
+            "new content",
+            encoding_rs::UTF_8,
+            LineEnding::Lf,
+            1,
+        );
+        assert!(result.is_err(), "rename over a directory must fail");
+
+        // The directory is untouched and no temp file remains.
+        assert!(target.is_dir());
+        let temp_files: Vec<_> = temp_dir
+            .path()
+            .read_dir()
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(temp_files.is_empty(), "temp file must be cleaned up");
+    }
+
+    /// `commit_content` propagates a metadata-read failure when the target is
+    /// missing (the original-permission capture cannot run).
+    #[test]
+    fn test_commit_content_metadata_read_failure() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing = temp_dir.path().join("ghost.txt");
+        let tool = EditFileTool::new();
+        let err = tool
+            .commit_content(&missing, "x", encoding_rs::UTF_8, LineEnding::Lf, 1)
+            .unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("read metadata") || msg.contains("not found"));
+    }
+
+    /// `write_with_encoding` surfaces an error when the file cannot be created
+    /// (its parent directory does not exist).
+    #[test]
+    fn test_write_with_encoding_create_failure() {
+        let temp_dir = TempDir::new().unwrap();
+        let unwritable = temp_dir.path().join("no_such_dir").join("out.txt");
+        let tool = EditFileTool::new();
+        let err = tool
+            .write_with_encoding(&unwritable, "content", encoding_rs::UTF_8)
+            .unwrap_err();
+        // The missing parent surfaces as a NotFound, mapped to "File not found".
+        assert!(format!("{err:?}").contains("File not found"));
+    }
+
+    /// `write_with_encoding` rejects content the target encoding cannot represent
+    /// (a non-Latin character under windows-1252).
+    #[test]
+    fn test_write_with_encoding_encode_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let out = temp_dir.path().join("out.txt");
+        let tool = EditFileTool::new();
+        // windows-1252 cannot encode an emoji → had_errors is true.
+        let result = tool.write_with_encoding(&out, "🌍", encoding_rs::WINDOWS_1252);
+        assert!(result.is_err(), "un-encodable content must error");
+        assert!(format!("{:?}", result.unwrap_err()).contains("Failed to encode"));
+    }
+
+    // =====================================================================
+    // resolve_pair / ladder recovery arms
+    // =====================================================================
+
+    /// `replace_all` with no literal occurrence yields a NoMatch outcome carrying
+    /// near-misses rather than a bare error (covers `no_match_outcome`).
+    #[test]
+    fn test_resolve_pair_replace_all_no_literal_is_no_match() {
+        let pair = EditPair {
+            find: "totally-absent-token".to_string(),
+            replace: "x".to_string(),
+            replace_all: true,
+            occurrence: None,
+        };
+        let outcome = resolve_pair("alpha\nbeta\ngamma\n", &pair).unwrap();
+        assert!(matches!(outcome, PairOutcome::NoMatch { .. }));
+    }
+
+    /// `resolve_via_ladder` resolves a `find` whose LEADING whitespace differs
+    /// from the file (tab on disk vs spaces in the find, so it is NOT a literal
+    /// substring and has no resolving anchor) to a unique span via the fuzzy
+    /// ladder — covering the Unique arm.
+    #[test]
+    fn test_resolve_via_ladder_unique_on_leading_whitespace_drift() {
+        // The unique interior line is tab-indented on disk; the find uses spaces.
+        // No literal substring match (tab != spaces), no anchor — only the
+        // normalized ladder, which tolerates leading-whitespace drift, resolves it.
+        let content = "alpha\n\tdistinct_target_line()\nomega\n";
+        let pair = EditPair {
+            find: "    distinct_target_line()".to_string(),
+            replace: "    replaced_target_line()".to_string(),
+            replace_all: false,
+            occurrence: None,
+        };
+
+        // Precondition: the literal rung cannot match (different leading bytes).
+        assert!(content.find(&pair.find).is_none());
+
+        let outcome = resolve_via_ladder(content, &pair).unwrap();
+        match outcome {
+            PairOutcome::Resolved(Resolution::Splice { range, replacement }) => {
+                assert_eq!(replacement, "    replaced_target_line()");
+                // The spliced range is the drifted original (tab-indented) line.
+                assert_eq!(&content[range], "\tdistinct_target_line()");
+            }
+            other => panic!("expected a unique ladder splice, got {other:?}"),
+        }
+    }
+
+    /// A `find` whose interior whitespace differs from the file produces a
+    /// structured NoMatch carrying a near-miss diff, not a bare error — covering
+    /// the ladder's NoMatch arm directly.
+    #[test]
+    fn test_resolve_via_ladder_no_match_surfaces_near_miss() {
+        let content = "alpha\nlet  x  =  1;\nomega\n";
+        let pair = EditPair {
+            find: "completely-different-token".to_string(),
+            replace: "x".to_string(),
+            replace_all: false,
+            occurrence: None,
+        };
+        let outcome = resolve_via_ladder(content, &pair).unwrap();
+        assert!(matches!(outcome, PairOutcome::NoMatch { .. }));
     }
 }
