@@ -37,8 +37,8 @@ comments:
 
     Leaving task in `doing`, green.
   timestamp: 2026-06-25T20:30:16.275251+00:00
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff280
 title: Consolidate hand-rolled atomic-write (temp sibling + rename) helpers into swissarmyhammer-common::fs_utils
 ---
 ## What

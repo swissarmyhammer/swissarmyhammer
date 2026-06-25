@@ -94,14 +94,14 @@ export function setupSpatialMocks(): SpatialMocks {
     async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
   );
   const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
+    (eventName: string, callback: ListenCallback): Promise<() => void> => {
+      const callbacks = listeners.get(eventName) ?? [];
+      callbacks.push(callback);
+      listeners.set(eventName, callbacks);
       return Promise.resolve(() => {
         const arr = listeners.get(eventName);
         if (arr) {
-          const idx = arr.indexOf(cb);
+          const idx = arr.indexOf(callback);
           if (idx >= 0) arr.splice(idx, 1);
         }
       });
@@ -166,10 +166,8 @@ export function makeSpatialTestHelpers(mocks: {
   }
 
   function keyForMoniker(moniker: string): FullyQualifiedMoniker | undefined {
-    const zone = registerScopeArgs().find((a) => a.segment === moniker);
-    if (zone) return zone.fq as FullyQualifiedMoniker;
-    const scope = registerScopeArgs().find((a) => a.segment === moniker);
-    return scope?.fq as FullyQualifiedMoniker | undefined;
+    const match = registerScopeArgs().find((a) => a.segment === moniker);
+    return match?.fq as FullyQualifiedMoniker | undefined;
   }
 
   function collectFocusTool(
@@ -290,31 +288,31 @@ export function makeDefaultInvokeImpl(
   const { keymapMode, handleSpatialCommand } = options;
 
   async function defaultInvokeImpl(
-    cmd: string,
+    command: string,
     args?: unknown,
   ): Promise<unknown> {
-    if (cmd === "command_tool_call") {
-      const env = args as
+    if (command === "command_tool_call") {
+      const envelope = args as
         | { tool?: string; op?: string; params?: Record<string, unknown> }
         | undefined;
-      if (env?.tool === "focus" || env?.tool === "entity") {
+      if (envelope?.tool === "focus" || envelope?.tool === "entity") {
         const wrapped = wrapMcpDispatch(
           { mock: { calls: [] } },
           (legacyCmd: string, legacyArgs?: unknown) =>
             defaultInvokeImpl(legacyCmd, legacyArgs),
         );
-        return wrapped(cmd, args);
+        return wrapped(command, args);
       }
       return commandToolCall(args);
     }
-    if (cmd === "list_entity_types") return ["task", "column"];
-    if (cmd === "get_entity_schema") {
+    if (command === "list_entity_types") return ["task", "column"];
+    if (command === "get_entity_schema") {
       return {
         entity: { name: "task", entity_type: "task" },
         fields: [],
       };
     }
-    if (cmd === "get_ui_state")
+    if (command === "get_ui_state")
       return {
         palette_open: false,
         palette_mode: "command",
@@ -324,9 +322,10 @@ export function makeDefaultInvokeImpl(
         windows: {},
         recent_boards: [],
       };
-    if (cmd === "get_undo_state") return { can_undo: false, can_redo: false };
-    if (cmd === "dispatch_command") return undefined;
-    const spatial = handleSpatialCommand(cmd, args);
+    if (command === "get_undo_state")
+      return { can_undo: false, can_redo: false };
+    if (command === "dispatch_command") return undefined;
+    const spatial = handleSpatialCommand(command, args);
     if (spatial !== UNHANDLED) return spatial;
     return undefined;
   }

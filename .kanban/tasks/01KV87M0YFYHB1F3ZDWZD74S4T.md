@@ -40,6 +40,27 @@ comments:
     - [x] Spatial/browser test files import from it instead of re-declaring the bootstrap (43 files)
     - [x] All affected test files remain green; tsc --noEmit clean
   timestamp: 2026-06-25T16:32:38.948627+00:00
+- actor: claude-code
+  id: 01kw09w4h4cs4gcw2kcsm8nfvr
+  text: |-
+    Targeted review-fix on the new harness src/test/spatial-nav-harness.ts. All edits behavior-preserving; left in doing for review.
+
+    FIXED:
+    1. MUST-FIX (blocker): keyForMoniker computed the SAME registerScopeArgs().find((a)=>a.segment===moniker) query twice (zone then scope) — the second was dead code returning an identical result. Confirmed via `git show ef627f6c0^:.../board-view.enter-drill-in.browser.test.tsx` that the double-find was copied VERBATIM from the pre-extraction helper. Collapsed to a single `const match = registerScopeArgs().find(...); return match?.fq as FullyQualifiedMoniker | undefined;`. Found/not-found results identical.
+    2. cb→callback (+coupled cbs→callbacks) in mockListen (setupSpatialMocks).
+    3. cmd→command in defaultInvokeImpl.
+    4. env→envelope in defaultInvokeImpl.
+
+    SKIPPED (documented):
+    - null→undefined for fireFocusChanged params: DELIBERATELY NOT changed. The harness constructs a FocusChangedPayload whose prev_fq/next_fq are typed `FullyQualifiedMoniker | null` (non-optional, types/spatial.ts), and production emits JSON null for absent monikers. Switching the `= null` defaults / `| null` unions to optional undefined would (a) break tsc (undefined not assignable to `... | null`) and (b) change the emitted payload value null→undefined, diverging from production. Verified the only consumer is the canonical board-view.enter-drill-in.browser.test.tsx, whose call sites pass partial args and rely on the null default. Left as-is.
+    - @/... path-alias imports: project-wide convention, out of scope.
+    - Splitting makeSpatialTestHelpers for the 82-line function-length warning: conflicts with this card's consolidation goal, out of scope.
+
+    VERIFICATION:
+    - npx tsc --noEmit → exit 0.
+    - Browser vitest project: 2535 passed / 10 failed — IDENTICAL to baseline (same 5 known-failing files: editor-save blur family, entity-card inspect, grid-empty-state, mention-view, spatial-nav-end-to-end). Zero previously-passing tests regressed.
+    - Adversarial double-check agent: PASS — confirmed diff is exactly the 4 intended edits, no dangling cb/cbs/cmd/env in the renamed functions, exported API surface unchanged, no external caller needs updating, the skipped items correctly absent from the diff.
+  timestamp: 2026-06-25T21:09:47.172321+00:00
 position_column: doing
 position_ordinal: '80'
 title: Extract shared spatial-nav browser-test harness (setupSpatialMocks/makeSpatialTestHelpers) — ~20 files duplicate the mock bootstrap verbatim
