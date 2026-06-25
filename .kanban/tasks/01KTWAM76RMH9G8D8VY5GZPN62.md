@@ -18,4 +18,4 @@ Card J therefore dropped the `z o` binding instead of migrating it (the other th
 - If not wanted: nothing to do — this card just documents why `z o` disappeared.
 
 ## Acceptance Criteria
-- [ ] Either a working, plugin-registered collapse-toggle command with the `z o` chord and a production-path test, or an explicit decision recorded that the binding stays deleted.
+- [ ] Either a working, plugin-registered collapse-toggle command with the `z o` chord and a production-path test, or an explicit decision recorded that the binding stays deleted. #ui

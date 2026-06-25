@@ -533,10 +533,31 @@ fn on_window_close_requested(window: &tauri::Window, label: &str) {
     }
     // Read the board this window was showing BEFORE removing the window entry —
     // `remove_window` clears the label→board mapping, so the lifecycle event
-    // would otherwise lose its board_path.
+    // (and the focus-layer reconcile below) would otherwise lose its board.
     let board_path = state.ui_state.window_board(label);
     // Remove the UiState entry synchronously so it won't resurrect on restart.
     state.ui_state.remove_window(label);
+
+    // Reconcile the closing window's stale focus-kernel layers. A closed window
+    // never runs its React effect cleanups, so any OVERLAY layers (inspector,
+    // palette, dialog) open at close time were never popped and would linger in
+    // the kernel forever. This MUST run here, not in `on_window_destroyed`: by
+    // the time `Destroyed` fires the window→board mapping is already cleared
+    // (above), so the per-board host the React side pushed into would no longer
+    // resolve. We capture the board path while it is still known and resolve the
+    // per-board host from it in the spawned task; the async host-lock work is
+    // kept off this synchronous OS event handler.
+    let reconcile_app = window.app_handle().clone();
+    let reconcile_label = label.to_string();
+    let reconcile_board_path = board_path.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = reconcile_app.state::<AppState>();
+        let board = match reconcile_board_path {
+            Some(ref bp) => state.board_handle_for_path(bp).await,
+            None => None,
+        };
+        crate::commands::reconcile_window_layers(&state, &reconcile_label, board).await;
+    });
 
     // Publish the raw-window-lifecycle `closed` event on the window's bridge so
     // plugins subscribed with `this.window.on("window.closed", …)` observe the
@@ -563,8 +584,12 @@ fn on_window_close_requested(window: &tauri::Window, label: &str) {
     tracing::info!(label = %label, "removed window entry on mid-session close");
 }
 
-/// Rebuild the Window menu when a secondary window is destroyed. Actual
-/// UiState cleanup already happened in `on_window_close_requested`.
+/// Rebuild the Window menu when a secondary window is destroyed.
+///
+/// UiState cleanup and the focus-layer reconcile already happened in
+/// `on_window_close_requested` — the reconcile cannot run here because the
+/// window→board mapping is cleared before `Destroyed` fires, so the per-board
+/// focus host the React side pushed into would no longer resolve.
 fn on_window_destroyed(window: &tauri::Window) {
     let state = window.app_handle().state::<AppState>();
     if state.shutting_down.load(Ordering::SeqCst) {

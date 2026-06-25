@@ -222,6 +222,31 @@ pub struct PopLayer {
     pub fq: FullyQualifiedMoniker,
 }
 
+/// Remove every layer owned by a window — the reconcile op for a window that
+/// went away without popping its layers.
+///
+/// When a webview fully reloads (dev full reload) or a window is destroyed,
+/// the old page's React effect cleanups never run, so `pop layer` is never
+/// called for the layers open at that moment. The window-root layer self-heals
+/// (the new page re-pushes the same FQM idempotently), but overlay layers
+/// (inspector, palette, dialog) would linger forever. The host calls this on
+/// window destroy / page re-bind so those stale layers are dropped before the
+/// new page pushes fresh ones. Delegates to
+/// [`crate::SpatialRegistry::remove_layers_for_window`].
+///
+/// Returns `{ ok: true, removed: <count> }` — the number of layers dropped
+/// (`0` when the window held none).
+#[operation(
+    verb = "remove",
+    noun = "layers",
+    description = "Remove every layer owned by a window (reconcile a reloaded or destroyed window)"
+)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemoveLayersForWindow {
+    /// Window whose layers are all removed.
+    pub window: WindowLabel,
+}
+
 /// Compute the FQM to focus when drilling *into* a scope.
 ///
 /// Ports `spatial_drill_in`: pure query returning [`crate::drill_in`]'s
@@ -387,6 +412,7 @@ static FOCUS_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(|
         Box::leak(Box::new(proto_focus_lost())) as &dyn Operation,
         Box::leak(Box::new(proto_push_layer())) as &dyn Operation,
         Box::leak(Box::new(proto_pop_layer())) as &dyn Operation,
+        Box::leak(Box::new(proto_remove_layers_for_window())) as &dyn Operation,
         Box::leak(Box::new(proto_drill_in())) as &dyn Operation,
         Box::leak(Box::new(proto_drill_out())) as &dyn Operation,
         Box::leak(Box::new(proto_generate_sneak_codes())) as &dyn Operation,
@@ -459,6 +485,12 @@ fn proto_push_layer() -> PushLayer {
 
 fn proto_pop_layer() -> PopLayer {
     PopLayer { fq: empty_fq() }
+}
+
+fn proto_remove_layers_for_window() -> RemoveLayersForWindow {
+    RemoveLayersForWindow {
+        window: WindowLabel::from_string(""),
+    }
 }
 
 fn proto_drill_in() -> DrillIn {

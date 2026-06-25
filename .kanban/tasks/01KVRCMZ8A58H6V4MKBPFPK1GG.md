@@ -57,4 +57,4 @@ Leave the non-slug (`displayField`) reads on `getStr` — those are real bag fie
 - [ ] Run the full UI suite: `cd apps/kanban-app/ui && npm test` — no regressions.
 
 ## Workflow
-- Use `/tdd` — write the two new tests first (they fail against the current empty-slug behavior), then add `getEntityField` and swap the three slug-field read sites so they pass.
+- Use `/tdd` — write the two new tests first (they fail against the current empty-slug behavior), then add `getEntityField` and swap the three slug-field read sites so they pass. #ui

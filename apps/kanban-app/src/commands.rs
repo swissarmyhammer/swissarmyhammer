@@ -2621,7 +2621,19 @@ pub async fn mcp_subscribe(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    bind_window_forwarder(&app, &state, window.label()).await;
+    let label = window.label();
+    // Reconcile the window's focus-kernel layers BEFORE the page pushes fresh
+    // ones. `mcp_subscribe` runs on every webview mount, including after a Vite
+    // full reload — a reload runs no React effect cleanups, so any OVERLAY layers
+    // (inspector, palette, dialog) open at reload time were never popped and would
+    // linger in the kernel forever (the window-root layer self-heals on the new
+    // page's idempotent re-push, but overlays do not). Dropping every stale layer
+    // here leaves the kernel holding only what the fresh page re-declares. The
+    // window→board mapping is still live here, so the per-board host (where the
+    // React side pushed) resolves directly from the label.
+    let board = state.board_handle_for_window(label).await;
+    reconcile_window_layers(&state, label, board).await;
+    bind_window_forwarder(&app, &state, label).await;
     Ok(())
 }
 
@@ -2692,6 +2704,83 @@ pub(crate) async fn publish_window_lifecycle(
 ) {
     let (_key, bridge) = resolve_window_bridge(state, label).await;
     bridge.publish(notification);
+}
+
+/// Drop every stale focus-kernel layer owned by `label` from the window's
+/// `focus` MCP module.
+///
+/// When a window is destroyed (or its webview fully reloads), the old page's
+/// React effect cleanups never run, so `pop layer` is never called for the
+/// layers open at that moment. The window-root layer self-heals — the new page
+/// re-pushes the same FQM idempotently — but OVERLAY layers (inspector,
+/// palette, dialog) would linger forever in the kernel's layer store. This
+/// reconciles them by dispatching the `remove layers` focus op against the
+/// SAME host the window's React side pushed into.
+///
+/// `board` is the window's already-resolved [`BoardHandle`] (its per-board host
+/// owns the `focus` registry the React side pushed into via
+/// [`command_tool_call`]); `None` routes to the global host — the same
+/// per-board-else-global choice `command_tool_call` makes. The caller resolves
+/// the handle BECAUSE the destroy path clears the window→board mapping before
+/// this async cleanup runs, so resolving here via the label would miss the
+/// per-board registry. See `on_window_close_requested`.
+pub(crate) async fn reconcile_window_layers(
+    state: &AppState,
+    label: &str,
+    board: Option<Arc<BoardHandle>>,
+) {
+    let input = serde_json::json!({ "op": "remove layers", "window": label });
+    let result = match board.as_ref().and_then(|h| h.platform()) {
+        Some(per_board) => {
+            per_board
+                .lock()
+                .await
+                .host()
+                .call(
+                    swissarmyhammer_plugin::CallerId::HostInternal,
+                    "focus",
+                    "focus",
+                    input,
+                )
+                .await
+        }
+        None => {
+            state
+                .plugin_platform
+                .lock()
+                .await
+                .host()
+                .call(
+                    swissarmyhammer_plugin::CallerId::HostInternal,
+                    "focus",
+                    "focus",
+                    input,
+                )
+                .await
+        }
+    };
+    match result {
+        Ok(value) => {
+            let removed = unwrap_tool_result(value)
+                .get("removed")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            if removed > 0 {
+                tracing::info!(
+                    label = %label,
+                    removed,
+                    "reconciled stale focus-kernel layers for window"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                label = %label,
+                error = %e,
+                "failed to reconcile stale focus-kernel layers for window"
+            );
+        }
+    }
 }
 
 /// Ensure `label`'s notification forwarder is bound to its CURRENT board's
@@ -3451,5 +3540,241 @@ mod tests {
         let result = json!({ "ok": true, "change": { "PaletteOpen": true } });
         assert!(drag_started_note(&result).is_none());
         assert!(drag_cancelled_note(&result).is_none());
+    }
+
+    // ── reconcile_window_layers host-wiring test ─────────────────────
+
+    use super::reconcile_window_layers;
+    use crate::state::AppState;
+    use swissarmyhammer_plugin::CallerId;
+    use tempfile::TempDir;
+
+    /// Push a layer for `window` through the global host's `focus` module, the
+    /// same way the React side does over `command_tool_call`.
+    async fn push_layer_via_host(state: &AppState, fq: &str, window: &str, parent: Option<&str>) {
+        let platform = state.plugin_platform.lock().await;
+        platform
+            .host()
+            .call(
+                CallerId::HostInternal,
+                "focus",
+                "focus",
+                json!({
+                    "op": "push layer",
+                    "fq": fq,
+                    "segment": fq.rsplit('/').next().unwrap_or(fq),
+                    "name": "window",
+                    "parent": parent,
+                    "window": window,
+                }),
+            )
+            .await
+            .expect("push layer through the host should succeed");
+    }
+
+    /// `reconcile_window_layers` reaches the window's `focus` module and drops
+    /// every layer the window owns — covering a destroyed / reloaded window
+    /// whose overlay layers were never popped — while leaving another window's
+    /// layers in place.
+    ///
+    /// Proven without a layer-existence query op: a second reconcile of the same
+    /// window removes `0` (the first cleared it), and reconciling the OTHER
+    /// window still removes its surviving layer.
+    #[tokio::test]
+    async fn reconcile_window_layers_removes_destroyed_windows_overlays() {
+        let user_root = TempDir::new().expect("user root temp dir");
+        let builtin_cache = TempDir::new().expect("builtin cache temp dir");
+        let board_dir = TempDir::new().expect("kanban board temp dir");
+        let state = AppState::new_for_test_with_plugins(
+            user_root.path().to_path_buf(),
+            builtin_cache.path().to_path_buf(),
+            board_dir.path().to_path_buf(),
+        )
+        .await
+        .expect("AppState should build with the plugin platform");
+
+        // Window "w1": a root + two overlays the page never popped.
+        push_layer_via_host(&state, "/w1", "w1", None).await;
+        push_layer_via_host(&state, "/w1/inspector", "w1", Some("/w1")).await;
+        push_layer_via_host(&state, "/w1/palette", "w1", Some("/w1")).await;
+        // Window "w2": one root, untouched by the w1 reconcile.
+        push_layer_via_host(&state, "/w2", "w2", None).await;
+
+        // Reconcile w1 (the host-wiring path the destroy / re-bind handlers use).
+        // No board → global host, the same registry the pushes above landed in.
+        reconcile_window_layers(&state, "w1", None).await;
+
+        // A second reconcile of w1 finds nothing left — the first removed all
+        // three of its layers.
+        let again = {
+            let platform = state.plugin_platform.lock().await;
+            platform
+                .host()
+                .call(
+                    CallerId::HostInternal,
+                    "focus",
+                    "focus",
+                    json!({ "op": "remove layers", "window": "w1" }),
+                )
+                .await
+                .expect("remove layers should succeed")
+        };
+        assert_eq!(
+            unwrap_tool_result(again)["removed"],
+            json!(0),
+            "w1 had no layers left after reconcile",
+        );
+
+        // w2's layer survived — reconciling it now removes exactly one.
+        let w2 = {
+            let platform = state.plugin_platform.lock().await;
+            platform
+                .host()
+                .call(
+                    CallerId::HostInternal,
+                    "focus",
+                    "focus",
+                    json!({ "op": "remove layers", "window": "w2" }),
+                )
+                .await
+                .expect("remove layers should succeed")
+        };
+        assert_eq!(
+            unwrap_tool_result(w2)["removed"],
+            json!(1),
+            "w2's root layer survived the w1 reconcile",
+        );
+    }
+
+    /// Seed a minimal `.kanban` board on disk so `open_board` accepts it
+    /// (Defense-1 board-entity validation), mirroring `plugins::tests::seed_board`.
+    fn seed_board(root: &std::path::Path, name: &str) {
+        let kanban_dir = root.join(".kanban");
+        let boards_dir = kanban_dir.join("boards");
+        std::fs::create_dir_all(&boards_dir).expect("boards dir");
+        std::fs::write(boards_dir.join("board.yaml"), format!("name: {name}\n"))
+            .expect("board.yaml");
+        for sub in ["columns", "tasks", "tags", "actors", "perspectives"] {
+            std::fs::create_dir_all(kanban_dir.join(sub)).expect("board subdir");
+        }
+    }
+
+    /// Push a layer for `window` through a SPECIFIC per-board host's `focus`
+    /// module — the routing `command_tool_call` uses for a board window.
+    async fn push_layer_via_board_host(
+        platform: &tokio::sync::Mutex<crate::plugins::PluginPlatform>,
+        fq: &str,
+        window: &str,
+        parent: Option<&str>,
+    ) {
+        platform
+            .lock()
+            .await
+            .host()
+            .call(
+                CallerId::HostInternal,
+                "focus",
+                "focus",
+                json!({
+                    "op": "push layer",
+                    "fq": fq,
+                    "segment": fq.rsplit('/').next().unwrap_or(fq),
+                    "name": "window",
+                    "parent": parent,
+                    "window": window,
+                }),
+            )
+            .await
+            .expect("push layer through the per-board host should succeed");
+    }
+
+    /// Regression for the destroy-path host-routing bug: a board window's
+    /// overlay layers live in its PER-BOARD focus registry, and the mid-session
+    /// close path clears the window→board mapping BEFORE the async reconcile
+    /// runs. The reconcile must therefore resolve the per-board host from the
+    /// board path captured while the mapping was still live (the
+    /// `board_handle_for_path` route `on_window_close_requested` uses) — routing
+    /// via the now-cleared label would hit the global registry and leave the
+    /// stale overlays behind.
+    #[tokio::test]
+    async fn reconcile_resolves_per_board_host_after_window_mapping_cleared() {
+        let user_root = TempDir::new().expect("user root temp dir");
+        let builtin_cache = TempDir::new().expect("builtin cache temp dir");
+        let global_dir = TempDir::new().expect("global tool working dir");
+        std::fs::create_dir_all(user_root.path().join("plugins")).expect("user plugins dir");
+        let state = AppState::new_for_test_with_plugins(
+            user_root.path().to_path_buf(),
+            builtin_cache.path().to_path_buf(),
+            global_dir.path().to_path_buf(),
+        )
+        .await
+        .expect("AppState should build with the plugin platform");
+
+        // Open a board so it gets its OWN per-board focus registry, and bind a
+        // window to it the way `create_window` does.
+        let board_dir = TempDir::new().expect("board temp dir");
+        seed_board(board_dir.path(), "Reconcile Board");
+        let path = state
+            .open_board(board_dir.path(), None)
+            .await
+            .expect("opening the seeded board should succeed");
+        let board_path = path.display().to_string();
+        let label = "board-window-1";
+        state.ui_state.set_window_board(label, &board_path);
+
+        let handle = state
+            .board_handle_for_window(label)
+            .await
+            .expect("the window resolves to its open board");
+        let per_board = handle
+            .platform()
+            .expect("the board has a per-board platform");
+
+        // The React side pushes a root + overlay into the PER-BOARD registry.
+        push_layer_via_board_host(per_board, "/board-window-1", label, None).await;
+        push_layer_via_board_host(
+            per_board,
+            "/board-window-1/palette",
+            label,
+            Some("/board-window-1"),
+        )
+        .await;
+
+        // Simulate the mid-session close ordering: capture the board path while
+        // the mapping is live, THEN clear it (as `remove_window` does).
+        let captured_board_path = state.ui_state.window_board(label);
+        state.ui_state.remove_window(label);
+        assert!(
+            state.board_handle_for_window(label).await.is_none(),
+            "the window→board mapping is cleared, so label-based routing would now miss",
+        );
+
+        // Reconcile exactly as `on_window_close_requested` does: resolve the
+        // per-board host from the CAPTURED path, not the cleared label.
+        let board = match captured_board_path {
+            Some(ref bp) => state.board_handle_for_path(bp).await,
+            None => None,
+        };
+        reconcile_window_layers(&state, label, board).await;
+
+        // The PER-BOARD registry is now empty — proven by a follow-up reconcile
+        // against the same per-board host removing 0.
+        let again = per_board
+            .lock()
+            .await
+            .host()
+            .call(
+                CallerId::HostInternal,
+                "focus",
+                "focus",
+                json!({ "op": "remove layers", "window": label }),
+            )
+            .await
+            .expect("remove layers should succeed");
+        assert_eq!(
+            unwrap_tool_result(again)["removed"],
+            json!(0),
+            "the per-board registry was actually reconciled (root + overlay both gone)",
+        );
     }
 }

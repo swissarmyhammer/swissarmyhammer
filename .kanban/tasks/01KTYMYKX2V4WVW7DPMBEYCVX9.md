@@ -31,4 +31,4 @@ Reuse the shared predicate `perspectiveVisibleInView(p, activeViewId, viewKind)`
 
 ## Constraints
 
-- Scoped vitest + `npx tsc --noEmit` in apps/kanban-app/ui only; no workspace builds.
+- Scoped vitest + `npx tsc --noEmit` in apps/kanban-app/ui only; no workspace builds. #ui

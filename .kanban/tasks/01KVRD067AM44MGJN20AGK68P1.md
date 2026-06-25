@@ -39,4 +39,4 @@ In `apps/kanban-app/ui/src/components/ai-prompt-composer.tsx`:
 - [ ] Run the full UI suite: `cd apps/kanban-app/ui && npm test` — no regressions.
 
 ## Workflow
-- Use `/tdd` — write the narrow-width overflow test first (it fails: the toolbar overflows / the value is not clamped), then add `min-w-0` to the trigger and `shrink-0` to the action button so it passes.
+- Use `/tdd` — write the narrow-width overflow test first (it fails: the toolbar overflows / the value is not clamped), then add `min-w-0` to the trigger and `shrink-0` to the action button so it passes. #ui

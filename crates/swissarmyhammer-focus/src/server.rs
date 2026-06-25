@@ -45,6 +45,7 @@ use crate::observer::{FocusEventSink, NoopSink};
 use crate::operations::{
     notifications, operations, ClearFocus, DrillIn, DrillOut, Focus, FocusLost, GenerateSneakCodes,
     Navigate, PopLayer, PushLayer, QueryFocus, QueryGeometry, QueryScopeChain,
+    RemoveLayersForWindow,
 };
 use crate::provider::{NoopProvider, UiGeometryProvider};
 use crate::registry::SpatialRegistry;
@@ -422,6 +423,23 @@ impl FocusServer {
         Ok(serde_json::json!({ "ok": true }))
     }
 
+    /// Handle a `remove layers` call.
+    ///
+    /// Drops every layer owned by `req.window` and reports the count. The
+    /// reconcile op for a window that went away without popping its layers
+    /// (webview full reload / window destroy) — see
+    /// [`crate::SpatialRegistry::remove_layers_for_window`]. No
+    /// `FocusChangedEvent` is produced: removing layers does not move focus.
+    async fn handle_remove_layers_for_window(
+        &self,
+        req: RemoveLayersForWindow,
+    ) -> Result<Value, McpError> {
+        let removed = self
+            .with_spatial(|registry, _state| registry.remove_layers_for_window(&req.window))
+            .await;
+        Ok(serde_json::json!({ "ok": true, "removed": removed }))
+    }
+
     /// Handle a `pop layer` call. Ports `spatial_pop_layer`.
     async fn handle_pop_layer(&self, req: PopLayer) -> Result<Value, McpError> {
         let next_fq = self
@@ -644,6 +662,10 @@ impl ServerHandler for FocusServer {
             "pop layer" => {
                 let req: PopLayer = deserialize_op(arguments, &op)?;
                 self.handle_pop_layer(req).await?
+            }
+            "remove layers" => {
+                let req: RemoveLayersForWindow = deserialize_op(arguments, &op)?;
+                self.handle_remove_layers_for_window(req).await?
             }
             "drill_in layer" => {
                 let req: DrillIn = deserialize_op(arguments, &op)?;

@@ -379,6 +379,67 @@ async fn push_then_pop_layer_returns_restoration_target() {
     assert_eq!(unknown["next_fq"], Value::Null);
 }
 
+/// `remove layers` drops every layer owned by the named window and leaves
+/// other windows' layers intact — the reconcile op for a reloaded / destroyed
+/// window whose overlay layers never got popped.
+#[tokio::test]
+async fn remove_layers_drops_only_the_named_windows_layers() {
+    use swissarmyhammer_focus::FullyQualifiedMoniker;
+
+    let server = FocusServer::new();
+    // Window "w1": root + two overlays, none of which the page popped.
+    push_root_layer(&server, "/w1", "w1").await;
+    for (fq, seg, name) in [
+        ("/w1/inspector", "inspector", "inspector"),
+        ("/w1/palette", "palette", "palette"),
+    ] {
+        call_tool(
+            &server,
+            "push layer",
+            json!({ "op": "push layer", "fq": fq, "segment": seg, "name": name,
+                    "parent": "/w1", "window": "w1" }),
+        )
+        .await
+        .unwrap();
+    }
+    // Window "w2": one root layer, untouched by the w1 reconcile.
+    push_root_layer(&server, "/w2", "w2").await;
+
+    let res = call_tool(
+        &server,
+        "remove layers",
+        json!({ "op": "remove layers", "window": "w1" }),
+    )
+    .await
+    .expect("remove layers should succeed");
+    assert_eq!(res["ok"], json!(true));
+    assert_eq!(res["removed"], json!(3), "all three w1 layers removed");
+
+    // Read the store back through the shared registry arc.
+    let registry = server.registry();
+    let reg = registry.lock().await;
+    assert!(
+        reg.layer(&FullyQualifiedMoniker::from_string("/w1"))
+            .is_none(),
+        "w1 root gone",
+    );
+    assert!(
+        reg.layer(&FullyQualifiedMoniker::from_string("/w1/inspector"))
+            .is_none(),
+        "w1 inspector overlay gone",
+    );
+    assert!(
+        reg.layer(&FullyQualifiedMoniker::from_string("/w1/palette"))
+            .is_none(),
+        "w1 palette overlay gone",
+    );
+    assert!(
+        reg.layer(&FullyQualifiedMoniker::from_string("/w2"))
+            .is_some(),
+        "w2 root survives the w1 reconcile",
+    );
+}
+
 /// `drill_in layer` returns the topmost-then-leftmost child of a focused
 /// zone — mirroring `spatial_drill_in`.
 #[tokio::test]

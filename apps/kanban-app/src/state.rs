@@ -1542,9 +1542,21 @@ impl AppState {
     /// to the global plugin platform.
     pub(crate) async fn board_handle_for_window(&self, label: &str) -> Option<Arc<BoardHandle>> {
         let path_str = self.ui_state.window_board(label)?;
-        let canonical = PathBuf::from(&path_str)
+        self.board_handle_for_path(&path_str).await
+    }
+
+    /// Resolve the open [`BoardHandle`] for `board_path`, or `None` if no board
+    /// is open at that path.
+    ///
+    /// Unlike [`board_handle_for_window`](Self::board_handle_for_window) this does
+    /// not consult the window→board mapping, so a caller can resolve a window's
+    /// board host even AFTER the window's mapping has been cleared (e.g. the
+    /// mid-session close path, which removes the mapping synchronously before its
+    /// async cleanup runs) by passing the board path it captured beforehand.
+    pub(crate) async fn board_handle_for_path(&self, board_path: &str) -> Option<Arc<BoardHandle>> {
+        let canonical = PathBuf::from(board_path)
             .canonicalize()
-            .unwrap_or_else(|_| PathBuf::from(&path_str));
+            .unwrap_or_else(|_| PathBuf::from(board_path));
         let boards = self.boards.read().await;
         boards.get(&canonical).cloned()
     }

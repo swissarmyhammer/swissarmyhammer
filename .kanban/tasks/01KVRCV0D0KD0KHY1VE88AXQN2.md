@@ -46,4 +46,4 @@ The metadata needed is already present: `buildMentionMetaMap` (use-mention-exten
 - [ ] Run the full UI suite: `cd apps/kanban-app/ui && npm test` — no regressions.
 
 ## Workflow
-- Use `/tdd` — write the `cm-mention-tooltip.test.ts` unit test and the `mention-view.test.tsx` wiring test first (both fail: the export doesn't exist and the spy is never called), then extract `mentionTooltipAt` and wire `createMentionTooltips` into `buildScopedExtensions` so they pass.
+- Use `/tdd` — write the `cm-mention-tooltip.test.ts` unit test and the `mention-view.test.tsx` wiring test first (both fail: the export doesn't exist and the spy is never called), then extract `mentionTooltipAt` and wire `createMentionTooltips` into `buildScopedExtensions` so they pass. #ui

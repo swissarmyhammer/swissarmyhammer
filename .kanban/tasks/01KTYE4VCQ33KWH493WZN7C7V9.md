@@ -33,4 +33,4 @@ Card 01KTY6T1GPY94VYWANE9X41SKJ deliberately routed AROUND this gap instead of f
 ## Constraints
 
 - Crate-scoped builds/tests only (`-p swissarmyhammer-kanban`, `-p swissarmyhammer-entity`).
-- Use tracing, never eprintln.
+- Use tracing, never eprintln. #ui
