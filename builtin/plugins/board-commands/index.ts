@@ -1,9 +1,15 @@
-// board-commands — builtin plugin owning the three `board.*` commands the
-// board view (`apps/kanban-app/ui/src/components/board-view.tsx`) used to
-// define client-side as React `CommandDef`s (`makeNewTaskCommand` /
-// `makeNavCommand`). Card F of the ui-command-cleanup project moves the
-// DEFINITIONS here so the CommandService catalogue is the single source of
-// every command's metadata.
+// board-commands — builtin plugin owning the board-view commands the board
+// view (`apps/kanban-app/ui/src/components/board-view.tsx`) used to define
+// client-side as React `CommandDef`s (`makeNewTaskCommand` / `makeNavCommand`).
+// Card F of the ui-command-cleanup project moves the DEFINITIONS here so the
+// CommandService catalogue is the single source of every command's metadata.
+//
+// The bundle owns the three original `board.*` commands plus
+// `group.toggleCollapse` — the vim `z o` chord that flips the focused group
+// section's collapse state in the grouped board view (it toggles a GROUP, not
+// a task, hence the `group.*` id; it lives here because grouping is a
+// board-view affordance). Like `board.newTask` it is webview-bus handled with
+// an inert host execute — see "The two execution shapes" below.
 //
 // This mirrors the `grid-commands` / `nav-commands` template:
 //
@@ -13,9 +19,9 @@
 //   2. `load()` calls `ensureServices(this, ["commands", "focus"])` FIRST —
 //      so the `commands` registry and the `focus` kernel are both live before
 //      any registration — THEN `registerCommands`.
-//   3. The three commands differ only by id / name / keys / wire direction,
+//   3. The four commands differ only by id / name / keys / wire direction,
 //      so they live in ONE data table interpreted by a single `map` (the
-//      `NAV_DIRECTIONS` / `GRID_COMMANDS` pattern), not three near-identical
+//      `NAV_DIRECTIONS` / `GRID_COMMANDS` pattern), not four near-identical
 //      object literals.
 //
 // # The two execution shapes
@@ -30,15 +36,19 @@
 // `Mod+End` are NOT among `nav.first` / `nav.last`'s keys. They need no
 // webview-bus handler — exactly the right case to keep OFF the bus.
 //
-// `board.newTask` has NO backend op: its effect is webview ORCHESTRATION —
-// resolve the focused column, re-dispatch the backend-op `entity.add:task`
-// command (the durable add — never inline), and focus the created card. The
-// board view registers that handler on the webview command bus on mount
-// (`registerWebviewCommandHandler`, Card B); `useDispatchCommand` runs the
-// handler and skips the backend. The host `execute` registered here is an
-// inert no-op, mirroring `nav.jump` / the `grid.*` set: it exists only to
-// satisfy the registration contract and to keep a direct host-side dispatch
-// — e.g. the plugin e2e where no webview is mounted — a harmless success.
+// `board.newTask` / `group.toggleCollapse` have NO backend op: their effect is
+// webview ORCHESTRATION. `board.newTask` resolves the focused column,
+// re-dispatches the backend-op `entity.add:task` command (the durable add —
+// never inline), and focuses the created card. `group.toggleCollapse` flips
+// the focused group section's view-local collapsed state. The board view
+// registers these handlers on the webview command bus on mount
+// (`registerWebviewCommandHandler`, Card B — for `group.toggleCollapse` via
+// the focus-gated `useFocusedWebviewCommandHandlers` so only the focused
+// group's handler is live); `useDispatchCommand` runs the handler and skips
+// the backend. The host `execute` registered here is an inert no-op, mirroring
+// `nav.jump` / the `grid.*` set: it exists only to satisfy the registration
+// contract and to keep a direct host-side dispatch — e.g. the plugin e2e where
+// no webview is mounted — a harmless success.
 //
 // # Scope gating
 //
@@ -98,13 +108,14 @@ interface BoardCommandSpec {
 }
 
 /**
- * The three board commands, as a data table.
+ * The board-view commands, as a data table.
  *
- * `id` / `name` / `keys` are copied 1:1 from the retired client-side
- * `CommandDef`s in `board-view.tsx` (`makeNewTaskCommand` /
- * `makeNavCommand`); `direction` is the lowercase `Direction` wire literal
- * (`operations.rs::Navigate`). Holding the variation as data keeps the three
- * registrations a single `map`.
+ * `id` / `name` / `keys` for the three `board.*` rows are copied 1:1 from the
+ * retired client-side `CommandDef`s in `board-view.tsx` (`makeNewTaskCommand`
+ * / `makeNavCommand`); `direction` is the lowercase `Direction` wire literal
+ * (`operations.rs::Navigate`). `group.toggleCollapse` (vim `z o`) carries no
+ * `direction` — it is webview-bus handled like `board.newTask`. Holding the
+ * variation as data keeps every registration a single `map`.
  */
 const BOARD_COMMANDS: readonly BoardCommandSpec[] = [
   // ── New task — webview orchestration (no backend op) ─────────────────────
@@ -130,14 +141,31 @@ const BOARD_COMMANDS: readonly BoardCommandSpec[] = [
     keys: { vim: "$", cua: "Mod+End" },
     direction: "last",
   },
+  // ── Toggle group collapse — webview orchestration (no backend op) ────────
+  // The vim `z o` chord (Card J schema: space-separated keystrokes) toggles
+  // the collapse state of the FOCUSED group section in the grouped board
+  // view. Collapse state is view-local React state owned by
+  // `<GroupedBoardBody>` (keyed by `bucket.value`); each `<GroupSection>`
+  // registers a focus-gated webview-bus handler via
+  // `useFocusedWebviewCommandHandlers`, so a dispatch reaches exactly the
+  // group whose subtree currently holds spatial focus. No durable mutation,
+  // no kernel op — the host execute is an inert no-op, mirroring
+  // `board.newTask`. The `id` is `group.toggleCollapse` (it toggles a GROUP,
+  // not a task) — the only `group.*` command, but it lives here because the
+  // grouped board view is the only surface that grouping exists on.
+  {
+    id: "group.toggleCollapse",
+    name: "Toggle Group Collapse",
+    keys: { vim: "z o" },
+  },
 ];
 
 /**
  * The board-commands builtin plugin.
  *
- * Registers the three `board.*` commands: `board.firstColumn` /
- * `board.lastColumn` route to the focus kernel's `navigate focus` op
- * host-driven (first / last); `board.newTask` is webview-bus handled — the
+ * Registers four board-view commands: `board.firstColumn` / `board.lastColumn`
+ * route to the focus kernel's `navigate focus` op host-driven (first / last);
+ * `board.newTask` and `group.toggleCollapse` are webview-bus handled — the
  * board React tree owns the live behavior and the host execute is an inert
  * no-op. Identity is the bundle directory name (`board-commands`); `name` /
  * `description` are descriptive metadata only.
@@ -152,7 +180,7 @@ export default class BoardCommandsPlugin extends Plugin {
 
   /**
    * Activate the `commands` registry and the `focus` kernel, then register
-   * the three board commands from the data table.
+   * the four board-view commands from the data table.
    */
   async load(): Promise<void> {
     await ensureServices(this, ["commands", "focus"]);
@@ -185,8 +213,9 @@ export default class BoardCommandsPlugin extends Plugin {
                 direction: spec.direction,
               });
             }
-          : // Presentation-only (`board.newTask`): the webview bus handler
-            // (registered by the board view on mount) intercepts this id in
+          : // Presentation-only (`board.newTask` / `group.toggleCollapse`):
+            // the webview bus handler (registered by the board view / each
+            // group section on mount) intercepts this id in
             // `useDispatchCommand` before the backend, so this host
             // `execute` is never reached in production. It exists as an
             // inert no-op only to satisfy the registration contract and to
@@ -199,7 +228,7 @@ export default class BoardCommandsPlugin extends Plugin {
     );
 
     this.log.info(
-      "board-commands: registered 3 board.* (firstColumn/lastColumn → focus navigate first/last; newTask → webview bus)",
+      "board-commands: registered 4 commands (firstColumn/lastColumn → focus navigate first/last; newTask, group.toggleCollapse → webview bus)",
     );
   }
 }

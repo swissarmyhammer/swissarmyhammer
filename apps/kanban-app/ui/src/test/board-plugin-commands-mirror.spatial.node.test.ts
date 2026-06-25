@@ -7,7 +7,9 @@
  * (`makeNewTaskCommand` / `makeNavCommand`) into the `board-commands`
  * builtin plugin (`builtin/plugins/board-commands/index.ts`); the board
  * React tree only registers a webview-bus handler for `board.newTask`
- * (the column extremes execute server-side). In production the commands'
+ * (the column extremes execute server-side). The bundle later gained
+ * `group.toggleCollapse` (vim `z o`, webview-bus handled per group), so the
+ * mirror now carries four entries. In production the commands'
  * `keys` + `scope: ["ui:board"]` reach the keymap layer through the
  * CommandService registry; in tests the host is mocked, so the keymap tests
  * publish the same metadata through `mock-command-list.ts`'s
@@ -41,8 +43,9 @@ describe("BOARD_PLUGIN_COMMANDS drift guard", () => {
   it("parses the BOARD_COMMANDS table out of the plugin source", () => {
     // Anchor sanity: a refactor that renames/moves the table must fail HERE,
     // not let the comparison pass vacuously against zero entries.
-    expect(pluginEntries.length).toBe(3);
+    expect(pluginEntries.length).toBe(4);
     expect(pluginEntries.map((e) => e.id)).toContain("board.newTask");
+    expect(pluginEntries.map((e) => e.id)).toContain("group.toggleCollapse");
   });
 
   it("mirror matches the plugin BOARD_COMMANDS 1:1 (ids, names, keys)", () => {

@@ -225,12 +225,15 @@ export const UI_SURFACE_PLUGIN_COMMANDS: CommandMetadata[] = [
 ];
 
 /**
- * Key metadata for the `board-commands` builtin plugin's three commands,
+ * Key metadata for the `board-commands` builtin plugin's four commands,
  * mirrored 1:1 from `builtin/plugins/board-commands/index.ts::BOARD_COMMANDS`
  * (Card F — the board command DEFINITIONS live in the plugin; board-view.tsx
  * only registers a webview-bus handler for `board.newTask`, while
  * `board.firstColumn` / `board.lastColumn` execute server-side via the focus
- * kernel's `navigate focus` op).
+ * kernel's `navigate focus` op). The fourth, `group.toggleCollapse` (vim
+ * `z o`), is webview-bus handled like `board.newTask` — each `<GroupSection>`
+ * registers a focus-gated handler that flips the focused group's collapsed
+ * state.
  *
  * Every entry is scope-gated to the board zone marker (`scope:
  * ["ui:board"]`, the constant marker `board-view.tsx` mounts via a
@@ -264,6 +267,13 @@ export const BOARD_PLUGIN_COMMANDS: CommandMetadata[] = [
     name: "Last Column",
     scope: ["ui:board"],
     keys: { vim: "$", cua: "Mod+End" },
+  },
+  {
+    id: "group.toggleCollapse",
+    name: "Toggle Group Collapse",
+    scope: ["ui:board"],
+    // vim `z o` is a chord (Card J) — mirrored 1:1 from the plugin.
+    keys: { vim: "z o" },
   },
 ];
 

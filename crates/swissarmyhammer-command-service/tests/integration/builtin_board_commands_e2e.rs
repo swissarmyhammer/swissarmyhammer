@@ -22,10 +22,18 @@
 //!   created card), so its host `execute` is an inert no-op, mirroring
 //!   `nav.jump` / the `grid.*` set.
 //!
+//! `group.toggleCollapse` is the fourth command in the bundle: the vim `z o`
+//! collapse-toggle for the focused group section of the grouped board view.
+//! Like `board.newTask` it has NO backend op — its host execute is an inert
+//! no-op and the real effect (flip the focused group's collapsed state) is a
+//! webview-bus handler `GroupSection` registers per group via
+//! `useFocusedWebviewCommandHandlers`. It is board-scoped (`ui:board`) and its
+//! single binding is the vim chord `z o`.
+//!
 //! What a passing run proves:
 //!
-//! 1. **Discovery + registration** — after load, all three `board.*` commands
-//!    are registered, and exactly those three.
+//! 1. **Discovery + registration** — after load, all four bundle commands
+//!    are registered, and exactly those four.
 //! 2. **Metadata fidelity** — each command's `name` / `keys` match the retired
 //!    board-view.tsx `CommandDef`s 1:1 (table test), every one is scoped to
 //!    the board zone (`scope: ["ui:board"]`) so its keys never claim a global
@@ -308,8 +316,19 @@ async fn focused_string(
 // The three board ids + the locked metadata table
 // ───────────────────────────────────────────────────────────────────────────
 
-/// The three board command ids, in no particular order.
-const BOARD_IDS: &[&str] = &["board.newTask", "board.firstColumn", "board.lastColumn"];
+/// The four board command ids, in no particular order.
+///
+/// `group.toggleCollapse` is the fourth — the vim `z o` collapse-toggle for
+/// the focused group section in the grouped board view. Like `board.newTask`
+/// it is webview-bus handled (no backend op, inert host execute); the board
+/// React tree (`GroupSection`) registers the live handler that flips the
+/// focused group's collapse state.
+const BOARD_IDS: &[&str] = &[
+    "board.newTask",
+    "board.firstColumn",
+    "board.lastColumn",
+    "group.toggleCollapse",
+];
 
 /// One row of the metadata-fidelity table: a board id with its expected
 /// `name` and `keys` JSON (locked against the retired board-view.tsx
@@ -339,6 +358,16 @@ fn board_metadata() -> Vec<BoardMeta> {
             id: "board.lastColumn",
             name: "Last Column",
             keys: json!({ "vim": "$", "cua": "Mod+End" }),
+        },
+        BoardMeta {
+            id: "group.toggleCollapse",
+            name: "Toggle Group Collapse",
+            // vim `z o` is a CHORD (Card J schema): canonical keystrokes
+            // separated by a single space. The webview keymap resolves it
+            // step-by-step with a pending buffer; the binding lives in the
+            // catalogue like every other key (no successor to the retired
+            // SEQUENCE_TABLES).
+            keys: json!({ "vim": "z o" }),
         },
     ]
 }
@@ -404,8 +433,8 @@ async fn board_commands_plugin_registers_and_routes_column_extremes_to_focus() {
     }
     assert_eq!(
         commands.len(),
-        3,
-        "exactly the 3 board.* commands should be registered, got {:?}",
+        4,
+        "exactly the 4 board-commands ids should be registered, got {:?}",
         commands.keys().collect::<Vec<_>>()
     );
 
@@ -507,5 +536,34 @@ async fn board_commands_plugin_registers_and_routes_column_extremes_to_focus() {
         focused_string(&state).await,
         focused_before,
         "board.newTask must leave the kernel focus slot untouched"
+    );
+
+    // ── (5) group.toggleCollapse host dispatch is an inert webview no-op ────
+    // The collapse-toggle effect lives entirely in the webview: `GroupSection`
+    // registers the focus-gated handler that flips the focused group's
+    // collapsed state. The host execute exists only to satisfy the
+    // registration contract, so a direct host-side dispatch (no webview
+    // mounted, as here) returns an inert `{ ok: true }` with no kernel `event`
+    // envelope and leaves the focus slot untouched — exactly `board.newTask`.
+    let focused_before_toggle = focused_string(&state).await;
+    let toggle = execute_ok(
+        &service,
+        "group.toggleCollapse",
+        json!({ "scope_chain": window_scope() }),
+    )
+    .await;
+    assert_eq!(
+        toggle["ok"],
+        json!(true),
+        "the inert host execute returns {{ ok: true }}; got {toggle}"
+    );
+    assert!(
+        toggle["structuredContent"].get("event").is_none(),
+        "group.toggleCollapse must not route to the focus kernel (no `event`); got {toggle}"
+    );
+    assert_eq!(
+        focused_string(&state).await,
+        focused_before_toggle,
+        "group.toggleCollapse must leave the kernel focus slot untouched"
     );
 }

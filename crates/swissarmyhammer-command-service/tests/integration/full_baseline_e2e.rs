@@ -9,7 +9,7 @@
 //! plugin, retiring the last YAML command source (`nav.yaml`).
 //! `CommandService` (fed by the 9 builtin command plugins at app startup)
 //! is now the sole source of every command's metadata. This test pins the
-//! "all 77 commands wire through the new path" gate the cut-over depends on.
+//! "all 100 commands wire through the new path" gate the cut-over depends on.
 //!
 //! Scope delivered: **registration coverage** end-to-end.
 //!
@@ -23,7 +23,7 @@
 //!    helper lands on the service.
 //! 4. Discover and load every plugin.
 //! 5. Assert the union of registered commands matches the locked
-//!    77-id baseline (set-equality with order-stable diff so missing,
+//!    100-id baseline (set-equality with order-stable diff so missing,
 //!    extra, or renamed ids surface explicitly).
 //!
 //! Dispatch coverage (per-command real effects against the matching
@@ -34,7 +34,7 @@
 //! one of its commands, the sort of drop the per-plugin tests cannot
 //! catch because each only stages one bundle in isolation.
 //!
-//! The 99 commands across the 10 builtin command plugins (matches each
+//! The 100 commands across the 10 builtin command plugins (matches each
 //! plugin's `registerCommands(...)` call set):
 //!
 //! - `app-shell-commands` (33): help, about, quit, command, search,
@@ -76,12 +76,14 @@
 //!   lastCell,edit,editEnter,exitEdit,toggleVisual,deleteRow,newBelow,
 //!   newAbove} — all webview-bus handled (Card C); the grid React tree
 //!   registers the live handlers, the host executes are inert no-ops.
-//! - `board-commands` (3): board.{newTask,firstColumn,lastColumn} — Card F.
+//! - `board-commands` (4): board.{newTask,firstColumn,lastColumn} +
+//!   group.toggleCollapse — Card F plus the vim `z o` group collapse-toggle.
 //!   firstColumn/lastColumn route to the focus kernel's `navigate focus` op
-//!   (first/last) host-driven; newTask is webview-bus handled (the board
-//!   React tree registers the live handler, the host execute is inert).
+//!   (first/last) host-driven; newTask and group.toggleCollapse are webview-bus
+//!   handled (the board React tree / each group section registers the live
+//!   handler, the host execute is inert).
 //!
-//! TOTAL: 99 commands.
+//! TOTAL: 100 commands.
 
 #![allow(dead_code)]
 
@@ -109,7 +111,7 @@ use crate::support::{call_command, copy_dir_recursive};
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The 10 builtin command plugins, in the order the app loads them.
-/// The grand union of their command registrations is the 99 ids asserted
+/// The grand union of their command registrations is the 100 ids asserted
 /// below. (The former `ui-commands` bundle was folded into
 /// `app-shell-commands` by the ui.*→app.* rename — there is no `ui.*`
 /// command namespace.)
@@ -250,7 +252,7 @@ fn registered_ids(list_result: &Value) -> BTreeSet<String> {
         .collect()
 }
 
-/// The locked 99-id baseline.
+/// The locked 100-id baseline.
 ///
 /// Mirrors the actual union of each plugin's `registerCommands(...)`
 /// calls as of the Stage 4 cut-over. If a plugin's command set
@@ -377,13 +379,19 @@ fn expected_command_ids() -> BTreeSet<String> {
         "grid.deleteRow",
         "grid.newBelow",
         "grid.newAbove",
-        // board-commands (3) — Card F: firstColumn/lastColumn route to the
-        // focus kernel's `navigate focus` op (first/last); newTask is
-        // webview-bus handled (the board React tree registers the live
-        // handler; the host execute is inert).
+        // board-commands (4) — Card F: firstColumn/lastColumn route to the
+        // focus kernel's `navigate focus` op (first/last); newTask and
+        // group.toggleCollapse are webview-bus handled (the board React tree /
+        // each group section registers the live handler; the host execute is
+        // inert).
         "board.newTask",
         "board.firstColumn",
         "board.lastColumn",
+        // group.toggleCollapse — vim `z o`, webview-bus handled (each group
+        // section registers a focus-gated handler that flips the focused
+        // group's collapsed state); the host execute is inert. Lives in the
+        // board-commands bundle because grouping is a board-view affordance.
+        "group.toggleCollapse",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -485,8 +493,8 @@ async fn all_builtin_command_plugins_register_their_full_command_set() {
 
     assert_eq!(
         got.len(),
-        99,
-        "the 10 builtin command plugins must collectively register exactly 99 commands"
+        100,
+        "the 10 builtin command plugins must collectively register exactly 100 commands"
     );
 }
 
