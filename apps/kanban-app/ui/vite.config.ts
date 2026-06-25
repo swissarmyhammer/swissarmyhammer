@@ -44,9 +44,14 @@ export default defineConfig({
         },
       },
       // Browser-side tests — the primary test project. Runs in real Chromium
-      // via Playwright, eliminating jsdom entirely.
+      // via Playwright, eliminating jsdom entirely. The `tailwindcss()` plugin
+      // is included so a test that imports the app stylesheet
+      // (`@/index.css`) gets the real generated utility CSS in the browser
+      // DOM — required for layout/overflow assertions (e.g. the composer's
+      // narrow-footer truncation) that depend on `flex`, `min-w-0`,
+      // `line-clamp-1` actually applying.
       {
-        plugins: [react()],
+        plugins: [react(), tailwindcss()],
         resolve: {
           alias: {
             "@": path.resolve(__dirname, "./src"),

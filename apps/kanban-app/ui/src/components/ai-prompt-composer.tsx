@@ -334,7 +334,20 @@ function ComposerModelSelect({
         onPress={() => triggerRef.current?.focus()}
         disabled={!hasModels}
       >
-        <PromptInputSelectTrigger ref={triggerRef} size="sm">
+        {/* `min-w-0` is call-site only — the shared `SelectTrigger` /
+            `PromptInputSelectTrigger` are untouched. It overrides the
+            trigger flex item's default `min-width: auto` (its content width)
+            so the trigger can shrink below the model label's full width
+            inside the footer toolbar; without it the base `SelectTrigger`'s
+            `w-fit` pins the trigger at content width and it overflows the
+            panel. Once the trigger can shrink, the base trigger's existing
+            `line-clamp-1` on the value slot clamps the long label to one
+            line and shows an ellipsis instead of spilling out. */}
+        <PromptInputSelectTrigger
+          ref={triggerRef}
+          size="sm"
+          className="min-w-0"
+        >
           <PromptInputSelectValue placeholder="Select a model" />
         </PromptInputSelectTrigger>
       </AiPanelPressable>
@@ -679,7 +692,10 @@ export function AiPromptComposer({
                 disabled={disabled}
                 onClick={handleSubmit}
                 className={cn(
-                  "inline-flex size-7 items-center justify-center rounded-md",
+                  // `shrink-0` keeps the fixed `size-7` action button at its
+                  // footprint when the model selector shrinks (`min-w-0`) for
+                  // a long label, so the button is never compressed.
+                  "inline-flex size-7 shrink-0 items-center justify-center rounded-md",
                   "bg-primary text-primary-foreground transition-colors",
                   "hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50",
                 )}
