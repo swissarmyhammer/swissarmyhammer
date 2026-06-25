@@ -424,7 +424,9 @@ impl TypesEmitter {
             return;
         }
 
-        if let Err(error) = atomic_write(&inner.output_path, &text) {
+        if let Err(error) =
+            swissarmyhammer_common::fs_utils::write_atomic(&inner.output_path, &text)
+        {
             // A failed types write is never fatal: generated types are a
             // development aid, decoupled from runtime. Log and carry on rather
             // than propagate — the host's lifecycle must not hinge on a `.d.ts`.
@@ -436,72 +438,6 @@ impl TypesEmitter {
             return;
         }
         inner.write_count.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-/// Writes `contents` to `path` atomically, via a temp file and a rename.
-///
-/// The text is written in full to a sibling temp file, which is then renamed
-/// over `path`. A rename within one directory is atomic on every platform the
-/// host targets, so a reader — a TypeScript language server watching the file —
-/// observes either the old file or the complete new one, never a partial write.
-/// The temp file is removed on a write failure so a failed regeneration leaves
-/// no debris next to the destination.
-///
-/// # Parameters
-///
-/// - `path` — the destination path; its parent directory is created if absent.
-/// - `contents` — the full declaration text to write.
-///
-/// # Errors
-///
-/// Returns the underlying [`std::io::Error`] when the parent directory cannot
-/// be created, the temp file cannot be written, or the rename fails.
-fn atomic_write(path: &Path, contents: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    // The temp file is a sibling of the destination so the rename stays within
-    // one directory and is therefore atomic. Its name carries the emitter's
-    // process id and a generation counter so two concurrent writers — or two
-    // emitters sharing a directory — never collide on the temp path.
-    let temp_path = temp_sibling(path);
-
-    if let Err(error) = std::fs::write(&temp_path, contents) {
-        // Best-effort cleanup so a failed write leaves no orphan temp file.
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(error);
-    }
-
-    if let Err(error) = std::fs::rename(&temp_path, path) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(error);
-    }
-
-    Ok(())
-}
-
-/// Builds a unique temp-file path that is a sibling of `path`.
-///
-/// The temp file must share a directory with the destination so the rename
-/// that publishes it is a same-directory rename — the only kind guaranteed
-/// atomic. The name is unique per call so concurrent regenerations do not
-/// stomp each other's temp files.
-fn temp_sibling(path: &Path) -> PathBuf {
-    /// A per-process counter making every temp filename unique.
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "app.d.ts".to_string());
-    let temp_name = format!(".{file_name}.{}.{seq}.tmp", std::process::id());
-
-    match path.parent() {
-        Some(parent) => parent.join(temp_name),
-        None => PathBuf::from(temp_name),
     }
 }
 

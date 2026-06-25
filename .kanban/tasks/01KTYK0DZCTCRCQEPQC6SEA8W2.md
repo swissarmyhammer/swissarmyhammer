@@ -1,8 +1,13 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: f380
+comments:
+- actor: claude-code
+  id: 01kw04vq9yzhwsnxtxjvmbmz60
+  text: 'Duplicate of h8cybf5 (01KTY97TWP9BJB4CX53H8CYBF5) — identical title/failure (meta_tree_id_param_is_required_where_expected). Verified resolved on current HEAD: the test passes, full swissarmyhammer-command-service package 173/173 green, clippy clean. The `id` param is declared required in the operations source (corrected by origin/main merge e6595fbce). No code change needed. Closing as resolved-duplicate.'
+  timestamp: 2026-06-25T19:42:10.750523+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff180
 title: 'Pre-existing failure: meta_tree_id_param_is_required_where_expected — unregister.id required flag is false'
 ---
 ## What

@@ -44,6 +44,10 @@ tracing = { workspace = true }
 # Directory stacking for plugin discovery
 swissarmyhammer-directory = { workspace = true }
 
+# Shared file-system utilities — supplies the atomic write_atomic primitive the
+# codegen emitter uses to publish app.d.ts via a temp sibling and a rename.
+swissarmyhammer-common = { workspace = true }
+
 [dev-dependencies]
 # Used by the cli_server integration test to probe whether a spawned
 # subprocess is still alive via kill(2) with signal 0.

@@ -602,31 +602,9 @@ impl UiState {
         if baseline.as_deref() == Some(yaml.as_str()) {
             return Ok(());
         }
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
-        }
-        let temp = Self::temp_sibling(path);
-        std::fs::write(&temp, &yaml)?;
-        if let Err(err) = std::fs::rename(&temp, path) {
-            let _ = std::fs::remove_file(&temp);
-            return Err(err);
-        }
+        swissarmyhammer_common::fs_utils::write_atomic(path, &yaml)?;
         *baseline = Some(yaml);
         Ok(())
-    }
-
-    /// Build a unique temp sibling path (same directory, so the rename in
-    /// [`Self::save`] stays on one filesystem and is atomic).
-    fn temp_sibling(path: &Path) -> PathBuf {
-        static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let file_name = path
-            .file_name()
-            .map(|f| f.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "ui-state.yaml".to_string());
-        path.with_file_name(format!(".{file_name}.tmp-{}-{n}", std::process::id()))
     }
 
     /// Try to save; log errors but never panic or propagate.
