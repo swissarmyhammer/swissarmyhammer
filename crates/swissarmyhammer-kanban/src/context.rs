@@ -14,9 +14,12 @@ use fs2::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use swissarmyhammer_entity::changelog::ChangeEntry;
-use swissarmyhammer_entity::{Entity, EntityCache, EntityContext, EntityWatcher};
+use swissarmyhammer_entity::{
+    Entity, EntityCache, EntityContext, EntityWatcher, PerspectiveReloader,
+};
 use swissarmyhammer_fields::{load_yaml_dir, DeriveRegistry, FieldsContext, ValidationEngine};
 use swissarmyhammer_perspectives::PerspectiveContext;
+use swissarmyhammer_store::EventProvenance;
 use swissarmyhammer_views::ViewsContext;
 use tokio::fs;
 use tokio::sync::{OnceCell, RwLock};
@@ -567,7 +570,25 @@ impl KanbanContext {
                 return Ok(false);
             }
         };
-        match EntityWatcher::start(self.root.clone(), cache) {
+        // Route `.kanban/perspectives/*.yaml` events to the live
+        // PerspectiveContext when it is already initialized, so an external
+        // rename/delete from a sibling process converges this context's
+        // perspective list (and the frontend tab bar) without re-opening.
+        // Perspectives are not entities, so the EntityCache cannot refresh
+        // them — the reloader bridges that gap.
+        let perspective_reloader: Option<Arc<dyn PerspectiveReloader>> =
+            self.perspectives.get().map(|p| {
+                Arc::new(PerspectiveFileReloader::new(Arc::clone(p)))
+                    as Arc<dyn PerspectiveReloader>
+            });
+        // Canonicalize the watch root so event-path `strip_prefix` matches the
+        // OS-reported paths. On macOS, FSEvents reports paths under
+        // `/private/var/…` while a `.kanban` dir resolved from a `/var/…`
+        // symlink (notably `tempfile::TempDir`, and any home dir behind a
+        // symlink) would otherwise fail the prefix check and silently drop
+        // every event. Falls back to the raw root if canonicalization fails.
+        let watch_root = std::fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
+        match EntityWatcher::start_with(watch_root, cache, perspective_reloader) {
             Ok(watcher) => {
                 let _ = self.entity_watcher.set(watcher);
                 Ok(true)
@@ -792,6 +813,42 @@ impl KanbanContext {
         match file.try_lock_exclusive() {
             Ok(()) => Ok(KanbanLock { file }),
             Err(_) => Err(KanbanError::LockBusy),
+        }
+    }
+}
+
+/// [`PerspectiveReloader`] over the live `Arc<RwLock<PerspectiveContext>>`.
+///
+/// Bridges the generic entity file watcher to the perspective store: when the
+/// watcher observes a `.kanban/perspectives/<id>.yaml` create/modify/delete, it
+/// calls [`reload`](PerspectiveReloader::reload), which re-reads that single
+/// file via [`PerspectiveContext::reload_from_disk_with`]. That method both
+/// converges the in-memory cache (so `perspective.list` reflects the change
+/// without re-opening the board) and broadcasts a `PerspectiveEvent` on the
+/// existing perspective bus — the same bus the frontend tab bar refetches from
+/// — so the store-event-loop is satisfied with no extra wiring.
+///
+/// The watcher provenance is stamped via [`EventProvenance::watcher`], matching
+/// how entity refreshes mark watcher-sourced events.
+struct PerspectiveFileReloader {
+    perspectives: Arc<RwLock<PerspectiveContext>>,
+}
+
+impl PerspectiveFileReloader {
+    fn new(perspectives: Arc<RwLock<PerspectiveContext>>) -> Self {
+        Self { perspectives }
+    }
+}
+
+#[async_trait::async_trait]
+impl PerspectiveReloader for PerspectiveFileReloader {
+    async fn reload(&self, id: &str) {
+        let mut pctx = self.perspectives.write().await;
+        if let Err(e) = pctx
+            .reload_from_disk_with(id, EventProvenance::watcher())
+            .await
+        {
+            tracing::warn!(perspective_id = id, error = %e, "failed to reload perspective from disk");
         }
     }
 }

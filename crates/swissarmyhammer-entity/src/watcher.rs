@@ -10,11 +10,37 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 use tracing;
 
 use crate::cache::EntityCache;
+
+/// Sink for `.kanban/perspectives/*.yaml` file events.
+///
+/// Perspectives are NOT entities — they live in a separate
+/// `PerspectiveContext` (`swissarmyhammer-perspectives`, a lower tier), not in
+/// the `EntityCache`. The generic [`EntityWatcher`] therefore cannot refresh
+/// them through the cache; routing a perspective file through
+/// `EntityCache::refresh_from_disk_with` fails with `UnknownEntityType` and the
+/// change is silently dropped.
+///
+/// This trait lets the owner of the `PerspectiveContext` (the kanban crate)
+/// inject a reload sink WITHOUT the entity crate having to know about
+/// perspectives. When a perspective YAML file is created, modified, or removed,
+/// the watcher calls [`reload`](Self::reload) with the perspective id (the file
+/// stem); the implementation re-reads that single file from disk and broadcasts
+/// the resulting change so downstream consumers (the perspective tab bar)
+/// converge — exactly mirroring how entity events route through the cache.
+#[async_trait]
+pub trait PerspectiveReloader: Send + Sync {
+    /// Reload one perspective from disk by id (the YAML file stem).
+    ///
+    /// The implementation decides create/update vs delete from the on-disk
+    /// state, so the watcher does not need to disambiguate the event kind.
+    async fn reload(&self, id: &str);
+}
 
 /// Handle to a running file watcher. Dropping it stops the watcher.
 pub struct EntityWatcher {
@@ -32,7 +58,28 @@ impl EntityWatcher {
     ///
     /// The watcher debounces rapid changes and routes events through the
     /// `EntityCache`, which handles hash comparison and event emission.
+    ///
+    /// Perspective files are not routed (no [`PerspectiveReloader`] sink); use
+    /// [`start_with`](Self::start_with) to also converge an out-of-process
+    /// `PerspectiveContext` on `.kanban/perspectives/*.yaml` events.
     pub fn start(root: PathBuf, cache: Arc<EntityCache>) -> Result<Self, notify::Error> {
+        Self::start_with(root, cache, None)
+    }
+
+    /// Like [`start`](Self::start) but also routes `.kanban/perspectives/*.yaml`
+    /// events to the supplied [`PerspectiveReloader`].
+    ///
+    /// Perspectives live in a separate `PerspectiveContext` rather than the
+    /// `EntityCache`, so an external rename/delete of a perspective file would
+    /// otherwise be invisible to a long-running process. Passing a reloader
+    /// makes the watcher re-read the changed perspective from disk and
+    /// broadcast the change, so a sibling process's `perspective.list` and the
+    /// frontend tab bar converge without re-opening the board.
+    pub fn start_with(
+        root: PathBuf,
+        cache: Arc<EntityCache>,
+        perspective_reloader: Option<Arc<dyn PerspectiveReloader>>,
+    ) -> Result<Self, notify::Error> {
         let (tx, mut rx) = mpsc::channel::<notify::Result<Event>>(256);
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
 
@@ -88,6 +135,17 @@ impl EntityWatcher {
                                     if let Some((entity_type, id)) =
                                         parse_entity_path(&root_clone, &path)
                                     {
+                                        // Perspectives are not entities — they
+                                        // live in a separate PerspectiveContext.
+                                        // Route them to the reload sink when one
+                                        // is wired; otherwise drop (the cache has
+                                        // no "perspective" type and would error).
+                                        if entity_type == "perspective" {
+                                            if let Some(reloader) = &perspective_reloader {
+                                                reloader.reload(&id).await;
+                                            }
+                                            continue;
+                                        }
                                         handle_file_event(&cache, &entity_type, &id, &kind, &path)
                                             .await;
                                     } else if let Some((entity_type, filename)) =

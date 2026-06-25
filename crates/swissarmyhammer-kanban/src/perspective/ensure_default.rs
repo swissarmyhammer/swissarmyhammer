@@ -5,12 +5,18 @@
 //!
 //! The "Default" perspective used to be created by a frontend auto-create
 //! hook minting a fresh ULID per create, guarded only by in-memory state.
-//! That state is loaded once per process and has no file watcher (the
-//! entity watcher rejects perspective files with "unknown entity type"), so
-//! every hot reload, extra window, or sibling process with a stale cache
-//! created another duplicate — hundreds of `Default` YAML files accumulated
-//! on one board. Conversely, a stale empty cache presented as ZERO
-//! perspectives while files existed on disk.
+//! That state is loaded once per process, so every hot reload, extra window,
+//! or sibling process with a stale cache created another duplicate — hundreds
+//! of `Default` YAML files accumulated on one board. Conversely, a stale empty
+//! cache presented as ZERO perspectives while files existed on disk.
+//!
+//! The cross-window staleness for rename/delete is now also closed: the entity
+//! file watcher routes `.kanban/perspectives/*.yaml` events to a
+//! [`PerspectiveReloader`](swissarmyhammer_entity::PerspectiveReloader) that
+//! calls [`PerspectiveContext::reload_from_disk_with`], converging a sibling
+//! process's perspective cache (and the frontend tab bar) on an external edit.
+//! The deterministic-id + reconciliation mechanisms below remain the
+//! convergence guarantee for the CREATE path.
 //!
 //! Two storage-layer mechanisms fix the class of bug:
 //!
