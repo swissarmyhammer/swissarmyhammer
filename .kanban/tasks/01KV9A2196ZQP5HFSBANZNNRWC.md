@@ -90,8 +90,8 @@ comments:
 
     Leaving in doing for /review.
   timestamp: 2026-06-25T15:28:48.444478+00:00
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffee80
 project: ui-command-cleanup
 title: Consolidate duplicated copy_dir_recursive() across command-service integration tests into support.rs
 ---

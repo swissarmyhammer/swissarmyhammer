@@ -6,10 +6,16 @@ import { renderInAct } from "@/test/act-render";
 // Mocks — must be declared before importing the component under test
 // ---------------------------------------------------------------------------
 
-vi.mock("@tauri-apps/api/core", () => ({
+// Spread the real module and override only the parts the test controls.
+// @tauri-apps/api >=2.11 pulls submodules that import named exports from core
+// (SERIALIZE_TO_IPC_FN, Resource, Channel, …); a hand-listed stub drops them
+// and breaks module loading.
+vi.mock("@tauri-apps/api/core", async (importActual) => ({
+  ...(await importActual<typeof import("@tauri-apps/api/core")>()),
   invoke: vi.fn(() => Promise.resolve("ok")),
 }));
-vi.mock("@tauri-apps/api/event", () => ({
+vi.mock("@tauri-apps/api/event", async (importActual) => ({
+  ...(await importActual<typeof import("@tauri-apps/api/event")>()),
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 vi.mock("@tauri-apps/plugin-log", () => ({
