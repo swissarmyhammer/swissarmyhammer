@@ -62,6 +62,7 @@ Idempotent — use the partial above. Run every time.
 | Invocation | Mode |
 |------------|------|
 | `/review <task-id>` | **task-mode** on that task |
+| `/review <task-id> <sha-or-range>` | **task-mode** on that task, scoped to `<sha-or-range>` |
 | Bare `/review` with tasks in `review` column | **task-mode** on the **oldest** review task |
 | Bare `/review` with `review` empty | **range-mode** on the current branch's changes |
 | `/review HEAD~4..HEAD`, `/review since abc123`, `/review feature-branch` | **range-mode** on that range/branch |
@@ -74,6 +75,8 @@ Bare `/review` check:
 
 If any exist, pick the oldest (lowest ordinal / earliest created) for task-mode.
 
+**Note:** `/implement` leaves a finished task in `doing`, not `review` — it never parks tasks in `review`. So bare `/review` won't auto-target a task that was just implemented; pass `/review <id>` to target it explicitly. Orchestrators like `/finish` always pass the id (and usually a sha), so they're unaffected.
+
 ### 3. Run the engine
 
 The chosen op decides the scope. Pass through `validators` / `backend` when the user asked to narrow or to run locally.
@@ -84,12 +87,15 @@ The chosen op decides the scope. Pass through `validators` / `backend` when the 
 {"op": "get task", "id": "<id>"}
 ```
 
-Derive the scope from any range hint in the description (commit range, branch, "since" ref):
+Pick the scope by this precedence:
 
-| Task body has | Call |
-|---------------|------|
-| A commit/range/branch hint | `{"op": "review sha", "sha": "<range>"}` |
-| No range hint | `{"op": "review working"}` |
+| Condition | Call |
+|-----------|------|
+| An explicit `<sha-or-range>` was passed (`/review <id> <sha>`) | `{"op": "review sha", "sha": "<sha-or-range>"}` |
+| The description has a commit/range/branch hint | `{"op": "review sha", "sha": "<range>"}` |
+| Otherwise | `{"op": "review working"}` |
+
+An explicit `<sha-or-range>` argument wins over everything else — this is how `/finish` asks for a review scoped to the just-committed checkpoint delta (e.g. `/review <id> HEAD~1..HEAD`), so each pass reviews only that iteration's change, never the whole accumulated task diff. Findings still land on `<id>` (task-mode) — the sha only narrows the scope, it does not turn this into range-mode.
 
 **Range-mode**:
 
@@ -112,13 +118,13 @@ Never create one kanban task per finding. Findings = checklist items on a host t
 
 1. Re-read the target task (already have it from step 3): `{"op": "get task", "id": "<id>"}`.
 
-2. If not in `review`, move it there first (covers manual `/review <id>` on a task still in `todo`/`doing`):
+2. If not already in `review`, move it there now — **this is the only path a task takes into `review`**:
 
    ```json
    {"op": "move task", "id": "<id>", "column": "review"}
    ```
 
-   No-op when it came from `implement` already in `review`.
+   Implement leaves finished tasks in `doing` (it never moves them to `review`), so this is a real `doing → review` move on the first review pass, and a no-op on re-reviews once the task is already in `review`.
 
 3. Parse the description for prior `## Review Findings (...)` sections; note whether every `- [ ]` has been flipped to `- [x]`.
 
