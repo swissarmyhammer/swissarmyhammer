@@ -72,8 +72,8 @@ comments:
   id: 01kvzrnhth3gqxsyyxag5yj1w6
   text: 'Addressed the 3 nits from "Review Findings (2026-06-25 10:01)": added one-line JSDoc to renderDisplay (comment-log-display.test.tsx), renderEditor (attachment-editor.test.tsx), and renderSingleSelect (single-select-editor.test.tsx), matching the style of neighboring documented helpers (avatar-display.test.tsx::renderDisplay, getCmView/settle). Documentation-only, no behavior change. Verified: `npx tsc --noEmit` exit 0; `npx vitest run --project browser` on the 3 touched files = 3 files / 46 tests passed, exit 0 (the [FocusLayer] push failed console.error lines are pre-existing tauri-window-mock noise, unrelated). Flipped the 3 checklist boxes. Leaving in doing for review.'
   timestamp: 2026-06-25T16:09:05.617173+00:00
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffef80
 title: Stale @tauri-apps/api import/module-resolution errors in browser vitest project (~7 files)
 ---
 ## What

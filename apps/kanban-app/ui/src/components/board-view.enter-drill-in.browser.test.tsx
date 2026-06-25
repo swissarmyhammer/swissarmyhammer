@@ -31,28 +31,9 @@ import type { BoardData, Entity } from "@/types/kanban";
 // Tauri API mocks — must come before component imports.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -96,13 +77,15 @@ vi.mock("@/components/perspective-container", () => ({
 
 import { BoardView } from "./board-view";
 import { AppShell } from "./app-shell";
-import { commandToolCall, navDispatchCmds } from "@/test/mock-command-list";
-import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
+import { navDispatchCmds } from "@/test/mock-command-list";
 import {
-  UNHANDLED,
   emitToListenerMap,
   makeSpatialKernelMock,
 } from "@/test/mock-spatial-kernel";
+import {
+  makeDefaultInvokeImpl,
+  makeSpatialTestHelpers,
+} from "@/test/spatial-nav-harness";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -114,12 +97,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoProvider } from "@/lib/undo-context";
-import {
-  asSegment,
-  type FocusChangedPayload,
-  type FullyQualifiedMoniker,
-  type WindowLabel,
-} from "@/types/spatial";
+import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -195,107 +173,36 @@ const { handleSpatialCommand, reset: resetSpatialKernel } =
 
 // ---------------------------------------------------------------------------
 // Default invoke responses — the handful of IPCs the AppShell + BoardView
-// providers hit on mount. Kept in one place so beforeEach restores them
-// cleanly after each test's mockClear / mockReset.
+// providers hit on mount. Built by the shared spatial-nav harness so
+// beforeEach restores them cleanly after each test's mockClear / mockReset.
 // ---------------------------------------------------------------------------
 
-async function defaultInvokeImpl(
-  cmd: string,
-  args?: unknown,
-): Promise<unknown> {
-  // Post-Stage-3, focus / entity operations route through the MCP
-  // envelope `invoke("command_tool_call", { tool, op, params })`. Detect
-  // a focus-tool envelope and re-enter `defaultInvokeImpl` with the
-  // legacy `(cmd, args)` shape so the rest of this dispatcher (which
-  // pre-dates the migration) matches without changes. The
-  // `mock-command-list` `commandToolCall` is reserved for the
-  // commands-tool ops (`list command`, `available command`).
-  if (cmd === "command_tool_call") {
-    const env = args as
-      | { tool?: string; op?: string; params?: Record<string, unknown> }
-      | undefined;
-    if (env?.tool === "focus" || env?.tool === "entity") {
-      const wrapped = wrapMcpDispatch(
-        // Stub a `mock.calls` array so the translator's call-replacement
-        // logic has a sink — we don't surface translated entries here
-        // because this codepath is invoked from a custom dispatcher,
-        // not the spy's own `mockImplementation`.
-        { mock: { calls: [] } },
-        (legacyCmd: string, legacyArgs?: unknown) =>
-          defaultInvokeImpl(legacyCmd, legacyArgs),
-      );
-      return wrapped(cmd, args);
-    }
-    return commandToolCall(args);
-  }
-  if (cmd === "list_entity_types") return ["task", "column"];
-  if (cmd === "get_entity_schema") {
-    return {
-      entity: { name: "task", entity_type: "task" },
-      fields: [],
-    };
-  }
-  if (cmd === "get_ui_state")
-    return {
-      palette_open: false,
-      palette_mode: "command",
-      keymap_mode: mockKeymapMode,
-      scope_chain: [],
-      open_boards: [],
-      windows: {},
-      recent_boards: [],
-    };
-  if (cmd === "get_undo_state") return { can_undo: false, can_redo: false };
-  if (cmd === "dispatch_command") return undefined;
-  // The spatial-nav register/unregister/focus calls all return void —
-  // undefined is the safe default. Drill has no client-side IPC at all:
-  // it executes host-side in the `nav-commands` builtin plugin.
-  const spatial = handleSpatialCommand(cmd, args);
-  if (spatial !== UNHANDLED) return spatial;
-  return undefined;
-}
+const defaultInvokeImpl = makeDefaultInvokeImpl({
+  keymapMode: () => mockKeymapMode,
+  handleSpatialCommand,
+});
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helpers — the call-log readers + `focus-changed` injector come from the
+// shared spatial-nav harness; only `flushSetup` and the render wrapper stay
+// local (the 50ms setup flush is specific to this AppShell-driven family).
 // ---------------------------------------------------------------------------
+
+const {
+  keyForMoniker,
+  spatialDrillInCalls,
+  spatialDrillOutCalls,
+  spatialFocusCalls,
+  dispatchPayloads,
+  inspectDispatches,
+  entityInspectDispatches,
+  fireFocusChanged,
+} = makeSpatialTestHelpers({ mockInvoke, listeners });
 
 /** Wait for register effects scheduled in `useEffect` to flush. */
 async function flushSetup() {
   await act(async () => {
     await new Promise((r) => setTimeout(r, 50));
-  });
-}
-
-/**
- * Drive a `focus-changed` event into the React tree as if the Rust kernel
- * had emitted one for the active window.
- *
- * The `next_segment` argument is REQUIRED for keystroke tests: the
- * spatial → entity bridge in `<EntityFocusProvider>` calls
- * `actions.setFocus(payload.next_segment)` on every focus-changed
- * event. The entity-focus store's `focusedScope` is what AppShell's
- * `<KeybindingHandler>` walks via `extractChainBindings` to resolve
- * scope-level command keys.
- */
-async function fireFocusChanged({
-  prev_fq = null,
-  next_fq = null,
-  next_segment = null,
-}: {
-  prev_fq?: FullyQualifiedMoniker | null;
-  next_fq?: FullyQualifiedMoniker | null;
-  next_segment?: string | null;
-}) {
-  const payload: FocusChangedPayload = {
-    window_label: "main" as WindowLabel,
-    prev_fq,
-    next_fq,
-    next_segment: next_segment as FocusChangedPayload["next_segment"],
-  };
-  const handlers = listeners.get("notifications/focus/changed") ?? [];
-  await act(async () => {
-    for (const handler of handlers) handler({ payload });
-    await Promise.resolve();
   });
 }
 
@@ -337,102 +244,6 @@ function renderBoardWithShell() {
       </FocusLayer>
     </SpatialFocusProvider>,
   );
-}
-
-/** Pull every `spatial_register_scope` invocation argument bag. */
-function registerScopeArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_scope")
-    .map((c) => c[1] as Record<string, unknown>);
-}
-
-/** Collect every client-side `drill_in layer` IPC, in order. Host-driven
- * drill means this must stay EMPTY for keyboard drill-in — the kernel
- * executes the drill in the `nav-commands` builtin plugin. The legacy
- * bare `spatial_drill_in` cmd is matched too as a no-legacy guard. */
-function spatialDrillInCalls(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter(
-      (c) =>
-        c[0] === "spatial_drill_in" ||
-        (c[0] === "command_tool_call" &&
-          (c[1] as any)?.tool === "focus" &&
-          (c[1] as any)?.op === "drill_in layer"),
-    )
-    .map((c) => {
-      const outer = c[1] as Record<string, unknown>;
-      return (outer?.params ?? outer) as Record<string, unknown>;
-    });
-}
-
-/** Collect every client-side `drill_out layer` IPC, in order. Host-driven
- * drill means this must stay EMPTY for keyboard drill-out — see
- * {@link spatialDrillInCalls}. */
-function spatialDrillOutCalls(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter(
-      (c) =>
-        c[0] === "spatial_drill_out" ||
-        (c[0] === "command_tool_call" &&
-          (c[1] as any)?.tool === "focus" &&
-          (c[1] as any)?.op === "drill_out layer"),
-    )
-    .map((c) => {
-      const outer = c[1] as Record<string, unknown>;
-      return (outer?.params ?? outer) as Record<string, unknown>;
-    });
-}
-
-/** Collect every client-side `set focus` IPC, in order. The drill flow
- * must NOT fan out a webview-side `spatial_focus` — the kernel commits
- * focus host-side and the webview only mirrors the resulting
- * `focus-changed` emission. */
-function spatialFocusCalls(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter(
-      (c) =>
-        c[0] === "spatial_focus" ||
-        (c[0] === "command_tool_call" &&
-          (c[1] as any)?.tool === "focus" &&
-          (c[1] as any)?.op === "set focus"),
-    )
-    .map((c) => {
-      const outer = c[1] as Record<string, unknown>;
-      return (outer?.params ?? outer) as Record<string, unknown>;
-    });
-}
-
-/** Filter `dispatch_command` calls down to those for the given command id. */
-function dispatchPayloads(cmdId: string): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "dispatch_command")
-    .map((c) => c[1] as Record<string, unknown>)
-    .filter((p) => p.cmd === cmdId);
-}
-
-/** Filter `dispatch_command` calls down to those for `app.inspect`. */
-function inspectDispatches(): Array<Record<string, unknown>> {
-  return dispatchPayloads("app.inspect");
-}
-
-/**
- * Filter `dispatch_command` calls down to those for the plugin-owned
- * `entity.inspect` (Card G). Space routes this id to the BACKEND with the
- * focused scope chain; the plugin resolves the target server-side.
- */
-function entityInspectDispatches(): Array<Record<string, unknown>> {
-  return dispatchPayloads("entity.inspect");
-}
-
-/**
- * Find the registered FullyQualifiedMoniker for a given segment moniker by
- * scanning `spatial_register_scope` calls.
- */
-function keyForMoniker(moniker: string): FullyQualifiedMoniker | undefined {
-  const zone = registerScopeArgs().find((a) => a.segment === moniker);
-  if (zone) return zone.fq as FullyQualifiedMoniker;
-  const scope = registerScopeArgs().find((a) => a.segment === moniker);
-  return scope?.fq as FullyQualifiedMoniker | undefined;
 }
 
 // ---------------------------------------------------------------------------
