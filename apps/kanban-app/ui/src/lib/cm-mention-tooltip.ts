@@ -70,6 +70,45 @@ function buildTooltipDom(
 }
 
 /**
+ * Resolve the tooltip payload for a mention at a document position.
+ *
+ * Pure resolution logic shared by the CM6 `hoverTooltip` source (in
+ * `createMentionTooltips`) and the read-only pill path (`MentionView`). Runs
+ * {@link mentionAtPos} to locate the mention under `pos`, looks its slug up in
+ * `meta`, and builds the tooltip DOM via {@link buildTooltipDom}. Returns the
+ * `{ pos, end, dom }` payload, or `null` when there is no mention under `pos`
+ * or its slug is absent from `meta`.
+ *
+ * @param text - The single line of text containing the mention.
+ * @param pos - The document position to resolve (absolute, not line-relative).
+ * @param lineFrom - The document offset of the line's first character.
+ * @param prefix - The mention prefix character (e.g. `#`, `@`, `^`).
+ * @param cssClass - CSS class for the tooltip container.
+ * @param meta - Slug → metadata map for the mention's entity type.
+ */
+export function mentionTooltipAt(
+  text: string,
+  pos: number,
+  lineFrom: number,
+  prefix: string,
+  cssClass: string,
+  meta: Map<string, MentionMeta>,
+): { pos: number; end: number; dom: HTMLElement } | null {
+  const slugs = Array.from(meta.keys());
+  const hit = mentionAtPos(text, pos, lineFrom, prefix, slugs);
+  if (!hit) return null;
+
+  const info = meta.get(hit.slug);
+  if (!info) return null;
+
+  return {
+    pos: hit.from,
+    end: hit.to,
+    dom: buildTooltipDom(cssClass, prefix, hit.slug, info),
+  };
+}
+
+/**
  * Create a mention tooltip extension for a given prefix.
  *
  * @param prefix - The mention prefix character (e.g. `#`, `@`)
@@ -88,20 +127,21 @@ export function createMentionTooltips(prefix: string, cssClass: string) {
   const hoverSource = hoverTooltip((view, pos) => {
     const line = view.state.doc.lineAt(pos);
     const meta = view.state.facet(metaFacet);
-    const slugs = Array.from(meta.keys());
-    const hit = mentionAtPos(line.text, pos, line.from, prefix, slugs);
-    if (!hit) return null;
-
-    const info = meta.get(hit.slug);
-    if (!info) return null;
+    const payload = mentionTooltipAt(
+      line.text,
+      pos,
+      line.from,
+      prefix,
+      cssClass,
+      meta,
+    );
+    if (!payload) return null;
 
     return {
-      pos: hit.from,
-      end: hit.to,
+      pos: payload.pos,
+      end: payload.end,
       above: true,
-      create: () => ({
-        dom: buildTooltipDom(cssClass, prefix, hit.slug, info),
-      }),
+      create: () => ({ dom: payload.dom }),
     } satisfies Tooltip;
   });
 
