@@ -41,7 +41,7 @@ use swissarmyhammer_plugin::{CallerId, InProcessServer, McpServer as PluginMcpSe
 use swissarmyhammer_ui_state::{ai_streaming_notification, UiState, UiStateServer};
 use tempfile::TempDir;
 
-use super::support::try_call_command;
+use super::support::{copy_dir_recursive, try_call_command};
 
 /// A generous upper bound on any single host or isolate interaction.
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -59,21 +59,6 @@ fn workspace_root() -> PathBuf {
         .nth(2)
         .expect("workspace root is two levels above the crate manifest dir")
         .to_path_buf()
-}
-
-/// Recursively copy a directory tree from `source` to `destination`.
-fn copy_dir_recursive(source: &Path, destination: &Path) {
-    std::fs::create_dir_all(destination).expect("staging directory should be created");
-    for entry in std::fs::read_dir(source).expect("bundle dir should be readable") {
-        let entry = entry.expect("a directory entry should be readable");
-        let from = entry.path();
-        let to = destination.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to);
-        } else {
-            std::fs::copy(&from, &to).expect("bundle file should copy");
-        }
-    }
 }
 
 /// Stage the committed `builtin/plugins/ai-commands` bundle into a temp
