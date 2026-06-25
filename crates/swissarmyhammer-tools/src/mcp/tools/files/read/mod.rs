@@ -169,7 +169,6 @@ pub async fn execute_read(
 ) -> Result<CallToolResult, McpError> {
     use crate::mcp::tools::files::shared_utils::{whole_file_hash, window_lines, SecureFileAccess};
     use serde::Deserialize;
-    use swissarmyhammer_common::rate_limiter::get_rate_limiter;
 
     tracing::debug!(
         "files read execute() called with arguments: {:?}",
@@ -211,16 +210,8 @@ pub async fn execute_read(
         }
     };
 
-    // Check rate limit using tokio task ID as client identifier
-    let rate_limiter = get_rate_limiter();
-    let client_id = format!("task_{:?}", tokio::task::try_id());
-    if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_read", 1) {
-        tracing::warn!("Rate limit exceeded for file_read: {}", e);
-        return Err(McpError::invalid_request(
-            format!("Rate limit exceeded: {}", e),
-            None,
-        ));
-    }
+    // Check rate limit (shared helper; keyed by the current Tokio task).
+    crate::mcp::tools::files::shared_utils::enforce_rate_limit("file_read", 1)?;
 
     // Validate parameters before security layer
     if let Some(offset) = request.offset {
@@ -300,13 +291,7 @@ pub async fn execute_read(
     // can re-base against it.
     let payload = format!("{HASH_LINE_PREFIX}{hash}\n{body}");
 
-    debug!(
-        path = %request.path,
-        content_length = body.len(),
-        format = ?format,
-        whole_file_hash = %hash,
-        "Successfully read file content"
-    );
+    debug!(path = %request.path, content_length = body.len(), format = ?format, whole_file_hash = %hash, "Successfully read file content");
 
     Ok(BaseToolImpl::create_success_response(payload))
 }
@@ -335,10 +320,7 @@ mod tests {
         assert!(result.is_ok());
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
-        let text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(t) => t.text.clone(),
-            _ => panic!("Expected text content"),
-        };
+        let text = read_text(&call_result);
         assert!(text.contains("Hello, world!"));
         assert!(text.contains("Line 2"));
     }
@@ -360,10 +342,7 @@ mod tests {
         let result = execute_read(args, &context).await;
         assert!(result.is_ok());
         let call_result = result.unwrap();
-        let text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(t) => t.text.clone(),
-            _ => panic!("Expected text content"),
-        };
+        let text = read_text(&call_result);
         // Offset 3 means skip lines 1 and 2 (1-based), start from line 3
         assert!(!text.contains("Line 1"));
         assert!(!text.contains("Line 2"));
@@ -387,10 +366,7 @@ mod tests {
         let result = execute_read(args, &context).await;
         assert!(result.is_ok());
         let call_result = result.unwrap();
-        let text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(t) => t.text.clone(),
-            _ => panic!("Expected text content"),
-        };
+        let text = read_text(&call_result);
         assert!(text.contains("Line 1"));
         assert!(text.contains("Line 2"));
         assert!(!text.contains("Line 3"));
@@ -414,10 +390,7 @@ mod tests {
         let result = execute_read(args, &context).await;
         assert!(result.is_ok());
         let call_result = result.unwrap();
-        let text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(t) => t.text.clone(),
-            _ => panic!("Expected text content"),
-        };
+        let text = read_text(&call_result);
         // Offset 2 means skip line 1, start from line 2, take 2 lines
         assert!(!text.contains("Line 1"));
         assert!(text.contains("Line 2"));
@@ -446,10 +419,7 @@ mod tests {
         let result = execute_read(args, &context).await;
         assert!(result.is_ok(), "string offset/limit should be accepted");
         let call_result = result.unwrap();
-        let text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(t) => t.text.clone(),
-            _ => panic!("Expected text content"),
-        };
+        let text = read_text(&call_result);
         // Offset 2 means skip line 1, start from line 2, take 2 lines
         assert!(!text.contains("Line 1"));
         assert!(text.contains("Line 2"));
@@ -604,10 +574,7 @@ mod tests {
         let result = execute_read(args, &context).await;
         assert!(result.is_ok());
         let call_result = result.unwrap();
-        let text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(t) => t.text.clone(),
-            _ => panic!("Expected text content"),
-        };
+        let text = read_text(&call_result);
         assert!(text.contains("🌍"));
         assert!(text.contains("Здравствуй"));
     }
@@ -798,6 +765,45 @@ mod tests {
                 "binary file should be rejected with format={format}"
             );
         }
+    }
+
+    /// An out-of-domain `format` value is rejected with an `invalid_request`
+    /// error (the schema constrains it, but the handler defends against it too),
+    /// and the file is never read or returned.
+    #[tokio::test]
+    async fn test_read_rejects_unknown_format_value() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("fmt.txt");
+        fs::write(&test_file, "alpha\n").unwrap();
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("format".to_string(), serde_json::json!("yaml"));
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_err(), "an unknown format must be rejected");
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("hashline") && err.contains("plain"),
+            "error should name the two valid formats, got: {err}"
+        );
+    }
+
+    /// `ReadFormat::parse` accepts the documented values (and the `None`
+    /// default) and rejects anything else — covering every arm directly.
+    #[test]
+    fn test_read_format_parse_arms() {
+        assert_eq!(ReadFormat::parse(None).unwrap(), ReadFormat::Hashline);
+        assert_eq!(
+            ReadFormat::parse(Some("hashline")).unwrap(),
+            ReadFormat::Hashline
+        );
+        assert_eq!(ReadFormat::parse(Some("plain")).unwrap(), ReadFormat::Plain);
+        assert!(ReadFormat::parse(Some("nonsense")).is_err());
     }
 
     #[tokio::test]

@@ -101,12 +101,7 @@ impl WriteFileTool {
         let temp_file_name = format!("{}.tmp.{}", file_path.display(), Ulid::new());
         let temp_path = Path::new(&temp_file_name);
 
-        debug!(
-            target_path = %file_path.display(),
-            temp_path = %temp_path.display(),
-            content_length = content.len(),
-            "Starting atomic write operation"
-        );
+        debug!(target_path = %file_path.display(), temp_path = %temp_path.display(), content_length = content.len(), "Starting atomic write operation");
 
         // Write content to temporary file
         let write_result = fs::write(temp_path, content.as_bytes())
@@ -122,11 +117,7 @@ impl WriteFileTool {
 
                 match rename_result {
                     Ok(()) => {
-                        debug!(
-                            path = %file_path.display(),
-                            bytes_written = content.len(),
-                            "Atomic write operation completed successfully"
-                        );
+                        debug!(path = %file_path.display(), bytes_written = content.len(), "Atomic write operation completed successfully");
                         Ok(content.len())
                     }
                     Err(e) => {
@@ -188,7 +179,6 @@ pub async fn execute_write(
     };
     use serde::Deserialize;
     use std::path::PathBuf;
-    use swissarmyhammer_common::rate_limiter::get_rate_limiter;
 
     #[derive(Deserialize)]
     struct WriteRequest {
@@ -204,16 +194,8 @@ pub async fn execute_write(
     // Parse arguments
     let request: WriteRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-    // Check rate limit using tokio task ID as client identifier
-    let rate_limiter = get_rate_limiter();
-    let client_id = format!("task_{:?}", tokio::task::try_id());
-    if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_write", 1) {
-        tracing::warn!("Rate limit exceeded for file_write: {}", e);
-        return Err(McpError::invalid_request(
-            format!("Rate limit exceeded: {}", e),
-            None,
-        ));
-    }
+    // Check rate limit (shared helper; keyed by the current Tokio task).
+    crate::mcp::tools::files::shared_utils::enforce_rate_limit("file_write", 1)?;
 
     // Validate parameters
     if request.file_path.trim().is_empty() {
@@ -228,14 +210,6 @@ pub async fn execute_write(
     if request.content.len() > MAX_FILE_SIZE {
         return Err(McpError::invalid_request(
             "content exceeds maximum size limit of 10MB".to_string(),
-            None,
-        ));
-    }
-
-    // Basic path validation
-    if request.file_path.trim().is_empty() {
-        return Err(McpError::invalid_request(
-            "File path cannot be empty".to_string(),
             None,
         ));
     }
@@ -269,11 +243,7 @@ pub async fn execute_write(
     check_file_permissions(&validated_path, FileOperation::Write)?;
 
     // Log file write attempt for security auditing
-    info!(
-        path = %validated_path.display(),
-        content_length = request.content.len(),
-        "Attempting to write file"
-    );
+    info!(path = %validated_path.display(), content_length = request.content.len(), "Attempting to write file");
 
     // Read-before-write freshness guard. For an EXISTING file, the model must
     // present the whole-file `expected_hash` it saw on its last `read files`. If
@@ -283,10 +253,7 @@ pub async fn execute_write(
     // new/nonexistent file is unguarded and writes freely.
     if validated_path.exists() {
         if let Some(rebase) = freshness_rebase(&validated_path, request.expected_hash.as_deref())? {
-            info!(
-                path = %validated_path.display(),
-                "write declined: stale or missing freshness token; returning current content for re-base"
-            );
+            info!(path = %validated_path.display(), "write declined: stale or missing freshness token; returning current content for re-base");
             return Ok(BaseToolImpl::create_success_response(rebase));
         }
     }
@@ -304,11 +271,7 @@ pub async fn execute_write(
 
     let success_message = "OK".to_string();
 
-    debug!(
-        path = %request.file_path,
-        bytes_written = bytes_written,
-        "File write operation completed successfully"
-    );
+    debug!(path = %request.file_path, bytes_written = bytes_written, "File write operation completed successfully");
 
     // Carry the mutating-result envelope: the just-written content re-tagged with
     // hashline anchors (so the model can chain the next edit without re-reading)
@@ -385,17 +348,7 @@ mod tests {
         let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments(&test_file.to_string_lossy(), test_content);
 
-        let result = execute_write(args, &context).await;
-        if let Err(e) = &result {
-            eprintln!("Test failed with error: {:?}", e);
-        }
-        assert!(
-            result.is_ok(),
-            "Expected write to succeed but got error: {:?}",
-            result.err()
-        );
-
-        let call_result = result.unwrap();
+        let call_result = execute_write(args, &context).await.unwrap();
         assert_eq!(call_result.is_error, Some(false));
 
         // Verify file was created with correct content
@@ -634,6 +587,50 @@ mod tests {
         assert!(
             temp_files.is_empty(),
             "Temporary files should be cleaned up after failure"
+        );
+    }
+
+    /// `WriteFileTool::new()` and the derived `Default` produce the same unit
+    /// value — the public constructor is equivalent to `default()`.
+    #[test]
+    fn test_write_file_tool_new_equals_default() {
+        let _new = WriteFileTool::new();
+        let _default = WriteFileTool;
+        // Unit struct: construction simply must succeed via both paths.
+    }
+
+    /// The atomic-write rename step can itself fail (the temp file was written
+    /// fine, but the rename onto the target cannot complete). When the target
+    /// path is an existing **directory**, renaming a regular temp file over it
+    /// fails — exercising the rename-failure cleanup arm. The temp file must be
+    /// removed and an error surfaced.
+    #[tokio::test]
+    async fn test_atomic_write_cleanup_on_rename_failure() {
+        let temp_dir = TempDir::new().unwrap();
+        // Target is a directory: fs::rename(temp_file, dir) fails.
+        let target_dir = temp_dir.path().join("i_am_a_directory");
+        fs::create_dir(&target_dir).unwrap();
+
+        let result = WriteFileTool::write_file_atomic(&target_dir, "payload").await;
+        assert!(
+            result.is_err(),
+            "renaming a temp file over an existing directory must fail"
+        );
+
+        // The directory must be untouched (still a directory, still empty).
+        assert!(target_dir.is_dir());
+        assert_eq!(fs::read_dir(&target_dir).unwrap().count(), 0);
+
+        // No leftover temp files in the parent.
+        let parent_dir = temp_dir.path();
+        let temp_files: Vec<_> = fs::read_dir(parent_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(
+            temp_files.is_empty(),
+            "temp file must be cleaned up after a rename failure"
         );
     }
 

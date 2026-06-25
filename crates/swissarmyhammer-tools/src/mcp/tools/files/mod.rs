@@ -842,4 +842,60 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Cannot determine operation"));
     }
+
+    // =========================================================================
+    // Trait surface tests (Default, read-only full schema, lifecycle/doctor)
+    // =========================================================================
+
+    /// `FilesTool::default()` must construct the same all-operations tool as
+    /// `new()` — the default surface advertises all five operations.
+    #[test]
+    fn test_files_tool_default_is_all_operations() {
+        let tool = FilesTool::default();
+        assert_eq!(tool.operations, FileOperationSubset::All);
+
+        let op_enum = tool.schema()["properties"]["op"]["enum"]
+            .as_array()
+            .expect("op should have enum")
+            .clone();
+        assert_eq!(op_enum.len(), 5);
+        assert!(op_enum.contains(&serde_json::json!("write file")));
+        assert!(op_enum.contains(&serde_json::json!("edit file")));
+    }
+
+    /// The read-only variant's *full* schema must carry only the three
+    /// read-only operation schemas — exercising the `ReadOnly` arm of
+    /// `schema_full`, distinct from the wire `schema`.
+    #[test]
+    fn test_read_only_full_schema_has_3_operation_schemas() {
+        let tool = FilesTool::read_only();
+        let schema = tool.schema_full();
+
+        let op_schemas = schema["x-operation-schemas"]
+            .as_array()
+            .expect("read-only full schema should carry x-operation-schemas");
+        assert_eq!(
+            op_schemas.len(),
+            3,
+            "read-only full schema must describe exactly read/glob/grep"
+        );
+    }
+
+    /// The `Initializable` and `Doctorable` trait surfaces report the tool's
+    /// human name and category, and `Doctorable` is always applicable with no
+    /// health checks of its own.
+    #[test]
+    fn test_files_tool_lifecycle_and_doctor_metadata() {
+        use swissarmyhammer_common::lifecycle::Initializable;
+
+        let tool = FilesTool::new();
+
+        assert_eq!(Initializable::name(&tool), "Files");
+        assert_eq!(Initializable::category(&tool), "tools");
+
+        assert_eq!(Doctorable::name(&tool), "Files");
+        assert_eq!(Doctorable::category(&tool), "tools");
+        assert!(Doctorable::is_applicable(&tool));
+        assert!(Doctorable::run_health_checks(&tool).is_empty());
+    }
 }
