@@ -21,14 +21,7 @@ vi.mock("@tauri-apps/api/event", async (importActual) => ({
   ...(await importActual<typeof import("@tauri-apps/api/event")>()),
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
-vi.mock("@tauri-apps/plugin-log", () => ({
-  error: vi.fn(),
-  warn: vi.fn(),
-  info: vi.fn(),
-  debug: vi.fn(),
-  trace: vi.fn(),
-  attachConsole: vi.fn(() => Promise.resolve()),
-}));
+// `@tauri-apps/plugin-log` is mocked globally in `src/test/setup.ts`.
 
 import { CommentLogEditor } from "./comment-log-editor";
 import { SchemaProvider } from "@/lib/schema-context";

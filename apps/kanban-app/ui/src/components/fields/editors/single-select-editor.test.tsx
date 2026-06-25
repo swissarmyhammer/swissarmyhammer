@@ -64,14 +64,7 @@ vi.mock("@tauri-apps/api/event", async (importActual) => ({
   ...(await importActual<typeof import("@tauri-apps/api/event")>()),
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
-vi.mock("@tauri-apps/plugin-log", () => ({
-  error: vi.fn(),
-  warn: vi.fn(),
-  info: vi.fn(),
-  debug: vi.fn(),
-  trace: vi.fn(),
-  attachConsole: vi.fn(() => Promise.resolve()),
-}));
+// `@tauri-apps/plugin-log` is mocked globally in `src/test/setup.ts`.
 
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
@@ -85,6 +78,19 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity, FieldDef } from "@/types/kanban";
+
+// Test timing constants (milliseconds). Named so each wait documents what
+// it is waiting on rather than leaving bare numeric literals in the body.
+/** Wait for async effects (schema load, focus) to settle in `settle()`. */
+const ASYNC_SETTLE_WAIT_MS = 50;
+/** Blur commit timeout the editor schedules before committing on blur. */
+const BLUR_COMMIT_TIMEOUT_MS = 100;
+/** Extra slack past the blur timeout so the scheduled commit has fired. */
+const BLUR_TEST_SLACK_MS = 50;
+/** Debounced autocomplete source latency (~150ms impl) plus test slack. */
+const AUTOCOMPLETE_DEBOUNCE_WAIT_MS = 400; // ~150ms implementation + 250ms slack
+/** Wait for the autocomplete source to fetch and render its results. */
+const AUTOCOMPLETE_SOURCE_WAIT_MS = 250;
 
 const PROJECT_SCHEMA = {
   entity: {
@@ -241,7 +247,7 @@ function getCmView(container: HTMLElement): EditorView {
 /** Wait for async effects (schema load, focus, etc.) */
 async function settle() {
   await act(async () => {
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, ASYNC_SETTLE_WAIT_MS));
   });
 }
 
@@ -345,7 +351,7 @@ describe("SingleSelectEditor", () => {
       });
       // Wait for the debounced async source to resolve (~150ms + slack).
       await act(async () => {
-        await new Promise((r) => setTimeout(r, 400));
+        await new Promise((r) => setTimeout(r, AUTOCOMPLETE_DEBOUNCE_WAIT_MS));
       });
 
       const searchCalls = mockInvoke.mock.calls.filter(
@@ -374,7 +380,7 @@ describe("SingleSelectEditor", () => {
         startCompletion(view);
       });
       await act(async () => {
-        await new Promise((r) => setTimeout(r, 400));
+        await new Promise((r) => setTimeout(r, AUTOCOMPLETE_DEBOUNCE_WAIT_MS));
       });
 
       const searchCalls = mockInvoke.mock.calls.filter(
@@ -488,9 +494,10 @@ describe("SingleSelectEditor", () => {
         fireEvent.blur(cmContent);
       });
 
-      // Blur uses setTimeout(100) before committing
+      // The editor schedules the commit on a BLUR_COMMIT_TIMEOUT_MS timer;
+      // advance past it plus slack so the scheduled commit has fired.
       await act(async () => {
-        vi.advanceTimersByTime(150);
+        vi.advanceTimersByTime(BLUR_COMMIT_TIMEOUT_MS + BLUR_TEST_SLACK_MS);
       });
 
       expect(onCommit).toHaveBeenCalledWith("proj-alpha");
@@ -670,7 +677,7 @@ describe("SingleSelectEditor", () => {
 
       // Wait for the autocomplete source to fetch results
       await act(async () => {
-        await new Promise((r) => setTimeout(r, 250));
+        await new Promise((r) => setTimeout(r, AUTOCOMPLETE_SOURCE_WAIT_MS));
       });
 
       // Find the active autocomplete tooltip and its first option

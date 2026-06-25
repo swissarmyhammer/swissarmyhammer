@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import { renderInAct } from "@/test/act-render";
+import { makeActor } from "@/test/entity-fixtures";
 
 // Spread the real module and override only the parts the test controls.
 // @tauri-apps/api >=2.11 pulls submodules that import named exports from core
@@ -14,14 +15,7 @@ vi.mock("@tauri-apps/api/event", async (importActual) => ({
   ...(await importActual<typeof import("@tauri-apps/api/event")>()),
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
-vi.mock("@tauri-apps/plugin-log", () => ({
-  error: vi.fn(),
-  warn: vi.fn(),
-  info: vi.fn(),
-  debug: vi.fn(),
-  trace: vi.fn(),
-  attachConsole: vi.fn(() => Promise.resolve()),
-}));
+// `@tauri-apps/plugin-log` is mocked globally in `src/test/setup.ts`.
 
 import { AvatarDisplay } from "./avatar-display";
 import { SchemaProvider } from "@/lib/schema-context";
@@ -89,19 +83,6 @@ async function renderDisplay(
       </FocusLayer>
     </SpatialFocusProvider>,
   );
-}
-
-function makeActor(
-  id: string,
-  name: string,
-  overrides: Record<string, unknown> = {},
-): Entity {
-  return {
-    entity_type: "actor",
-    id,
-    moniker: `actor:${id}`,
-    fields: { name, ...overrides },
-  };
 }
 
 const DATA_URI = "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=";

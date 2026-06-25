@@ -27,14 +27,7 @@ vi.mock("@tauri-apps/api/webview", () => ({
     onDragDropEvent: vi.fn(() => Promise.resolve(() => {})),
   }),
 }));
-vi.mock("@tauri-apps/plugin-log", () => ({
-  error: vi.fn(),
-  warn: vi.fn(),
-  info: vi.fn(),
-  debug: vi.fn(),
-  trace: vi.fn(),
-  attachConsole: vi.fn(() => Promise.resolve()),
-}));
+// `@tauri-apps/plugin-log` is mocked globally in `src/test/setup.ts`.
 
 // ---------------------------------------------------------------------------
 // Imports — after mocks
