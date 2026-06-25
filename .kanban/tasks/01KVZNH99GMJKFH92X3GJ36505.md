@@ -68,6 +68,10 @@ comments:
 
     Leaving the task in `doing` (green, ready for /review).
   timestamp: 2026-06-25T16:00:41.154433+00:00
+- actor: claude-code
+  id: 01kvzrnhth3gqxsyyxag5yj1w6
+  text: 'Addressed the 3 nits from "Review Findings (2026-06-25 10:01)": added one-line JSDoc to renderDisplay (comment-log-display.test.tsx), renderEditor (attachment-editor.test.tsx), and renderSingleSelect (single-select-editor.test.tsx), matching the style of neighboring documented helpers (avatar-display.test.tsx::renderDisplay, getCmView/settle). Documentation-only, no behavior change. Verified: `npx tsc --noEmit` exit 0; `npx vitest run --project browser` on the 3 touched files = 3 files / 46 tests passed, exit 0 (the [FocusLayer] push failed console.error lines are pre-existing tauri-window-mock noise, unrelated). Flipped the 3 checklist boxes. Leaving in doing for review.'
+  timestamp: 2026-06-25T16:09:05.617173+00:00
 position_column: doing
 position_ordinal: '80'
 title: Stale @tauri-apps/api import/module-resolution errors in browser vitest project (~7 files)
@@ -107,3 +111,10 @@ Relevant context: this repo's `apps/kanban-app/ui` lockfile is gitignored and CI
 - [x] `apps/kanban-app/ui/src/components/fields/editors/single-select-editor.test.tsx:155` — Unexplained numeric literal `50` (milliseconds) configures test timing behavior in the settle() helper; should be a named constant. Extract to a named constant at module scope: `const ASYNC_SETTLE_WAIT_MS = 50;` and reference it in the setTimeout call.
 - [x] `apps/kanban-app/ui/src/components/fields/editors/single-select-editor.test.tsx:190` — Unexplained numeric literal `400` (milliseconds) configures test timeout; comment claims '~150ms + slack' but does not justify why 400 specifically. Extract to a named constant with clarifying comment: `const AUTOCOMPLETE_DEBOUNCE_WAIT_MS = 400; // ~150ms implementation + 250ms slack` and use it in the setTimeout.
 - [x] `apps/kanban-app/ui/src/components/fields/editors/single-select-editor.test.tsx:213` — Unexplained numeric literal `250` (milliseconds) configures test timeout; comment explains the intent (wait for async source) but not the specific value choice. Extract to a named constant: `const AUTOCOMPLETE_SOURCE_WAIT_MS = 250;` and use it in the setTimeout.
+
+## Review Findings (2026-06-25 10:01)
+
+### Nits
+- [x] `apps/kanban-app/ui/src/components/fields/displays/comment-log-display.test.tsx:65` — Test helper function `renderDisplay` lacks documentation. It has complex parameters and wraps multiple React providers; similar functions in other test files (avatar.test.tsx::renderAvatar, avatar-display.test.tsx::renderDisplay) are documented. Add a JSDoc comment above `renderDisplay()` explaining its purpose, the `value` parameter, and the `options` object, matching the style used in avatar-display.test.tsx.
+- [x] `apps/kanban-app/ui/src/components/fields/editors/attachment-editor.test.tsx:88` — Test helper function `renderEditor` lacks documentation. It wraps the editor in multiple providers with complex parameters. Add a JSDoc comment above `renderEditor()` explaining its purpose and the `props` parameter structure.
+- [x] `apps/kanban-app/ui/src/components/fields/editors/single-select-editor.test.tsx:155` — Test helper function `renderSingleSelect` lacks documentation. It has complex parameters and wraps the component in multiple providers; the same file documents other test helpers (getCmView, settle). Add a JSDoc comment above `renderSingleSelect()` explaining its purpose and parameters, following the pattern used for getCmView() and settle() in the same file.

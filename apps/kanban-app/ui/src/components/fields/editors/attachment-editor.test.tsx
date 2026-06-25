@@ -81,6 +81,10 @@ const SAMPLE_ATTACHMENTS: AttachmentMeta[] = [
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Wrap AttachmentEditor in required providers. The `props` object supplies the
+ * `field` def, current `value`, and the `onCommit`/`onCancel`/`onChange` callbacks.
+ */
 function renderEditor(props: {
   field?: FieldDef;
   value?: unknown;

@@ -63,6 +63,10 @@ const COMMENT_B = {
 
 const ACTORS = [makeActor("alice", "Alice Smith"), makeActor("bob", "Bob Jones")];
 
+/**
+ * Wrap CommentLogDisplay in required providers. Accepts the `value` to render
+ * and an `options` object overriding the `field` def and display `mode`.
+ */
 async function renderDisplay(
   value: unknown,
   options: { field?: FieldDef; mode?: "compact" | "full" } = {},

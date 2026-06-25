@@ -202,8 +202,13 @@ const POSITION_COLUMN_FIELD: FieldDef = {
   display: "badge",
 };
 
-function renderSingleSelect(
-  props: {
+  /**
+   * Wrap SingleSelectEditor in required providers. Takes a `props` object with
+   * the `field` def, `value`, and `onCommit`/`onCancel` callbacks, plus an
+   * `entities` map seeding the EntityStore for reference resolution.
+   */
+  function renderSingleSelect(
+    props: {
     field: FieldDef;
     value: unknown;
     onCommit: (val: unknown) => void;
