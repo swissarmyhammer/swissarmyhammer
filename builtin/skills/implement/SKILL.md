@@ -2,7 +2,7 @@
 name: implement
 profiles:
   - kanban
-description: Kanban task executor. Use this skill when the user says "/implement", "implement task", "implement the next task", "work the next task", "pick up a task", or "implement" followed by a task id. Picks up one kanban task and drives it from ready through doing to review. Do NOT use this skill for free-form edits, typo fixes, refactors, or any coding work that is not tied to a specific kanban task — those are not "implementation" in this skill sense. If there is no kanban task yet, use the `task` or `plan` skill to create one first.
+description: Kanban task executor. Use this skill when the user says "/implement", "implement task", "implement the next task", "work the next task", "pick up a task", or "implement" followed by a task id. Picks up one kanban task and drives it from ready through doing, leaving it green and ready for review. Do NOT use this skill for free-form edits, typo fixes, refactors, or any coding work that is not tied to a specific kanban task — those are not "implementation" in this skill sense. If there is no kanban task yet, use the `task` or `plan` skill to create one first.
 agent: implementer
 license: MIT OR Apache-2.0
 compatibility: Requires the `kanban` MCP tool (to read, move, and complete tasks) and the `code_context` MCP tool (to research symbols and blast-radius before coding). 
@@ -25,7 +25,6 @@ $ARGUMENTS
 ## Guidelines
 
 {% include "_partials/coding-standards" %}
-{% include "_partials/review-column" %}
 {% include "_partials/architecture-awareness" %}
 
 ## Invocation
@@ -113,34 +112,27 @@ Do the work in the task and subtasks. After changing any symbol's signature or b
 
 ### 5.5 Verify with really-done
 
-Before moving the task to `review`, invoke the `really-done` skill to verify the work.
+When the work is done, invoke the `really-done` skill to verify it.
 
-- The verification-command pass is really-done's **hard requirement** — verification commands must be green before the task moves to `review`. This gates the move.
+- The verification-command pass is really-done's **hard requirement** — verification commands must be green before you hand the task off. This gates handoff.
 - really-done now runs the advisory adversarial double-check internally, so its sign-off is reached **transitively** through really-done. **Do NOT spawn the double-check agent directly from implement** — reach it through really-done.
 - Double-check findings are advisory: fix them, or proceed with a logged justification per really-done's contract.
 
-Not green? Do NOT move to review — fix the work, re-run really-done, or record what blocked you on the task and report back.
+Not green? Do NOT hand off — fix the work, re-run really-done, or record what blocked you on the task and report back.
 
-### 6. Move to review
+### 6. Leave the task in `doing` for review
 
-When work is done and every subtask checkbox is `- [x]`:
+When the work is done, really-done is green, and every subtask checkbox is `- [x]`, **leave the task in `doing`**. Do **not** move it to `review` yourself.
 
-1. Ensure the `review` column exists (idempotent — use the partial above).
-2. Move:
+Moving a task into `review` is the review step's job, not implement's. `/review` pulls the task from `doing` into `review` when it runs — and under `/finish`, only after the green state has been committed as a checkpoint. Implement establishes "the work is done and green"; it does not declare "ready to review" by moving columns. Keeping a single owner for the `doing → review` transition is the whole point — implement no longer touches the `review` column.
 
-   ```json
-   {"op": "move task", "id": "<id>", "column": "review"}
-   ```
+**Do NOT use `complete task`** — it jumps to the terminal column, skipping the review gate entirely.
 
-A task left in `doing` is not finished.
-
-**Do NOT use `complete task`** — it jumps to the terminal column, skipping the review gate. Use `move task` with `column: "review"` explicitly.
-
-Cannot complete? Do NOT move forward. Record what happened on the task — `{"op": "add comment", "task_id": "<id>", "text": "<what blocked you>"}` — and report back.
+Cannot finish the work? Do NOT pretend it's done. Record what happened on the task — `{"op": "add comment", "task_id": "<id>", "text": "<what blocked you>"}` — and report back.
 
 ### 7. Stop for review
 
-**Always stop after moving to review.** Summarize what was done, what tests pass, tell the user the task is ready for `/review`. User decides next — no auto-continue.
+**Always stop once the work is done and green.** The task stays in `doing`. Summarize what was done and what tests pass, and tell the user it's ready for `/review` (which moves it into `review`). User decides next — no auto-continue.
 
 Exception: if the task description explicitly says **auto-continue** or **chain to next**, proceed.
 
@@ -154,6 +146,7 @@ Exception: if the task description explicitly says **auto-continue** or **chain 
 - All tests pass before reporting success. Zero failures, zero warnings.
 - Kanban is the single source of truth — no TodoWrite/TaskCreate.
 - New work discovered? Add as a new kanban task.
-- Do not move a task to `review` until really-done has been run (verification commands green).
+- Do not hand a task off as done until really-done has been run (verification commands green).
+- Implement never moves a task into `review` — it leaves the green task in `doing` for `/review` to pick up. (It may still pull a returning task from `review` back to `doing` when re-working findings.)
 - Stuck? Report what you tried and where you're blocked — don't silently give up.
 - **No worktrees.** `isolation: "worktree"` loses changes — agents write to isolated copies never merged back. Work directly in the current tree.
