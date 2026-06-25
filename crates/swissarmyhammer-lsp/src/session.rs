@@ -1039,7 +1039,9 @@ mod tests {
         let session = LspSession::new(Arc::clone(&client), "rust");
         let path = PathBuf::from("/src/lib.rs");
 
-        session.pull_diagnostics(&path).expect("first (cancelled) pull");
+        session
+            .pull_diagnostics(&path)
+            .expect("first (cancelled) pull");
         assert!(!session.is_ready(), "not-ready after the cancelled pull");
 
         session.pull_diagnostics(&path).expect("second (real) pull");

@@ -239,11 +239,11 @@ where
         per_report_cap: usize::MAX,
         ..config.clone()
     };
-    let (records, settle_pending) = match settle(session, &watched_uris, &settle_config, timer).await
-    {
-        SettleOutcome::Settled(records) => (records, false),
-        SettleOutcome::Pending => (Vec::new(), true),
-    };
+    let (records, settle_pending) =
+        match settle(session, &watched_uris, &settle_config, timer).await {
+            SettleOutcome::Settled(records) => (records, false),
+            SettleOutcome::Pending => (Vec::new(), true),
+        };
 
     // A running server that has signalled it is still loading (a pull answered
     // with ServerCancelled / ContentModified / retrigger — see

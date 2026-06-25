@@ -139,9 +139,7 @@ pub async fn fold_in_diagnostics_with(
     }
 
     match diagnoser.diagnose(&diagnosable, context).await {
-        MutationDiagnosis::Analyzed(outcome) => {
-            Ok(fold_outcome_into_result(call_result, &outcome))
-        }
+        MutationDiagnosis::Analyzed(outcome) => Ok(fold_outcome_into_result(call_result, &outcome)),
         MutationDiagnosis::Unavailable(reason) => {
             Ok(fold_unavailable_into_result(call_result, &reason))
         }
