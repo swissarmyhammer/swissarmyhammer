@@ -390,6 +390,14 @@ export function getStr(entity: Entity, field: string, fallback = ""): string {
   return typeof v === "string" ? v : fallback;
 }
 
+/** Read a field that may be a top-level identity column (id/entity_type/moniker) rather than a bag field. */
+export function getEntityField(entity: Entity, field: string): string {
+  if (field === "id") return entity.id;
+  if (field === "entity_type") return entity.entity_type;
+  if (field === "moniker") return entity.moniker;
+  return getStr(entity, field);
+}
+
 /** Read a string array field, returning [] if missing/null/wrong type. */
 export function getStrList(entity: Entity, field: string): string[] {
   const v = entity.fields[field];

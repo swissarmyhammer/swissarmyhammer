@@ -276,6 +276,47 @@ describe("MentionView — single mode", () => {
     expect(widget?.textContent).toBe("^28rfp1r");
   });
 
+  it("renders a $project pill when the type's slug field is the top-level id", async () => {
+    // Projects declare `mention_slug_field: id`. The mention slug must be read
+    // from the top-level `Entity.id` (which `entityFromBag` lifts out of the
+    // `fields` bag), not `fields["id"]`. Before the fix the empty slug left the
+    // metaMap without a project entry, so this rendered as raw `$task-card-fields`
+    // text (a muted `.cm-project-pill` mark) instead of a resolved pill.
+    mockEntities = {
+      project: [
+        {
+          id: "task-card-fields",
+          entity_type: "project",
+          moniker: "project:task-card-fields",
+          fields: {
+            name: "Task Card Fields",
+            color: "6366f1",
+          },
+        },
+      ],
+    };
+    mockMentionableTypes = [
+      {
+        entityType: "project",
+        prefix: "$",
+        displayField: "name",
+        slugField: "id",
+      },
+    ];
+
+    const { container } = render(
+      <Providers>
+        <MentionView entityType="project" id="task-card-fields" />
+      </Providers>,
+    );
+    await flush();
+
+    // A resolved mention widget (not the muted raw-text fallback).
+    const widget = container.querySelector(".cm-mention-pill");
+    expect(widget).toBeTruthy();
+    expect(widget?.textContent).toBe("$task-card-fields");
+  });
+
   it("falls back to raw id with muted mark styling when entity is missing", async () => {
     mockEntities = { project: [] };
     const { container } = render(

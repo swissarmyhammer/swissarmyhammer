@@ -35,7 +35,7 @@ import { moniker as buildMoniker } from "@/lib/moniker";
 import { slugify } from "@/lib/slugify";
 import type { CommandDef } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
-import { getStr } from "@/types/kanban";
+import { getStr, getEntityField } from "@/types/kanban";
 
 /** A single mention reference — either an entity id or an existing slug. */
 export interface MentionItem {
@@ -162,7 +162,7 @@ function slugMatchesEntity(
   config: MentionableType | undefined,
 ): boolean {
   if (config?.slugField) {
-    return getStr(entity, config.slugField) === slug;
+    return getEntityField(entity, config.slugField) === slug;
   }
   const val = getStr(entity, config?.displayField ?? "name");
   return val !== "" && (val === slug || slugify(val) === slug);
@@ -185,7 +185,7 @@ function mentionSlugFor(
 ): string {
   const fallback = item.slug ?? item.id ?? "";
   if (!entity) return fallback;
-  if (slugField) return getStr(entity, slugField) || fallback;
+  if (slugField) return getEntityField(entity, slugField) || fallback;
   const raw = getStr(entity, displayField);
   return raw ? slugify(raw) : fallback;
 }

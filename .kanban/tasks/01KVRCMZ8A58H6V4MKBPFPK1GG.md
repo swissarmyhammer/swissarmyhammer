@@ -1,8 +1,42 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: fb80
+comments:
+- actor: claude-code
+  id: 01kvzg271k59f9yabcerqbzxh5
+  text: 'Picked up. Verified root cause and current line numbers match the card exactly: entityFromBag (kanban.ts:431) lifts id out of fields; the 3 slug-read sites are use-mention-extensions.ts:105, mention-view.tsx:165 (slugMatchesEntity) and :188 (mentionSlugFor). TDD RED landed: added 2 failing tests — buildMentionMetaMap with slugField:"id" (asserts map.has(top-level id)) and MentionView project pill with slugField:"id" (asserts .cm-mention-pill). Both fail now with empty-slug behavior (metaMap empty → no key, no resolved widget). Implementing getEntityField + swapping the 3 sites next.'
+  timestamp: 2026-06-25T13:38:43.379788+00:00
+- actor: claude-code
+  id: 01kvzgaa638y00pgrsswm96asq
+  text: |-
+    GREEN + verified. Implemented getEntityField(entity, field) beside getStr in types/kanban.ts (returns top-level id/entity_type/moniker, else getStr). Swapped getStr→getEntityField at exactly the 3 slug-field read sites: use-mention-extensions.ts buildMentionMetaMap (slug read), mention-view.tsx slugMatchesEntity, mention-view.tsx mentionSlugFor. Left the displayField reads on getStr (real bag fields). entityFromBag untouched; pill still labels with id slug (no relabel) per out-of-scope.
+
+    Verification (cd apps/kanban-app/ui):
+    - npx tsc --noEmit → exit 0, clean.
+    - npm test -- use-mention-extensions mention-view → both new tests pass (RED→GREEN confirmed).
+    - npm test -- mention badge → 121 passed; only failure is the pre-existing "extraCommands single mode right-click" browser-chromium context-menu test, which I confirmed ALSO fails on a clean git-stashed tree (unrelated to this card).
+    - npm test -- use-mention-extensions markdown-display badge-list-display → 42/42 pass (task/tag/actor slug pills unregressed).
+    Adversarial double-check: PASS (correctness/completeness/intent/blast-radius all clean).
+  timestamp: 2026-06-25T13:43:08.739642+00:00
+- actor: wballard
+  id: 01kvzgrtygw5cd1500pypz9c9a
+  text: |-
+    Review resolution — IN-SCOPE CLEAN, 0 blockers. Reviewer's semantic diff + independent verification confirmed the implementation matches the card spec exactly. All acceptance criteria MET:
+    - ✅ `getEntityField(entity, "id")` returns top-level Entity.id; for a bag field it matches `getStr`. Added beside getStr in types/kanban.ts.
+    - ✅ Exactly THREE slug-field sites swapped to `getEntityField`, slug-branch only (displayField reads correctly left on getStr): buildMentionMetaMap, mentionSlugFor, slugMatchesEntity.
+    - ✅ buildMentionMetaMap returns a non-empty map keyed by project id when slugField="id" (new test asserts key===id, displayName===id, description===name).
+    - ✅ Project `$` pill renders as a real `.cm-mention-pill` widget, not raw `$<slug>` text (new render test).
+    - ✅ Task/tag/actor pills unchanged (getEntityField only differs from getStr when slugField is an identity column; task/tag/actor key on short_id/bag fields).
+    - ✅ Out-of-scope respected: entityFromBag untouched; no project-pill relabel to `name`.
+
+    TDD RED→GREEN genuine (both new tests fail against the empty-slug behavior, pass after). Verified: tsc clean; new tests green; task/tag/actor/column slug pills all still green (no regression).
+
+    5 engine findings (mockInvoke any[], untyped mock entity lists, hardcoded 400ms waits in pre-existing debounce/search tests) all land on PRE-EXISTING whole-file content, not this diff — out of scope.
+
+    DISCOVERED (pre-existing, NOT this task's regression — confirmed via git stash on a clean tree): `mention-view.test.tsx` `extraCommands single mode right-click` chromium context-menu test fails on main. Worth a separate tracking task. Moving to done.
+  timestamp: 2026-06-25T13:51:04.656531+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffeb80
 project: pill-via-cm6
 title: Project mention pills don't render (mention_slug_field "id" reads empty from fields bag)
 ---
@@ -57,4 +91,24 @@ Leave the non-slug (`displayField`) reads on `getStr` — those are real bag fie
 - [ ] Run the full UI suite: `cd apps/kanban-app/ui && npm test` — no regressions.
 
 ## Workflow
-- Use `/tdd` — write the two new tests first (they fail against the current empty-slug behavior), then add `getEntityField` and swap the three slug-field read sites so they pass. #ui
+- Use `/tdd` — write the two new tests first (they fail against the current empty-slug behavior), then add `getEntityField` and swap the three slug-field read sites so they pass.
+
+## Review Findings (2026-06-25 07:50)
+
+**In-scope verdict: CLEAN.** The diff matches the card spec exactly and both new TDD tests are genuinely green.
+
+In-scope confirmations (no findings):
+- [x] `getEntityField` correctness — returns top-level `id`/`entity_type`/`moniker`, delegates to `getStr` for bag fields (so `getEntityField(e, bagField) === getStr(e, bagField)`). Matches spec verbatim.
+- [x] EXACTLY THREE slug-field sites swapped: `buildMentionMetaMap` (the `slug` read only), `mentionSlugFor` (the `slugField` branch only), `slugMatchesEntity` (the `config.slugField` branch only). The `displayField`/`color`/`description` reads in those same functions correctly stayed on `getStr`. No other `getStr(.., slugField)` site missed.
+- [x] OUT-OF-SCOPE RESPECTED: `entityFromBag` is untouched (not in diff); project pills NOT relabeled to `name` — `buildMentionMetaMap` still sets `displayName: slug` per the `displayName = slug` contract.
+- [x] TDD genuineness: `keys the metaMap by the top-level id when the slug field is "id"` and `renders a $project pill when the type's slug field is the top-level id` both pass; render test asserts a real `.cm-mention-pill` widget. Implementer's git-stash check confirmed RED→GREEN.
+- [x] NO REGRESSION to task/tag/actor/column pills — `keys the metaMap by the slug field` (non-id), task `^<short>` pill, and `%column` pill tests all pass. `getEntityField` only diverges from `getStr` when the slug field is an identity column.
+
+Verification re-run by reviewer (cd apps/kanban-app/ui):
+- `npx tsc --noEmit` → exit 0, clean.
+- `npm test -- use-mention-extensions mention-view` → 30/31 pass; the single failure is the pre-existing `extraCommands single mode right-click` chromium context-menu test (mention-view.test.tsx:512), confirmed unrelated to this card (fails on a clean tree). DISREGARDED per card scope.
+
+Pre-existing whole-file noise (NOT this task's diff — no action required for this card):
+- [ ] `mention-view.test.tsx` `mockInvoke` uses `any[]` (eslint-disabled Tauri mock boilerplate at file top, predates this task — not part of the new render test).
+- [ ] `use-mention-extensions.test.ts` pre-existing mock entity lists use `any`/untyped shapes (the new `projects` fixture is clean: top-level identity columns + `fields:{name,color}`).
+- [ ] `use-mention-extensions.test.ts` hardcoded `400` ms async waits in pre-existing debounce/search tests — could be a named `MENTION_SEARCH_DEBOUNCE_MS + slack` constant. The two new TDD tests use no async debounce waits.
