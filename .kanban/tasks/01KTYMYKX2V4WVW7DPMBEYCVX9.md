@@ -1,8 +1,33 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: f480
+comments:
+- actor: claude-code
+  id: 01kvzf37phqc1vw83v4tw9myye
+  text: 'Picked up. Verified current code in perspective-context.tsx matches the task description: useAutoSelectActivePerspective builds `matching` kind-only (`p.view === viewKind`); activePerspective memo fallback `perspectives.find(...) ?? perspectives[0] ?? null` is not even kind-filtered. Shared predicate perspectiveVisibleInView(p, activeViewId, viewKind) lives in types/kanban.ts and is already used by useAutoCreateDefaultPerspective (which is threaded `activeViewId` via PerspectiveProvider). Starting TDD: writing failing vitest cases first.'
+  timestamp: 2026-06-25T13:21:48.241172+00:00
+- actor: claude-code
+  id: 01kvzf7d8rkfp3hrwand9r2wjj
+  text: |-
+    Implemented and GREEN. Changes (apps/kanban-app/ui):
+    - src/lib/perspective-context.tsx: useAutoSelectActivePerspective now builds `matching` via perspectiveVisibleInView(p, activeViewId, viewKind) instead of `p.view === viewKind`; threaded `activeViewId` param + dep (mirrors useAutoCreateDefaultPerspective; call site passes the same `activeViewId = activeView?.id` source). activePerspective memo now filters perspectives to the VISIBLE set first, then `find(id) ?? visible[0] ?? null` (was unfiltered find ?? perspectives[0]); added activeViewId+viewKind to deps.
+    - src/lib/perspective-context.test.tsx: 3 new TDD cases (sibling-pinned not auto-selected; visible wins; sibling-pinned stored id rejected; activePerspective fallback skips sibling-pinned).
+
+    TDD RED evidence: before the production change, the 3 new tests run against the original kind-only code gave "3 failed | 2 passed" (browser/chromium project). After the fix: 31 passed (both happy-dom unit and browser projects), stable across 3 reruns.
+
+    Verification: npx tsc --noEmit clean (exit 0); perspective-context.test.tsx 31/31; perspective-tab-bar.test.tsx 22/22; view-id-scoping + perspective-container + perspectives-container + grid-view.perspective-filter 20/20.
+  timestamp: 2026-06-25T13:24:05.016658+00:00
+- actor: wballard
+  id: 01kvzfv8g2dgs5a862jq51e3np
+  text: |-
+    Review resolution — IN-SCOPE CLEAN, 0 blockers. Reviewer independently verified all 5 load-bearing points: shared `perspectiveVisibleInView` predicate REUSED (single source of truth shared with the tab bar + useAutoCreateDefaultPerspective, not duplicated); all 3 repair paths in useAutoSelectActivePerspective + the activePerspective memo's find/[0] fallback constrained to the visible set; dep arrays correctly extended (activeViewId on the effect, activeViewId+viewKind on the memo); activeViewId threading mirrors the useAutoCreateDefaultPerspective precedent (both callers updated atomically, no signature break); TDD genuine (reviewer reverted predicate → 2-3 tests fail, restored → green).
+
+    All 6 engine findings (active_perspective_id snake_case ×2 [backend field name], PerspectiveProvider length, missing PerspectiveProviderProps interface, missing JSDoc ×2) are PRE-EXISTING whole-file noise NOT touching the changed lines — out of scope, no action.
+
+    NOTE: during the reviewer's RED check it accidentally `git checkout -- perspective-context.tsx` (discarding the uncommitted fix) then restored from the captured diff. I INDEPENDENTLY RE-VERIFIED the working tree afterward: both new call sites present (perspective-context.tsx lines 227 + 374), `git diff --stat HEAD` shows both files changed (+35 prod / +85 test), `npx tsc --noEmit` clean, and perspective-context.test.tsx 31 + perspective-tab-bar.test.tsx 22 = 53/53 pass. The fix is fully intact byte-for-byte. Moving to done.
+  timestamp: 2026-06-25T13:34:55.490241+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffea80
 title: Auto-select / activePerspective fallback are kind-only and can select a perspective invisible in the active view's tab bar — route both through perspectiveVisibleInView
 ---
 ## What
@@ -32,3 +57,22 @@ Reuse the shared predicate `perspectiveVisibleInView(p, activeViewId, viewKind)`
 ## Constraints
 
 - Scoped vitest + `npx tsc --noEmit` in apps/kanban-app/ui only; no workspace builds. #ui
+
+## Review Findings (2026-06-25 07:34)
+
+**In-scope verdict: CLEAN.** The load-bearing change is correct on all 5 review-focus points and the new tests are genuine (RED→GREEN verified by the reviewer — see below). Every engine finding below is **pre-existing whole-file noise** that does NOT touch the changed lines; none are introduced or worsened by this diff. They are recorded for traceability, not as blockers for this task.
+
+### In-scope assessment (reviewer-verified, no action needed)
+- [x] Shared-predicate single-source-of-truth: `useAutoSelectActivePerspective` and the `activePerspective` memo now both filter via `perspectiveVisibleInView(p, activeViewId, viewKind)` imported from `src/types/kanban.ts` — the SAME predicate the tab bar's `filteredPerspectives` and `useAutoCreateDefaultPerspective` use. Reused, not duplicated; selection and visibility can no longer diverge.
+- [x] All three repair paths in `useAutoSelectActivePerspective` (invalid/empty id → `matching[0]`; stale-filter redispatch; `matching.some(...)` validity) now operate on the visible set. `activePerspective` memo's `find` AND `[0]` fallback both constrained to `visible`.
+- [x] Dependency arrays correct: `useEffect` deps gained `activeViewId` (viewKind already present); `useMemo` deps gained `activeViewId, viewKind`. No stale-selection risk.
+- [x] `activeViewId` threading mirrors the `useAutoCreateDefaultPerspective` precedent (param position before `viewKind`; call site passes `activeView?.id`). Both callers updated atomically — no signature break.
+- [x] TDD genuineness verified by reviewer: reverting `useAutoSelectActivePerspective` predicate to kind-only → 2 new tests fail; additionally reverting the `activePerspective` memo to unfiltered → all 3 new tests fail. Restored production code: `npx tsc --noEmit` exit 0; `perspective-context.test.tsx` 31/31 + `perspective-tab-bar.test.tsx` 22/22 = 53/53 GREEN. No regression.
+
+### Out-of-scope / pre-existing (engine fan-out — NOT introduced by this diff)
+- [ ] `perspective-context.tsx` — Parameter `active_perspective_id` uses snake_case rather than camelCase. PRE-EXISTING: name mirrors the backend `uiState.windows[...].active_perspective_id` field and predates HEAD; this diff neither adds nor renames it.
+- [ ] `perspective-context.tsx` — Local variable `active_perspective_id` uses snake_case. PRE-EXISTING, same backend-field origin as above.
+- [ ] `perspective-context.tsx` — `PerspectiveProvider` exceeds the ~50-line threshold; suggest extracting hook composition into `usePerspectiveRepair`/`usePerspectiveSelection`. PRE-EXISTING: the component was already this size at HEAD; this diff added ~7 net lines of memo body.
+- [ ] `perspective-context.tsx` — `PerspectiveProvider` lacks a named `interface PerspectiveProviderProps`. PRE-EXISTING: inline `{ children }: { children: ReactNode }` predates HEAD.
+- [ ] `perspective-context.tsx` — `PerspectivesContextValue` interface lacks JSDoc. PRE-EXISTING, untouched by this diff.
+- [ ] `perspective-context.tsx` — `PerspectiveProvider` lacks a JSDoc usage comment. PRE-EXISTING, untouched by this diff.

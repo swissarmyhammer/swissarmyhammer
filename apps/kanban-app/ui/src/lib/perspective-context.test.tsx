@@ -190,6 +190,26 @@ describe("PerspectiveProvider", () => {
     expect(result.current.activePerspective?.id).toBe("p1");
   });
 
+  it("activePerspective fallback skips a perspective pinned to a sibling view and returns the visible one", async () => {
+    // The first perspective in the list is pinned (view_id) to a sibling
+    // board the user is NOT viewing — it is invisible in the active view's
+    // tab bar. The fallback must NOT return it; it must return the
+    // perspective visible in the active view (the second one).
+    const ps = [
+      { ...makePerspective("pinned", "Pinned Sibling"), view_id: "board-other" },
+      makePerspective("visible", "Visible Here"),
+    ];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 2 },
+      undoable: false,
+    });
+
+    const { result } = renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {});
+
+    expect(result.current.activePerspective?.id).toBe("visible");
+  });
+
   it("activePerspective uses active_perspective_id from UIState", async () => {
     mockUIState = {
       ...mockUIState,
@@ -686,6 +706,71 @@ describe("PerspectiveProvider", () => {
     // No perspective.switch — only perspective.save would be dispatched by
     // the sibling hook (not asserted here; covered elsewhere).
     expect(perspectiveSwitchCalls().length).toBe(0);
+  });
+
+  it("auto-selects the perspective visible in the active view, NOT a same-kind one pinned to a sibling view", async () => {
+    // Two same-kind perspectives exist: one pinned (view_id) to a sibling
+    // board the user cannot see in the active view's tab bar, and one
+    // visible in the active view. With no stored active id, auto-select must
+    // switch to the VISIBLE one — never the sibling-pinned tab the user has
+    // no way to see or switch off in the active bar.
+    const ps = [
+      { ...makePerspective("pinned", "Pinned Sibling"), view_id: "board-other" },
+      makePerspective("visible", "Visible Here"),
+    ];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 2 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const calls = perspectiveSwitchCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls[0][1]).toMatchObject({
+      cmd: "perspective.switch",
+      args: { perspective_id: "visible" },
+    });
+  });
+
+  it("does NOT treat a sibling-pinned perspective as a valid stored selection (redispatches to the visible one)", async () => {
+    // UIState points at a same-kind perspective pinned to a sibling view —
+    // invisible in the active view's bar. The kind-only validity check would
+    // see it as "still valid" and leave it selected. The visibility-aware
+    // check must reject it and switch to the perspective visible here.
+    mockUIState = {
+      ...mockUIState,
+      windows: {
+        main: {
+          active_perspective_id: "pinned",
+          filtered_task_ids: ["t1"],
+        },
+      },
+    };
+
+    const ps = [
+      { ...makePerspective("pinned", "Pinned Sibling"), view_id: "board-other" },
+      makePerspective("visible", "Visible Here"),
+    ];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 2 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const calls = perspectiveSwitchCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls[0][1]).toMatchObject({
+      cmd: "perspective.switch",
+      args: { perspective_id: "visible" },
+    });
   });
 
   // -----------------------------------------------------------------------

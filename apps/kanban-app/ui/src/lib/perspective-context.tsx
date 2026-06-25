@@ -210,12 +210,22 @@ function useAutoSelectActivePerspective(
   perspectives: PerspectiveDef[],
   active_perspective_id: string,
   filtered_task_ids_defined: boolean,
+  activeViewId: string | undefined,
   viewKind: string,
   dispatchRef: React.MutableRefObject<DispatchFn>,
 ) {
   useEffect(() => {
     if (!loaded) return;
-    const matching = perspectives.filter((p) => p.view === viewKind);
+    // Selection must agree with VISIBILITY: a perspective the active view's
+    // tab bar would hide (pinned via `view_id` to a sibling view) is not a
+    // valid selection here. Build `matching` with the same
+    // `perspectiveVisibleInView` predicate the bar filters with — not a
+    // kind-only check — so all three repair paths (invalid/empty stored id →
+    // `matching[0]`; stale-filter redispatch; validity check) operate on the
+    // tabs the user can actually see and switch between in the active view.
+    const matching = perspectives.filter((p) =>
+      perspectiveVisibleInView(p, activeViewId, viewKind),
+    );
     if (matching.length === 0) {
       // No perspectives for this view kind yet; let
       // useAutoCreateDefaultPerspective create one first.
@@ -250,6 +260,7 @@ function useAutoSelectActivePerspective(
     perspectives,
     active_perspective_id,
     filtered_task_ids_defined,
+    activeViewId,
     viewKind,
     dispatchRef,
   ]);
@@ -324,6 +335,7 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
     perspectives,
     active_perspective_id,
     filtered_task_ids_defined,
+    activeViewId,
     viewKind,
     dispatchRef,
   );
@@ -351,13 +363,20 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
     [dispatchRef],
   );
 
-  const activePerspective = useMemo(
-    () =>
-      perspectives.find((p) => p.id === active_perspective_id) ??
-      perspectives[0] ??
-      null,
-    [perspectives, active_perspective_id],
-  );
+  const activePerspective = useMemo(() => {
+    // Constrain the synchronous fallback to perspectives VISIBLE in the
+    // active view (same `perspectiveVisibleInView` predicate as the tab bar
+    // and auto-select). The stored-id `find` is also visibility-filtered so a
+    // sibling-pinned id can never resolve to a tab the user has no way to see
+    // or switch off — and the `[0]` fallback picks the first visible tab, not
+    // any arbitrary kind/pinned perspective.
+    const visible = perspectives.filter((p) =>
+      perspectiveVisibleInView(p, activeViewId, viewKind),
+    );
+    return (
+      visible.find((p) => p.id === active_perspective_id) ?? visible[0] ?? null
+    );
+  }, [perspectives, active_perspective_id, activeViewId, viewKind]);
 
   const value = useMemo<PerspectivesContextValue>(
     () => ({
