@@ -26,6 +26,17 @@ comments:
 
     Leaving task in `doing`, green, ready for /review.
   timestamp: 2026-06-25T19:59:56.672210+00:00
+- actor: claude-code
+  id: 01kw07ks6k0qrz0tvyhb915qeh
+  text: |-
+    Review nit addressed: changed `write_atomic` signature in crates/swissarmyhammer-common/src/fs_utils.rs from `path: &Path` to `path: impl AsRef<Path>` (added `let path = path.as_ref();` as the first body line) to match std::fs::write conventions and accept PathBuf/&str/&Path without conversion. Body otherwise unchanged (parent-dir create, temp_sibling, write, rename, cleanup).
+
+    Note: could not flip a `- [ ]` checkbox — the task description has no findings checklist (only What / Proposed outcome / Constraints), and neither comment contains a checklist. Recording the resolution here instead.
+
+    Verification (all green): `cargo check -p swissarmyhammer-common` exit 0; `cargo nextest run -p swissarmyhammer-common` 607/607 passed (incl. the 4 write_atomic tests); `cargo nextest run -p swissarmyhammer-ui-state -p swissarmyhammer-plugin` — ui-state save_replaces_file_atomically_via_rename + concurrent_load_during_save_never_sees_torn_state pass; the only 2 failures (file_notes_e2e, example_layering_e2e) are the documented pre-existing/unrelated ones, flaky hot_reload passed this run. `cargo fmt` + `cargo clippy -p swissarmyhammer-common --all-targets -- -D warnings` clean.
+
+    Leaving task in `doing`, green.
+  timestamp: 2026-06-25T20:30:16.275251+00:00
 position_column: doing
 position_ordinal: '8180'
 title: Consolidate hand-rolled atomic-write (temp sibling + rename) helpers into swissarmyhammer-common::fs_utils

@@ -573,7 +573,8 @@ impl FileSystem for MockFileSystem {
 ///
 /// Returns the underlying [`std::io::Error`] when the parent directory cannot
 /// be created, the temp file cannot be written, or the rename fails.
-pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+pub fn write_atomic(path: impl AsRef<Path>, contents: &str) -> std::io::Result<()> {
+    let path = path.as_ref();
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
