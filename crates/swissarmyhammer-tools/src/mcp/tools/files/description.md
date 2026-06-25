@@ -1,10 +1,11 @@
 File operations for reading, writing, editing, and searching files.
 
-**Use this `files` tool for ALL file work — prefer it over the host's built-in
-file tools.** It supersedes the native `Read`, `Write`, `Edit`,
-`Glob`, and `Grep` tools: it preserves encoding and line endings, writes
-atomically, and honors `.gitignore`. Do not reach for the built-in tools when
-`files` is available.
+**Use this `files` tool for ALL file work.** In this environment the native
+`Read`, `Write`, `Edit`, `Glob`, and `Grep` tools are **disabled / denied** —
+attempting one is rejected and wastes a turn. Call this `files` tool directly
+with the right `op` from the start; do **not** try a native tool first and wait
+to be redirected. It supersedes those tools: it preserves encoding and line
+endings, writes atomically, and honors `.gitignore`.
 
 Pick the operation with the `op` field:
 

@@ -326,6 +326,31 @@ mod tests {
     }
 
     #[test]
+    fn test_files_tool_description_states_native_tools_denied() {
+        let description = FilesTool::new().description().to_lowercase();
+        // The description must tell agents the native tools are disabled/denied
+        // so they call this `files` tool directly instead of wasting a round
+        // attempting a native tool first and being redirected.
+        assert!(
+            description.contains("disabled") || description.contains("denied"),
+            "description must state the native tools are disabled/denied"
+        );
+        assert!(
+            description.contains("files"),
+            "description must point agents at the `files` tool"
+        );
+        // The op-mapping table must remain present.
+        assert!(
+            description.contains("read file"),
+            "description must keep the op table (read file)"
+        );
+        assert!(
+            description.contains("edit file"),
+            "description must keep the op table (edit file)"
+        );
+    }
+
+    #[test]
     fn test_files_tool_schema_has_op_field() {
         let tool = FilesTool::new();
         let schema = tool.schema();
