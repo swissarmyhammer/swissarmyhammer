@@ -71,6 +71,25 @@ comments:
 
     Leaving in doing for /review.
   timestamp: 2026-06-25T15:21:10.750321+00:00
+- actor: claude-code
+  id: 01kvzpbs9wee1bmyekwkkmz740
+  text: |-
+    Re-picked from review; addressed both 2026-06-25 09:22 review findings in builtin_ai_commands_e2e.rs. Pure clarity refactors, no behavior change.
+
+    1. (warning) Extracted the repeated `"ai.cancel"` command-id literal into `const TEST_COMMAND_ID: &str = "ai.cancel";` (added after the existing const block, near TIMEOUT/BUNDLE/PLUGINS_SUBDIR). Replaced all 7 call-site arguments (available(...)/wait_for_available(...) across both tests) with the const. Left the ~9 occurrences in doc comments and assertion-message prose as literals — the finding targeted the string-literal *arguments*, not prose.
+
+    2. (nit) Extracted the 20ms poll interval into `const POLL_INTERVAL: Duration = Duration::from_millis(20);` (Duration was already imported) and used it at the sole poll site: `tokio::time::sleep(POLL_INTERVAL).await;`.
+
+    Both review-findings checkboxes flipped to [x].
+
+    VERIFICATION (all fresh):
+    - `cargo nextest run -p swissarmyhammer-command-service` → 173 tests run, 173 passed, 0 skipped, 0 failed. GREEN.
+    - `cargo fmt` → clean (no reformatting beyond my edits; git diff --stat shows only the one .rs test file + the .md/.jsonl card files).
+    - `cargo clippy -p swissarmyhammer-command-service --all-targets -- -D warnings` → ZERO errors attributable to command-service or the edited file (verified by grep). The only 3 errors are the SAME documented pre-existing dependency-crate lints: swissarmyhammer-focus doc_lazy_continuation + too_many_arguments, swissarmyhammer-window-service manual_contains. `git diff HEAD --stat` on those two crate paths is EMPTY — untouched by me.
+    - grep confirms no `"ai.cancel"` call-site argument and no bare `from_millis(20)` outside the const definition remain.
+
+    Leaving in doing for /review.
+  timestamp: 2026-06-25T15:28:48.444478+00:00
 position_column: doing
 position_ordinal: '80'
 project: ui-command-cleanup
@@ -120,3 +139,11 @@ Both surfaced as review findings on card ^xqgghvd, which touched a narrow set of
 - [x] `cargo nextest run -p swissarmyhammer-command-service` green (no behavior change). 166/166.
 - [x] Workspace build + `swissarmyhammer-ui-state` tests green. build OK; 143/143.
 - [x] No new clippy warnings. (3 surfaced lints are all pre-existing in untouched code; verified vs HEAD.)
+
+## Review Findings (2026-06-25 09:22)
+
+### Warnings
+- [x] `crates/swissarmyhammer-command-service/tests/integration/builtin_ai_commands_e2e.rs:128` — The command ID "ai.cancel" is hardcoded as a string literal 8 times across the test functions (lines 128, 134, 145, 181, 191, 212, 221, 237). This violates the rule of three — repeated literals should be named constants so changes require editing one place, not eight. Define a constant near the top of the file (after the other `const` declarations at lines 30–36): `const TEST_COMMAND_ID: &str = "ai.cancel";` and replace all 8 string-literal arguments with references to this constant.
+
+### Nits
+- [x] `crates/swissarmyhammer-command-service/tests/integration/builtin_ai_commands_e2e.rs:134` — Hardcoded polling interval of 20 milliseconds should be a named constant — configuration values like timeouts and poll rates should not be scattered as literals through code. Define `const POLL_INTERVAL: Duration = Duration::from_millis(20);` at the top of the file (near TIMEOUT) and replace the literal with `tokio::time::sleep(POLL_INTERVAL).await;`.

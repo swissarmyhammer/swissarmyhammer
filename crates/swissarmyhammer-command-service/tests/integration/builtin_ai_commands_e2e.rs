@@ -52,6 +52,14 @@ const BUNDLE: &str = "ai-commands";
 /// The `plugins/` subdirectory of a layer root the host discovers bundles in.
 const PLUGINS_SUBDIR: &str = "plugins";
 
+/// The command id under test — the "Stop AI Generation" command the
+/// `ai-commands` plugin gates in the registry palette.
+const TEST_COMMAND_ID: &str = "ai.cancel";
+
+/// How long to wait between `available command` polls while the event pump
+/// delivers a published notification to the plugin's `.on` callback.
+const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
 /// Resolve the workspace root (two levels above this crate's manifest dir).
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -122,7 +130,7 @@ async fn wait_for_available(service: &CommandService, id: &str, want: bool) -> V
         if tokio::time::Instant::now() >= deadline {
             panic!("timed out waiting for {id} available.ok == {want}; last response: {got}");
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
 
@@ -197,7 +205,7 @@ async fn ai_cancel_palette_availability_tracks_streaming_notification() {
     let AiCommandsHost { host, service, .. } = build_ai_commands_host().await;
 
     // Idle (default): the registry palette gate is closed.
-    let idle = available(&service, "ai.cancel").await;
+    let idle = available(&service, TEST_COMMAND_ID).await;
     assert_eq!(
         idle["ok"],
         json!(false),
@@ -218,7 +226,7 @@ async fn ai_cancel_palette_availability_tracks_streaming_notification() {
         "the host event pump should be a live bridge subscriber, got {reached}"
     );
 
-    let streaming = wait_for_available(&service, "ai.cancel", true).await;
+    let streaming = wait_for_available(&service, TEST_COMMAND_ID, true).await;
     assert_eq!(
         streaming["ok"],
         json!(true),
@@ -228,7 +236,7 @@ async fn ai_cancel_palette_availability_tracks_streaming_notification() {
     // The turn ends: the gate re-closes.
     host.notification_bridge()
         .publish(ai_streaming_notification(false));
-    let idle_again = wait_for_available(&service, "ai.cancel", false).await;
+    let idle_again = wait_for_available(&service, TEST_COMMAND_ID, false).await;
     assert_eq!(
         idle_again["ok"],
         json!(false),
@@ -272,7 +280,7 @@ async fn ai_streaming_flag_is_independent_per_host() {
         (&global.service, "global"),
         (&per_board.service, "per-board"),
     ] {
-        let idle = available(svc, "ai.cancel").await;
+        let idle = available(svc, TEST_COMMAND_ID).await;
         assert_eq!(
             idle["ok"],
             json!(false),
@@ -294,7 +302,7 @@ async fn ai_streaming_flag_is_independent_per_host() {
     );
 
     // The per-board isolate's gate opens…
-    let streaming = wait_for_available(&per_board.service, "ai.cancel", true).await;
+    let streaming = wait_for_available(&per_board.service, TEST_COMMAND_ID, true).await;
     assert_eq!(
         streaming["ok"],
         json!(true),
@@ -305,7 +313,7 @@ async fn ai_streaming_flag_is_independent_per_host() {
     // is untouched. This is the crux: a publish aimed at the global host (the
     // pre-fix behaviour) would have flipped THIS isolate and left the per-board
     // one (which answers the board window's palette) stuck disabled.
-    let global_still_idle = available(&global.service, "ai.cancel").await;
+    let global_still_idle = available(&global.service, TEST_COMMAND_ID).await;
     assert_eq!(
         global_still_idle["ok"],
         json!(false),
@@ -318,7 +326,7 @@ async fn ai_streaming_flag_is_independent_per_host() {
         .host
         .notification_bridge()
         .publish(ai_streaming_notification(false));
-    let per_board_idle = wait_for_available(&per_board.service, "ai.cancel", false).await;
+    let per_board_idle = wait_for_available(&per_board.service, TEST_COMMAND_ID, false).await;
     assert_eq!(
         per_board_idle["ok"],
         json!(false),
