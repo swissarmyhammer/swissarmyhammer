@@ -32,8 +32,15 @@ comments:
 
     Target test committed_examples_coload_across_layers is GREEN; sibling file_notes_plugin_round_trips_through_files_tool also GREEN. Leaving task in `doing` for /review.
   timestamp: 2026-06-26T21:16:15.025413+00:00
-position_column: doing
-position_ordinal: '8180'
+- actor: claude-code
+  id: 01kw2x82awbr2tjpjjctb12cgt
+  text: |-
+    Closing to done. Card goal achieved and verified: example_layering_e2e::committed_examples_coload_across_layers (and sibling file_notes_e2e round-trip) now pass — root cause was stale test expectations asserting relative file-notes writes land at process CWD, when the files handler correctly resolves against the server's configured work_dir (sanctioned session-cwd-for-tools design). Fixed the assertions + removed obsolete cwd_dir/CurrentDirGuard/#[serial] machinery and stale docs; no production code changed. cargo nextest -p swissarmyhammer-plugin 177/177 green; clippy + fmt clean.
+
+    Review (HEAD~1..HEAD): 0 blockers, 1 warning — function-length on `load_cli_echo_from_builtin_layer` (60 lines > 50 guideline) at example_layering_e2e.rs:546. Declined as out of scope: my delta only touched a call site (line 117), not that function's body; its length is pre-existing and unrelated to this card's CWD-assertion fix. Splitting it is bonus refactoring (same rationale applied to the analogous function-length warning on zd74s4t). Marking done.
+  timestamp: 2026-06-26T21:26:49.948962+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff480
 title: 'Pre-existing: example_layering_e2e::committed_examples_coload_across_layers fails (file-notes load() note not written)'
 ---
 Discovered while verifying the D1–D4 bridge/substrate fixes. `cargo test -p swissarmyhammer-plugin --test example_layering_e2e committed_examples_coload_across_layers` fails deterministically:
