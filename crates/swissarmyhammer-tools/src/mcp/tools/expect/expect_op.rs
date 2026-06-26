@@ -42,6 +42,7 @@ use crate::mcp::tool_registry::ToolContext;
 ///
 /// This is exactly the shape of `swissarmyhammer_agent::AcpAgentHandle`, supplied
 /// to the tool so this crate's `expect` engine never constructs an agent itself.
+#[derive(Debug)]
 pub struct AgentHandle {
     /// The agent component the driver runs as the ACP server side.
     pub agent: DynConnectTo<Client>,
