@@ -40,6 +40,20 @@ pub fn read_json(path: &Path) -> Result<Value, RegistryError> {
     })
 }
 
+/// Create `path`'s parent directories if they do not already exist.
+///
+/// Shared by every config writer ([`write_json`] and the TOML branch of
+/// [`write_mcp_config`]) so the "make the parent dir" step cannot drift between
+/// the JSON and TOML write paths. An empty parent (a bare filename) is a no-op.
+fn create_parent_dirs(path: &Path) -> Result<(), RegistryError> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    Ok(())
+}
+
 /// Write a JSON value to a settings file with pretty-printing.
 ///
 /// Creates parent directories if they do not exist. Output is terminated
@@ -48,11 +62,7 @@ pub fn read_json(path: &Path) -> Result<Value, RegistryError> {
 /// Returns a `RegistryError::Io` on I/O failure or `RegistryError::Validation`
 /// when the value cannot be serialized.
 pub fn write_json(path: &Path, value: &Value) -> Result<(), RegistryError> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
-    }
+    create_parent_dirs(path)?;
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| RegistryError::Validation(format!("Failed to serialize JSON: {}", e)))?;
     fs::write(path, format!("{}\n", json))?;
@@ -133,11 +143,7 @@ pub fn write_mcp_config(path: &Path, value: &Value) -> Result<(), RegistryError>
     if !is_toml_config(path) {
         return write_json(path, value);
     }
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
-    }
+    create_parent_dirs(path)?;
     let toml_value = toml::Value::try_from(value)
         .map_err(|e| RegistryError::Validation(format!("Failed to convert JSON to TOML: {}", e)))?;
     // The TOML serializer emits scalar keys before sub-tables, so unrelated
