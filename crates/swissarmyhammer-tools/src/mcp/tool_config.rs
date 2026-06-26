@@ -31,6 +31,7 @@ use tracing::warn;
 pub const KNOWN_TOOL_NAMES: &[&str] = &[
     "agent",
     "code_context",
+    "expect",
     "files",
     "git",
     "kanban",

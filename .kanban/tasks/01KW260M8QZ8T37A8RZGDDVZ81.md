@@ -22,6 +22,15 @@ comments:
 
     Left in doing for /review.
   timestamp: 2026-06-26T18:05:40.826850+00:00
+- actor: claude-code
+  id: 01kw2jm520xvmw6s8012etvwkx
+  text: |-
+    Cleared the open warning: added "expect" to KNOWN_TOOL_NAMES in tool_config.rs, alphabetically between "code_context" and "files".
+
+    Did NOT strengthen test_known_tool_names_matches_registry() to also assert registry → constant. While investigating, found that the guard test's registry registers `review`, `diagnostics`, AND `expect`, but KNOWN_TOOL_NAMES is missing all three of `review`, `diagnostics`, and `expect` (now just review + diagnostics after this fix). So adding the reverse-direction assertion would FAIL on review and diagnostics too — fixing it properly means adding those two names as well, which is broader than this finding's scope. Deferred to avoid scope creep; noting the asymmetry here. A follow-up task should add "review" and "diagnostics" to KNOWN_TOOL_NAMES and add the registry→constant assertion to make the guard bidirectional.
+
+    Verification (all green): cargo nextest -p swissarmyhammer-tools -E 'test(tool_config) or test(known_tool) or test(expect)' = 22 passed / 0 failed; cargo check --workspace exit 0; cargo fmt applied; cargo clippy -p swissarmyhammer-tools -- -D warnings exit 0 (clean).
+  timestamp: 2026-06-26T18:21:11.616181+00:00
 depends_on:
 - 01KW25YZ4MKNR09RXYR1B4S05T
 position_column: doing
@@ -54,3 +63,15 @@ Create the op-dispatched MCP tool that surfaces all `expect` ops, modeled on `di
 
 ## Workflow
 - Use `/tdd`. Copy `tools/diagnostics/mod.rs` as the skeleton.
+
+## Review Findings (2026-06-26 13:06)
+
+Scope reviewed: `HEAD~1..HEAD` (expect MCP tool skeleton commit). Driver verification: `cargo build -p swissarmyhammer-tools` green; 22 `#[operation(...)]` ops present; unknown op → `invalid_params` confirmed (`expect/mod.rs`).
+
+### Warnings
+- [x] `crates/swissarmyhammer-tools/src/mcp/tool_config.rs:24` — `KNOWN_TOOL_NAMES` is documented as "the single source of truth for valid tool names ... Add a new name here whenever a new top-level tool is registered," but `expect` is now registered (in `create_fully_registered_tool_registry`, `server.rs`, etc.) and is **missing** from the constant. Add `"expect"` in alphabetical order, between `"code_context"` and `"files"`. The guard test `test_known_tool_names_matches_registry()` does not catch this because it only asserts constant → registry (every listed name is registered), not the reverse (every registered tool is listed), so the build/tests stay green while the contract is violated. CLI/validation paths that consult `KNOWN_TOOL_NAMES` will not recognize `expect`.
+
+### Notes (reviewer-refuted / out of scope — no action required)
+- [x] REFUTED — engine reported `register_all_tools` "defined twice ... will not compile" in `server.rs`. Only one definition exists (`server.rs:930`) and `cargo build -p swissarmyhammer-tools` succeeds (exit 0). Diff-context false positive.
+- [x] PRE-EXISTING — engine flagged the `register_*_tools` registration sequence as duplicated across `tool_registry.rs`, `server.rs`, `tool_config.rs`, `health_registry.rs`. This is the established codebase pattern that this task was explicitly instructed to follow for the new tool; it is not introduced by this diff. Not a blocker for the skeleton task; raise separately if the team wants to DRY it.
+- [x] PRE-EXISTING — engine flagged deep nesting in `PromptHealthChecker::run_health_checks` (`health_registry.rs`) and a hardcoded 50ms mtime delay in a `tool_config.rs` watcher test. Both are pre-existing code not introduced by this commit's diff.
