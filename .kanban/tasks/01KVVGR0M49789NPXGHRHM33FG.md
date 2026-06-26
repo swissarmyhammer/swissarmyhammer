@@ -1,6 +1,18 @@
 ---
-position_column: todo
-position_ordinal: ff80
+comments:
+- actor: claude-code
+  id: 01kw35cbag3mfcmknn8hgktdwf
+  text: |-
+    Picked up; moved to doing. Implemented both items in apps/kanban-app/src/plugins.rs (test module).
+
+    1. Consolidation: confirmed write_user_command_plugin and write_project_command_plugin shared a byte-identical TypeScript `index.ts` template, differing only in plugins-dir resolution + panic-message strings. Extracted a single `fn write_command_plugin(plugins_dir: &std::path::Path, id: &str, command_id: &str)` holding the shared body (create_dir_all + format! + write, with generic "plugin directory"/"plugin index.ts" expects). write_project_command_plugin is now a thin wrapper that resolves `board_dir.join(".kanban").join("plugins")` then delegates (kept because 5 callers pass a board_dir). write_user_command_plugin was a pure same-signature pass-through, so I deleted it and pointed its single caller at write_command_plugin(&user_plugins, ...) directly. No behavioral change.
+
+    2. Constants: added four module-scope (test-mod) consts next to existing TIMEOUT/SETTLE — AVAILABLE_POLL (20ms, wait_for_available), COMMAND_POLL (100ms, list-command poll x3), WATCHER_SETTLE (300ms, OS watcher settle x4), HANDLE_DROP_POLL (50ms, Weak-upgrade poll). All 9 hardcoded Duration::from_millis sleep literals now reference these by name; zero literal sleeps remain.
+
+    Verification: `cargo nextest run -p kanban-app plugins::` -> 12 passed (the 1 "leaky" flag on all_builtin_command_plugins_load_with_full_baseline is a pre-existing nextest process-leak note, unrelated). `cargo fmt` clean. clippy: plugins.rs produces ZERO warnings (verified via --no-deps). Two PRE-EXISTING rust-1.95.0 clippy lints block a strict `-D warnings` run but are in files I did not touch — `apps/kanban-app/src/menu.rs` (empty_line_after_doc_comments) and `crates/swissarmyhammer-window-service/src/shell.rs` (manual_contains). Left out of scope per "do ONLY these two items".
+  timestamp: 2026-06-26T23:48:58.832546+00:00
+position_column: doing
+position_ordinal: '8180'
 title: Consolidate duplicated write_user/project_command_plugin + extract poll-timeout constants in kanban-app plugins.rs
 ---
 ## What

@@ -37,8 +37,8 @@ comments:
   id: 01kw34jd7j0a9d38p5wgemx9ja
   text: 'Review-nit fix applied to test_support.rs: extracted the two remaining magic literals in the shared `test_spec` builder into named module-level consts and used them:\n- `const TEST_SPEC_STARTUP_TIMEOUT_SECS: u64 = 5;`\n- `const TEST_SPEC_HEALTH_CHECK_INTERVAL_SECS: u64 = 60;`\n\nNamed distinctly (TEST_SPEC_* prefix) to avoid collision/confusion with supervisor.rs''s same-purpose-but-faster `TEST_STARTUP_TIMEOUT_SECS` / `TEST_HEALTH_CHECK_INTERVAL_SECS` (used by its inline real-process \"true\" spec, different values). Each const carries a doc comment noting it''s the shared test_spec builder default and calling out the distinction. Values unchanged (5 / 60); supervisor.rs untouched.\n\nVerification:\n- cargo nextest run -p swissarmyhammer-lsp: 221 passed, 0 failed (~4.08s).\n- cargo clippy -p swissarmyhammer-lsp --all-targets -- -D warnings: clean.\n- cargo fmt applied.\n\nLeft in `doing` for /review.'
   timestamp: 2026-06-26T23:34:48.818167+00:00
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff880
 title: Dedupe test-spec helpers in swissarmyhammer-lsp (fake_spec/test_spec) + name health-check interval constant
 ---
 ## What

@@ -466,6 +466,22 @@ mod tests {
     /// How long a watcher-driven load is polled for before the test fails.
     const SETTLE: Duration = Duration::from_secs(15);
 
+    /// Interval between `available command` polls in [`wait_for_available`]
+    /// while the event pump delivers a published notification to the host.
+    const AVAILABLE_POLL: Duration = Duration::from_millis(20);
+
+    /// Interval between host `list command` polls while waiting for a
+    /// watcher-driven load/reload/unload to settle.
+    const COMMAND_POLL: Duration = Duration::from_millis(100);
+
+    /// Short fixed sleep that lets a freshly started OS file-watcher register
+    /// before the watched plugin tree is mutated.
+    const WATCHER_SETTLE: Duration = Duration::from_millis(300);
+
+    /// Interval between `Weak` upgrade polls while waiting for a closed board's
+    /// handle (and its watcher) to drop.
+    const HANDLE_DROP_POLL: Duration = Duration::from_millis(50);
+
     /// Writes a genuine probe plugin bundle into `plugins_dir/<id>/`.
     ///
     /// The bundle is a real TS-only bundle: just an `index.ts`. The plugin's
@@ -597,7 +613,7 @@ mod tests {
         // Start the hot-reload watcher, then let the OS watcher register before
         // mutating the tree.
         state.start_plugin_watcher().await;
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(WATCHER_SETTLE).await;
 
         // Drop a new plugin into the watched user layer.
         write_probe_plugin(&user_plugins, "kanban-dropped-probe");
@@ -619,7 +635,7 @@ mod tests {
                 Instant::now() < deadline,
                 "the dropped plugin was never loaded by the watcher within {SETTLE:?}"
             );
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(COMMAND_POLL).await;
         }
     }
 
@@ -950,7 +966,7 @@ mod tests {
             if Instant::now() >= deadline {
                 panic!("timed out waiting for {id} available.ok == {want}; last: {got}");
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::time::sleep(AVAILABLE_POLL).await;
         }
     }
 
@@ -1176,22 +1192,23 @@ mod tests {
     // pipeline — `open_board` builds each per-board host with its project layer
     // rooted at the board's `.kanban` — not a fixture.
 
-    /// Write a project plugin bundle that registers a single command `command_id`
-    /// into the board's `commands` registry, at `<board_dir>/.kanban/plugins/<id>/`.
+    /// Write a plugin bundle that registers a single command `command_id` into
+    /// the `commands` registry, at `<plugins_dir>/<id>/index.ts`.
     ///
     /// The bundle is a real TS-only plugin: it `ensureServices(["commands"])`
     /// then `registerCommands` one command, exactly the path the builtin command
     /// plugins take. Seeing `command_id` in a host's `list command` is proof the
-    /// project plugin genuinely loaded and is functional in that host. The
-    /// `execute` callback only has to resolve at dispatch time, so a trivial
-    /// no-op body is enough to prove registration + listing.
+    /// plugin genuinely loaded and is functional in that host. The `execute`
+    /// callback only has to resolve at dispatch time, so a trivial no-op body is
+    /// enough to prove registration + listing.
     ///
-    /// `board_dir` is the board's working directory (the parent of `.kanban`);
-    /// `id` is the bundle directory name and so the plugin's identity.
-    fn write_project_command_plugin(board_dir: &std::path::Path, id: &str, command_id: &str) {
-        let plugins_dir = board_dir.join(".kanban").join("plugins");
+    /// `plugins_dir` is the layer's `plugins/` directory the bundle is rooted
+    /// under; `id` is the bundle directory name and so the plugin's identity.
+    /// The user- and project-layer helpers differ only in which `plugins_dir`
+    /// they target, so they both delegate here.
+    fn write_command_plugin(plugins_dir: &std::path::Path, id: &str, command_id: &str) {
         let plugin_dir = plugins_dir.join(id);
-        std::fs::create_dir_all(&plugin_dir).expect("project plugin directory");
+        std::fs::create_dir_all(&plugin_dir).expect("plugin directory");
         let entry = format!(
             "import {{ Plugin, ensureServices, registerCommands }} from '@swissarmyhammer/plugin';\n\
              export default class P extends Plugin {{\n\
@@ -1206,7 +1223,15 @@ mod tests {
                }}\n\
              }}\n"
         );
-        std::fs::write(plugin_dir.join("index.ts"), entry).expect("project plugin index.ts");
+        std::fs::write(plugin_dir.join("index.ts"), entry).expect("plugin index.ts");
+    }
+
+    /// Write a project plugin bundle into the board's project layer, at
+    /// `<board_dir>/.kanban/plugins/<id>/`. `board_dir` is the board's working
+    /// directory (the parent of `.kanban`). Delegates to [`write_command_plugin`].
+    fn write_project_command_plugin(board_dir: &std::path::Path, id: &str, command_id: &str) {
+        let plugins_dir = board_dir.join(".kanban").join("plugins");
+        write_command_plugin(&plugins_dir, id, command_id);
     }
 
     /// Open a board on `state` whose project plugin layer has been seeded BEFORE
@@ -1318,7 +1343,7 @@ mod tests {
         let global_board_dir = TempDir::new().expect("global tool working dir");
         let user_plugins = user_root.path().join("plugins");
         std::fs::create_dir_all(&user_plugins).expect("user plugins dir");
-        write_user_command_plugin(&user_plugins, SHARED_ID, USER_COMMAND);
+        write_command_plugin(&user_plugins, SHARED_ID, USER_COMMAND);
 
         let state = AppState::new_for_test_with_plugins(
             user_root.path().to_path_buf(),
@@ -1350,31 +1375,6 @@ mod tests {
             !ids.contains(USER_COMMAND),
             "the user copy of {SHARED_ID:?} must be shadowed by the project copy; got {ids:?}"
         );
-    }
-
-    /// Write a user-layer plugin bundle that registers a single command, at
-    /// `<user_plugins>/<id>/`. Same bundle shape as
-    /// [`write_project_command_plugin`], just rooted at the user layer's
-    /// `plugins/` directory — used to stage a same-id copy the project layer
-    /// shadows.
-    fn write_user_command_plugin(user_plugins: &std::path::Path, id: &str, command_id: &str) {
-        let plugin_dir = user_plugins.join(id);
-        std::fs::create_dir_all(&plugin_dir).expect("user plugin directory");
-        let entry = format!(
-            "import {{ Plugin, ensureServices, registerCommands }} from '@swissarmyhammer/plugin';\n\
-             export default class P extends Plugin {{\n\
-               async load(): Promise<void> {{\n\
-                 await ensureServices(this, ['commands']);\n\
-                 await registerCommands(this, [{{\n\
-                   id: '{command_id}',\n\
-                   name: '{command_id}',\n\
-                   execute: async () => ({{ ok: true }}),\n\
-                 }}]);\n\
-                 this.log.info('{id} loaded');\n\
-               }}\n\
-             }}\n"
-        );
-        std::fs::write(plugin_dir.join("index.ts"), entry).expect("user plugin index.ts");
     }
 
     /// A boardless / unknown window falls back to the global platform: the
@@ -1436,7 +1436,7 @@ mod tests {
                 Instant::now() < deadline,
                 "{context} within {SETTLE:?}; last seen ids: {ids:?}"
             );
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(COMMAND_POLL).await;
         }
     }
 
@@ -1483,7 +1483,7 @@ mod tests {
 
         // Let board A's OS watcher register before mutating its project tree
         // (same settle the user-layer hot-reload test uses).
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(WATCHER_SETTLE).await;
 
         // ADD: drop a project plugin into board A's project layer. The watcher
         // must load it and register ADDED_COMMAND in board A's host.
@@ -1564,7 +1564,7 @@ mod tests {
         // re-resolves the host through `state.boards` each iteration, so it holds
         // no `BoardHandle` strong reference that would keep the handle alive past
         // close.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(WATCHER_SETTLE).await;
         const BEFORE_CLOSE_COMMAND: &str = "hotreload.probe.before-close";
         write_project_command_plugin(dir.path(), "pre-close-plugin", BEFORE_CLOSE_COMMAND);
         poll_command_ids_until_via_map(
@@ -1591,7 +1591,7 @@ mod tests {
                 Instant::now() < deadline,
                 "the closed board's handle (and its watcher) was never dropped within {SETTLE:?}"
             );
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::time::sleep(HANDLE_DROP_POLL).await;
         }
 
         // BEHAVIORAL: a project-plugin change after close runs cleanly and has
@@ -1602,7 +1602,7 @@ mod tests {
             "post-close-plugin",
             "hotreload.probe.after-close",
         );
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(WATCHER_SETTLE).await;
         let boards = state.boards.read().await;
         assert!(
             !boards.contains_key(&path),
@@ -1637,7 +1637,7 @@ mod tests {
                 Instant::now() < deadline,
                 "{context} within {SETTLE:?}; last seen ids: {ids:?}"
             );
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(COMMAND_POLL).await;
         }
     }
 }
