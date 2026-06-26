@@ -32,6 +32,17 @@ comments:
 
     Verification: expect tests 27 passed; kanban 1537 passed; common gitignore tests pass; `cargo check --workspace` clean; `cargo clippy -p swissarmyhammer-tools -- -D warnings` clean; `cargo fmt` applied. double-check agent: PASS. Leaving in `doing` for /review.
   timestamp: 2026-06-26T20:56:55.298616+00:00
+- actor: claude-code
+  id: 01kw2w89s2sfht1bxkjbb7tyjv
+  text: |-
+    Cleared the two open warnings from the 2026-06-26 15:57 review.
+
+    1. fs_utils.rs ensure_gitignore_entries doc comment: already present and comprehensive in HEAD (commit b65e12088) — covers reconcile/append-only-missing, idempotency, reads+preserves existing content, rewrites only when changed, params (dir/entries), and io::Result error condition. No code change needed; finding satisfied by committed code.
+
+    2. expect/init.rs expect_paths test helper: refactored to derive subdir paths from SCAFFOLD_SUBDIRS (fixed paths in the vec, then `for subdir in SCAFFOLD_SUBDIRS { paths.push(expect_dir.join(subdir)); }`) instead of hardcoding "expectations"/"goldens"/"received". Eliminates the drift risk.
+
+    Verify: cargo nextest -p swissarmyhammer-tools -E 'test(expect)' = 27 passed; -p swissarmyhammer-common -E 'test(gitignore)' = 8 passed; cargo fmt applied; clippy -p swissarmyhammer-common -p swissarmyhammer-tools -D warnings clean. Left in doing for /review.
+  timestamp: 2026-06-26T21:09:28.994181+00:00
 depends_on:
 - 01KW25ZW4NED0J1BD77HPK7DNX
 - 01KW260M8QZ8T37A8RZGDDVZ81
@@ -82,3 +93,11 @@ Implement `expect init` (the `Initializable` trait verb, rolling up to `sah init
 ### Warnings
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:122` — The `ensure_gitignore()` function reimplements the exact algorithm already in kanban's `ensure_gitignore_entries()` (crates/swissarmyhammer-kanban/src/board/init.rs:313-332). The comment at line 124 acknowledges this: 'Mirrors the kanban board's `ensure_gitignore_entries`'. The algorithm is identical (read lines, check for missing entries, rewrite if changed); only the directory and required entries differ. This should be extracted into a shared generic utility parameterized by path and entries, then called from both places. Extract a generic `reconcile_gitignore_entries(path: &Path, entries: &[&str]) -> io::Result<()>` into a shared utility module (e.g., `swissarmyhammer-common`), then call it from both kanban and expect with their respective `REQUIRED_GITIGNORE_ENTRIES` arrays. This keeps one canonical implementation and prevents divergence if the algorithm needs fixing later. **FIXED**: same extraction as the blocker above — `swissarmyhammer_common::fs_utils::ensure_gitignore_entries`.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:138` — Hardcoded list of surface names in config template comment; should be derived from the Surface enum or catalog to stay in sync when new surface variants are added. Derive the surface list dynamically from `surfaces::catalog()` (already imported in `mod.rs`). Add `use swissarmyhammer_expect::surfaces;` to the imports, create a helper function that generates the comment with the current catalog, and update the test (`expect_init_config_contents_still_parse_with_surface_header`) to verify all catalog surfaces are listed. **FIXED**: added `use swissarmyhammer_expect::{surfaces, Surface}`; new `catalog_surface_names()` helper derives the "one of:" list from `surfaces::catalog()`; `config_contents` uses it; new test `expect_init_config_header_lists_every_catalog_surface` asserts every catalog surface name appears in the header.
+
+## Review Findings (2026-06-26 15:57)
+
+### Warnings
+- [x] `crates/swissarmyhammer-common/src/fs_utils.rs:547` — Public function `ensure_gitignore_entries` lacks doc comments. The rule requires all public items to have documentation explaining purpose, parameters, return value, and any error conditions. Add a doc comment above the function explaining: (1) that it reconciles gitignore entries (appending only those missing), (2) the intent of idempotency, (3) that it reads existing content and preserves it, (4) when it modifies the file. Example: `/// Reconcile `.gitignore` entries — append any that are missing, leaving existing content untouched.
+/// 
+/// Returns `Ok(())` on success or if no changes were needed (idempotent). Returns `Err` if file I/O fails.`. **FIXED**: the public `ensure_gitignore_entries` already carries a full doc comment in HEAD (commit b65e12088) covering all four points — reconcile/append-only-missing, idempotency (no-op when complete), reads+preserves existing lines without clobbering, rewrites only when changed — plus its params (`dir`, `entries`) and the `std::io::Error` return condition. Confirmed satisfied.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:227` — Subdirectory names "expectations", "goldens", "received" are hardcoded in `expect_paths` test helper, duplicating the `SCAFFOLD_SUBDIRS` constant. If directories are added or removed, both must be kept in sync — a maintenance burden and source of drift. Refactor `expect_paths` to derive subdirs from `SCAFFOLD_SUBDIRS` rather than hardcoding: collect the fixed paths (root, config, readme, example, gitignore), then append paths from the loop `for subdir in SCAFFOLD_SUBDIRS { paths.push(expect_dir.join(subdir)); }`. **FIXED**: `expect_paths` now builds the fixed paths then appends `for subdir in SCAFFOLD_SUBDIRS { paths.push(expect_dir.join(subdir)); }`, deriving all subdirs from the single `SCAFFOLD_SUBDIRS` source.

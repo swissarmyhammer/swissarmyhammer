@@ -292,17 +292,21 @@ mod tests {
     const GITIGNORE_FILE: &str = ".gitignore";
 
     /// Every scaffolded path from the `ideas/expect.md` §"expect init" tree.
+    ///
+    /// The subdirectories are derived from [`SCAFFOLD_SUBDIRS`] so this helper
+    /// stays in sync as scaffold dirs are added or removed.
     fn expect_paths(expect_dir: &Path) -> Vec<PathBuf> {
-        vec![
+        let mut paths = vec![
             expect_dir.to_path_buf(),
             expect_dir.join(CONFIG_FILE),
             expect_dir.join(README_FILE),
             expect_dir.join(EXAMPLE_FILE),
             expect_dir.join(GITIGNORE_FILE),
-            expect_dir.join("expectations"),
-            expect_dir.join("goldens"),
-            expect_dir.join("received"),
-        ]
+        ];
+        for subdir in SCAFFOLD_SUBDIRS {
+            paths.push(expect_dir.join(subdir));
+        }
+        paths
     }
 
     #[test]
