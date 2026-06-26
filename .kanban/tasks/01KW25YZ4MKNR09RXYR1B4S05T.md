@@ -24,6 +24,10 @@ comments:
   id: 01kw2cqjefhgaf4h7sv3f43mrx
   text: 'Implemented via TDD. Created crates/swissarmyhammer-expect (lib) with src/types.rs (Observation/Checkpoint/SurfaceState{Cli,Json}/CliState/Trajectory/Evidence/CriterionVerdict/ExpectationVerdict/Reliability + enums Surface/VerdictTier/CriterionStatus/LedgerState), src/error.rs (ExpectError via thiserror), src/lib.rs re-exports. Added to root Cargo.toml workspace members + deps. Enums use serde rename_all=lowercase; Duration serializes as explicit duration_ms u64. No dep on swissarmyhammer-tools. Green: cargo nextest 11/11 pass, fmt clean, clippy -D warnings clean. NOTE for future agents: the `files` write-file op silently no-op''d twice on lib.rs during this work (returned unchanged); `edit file` worked — use edit if a write appears to not take.'
   timestamp: 2026-06-26T16:38:12.175545+00:00
+- actor: claude-code
+  id: 01kw2d7e6spf6y4t2vbj0rad79
+  text: 'Addressed the single review finding: added a runnable `# Examples` section to the crate-level docs in `crates/swissarmyhammer-expect/src/lib.rs`. The doctest deserializes an `Observation` from wire JSON (cli SurfaceState via `{"kind":"cli",...}`, `duration_ms` key) and constructs a `Reliability { required: 3, runs: vec![true, true, true] }`, asserting `.satisfied()`. Verified: `cargo test --doc -p swissarmyhammer-expect` -> 1 passed; `cargo fmt` applied; `cargo clippy -p swissarmyhammer-expect -- -D warnings` clean. Finding checkbox flipped to [x]. Left in doing for review.'
+  timestamp: 2026-06-26T16:46:52.121084+00:00
 position_column: doing
 position_ordinal: '8280'
 project: expect
@@ -57,3 +61,26 @@ Stand up the engine crate and its pure data model. Everything else in the `expec
 
 ## Workflow
 - Use `/tdd` — write failing serde round-trip tests first, then define the types to make them pass.
+
+## Review Findings (2026-06-26 11:38)
+
+### Nits
+- [x] `crates/swissarmyhammer-expect/src/lib.rs:1` — Crate-level documentation lacks code examples. The rule requires examples showing common use cases, but the current docs only explain the crate's purpose and reference the types. Add an `# Examples` section to the crate-level docs demonstrating: (1) deserializing an `Observation` from JSON, and (2) constructing a `Reliability` and checking `.satisfied()`. For example:
+
+```rust
+/// # Examples
+/// ```
+/// use serde_json::json;
+/// # use swissarmyhammer_expect::*;
+/// let json = json!({
+///   "path": "spec.yaml",
+///   "checkpoints": [...],
+///   "trajectory": {...}
+/// });
+/// let obs: Observation = serde_json::from_value(json)?;
+/// 
+/// let reliability = Reliability { required: 3, runs: vec![true, true, true] };
+/// assert!(reliability.satisfied());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+/// ```.

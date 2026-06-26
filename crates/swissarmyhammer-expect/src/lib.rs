@@ -8,6 +8,38 @@
 //!
 //! See [`types`] for the domain model ([`Observation`], [`ExpectationVerdict`],
 //! and the closed enums) and [`error`] for [`ExpectError`].
+//!
+//! # Examples
+//!
+//! Deserialize an [`Observation`] from its wire JSON, then build a
+//! [`Reliability`] and check whether `pass^k` is satisfied:
+//!
+//! ```
+//! use swissarmyhammer_expect::{Observation, Reliability};
+//! use serde_json::json;
+//!
+//! let observation: Observation = serde_json::from_value(json!({
+//!     "path": "src/checkout/coupon",
+//!     "checkpoints": [{
+//!         "after": "apply SAVE10",
+//!         "state": {
+//!             "kind": "cli",
+//!             "stdout": "Total: $40\n",
+//!             "stderr": "",
+//!             "exit_code": 0,
+//!             "files": {}
+//!         },
+//!         "duration_ms": 120
+//!     }],
+//!     "trajectory": { "steps": ["ran: checkout --apply SAVE10"] }
+//! }))?;
+//! assert_eq!(observation.path, "src/checkout/coupon");
+//! assert_eq!(observation.checkpoints.len(), 1);
+//!
+//! let reliability = Reliability { required: 3, runs: vec![true, true, true] };
+//! assert!(reliability.satisfied());
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 pub mod error;
 pub mod types;
