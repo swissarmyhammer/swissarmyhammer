@@ -451,6 +451,8 @@ mod duration_str {
     const MILLIS_PER_MINUTE: u128 = 60_000;
     /// Milliseconds in one second.
     const MILLIS_PER_SECOND: u128 = 1_000;
+    /// Milliseconds in one millisecond.
+    const MILLIS_PER_MILLIS: u128 = 1;
 
     /// Serialize as the most compact whole-unit form (`h`, `m`, `s`, or `ms`).
     pub fn serialize<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
@@ -489,7 +491,7 @@ mod duration_str {
     fn parse_duration(raw: &str) -> Option<Duration> {
         let raw = raw.trim();
         let (value, unit_millis): (&str, u128) = if let Some(value) = raw.strip_suffix("ms") {
-            (value, 1)
+            (value, MILLIS_PER_MILLIS)
         } else if let Some(value) = raw.strip_suffix('s') {
             (value, MILLIS_PER_SECOND)
         } else if let Some(value) = raw.strip_suffix('m') {

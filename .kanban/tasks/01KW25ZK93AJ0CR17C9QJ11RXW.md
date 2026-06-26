@@ -22,6 +22,10 @@ comments:
 
     Verification: cargo nextest run -p swissarmyhammer-expect = 21 passed, 0 failed; cargo test --doc = 1 passed; cargo fmt applied; cargo clippy --all-targets -D warnings clean. Left in doing for review.
   timestamp: 2026-06-26T17:17:10.585509+00:00
+- actor: claude-code
+  id: 01kw2farv01fv9yrfprf8yd5yn
+  text: 'Cleared the open review nit (2026-06-26 12:18): added module-level `const MILLIS_PER_MILLIS: u128 = 1;` in the `duration_str` module and used it in the `ms` branch of `parse_duration` (was bare literal `1`), matching the existing MILLIS_PER_SECOND/MINUTE/HOUR pattern. Verified: cargo nextest run -p swissarmyhammer-expect = 21 passed; cargo test --doc -p swissarmyhammer-expect = 1 passed; cargo fmt applied; cargo clippy -p swissarmyhammer-expect --all-targets -- -D warnings clean.'
+  timestamp: 2026-06-26T17:23:38.464500+00:00
 depends_on:
 - 01KW25YZ4MKNR09RXYR1B4S05T
 position_column: doing
@@ -63,3 +67,8 @@ Parse a `*.expect.md` expectation file into a typed `Expectation`. Closest templ
 
 ### Nits
 - [x] `crates/swissarmyhammer-expect/src/spec.rs:349` — Hardcoded literal `3` represents the GFM checkbox marker length (`[ ]` or `[x]`). Should be a named constant for clarity and to prevent duplication. Define `const CHECKBOX_MARKER_LEN: usize = 3;` and use it in both places.
+
+## Review Findings (2026-06-26 12:18)
+
+### Nits
+- [x] `crates/swissarmyhammer-expect/src/spec.rs:501` — The literal `1` for millisecond conversion breaks the pattern established by named constants (`MILLIS_PER_SECOND`, `MILLIS_PER_MINUTE`, `MILLIS_PER_HOUR`). Inconsistent use of magic numbers vs. named constants for unit conversion factors. Define `const MILLIS_PER_MILLIS: u128 = 1;` at line 449 and use it on line 501: `(value, MILLIS_PER_MILLIS)`.
