@@ -45,6 +45,7 @@ pub mod config;
 pub mod error;
 pub mod loader;
 pub mod spec;
+pub mod surfaces;
 pub mod types;
 
 pub use config::{
@@ -54,6 +55,7 @@ pub use config::{
 pub use error::ExpectError;
 pub use loader::ExpectationLoader;
 pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};
+pub use surfaces::SurfaceInfo;
 pub use types::{
     Checkpoint, CliState, CriterionStatus, CriterionVerdict, Evidence, ExpectationVerdict,
     LedgerState, Observation, Reliability, Surface, SurfaceState, Trajectory, VerdictTier,

@@ -8783,6 +8783,7 @@ dependencies = [
  "swissarmyhammer-directory",
  "swissarmyhammer-edit-match",
  "swissarmyhammer-embedding",
+ "swissarmyhammer-expect",
  "swissarmyhammer-git",
  "swissarmyhammer-hashline",
  "swissarmyhammer-kanban",

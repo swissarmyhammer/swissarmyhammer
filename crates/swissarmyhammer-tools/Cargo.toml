@@ -22,6 +22,7 @@ swissarmyhammer-config = { workspace = true }
 swissarmyhammer-git = { workspace = true }
 swissarmyhammer-kanban = { workspace = true }
 swissarmyhammer-skills = { workspace = true }
+swissarmyhammer-expect = { workspace = true }
 swissarmyhammer-templating = { workspace = true }
 swissarmyhammer-agents = { workspace = true }
 swissarmyhammer-shell = { workspace = true }

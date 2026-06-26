@@ -20,8 +20,10 @@
 //! | `surface` | `get` |
 //! | `surfaces` | `list` |
 //!
-//! Every op is currently a stub: it dispatches to a structured "not implemented
-//! yet" payload. The real implementations (and their parameters, scope
+//! The read-only `surface` / `surfaces` ops are implemented: they serve the
+//! static surface adapter catalog ([`swissarmyhammer_expect::surfaces`]). Every
+//! other op is still a stub that dispatches to a structured "not implemented
+//! yet" payload. The remaining real implementations (and their parameters, scope
 //! resolution, doctor pass, observe/evaluate/compare machinery) land in later
 //! tasks, which replace these stubs and the placeholder
 //! [`Doctorable`](swissarmyhammer_common::health::Doctorable) /
@@ -31,10 +33,13 @@ use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use rmcp::model::CallToolResult;
 use swissarmyhammer_operations::{
-    generate_mcp_schema_full, generate_mcp_schema_wire, operation, Operation, SchemaConfig,
+    generate_mcp_schema_full, generate_mcp_schema_wire, operation, Operation, ParamMeta, ParamType,
+    SchemaConfig,
 };
 
-use crate::mcp::op_tool_helpers::json_result;
+use swissarmyhammer_expect::{surfaces, Surface};
+
+use crate::mcp::op_tool_helpers::{json_result, string_arg};
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 
 /// The tool's registered name and its `cli_category` (the top-level `sah`
@@ -47,8 +52,9 @@ const NOT_IMPLEMENTED_STATUS: &str = "not_implemented";
 
 // ---------------------------------------------------------------------------
 // Operations (one zero-sized struct per `<verb> <noun>` grid cell). Parameters
-// are added when each op gains its real implementation; for the skeleton every
-// op is parameterless and dispatches to the not-implemented placeholder.
+// are added when each op gains its real implementation; the still-skeleton ops
+// are parameterless and dispatch to the not-implemented placeholder, while the
+// implemented `get surface` declares its `name` parameter.
 // ---------------------------------------------------------------------------
 
 /// `create expectation` — draft a new expectation spec.
@@ -232,13 +238,33 @@ pub struct GoldensList;
 pub struct GoldensEvaluate;
 
 /// `get surface` — read one surface adapter from the catalog.
-#[operation(
-    verb = "get",
-    noun = "surface",
-    description = "Get one surface adapter from the catalog"
-)]
+///
+/// Unlike the skeleton stubs, this op has a real implementation and so declares
+/// its `name` parameter (mirroring the `diagnostics` tool's manual op impls).
 #[derive(Debug, Default)]
 pub struct SurfaceGet;
+
+/// The `name` parameter of `get surface`: which adapter to read. Required — the
+/// op resolves exactly one named entry from the closed surface set.
+static SURFACE_GET_PARAMS: &[ParamMeta] = &[ParamMeta::new("name")
+    .description("The surface adapter to read (one of cli/http/browser/gui/file/db).")
+    .param_type(ParamType::String)
+    .required()];
+
+impl Operation for SurfaceGet {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "surface"
+    }
+    fn description(&self) -> &'static str {
+        "Get one surface adapter from the catalog"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SURFACE_GET_PARAMS
+    }
+}
 
 /// `list surfaces` — survey the surface adapter catalog.
 #[operation(
@@ -313,6 +339,58 @@ fn not_implemented(op: &str) -> serde_json::Value {
     })
 }
 
+/// The `get surface` op id (verb + noun), matched in `execute`'s dispatch.
+const SURFACE_GET_OP: &str = "get surface";
+
+/// The `list surfaces` op id (verb + noun), matched in `execute`'s dispatch.
+const SURFACES_LIST_OP: &str = "list surfaces";
+
+/// The surface adapter names, comma-separated, for error messages. Derived from
+/// the catalog (the source of truth) so it can never drift from the real set.
+fn surface_name_list() -> String {
+    surfaces::catalog()
+        .iter()
+        .filter_map(|info| serde_json::to_value(info.name).ok())
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `get surface` — serve one surface adapter's catalog entry, resolved from the
+/// required `name` argument. An absent or unknown name is a clear
+/// `invalid_params` error listing the valid surfaces.
+fn surface_get(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let Some(name) = string_arg(arguments, "name") else {
+        return Err(rmcp::ErrorData::invalid_params(
+            format!(
+                "`{SURFACE_GET_OP}` requires a `name` (one of {})",
+                surface_name_list()
+            ),
+            None,
+        ));
+    };
+    let surface: Surface = serde_json::from_value(serde_json::Value::String(name.clone()))
+        .map_err(|_| {
+            rmcp::ErrorData::invalid_params(
+                format!(
+                    "unknown surface `{name}`. Valid surfaces: {}",
+                    surface_name_list()
+                ),
+                None,
+            )
+        })?;
+    // A parsed `Surface` is a closed-enum variant the catalog always covers.
+    let info = surfaces::get(surface).expect("every Surface variant has a catalog entry");
+    json_result(&info)
+}
+
+/// `list surfaces` — serve the full surface adapter catalog.
+fn surfaces_list() -> Result<CallToolResult, rmcp::ErrorData> {
+    json_result(&surfaces::catalog())
+}
+
 crate::impl_default_doctorable!(ExpectTool);
 crate::impl_empty_initializable!(ExpectTool);
 
@@ -359,22 +437,28 @@ impl McpTool for ExpectTool {
             ));
         };
 
-        // Dispatch is data-driven over EXPECT_OPERATIONS: a known op id resolves
-        // to its (currently stub) result; anything else is an invalid op. This
-        // keeps the op table the single source of truth rather than a parallel
-        // 22-arm match a human must keep in lockstep with the struct list.
-        if EXPECT_OPERATIONS.iter().any(|op| op.op_string() == op_str) {
-            json_result(&not_implemented(op_str))
-        } else {
-            let valid = EXPECT_OPERATIONS
-                .iter()
-                .map(|op| op.op_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            Err(rmcp::ErrorData::invalid_params(
-                format!("Unknown operation '{op_str}'. Valid operations: {valid}"),
-                None,
-            ))
+        // Dispatch routes the implemented ops to their handlers; every other
+        // known op id resolves to its stub result, and anything unknown is an
+        // invalid op. The `EXPECT_OPERATIONS` table stays the single source of
+        // truth for "known", rather than a parallel match a human must keep in
+        // lockstep with the struct list.
+        match op_str {
+            SURFACE_GET_OP => surface_get(&arguments),
+            SURFACES_LIST_OP => surfaces_list(),
+            known if EXPECT_OPERATIONS.iter().any(|op| op.op_string() == known) => {
+                json_result(&not_implemented(known))
+            }
+            unknown => {
+                let valid = EXPECT_OPERATIONS
+                    .iter()
+                    .map(|op| op.op_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(rmcp::ErrorData::invalid_params(
+                    format!("Unknown operation '{unknown}'. Valid operations: {valid}"),
+                    None,
+                ))
+            }
         }
     }
 }
@@ -434,6 +518,19 @@ mod tests {
 
     fn args(pairs: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
         pairs.as_object().unwrap().clone()
+    }
+
+    /// The grid ops that now have a real implementation rather than the stub.
+    /// The not-implemented dispatch test skips these.
+    const IMPLEMENTED_OPS: &[&str] = &[SURFACE_GET_OP, SURFACES_LIST_OP];
+
+    /// Pull the JSON payload out of a successful tool result.
+    fn payload_of(result: &CallToolResult) -> serde_json::Value {
+        let text = match &result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => &t.text,
+            other => panic!("expected text content, got {other:?}"),
+        };
+        serde_json::from_str(text).expect("json payload")
     }
 
     /// `EXPECT_OPERATIONS` must cover exactly the domain grid — no missing cells,
@@ -523,6 +620,9 @@ mod tests {
     #[tokio::test]
     async fn every_grid_op_dispatches_to_not_implemented() {
         for op in GRID {
+            if IMPLEMENTED_OPS.contains(op) {
+                continue;
+            }
             let result = tool()
                 .execute(args(serde_json::json!({ "op": op })), &context())
                 .await
@@ -568,5 +668,66 @@ mod tests {
             .await
             .expect_err("missing op must error");
         assert!(err.message.contains("op"));
+    }
+
+    /// `surfaces list` returns the full surface adapter catalog, byte-for-byte
+    /// the engine's source-of-truth `catalog()`.
+    #[tokio::test]
+    async fn surfaces_list_returns_the_full_catalog() {
+        let result = tool()
+            .execute(
+                args(serde_json::json!({ "op": SURFACES_LIST_OP })),
+                &context(),
+            )
+            .await
+            .expect("surfaces list should dispatch");
+        assert!(!result.is_error.unwrap_or(false));
+        let returned: Vec<swissarmyhammer_expect::SurfaceInfo> =
+            serde_json::from_value(payload_of(&result)).expect("catalog array");
+        assert_eq!(returned, surfaces::catalog());
+    }
+
+    /// `surface get cli` returns exactly the catalog's cli entry.
+    #[tokio::test]
+    async fn surface_get_returns_the_named_entry() {
+        let result = tool()
+            .execute(
+                args(serde_json::json!({ "op": SURFACE_GET_OP, "name": "cli" })),
+                &context(),
+            )
+            .await
+            .expect("surface get should dispatch");
+        assert!(!result.is_error.unwrap_or(false));
+        let returned: swissarmyhammer_expect::SurfaceInfo =
+            serde_json::from_value(payload_of(&result)).expect("surface info");
+        assert_eq!(Some(returned), surfaces::get(Surface::Cli));
+    }
+
+    /// An unknown surface name is rejected with a clear error naming the input,
+    /// not dispatched as a catalog hit.
+    #[tokio::test]
+    async fn surface_get_unknown_name_errors() {
+        let err = tool()
+            .execute(
+                args(serde_json::json!({ "op": SURFACE_GET_OP, "name": "telepathy" })),
+                &context(),
+            )
+            .await
+            .expect_err("unknown surface must error");
+        assert!(err.message.contains("telepathy"));
+        assert!(err.message.contains("unknown surface"));
+    }
+
+    /// `surface get` without a `name` is rejected.
+    #[tokio::test]
+    async fn surface_get_missing_name_errors() {
+        let err = tool()
+            .execute(
+                args(serde_json::json!({ "op": SURFACE_GET_OP })),
+                &context(),
+            )
+            .await
+            .expect_err("missing name must error");
+        assert!(err.message.contains("name"));
     }
 }
