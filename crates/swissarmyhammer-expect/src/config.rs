@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// The directory, at the repo root, that holds `expect` state and config.
-const EXPECT_DIR: &str = ".expect";
+///
+/// `pub(crate)` so sibling modules (e.g. [`crate::observe`]) anchor their own
+/// `.expect/` sub-paths to this single source of truth rather than re-typing it.
+pub(crate) const EXPECT_DIR: &str = ".expect";
 
 /// The repo-level config file within [`EXPECT_DIR`].
 const CONFIG_FILE: &str = "config.toml";

@@ -20,14 +20,18 @@
 //! | `surface` | `get` |
 //! | `surfaces` | `list` |
 //!
-//! The read-only `surface` / `surfaces` ops are implemented: they serve the
-//! static surface adapter catalog ([`swissarmyhammer_expect::surfaces`]). Every
-//! other op is still a stub that dispatches to a structured "not implemented
-//! yet" payload. The remaining real implementations (and their parameters, scope
-//! resolution, doctor pass, observe/evaluate/compare machinery) land in later
-//! tasks, which replace these stubs and the placeholder
+//! The read-only `surface` / `surfaces` ops serve the static surface adapter
+//! catalog ([`swissarmyhammer_expect::surfaces`]), and `observe expectation` /
+//! `observe expectations` resolve a scope and run the engine's
+//! [`observe`](swissarmyhammer_expect::observe) loop, persisting each received
+//! observation under `.expect/received/`. Every other op is still a stub that
+//! dispatches to a structured "not implemented yet" payload. The remaining real
+//! implementations (and their parameters, doctor pass, evaluate/compare
+//! machinery) land in later tasks, which replace these stubs and the placeholder
 //! [`Doctorable`](swissarmyhammer_common::health::Doctorable) /
 //! [`Initializable`](crate::mcp::tool_registry::Initializable) impls.
+
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -37,7 +41,10 @@ use swissarmyhammer_operations::{
     SchemaConfig,
 };
 
-use swissarmyhammer_expect::{surfaces, Surface};
+use swissarmyhammer_expect::{
+    observe, surfaces, write_received, CliAdapter, Expectation, ExpectationLoader, Observation,
+    ObserveConfig, Surface,
+};
 
 use crate::mcp::op_tool_helpers::{json_result, string_arg};
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
@@ -84,14 +91,42 @@ pub struct ExpectationGet;
 #[derive(Debug, Default)]
 pub struct ExpectationDelete;
 
+/// The `scope` / `tag` parameters shared by `observe expectation` and
+/// `observe expectations`: both resolve a `<scope>` (optionally narrowed by a
+/// `--tag`) through [`ExpectationLoader::resolve_scope`], so they declare an
+/// identical parameter set from one source rather than two drifting copies.
+static OBSERVE_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("scope")
+        .description(
+            "The expectation scope: a spec path, a folder, or a glob. Omit to observe every spec.",
+        )
+        .param_type(ParamType::String),
+    ParamMeta::new("tag")
+        .description("Narrow the scope to specs carrying this tag.")
+        .param_type(ParamType::String),
+];
+
 /// `observe expectation` — drive the system and capture an observation.
-#[operation(
-    verb = "observe",
-    noun = "expectation",
-    description = "Drive the system and capture an observation for one expectation"
-)]
+///
+/// A manual [`Operation`] impl (rather than the `#[operation]` macro) so it can
+/// declare the [`OBSERVE_PARAMS`] scope/tag inputs, mirroring [`SurfaceGet`].
 #[derive(Debug, Default)]
 pub struct ExpectationObserve;
+
+impl Operation for ExpectationObserve {
+    fn verb(&self) -> &'static str {
+        "observe"
+    }
+    fn noun(&self) -> &'static str {
+        "expectation"
+    }
+    fn description(&self) -> &'static str {
+        "Drive the system and capture an observation for one expectation"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        OBSERVE_PARAMS
+    }
+}
 
 /// `check expectation` — doctor, observe, evaluate, and compare one expectation.
 #[operation(
@@ -112,13 +147,26 @@ pub struct ExpectationCheck;
 pub struct ExpectationsList;
 
 /// `observe expectations` — capture observations for a batch of expectations.
-#[operation(
-    verb = "observe",
-    noun = "expectations",
-    description = "Capture observations for a batch of expectations"
-)]
+///
+/// Shares [`OBSERVE_PARAMS`] with [`ExpectationObserve`]; the two differ only in
+/// how many specs the scope is expected to match, not in their inputs.
 #[derive(Debug, Default)]
 pub struct ExpectationsObserve;
+
+impl Operation for ExpectationsObserve {
+    fn verb(&self) -> &'static str {
+        "observe"
+    }
+    fn noun(&self) -> &'static str {
+        "expectations"
+    }
+    fn description(&self) -> &'static str {
+        "Capture observations for a batch of expectations"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        OBSERVE_PARAMS
+    }
+}
 
 /// `check expectations` — doctor, observe, evaluate, and compare a batch.
 #[operation(
@@ -345,13 +393,27 @@ const SURFACE_GET_OP: &str = "get surface";
 /// The `list surfaces` op id (verb + noun), matched in `execute`'s dispatch.
 const SURFACES_LIST_OP: &str = "list surfaces";
 
+/// The `observe expectation` op id (verb + noun), matched in `execute`'s dispatch.
+const EXPECTATION_OBSERVE_OP: &str = "observe expectation";
+
+/// The `observe expectations` op id (verb + noun), matched in `execute`'s dispatch.
+const EXPECTATIONS_OBSERVE_OP: &str = "observe expectations";
+
+/// The lowercase wire name of a [`Surface`], derived from its serde form (the
+/// source of truth) rather than a re-typed literal.
+fn surface_wire_name(surface: Surface) -> String {
+    serde_json::to_value(surface)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
 /// The surface adapter names, comma-separated, for error messages. Derived from
 /// the catalog (the source of truth) so it can never drift from the real set.
 fn surface_name_list() -> String {
     surfaces::catalog()
         .iter()
-        .filter_map(|info| serde_json::to_value(info.name).ok())
-        .filter_map(|value| value.as_str().map(str::to_string))
+        .map(|info| surface_wire_name(info.name))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -391,6 +453,85 @@ fn surfaces_list() -> Result<CallToolResult, rmcp::ErrorData> {
     json_result(&surfaces::catalog())
 }
 
+/// Resolve the repo root the observe run provisions and stores against.
+///
+/// Prefers the git repository root enclosing the session working dir (so spec
+/// identities and the `.expect/` slot are repo-relative), falling back to the
+/// session root itself when the work dir is not inside a git repository.
+fn observe_repo_root(context: &ToolContext) -> PathBuf {
+    let session_root = context.session_root();
+    swissarmyhammer_directory::find_git_repository_root_from(&session_root).unwrap_or(session_root)
+}
+
+/// Observe one expectation against its surface, returning the captured
+/// [`Observation`].
+///
+/// Only the cli surface drives deterministically today; any other surface is a
+/// clear `invalid_params` error rather than a silent mis-run.
+fn observe_one(spec: &Expectation, repo_root: &Path) -> Result<Observation, rmcp::ErrorData> {
+    if spec.frontmatter.surface != Surface::Cli {
+        return Err(rmcp::ErrorData::invalid_params(
+            format!(
+                "`observe` currently supports only the cli surface, but `{}` declares `{}`",
+                spec.path,
+                surface_wire_name(spec.frontmatter.surface)
+            ),
+            None,
+        ));
+    }
+    let adapter = CliAdapter::new(spec.frontmatter.timeout);
+    let config = ObserveConfig::new(repo_root);
+    observe(spec, &adapter, &config).map_err(|err| {
+        rmcp::ErrorData::internal_error(format!("observing `{}` failed: {err}", spec.path), None)
+    })
+}
+
+/// Shared handler for `observe expectation` and `observe expectations`: resolve
+/// the `<scope>` (and optional `--tag`), observe each matching spec, persist its
+/// received observation, and report what was captured.
+///
+/// Both ops share one body because they differ only in how many specs the scope
+/// is expected to match; the singular form is just a scope that resolves to one.
+fn observe_op(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let scope = string_arg(arguments, "scope");
+    let tag = string_arg(arguments, "tag");
+    let repo_root = observe_repo_root(context);
+
+    let loader = ExpectationLoader::new(&repo_root);
+    let specs = loader
+        .resolve_scope(scope.as_deref(), tag.as_deref())
+        .map_err(|err| {
+            rmcp::ErrorData::internal_error(format!("scope resolution failed: {err}"), None)
+        })?;
+
+    let mut observed = Vec::with_capacity(specs.len());
+    for spec in &specs {
+        let observation = observe_one(spec, &repo_root)?;
+        let received = write_received(&repo_root, &observation).map_err(|err| {
+            rmcp::ErrorData::internal_error(
+                format!(
+                    "writing received observation for `{}` failed: {err}",
+                    spec.path
+                ),
+                None,
+            )
+        })?;
+        observed.push(serde_json::json!({
+            "path": observation.path,
+            "received": received.display().to_string(),
+            "checkpoints": observation.checkpoints.len(),
+        }));
+    }
+
+    json_result(&serde_json::json!({
+        "count": observed.len(),
+        "observed": observed,
+    }))
+}
+
 crate::impl_default_doctorable!(ExpectTool);
 
 // The real `Initializable` impl (the `expect init` scaffold) lives in `init`.
@@ -426,7 +567,7 @@ impl McpTool for ExpectTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let op_str = arguments
             .get("op")
@@ -447,6 +588,7 @@ impl McpTool for ExpectTool {
         match op_str {
             SURFACE_GET_OP => surface_get(&arguments),
             SURFACES_LIST_OP => surfaces_list(),
+            EXPECTATION_OBSERVE_OP | EXPECTATIONS_OBSERVE_OP => observe_op(&arguments, context),
             known if EXPECT_OPERATIONS.iter().any(|op| op.op_string() == known) => {
                 json_result(&not_implemented(known))
             }
@@ -524,7 +666,12 @@ mod tests {
 
     /// The grid ops that now have a real implementation rather than the stub.
     /// The not-implemented dispatch test skips these.
-    const IMPLEMENTED_OPS: &[&str] = &[SURFACE_GET_OP, SURFACES_LIST_OP];
+    const IMPLEMENTED_OPS: &[&str] = &[
+        SURFACE_GET_OP,
+        SURFACES_LIST_OP,
+        EXPECTATION_OBSERVE_OP,
+        EXPECTATIONS_OBSERVE_OP,
+    ];
 
     /// Pull the JSON payload out of a successful tool result.
     fn payload_of(result: &CallToolResult) -> serde_json::Value {
@@ -731,5 +878,118 @@ mod tests {
             .await
             .expect_err("missing name must error");
         assert!(err.message.contains("name"));
+    }
+
+    /// A fixture cli spec: an echoing SUT driven through two `When` steps. The
+    /// observe op must capture one checkpoint per step plus a final and persist
+    /// the received observation under `.expect/received/`.
+    #[cfg(unix)]
+    const FIXTURE_SPEC: &str = "---\n\
+         description: the app echoes each command it is given\n\
+         surface: cli\n\
+         setup: ./app.sh\n\
+         ---\n\
+         \n\
+         The app echoes the argument it is driven with.\n\
+         \n\
+         ## When\n\
+         - first\n\
+         - second\n\
+         \n\
+         ## Then\n\
+         - [ ] it echoes the first command\n\
+         - [ ] it echoes the second command\n";
+
+    /// The repo-relative identity of [`FIXTURE_SPEC`].
+    #[cfg(unix)]
+    const FIXTURE_IDENTITY: &str = "echo";
+
+    /// Stand up a temp repo with the echoing cli SUT and the fixture spec, and
+    /// return a [`ToolContext`] rooted there alongside the repo dir.
+    #[cfg(unix)]
+    fn observe_fixture() -> (tempfile::TempDir, ToolContext) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = tempfile::TempDir::new().unwrap();
+        let app = repo.path().join("app.sh");
+        std::fs::write(&app, "#!/bin/sh\necho \"$@\"\n").unwrap();
+        let mut perms = std::fs::metadata(&app).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&app, perms).unwrap();
+        std::fs::write(
+            repo.path().join(format!("{FIXTURE_IDENTITY}.expect.md")),
+            FIXTURE_SPEC,
+        )
+        .unwrap();
+
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+        (repo, ctx)
+    }
+
+    /// `observe expectation <scope>` provisions the cli SUT, drives each `When`
+    /// step, and writes the received observation (3 checkpoints) to disk.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn observe_expectation_writes_received_observation() {
+        let (repo, ctx) = observe_fixture();
+
+        let result = tool()
+            .execute(
+                args(serde_json::json!({
+                    "op": EXPECTATION_OBSERVE_OP,
+                    "scope": FIXTURE_IDENTITY,
+                })),
+                &ctx,
+            )
+            .await
+            .expect("observe expectation should dispatch");
+        assert!(!result.is_error.unwrap_or(false), "observe should succeed");
+
+        let payload = payload_of(&result);
+        assert_eq!(payload["count"], 1, "exactly one spec observed");
+        assert_eq!(payload["observed"][0]["path"], FIXTURE_IDENTITY);
+        // Two When steps plus a final.
+        assert_eq!(payload["observed"][0]["checkpoints"], 3);
+
+        // The received observation is written to the gitignored slot and reloads.
+        let received = repo
+            .path()
+            .join(".expect")
+            .join("received")
+            .join(format!("{FIXTURE_IDENTITY}.received.json"));
+        assert!(received.is_file(), "received observation is persisted");
+        let observation: swissarmyhammer_expect::Observation =
+            serde_json::from_str(&std::fs::read_to_string(&received).unwrap())
+                .expect("received json parses");
+        assert_eq!(observation.path, FIXTURE_IDENTITY);
+        assert_eq!(observation.checkpoints.len(), 3);
+    }
+
+    /// `observe expectations` (plural) runs the same over a multi-spec scope.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn observe_expectations_runs_over_a_batch() {
+        let (repo, ctx) = observe_fixture();
+
+        let result = tool()
+            .execute(
+                args(serde_json::json!({ "op": EXPECTATIONS_OBSERVE_OP })),
+                &ctx,
+            )
+            .await
+            .expect("observe expectations should dispatch");
+        assert!(!result.is_error.unwrap_or(false), "observe should succeed");
+
+        let payload = payload_of(&result);
+        assert_eq!(payload["count"], 1, "the batch covers the one fixture spec");
+        let received = repo
+            .path()
+            .join(".expect")
+            .join("received")
+            .join(format!("{FIXTURE_IDENTITY}.received.json"));
+        assert!(
+            received.is_file(),
+            "the batch persists each received observation"
+        );
     }
 }

@@ -16,8 +16,8 @@ comments:
 depends_on:
 - 01KW25ZK93AJ0CR17C9QJ11RXW
 - 01KW261K28N0RA00X9P0APED21
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffec80
 project: expect
 title: Static doctor diagnostics for expectation specs (per-field, teaching)
 ---

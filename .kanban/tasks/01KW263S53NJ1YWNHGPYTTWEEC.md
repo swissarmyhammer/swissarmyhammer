@@ -1,12 +1,32 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kw2zfntk9t3cc4d2qaf4tr5a
+  text: 'Picked up. Researched: types.rs (Observation/Checkpoint/SurfaceState/Trajectory), surface/mod.rs (SurfaceAdapter trait provision/drive/observe/teardown), surface/cli.rs (CliAdapter + safe_output_path traversal guard), spec.rs (Expectation given/when), loader.rs (resolve_scope), config.rs (EXPECT_DIR=".expect", find_expect_dir), tools/expect/mod.rs (stub ops dispatch), init.rs (.expect/received scaffold). Plan: new engine observe.rs with observe(expectation, adapter, &ObserveConfig{repo_root}) running provision -> arrange(Given via drive, no checkpoint) -> act(When: drive+observe -> checkpoint per step) -> final checkpoint -> teardown; plus received_path/write_received with traversal guard mirroring safe_output_path. Wire observe expectation/expectations ops via shared handler resolving scope + writing .expect/received/<path>.received.json. TDD: engine integration test in tests/observe.rs + tools op test.'
+  timestamp: 2026-06-26T22:05:56.435089+00:00
+- actor: claude-code
+  id: 01kw305rwvm3hrd4za3khzjd6g
+  text: |-
+    Implementation complete and green. Engine: new src/observe.rs with observe(expectation, adapter, &ObserveConfig) running provision -> arrange(Given via drive, no checkpoint) -> act(When: drive+observe = one checkpoint per step) -> final checkpoint -> teardown; received_path/write_received write .expect/received/<path>.received.json with a path-traversal guard mirroring cli.rs safe_output_path. Tools: manual Operation impls for observe expectation/expectations with shared scope/tag params, observe_op/observe_one/observe_repo_root handlers, dispatch wired, added to IMPLEMENTED_OPS.
+
+    Verification (all green): cargo nextest -p swissarmyhammer-expect -p swissarmyhammer-tools -E 'test(observe) or test(expect)' = 44 passed; cargo check --workspace OK; cargo clippy (both crates, -D warnings) clean; cargo fmt --check clean.
+
+    Adversarial double-check (advisory) raised 4 findings; proceeding with justification (out of this card's scope / unmandated design choices):
+    1. named-files capture not wired from a frontmatter field. CliState carries the `files` slot at every checkpoint (criterion met at the type level; cli.rs tests exercise .capturing()). Populating it from a spec needs a NEW Frontmatter key (deny_unknown_fields closed enum) which is a separate task, not this one. Filing as follow-up.
+    2. observe expectations is fail-fast (first failing spec aborts the batch). Acceptance criteria don't mandate per-spec resilience; clear error is acceptable for the deterministic first cut. Follow-up candidate.
+    3. A cli spec with zero When steps surfaces the adapter's "nothing to observe" error. Edge case outside the When-bearing specs this card targets; follow-up candidate for a clearer domain error.
+    4. received gitignoring is established by `expect init` (prior task scaffolds .expect/.gitignore with received/). Correct separation of concerns; left as-is.
+
+    Task left in doing for review.
+  timestamp: 2026-06-26T22:18:00.475689+00:00
 depends_on:
 - 01KW262DJSSC1JX2FXCDQN0X4E
 - 01KW260M8QZ8T37A8RZGDDVZ81
 - 01KW261K28N0RA00X9P0APED21
-position_column: todo
-position_ordinal: ad80
+position_column: doing
+position_ordinal: '8280'
 project: expect
 title: expect expectation observe → Observation (cli, deterministic)
 ---
