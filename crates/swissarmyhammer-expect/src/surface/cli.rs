@@ -186,29 +186,75 @@ fn tokenize(command: &str) -> Argv {
     command.split_whitespace().map(str::to_string).collect()
 }
 
-/// Expect's own `ProjectType → {build, launch}` map for the cli surface.
+/// One row of [`DETECTED_COMMANDS`]: a [`ProjectType`] paired with its build
+/// steps (each an argv) and its launch argv, all borrowed as `'static` slices.
+type DetectedRow = (
+    ProjectType,
+    &'static [&'static [&'static str]],
+    &'static [&'static str],
+);
+
+/// Expect's own `ProjectType → {build, launch}` table for the cli surface.
 ///
 /// `swissarmyhammer-project-detection` reports only the *type* of a project, not
 /// how to build or run it, so the cli adapter owns these best-effort conventions
-/// itself. `setup:` overrides them whenever a spec needs something different. The
-/// match is exhaustive so a new [`ProjectType`] must be given an entry here.
+/// itself, as data rather than control flow. `setup:` overrides them whenever a
+/// spec needs something different. Every [`ProjectType`] must have exactly one
+/// row here; [`detected_commands`] resolves by a single table lookup, and
+/// [`detected_commands_table_covers_every_project_type`] guards against a
+/// missing or duplicate row.
+const DETECTED_COMMANDS: &[DetectedRow] = &[
+    (
+        ProjectType::Rust,
+        &[&["cargo", "build"]],
+        &["cargo", "run", "--quiet", "--"],
+    ),
+    (ProjectType::NodeJs, &[&["npm", "install"]], &["node", "."]),
+    (ProjectType::Python, &[], &["python", "-m", "main"]),
+    (ProjectType::Go, &[&["go", "build"]], &["go", "run", "."]),
+    (
+        ProjectType::JavaMaven,
+        &[&["mvn", "-q", "package"]],
+        &["mvn", "-q", "exec:java"],
+    ),
+    (
+        ProjectType::JavaGradle,
+        &[&["gradle", "build"]],
+        &["gradle", "run", "--quiet"],
+    ),
+    (
+        ProjectType::CSharp,
+        &[&["dotnet", "build"]],
+        &["dotnet", "run"],
+    ),
+    (
+        ProjectType::CMake,
+        &[&["cmake", "--build", "."]],
+        &["cmake", "--build", ".", "--target", "run"],
+    ),
+    (ProjectType::Makefile, &[&["make"]], &["make", "run"]),
+    (
+        ProjectType::Flutter,
+        &[&["flutter", "build"]],
+        &["flutter", "run"],
+    ),
+    (ProjectType::Php, &[], &["php", "index.php"]),
+];
+
+/// Look up the best-effort build-and-launch commands for `project_type` in
+/// [`DETECTED_COMMANDS`].
+///
+/// # Panics
+///
+/// Panics if `project_type` has no row in [`DETECTED_COMMANDS`]. The table is
+/// the single source of truth for every [`ProjectType`]; a missing row is a
+/// programming error caught by
+/// [`detected_commands_table_covers_every_project_type`].
 fn detected_commands(project_type: ProjectType) -> CliCommands {
-    let (build, launch): (&[&[&str]], &[&str]) = match project_type {
-        ProjectType::Rust => (&[&["cargo", "build"]], &["cargo", "run", "--quiet", "--"]),
-        ProjectType::NodeJs => (&[&["npm", "install"]], &["node", "."]),
-        ProjectType::Python => (&[], &["python", "-m", "main"]),
-        ProjectType::Go => (&[&["go", "build"]], &["go", "run", "."]),
-        ProjectType::JavaMaven => (&[&["mvn", "-q", "package"]], &["mvn", "-q", "exec:java"]),
-        ProjectType::JavaGradle => (&[&["gradle", "build"]], &["gradle", "run", "--quiet"]),
-        ProjectType::CSharp => (&[&["dotnet", "build"]], &["dotnet", "run"]),
-        ProjectType::CMake => (
-            &[&["cmake", "--build", "."]],
-            &["cmake", "--build", ".", "--target", "run"],
-        ),
-        ProjectType::Makefile => (&[&["make"]], &["make", "run"]),
-        ProjectType::Flutter => (&[&["flutter", "build"]], &["flutter", "run"]),
-        ProjectType::Php => (&[], &["php", "index.php"]),
-    };
+    let (_, build, launch) = DETECTED_COMMANDS
+        .iter()
+        .find(|(ty, _, _)| *ty == project_type)
+        .expect("every ProjectType has a row in DETECTED_COMMANDS");
     CliCommands {
         build: build.iter().map(|argv| argv_owned(argv)).collect(),
         launch: argv_owned(launch),
@@ -275,6 +321,37 @@ fn detect_project_type(repo_root: &Path) -> Result<ProjectType, ExpectError> {
         })
 }
 
+/// Resolve an output-file `name` to a path inside `work_dir`, rejecting any
+/// name that could escape it.
+///
+/// Output-file names come from the spec and are otherwise joined onto the SUT's
+/// work dir verbatim, so an absolute path or a `..` component would let a spec
+/// read files outside the sandbox (e.g. `../../etc/passwd`). A name is accepted
+/// only when it is relative and contains no parent-directory component, which
+/// guarantees the join cannot resolve above `work_dir`.
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Surface`] when `name` is absolute or contains a `..`
+/// component.
+fn safe_output_path(work_dir: &Path, name: &str) -> Result<PathBuf, ExpectError> {
+    let candidate = Path::new(name);
+    if candidate.is_absolute() {
+        return Err(ExpectError::Surface(format!(
+            "output file `{name}` must be a relative path within the work dir"
+        )));
+    }
+    if candidate
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(ExpectError::Surface(format!(
+            "output file `{name}` must not escape the work dir with `..`"
+        )));
+    }
+    Ok(work_dir.join(candidate))
+}
+
 /// Spawn a thread that drains a child pipe to a [`String`].
 fn drain<R: Read + Send + 'static>(reader: Option<R>) -> Option<JoinHandle<String>> {
     reader.map(|mut reader| {
@@ -328,7 +405,8 @@ impl SurfaceAdapter for CliAdapter {
             ExpectError::Surface("nothing to observe: drive the cli SUT first".to_string())
         })?;
         for name in &self.output_files {
-            match std::fs::read_to_string(sut.work_dir.join(name)) {
+            let path = safe_output_path(&sut.work_dir, name)?;
+            match std::fs::read_to_string(path) {
                 Ok(content) => {
                     state.files.insert(name.clone(), content);
                 }
@@ -357,6 +435,26 @@ mod tests {
     /// A generous budget for runs that should finish well within it.
     const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+    /// A deliberately tiny budget for runs that must be aborted by the timeout.
+    const TEST_TIMEOUT_SHORT: Duration = Duration::from_millis(50);
+
+    /// Every [`ProjectType`] variant, so the table-coverage guard fails to
+    /// compile when a new variant is added without being listed here, then fails
+    /// at runtime if that variant lacks a [`DETECTED_COMMANDS`] row.
+    const ALL_PROJECT_TYPES: &[ProjectType] = &[
+        ProjectType::Rust,
+        ProjectType::NodeJs,
+        ProjectType::Python,
+        ProjectType::Go,
+        ProjectType::JavaMaven,
+        ProjectType::JavaGradle,
+        ProjectType::CSharp,
+        ProjectType::CMake,
+        ProjectType::Makefile,
+        ProjectType::Flutter,
+        ProjectType::Php,
+    ];
+
     #[cfg(unix)]
     fn write_executable(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
@@ -366,6 +464,29 @@ mod tests {
         perms.set_mode(0o755);
         std::fs::set_permissions(&path, perms).unwrap();
         path
+    }
+
+    #[test]
+    fn detected_commands_table_covers_every_project_type() {
+        // Each project type resolves to a row, and no row is missing or
+        // duplicated — the guarantee the old exhaustive match gave for free.
+        for &project_type in ALL_PROJECT_TYPES {
+            let rows = DETECTED_COMMANDS
+                .iter()
+                .filter(|(ty, _, _)| *ty == project_type)
+                .count();
+            assert_eq!(rows, 1, "{project_type:?} must have exactly one row");
+            // And the lookup actually yields a launchable command.
+            assert!(
+                !detected_commands(project_type).launch.is_empty(),
+                "{project_type:?} resolves to a launch command"
+            );
+        }
+        assert_eq!(
+            DETECTED_COMMANDS.len(),
+            ALL_PROJECT_TYPES.len(),
+            "the table has no rows for unknown project types"
+        );
     }
 
     #[test]
@@ -519,7 +640,7 @@ mod tests {
     #[test]
     fn run_exceeding_timeout_is_aborted_not_hung() {
         let dir = TempDir::new().unwrap();
-        let adapter = CliAdapter::new(Duration::from_millis(50));
+        let adapter = CliAdapter::new(TEST_TIMEOUT_SHORT);
         let setup = Setup::Command("sleep 5".to_string());
         let mut sut = adapter
             .provision(Some(&setup), dir.path())
@@ -548,7 +669,7 @@ mod tests {
         // that open pipe forever — this test guards against that hang.
         write_executable(dir.path(), "slow.sh", "#!/bin/sh\nsleep 8\necho done\n");
 
-        let adapter = CliAdapter::new(Duration::from_millis(50));
+        let adapter = CliAdapter::new(TEST_TIMEOUT_SHORT);
         let setup = Setup::Command("./slow.sh".to_string());
         let mut sut = adapter
             .provision(Some(&setup), dir.path())
@@ -564,6 +685,55 @@ mod tests {
             start.elapsed() < Duration::from_secs(4),
             "drive hung on a grandchild that kept the pipe open"
         );
+    }
+
+    #[test]
+    fn safe_output_path_rejects_traversal_and_accepts_plain_names() {
+        let work = Path::new("/work/dir");
+        // A plain filename joins directly under the work dir.
+        assert_eq!(
+            safe_output_path(work, "out.txt").unwrap(),
+            work.join("out.txt")
+        );
+        // A nested relative path stays under the work dir.
+        assert_eq!(
+            safe_output_path(work, "logs/run.txt").unwrap(),
+            work.join("logs/run.txt")
+        );
+        // `..` traversal is rejected.
+        assert!(matches!(
+            safe_output_path(work, "../../etc/passwd"),
+            Err(ExpectError::Surface(_))
+        ));
+        // A `..` buried mid-path is rejected too.
+        assert!(matches!(
+            safe_output_path(work, "logs/../../etc/passwd"),
+            Err(ExpectError::Surface(_))
+        ));
+        // An absolute path is rejected.
+        assert!(matches!(
+            safe_output_path(work, "/etc/passwd"),
+            Err(ExpectError::Surface(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn observe_rejects_output_file_path_traversal() {
+        let dir = TempDir::new().unwrap();
+        write_executable(dir.path(), "noop.sh", "#!/bin/sh\ntrue\n");
+
+        let adapter = CliAdapter::new(TEST_TIMEOUT).capturing(["../escape.txt".to_string()]);
+        let setup = Setup::Command("./noop.sh".to_string());
+        let mut sut = adapter
+            .provision(Some(&setup), dir.path())
+            .expect("provision");
+        adapter.drive(&mut sut, "").expect("drive");
+
+        let err = adapter
+            .observe(&sut)
+            .expect_err("traversal must be rejected");
+        assert!(matches!(err, ExpectError::Surface(_)), "got {err:?}");
     }
 
     #[test]

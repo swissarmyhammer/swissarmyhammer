@@ -24,6 +24,17 @@ comments:
 
     Left in `doing`, green, ready for /review.
   timestamp: 2026-06-26T19:55:46.448172+00:00
+- actor: claude-code
+  id: 01kw2rzfryn1qa6y6bm7f58t97
+  text: |-
+    Resolved all review findings in crates/swissarmyhammer-expect/src/surface/cli.rs:
+
+    - BLOCKER (path traversal): added `safe_output_path(work_dir, name)` which rejects absolute paths and any `..` (ParentDir) component before joining, returning ExpectError::Surface; `observe` now routes every output-file name through it. Regression tests: `safe_output_path_rejects_traversal_and_accepts_plain_names` (unit: accepts plain/nested, rejects `../../etc/passwd`, mid-path `..`, and absolute) plus `observe_rejects_output_file_path_traversal` (through the public observe path with a `../escape.txt` capture).
+    - WARNING (11-arm match): replaced the ProjectType match with a static `DETECTED_COMMANDS: &[DetectedRow]` table; `detected_commands` is now a single `.find()` lookup. Added `detected_commands_table_covers_every_project_type` guard test (one row per variant, no dups) to recover the exhaustiveness the match gave for free.
+    - NITS (magic 50ms): extracted `const TEST_TIMEOUT_SHORT: Duration = Duration::from_millis(50)`, used in both timeout tests.
+
+    Verification: cargo nextest -p swissarmyhammer-expect = 63 passed/0 failed; cargo test --doc = 3 passed; cargo fmt applied; cargo clippy --all-targets -D warnings clean (also factored the table tuple into a `DetectedRow` type alias to satisfy clippy::type_complexity).
+  timestamp: 2026-06-26T20:12:14.494043+00:00
 depends_on:
 - 01KW25YZ4MKNR09RXYR1B4S05T
 - 01KW25ZW4NED0J1BD77HPK7DNX
@@ -56,3 +67,15 @@ The first surface adapter — `cli` — the deterministic, no-agent path. A `Sur
 
 ## Workflow
 - Use `/tdd`.
+
+## Review Findings (2026-06-26 14:56)
+
+### Blockers
+- [x] `crates/swissarmyhammer-expect/src/surface/cli.rs:316` — Path traversal via unvalidated file names in output_files. A malicious or misconfigured spec could specify output file names like `../../etc/passwd` to read arbitrary files outside the work_dir. Validate that each file name is a simple filename without `..`, `/`, or other path traversal sequences. Use either: (1) `Path::file_name()` to extract only the basename, (2) explicit checks rejecting `..` and absolute paths, or (3) `std::path::Path::canonicalize()` to normalize and verify the resolved path remains within work_dir.
+
+### Warnings
+- [x] `crates/swissarmyhammer-expect/src/surface/cli.rs:122` — Match expression with 11 arms over ProjectType (Rust, NodeJs, Python, Go, JavaMaven, JavaGradle, CSharp, CMake, Makefile, Flutter, Php), where all arms differ only in constant command lists, should be expressed as a static data table instead of parallel code paths. The function's own documentation refers to it as a 'map'; expressing it as actual data eliminates the maintenance burden of keeping all arms in lockstep when new ProjectTypes are added. Convert to a static lookup table (HashMap, BTreeMap, or phf map) that maps ProjectType → (build_commands, launch_command), then simplify `detected_commands()` to a single table lookup instead of a 11-way match.
+
+### Nits
+- [x] `crates/swissarmyhammer-expect/src/surface/cli.rs:413` — Hardcoded timeout value `50` (milliseconds) configures test behavior and should be a named constant, not a magic number. Extract to a test-level constant like `const TEST_TIMEOUT_SHORT: Duration = Duration::from_millis(50);` and reuse it in both tests that need this value.
+- [x] `crates/swissarmyhammer-expect/src/surface/cli.rs:455` — Hardcoded timeout value `50` (milliseconds) configures test behavior and should be a named constant, not a magic number. Extract to a test-level constant (same constant as the duplicate at line 413) and reuse it.
