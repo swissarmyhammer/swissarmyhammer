@@ -2176,6 +2176,11 @@ register_tool_category!(
     diagnostics,
     "Register the operation-based diagnostics tool with the registry"
 );
+register_tool_category!(
+    register_expect_tools,
+    expect,
+    "Register the operation-based expect tool with the registry"
+);
 
 /// Create a fully registered tool registry with all available tools
 ///
@@ -2200,6 +2205,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_ralph_tools(&mut registry);
     register_review_tools(&mut registry);
     register_diagnostics_tools(&mut registry);
+    register_expect_tools(&mut registry);
 
     registry
 }
@@ -3400,6 +3406,15 @@ mod tests {
         assert!(
             !cli_tools.is_empty(),
             "fully registered registry should have CLI tools"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_fully_registered_tool_registry_contains_expect() {
+        let registry = create_fully_registered_tool_registry().await;
+        assert!(
+            registry.get_tool("expect").is_some(),
+            "fully registered registry should contain the `expect` tool"
         );
     }
 

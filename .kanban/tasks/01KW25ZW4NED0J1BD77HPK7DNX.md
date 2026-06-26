@@ -27,8 +27,8 @@ comments:
   timestamp: 2026-06-26T17:46:43.734239+00:00
 depends_on:
 - 01KW25YZ4MKNR09RXYR1B4S05T
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffe580
 project: expect
 title: .expect/config.toml schema + parsing
 ---

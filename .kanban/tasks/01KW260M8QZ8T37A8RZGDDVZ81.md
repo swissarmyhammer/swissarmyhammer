@@ -1,10 +1,31 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kw2hqr2tv3yz7hjtn2852wxr
+  text: |-
+    Implemented the expect MCP tool skeleton (op-dispatched, stubs return "not implemented").
+
+    Files created:
+    - crates/swissarmyhammer-tools/src/mcp/tools/expect/mod.rs — ExpectTool + 22 #[operation] structs (one per grid cell), EXPECT_OPERATIONS Lazy vec, McpTool impl (name/description/schema wire+full/cli_category=expect/operations/execute data-driven dispatch over op_string with invalid_params on unknown/missing op), impl_default_doctorable! + impl_empty_initializable!, register_expect_tools, and tests.
+    - crates/swissarmyhammer-tools/src/mcp/tools/expect/description.md
+
+    Registration sites wired (mirroring diagnostics/review):
+    - tools/mod.rs: pub mod expect;
+    - tool_registry.rs: register_tool_category!(register_expect_tools, expect, ...) + call in create_fully_registered_tool_registry() + new registry test test_create_fully_registered_tool_registry_contains_expect
+    - server.rs register_all_tools, tool_config.rs (import + test-registry call), health_registry.rs collect_all_health_checks, lib.rs + mcp/mod.rs re-exports
+
+    TDD tests (in expect/mod.rs): operations_cover_the_domain_grid, command_tree_is_noun_first_and_covers_the_grid (cli_gen round-trip: parses `expect expectation check` -> op `check expectation`), wire_schema_exposes_every_op, register_advertises_the_expect_tool, every_grid_op_dispatches_to_not_implemented, unknown_op_is_rejected, missing_op_is_rejected.
+
+    Verification: cargo build -p swissarmyhammer-tools OK; cargo nextest run -p swissarmyhammer-tools -E 'test(expect)' = 10 passed; cargo clippy -p swissarmyhammer-tools -- -D warnings clean; cargo fmt applied; cargo check --workspace OK. double-check agent verdict: PASS.
+
+    Left in doing for /review.
+  timestamp: 2026-06-26T18:05:40.826850+00:00
 depends_on:
 - 01KW25YZ4MKNR09RXYR1B4S05T
-position_column: todo
-position_ordinal: a680
+position_column: doing
+position_ordinal: '8280'
 project: expect
 title: expect MCP tool skeleton + op dispatch + noun-first CLI wiring
 ---
