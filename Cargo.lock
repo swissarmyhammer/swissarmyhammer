@@ -8326,6 +8326,11 @@ dependencies = [
 name = "swissarmyhammer-expect"
 version = "0.17.0"
 dependencies = [
+ "acp-conformance",
+ "agent-client-protocol",
+ "agent-client-protocol-extras",
+ "claude-agent",
+ "futures",
  "glob",
  "nix 0.29.0",
  "serde",
@@ -8333,9 +8338,12 @@ dependencies = [
  "serde_yaml_ng",
  "swissarmyhammer-directory",
  "swissarmyhammer-project-detection",
+ "swissarmyhammer-validators",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "toml 1.1.2+spec-1.1.0",
+ "tracing",
  "walkdir",
 ]
 

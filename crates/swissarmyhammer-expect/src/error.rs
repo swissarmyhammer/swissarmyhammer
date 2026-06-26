@@ -40,6 +40,11 @@ pub enum ExpectError {
         /// The exceeded budget, in milliseconds.
         timeout_ms: u64,
     },
+
+    /// The ACP connection to the driving agent could not be stood up, or the
+    /// driving pipeline failed over it (see [`crate::drive`]).
+    #[error("agent connection error: {0}")]
+    Agent(String),
 }
 
 #[cfg(test)]

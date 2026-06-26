@@ -205,7 +205,12 @@ fn parse_bare_object_findings(agent_text: &str) -> Option<Vec<Finding>> {
 ///
 /// Falls back to the trimmed input so the caller's `serde_json` error carries a
 /// useful message when nothing delimited is present.
-pub(crate) fn extract_json_value(response: &str, open: char, close: char) -> &str {
+///
+/// `pub` (re-exported as [`crate::review::extract_json_value`]) so sibling
+/// engines — notably `swissarmyhammer-expect`'s ACP driver — reuse the one
+/// tolerant fenced-JSON extractor for their `StructuredOutput` capture rather
+/// than re-deriving the fence-stripping rules.
+pub fn extract_json_value(response: &str, open: char, close: char) -> &str {
     let trimmed = response.trim();
 
     // 1. JSON within a ```json fenced block.

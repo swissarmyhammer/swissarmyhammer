@@ -31,6 +31,20 @@ glob = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
+# ACP delegation seam (the `drive` module). The engine is agent-construction-free:
+# it receives a `DynConnectTo<Client>` + notifier and reuses review's machinery.
+agent-client-protocol = { workspace = true }
+agent-client-protocol-extras = { workspace = true }
+claude-agent = { workspace = true }
+tokio = { workspace = true }
+
+# Structured logging for the drive seam (stderr is swallowed under MCP).
+tracing = { workspace = true }
+
+# Reuse review's `AgentPool` (submit/fork/prime/liveness) and the tolerant
+# `extract_json_value` extractor rather than re-deriving the ACP wiring.
+swissarmyhammer-validators = { workspace = true }
+
 # Unix process-group signalling so a timed-out cli run kills its descendants too
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true }
@@ -40,3 +54,9 @@ serde_json = { workspace = true }
 
 # Temp dirs for config load / repo-root discovery tests
 tempfile = { workspace = true }
+
+# A stub ACP agent for the drive seam's end-to-end test, mirroring review's tests.
+# (`tokio` is already a non-dev dependency with the workspace `full` feature set,
+# so `#[tokio::test]` and `tokio::time::timeout` are available here too.)
+acp-conformance = { workspace = true, features = ["test-support"] }
+futures = { workspace = true }

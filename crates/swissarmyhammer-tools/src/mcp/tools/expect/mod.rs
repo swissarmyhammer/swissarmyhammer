@@ -534,6 +534,12 @@ fn observe_op(
 
 crate::impl_default_doctorable!(ExpectTool);
 
+// The ACP delegation seam — the `AgentHandle`/`AgentFactory`, the pipeline gate,
+// the spawn-blocking driver, and the use-case agent resolution — lives in
+// `expect_op`, mirroring `review_op`. The op handlers that drive the agent (the
+// observe-over-agent / check ops) consume it in later tasks.
+pub mod expect_op;
+
 // The real `Initializable` impl (the `expect init` scaffold) lives in `init`.
 mod init;
 

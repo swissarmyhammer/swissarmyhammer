@@ -3,11 +3,19 @@
 //! `expect` runs human-authored behavioral expectations against a running system
 //! and renders a verdict that a human must approve every change to. This crate
 //! is the bottom layer: the pure, serde-driven data model (`ideas/expect.md`
-//! §"The Verdict Ladder") that every higher layer builds on. It has no IO, no
-//! system access, no agent, and — deliberately — no dependency on the tool layer.
+//! §"The Verdict Ladder") that every higher layer builds on. The model itself
+//! ([`types`], [`spec`], [`config`]) has no IO and no agent — and deliberately no
+//! dependency on the tool layer.
+//!
+//! The one exception is [`drive`], the ACP delegation seam: it borrows a live
+//! agent (supplied by the tool layer as a `DynConnectTo<Client>`) to *drive* the
+//! system under test, while the verdict it feeds stays deterministic and inside
+//! the pure model. The seam constructs no agent itself, reusing review's
+//! `AgentPool` and ACP wiring rather than re-deriving them.
 //!
 //! See [`types`] for the domain model ([`Observation`], [`ExpectationVerdict`],
-//! and the closed enums) and [`error`] for [`ExpectError`].
+//! and the closed enums), [`error`] for [`ExpectError`], and [`drive`] for the
+//! agent seam.
 //!
 //! # Examples
 //!
@@ -43,6 +51,7 @@
 
 pub mod config;
 pub mod doctor;
+pub mod drive;
 pub mod error;
 pub mod loader;
 pub mod observe;
@@ -56,6 +65,7 @@ pub use config::{
     ModelConfig, OnMissing, ProvisionConfig, ReliabilityConfig,
 };
 pub use doctor::{diagnose, render, DiagnosticStatus, DoctorFacts, FieldDiagnostic};
+pub use drive::{run_expect_over_agent, DrivenObservation, ExpectScope};
 pub use error::ExpectError;
 pub use loader::ExpectationLoader;
 pub use observe::{observe, received_path, write_received, ObserveConfig, FINAL_CHECKPOINT};

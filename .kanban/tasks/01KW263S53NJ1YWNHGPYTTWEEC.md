@@ -25,8 +25,8 @@ depends_on:
 - 01KW262DJSSC1JX2FXCDQN0X4E
 - 01KW260M8QZ8T37A8RZGDDVZ81
 - 01KW261K28N0RA00X9P0APED21
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffed80
 project: expect
 title: expect expectation observe → Observation (cli, deterministic)
 ---
