@@ -1,11 +1,23 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kw2xvxefemna564r48rpz6jp
+  text: |-
+    Implemented static doctor diagnostics in new crates/swissarmyhammer-expect/src/doctor.rs (TDD: 12 failing tests first, then GREEN).
+
+    Design: diagnose(content, &DoctorFacts) -> Vec<FieldDiagnostic>. Pure static — dynamic facts (available_models, known_setup_commands) are INJECTED, so no real registry/system is hit. Production caller will populate available_models from ModelManager; this crate gained no new dependency. render(path, &diags) gives the ✗/→ human shape.
+
+    Checks: unknown-key (Levenshtein did-you-mean, suppresses double-report of a required key a typo stands in for); required description+surface; surface/tiers/reliability/isolation validated by round-tripping through the real domain enums (allowed lists derived from the enums, never re-typed); body intent (prose vs all-mechanics) + ≥1 criterion; per-criterion checkability (vague-term + no-digit => Error with threshold suggestion). model: warning-not-error when missing. setup: Ok in known set / Error when unprovisionable / Warning when facts unavailable.
+
+    Made spec::parse_bullet/parse_criterion pub(crate) for reuse. Verified: cargo nextest run -p swissarmyhammer-expect = 75 passed; cargo test --doc -p swissarmyhammer-expect = 4 passed; cargo clippy --all-targets -D warnings clean; fmt applied. Left in doing for review.
+  timestamp: 2026-06-26T21:37:40.303006+00:00
 depends_on:
 - 01KW25ZK93AJ0CR17C9QJ11RXW
 - 01KW261K28N0RA00X9P0APED21
-position_column: todo
-position_ordinal: ac80
+position_column: doing
+position_ordinal: '8280'
 project: expect
 title: Static doctor diagnostics for expectation specs (per-field, teaching)
 ---

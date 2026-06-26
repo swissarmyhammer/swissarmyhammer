@@ -42,6 +42,7 @@
 //! ```
 
 pub mod config;
+pub mod doctor;
 pub mod error;
 pub mod loader;
 pub mod spec;
@@ -53,6 +54,7 @@ pub use config::{
     find_expect_dir, AgentConfig, ApprovalConfig, EmbedderConfig, ExpectConfig, Granularity,
     ModelConfig, OnMissing, ProvisionConfig, ReliabilityConfig,
 };
+pub use doctor::{diagnose, render, DiagnosticStatus, DoctorFacts, FieldDiagnostic};
 pub use error::ExpectError;
 pub use loader::ExpectationLoader;
 pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};

@@ -59,8 +59,8 @@ comments:
 depends_on:
 - 01KW25ZW4NED0J1BD77HPK7DNX
 - 01KW260M8QZ8T37A8RZGDDVZ81
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffeb80
 project: expect
 title: 'expect init: scaffold .expect/ tree + surface auto-detection'
 ---

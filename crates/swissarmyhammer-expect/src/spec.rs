@@ -416,7 +416,7 @@ impl Section {
 }
 
 /// Parse a plain `- ` / `* ` bullet line into its text, or `None`.
-fn parse_bullet(line: &str) -> Option<String> {
+pub(crate) fn parse_bullet(line: &str) -> Option<String> {
     let rest = line
         .trim()
         .strip_prefix("- ")
@@ -431,7 +431,7 @@ fn parse_bullet(line: &str) -> Option<String> {
 
 /// Parse a GFM task-list item (`- [ ]` / `- [x]`) into a [`Criterion`], or
 /// `None` if the line is not a checklist item.
-fn parse_criterion(line: &str) -> Option<Criterion> {
+pub(crate) fn parse_criterion(line: &str) -> Option<Criterion> {
     let trimmed = line.trim();
     let rest = trimmed
         .strip_prefix("- ")
