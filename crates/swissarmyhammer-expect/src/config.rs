@@ -23,6 +23,9 @@ const EXPECT_DIR: &str = ".expect";
 /// The repo-level config file within [`EXPECT_DIR`].
 const CONFIG_FILE: &str = "config.toml";
 
+/// The default Tier-2 cosine similarity cutoff for [`EmbedderConfig`].
+const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.80;
+
 /// The repo-level `.expect/config.toml` configuration.
 ///
 /// The whole struct is `#[serde(default)]`, so any missing section is filled from
@@ -102,7 +105,7 @@ impl Default for EmbedderConfig {
     fn default() -> Self {
         EmbedderConfig {
             model: "text-embedding-3-large".to_string(),
-            similarity_threshold: 0.80,
+            similarity_threshold: DEFAULT_SIMILARITY_THRESHOLD,
         }
     }
 }
