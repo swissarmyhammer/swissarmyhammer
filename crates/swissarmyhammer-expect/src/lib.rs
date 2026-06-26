@@ -43,6 +43,7 @@
 
 pub mod config;
 pub mod error;
+pub mod loader;
 pub mod spec;
 pub mod types;
 
@@ -51,6 +52,7 @@ pub use config::{
     ModelConfig, OnMissing, ProvisionConfig, ReliabilityConfig,
 };
 pub use error::ExpectError;
+pub use loader::ExpectationLoader;
 pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};
 pub use types::{
     Checkpoint, CliState, CriterionStatus, CriterionVerdict, Evidence, ExpectationVerdict,

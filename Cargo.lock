@@ -8326,13 +8326,16 @@ dependencies = [
 name = "swissarmyhammer-expect"
 version = "0.17.0"
 dependencies = [
+ "glob",
  "serde",
  "serde_json",
  "serde_yaml_ng",
  "swissarmyhammer-directory",
+ "swissarmyhammer-project-detection",
  "tempfile",
  "thiserror 2.0.18",
  "toml 1.1.2+spec-1.1.0",
+ "walkdir",
 ]
 
 [[package]]

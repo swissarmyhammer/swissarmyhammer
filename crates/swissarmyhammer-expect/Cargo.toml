@@ -19,6 +19,15 @@ toml = { workspace = true }
 # Locate the repo root (and thus .expect/) from a working directory
 swissarmyhammer-directory = { workspace = true }
 
+# Shared skip-directory set for repo-wide *.expect.md discovery
+swissarmyhammer-project-detection = { workspace = true }
+
+# Recursive directory traversal for discovering *.expect.md specs
+walkdir = { workspace = true }
+
+# Shell-style glob scope resolution
+glob = { workspace = true }
+
 # Error handling
 thiserror = { workspace = true }
 

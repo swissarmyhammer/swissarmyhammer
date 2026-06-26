@@ -25,7 +25,10 @@ use std::path::Path;
 use std::time::Duration;
 
 /// The file extension that marks an expectation spec.
-const EXPECT_EXTENSION: &str = ".expect.md";
+///
+/// Shared with [`crate::loader`] so discovery and identity derivation agree on a
+/// single source of truth for the `*.expect.md` suffix.
+pub(crate) const EXPECT_EXTENSION: &str = ".expect.md";
 
 /// The default wall-clock budget for one run when `timeout` is omitted.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
