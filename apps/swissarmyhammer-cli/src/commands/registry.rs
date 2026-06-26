@@ -7,12 +7,13 @@
 //! path (see [`super::profile::sah_profile`]). There is no bespoke per-step
 //! `Initializable` code for any of those concerns.
 //!
-//! This registry holds only the two install concerns that are *not* expressible
-//! as profile data:
+//! This registry holds only the filesystem-scaffold install concerns that are
+//! *not* expressible as profile data:
 //!
 //! | Priority | Component (display name)               | User | Notes                                                |
 //! |---------:|----------------------------------------|:----:|------------------------------------------------------|
 //! | 40       | ProjectStructure ("Project workspace") |  -   | Project-only — creates `.sah/` + `.prompts/`         |
+//! | 45       | ExpectTool ("Expectations")            |  -   | Project-only — scaffolds the `.expect/` tree         |
 //! | 55       | KanbanTool                             |  -   | Tool lifecycle: registers `.kanban/` merge drivers   |
 //!
 //! `ProjectStructure` creates the `.sah/` + `.prompts/` project tree (via
@@ -30,8 +31,10 @@ use swissarmyhammer_common::lifecycle::InitRegistry;
 
 /// Register the non-profile sah init/deinit components into the given registry.
 ///
-/// Only `ProjectStructure` and `KanbanTool` are registered here — every other
-/// install concern (MCP, skills, agents, statusline, preamble) is handled by
+/// Only the filesystem-scaffold concerns are registered here —
+/// `ProjectStructure` (`.sah/` + `.prompts/`), `ExpectTool` (the `.expect/`
+/// tree), and `KanbanTool` (`.kanban/` merge drivers). Every other install
+/// concern (MCP, skills, agents, statusline, preamble) is handled by
 /// [`mirdan::install::init_profile`] / [`mirdan::install::deinit_profile`] from
 /// [`super::install::init`] / [`super::install::deinit`].
 ///
@@ -41,6 +44,11 @@ pub fn register_all(registry: &mut InitRegistry, remove_directory: bool) {
     registry.register(super::install::components::ProjectStructure::new(
         remove_directory,
     ));
+
+    // The `expect` tool scaffolds the project-local `.expect/` tree (config,
+    // README, example, goldens/received dirs + .gitignore) and detects the
+    // surface defaults. Project-local filesystem setup, like ProjectStructure.
+    registry.register(swissarmyhammer_tools::mcp::tools::expect::ExpectTool::new());
 
     // sah exposes kanban through `sah serve`, NOT a separate `kanban` MCP
     // server — so it constructs the tool WITHOUT an injected MCP entry. The
@@ -56,8 +64,8 @@ mod tests {
     fn test_register_all_populates_registry() {
         let mut registry = InitRegistry::new();
         register_all(&mut registry, false);
-        // The two non-profile components: ProjectStructure + KanbanTool.
-        assert_eq!(registry.len(), 2);
+        // The three scaffold components: ProjectStructure + ExpectTool + KanbanTool.
+        assert_eq!(registry.len(), 3);
     }
 
     #[test]
@@ -65,6 +73,6 @@ mod tests {
         let mut registry = InitRegistry::new();
         register_all(&mut registry, true);
         // Same component count regardless of remove_directory flag.
-        assert_eq!(registry.len(), 2);
+        assert_eq!(registry.len(), 3);
     }
 }

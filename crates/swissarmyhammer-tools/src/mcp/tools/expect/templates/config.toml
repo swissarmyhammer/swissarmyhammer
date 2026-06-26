@@ -1,0 +1,23 @@
+[model]
+default = ""                       # named sah model for grading; empty => sah model default
+panel = []                         # optional: extra named models for borderline criteria
+on_missing = "fallback"            # pinned model gone: "fallback" (warn + use default) | "error"
+
+[provision]
+granularity = "per-check"          # one shared SUT per check; `isolation: fresh` overrides per-spec
+
+[embedder]
+model = "text-embedding-3-large"   # pinned; checkpoint matters for reproducibility
+similarity_threshold = 0.80
+
+[reliability]
+default = "pass^1"
+nondeterministic_surfaces = []     # surfaces that drive non-deterministically; empty => all mechanical
+
+[approval]
+ci_autoapprove = false             # CI=true => unapproved drift is a hard failure
+escalate_below_confidence = 0.6    # route to human queue below this grader confidence
+
+[agent]
+use_case = "expectations"          # the agent that DRIVES the system (perceive/act);
+                                   # distinct from [model], which only GRADES criteria.

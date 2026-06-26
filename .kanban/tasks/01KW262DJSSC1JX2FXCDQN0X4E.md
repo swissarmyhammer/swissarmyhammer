@@ -38,8 +38,8 @@ comments:
 depends_on:
 - 01KW25YZ4MKNR09RXYR1B4S05T
 - 01KW25ZW4NED0J1BD77HPK7DNX
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffea80
 project: expect
 title: 'cli surface adapter: provision + drive + observe + teardown'
 ---

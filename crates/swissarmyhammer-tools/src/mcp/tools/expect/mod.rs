@@ -392,7 +392,9 @@ fn surfaces_list() -> Result<CallToolResult, rmcp::ErrorData> {
 }
 
 crate::impl_default_doctorable!(ExpectTool);
-crate::impl_empty_initializable!(ExpectTool);
+
+// The real `Initializable` impl (the `expect init` scaffold) lives in `init`.
+mod init;
 
 #[async_trait]
 impl McpTool for ExpectTool {
