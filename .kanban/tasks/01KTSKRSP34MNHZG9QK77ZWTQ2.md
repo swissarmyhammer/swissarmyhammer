@@ -22,8 +22,8 @@ comments:
 
     Re-verified all green: tsc --noEmit exit 0; entity-icon.browser.test.tsx 3/3 pass. The characterization test is a behavior-preservation guard (passes before and after by design, as expected for a pure refactor).
   timestamp: 2026-06-26T21:31:44.831024+00:00
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff580
 title: Unify entity-icon.tsx lucide lookup onto lib/icon-name.ts::iconByName
 ---
 `apps/kanban-app/ui/src/components/entity-icon.tsx` carries its own verbatim `kebabToPascal` + lucide `icons` registry lookup — the same pure logic now centralized in `apps/kanban-app/ui/src/lib/icon-name.ts::iconByName` (extracted while working the review warning on 01KTCRY5W2BP7TYTHV4JB9CH8K, which scoped the unification to `fieldIcon`/`viewIcon` only).

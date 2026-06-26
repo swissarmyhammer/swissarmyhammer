@@ -1,8 +1,28 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 9d80
+comments:
+- actor: claude-code
+  id: 01kw2ynmmb296wx78ggzy0hsbd
+  text: |-
+    Implemented TOML-aware MCP config writes (TDD: 5 failing tests first → RED confirmed → GREEN).
+
+    Design: added extension-dispatched helpers in `settings.rs`:
+    - `is_toml_config(path)` — single `.toml` predicate, shared with status reader.
+    - `toml_str_to_json(content)` — TOML→serde_json::Value (extracted; status.rs `read_config_doc` now reuses it instead of its inline toml branch).
+    - `json_to_toml_string(value)` (private) — serde_json::Value→TOML via `toml::Value::try_from` + `toml::to_string` (toml 1.1, toml_edit-backed, emits scalars before tables so unrelated keys like `model` are preserved).
+    - `read_mcp_config` / `write_mcp_config` — dispatch on extension; non-`.toml` paths delegate to existing `read_json`/`write_json` byte-identically.
+
+    Routed all four writers through the new helpers: `mcp_config::register_mcp_server`, `mcp_config::unregister_mcp_server`, `strategy::generic_register_mcp` (generic_unregister_mcp already routes via unregister_mcp_server). The shared `set_mcp_server_entry`/`remove_mcp_server_entry` are unchanged.
+
+    Tests added: TOML write shape, unrelated-key preservation (register + unregister), round-trip with status `mcp_server_installed`, and a strategy-level Codex `.codex/config.toml` agent test asserting TOML output + idempotent re-register (Ok(false)).
+
+    Verification (all green): `cargo nextest run -p mirdan` = 408 passed, 0 failed; `cargo fmt`; `cargo clippy -p mirdan --all-targets -- -D warnings` clean. Adversarial double-check: PASS (verified ordering proof, blast radius, edge cases).
+
+    Left in `doing` for review.
+  timestamp: 2026-06-26T21:51:43.243510+00:00
+position_column: doing
+position_ordinal: '8180'
 project: mirdan-install
 title: 'mirdan: TOML-aware MCP config writes (Codex .codex/config.toml)'
 ---

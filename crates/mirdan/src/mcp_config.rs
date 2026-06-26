@@ -173,9 +173,9 @@ pub fn register_mcp_server(
     entry: &McpServerEntry,
     extras: &BTreeMap<String, Value>,
 ) -> Result<(), RegistryError> {
-    let mut root = crate::settings::read_json(config_path)?;
+    let mut root = crate::settings::read_mcp_config(config_path)?;
     set_mcp_server_entry(&mut root, servers_key, tool_name, entry, extras)?;
-    crate::settings::write_json(config_path, &root)
+    crate::settings::write_mcp_config(config_path, &root)
 }
 
 /// Unregister an MCP server from a JSON config file.
@@ -190,10 +190,10 @@ pub fn unregister_mcp_server(
         return Ok(false);
     }
 
-    let mut root = crate::settings::read_json(config_path)?;
+    let mut root = crate::settings::read_mcp_config(config_path)?;
     let removed = remove_mcp_server_entry(&mut root, servers_key, tool_name);
     if removed {
-        crate::settings::write_json(config_path, &root)?;
+        crate::settings::write_mcp_config(config_path, &root)?;
     }
     Ok(removed)
 }
@@ -762,5 +762,132 @@ mcp:
         let yaml = parse_yaml_frontmatter(&md).unwrap();
         assert_eq!(yaml["name"].as_str().unwrap(), "my-tool");
         assert_eq!(yaml["mcp"]["command"].as_str().unwrap(), "npx");
+    }
+
+    #[test]
+    fn test_register_mcp_server_writes_toml_for_toml_path() {
+        // Codex stores MCP servers in `.codex/config.toml` (TOML), not JSON.
+        // Registering must produce valid TOML with a `[mcp_servers.kanban]`
+        // table, never pretty-printed JSON in a `.toml` file.
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join(".codex").join("config.toml");
+
+        let entry = McpServerEntry {
+            command: "sah".to_string(),
+            args: vec!["serve".to_string()],
+            env: BTreeMap::new(),
+        };
+
+        register_mcp_server(
+            &config_path,
+            "mcp_servers",
+            "kanban",
+            &entry,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let parsed: toml::Value =
+            toml::from_str(&content).expect("written .codex/config.toml must be valid TOML");
+        assert_eq!(
+            parsed["mcp_servers"]["kanban"]["command"].as_str().unwrap(),
+            "sah"
+        );
+        assert_eq!(
+            parsed["mcp_servers"]["kanban"]["args"][0].as_str().unwrap(),
+            "serve"
+        );
+        // A JSON document would begin with `{`; TOML never does.
+        assert!(
+            !content.trim_start().starts_with('{'),
+            "config.toml must be TOML, not JSON: {content}"
+        );
+    }
+
+    #[test]
+    fn test_register_mcp_server_toml_preserves_unrelated_keys() {
+        // Pre-existing unrelated TOML (e.g. Codex's `model`) must survive a
+        // register that round-trips the document through serde_json::Value.
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, "model = \"gpt-5-codex\"\n").unwrap();
+
+        let entry = McpServerEntry {
+            command: "sah".to_string(),
+            args: vec!["serve".to_string()],
+            env: BTreeMap::new(),
+        };
+        register_mcp_server(
+            &config_path,
+            "mcp_servers",
+            "kanban",
+            &entry,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let parsed: toml::Value = toml::from_str(&content).unwrap();
+        assert_eq!(parsed["model"].as_str().unwrap(), "gpt-5-codex");
+        assert_eq!(
+            parsed["mcp_servers"]["kanban"]["command"].as_str().unwrap(),
+            "sah"
+        );
+    }
+
+    #[test]
+    fn test_unregister_mcp_server_toml_removes_entry_and_preserves_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, "model = \"gpt-5-codex\"\n").unwrap();
+
+        let entry = McpServerEntry {
+            command: "sah".to_string(),
+            args: vec!["serve".to_string()],
+            env: BTreeMap::new(),
+        };
+        register_mcp_server(
+            &config_path,
+            "mcp_servers",
+            "kanban",
+            &entry,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        let removed = unregister_mcp_server(&config_path, "mcp_servers", "kanban").unwrap();
+        assert!(removed);
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let parsed: toml::Value = toml::from_str(&content).unwrap();
+        assert!(
+            parsed
+                .get("mcp_servers")
+                .and_then(|m| m.get("kanban"))
+                .is_none(),
+            "kanban entry must be gone after unregister"
+        );
+        assert_eq!(parsed["model"].as_str().unwrap(), "gpt-5-codex");
+    }
+
+    #[test]
+    fn test_register_mcp_server_toml_roundtrips_with_status_reader() {
+        // The TOML write must be detected as installed by the existing status
+        // reader, which parses `.toml` and probes the `mcp_servers` key.
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        let entry = McpServerEntry {
+            command: "sah".to_string(),
+            args: vec!["serve".to_string()],
+            env: BTreeMap::new(),
+        };
+        register_mcp_server(&config_path, "mcp_servers", "sah", &entry, &BTreeMap::new()).unwrap();
+
+        assert!(crate::status::mcp_server_installed(
+            &config_path,
+            Some("mcp_servers")
+        ));
     }
 }

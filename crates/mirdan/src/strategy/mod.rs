@@ -387,7 +387,7 @@ fn generic_register_mcp(
     let Some(path) = agent_mcp_config_path(agent, scope) else {
         return Ok(false);
     };
-    let mut root = settings::read_json(&path)?;
+    let mut root = settings::read_mcp_config(&path)?;
     let changed = mcp_config::set_mcp_server_entry(
         &mut root,
         &mcp_cfg.servers_key,
@@ -396,7 +396,7 @@ fn generic_register_mcp(
         &mcp_cfg.entry_extras,
     )?;
     if changed {
-        settings::write_json(&path, &root)?;
+        settings::write_mcp_config(&path, &root)?;
     }
     Ok(changed)
 }
@@ -705,5 +705,65 @@ mod tests {
         assert!(!GenericMcpJsonStrategy
             .allow_tool(&agent, InitScope::Project, "Bash")
             .unwrap());
+    }
+
+    /// Build a Codex-like AgentDef whose MCP config is a `.codex/config.toml`
+    /// TOML file with the `mcp_servers` servers key and no entry extras.
+    fn codex_agent(root: &Path) -> AgentDef {
+        AgentDef {
+            id: "codex".to_string(),
+            name: "Codex".to_string(),
+            project_path: ".codex/skills".to_string(),
+            global_path: "~/.codex/skills".to_string(),
+            detect: vec![],
+            symlink_policy: agents::SymlinkPolicy::default(),
+            mcp_config: Some(agents::McpConfigDef {
+                project_path: root
+                    .join(".codex/config.toml")
+                    .to_string_lossy()
+                    .to_string(),
+                global_path: None,
+                servers_key: "mcp_servers".to_string(),
+                entry_extras: BTreeMap::new(),
+            }),
+            plugin_path: None,
+            global_plugin_path: None,
+            agent_path: None,
+            global_agent_path: None,
+            instructions_path: None,
+            global_instructions_path: None,
+            settings_path: None,
+            global_settings_path: None,
+            doctor: true,
+        }
+    }
+
+    #[test]
+    fn generic_register_mcp_writes_toml_for_toml_config_path() {
+        // A Codex-style agent whose mcp_config.project_path ends in `.toml`
+        // must get a TOML document, and re-registering the same entry is a
+        // no-op (Ok(false)) just like the JSON path.
+        let dir = tempfile::tempdir().unwrap();
+        let agent = codex_agent(dir.path());
+
+        let changed = GenericMcpJsonStrategy
+            .register_mcp(&agent, InitScope::Project, "sah", &entry())
+            .unwrap();
+        assert!(changed);
+
+        let content = std::fs::read_to_string(dir.path().join(".codex/config.toml")).unwrap();
+        let parsed: toml::Value = toml::from_str(&content).expect("config.toml must be valid TOML");
+        assert_eq!(
+            parsed["mcp_servers"]["sah"]["command"].as_str().unwrap(),
+            "sah"
+        );
+
+        let changed_again = GenericMcpJsonStrategy
+            .register_mcp(&agent, InitScope::Project, "sah", &entry())
+            .unwrap();
+        assert!(
+            !changed_again,
+            "idempotent re-register must report no change"
+        );
     }
 }

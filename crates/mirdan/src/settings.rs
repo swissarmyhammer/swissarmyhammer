@@ -59,6 +59,84 @@ pub fn write_json(path: &Path, value: &Value) -> Result<(), RegistryError> {
     Ok(())
 }
 
+/// True when `path` has a `.toml` extension (case-insensitive).
+///
+/// MCP config files are JSON for most agents but TOML for Codex
+/// (`.codex/config.toml`). This is the single predicate that decides which
+/// parser/serializer the MCP config read/write helpers use, and is shared with
+/// the `status` detection reader so detection and writes cannot drift.
+pub fn is_toml_config(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
+}
+
+/// Parse a TOML document into a `serde_json::Value`.
+///
+/// The MCP config helpers operate on `serde_json::Value` regardless of the
+/// on-disk format, so TOML input is converted to the JSON data model on read.
+/// Shared with the `status` detection reader so parsing and detection cannot
+/// drift. Returns a `Validation` error when the content is not valid TOML or
+/// cannot be represented in the JSON data model.
+pub fn toml_str_to_json(content: &str) -> Result<Value, RegistryError> {
+    let value: toml::Value = toml::from_str(content)
+        .map_err(|e| RegistryError::Validation(format!("Invalid TOML: {}", e)))?;
+    serde_json::to_value(value)
+        .map_err(|e| RegistryError::Validation(format!("Failed to convert TOML to JSON: {}", e)))
+}
+
+/// Serialize a `serde_json::Value` into a TOML document string.
+///
+/// Converts the JSON data model to a `toml::Value` and serializes it; the TOML
+/// serializer emits scalar keys before sub-tables, so unrelated top-level keys
+/// (e.g. Codex's `model`) are preserved alongside the `[mcp_servers.*]` tables.
+/// Returns a `Validation` error when the value cannot be represented in TOML
+/// (e.g. a JSON `null`).
+fn json_to_toml_string(value: &Value) -> Result<String, RegistryError> {
+    let toml_value = toml::Value::try_from(value)
+        .map_err(|e| RegistryError::Validation(format!("Failed to convert JSON to TOML: {}", e)))?;
+    toml::to_string(&toml_value)
+        .map_err(|e| RegistryError::Validation(format!("Failed to serialize TOML: {}", e)))
+}
+
+/// Read an MCP config file as a `serde_json::Value`, dispatching on extension.
+///
+/// `.toml` paths (Codex's `.codex/config.toml`) are parsed as TOML and
+/// converted to the JSON data model so the shared `set`/`remove` entry helpers
+/// can mutate them uniformly; every other path is read as JSONC via
+/// [`read_json`]. A missing or empty file yields an empty object in both cases.
+pub fn read_mcp_config(path: &Path) -> Result<Value, RegistryError> {
+    if !is_toml_config(path) {
+        return read_json(path);
+    }
+    match fs::read_to_string(path) {
+        Ok(content) if content.trim().is_empty() => Ok(json!({})),
+        Ok(content) => toml_str_to_json(&content),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
+        Err(e) => Err(RegistryError::Io(e)),
+    }
+}
+
+/// Write an MCP config `value` to `path`, dispatching on extension.
+///
+/// `.toml` paths are serialized as TOML so Codex's `config.toml` stays valid
+/// TOML rather than receiving pretty-printed JSON; every other path is written
+/// as pretty-printed JSON via [`write_json`]. Creates parent directories as
+/// needed. Behavior for non-`.toml` paths is byte-identical to [`write_json`].
+pub fn write_mcp_config(path: &Path, value: &Value) -> Result<(), RegistryError> {
+    if !is_toml_config(path) {
+        return write_json(path, value);
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let toml = json_to_toml_string(value)?;
+    fs::write(path, toml)?;
+    Ok(())
+}
+
 /// Ensure that the JSON array at `pointer` contains `value`, creating any
 /// missing object parents along the way.
 ///
