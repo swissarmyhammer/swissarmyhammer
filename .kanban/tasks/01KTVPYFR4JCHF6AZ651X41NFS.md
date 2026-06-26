@@ -21,6 +21,23 @@ comments:
 
     Left in `doing` for review.
   timestamp: 2026-06-26T21:51:43.243510+00:00
+- actor: claude-code
+  id: 01kw306meg5ea8gv8r1135ybbb
+  text: |-
+    Resolved all 4 review findings on the TOML-aware MCP config writes.
+
+    1. (warning) De-duplicated the TOML/JSON read dispatch. Extracted `settings::dispatch_read_config(path, content) -> Result<Value, RegistryError>` as the single source of truth for the `is_toml_config` branch (TOML via `toml_str_to_json`, else JSONC via `crate::parse_jsonc`). Both `status::read_config_doc` (layers `.ok()` → Option) and `settings::read_mcp_config` (layers file IO + empty/NotFound → empty object) now call it. JSON-path error message ("Invalid JSON in {path}: {e}") and missing/empty behavior kept byte-identical for non-.toml paths.
+
+    2. (nit) Inlined `json_to_toml_string` (single call site) into `write_mcp_config` and deleted the helper. Zero remaining references.
+
+    3. (nit) Trailing newline: investigation showed `toml::to_string` ALREADY emits a trailing newline, so the literal suggested fix `format!("{}\n", toml)` would DOUBLE it (inconsistent with the JSON path's single newline — contradicting the finding's own intent). Implemented the robust version instead: `if !toml.ends_with('\n') { toml.push('\n'); }` — guarantees exactly one trailing newline and also covers the empty-doc edge (""→"\n"). Added tests: `write_mcp_config_toml_ends_with_single_trailing_newline` (ends_with \n, not \n\n), `write_mcp_config_toml_empty_object_gets_trailing_newline` (== "\n"), plus trailing-newline + no-double assertions on the canonical mcp_config.rs TOML-write test.
+
+    4. (nit) Inlined the `codex_agent` test helper (single call site) into `generic_register_mcp_writes_toml_for_toml_config_path` and deleted it; `root` → `dir.path()`, all AgentDef fields identical.
+
+    Verification (all green): `cargo nextest run -p mirdan` = 410 passed, 0 failed (was 408; +2 new tests); `cargo fmt`; `cargo clippy -p mirdan --all-targets -- -D warnings` clean. Adversarial double-check: PASS (verified dispatch is single-source, byte-identical JSON behavior, no double newline, no dead refs).
+
+    Files: crates/mirdan/src/settings.rs, crates/mirdan/src/status.rs, crates/mirdan/src/mcp_config.rs, crates/mirdan/src/strategy/mod.rs. Left in `doing` for review.
+  timestamp: 2026-06-26T22:18:28.688250+00:00
 position_column: doing
 position_ordinal: '8180'
 project: mirdan-install

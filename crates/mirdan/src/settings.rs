@@ -85,33 +85,37 @@ pub fn toml_str_to_json(content: &str) -> Result<Value, RegistryError> {
         .map_err(|e| RegistryError::Validation(format!("Failed to convert TOML to JSON: {}", e)))
 }
 
-/// Serialize a `serde_json::Value` into a TOML document string.
+/// Parse already-read config `content` into a `serde_json::Value`, choosing the
+/// parser from `path`'s extension.
 ///
-/// Converts the JSON data model to a `toml::Value` and serializes it; the TOML
-/// serializer emits scalar keys before sub-tables, so unrelated top-level keys
-/// (e.g. Codex's `model`) are preserved alongside the `[mcp_servers.*]` tables.
-/// Returns a `Validation` error when the value cannot be represented in TOML
-/// (e.g. a JSON `null`).
-fn json_to_toml_string(value: &Value) -> Result<String, RegistryError> {
-    let toml_value = toml::Value::try_from(value)
-        .map_err(|e| RegistryError::Validation(format!("Failed to convert JSON to TOML: {}", e)))?;
-    toml::to_string(&toml_value)
-        .map_err(|e| RegistryError::Validation(format!("Failed to serialize TOML: {}", e)))
+/// This is the **single source of truth** for the TOML-vs-JSON config dispatch:
+/// `.toml` paths (Codex's `.codex/config.toml`) are parsed as TOML via
+/// [`toml_str_to_json`], every other path as JSONC (JSON with comments and
+/// trailing commas). Both the install-side reader ([`read_mcp_config`]) and the
+/// `status` detection reader funnel through here so the branch decision cannot
+/// drift between detection and writes. Each caller layers its own error/`Option`
+/// handling on top of the returned `Result`.
+pub(crate) fn dispatch_read_config(path: &Path, content: &str) -> Result<Value, RegistryError> {
+    if is_toml_config(path) {
+        toml_str_to_json(content)
+    } else {
+        crate::parse_jsonc(content).map_err(|e| {
+            RegistryError::Validation(format!("Invalid JSON in {}: {}", path.display(), e))
+        })
+    }
 }
 
 /// Read an MCP config file as a `serde_json::Value`, dispatching on extension.
 ///
 /// `.toml` paths (Codex's `.codex/config.toml`) are parsed as TOML and
 /// converted to the JSON data model so the shared `set`/`remove` entry helpers
-/// can mutate them uniformly; every other path is read as JSONC via
-/// [`read_json`]. A missing or empty file yields an empty object in both cases.
+/// can mutate them uniformly; every other path is read as JSONC. A missing or
+/// empty file yields an empty object in both cases. The format dispatch is
+/// shared with the `status` reader via [`dispatch_read_config`].
 pub fn read_mcp_config(path: &Path) -> Result<Value, RegistryError> {
-    if !is_toml_config(path) {
-        return read_json(path);
-    }
     match fs::read_to_string(path) {
         Ok(content) if content.trim().is_empty() => Ok(json!({})),
-        Ok(content) => toml_str_to_json(&content),
+        Ok(content) => dispatch_read_config(path, &content),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
         Err(e) => Err(RegistryError::Io(e)),
     }
@@ -122,7 +126,9 @@ pub fn read_mcp_config(path: &Path) -> Result<Value, RegistryError> {
 /// `.toml` paths are serialized as TOML so Codex's `config.toml` stays valid
 /// TOML rather than receiving pretty-printed JSON; every other path is written
 /// as pretty-printed JSON via [`write_json`]. Creates parent directories as
-/// needed. Behavior for non-`.toml` paths is byte-identical to [`write_json`].
+/// needed. Output is terminated with exactly one trailing newline to match the
+/// established mirdan convention (the same convention [`write_json`] follows).
+/// Behavior for non-`.toml` paths is byte-identical to [`write_json`].
 pub fn write_mcp_config(path: &Path, value: &Value) -> Result<(), RegistryError> {
     if !is_toml_config(path) {
         return write_json(path, value);
@@ -132,7 +138,18 @@ pub fn write_mcp_config(path: &Path, value: &Value) -> Result<(), RegistryError>
             fs::create_dir_all(parent)?;
         }
     }
-    let toml = json_to_toml_string(value)?;
+    let toml_value = toml::Value::try_from(value)
+        .map_err(|e| RegistryError::Validation(format!("Failed to convert JSON to TOML: {}", e)))?;
+    // The TOML serializer emits scalar keys before sub-tables, so unrelated
+    // top-level keys (e.g. Codex's `model`) are preserved alongside the
+    // `[mcp_servers.*]` tables. It already terminates non-empty output with a
+    // newline; normalize to exactly one trailing newline so every config file
+    // ends with a newline without doubling it.
+    let mut toml = toml::to_string(&toml_value)
+        .map_err(|e| RegistryError::Validation(format!("Failed to serialize TOML: {}", e)))?;
+    if !toml.ends_with('\n') {
+        toml.push('\n');
+    }
     fs::write(path, toml)?;
     Ok(())
 }
@@ -332,6 +349,35 @@ mod tests {
         });
         write_json(&path, &original).unwrap();
         assert_eq!(read_json(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn write_mcp_config_toml_ends_with_single_trailing_newline() {
+        // TOML config files follow the same mirdan convention as JSON: exactly
+        // one trailing newline, never zero and never doubled.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let value = json!({"mcp_servers": {"sah": {"command": "sah", "args": ["serve"]}}});
+        write_mcp_config(&path, &value).unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(
+            content.ends_with('\n'),
+            "TOML output must end with a trailing newline: {content:?}"
+        );
+        assert!(
+            !content.ends_with("\n\n"),
+            "TOML output must not double the trailing newline: {content:?}"
+        );
+    }
+
+    #[test]
+    fn write_mcp_config_toml_empty_object_gets_trailing_newline() {
+        // An empty document serializes to "" with no newline; the writer must
+        // still terminate the file with exactly one trailing newline.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        write_mcp_config(&path, &json!({})).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "\n");
     }
 
     #[test]

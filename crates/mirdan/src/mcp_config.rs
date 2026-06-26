@@ -803,6 +803,16 @@ mcp:
             !content.trim_start().starts_with('{'),
             "config.toml must be TOML, not JSON: {content}"
         );
+        // Per the mirdan convention, every config file ends with exactly one
+        // trailing newline — matching the JSON writer — and never doubles it.
+        assert!(
+            content.ends_with('\n'),
+            "config.toml must end with a trailing newline: {content:?}"
+        );
+        assert!(
+            !content.ends_with("\n\n"),
+            "config.toml must not have a doubled trailing newline: {content:?}"
+        );
     }
 
     #[test]
