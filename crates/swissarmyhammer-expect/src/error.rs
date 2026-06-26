@@ -13,6 +13,10 @@ pub enum ExpectError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    /// TOML parsing error (the `.expect/config.toml` repo-level config).
+    #[error("TOML error: {0}")]
+    Toml(#[from] toml::de::Error),
+
     /// An expectation, addressed by its repo-relative path, is malformed or
     /// could not be processed.
     #[error("expectation '{path}' error: {message}")]

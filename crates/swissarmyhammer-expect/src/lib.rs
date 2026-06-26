@@ -41,10 +41,15 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+pub mod config;
 pub mod error;
 pub mod spec;
 pub mod types;
 
+pub use config::{
+    find_expect_dir, AgentConfig, ApprovalConfig, EmbedderConfig, ExpectConfig, Granularity,
+    ModelConfig, OnMissing, ProvisionConfig, ReliabilityConfig,
+};
 pub use error::ExpectError;
 pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};
 pub use types::{

@@ -28,8 +28,8 @@ comments:
   timestamp: 2026-06-26T17:23:38.464500+00:00
 depends_on:
 - 01KW25YZ4MKNR09RXYR1B4S05T
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffe480
 project: expect
 title: Parse *.expect.md files (frontmatter + intent body + criteria)
 ---

@@ -13,8 +13,17 @@ serde_json = { workspace = true }
 # YAML frontmatter parsing for *.expect.md spec files
 serde_yaml_ng = { workspace = true }
 
+# TOML parsing for .expect/config.toml repo-level config
+toml = { workspace = true }
+
+# Locate the repo root (and thus .expect/) from a working directory
+swissarmyhammer-directory = { workspace = true }
+
 # Error handling
 thiserror = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+
+# Temp dirs for config load / repo-root discovery tests
+tempfile = { workspace = true }

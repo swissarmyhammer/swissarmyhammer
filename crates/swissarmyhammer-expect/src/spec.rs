@@ -137,6 +137,13 @@ impl ReliabilityPolicy {
     }
 }
 
+impl Default for ReliabilityPolicy {
+    /// The documented default policy, `pass^1` — a single run must pass.
+    fn default() -> Self {
+        ReliabilityPolicy { required: 1 }
+    }
+}
+
 impl Serialize for ReliabilityPolicy {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -194,7 +201,7 @@ pub enum Setup {
 
 /// The default `pass^1` reliability policy.
 fn default_reliability() -> ReliabilityPolicy {
-    ReliabilityPolicy { required: 1 }
+    ReliabilityPolicy::default()
 }
 
 /// The default tier set: all three ladder tiers may decide a criterion.

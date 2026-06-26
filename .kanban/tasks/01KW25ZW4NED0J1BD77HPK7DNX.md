@@ -1,10 +1,19 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kw2fmp24bfsb5p0cxb00at3p
+  text: 'Picked up. Research done: Surface enum + ReliabilityPolicy (pass^N, custom serde) live in spec.rs/types.rs and will be reused. find_git_repository_root_from is in swissarmyhammer-directory (low-level, no tool-layer dep). toml 1.1 + tempfile in workspace deps. Plan: new config.rs with [model]/[provision]/[embedder]/[reliability]/[approval]/[agent] sections, container-level #[serde(default, deny_unknown_fields)] so absent file/sections fall back to manual Default impls; reuse ReliabilityPolicy (adding a Default=pass^1 impl) for reliability.default. TDD.'
+  timestamp: 2026-06-26T17:29:03.300568+00:00
+- actor: claude-code
+  id: 01kw2fvz2kjagaq14qb6zmyw9m
+  text: 'Done. Added crates/swissarmyhammer-expect/src/config.rs (ExpectConfig + 6 section structs, OnMissing/Granularity enums, parse/load + find_expect_dir). Reused Surface and ReliabilityPolicy (added Default=pass^1 to it), find_git_repository_root_from from swissarmyhammer-directory. Added Toml variant to error.rs; declared/exported config module; added toml + swissarmyhammer-directory deps and tempfile dev-dep. TDD: 6 RED config tests watched fail (stub parse), then GREEN. Verification: cargo nextest -p swissarmyhammer-expect = 31/31 pass (10 config); cargo test --doc = 1 pass; cargo clippy --all-targets -D warnings clean; cargo fmt applied. Adversarial double-check: PASS. Left in doing for /review.'
+  timestamp: 2026-06-26T17:33:01.907331+00:00
 depends_on:
 - 01KW25YZ4MKNR09RXYR1B4S05T
-position_column: todo
-position_ordinal: a580
+position_column: doing
+position_ordinal: '8280'
 project: expect
 title: .expect/config.toml schema + parsing
 ---
