@@ -42,7 +42,7 @@
 //!    on the cross axis (horizontal overlap for `Up`/`Down`, vertical
 //!    overlap for `Left`/`Right`).
 //! 3. Are not the focused entry itself.
-//! 3b. Are **focusable** — a `focusable: false` scope is a structural zone
+//!    3b. Are **focusable** — a `focusable: false` scope is a structural zone
 //!    (board well, perspective bar, column, panel/view-area wrapper) that
 //!    paints no focus indicator and is never a cardinal target; pathfinding
 //!    skips it and lands on the focusable unit beyond. See

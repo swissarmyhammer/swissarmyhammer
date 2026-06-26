@@ -38,8 +38,8 @@ comments:
 
     Files: crates/mirdan/src/settings.rs, crates/mirdan/src/status.rs, crates/mirdan/src/mcp_config.rs, crates/mirdan/src/strategy/mod.rs. Left in `doing` for review.
   timestamp: 2026-06-26T22:18:28.688250+00:00
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff680
 project: mirdan-install
 title: 'mirdan: TOML-aware MCP config writes (Codex .codex/config.toml)'
 ---

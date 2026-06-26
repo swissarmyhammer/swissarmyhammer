@@ -395,10 +395,12 @@ impl FocusServer {
                 state.focus_lost(
                     registry,
                     &req.snapshot,
-                    &req.focused_fq,
-                    req.lost_parent_zone.as_ref(),
-                    &req.lost_layer_fq,
-                    req.lost_rect,
+                    crate::state::LostScope {
+                        fq: &req.focused_fq,
+                        parent_zone: req.lost_parent_zone.as_ref(),
+                        layer_fq: &req.lost_layer_fq,
+                        rect: req.lost_rect,
+                    },
                     None,
                 )
             })

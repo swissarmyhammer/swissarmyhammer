@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    FocusLayer, FullyQualifiedMoniker, LayerName, NavSnapshot, Pixels, Rect, SegmentMoniker,
-    SnapshotScope, SpatialRegistry, SpatialState, WindowLabel,
+    FocusLayer, FullyQualifiedMoniker, LayerName, LostScope, NavSnapshot, Pixels, Rect,
+    SegmentMoniker, SnapshotScope, SpatialRegistry, SpatialState, WindowLabel,
 };
 
 fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
@@ -89,10 +89,12 @@ fn focus_lost_picks_sibling_in_zone() {
         .focus_lost(
             &mut reg,
             &post_unmount,
-            &fq("/L/zone/lost"),
-            Some(&fq("/L/zone")),
-            &fq("/L"),
-            rect(0.0, 0.0, 10.0, 10.0),
+            LostScope {
+                fq: &fq("/L/zone/lost"),
+                parent_zone: Some(&fq("/L/zone")),
+                layer_fq: &fq("/L"),
+                rect: rect(0.0, 0.0, 10.0, 10.0),
+            },
             None,
         )
         .expect("focus_lost emits");
@@ -169,10 +171,12 @@ fn focus_lost_picks_parent_zone_last_focused() {
         .focus_lost(
             &mut reg,
             &post_unmount,
-            &fq("/L/outer/inner/lost"),
-            Some(&fq("/L/outer/inner")),
-            &fq("/L"),
-            rect(0.0, 0.0, 10.0, 10.0),
+            LostScope {
+                fq: &fq("/L/outer/inner/lost"),
+                parent_zone: Some(&fq("/L/outer/inner")),
+                layer_fq: &fq("/L"),
+                rect: rect(0.0, 0.0, 10.0, 10.0),
+            },
             None,
         )
         .expect("focus_lost emits");
@@ -206,10 +210,12 @@ fn focus_lost_emits_none_when_layer_is_empty() {
         .focus_lost(
             &mut reg,
             &post,
-            &fq("/L/lost"),
-            None,
-            &fq("/L"),
-            rect(0.0, 0.0, 10.0, 10.0),
+            LostScope {
+                fq: &fq("/L/lost"),
+                parent_zone: None,
+                layer_fq: &fq("/L"),
+                rect: rect(0.0, 0.0, 10.0, 10.0),
+            },
             None,
         )
         .expect("focus_lost emits");
@@ -252,10 +258,12 @@ fn focus_lost_on_unfocused_fq_is_noop() {
     let event = state.focus_lost(
         &mut reg,
         &post,
-        &fq("/main/window/b"),
-        None,
-        &fq("/main/window"),
-        rect(20.0, 0.0, 10.0, 10.0),
+        LostScope {
+            fq: &fq("/main/window/b"),
+            parent_zone: None,
+            layer_fq: &fq("/main/window"),
+            rect: rect(20.0, 0.0, 10.0, 10.0),
+        },
         None,
     );
 

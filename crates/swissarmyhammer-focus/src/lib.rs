@@ -135,7 +135,7 @@ pub use registry::SpatialRegistry;
 pub use server::FocusServer;
 pub use snapshot::{FocusOverrides, IndexedSnapshot, NavSnapshot, SnapshotScope};
 pub use sneak::{generate_sneak_codes, SneakError, MAX_SNEAK_CODES, SNEAK_ALPHABET};
-pub use state::{FallbackResolution, FocusChangedEvent, LostFocusContext, SpatialState};
+pub use state::{FallbackResolution, FocusChangedEvent, LostFocusContext, LostScope, SpatialState};
 pub use types::{
     Direction, FullyQualifiedMoniker, LayerName, Pixels, Rect, SegmentMoniker, WindowLabel,
 };

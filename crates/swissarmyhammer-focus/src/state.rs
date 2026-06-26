@@ -109,6 +109,28 @@ pub enum FallbackResolution {
     NoFocus,
 }
 
+/// Wire descriptor of the scope that just lost focus, bundled so
+/// [`SpatialState::focus_lost`] takes a single lost-scope argument
+/// instead of four positional ones.
+///
+/// The snapshot enumerates only live scopes; the lost FQM has already
+/// been removed by React before the IPC fires, so its identity (`fq`)
+/// and metadata (`parent_zone`, `layer_fq`, `rect`) ride alongside the
+/// snapshot rather than inside it.
+#[derive(Debug, Clone, Copy)]
+pub struct LostScope<'a> {
+    /// FQM of the scope that unmounted on the React side and is no
+    /// longer present in `snapshot.scopes`.
+    pub fq: &'a FullyQualifiedMoniker,
+    /// `parent_zone` of the lost FQM, or `None` when it was registered
+    /// directly under the layer root.
+    pub parent_zone: Option<&'a FullyQualifiedMoniker>,
+    /// FQM of the layer the lost FQM lived in.
+    pub layer_fq: &'a FullyQualifiedMoniker,
+    /// Bounding rect of the lost FQM at the moment it was unregistered.
+    pub rect: Rect,
+}
+
 /// Carries the lost FQM's metadata that the snapshot cannot supply on
 /// its own.
 ///
@@ -314,27 +336,27 @@ impl SpatialState {
     /// `parent_zone`, owning layer FQM, and bounding rect arrive on the
     /// wire alongside the snapshot.
     ///
-    /// If `lost_fq` is no longer the focused slot for any window, this is
+    /// If `lost.fq` is no longer the focused slot for any window, this is
     /// a no-op returning `None`.
+    ///
+    /// The lost scope's wire descriptor (`fq`, `parent_zone`, `layer_fq`,
+    /// `rect`) is bundled into [`LostScope`] so this call stays readable.
     pub fn focus_lost(
         &mut self,
         registry: &mut SpatialRegistry,
         snapshot: &NavSnapshot,
-        lost_fq: &FullyQualifiedMoniker,
-        lost_parent_zone: Option<&FullyQualifiedMoniker>,
-        lost_layer_fq: &FullyQualifiedMoniker,
-        lost_rect: Rect,
+        lost: LostScope<'_>,
         window: Option<WindowLabel>,
     ) -> Option<FocusChangedEvent> {
         // The calling window is authoritative when supplied: only react if
-        // `lost_fq` is actually the focused slot for *that* window. Falling
+        // `lost.fq` is actually the focused slot for *that* window. Falling
         // back to a value-search over `focus_by_window` is ambiguous because
         // FQMs are not unique across windows — the same card FQM can be the
         // focused slot in two windows, and the search would pick an arbitrary
         // one. The window-aware (Tauri) path always passes `Some(window)`.
         let window = match window {
             Some(w) => {
-                if self.focus_by_window.get(&w) != Some(lost_fq) {
+                if self.focus_by_window.get(&w) != Some(lost.fq) {
                     return None;
                 }
                 w
@@ -342,19 +364,19 @@ impl SpatialState {
             None => self
                 .focus_by_window
                 .iter()
-                .find(|(_, focused)| *focused == lost_fq)
+                .find(|(_, focused)| *focused == lost.fq)
                 .map(|(w, _)| w.clone())?,
         };
 
         let indexed = IndexedSnapshot::new(snapshot);
         let ctx = LostFocusContext {
             view: &indexed,
-            lost_layer_fq: lost_layer_fq.clone(),
-            lost_parent_zone: lost_parent_zone.cloned(),
-            lost_rect,
+            lost_layer_fq: lost.layer_fq.clone(),
+            lost_parent_zone: lost.parent_zone.cloned(),
+            lost_rect: lost.rect,
         };
-        let resolution = self.resolve_fallback(registry, lost_fq, &ctx);
-        Some(self.commit_fallback_resolution(registry, &window, lost_fq, resolution, &indexed))
+        let resolution = self.resolve_fallback(registry, lost.fq, &ctx);
+        Some(self.commit_fallback_resolution(registry, &window, lost.fq, resolution, &indexed))
     }
 
     /// Commit a [`FallbackResolution`] to `focus_by_window` and produce

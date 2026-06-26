@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    Direction, FocusLayer, FullyQualifiedMoniker, LayerName, NavSnapshot, Pixels, Rect,
+    Direction, FocusLayer, FullyQualifiedMoniker, LayerName, LostScope, NavSnapshot, Pixels, Rect,
     SegmentMoniker, SnapshotScope, SpatialRegistry, SpatialState, WindowLabel,
 };
 
@@ -188,10 +188,12 @@ fn filter_change_hides_focused_card_falls_back_to_sibling() {
         .focus_lost(
             &mut reg,
             &post_snapshot,
-            &lost,
-            Some(&fq("/L/col:0")),
-            &fq("/L"),
-            rect(10.0, 120.0, 160.0, 60.0),
+            LostScope {
+                fq: &lost,
+                parent_zone: Some(&fq("/L/col:0")),
+                layer_fq: &fq("/L"),
+                rect: rect(10.0, 120.0, 160.0, 60.0),
+            },
             None,
         )
         .expect("focus_lost emits");
@@ -238,10 +240,12 @@ fn bulk_delete_falls_back_to_layer_root_sibling() {
         .focus_lost(
             &mut reg,
             &post_snapshot,
-            &lost,
-            Some(&fq("/L/col:0")),
-            &fq("/L"),
-            rect(10.0, 120.0, 160.0, 60.0),
+            LostScope {
+                fq: &lost,
+                parent_zone: Some(&fq("/L/col:0")),
+                layer_fq: &fq("/L"),
+                rect: rect(10.0, 120.0, 160.0, 60.0),
+            },
             None,
         )
         .expect("focus_lost emits");
@@ -306,10 +310,12 @@ fn inspector_layer_focus_lost_resolves_within_layer() {
         .focus_lost(
             &mut reg,
             &post,
-            &title,
-            Some(&panel),
-            &inspector_layer,
-            rect(810.0, 10.0, 380.0, 40.0),
+            LostScope {
+                fq: &title,
+                parent_zone: Some(&panel),
+                layer_fq: &inspector_layer,
+                rect: rect(810.0, 10.0, 380.0, 40.0),
+            },
             None,
         )
         .expect("focus_lost emits");
