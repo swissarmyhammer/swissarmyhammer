@@ -14,6 +14,25 @@ use serde_json::Value;
 
 use crate::client::LspTransport;
 use crate::error::LspError;
+use crate::types::OwnedLspServerSpec;
+
+/// Build a minimal `OwnedLspServerSpec` for testing.
+///
+/// Shared by the daemon and supervisor unit-test modules so neither
+/// re-implements the spec-builder boilerplate.
+pub(crate) fn test_spec(command: &str) -> OwnedLspServerSpec {
+    OwnedLspServerSpec {
+        project_types: vec![],
+        command: command.to_string(),
+        args: vec![],
+        language_ids: vec!["test".to_string()],
+        file_extensions: vec!["txt".to_string()],
+        startup_timeout_secs: 5,
+        health_check_interval_secs: 60,
+        install_hint: format!("install {command}"),
+        icon: None,
+    }
+}
 
 /// An in-memory [`LspTransport`] for unit tests.
 ///
