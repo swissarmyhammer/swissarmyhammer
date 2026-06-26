@@ -30,6 +30,9 @@ const EXPECT_EXTENSION: &str = ".expect.md";
 /// The default wall-clock budget for one run when `timeout` is omitted.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Length of a GFM checkbox marker (`[ ]`, `[x]`, or `[X]`).
+const CHECKBOX_MARKER_LEN: usize = 3;
+
 /// A parsed expectation file: its identity, frontmatter, and body content.
 ///
 /// The whole markdown body is the [`intent`](Expectation::intent); the
@@ -121,7 +124,17 @@ pub struct Criterion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReliabilityPolicy {
     /// `k` in `pass^k` — the number of runs that must all pass (≥ 1).
-    pub required: u32,
+    ///
+    /// Private so the ≥ 1 invariant (enforced in [`Deserialize`]) cannot be
+    /// bypassed by direct construction; read it via [`ReliabilityPolicy::required`].
+    required: u32,
+}
+
+impl ReliabilityPolicy {
+    /// `k` in `pass^k` — the number of runs that must all pass (always ≥ 1).
+    pub fn required(&self) -> u32 {
+        self.required
+    }
 }
 
 impl Serialize for ReliabilityPolicy {
@@ -334,19 +347,17 @@ impl Sections {
                 continue;
             }
 
-            match current {
-                Section::Given => {
-                    if let Some(item) = parse_bullet(line) {
-                        given.push(item);
-                    }
+            // Notes captures every line verbatim; Given/When capture only plain
+            // bullets. Hoisting the bullet parse above the match keeps the
+            // routing at one nesting level instead of one per arm.
+            if let Section::Notes = current {
+                notes_lines.push(line);
+            } else if let Some(item) = parse_bullet(line) {
+                match current {
+                    Section::Given => given.push(item),
+                    Section::When => when.push(item),
+                    Section::None | Section::Then | Section::Notes => {}
                 }
-                Section::When => {
-                    if let Some(item) = parse_bullet(line) {
-                        when.push(item);
-                    }
-                }
-                Section::Notes => notes_lines.push(line),
-                Section::None | Section::Then => {}
             }
         }
 
@@ -415,13 +426,13 @@ fn parse_criterion(line: &str) -> Option<Criterion> {
     let rest = trimmed
         .strip_prefix("- ")
         .or_else(|| trimmed.strip_prefix("* "))?;
-    let marker = rest.get(..3)?;
+    let marker = rest.get(..CHECKBOX_MARKER_LEN)?;
     let checked = match marker {
         "[ ]" => false,
         "[x]" | "[X]" => true,
         _ => return None,
     };
-    let text = rest[3..].trim();
+    let text = rest[CHECKBOX_MARKER_LEN..].trim();
     Some(Criterion {
         text: text.to_string(),
         checked,
@@ -434,6 +445,13 @@ mod duration_str {
     use serde::{Deserialize, Deserializer, Serializer};
     use std::time::Duration;
 
+    /// Milliseconds in one hour.
+    const MILLIS_PER_HOUR: u128 = 3_600_000;
+    /// Milliseconds in one minute.
+    const MILLIS_PER_MINUTE: u128 = 60_000;
+    /// Milliseconds in one second.
+    const MILLIS_PER_SECOND: u128 = 1_000;
+
     /// Serialize as the most compact whole-unit form (`h`, `m`, `s`, or `ms`).
     pub fn serialize<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -442,12 +460,12 @@ mod duration_str {
         let millis = duration.as_millis();
         let text = if millis == 0 {
             "0s".to_string()
-        } else if millis.is_multiple_of(3_600_000) {
-            format!("{}h", millis / 3_600_000)
-        } else if millis.is_multiple_of(60_000) {
-            format!("{}m", millis / 60_000)
-        } else if millis.is_multiple_of(1_000) {
-            format!("{}s", millis / 1_000)
+        } else if millis.is_multiple_of(MILLIS_PER_HOUR) {
+            format!("{}h", millis / MILLIS_PER_HOUR)
+        } else if millis.is_multiple_of(MILLIS_PER_MINUTE) {
+            format!("{}m", millis / MILLIS_PER_MINUTE)
+        } else if millis.is_multiple_of(MILLIS_PER_SECOND) {
+            format!("{}s", millis / MILLIS_PER_SECOND)
         } else {
             format!("{millis}ms")
         };
@@ -470,19 +488,19 @@ mod duration_str {
     /// Parse a human duration string into a [`Duration`].
     fn parse_duration(raw: &str) -> Option<Duration> {
         let raw = raw.trim();
-        let (value, unit_millis) = if let Some(value) = raw.strip_suffix("ms") {
+        let (value, unit_millis): (&str, u128) = if let Some(value) = raw.strip_suffix("ms") {
             (value, 1)
         } else if let Some(value) = raw.strip_suffix('s') {
-            (value, 1_000)
+            (value, MILLIS_PER_SECOND)
         } else if let Some(value) = raw.strip_suffix('m') {
-            (value, 60_000)
+            (value, MILLIS_PER_MINUTE)
         } else if let Some(value) = raw.strip_suffix('h') {
-            (value, 3_600_000)
+            (value, MILLIS_PER_HOUR)
         } else {
             return None;
         };
         let count: u64 = value.trim().parse().ok()?;
-        Some(Duration::from_millis(count * unit_millis))
+        Some(Duration::from_millis(count * unit_millis as u64))
     }
 }
 
@@ -546,7 +564,7 @@ reason must be the coupon.
             "A valid coupon reduces the order total by its discount, exactly once"
         );
         assert_eq!(expectation.frontmatter.surface, Surface::Cli);
-        assert_eq!(expectation.frontmatter.reliability.required, 3);
+        assert_eq!(expectation.frontmatter.reliability.required(), 3);
         assert_eq!(
             expectation.frontmatter.model.as_deref(),
             Some("qwen-coder-flash")
@@ -602,7 +620,7 @@ surface: http
         let expectation =
             Expectation::parse(spec, &coupon_path(), &repo_root()).expect("parse minimal");
 
-        assert_eq!(expectation.frontmatter.reliability.required, 1);
+        assert_eq!(expectation.frontmatter.reliability.required(), 1);
         assert_eq!(expectation.frontmatter.isolation, Isolation::Shared);
         assert_eq!(expectation.frontmatter.timeout, Duration::from_secs(60));
         assert_eq!(
@@ -690,7 +708,7 @@ timeout: 5m
 "#;
         let expectation =
             Expectation::parse(spec, &coupon_path(), &repo_root()).expect("parse durations");
-        assert_eq!(expectation.frontmatter.reliability.required, 5);
+        assert_eq!(expectation.frontmatter.reliability.required(), 5);
         assert_eq!(expectation.frontmatter.timeout, Duration::from_secs(300));
     }
 
