@@ -28,8 +28,8 @@ comments:
   id: 01kw2d7e6spf6y4t2vbj0rad79
   text: 'Addressed the single review finding: added a runnable `# Examples` section to the crate-level docs in `crates/swissarmyhammer-expect/src/lib.rs`. The doctest deserializes an `Observation` from wire JSON (cli SurfaceState via `{"kind":"cli",...}`, `duration_ms` key) and constructs a `Reliability { required: 3, runs: vec![true, true, true] }`, asserting `.satisfied()`. Verified: `cargo test --doc -p swissarmyhammer-expect` -> 1 passed; `cargo fmt` applied; `cargo clippy -p swissarmyhammer-expect -- -D warnings` clean. Finding checkbox flipped to [x]. Left in doing for review.'
   timestamp: 2026-06-26T16:46:52.121084+00:00
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffe380
 project: expect
 title: Create swissarmyhammer-expect crate + core domain types
 ---

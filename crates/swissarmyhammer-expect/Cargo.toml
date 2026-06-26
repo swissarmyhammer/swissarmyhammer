@@ -10,6 +10,9 @@ description = "The expect engine: pure domain model for human-authored behaviora
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# YAML frontmatter parsing for *.expect.md spec files
+serde_yaml_ng = { workspace = true }
+
 # Error handling
 thiserror = { workspace = true }
 

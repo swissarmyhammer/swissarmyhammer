@@ -1,10 +1,20 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kw2dzgg18tzevkr8d91mqee5
+  text: |-
+    Implemented `crates/swissarmyhammer-expect/src/spec.rs`: `Expectation`, `Frontmatter` (deny_unknown_fields, all 11 closed keys with documented defaults), `Criterion`, plus `ReliabilityPolicy` (parses `pass^N`), `Isolation` (default shared), `Setup` (string|list), and a `duration_str` serde module for `30s`/`5m` timeouts. Added `serde_yaml_ng` dep; wired module + re-exports into lib.rs. Reuses the existing `Surface` and `VerdictTier` enums from types.rs. Wrote a small frontmatter splitter + single-pass section walker rather than depending on templating (matches the prevailing per-crate pattern; validators has its own too). Criteria are collected from any GFM checklist item in the body so the no-`## Then`-header / criteria-list case parses.
+
+    TDD: 13 new spec tests covering the coupon worked example (description, surface cli, reliability pass^3, 2 Given, 2 When, 4 Then unchecked, Notes block), unknown-key rejection (names `surfce`), default application, no-GWT, zero criteria, outside-repo-root, missing frontmatter, timeout/reliability forms, ReliabilityPolicy round-trip, setup string|list.
+
+    Verified: `cargo nextest run -p swissarmyhammer-expect` = 21 passed; `cargo clippy -p swissarmyhammer-expect --all-targets -- -D warnings` clean; `cargo test --doc` 1 passed; double-check agent verdict PASS. Left in `doing` for /review.
+  timestamp: 2026-06-26T17:00:00.897497+00:00
 depends_on:
 - 01KW25YZ4MKNR09RXYR1B4S05T
-position_column: todo
-position_ordinal: a480
+position_column: doing
+position_ordinal: '8280'
 project: expect
 title: Parse *.expect.md files (frontmatter + intent body + criteria)
 ---

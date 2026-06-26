@@ -42,9 +42,11 @@
 //! ```
 
 pub mod error;
+pub mod spec;
 pub mod types;
 
 pub use error::ExpectError;
+pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};
 pub use types::{
     Checkpoint, CliState, CriterionStatus, CriterionVerdict, Evidence, ExpectationVerdict,
     LedgerState, Observation, Reliability, Surface, SurfaceState, Trajectory, VerdictTier,
