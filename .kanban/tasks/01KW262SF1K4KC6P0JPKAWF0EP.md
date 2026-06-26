@@ -43,6 +43,19 @@ comments:
 
     Verify: cargo nextest -p swissarmyhammer-tools -E 'test(expect)' = 27 passed; -p swissarmyhammer-common -E 'test(gitignore)' = 8 passed; cargo fmt applied; clippy -p swissarmyhammer-common -p swissarmyhammer-tools -D warnings clean. Left in doing for /review.
   timestamp: 2026-06-26T21:09:28.994181+00:00
+- actor: claude-code
+  id: 01kw2wrq6pmkvj184b2tbbkw4y
+  text: |-
+    Cleared the 2026-06-26 16:10 review findings (test-module DRY in expect/init.rs) — tests only, no production change, no coverage weakened:
+
+    1. BLOCKER: extracted `assert_detected_surface_default(marker_file, marker_contents, expected: Surface)`; the Rust→Cli and Node.js→Http surface-default tests now call it instead of being near-verbatim copies.
+    2. WARNING: replaced the three hardcoded subdir `is_dir()` assertions with a loop over SCAFFOLD_SUBDIRS.
+    3. WARNING: replaced the hardcoded "received/" gitignore check with a loop over REQUIRED_GITIGNORE_ENTRIES.
+
+    Self-audit of the whole init.rs test module for the same class (re-typed literals duplicating a source of truth / near-duplicate bodies): also fixed `expect_init_config_contents_still_parse_with_surface_header` to assert `surface_name(Surface::Cli/Http)` instead of literal "cli"/"http". Remaining literals ("*" blanket negative, "goldens" committed-dir negative) are singular meaningful assertions, not lockstep lists — left as-is.
+
+    Verify: `cargo nextest run -p swissarmyhammer-tools -E 'test(expect)'` → 27 passed, 0 failed. `cargo fmt` applied. `cargo clippy -p swissarmyhammer-tools --all-targets -- -D warnings` clean (exit 0). Task left green in `doing` for /review.
+  timestamp: 2026-06-26T21:18:27.030290+00:00
 depends_on:
 - 01KW25ZW4NED0J1BD77HPK7DNX
 - 01KW260M8QZ8T37A8RZGDDVZ81
@@ -88,16 +101,27 @@ Implement `expect init` (the `Initializable` trait verb, rolling up to `sah init
 ## Review Findings (2026-06-26 15:33)
 
 ### Blockers
-- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:177` — The `ensure_gitignore` function is verbatim to kanban's `ensure_gitignore_entries` (crates/swissarmyhammer-kanban/src/board/init.rs:313–332), differing only in parameter names (`expect_dir` vs `kanban_root`), variable names (`line` vs `l`), and the path constant. Two functions differing only by renamed variables are one function with arguments. This duplication inflates maintenance surface—a fix applied to one and not the other becomes a latent bug. Extract a shared `ensure_gitignore_reconcile(dir: &Path, entries: &[&str]) -> std::io::Result<()>` helper (in swissarmyhammer-common or a gitignore module). Both kanban and expect call it with their respective directory and `REQUIRED_GITIGNORE_ENTRIES`. Delete the duplicate implementations. **FIXED (preferred path)**: extracted `swissarmyhammer_common::fs_utils::ensure_gitignore_entries(dir: &Path, entries: &[&str])` (single canonical impl, 4 new tests). kanban's `ensure_gitignore_entries(kanban_root)` and expect's `ensure_gitignore(expect_dir)` both delegate to it, each keeping its own `REQUIRED_GITIGNORE_ENTRIES`. kanban suite 1537 passed (clean drop-in).
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:177` — duplicate `ensure_gitignore`. **FIXED**: extracted `swissarmyhammer_common::fs_utils::ensure_gitignore_entries`; both kanban and expect delegate.
 
 ### Warnings
-- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:122` — The `ensure_gitignore()` function reimplements the exact algorithm already in kanban's `ensure_gitignore_entries()` (crates/swissarmyhammer-kanban/src/board/init.rs:313-332). The comment at line 124 acknowledges this: 'Mirrors the kanban board's `ensure_gitignore_entries`'. The algorithm is identical (read lines, check for missing entries, rewrite if changed); only the directory and required entries differ. This should be extracted into a shared generic utility parameterized by path and entries, then called from both places. Extract a generic `reconcile_gitignore_entries(path: &Path, entries: &[&str]) -> io::Result<()>` into a shared utility module (e.g., `swissarmyhammer-common`), then call it from both kanban and expect with their respective `REQUIRED_GITIGNORE_ENTRIES` arrays. This keeps one canonical implementation and prevents divergence if the algorithm needs fixing later. **FIXED**: same extraction as the blocker above — `swissarmyhammer_common::fs_utils::ensure_gitignore_entries`.
-- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:138` — Hardcoded list of surface names in config template comment; should be derived from the Surface enum or catalog to stay in sync when new surface variants are added. Derive the surface list dynamically from `surfaces::catalog()` (already imported in `mod.rs`). Add `use swissarmyhammer_expect::surfaces;` to the imports, create a helper function that generates the comment with the current catalog, and update the test (`expect_init_config_contents_still_parse_with_surface_header`) to verify all catalog surfaces are listed. **FIXED**: added `use swissarmyhammer_expect::{surfaces, Surface}`; new `catalog_surface_names()` helper derives the "one of:" list from `surfaces::catalog()`; `config_contents` uses it; new test `expect_init_config_header_lists_every_catalog_surface` asserts every catalog surface name appears in the header.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:122` — duplicate gitignore reconcile algorithm. **FIXED**: same shared extraction.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:138` — hardcoded surface names in config template comment. **FIXED**: `catalog_surface_names()` derives from `surfaces::catalog()`.
 
 ## Review Findings (2026-06-26 15:57)
 
 ### Warnings
-- [x] `crates/swissarmyhammer-common/src/fs_utils.rs:547` — Public function `ensure_gitignore_entries` lacks doc comments. The rule requires all public items to have documentation explaining purpose, parameters, return value, and any error conditions. Add a doc comment above the function explaining: (1) that it reconciles gitignore entries (appending only those missing), (2) the intent of idempotency, (3) that it reads existing content and preserves it, (4) when it modifies the file. Example: `/// Reconcile `.gitignore` entries — append any that are missing, leaving existing content untouched.
-/// 
-/// Returns `Ok(())` on success or if no changes were needed (idempotent). Returns `Err` if file I/O fails.`. **FIXED**: the public `ensure_gitignore_entries` already carries a full doc comment in HEAD (commit b65e12088) covering all four points — reconcile/append-only-missing, idempotency (no-op when complete), reads+preserves existing lines without clobbering, rewrites only when changed — plus its params (`dir`, `entries`) and the `std::io::Error` return condition. Confirmed satisfied.
-- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:227` — Subdirectory names "expectations", "goldens", "received" are hardcoded in `expect_paths` test helper, duplicating the `SCAFFOLD_SUBDIRS` constant. If directories are added or removed, both must be kept in sync — a maintenance burden and source of drift. Refactor `expect_paths` to derive subdirs from `SCAFFOLD_SUBDIRS` rather than hardcoding: collect the fixed paths (root, config, readme, example, gitignore), then append paths from the loop `for subdir in SCAFFOLD_SUBDIRS { paths.push(expect_dir.join(subdir)); }`. **FIXED**: `expect_paths` now builds the fixed paths then appends `for subdir in SCAFFOLD_SUBDIRS { paths.push(expect_dir.join(subdir)); }`, deriving all subdirs from the single `SCAFFOLD_SUBDIRS` source.
+- [x] `crates/swissarmyhammer-common/src/fs_utils.rs:547` — public fn doc comments. **FIXED**: full doc comment present.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:227` — `expect_paths` hardcoded subdirs. **FIXED**: derives from `SCAFFOLD_SUBDIRS`.
+
+## Review Findings (2026-06-26 16:10)
+
+### Blockers
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:255` — the two detected-project surface-default tests were near-verbatim copies. **FIXED**: extracted parameterized `assert_detected_surface_default(marker_file, marker_contents, expected)`; both Rust→Cli and Node.js→Http tests are now one-line calls to it.
+
+### Warnings
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:306` — three hardcoded subdir assertions. **FIXED**: replaced with `for subdir in SCAFFOLD_SUBDIRS { assert!(expect_dir.join(subdir).is_dir(), ...) }`, deriving from the single source of truth.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:326` — hardcoded "received/" gitignore assertion. **FIXED**: replaced with `for entry in REQUIRED_GITIGNORE_ENTRIES { assert!(gitignore.lines().any(|line| line.trim() == *entry), ...) }`.
+
+### Self-audit (same class, fixed this pass)
+- [x] `expect_init_config_contents_still_parse_with_surface_header` hardcoded `"cli"`/`"http"` literals duplicating the serde wire names. **FIXED**: now asserts `contents.contains(&surface_name(Surface::Cli))` / `surface_name(Surface::Http)`.
+- Audited the rest of the init.rs test module: remaining literals (`"*"` blanket-ignore negative check, `"goldens"` committed-dir negative check) are singular meaningful assertions, not re-typed lists in lockstep with a production constant, so left intact per "keep meaning identical".

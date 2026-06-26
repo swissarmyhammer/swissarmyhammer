@@ -317,9 +317,12 @@ mod tests {
         for path in expect_paths(&expect_dir) {
             assert!(path.exists(), "scaffold should create {}", path.display());
         }
-        assert!(expect_dir.join("expectations").is_dir());
-        assert!(expect_dir.join("goldens").is_dir());
-        assert!(expect_dir.join("received").is_dir());
+        for subdir in SCAFFOLD_SUBDIRS {
+            assert!(
+                expect_dir.join(subdir).is_dir(),
+                "scaffold subdir {subdir} should be a directory"
+            );
+        }
     }
 
     #[test]
@@ -328,10 +331,12 @@ mod tests {
         let expect_dir = scaffold_expect_dir(temp.path()).unwrap();
         let gitignore = std::fs::read_to_string(expect_dir.join(GITIGNORE_FILE)).unwrap();
 
-        assert!(
-            gitignore.lines().any(|line| line.trim() == "received/"),
-            "gitignore must ignore received/, got: {gitignore:?}"
-        );
+        for entry in REQUIRED_GITIGNORE_ENTRIES {
+            assert!(
+                gitignore.lines().any(|line| line.trim() == *entry),
+                "gitignore must contain {entry}, got: {gitignore:?}"
+            );
+        }
         assert!(
             !gitignore.lines().any(|line| line.trim() == "*"),
             "gitignore must not blanket-ignore with `*`, got: {gitignore:?}"
@@ -383,34 +388,37 @@ mod tests {
         );
     }
 
-    #[test]
-    fn expect_init_detected_rust_project_yields_cli_surface_default() {
+    /// Scaffold a project whose root holds `marker_file` with `marker_contents`,
+    /// then assert `config.toml` records `expected` as a detected surface default.
+    ///
+    /// The per-project-type detection tests differ only by these three values, so
+    /// they share one body parameterized over them.
+    fn assert_detected_surface_default(
+        marker_file: &str,
+        marker_contents: &str,
+        expected: Surface,
+    ) {
         let temp = tempfile::TempDir::new().unwrap();
-        std::fs::write(temp.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        std::fs::write(temp.path().join(marker_file), marker_contents).unwrap();
 
         let expect_dir = scaffold_expect_dir(temp.path()).unwrap();
         let config = std::fs::read_to_string(expect_dir.join(CONFIG_FILE)).unwrap();
 
-        let expected = surface_name(Surface::Cli);
+        let expected_name = surface_name(expected);
         assert!(
-            config.contains(&expected),
-            "a Rust project should record the `{expected}` surface default, got: {config}"
+            config.contains(&expected_name),
+            "a {marker_file} project should record the `{expected_name}` surface default, got: {config}"
         );
     }
 
     #[test]
+    fn expect_init_detected_rust_project_yields_cli_surface_default() {
+        assert_detected_surface_default("Cargo.toml", "[package]\nname = \"x\"\n", Surface::Cli);
+    }
+
+    #[test]
     fn expect_init_detected_http_project_yields_http_surface_default() {
-        let temp = tempfile::TempDir::new().unwrap();
-        std::fs::write(temp.path().join("package.json"), "{\"name\":\"x\"}\n").unwrap();
-
-        let expect_dir = scaffold_expect_dir(temp.path()).unwrap();
-        let config = std::fs::read_to_string(expect_dir.join(CONFIG_FILE)).unwrap();
-
-        let expected = surface_name(Surface::Http);
-        assert!(
-            config.contains(&expected),
-            "a Node.js project should record the `{expected}` surface default, got: {config}"
-        );
+        assert_detected_surface_default("package.json", "{\"name\":\"x\"}\n", Surface::Http);
     }
 
     #[test]
@@ -448,8 +456,8 @@ mod tests {
         let contents = config_contents(&[Surface::Cli, Surface::Http]);
         let parsed = ExpectConfig::parse(&contents).expect("config with header must parse");
         assert_eq!(parsed, ExpectConfig::default());
-        assert!(contents.contains("cli"));
-        assert!(contents.contains("http"));
+        assert!(contents.contains(&surface_name(Surface::Cli)));
+        assert!(contents.contains(&surface_name(Surface::Http)));
     }
 
     #[test]
