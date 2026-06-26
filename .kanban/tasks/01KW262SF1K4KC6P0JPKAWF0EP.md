@@ -17,6 +17,21 @@ comments:
 
     Verification: `cargo nextest run -p swissarmyhammer-tools -E 'test(expect)'` = 26 passed (13 new init tests). RED verified: blanket-`*` gitignore breaks the keeps-goldens test. `cargo check --workspace` clean. `cargo clippy -p swissarmyhammer-tools -- -D warnings` clean. CLI registry tests pass (len 3). double-check agent: PASS. Leaving in `doing` for /review.
   timestamp: 2026-06-26T20:33:06.342322+00:00
+- actor: claude-code
+  id: 01kw2tz0k6kk4ng4kxe725td5q
+  text: 'Re-picked from review to resolve 2 maintainability findings. Plan: (A) derive the config.toml header surface list from surfaces::catalog() instead of the hardcoded literal; (B) PREFERRED path is viable — both kanban and swissarmyhammer-tools(expect) already depend on swissarmyhammer-common, so extracting a shared ensure_gitignore_entries(dir, &[entries]) into common/src/fs_utils.rs and delegating from both is a clean drop-in. Kanban keeps its own REQUIRED_GITIGNORE_ENTRIES constant (domain data) as a thin wrapper; expect likewise. TDD on the shared helper.'
+  timestamp: 2026-06-26T20:46:56.102338+00:00
+- actor: claude-code
+  id: 01kw2vh9r2czk967kfm84hp5me
+  text: |-
+    Both review findings resolved (PREFERRED path for the duplication finding).
+
+    FINDING B (gitignore duplication, blocker + warning): extracted the canonical reconciler into swissarmyhammer-common — `swissarmyhammer_common::fs_utils::ensure_gitignore_entries(dir: &Path, entries: &[&str])` with 4 new TDD tests (create-missing, append-without-clobber, idempotent, trimmed-line dedup). kanban's `ensure_gitignore_entries(kanban_root)` and expect's `ensure_gitignore(expect_dir)` now both delegate, each keeping its own REQUIRED_GITIGNORE_ENTRIES. Verified clean drop-in: `cargo nextest run -p swissarmyhammer-kanban` = 1537 passed.
+
+    FINDING A (hardcoded surface list): added `use swissarmyhammer_expect::{surfaces, Surface}`; new `catalog_surface_names()` derives the config.toml header "one of:" list from `surfaces::catalog()` (byte-identical to the old literal, but now drift-proof). New test `expect_init_config_header_lists_every_catalog_surface` guards it. Also moved the now-test-only GITIGNORE_FILE const into the test module to keep clippy -D warnings clean.
+
+    Verification: expect tests 27 passed; kanban 1537 passed; common gitignore tests pass; `cargo check --workspace` clean; `cargo clippy -p swissarmyhammer-tools -- -D warnings` clean; `cargo fmt` applied. double-check agent: PASS. Leaving in `doing` for /review.
+  timestamp: 2026-06-26T20:56:55.298616+00:00
 depends_on:
 - 01KW25ZW4NED0J1BD77HPK7DNX
 - 01KW260M8QZ8T37A8RZGDDVZ81
@@ -46,15 +61,24 @@ Implement `expect init` (the `Initializable` trait verb, rolling up to `sah init
 - Gate filesystem work to `InitScope::Project|Local` (not User), as kanban does.
 
 ## Acceptance Criteria
-- [ ] `expect init` (and `sah init`) create the full `.expect/` tree; re-running does not overwrite `config.toml`/`example.expect.md`.
-- [ ] `.expect/.gitignore` ignores `received/` but not `goldens/` (no blanket `*`).
-- [ ] `config.toml` is written with surface defaults derived from the detected project type(s).
-- [ ] Running in a non-git / read-only CWD does not panic (derive root safely; mirror gui-cwd-readonly guidance).
+- [x] `expect init` (and `sah init`) create the full `.expect/` tree; re-running does not overwrite `config.toml`/`example.expect.md`.
+- [x] `.expect/.gitignore` ignores `received/` but not `goldens/` (no blanket `*`).
+- [x] `config.toml` is written with surface defaults derived from the detected project type(s).
+- [x] Running in a non-git / read-only CWD does not panic (derive root safely; mirror gui-cwd-readonly guidance).
 
 ## Tests
-- [ ] Init test in a `tempfile` repo: asserts every scaffolded path exists, `.gitignore` content (received ignored, goldens kept), and idempotency on second run.
-- [ ] Test that detected `ProjectType` ⇒ expected `surface` default in `config.toml`.
-- [ ] `cargo nextest run -p swissarmyhammer-tools expect_init` passes.
+- [x] Init test in a `tempfile` repo: asserts every scaffolded path exists, `.gitignore` content (received ignored, goldens kept), and idempotency on second run.
+- [x] Test that detected `ProjectType` ⇒ expected `surface` default in `config.toml`.
+- [x] `cargo nextest run -p swissarmyhammer-tools expect_init` passes.
 
 ## Workflow
 - Use `/tdd`.
+
+## Review Findings (2026-06-26 15:33)
+
+### Blockers
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:177` — The `ensure_gitignore` function is verbatim to kanban's `ensure_gitignore_entries` (crates/swissarmyhammer-kanban/src/board/init.rs:313–332), differing only in parameter names (`expect_dir` vs `kanban_root`), variable names (`line` vs `l`), and the path constant. Two functions differing only by renamed variables are one function with arguments. This duplication inflates maintenance surface—a fix applied to one and not the other becomes a latent bug. Extract a shared `ensure_gitignore_reconcile(dir: &Path, entries: &[&str]) -> std::io::Result<()>` helper (in swissarmyhammer-common or a gitignore module). Both kanban and expect call it with their respective directory and `REQUIRED_GITIGNORE_ENTRIES`. Delete the duplicate implementations. **FIXED (preferred path)**: extracted `swissarmyhammer_common::fs_utils::ensure_gitignore_entries(dir: &Path, entries: &[&str])` (single canonical impl, 4 new tests). kanban's `ensure_gitignore_entries(kanban_root)` and expect's `ensure_gitignore(expect_dir)` both delegate to it, each keeping its own `REQUIRED_GITIGNORE_ENTRIES`. kanban suite 1537 passed (clean drop-in).
+
+### Warnings
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:122` — The `ensure_gitignore()` function reimplements the exact algorithm already in kanban's `ensure_gitignore_entries()` (crates/swissarmyhammer-kanban/src/board/init.rs:313-332). The comment at line 124 acknowledges this: 'Mirrors the kanban board's `ensure_gitignore_entries`'. The algorithm is identical (read lines, check for missing entries, rewrite if changed); only the directory and required entries differ. This should be extracted into a shared generic utility parameterized by path and entries, then called from both places. Extract a generic `reconcile_gitignore_entries(path: &Path, entries: &[&str]) -> io::Result<()>` into a shared utility module (e.g., `swissarmyhammer-common`), then call it from both kanban and expect with their respective `REQUIRED_GITIGNORE_ENTRIES` arrays. This keeps one canonical implementation and prevents divergence if the algorithm needs fixing later. **FIXED**: same extraction as the blocker above — `swissarmyhammer_common::fs_utils::ensure_gitignore_entries`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/expect/init.rs:138` — Hardcoded list of surface names in config template comment; should be derived from the Surface enum or catalog to stay in sync when new surface variants are added. Derive the surface list dynamically from `surfaces::catalog()` (already imported in `mod.rs`). Add `use swissarmyhammer_expect::surfaces;` to the imports, create a helper function that generates the comment with the current catalog, and update the test (`expect_init_config_contents_still_parse_with_surface_header`) to verify all catalog surfaces are listed. **FIXED**: added `use swissarmyhammer_expect::{surfaces, Surface}`; new `catalog_surface_names()` helper derives the "one of:" list from `surfaces::catalog()`; `config_contents` uses it; new test `expect_init_config_header_lists_every_catalog_surface` asserts every catalog surface name appears in the header.

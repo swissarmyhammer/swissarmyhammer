@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use swissarmyhammer_common::lifecycle::{InitResult, InitScope, Initializable};
 use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
-use swissarmyhammer_expect::Surface;
+use swissarmyhammer_expect::{surfaces, Surface};
 use swissarmyhammer_project_detection::{detect_projects, ProjectType};
 
 use super::ExpectTool;
@@ -37,8 +37,6 @@ const CONFIG_FILE: &str = "config.toml";
 const README_FILE: &str = "README.md";
 /// The worked, ready-to-copy expectation.
 const EXAMPLE_FILE: &str = "example.expect.md";
-/// The `.expect/.gitignore` reconciled by [`ensure_gitignore`].
-const GITIGNORE_FILE: &str = ".gitignore";
 
 /// Subdirectories created under `.expect/`: repo-global specs, committed
 /// goldens, and gitignored received runs.
@@ -116,17 +114,32 @@ fn surface_name(surface: Surface) -> String {
         .unwrap_or_default()
 }
 
+/// The comma-joined wire names of every surface in the adapter catalog.
+///
+/// Derived from [`surfaces::catalog`] — the single source of truth for the set
+/// of surfaces — rather than a re-typed literal, so the `config.toml` header's
+/// "one of:" list can never drift when a new [`Surface`] variant is added.
+fn catalog_surface_names() -> String {
+    surfaces::catalog()
+        .into_iter()
+        .map(|info| surface_name(info.name))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Build the `config.toml` contents: a detected-surface header comment over the
-/// all-defaults [`CONFIG_TEMPLATE`].
+/// all-defaults [`CONFIG_TEMPLATE`]. The list of selectable surfaces in the
+/// header is derived from the catalog via [`catalog_surface_names`].
 fn config_contents(surfaces: &[Surface]) -> String {
     let names = surfaces
         .iter()
         .map(|surface| surface_name(*surface))
         .collect::<Vec<_>>()
         .join(", ");
+    let all_surfaces = catalog_surface_names();
     format!(
         "# Detected surface default(s) for new expectations: {names}\n\
-         # Set `surface:` in each *.expect.md to one of: cli, http, browser, gui, file, db.\n\
+         # Set `surface:` in each *.expect.md to one of: {all_surfaces}.\n\
          \n\
          {CONFIG_TEMPLATE}"
     )
@@ -146,29 +159,16 @@ fn write_if_absent(path: &Path, contents: &str) -> std::io::Result<()> {
 /// Reconcile `.expect/.gitignore` so every entry in
 /// [`REQUIRED_GITIGNORE_ENTRIES`] is present, appending any that are missing.
 ///
-/// Mirrors the kanban board's `ensure_gitignore_entries`: reads whatever is
-/// already there, appends only the missing required entries without clobbering
-/// existing lines, and rewrites only when something changed. `received/` is
-/// listed explicitly (not a blanket `*`) so `goldens/` stays tracked.
+/// A thin binding of expect's own [`REQUIRED_GITIGNORE_ENTRIES`] to the shared
+/// [`swissarmyhammer_common::fs_utils::ensure_gitignore_entries`] reconciler
+/// (the single canonical implementation, also used by the kanban board): each
+/// entry is listed explicitly (not a blanket `*`) so `goldens/` — committed
+/// source — stays tracked.
 fn ensure_gitignore(expect_dir: &Path) -> std::io::Result<()> {
-    let gitignore_path = expect_dir.join(GITIGNORE_FILE);
-    let existing = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
-
-    let mut lines: Vec<String> = existing.lines().map(|line| line.to_string()).collect();
-    let mut changed = false;
-    for required in REQUIRED_GITIGNORE_ENTRIES {
-        if !lines.iter().any(|line| line.trim() == *required) {
-            lines.push((*required).to_string());
-            changed = true;
-        }
-    }
-
-    if changed {
-        let mut content = lines.join("\n");
-        content.push('\n');
-        std::fs::write(&gitignore_path, content)?;
-    }
-    Ok(())
+    swissarmyhammer_common::fs_utils::ensure_gitignore_entries(
+        expect_dir,
+        REQUIRED_GITIGNORE_ENTRIES,
+    )
 }
 
 /// Scaffold the `.expect/` tree under an explicit `root`, idempotently.
@@ -286,6 +286,10 @@ mod tests {
     use super::*;
     use swissarmyhammer_common::reporter::NullReporter;
     use swissarmyhammer_expect::ExpectConfig;
+
+    /// The `.expect/.gitignore` the shared reconciler writes — asserted against
+    /// by the scaffold tests.
+    const GITIGNORE_FILE: &str = ".gitignore";
 
     /// Every scaffolded path from the `ideas/expect.md` §"expect init" tree.
     fn expect_paths(expect_dir: &Path) -> Vec<PathBuf> {
@@ -442,6 +446,21 @@ mod tests {
         assert_eq!(parsed, ExpectConfig::default());
         assert!(contents.contains("cli"));
         assert!(contents.contains("http"));
+    }
+
+    #[test]
+    fn expect_init_config_header_lists_every_catalog_surface() {
+        // The "one of:" list is derived from the catalog, so every surface the
+        // engine knows about must appear — guarding against drift when a new
+        // `Surface` variant is added.
+        let contents = config_contents(&[Surface::Cli]);
+        for info in surfaces::catalog() {
+            let name = surface_name(info.name);
+            assert!(
+                contents.contains(&name),
+                "config header must list catalog surface `{name}`, got: {contents}"
+            );
+        }
     }
 
     #[test]

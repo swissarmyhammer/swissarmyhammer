@@ -452,6 +452,42 @@ impl Default for FileSystemUtils {
     }
 }
 
+/// Reconcile a directory's `.gitignore` so every entry in `entries` is present,
+/// appending any that are missing.
+///
+/// Reads whatever `.gitignore` is already in `dir` (a missing file is treated as
+/// empty), appends only the required entries that are not already present —
+/// without clobbering existing lines — and rewrites the file only when something
+/// changed. Entries are matched by trimmed-line equality, so each is listed
+/// explicitly (e.g. `received/`) rather than blanket-ignoring the directory,
+/// keeping the directory's tracked source files un-ignored.
+///
+/// The single canonical implementation behind both the kanban board's
+/// `.kanban/.gitignore` and the expectations `.expect/.gitignore` scaffolds:
+/// callers pass their own directory and required-entries list. Idempotent —
+/// reconciling an already-complete `.gitignore` is a no-op. Returns the
+/// underlying [`std::io::Error`] if the rewrite fails.
+pub fn ensure_gitignore_entries(dir: &Path, entries: &[&str]) -> std::io::Result<()> {
+    let gitignore_path = dir.join(".gitignore");
+    let existing = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
+
+    let mut lines: Vec<String> = existing.lines().map(|line| line.to_string()).collect();
+    let mut changed = false;
+    for required in entries {
+        if !lines.iter().any(|line| line.trim() == *required) {
+            lines.push((*required).to_string());
+            changed = true;
+        }
+    }
+
+    if changed {
+        let mut content = lines.join("\n");
+        content.push('\n');
+        std::fs::write(&gitignore_path, content)?;
+    }
+    Ok(())
+}
+
 /// Mock file system for testing
 pub struct MockFileSystem {
     files: Mutex<HashMap<PathBuf, String>>,
@@ -1293,6 +1329,63 @@ pub mod tests {
         // set_permissions on mock is a no-op, should succeed
         fs.set_permissions(Path::new("/anything"), FilePermissions::OwnerReadOnly)
             .unwrap();
+    }
+
+    // ── ensure_gitignore_entries (shared gitignore reconciler) ────────
+
+    #[test]
+    fn ensure_gitignore_entries_creates_file_with_missing_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_gitignore_entries(dir.path(), &["received/", "*.tmp"]).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert!(lines.contains(&"received/"));
+        assert!(lines.contains(&"*.tmp"));
+    }
+
+    #[test]
+    fn ensure_gitignore_entries_appends_without_clobbering_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let gitignore = dir.path().join(".gitignore");
+        std::fs::write(&gitignore, "# hand-written\nkeep-me\n").unwrap();
+
+        ensure_gitignore_entries(dir.path(), &["received/"]).unwrap();
+
+        let content = std::fs::read_to_string(&gitignore).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert!(lines.contains(&"# hand-written"), "existing comment kept");
+        assert!(lines.contains(&"keep-me"), "existing entry kept");
+        assert!(lines.contains(&"received/"), "missing entry appended");
+    }
+
+    #[test]
+    fn ensure_gitignore_entries_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_gitignore_entries(dir.path(), &["received/"]).unwrap();
+        let first = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+
+        ensure_gitignore_entries(dir.path(), &["received/"]).unwrap();
+        let second = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+
+        assert_eq!(
+            first, second,
+            "reconciling an up-to-date gitignore is a no-op"
+        );
+    }
+
+    #[test]
+    fn ensure_gitignore_entries_matches_by_trimmed_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let gitignore = dir.path().join(".gitignore");
+        // Entry present but indented — must not be duplicated.
+        std::fs::write(&gitignore, "  received/  \n").unwrap();
+
+        ensure_gitignore_entries(dir.path(), &["received/"]).unwrap();
+
+        let content = std::fs::read_to_string(&gitignore).unwrap();
+        let count = content.lines().filter(|l| l.trim() == "received/").count();
+        assert_eq!(count, 1, "existing trimmed-equal entry is not re-added");
     }
 
     #[test]

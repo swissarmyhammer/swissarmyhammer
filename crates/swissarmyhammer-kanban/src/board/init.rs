@@ -311,24 +311,10 @@ pub(crate) const REQUIRED_GITIGNORE_ENTRIES: &[&str] = &[
 /// without clobbering existing lines, and rewrites the file only when something
 /// changed. Returns the underlying [`std::io::Error`] if the rewrite fails.
 pub(crate) fn ensure_gitignore_entries(kanban_root: &Path) -> std::io::Result<()> {
-    let gitignore_path = kanban_root.join(".gitignore");
-    let existing = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
-
-    let mut lines: Vec<String> = existing.lines().map(|l| l.to_string()).collect();
-    let mut changed = false;
-    for required in REQUIRED_GITIGNORE_ENTRIES {
-        if !lines.iter().any(|l| l.trim() == *required) {
-            lines.push((*required).to_string());
-            changed = true;
-        }
-    }
-
-    if changed {
-        let mut content = lines.join("\n");
-        content.push('\n');
-        std::fs::write(&gitignore_path, content)?;
-    }
-    Ok(())
+    swissarmyhammer_common::fs_utils::ensure_gitignore_entries(
+        kanban_root,
+        REQUIRED_GITIGNORE_ENTRIES,
+    )
 }
 
 /// Initialize a new kanban board
