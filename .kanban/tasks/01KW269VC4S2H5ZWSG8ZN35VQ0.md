@@ -1,0 +1,36 @@
+---
+assignees:
+- claude-code
+depends_on:
+- 01KW263EW64TVAPZD7CYCBMNVV
+- 01KW263S53NJ1YWNHGPYTTWEEC
+- 01KW266J4AJCJH9HM4DYFJRK09
+- 01KW268RCP6G7SKWFXNR6BCBVR
+position_column: todo
+position_ordinal: b980
+project: expect
+title: expect expectation/expectations check = doctor + observe + evaluate + compare
+---
+## What
+Compose the full inner-loop / CI verb: `check` = doctor (static) + observe + evaluate + compare-to-golden. Per `ideas/expect.md` §"check decomposes into three separable verbs" and §"Two different things are being checked".
+
+- New `crates/swissarmyhammer-expect/src/check.rs`:
+  - `check(scope, config) -> CheckReport`: run the doctor pass FIRST and refuse to run a malformed spec (a CI failure is never ambiguous between bad-spec and bad-code); then observe → evaluate(received) → compare to golden → derive ledger state.
+  - Scope resolution (path/folder/glob/tag/none) via the loader's `resolve_scope`.
+  - Result: per-expectation pass / fail / drift, with the structured verdict + teaching error messages routing a failure back to either "the program is wrong" or "your criterion is uncheckable, here's how to sharpen it".
+- Wire `expectation check` (singular) and `expectations check` (plural/batch) ops in `tools/expect/mod.rs`.
+- **Exit codes / CI**: a bare `expect expectations check` exits non-zero on a malformed spec OR an unmet expectation OR an unapproved drift; `new` (no golden) fails in CI.
+
+## Acceptance Criteria
+- [ ] `expect expectation check <scope>` runs doctor→observe→evaluate→compare and reports pass/fail/drift per spec.
+- [ ] A malformed spec makes `check` refuse to run it (doctor gate) with a non-zero exit distinct from a code failure message.
+- [ ] `expect expectations check` (no scope) discovers all specs and exits non-zero on any bad-spec / unmet / unapproved-drift / new-in-CI.
+- [ ] A failing criterion's message distinguishes program-wrong from criterion-uncheckable.
+
+## Tests
+- [ ] Integration test on a fixture repo with: one passing spec, one failing (code wrong), one drifted, one malformed — assert per-spec outcomes and the aggregate exit code.
+- [ ] Test that the doctor gate blocks a malformed spec before any observe.
+- [ ] `cargo nextest run -p swissarmyhammer-expect check` + tools op test pass.
+
+## Workflow
+- Use `/tdd`.
