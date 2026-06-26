@@ -178,6 +178,8 @@
 //! }
 //! ```
 
+/// Use-case-based agent selection
+pub mod agent_use_case;
 /// Model configuration types and infrastructure
 pub mod model;
 
@@ -195,6 +197,7 @@ pub mod provider;
 pub mod template_context;
 
 // Re-export main types for easier access
+pub use agent_use_case::AgentUseCase;
 pub use discovery::{ConfigurationDiscovery, DiscoveryPaths};
 pub use env_vars::EnvVarSubstitution;
 pub use error::{ConfigurationError, ConfigurationResult};

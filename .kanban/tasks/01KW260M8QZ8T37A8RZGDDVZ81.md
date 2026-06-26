@@ -33,8 +33,8 @@ comments:
   timestamp: 2026-06-26T18:21:11.616181+00:00
 depends_on:
 - 01KW25YZ4MKNR09RXYR1B4S05T
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffe680
 project: expect
 title: expect MCP tool skeleton + op dispatch + noun-first CLI wiring
 ---
@@ -75,3 +75,13 @@ Scope reviewed: `HEAD~1..HEAD` (expect MCP tool skeleton commit). Driver verific
 - [x] REFUTED — engine reported `register_all_tools` "defined twice ... will not compile" in `server.rs`. Only one definition exists (`server.rs:930`) and `cargo build -p swissarmyhammer-tools` succeeds (exit 0). Diff-context false positive.
 - [x] PRE-EXISTING — engine flagged the `register_*_tools` registration sequence as duplicated across `tool_registry.rs`, `server.rs`, `tool_config.rs`, `health_registry.rs`. This is the established codebase pattern that this task was explicitly instructed to follow for the new tool; it is not introduced by this diff. Not a blocker for the skeleton task; raise separately if the team wants to DRY it.
 - [x] PRE-EXISTING — engine flagged deep nesting in `PromptHealthChecker::run_health_checks` (`health_registry.rs`) and a hardcoded 50ms mtime delay in a `tool_config.rs` watcher test. Both are pre-existing code not introduced by this commit's diff.
+
+## Review Findings (2026-06-26 13:21)
+
+Scope reviewed: `HEAD~1..HEAD` (the fix commit adding `"expect"` to `KNOWN_TOOL_NAMES`). Engine counts: 0 blockers, 1 warning, 0 nits, confirmed 1, refuted 1. The prior `KNOWN_TOOL_NAMES` gap is **resolved** — `"expect"` is now in the constant; nothing new introduced by this diff.
+
+### Warnings
+- [ ] `crates/swissarmyhammer-tools/src/mcp/tool_config.rs:251` — The test hardcodes 11+ registration function calls (lines 241–251, 254, 256) that correspond directly to tool names in KNOWN_TOOL_NAMES. Each new tool requires manual updates to both the constant and the test function, creating a maintenance coupling that should be eliminated by data-driven design. Create a single data-driven source (e.g., a const array mapping tool name to registration function). Derive KNOWN_TOOL_NAMES from it, and iterate over it in the test. This ensures KNOWN_TOOL_NAMES and registrations stay in sync automatically for all future tools.
+
+### Driver note (out of scope for this task)
+- The single warning above is the **pre-existing structural coupling** between `KNOWN_TOOL_NAMES`, the hardcoded registration list, and the one-directional guard test — the same family as the prior pass's `PRE-EXISTING` notes, and the deliberately-deferred follow-up recorded for this skeleton task (the guard test was intentionally not made bidirectional because `review`/`diagnostics` are also pre-existingly absent from the constant). The diff under review only adds one line to the constant and introduces no new coupling. Per the proportionate bar, this is not a blocker for the skeleton task. Task gap resolved → moving to `done`; the data-driven-registration refactor remains a separate follow-up.

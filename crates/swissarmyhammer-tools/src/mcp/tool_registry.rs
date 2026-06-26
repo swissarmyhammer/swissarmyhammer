@@ -233,6 +233,7 @@ use std::sync::Arc;
 use swissarmyhammer_common::health::Doctorable;
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use swissarmyhammer_config::model::ModelConfig;
+use swissarmyhammer_config::AgentUseCase;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_templating::TemplateLibrary;
 use tokio::sync::{Mutex, RwLock};
@@ -275,6 +276,16 @@ pub struct ToolContext {
     /// and associated settings. Tools that need to execute agent operations should
     /// use this configuration to create appropriate executor instances.
     pub agent_config: Arc<ModelConfig>,
+
+    /// Per-use-case agent overrides, resolved by
+    /// [`get_agent_for_use_case`](Self::get_agent_for_use_case).
+    ///
+    /// Maps an [`AgentUseCase`] to the agent that should drive that operation
+    /// (e.g. a faster model for rule checking, the driving agent for `expect`
+    /// expectation runs). A use case absent from this map silently falls back to
+    /// the root [`agent_config`](Self::agent_config). Defaults to an empty map,
+    /// so tools that don't opt in are unaffected and everything resolves to root.
+    pub use_case_agents: Arc<HashMap<AgentUseCase, ModelConfig>>,
 
     /// Optional plan sender for task management operations
     ///
@@ -440,6 +451,7 @@ impl ToolContext {
             tool_handlers,
             git_ops,
             agent_config,
+            use_case_agents: Arc::new(HashMap::new()),
             plan_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
             peer: None,
@@ -453,6 +465,49 @@ impl ToolContext {
             progress_sink: None,
             mutated_paths: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    /// Set the per-use-case agent overrides for this context.
+    ///
+    /// Populated at server init from the configured `agents` use-case mapping.
+    /// Use cases absent from the map fall back to the root
+    /// [`agent_config`](Self::agent_config) via
+    /// [`get_agent_for_use_case`](Self::get_agent_for_use_case).
+    ///
+    /// # Arguments
+    ///
+    /// * `use_case_agents` - Map from [`AgentUseCase`] to its resolved agent
+    ///
+    /// # Returns
+    ///
+    /// A new `ToolContext` with the use-case agent map set
+    pub fn with_use_case_agents(
+        mut self,
+        use_case_agents: Arc<HashMap<AgentUseCase, ModelConfig>>,
+    ) -> Self {
+        self.use_case_agents = use_case_agents;
+        self
+    }
+
+    /// Resolve the agent configuration for a given use case.
+    ///
+    /// Returns the agent explicitly configured for `use_case` in
+    /// [`use_case_agents`](Self::use_case_agents), or the root
+    /// [`agent_config`](Self::agent_config) when the use case is unconfigured.
+    /// This silent fallback to root is the design's chosen behavior (see
+    /// `ideas/rule_agent.md`, "Design Decisions": fallback behavior).
+    ///
+    /// # Arguments
+    ///
+    /// * `use_case` - The operation whose agent should be resolved
+    ///
+    /// # Returns
+    ///
+    /// A reference to the resolved [`ModelConfig`]
+    pub fn get_agent_for_use_case(&self, use_case: AgentUseCase) -> &ModelConfig {
+        self.use_case_agents
+            .get(&use_case)
+            .unwrap_or(&self.agent_config)
     }
 
     /// Record a path mutated by the current tool call.
@@ -2276,6 +2331,81 @@ mod tests {
         let registry = ToolRegistry::new();
         assert!(registry.is_empty());
         assert_eq!(registry.len(), 0);
+    }
+
+    /// Build a minimal `ToolContext` carrying the given root agent and use-case
+    /// agent map, with no other backends wired.
+    fn context_with_agents(
+        root: ModelConfig,
+        use_case_agents: HashMap<AgentUseCase, ModelConfig>,
+    ) -> ToolContext {
+        let git_ops = Arc::new(Mutex::new(None));
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        ToolContext::new(tool_handlers, git_ops, Arc::new(root))
+            .with_use_case_agents(Arc::new(use_case_agents))
+    }
+
+    #[test]
+    fn get_agent_for_use_case_returns_configured_agent() {
+        // The configured Expectations agent is distinguishable from root by `quiet`.
+        let expectations = ModelConfig {
+            quiet: true,
+            ..ModelConfig::default()
+        };
+        let root = ModelConfig {
+            quiet: false,
+            ..ModelConfig::default()
+        };
+
+        let mut map = HashMap::new();
+        map.insert(AgentUseCase::Expectations, expectations.clone());
+        let context = context_with_agents(root, map);
+
+        let resolved = context.get_agent_for_use_case(AgentUseCase::Expectations);
+        assert_eq!(
+            resolved.quiet, expectations.quiet,
+            "configured use case must resolve to its own agent"
+        );
+    }
+
+    #[test]
+    fn get_agent_for_use_case_falls_back_to_root_when_unconfigured() {
+        // distinguish root from a default-constructed agent
+        let root = ModelConfig {
+            quiet: true,
+            ..ModelConfig::default()
+        };
+
+        // Only Expectations is configured; Rules is not.
+        let mut map = HashMap::new();
+        map.insert(AgentUseCase::Expectations, ModelConfig::default());
+        let context = context_with_agents(root.clone(), map);
+
+        let resolved = context.get_agent_for_use_case(AgentUseCase::Rules);
+        assert_eq!(
+            resolved.quiet, root.quiet,
+            "unconfigured use case must fall back to the root agent"
+        );
+    }
+
+    #[test]
+    fn get_agent_for_use_case_defaults_to_empty_map() {
+        // A context built without any use-case agents resolves everything to root.
+        let root = ModelConfig {
+            quiet: true,
+            ..ModelConfig::default()
+        };
+        let git_ops = Arc::new(Mutex::new(None));
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let context = ToolContext::new(tool_handlers, git_ops, Arc::new(root.clone()));
+
+        assert_eq!(
+            context
+                .get_agent_for_use_case(AgentUseCase::Expectations)
+                .quiet,
+            root.quiet,
+            "empty use-case map must resolve to root"
+        );
     }
 
     #[test]

@@ -908,6 +908,12 @@ impl McpServer {
         )
         .await;
 
+        // The per-use-case agent map (`ToolContext::use_case_agents`) is left
+        // empty here: there is not yet a config surface for the `agents`
+        // use-case mapping (see `ideas/rule_agent.md`). With an empty map every
+        // use case silently falls back to the root `agent_config` via
+        // `ToolContext::get_agent_for_use_case`, so existing tools are
+        // unaffected. Populate this from config once that surface lands.
         let mut tool_context = ToolContext::new(Arc::new(tool_handlers), git_ops_arc, agent_config);
         tool_context.working_dir = working_dir;
 
