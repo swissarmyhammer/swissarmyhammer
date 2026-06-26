@@ -8327,6 +8327,7 @@ name = "swissarmyhammer-expect"
 version = "0.17.0"
 dependencies = [
  "glob",
+ "nix 0.29.0",
  "serde",
  "serde_json",
  "serde_yaml_ng",

@@ -26,6 +26,20 @@ pub enum ExpectError {
         /// What went wrong.
         message: String,
     },
+
+    /// A surface adapter could not provision, drive, or observe the system
+    /// under test (e.g. a failed build step, an undetectable project type, or
+    /// an empty command).
+    #[error("surface error: {0}")]
+    Surface(String),
+
+    /// A driven run exceeded its wall-clock budget and was aborted, rather than
+    /// allowed to hang.
+    #[error("run timed out after {timeout_ms}ms")]
+    Timeout {
+        /// The exceeded budget, in milliseconds.
+        timeout_ms: u64,
+    },
 }
 
 #[cfg(test)]

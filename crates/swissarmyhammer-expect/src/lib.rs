@@ -45,6 +45,7 @@ pub mod config;
 pub mod error;
 pub mod loader;
 pub mod spec;
+pub mod surface;
 pub mod surfaces;
 pub mod types;
 
@@ -55,6 +56,8 @@ pub use config::{
 pub use error::ExpectError;
 pub use loader::ExpectationLoader;
 pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};
+pub use surface::cli::{CliAdapter, CliCommands, CliSut};
+pub use surface::SurfaceAdapter;
 pub use surfaces::SurfaceInfo;
 pub use types::{
     Checkpoint, CliState, CriterionStatus, CriterionVerdict, Evidence, ExpectationVerdict,
