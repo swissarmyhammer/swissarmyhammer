@@ -83,14 +83,6 @@ swissarmyhammer-templating = { workspace = true }
 swissarmyhammer-config = { workspace = true }
 swissarmyhammer-git = { workspace = true }
 
-# Used by the `file_notes_e2e` integration test, whose `files`-tool example
-# resolves relative paths against the *process* current directory. The test
-# pins the process CWD to a temp dir with `swissarmyhammer-common`'s
-# `CurrentDirGuard` and serializes against every other CWD-touching test with
-# `serial_test` so the two never race.
-swissarmyhammer-common = { workspace = true }
-serial_test = { workspace = true }
-
 # Used by the `tests/integration/*.rs` SDK-helper end-to-end tests, which
 # bootstrap the real command service into a `PluginHost` so a probe plugin's
 # `ensureServices` + `registerCommands` calls land on a genuine in-process

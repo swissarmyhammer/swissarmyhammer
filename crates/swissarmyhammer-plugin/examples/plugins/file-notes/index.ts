@@ -30,35 +30,40 @@
 // The working-directory contract: RELATIVE paths only
 // ───────────────────────────────────────────────────────────────────────────
 //
-// The `files` tool resolves a RELATIVE path against the host **process's**
-// current working directory before it touches the disk; an ABSOLUTE path is
-// used verbatim. Each operation resolves at its own site: `write file` joins
-// the relative path onto `std::env::current_dir()`, and `read file` resolves
-// through the tool's `FilePathValidator`.
+// The `files` tool resolves a RELATIVE path against the host's **session
+// working directory** before it touches the disk; an ABSOLUTE path is used
+// verbatim. The session working directory is the `work_dir` the host MCP
+// server was constructed with (its board directory) — NOT the process current
+// directory. Every operation resolves through `ToolContext::session_root`,
+// which returns that `work_dir`; the process CWD is only a last-resort fallback
+// for a stand-alone caller that never set one. This matters because the
+// bundled GUI app launches with a process CWD of `/` (a read-only filesystem
+// root) and a single process hosts many boards, so the process CWD cannot be a
+// per-session root.
 //
 // This example — being committed source that ships in the repository — cannot
 // hard-code an absolute path: there is no temp directory it could name at
 // authoring time, and writing to a fixed absolute path would be unsafe. So it
 // addresses the `files` tool with RELATIVE paths (`notes/hello.txt`,
 // `notes/echo.txt`). Where those files actually land depends entirely on the
-// process working directory at load time:
+// host server's `work_dir`:
 //
-//   • the end-to-end test (`tests/file_notes_e2e.rs`) pins the process CWD to
-//     a throwaway temp directory, so the notes land there and the real source
-//     tree is never written to;
+//   • the end-to-end test (`tests/file_notes_e2e.rs`) builds the host server
+//     against a throwaway temp `work_dir`, so the notes land there and the real
+//     source tree is never written to;
 //   • a plugin you write for real should likewise either use a relative path
-//     and know the process CWD, or compute an absolute path it controls.
+//     and know the host's `work_dir`, or compute an absolute path it controls.
 //
 // The `notes/` parent directory does not need to exist beforehand — the
 // `files` `write file` operation creates parent directories as needed.
 
 import { Plugin } from "@swissarmyhammer/plugin";
 
-// The two note paths this plugin writes, RELATIVE to the process working
-// directory (see the working-directory contract above). The end-to-end test
-// that drives this bundle (`tests/file_notes_e2e.rs`) asserts both files land
-// under its temp CWD with the body below, so the paths and body are a fixed
-// contract.
+// The two note paths this plugin writes, RELATIVE to the host's session
+// working directory (see the working-directory contract above). The end-to-end
+// test that drives this bundle (`tests/file_notes_e2e.rs`) asserts both files
+// land under the host server's `work_dir` with the body below, so the paths and
+// body are a fixed contract.
 const HELLO_NOTE = "notes/hello.txt";
 const ECHO_NOTE = "notes/echo.txt";
 
@@ -94,8 +99,8 @@ function readBackText(result: unknown): string {
  *
  * Its `load()` registers the host-exposed in-process `files` operation tool
  * and round-trips a note through it — write, read, write — all against
- * relative paths resolved by the `files` tool against the process working
- * directory.
+ * relative paths the `files` tool resolves against the host's session working
+ * directory (the server's `work_dir`).
  */
 export default class FileNotesPlugin extends Plugin {
   /** Human-readable name — descriptive metadata only, not plugin identity. */
@@ -127,7 +132,7 @@ export default class FileNotesPlugin extends Plugin {
     this.register("fs", { rust: "files" });
 
     // (2) Write the first note through the direct `op` dispatch form. The path
-    //     is RELATIVE — the `files` tool resolves it against the process
+    //     is RELATIVE — the `files` tool resolves it against the host's session
     //     working directory. `write file` creates the `notes/` parent dir.
     await this.fs.files({
       op: "write file",

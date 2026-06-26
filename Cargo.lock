@@ -9666,7 +9666,6 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
- "serial_test",
  "swissarmyhammer-command-service",
  "swissarmyhammer-common",
  "swissarmyhammer-config",

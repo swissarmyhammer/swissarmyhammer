@@ -34,19 +34,19 @@
 //! # Isolation
 //!
 //! Both tests own their own [`tempfile::TempDir`] layer roots and fresh
-//! [`PluginHost`]s; nothing is `static` and no temp dir is reused. Both run
-//! under [`CurrentDirGuard`] and are `#[serial_test::serial]`: the `file-notes`
-//! bundle writes through the process CWD — global mutable state — so a
-//! CWD-touching test must be temp-CWD isolated and never race another. Every
-//! cross-thread interaction is bounded by [`support::TIMEOUT`] so a wedged
-//! isolate fails the test fast instead of hanging CI.
+//! [`PluginHost`]s; nothing is `static` and no temp dir is reused. The
+//! `file-notes` bundle writes through the `files` tool, which resolves its
+//! relative note paths against the host server's `work_dir` (the session root)
+//! rather than the process CWD — so each test's own temp `work_dir` keeps its
+//! writes isolated without any process-CWD pinning. Every cross-thread
+//! interaction is bounded by [`support::TIMEOUT`] so a wedged isolate fails the
+//! test fast instead of hanging CI.
 
 mod support;
 
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
-use swissarmyhammer_common::test_utils::CurrentDirGuard;
 use swissarmyhammer_directory::{FileSource, SwissarmyhammerConfig};
 use swissarmyhammer_plugin::{
     discover_plugins, CallerId, Error, LayerRoot, PluginHost, PLUGINS_SUBDIR,
@@ -266,20 +266,14 @@ fn assert_discovered_sources(layers: &[LayerRoot], expected: &[(&str, FileSource
 /// bundles. The server's `kanban` tool resolves its board against the server's
 /// `work_dir`, so the probe's `init board` lands a `.kanban` board there.
 #[tokio::test]
-#[serial_test::serial]
 async fn committed_examples_coload_across_layers() {
-    // Per-test isolation: every root is this test's own `TempDir`.
+    // Per-test isolation: every root is this test's own `TempDir`. The
+    // `file-notes` bundle's relative note paths resolve against the server's
+    // `work_dir` (the session root), so its writes land under this test's own
+    // temp `work_dir` and never touch the real source tree.
     let work_dir = tempfile::TempDir::new().expect("work dir temp");
     let builtin_root = tempfile::TempDir::new().expect("builtin layer root temp");
     let project_root = tempfile::TempDir::new().expect("project layer root temp");
-    let cwd_dir = tempfile::TempDir::new().expect("process cwd temp");
-
-    // The `file-notes` bundle writes against the process CWD; pin it to a temp
-    // dir for the whole test so its note files land there and the real source
-    // tree is never written to. The guard restores the CWD on drop, even on
-    // panic; `#[serial]` keeps it from racing another CWD-touching test.
-    let _cwd_guard = CurrentDirGuard::new(cwd_dir.path())
-        .expect("pinning the process CWD to the temp dir should succeed");
 
     // Stage the two bundles EXACTLY as committed — the repo-root builtin probe
     // into the builtin layer, the `file-notes` example into the project layer.
@@ -366,9 +360,10 @@ async fn committed_examples_coload_across_layers() {
     );
 
     // Effect 2 — the project-layer `file-notes` bundle ran. It wrote both note
-    // files against relative paths resolved at the pinned process CWD; both
-    // existing with the written body proves its `load()` ran end to end.
-    let hello_path = cwd_dir.path().join(HELLO_NOTE);
+    // files against relative paths the `files` tool resolves against the
+    // server's `work_dir` (the session root); both existing under it with the
+    // written body proves its `load()` ran end to end.
+    let hello_path = work_dir.path().join(HELLO_NOTE);
     assert_eq!(
         std::fs::read_to_string(&hello_path).unwrap_or_else(|error| panic!(
             "the file-notes hello note must exist at {}: {error}",
@@ -377,7 +372,7 @@ async fn committed_examples_coload_across_layers() {
         NOTE_BODY,
         "the file-notes hello note must hold the body the plugin wrote",
     );
-    let echo_path = cwd_dir.path().join(ECHO_NOTE);
+    let echo_path = work_dir.path().join(ECHO_NOTE);
     assert_eq!(
         std::fs::read_to_string(&echo_path).unwrap_or_else(|error| panic!(
             "the file-notes echo note must exist at {}: {error}",
@@ -434,15 +429,11 @@ async fn committed_examples_coload_across_layers() {
 /// only substitution is the `cli-echo` `__CLI_ECHO_COMMAND__` fixture-path
 /// token, the bundle's own placeholder for a host-supplied binary path.
 #[tokio::test]
-#[serial_test::serial]
 async fn each_committed_example_loads_from_its_layer() {
-    // `cli-echo` writes nothing through the process CWD, but `file-notes`'
-    // sibling test does; pinning the CWD here keeps this `#[serial]` test from
-    // leaving the process CWD anywhere surprising for whatever runs next.
-    let cwd_dir = tempfile::TempDir::new().expect("process cwd temp");
-    let _cwd_guard = CurrentDirGuard::new(cwd_dir.path())
-        .expect("pinning the process CWD to the temp dir should succeed");
-
+    // None of these examples touch the process CWD: each loads against its own
+    // fresh host whose `files` tool resolves relative paths against a
+    // per-example temp `work_dir` (the session root), so no process-CWD pinning
+    // is needed.
     load_kanban_tasks_from_user_layer().await;
     load_multi_module_from_project_layer().await;
     load_cli_echo_from_builtin_layer().await;

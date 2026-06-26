@@ -1,6 +1,6 @@
 ---
-position_column: todo
-position_ordinal: ff8180
+position_column: doing
+position_ordinal: '80'
 title: 'Pre-existing UI browser-suite test failures (~10): editor-save, mention-view extraCommands, entity-card, grid-empty-state, spatial-nav'
 ---
 ## What

@@ -61,8 +61,24 @@ comments:
     - Browser vitest project: 2535 passed / 10 failed — IDENTICAL to baseline (same 5 known-failing files: editor-save blur family, entity-card inspect, grid-empty-state, mention-view, spatial-nav-end-to-end). Zero previously-passing tests regressed.
     - Adversarial double-check agent: PASS — confirmed diff is exactly the 4 intended edits, no dangling cb/cbs/cmd/env in the renamed functions, exported API surface unchanged, no external caller needs updating, the skipped items correctly absent from the diff.
   timestamp: 2026-06-25T21:09:47.172321+00:00
-position_column: doing
-position_ordinal: '80'
+- actor: claude-code
+  id: 01kw0asyqwm9wg267rj3hhfbzb
+  text: |-
+    Closing to done. Card goal achieved and verified: shared spatial-nav harness (setupSpatialMocks / makeSpatialTestHelpers / makeDefaultInvokeImpl) extracted in apps/kanban-app/ui/src/test/spatial-nav-harness.ts and ~43 duplicating browser-test files routed through it. Behavior provably preserved — browser passing-test set byte-identical before/after (2535 pass / 10 pre-existing fail tracked separately), tsc --noEmit exit 0, double-check PASS.
+
+    Review (run on the new harness file, since the 48-file delta exceeded the review-engine fan-out capacity): round 1 surfaced ONE genuine finding — a redundant duplicate `registerScopeArgs().find` in keyForMoniker (dead second branch, verbatim-copied from the original). FIXED (collapsed to a single find; behavior identical).
+
+    Subsequent review rounds produced only style-validator churn that I decline as out-of-scope per "no bonus refactoring":
+    - "Blockers" to factory-wrap spatialDrillIn/Out/FocusCalls and inspect/entityInspectDispatches — these are trivial ONE-LINE named accessors over the shared collectFocusTool/dispatchPayloads helpers; they are already DRY, and a make*Collector factory would reduce readability, not improve it.
+    - function-length (85-line makeSpatialTestHelpers): this IS the consolidation factory; splitting it conflicts with the card's single-source-of-truth goal. (Repeat of a finding already declined the prior round.)
+    - null defaults / `| null`: FocusChangedPayload types prev_fq/next_fq as `... | null` and production emits JSON null; switching to undefined breaks tsc and diverges from the wire contract. (Repeat of a declined finding; implementer verified.)
+    - snake_case params prev_fq/next_fq/next_segment: intentionally mirror the backend FocusChangedPayload field names.
+    - Array<X> vs X[], single-letter find-lambda, residual abbreviations: match surrounding codebase conventions; pure taste.
+
+    Cheap localized renames that did improve the new code (cb→callback, cmd→command, env→envelope) were applied. Marking done — substantive work + the one real blocker are complete and verified.
+  timestamp: 2026-06-25T21:26:04.284720+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff380
 title: Extract shared spatial-nav browser-test harness (setupSpatialMocks/makeSpatialTestHelpers) — ~20 files duplicate the mock bootstrap verbatim
 ---
 ## What
