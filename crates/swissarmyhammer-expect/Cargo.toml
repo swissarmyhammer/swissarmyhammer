@@ -1,0 +1,17 @@
+[package]
+name = "swissarmyhammer-expect"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The expect engine: pure domain model for human-authored behavioral expectations, observations, and verdicts"
+
+[dependencies]
+# Serialization — the whole domain model is serde-driven (golden/received JSON wire forms)
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

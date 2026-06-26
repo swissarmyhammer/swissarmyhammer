@@ -8323,6 +8323,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-expect"
+version = "0.17.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "swissarmyhammer-fields"
 version = "0.17.0"
 dependencies = [

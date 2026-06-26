@@ -71,6 +71,7 @@ members = [
     "crates/swissarmyhammer-cli-completions",
     "crates/swissarmyhammer-hashline",
     "crates/swissarmyhammer-edit-match",
+    "crates/swissarmyhammer-expect",
 ]
 resolver = "2"
 
@@ -290,6 +291,7 @@ swissarmyhammer-edit-match = { path = "crates/swissarmyhammer-edit-match" }
 swissarmyhammer-doctor = { path = "crates/swissarmyhammer-doctor" }
 swissarmyhammer-embedding = { path = "crates/swissarmyhammer-embedding" }
 swissarmyhammer-entity = { path = "crates/swissarmyhammer-entity" }
+swissarmyhammer-expect = { path = "crates/swissarmyhammer-expect" }
 swissarmyhammer-entity-search = { path = "crates/swissarmyhammer-entity-search" }
 swissarmyhammer-fields = { path = "crates/swissarmyhammer-fields" }
 swissarmyhammer-filter-expr = { path = "crates/swissarmyhammer-filter-expr" }

@@ -1,8 +1,31 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a380
+comments:
+- actor: claude-code
+  id: 01kw2ch55cwzwkzwqsqvnqzcj1
+  text: |-
+    Implemented the crate via TDD (serde round-trip tests first → RED confirmed missing types → GREEN).
+
+    Files:
+    - crates/swissarmyhammer-expect/Cargo.toml (lib; deps: serde, serde_json, thiserror only — NO swissarmyhammer-tools, engine stays below tool layer)
+    - src/lib.rs (re-exports all public types)
+    - src/types.rs (Observation, Checkpoint, SurfaceState{Cli(CliState)|Json}, Trajectory, CriterionVerdict, ExpectationVerdict, Evidence, Reliability; enums Surface, VerdictTier, CriterionStatus, LedgerState — all #[serde(rename_all="lowercase")]; Duration serialized as explicit `duration_ms` u64)
+    - src/error.rs (ExpectError via thiserror: Io, Json, Expectation{path,message})
+    - root Cargo.toml: added member + [workspace.dependencies] entry
+
+    Verification: cargo build -p swissarmyhammer-expect OK; cargo nextest run -p swissarmyhammer-expect = 11 passed/0 failed; cargo fmt applied; cargo clippy -p swissarmyhammer-expect -- -D warnings clean.
+  timestamp: 2026-06-26T16:34:41.964968+00:00
+- actor: claude-code
+  id: 01kw2cp204hcbvzn4qqx5sjqh7
+  text: 'double-check (advisory) returned REVISE on one low finding: src/lib.rs lacked the crate-root re-exports (an earlier write op had silently no-op''d, leaving only the `pub mod` declarations). Fixed via edit op — lib.rs now `pub use error::ExpectError;` and `pub use types::{...}` for all 13 public types, mirroring swissarmyhammer-validators. Re-verified after fix: build OK, clippy -D warnings clean, nextest 11/11 passed. Left in doing for /review.'
+  timestamp: 2026-06-26T16:37:22.564442+00:00
+- actor: claude-code
+  id: 01kw2cqjefhgaf4h7sv3f43mrx
+  text: 'Implemented via TDD. Created crates/swissarmyhammer-expect (lib) with src/types.rs (Observation/Checkpoint/SurfaceState{Cli,Json}/CliState/Trajectory/Evidence/CriterionVerdict/ExpectationVerdict/Reliability + enums Surface/VerdictTier/CriterionStatus/LedgerState), src/error.rs (ExpectError via thiserror), src/lib.rs re-exports. Added to root Cargo.toml workspace members + deps. Enums use serde rename_all=lowercase; Duration serializes as explicit duration_ms u64. No dep on swissarmyhammer-tools. Green: cargo nextest 11/11 pass, fmt clean, clippy -D warnings clean. NOTE for future agents: the `files` write-file op silently no-op''d twice on lib.rs during this work (returned unchanged); `edit file` worked — use edit if a write appears to not take.'
+  timestamp: 2026-06-26T16:38:12.175545+00:00
+position_column: doing
+position_ordinal: '8280'
 project: expect
 title: Create swissarmyhammer-expect crate + core domain types
 ---
