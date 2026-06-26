@@ -26,6 +26,10 @@ const CONFIG_FILE: &str = "config.toml";
 /// The default Tier-2 cosine similarity cutoff for [`EmbedderConfig`].
 const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.80;
 
+/// The default grader-confidence floor for [`ApprovalConfig`]: below this, a
+/// criterion is routed to the human escalation queue.
+const DEFAULT_ESCALATE_BELOW_CONFIDENCE: f32 = 0.6;
+
 /// The repo-level `.expect/config.toml` configuration.
 ///
 /// The whole struct is `#[serde(default)]`, so any missing section is filled from
@@ -135,7 +139,7 @@ impl Default for ApprovalConfig {
     fn default() -> Self {
         ApprovalConfig {
             ci_autoapprove: false,
-            escalate_below_confidence: 0.6,
+            escalate_below_confidence: DEFAULT_ESCALATE_BELOW_CONFIDENCE,
         }
     }
 }
@@ -274,11 +278,17 @@ use_case = "driving"
         assert_eq!(config.model.on_missing, OnMissing::Fallback);
         assert_eq!(config.provision.granularity, Granularity::PerCheck);
         assert_eq!(config.embedder.model, "text-embedding-3-large");
-        assert_eq!(config.embedder.similarity_threshold, 0.80);
+        assert_eq!(
+            config.embedder.similarity_threshold,
+            DEFAULT_SIMILARITY_THRESHOLD
+        );
         assert_eq!(config.reliability.default.required(), 1);
         assert!(config.reliability.nondeterministic_surfaces.is_empty());
         assert!(!config.approval.ci_autoapprove);
-        assert_eq!(config.approval.escalate_below_confidence, 0.6);
+        assert_eq!(
+            config.approval.escalate_below_confidence,
+            DEFAULT_ESCALATE_BELOW_CONFIDENCE
+        );
         assert_eq!(config.agent.use_case, "expectations");
     }
 
@@ -294,7 +304,10 @@ use_case = "driving"
         assert_eq!(config.embedder.model, "text-embedding-3-large");
         // An entirely absent section is the default.
         assert_eq!(config.agent.use_case, "expectations");
-        assert_eq!(config.approval.escalate_below_confidence, 0.6);
+        assert_eq!(
+            config.approval.escalate_below_confidence,
+            DEFAULT_ESCALATE_BELOW_CONFIDENCE
+        );
     }
 
     #[test]

@@ -17,6 +17,14 @@ comments:
 
     Both WARNINGS (config.rs public fields; spec.rs Expectation/Frontmatter/Criterion public fields) consciously WAIVED, no code change. Rationale: public fields are the idiomatic, correct design for plain serde config/data DTOs in this workspace — adding getters/encapsulation would fight the DTO pattern with no real benefit. Additionally, the spec.rs structs were already reviewed and APPROVED to `done` under ^qj11rxw, so re-encapsulating them now is out of scope and re-litigates approved code. Checkboxes flipped to [x] with explicit "(accepted: ...)" notes.
   timestamp: 2026-06-26T17:41:50.350176+00:00
+- actor: claude-code
+  id: 01kw2gn1mpxx8s63n0tep1sdsz
+  text: |-
+    Cleared the two open 12:42 review findings in config.rs:
+    1. WARNING — default_config_matches_the_documented_defaults test now asserts against DEFAULT_SIMILARITY_THRESHOLD instead of the literal 0.80.
+    2. NIT — extracted `const DEFAULT_ESCALATE_BELOW_CONFIDENCE: f32 = 0.6;`, used it in ApprovalConfig::default(), and pointed both 0.6 test assertions (default + partial-merge tests) at the const.
+    Verified: cargo nextest run -p swissarmyhammer-expect = 31 passed; cargo test --doc = 1 passed; cargo fmt applied; cargo clippy --all-targets -D warnings clean. Both checkboxes flipped; task left in doing for review.
+  timestamp: 2026-06-26T17:46:43.734239+00:00
 depends_on:
 - 01KW25YZ4MKNR09RXYR1B4S05T
 position_column: doing
@@ -54,3 +62,11 @@ Type and parse `.expect/config.toml` — the repo-level config from `ideas/expec
 
 ### Nits
 - [x] `crates/swissarmyhammer-expect/src/config.rs:81` — Hardcoded similarity threshold `0.80` in Default impl should be a named constant — it configures the Tier-2 cosine cutoff behavior and is documented as the default. Define `const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.80;` at module level and use it in the Default impl.
+
+## Review Findings (2026-06-26 12:42)
+
+### Warnings
+- [x] `crates/swissarmyhammer-expect/src/config.rs:215` — Test hardcodes `0.80` where it should reference the `DEFAULT_SIMILARITY_THRESHOLD` constant (defined at line 26). After extracting a named constant, all occurrences of the literal must be replaced so changes propagate everywhere and remain synchronized. Replace `0.80` with `DEFAULT_SIMILARITY_THRESHOLD` on line 215: `assert_eq!(config.embedder.similarity_threshold, DEFAULT_SIMILARITY_THRESHOLD);`.
+
+### Nits
+- [x] `crates/swissarmyhammer-expect/src/config.rs:111` — The default value 0.6 for escalate_below_confidence should be a named constant (e.g., DEFAULT_ESCALATE_BELOW_CONFIDENCE), following the pattern established by DEFAULT_SIMILARITY_THRESHOLD. Define 'const DEFAULT_ESCALATE_BELOW_CONFIDENCE: f32 = 0.6;' at the top of the file with other constants (after line 22), then use it in ApprovalConfig::default() on line 111.
