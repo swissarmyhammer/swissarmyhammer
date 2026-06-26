@@ -1467,52 +1467,66 @@ async fn undo_column_reorder_restores_original_order() {
         cols.iter().map(|c| c.id.to_string()).collect()
     }
 
-    let original = sorted_ids(&ectx).await;
-    assert_eq!(original, vec!["todo", "doing", "done"]);
+    // Snapshot every column's `order` field, keyed by id and sorted by id, so
+    // the assertions track undo *grouping* rather than the exact default
+    // column set.
+    async fn orders_by_id(
+        ectx: &Arc<swissarmyhammer_entity::EntityContext>,
+    ) -> Vec<(String, u64)> {
+        let mut orders: Vec<(String, u64)> = ectx
+            .list("column")
+            .await
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c.id.to_string(),
+                    c.get("order").and_then(|v| v.as_u64()).unwrap_or(0),
+                )
+            })
+            .collect();
+        orders.sort_by(|a, b| a.0.cmp(&b.0));
+        orders
+    }
 
+    // Default board: todo, doing, review, done.
+    let original = sorted_ids(&ectx).await;
+    assert_eq!(original, vec!["todo", "doing", "review", "done"]);
+    let original_orders = orders_by_id(&ectx).await;
+
+    // Drag `todo` to the last slot.
+    let last_index = original.len() - 1;
     let mut args = HashMap::new();
     args.insert("id".into(), json!("todo"));
-    args.insert("target_index".into(), json!(2));
+    args.insert("target_index".into(), json!(last_index));
     engine
         .dispatch("column.reorder", &[], None, args)
         .await
         .expect("column.reorder");
+
+    let reordered = sorted_ids(&ectx).await;
     assert_eq!(
-        sorted_ids(&ectx).await,
-        vec!["doing", "done", "todo"],
-        "post-drag column order"
+        reordered.last().map(String::as_str),
+        Some("todo"),
+        "todo must land in the last slot after the drag"
+    );
+    assert_eq!(
+        reordered.len(),
+        original.len(),
+        "reorder must not add or drop columns"
     );
 
-    // Snapshot every column's order field after a single undo. The
-    // expectation is the *whole* drag reverts: todo=0, doing=1, done=2.
-    // Without grouping, only the last UpdateColumn (todo, 0 → 2) is
-    // reversed, leaving doing=0, done=1, todo=0 — a corrupted state
-    // with two columns tied at order=0.
+    // A single undo must revert the WHOLE drag — every column's `order` field
+    // back to its pre-drag value, not just the last UpdateColumn. Without
+    // grouping, only the final UpdateColumn is reversed, leaving a corrupted
+    // state with two columns tied at the same order.
     engine.undo().await;
-    let mut orders: Vec<(String, u64)> = ectx
-        .list("column")
-        .await
-        .unwrap()
-        .iter()
-        .map(|c| {
-            (
-                c.id.to_string(),
-                c.get("order").and_then(|v| v.as_u64()).unwrap_or(0),
-            )
-        })
-        .collect();
-    orders.sort_by(|a, b| a.0.cmp(&b.0));
     assert_eq!(
-        orders,
-        vec![
-            ("doing".to_string(), 1),
-            ("done".to_string(), 2),
-            ("todo".to_string(), 0),
-        ],
+        orders_by_id(&ectx).await,
+        original_orders,
         "one app.undo must restore every column's pre-drag `order` field, \
          not just the last UpdateColumn"
     );
-
     assert_eq!(
         sorted_ids(&ectx).await,
         original,
@@ -1522,7 +1536,7 @@ async fn undo_column_reorder_restores_original_order() {
     engine.redo().await;
     assert_eq!(
         sorted_ids(&ectx).await,
-        vec!["doing", "done", "todo"],
+        reordered,
         "one app.redo must reapply the entire column reorder"
     );
 }

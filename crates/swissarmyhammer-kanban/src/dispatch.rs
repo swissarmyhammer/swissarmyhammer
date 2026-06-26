@@ -1159,9 +1159,10 @@ mod tests {
     async fn dispatch_add_task_on_board_with_no_columns_returns_error() {
         let (_temp, ctx) = setup().await;
 
-        // Delete all default columns (todo, doing, done)
-        for col_id in &["todo", "doing", "done"] {
-            let ops = parse_input(json!({"op": "delete column", "id": col_id})).unwrap();
+        // Delete every default column so the board has none.
+        for col in crate::types::default_column_entities() {
+            let ops =
+                parse_input(json!({"op": "delete column", "id": col.id.to_string()})).unwrap();
             execute_operation(&ctx, &ops[0]).await.unwrap();
         }
 
@@ -1806,10 +1807,10 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         let ops =
-            parse_input(json!({"op": "add column", "id": "review", "name": "Review"})).unwrap();
+            parse_input(json!({"op": "add column", "id": "qa", "name": "QA"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["id"], "review");
-        assert_eq!(result["name"], "Review");
+        assert_eq!(result["id"], "qa");
+        assert_eq!(result["name"], "QA");
     }
 
     #[tokio::test]
@@ -2715,10 +2716,10 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         let ops =
-            parse_input(json!({"op": "add column", "id": "review", "name": "Review", "order": 1}))
+            parse_input(json!({"op": "add column", "id": "qa", "name": "QA", "order": 1}))
                 .unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["id"], "review");
+        assert_eq!(result["id"], "qa");
         assert_eq!(result["order"], 1);
     }
 

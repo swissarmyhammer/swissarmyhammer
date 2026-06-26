@@ -81,21 +81,21 @@ mod tests {
     async fn test_get_column_returns_name_and_order() {
         let (_temp, ctx) = setup().await;
 
-        AddColumn::new("review", "Review")
+        AddColumn::new("qa", "QA")
             .with_order(99)
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        let result = GetColumn::new("review")
+        let result = GetColumn::new("qa")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        assert_eq!(result["id"], "review");
-        assert_eq!(result["name"], "Review");
+        assert_eq!(result["id"], "qa");
+        assert_eq!(result["name"], "QA");
         assert_eq!(result["order"], 99);
     }
 
