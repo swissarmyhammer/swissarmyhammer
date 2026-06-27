@@ -40,8 +40,8 @@ comments:
     1) Tool layer uses a placeholder seam, not real pinned embedder/grader (AC3 "real ... in production"). JUSTIFIED/DEFERRED: explicitly sanctioned by the task scope; engine path is fully real + tested; follow-up ^hatnq5h created and strengthened to flag the silent-false-negative risk (a tiered golden currently reads Approved in the tool layer until real wiring lands).
     2) Perception verbs in JUDGMENT_CUES mis-route literal-text criteria to Tier 3. ADDRESSED: removed ambiguous `reads`/`looks`/`sounds` from JUDGMENT_CUES so they default to the cheaper Tier 2 semantic band (kept clearly-subjective `feels`/`seems`); documented the rationale. (Did not add NearString-band residual selection — Semantic is a faithful default; the ToleranceBand enum already supports all bands per AC1.)
   timestamp: 2026-06-27T18:41:50.217566+00:00
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8880
 project: expect
 title: Compile residual criteria into frozen Tier 2/3 assertions at approve
 ---

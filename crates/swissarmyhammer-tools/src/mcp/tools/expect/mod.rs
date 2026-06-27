@@ -32,6 +32,7 @@
 //! [`Initializable`](crate::mcp::tool_registry::Initializable) impls.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -40,21 +41,23 @@ use swissarmyhammer_operations::{
     generate_mcp_schema_full, generate_mcp_schema_wire, operation, Operation, ParamMeta, ParamType,
     SchemaConfig,
 };
+use tokio::runtime::Handle;
 
 use swissarmyhammer_expect::{
     approval_diff, approval_status, approve, check, decide_approval, delete_expectation,
     delete_golden, delete_observation, evaluate_spec, find_expect_dir, golden_path, ledger_entry,
     ledger_queue, observe, observe_repeated, read_golden, received_path, surfaces, write_golden,
-    write_received, ApprovalDecision, ApprovalStatus, ApproveMode, CheckOptions, CliAdapter,
-    CreateSource, DeletionSummary, ExpectConfig, ExpectError, Expectation, ExpectationLoader,
-    Golden, GradingPins, GradingSeam, JudgmentContext, Observation, ObserveConfig, ScrubberSet,
-    Surface, TextEmbedder,
+    write_received, ApprovalDecision, ApprovalStatus, ApproveMode, CheckOptions, CheckReport,
+    CliAdapter, CreateSource, DeletionSummary, ExpectConfig, ExpectError, Expectation,
+    ExpectationLoader, Golden, GradingPins, GradingSeam, JudgmentContext, Observation,
+    ObserveConfig, ScrubberSet, Surface, TextEmbedder, CHECK_EXIT_FAILED,
 };
 use swissarmyhammer_kanban::{comment::AddComment, task::GetTask, Execute, KanbanContext};
 use swissarmyhammer_validators::PoolConfig;
 
 use crate::mcp::op_tool_helpers::{bool_arg, json_result, string_arg};
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
+use crate::mcp::tools::review::review_op;
 
 /// The tool's registered name and its `cli_category` (the top-level `sah`
 /// subcommand the noun-first command tree hangs under).
@@ -613,22 +616,34 @@ pub static EXPECT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
 
 /// The operation-based `expect` MCP tool.
 ///
-/// Holds an optional [`AgentFactory`](expect_op::AgentFactory): every op except
-/// `create expectation` works without it, but `create` drives a live authoring
-/// agent and so requires one. The production server injects a factory that builds
-/// the configured backend; a tool built without one (the default) returns an
-/// actionable error for `create` and serves every other op.
+/// Holds an optional [`AgentFactory`](expect_op::AgentFactory) and an optional
+/// [`EmbedderFactory`](review_op::EmbedderFactory).
+///
+/// Every op except `create expectation` works without the agent factory, but
+/// `create` drives a live authoring agent and so requires one. The embedder factory
+/// is the *same* seam `review` resolves its platform embedder through: when wired, the
+/// ledger ops grade a tiered golden faithfully with the real pinned embedder; when
+/// absent (the default, and every unit test), a tiered golden is escalated as a
+/// NON-approved `uncheckable` row by the loud-and-safe guard rather than silently read
+/// off an empty-vector compare. The production server injects both factories; a tool
+/// built without one returns an actionable error for `create` and grades only
+/// Tier-1-only goldens (escalating tiered ones).
 #[derive(Default)]
 pub struct ExpectTool {
     /// The live-agent factory the `create expectation` op drives, if wired.
     agent_factory: Option<expect_op::AgentFactory>,
+    /// The platform-embedder factory the ledger ops grade tiered goldens through, if
+    /// wired — shared with `review` (see [`review_op::EmbedderFactory`]).
+    embedder_factory: Option<review_op::EmbedderFactory>,
 }
 
 impl ExpectTool {
-    /// Build the tool with no agent factory — every op but `create` is served.
+    /// Build the tool with no factories — every op but `create` is served, and a
+    /// tiered golden is escalated as `uncheckable` (no real embedder to grade it).
     pub fn new() -> Self {
         Self {
             agent_factory: None,
+            embedder_factory: None,
         }
     }
 
@@ -636,6 +651,34 @@ impl ExpectTool {
     pub fn with_agent_factory(mut self, factory: expect_op::AgentFactory) -> Self {
         self.agent_factory = Some(factory);
         self
+    }
+
+    /// Attach the platform-embedder factory the ledger ops grade tiered goldens
+    /// through — the same seam `review` resolves its embedder by.
+    pub fn with_embedder_factory(mut self, factory: review_op::EmbedderFactory) -> Self {
+        self.embedder_factory = Some(factory);
+        self
+    }
+
+    /// Resolve the loaded platform embedder for a ledger op, or `None` when no factory
+    /// is wired or the model cannot be loaded.
+    ///
+    /// `None` is the loud-and-safe path: the caller escalates a tiered golden to a
+    /// NON-approved `uncheckable` row rather than grading it through the placeholder
+    /// seam. A load failure is logged (not raised) so a missing/unavailable model never
+    /// hard-fails an otherwise serviceable survey/approve/check.
+    async fn resolve_embedder(&self) -> Option<Arc<dyn model_embedding::TextEmbedder>> {
+        let factory = self.embedder_factory.as_ref()?;
+        match factory().await {
+            Ok(embedder) => Some(embedder),
+            Err(err) => {
+                tracing::info!(
+                    "expect: pinned embedder unavailable ({err}); tiered goldens escalate as \
+                     `uncheckable` rather than being graded"
+                );
+                None
+            }
+        }
     }
 }
 
@@ -1081,34 +1124,112 @@ fn goldens_list(
 /// orders the rows drifted-first with [`ledger_queue`] so the survey doubles as
 /// the review queue. A drifted row carries its re-derived old-vs-new comparison
 /// as evidence (`ideas/expect.md` §"The Drift Ledger").
-fn expectations_list(
+async fn expectations_list(
     arguments: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
+    embedder: Option<Arc<dyn model_embedding::TextEmbedder>>,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let (repo_root, specs) = resolve_scope_specs(arguments, context)?;
-    let scrubbers = ScrubberSet::default_set();
-    let embedder = PlaceholderEmbedder;
-    let judgment = placeholder_judgment();
-    let seam = GradingSeam {
-        embedder: &embedder,
-        judgment: &judgment,
-    };
-    let mut entries = Vec::with_capacity(specs.len());
-    for spec in &specs {
-        let (golden, received) = load_golden_and_received(&repo_root, &spec.path)?;
-        entries.push(ledger_entry(
-            spec,
-            golden.as_ref(),
-            received.as_ref(),
-            &scrubbers,
-            &seam,
-        ));
+    let handle = Handle::current();
+    // The grading runs on a blocking thread: the real embedder bridges its async
+    // `embed_text` via `block_on`, which is only sound off a reactor thread.
+    let payload =
+        tokio::task::spawn_blocking(move || -> Result<serde_json::Value, rmcp::ErrorData> {
+            let scrubbers = ScrubberSet::default_set();
+            let placeholder = PlaceholderEmbedder;
+            let real = embedder.map(|embedder| grading::ExpectEmbedder::new(embedder, handle));
+            let real_available = real.is_some();
+            let judgment = placeholder_judgment();
+            let seam = GradingSeam {
+                embedder: grading_embedder(real.as_ref(), &placeholder),
+                judgment: &judgment,
+            };
+
+            // With a real embedder a tiered golden is graded faithfully; without one it is
+            // short-circuited to a NON-approved `uncheckable` row before the placeholder
+            // compare could read it Approved. The rest are graded normally (their Tier-1
+            // compare never consults the embedder). Uncheckable rows lead the survey — like
+            // an unapproved drift, they are rows a human must act on.
+            let mut uncheckable = Vec::new();
+            let mut gradable = Vec::new();
+            for spec in &specs {
+                let (golden, received) = load_golden_and_received(&repo_root, &spec.path)?;
+                let tiered = golden.as_ref().is_some_and(golden_requires_grading);
+                if tiered && !real_available {
+                    uncheckable.push(uncheckable_row(&spec.path, "state"));
+                    continue;
+                }
+                let entry =
+                    ledger_entry(spec, golden.as_ref(), received.as_ref(), &scrubbers, &seam);
+                // A real embed that failed mid-grade leaves a degraded (empty-vector) compare
+                // that could read Approved off pass==pass — escalate rather than trust it.
+                if tiered && embed_failed(real.as_ref()) {
+                    uncheckable.push(uncheckable_row(&spec.path, "state"));
+                    continue;
+                }
+                gradable.push(entry);
+            }
+            let count = uncheckable.len() + gradable.len();
+            let mut entries = uncheckable;
+            for entry in ledger_queue(gradable) {
+                entries.push(serde_json::to_value(entry).map_err(|err| {
+                    rmcp::ErrorData::internal_error(
+                        format!("serializing ledger entry failed: {err}"),
+                        None,
+                    )
+                })?);
+            }
+            Ok(serde_json::json!({
+                "count": count,
+                "expectations": entries,
+            }))
+        })
+        .await
+        .map_err(|err| {
+            rmcp::ErrorData::internal_error(format!("expect ledger task join error: {err}"), None)
+        })??;
+    json_result(&payload)
+}
+
+/// The grading embedder for a ledger op: the real pinned adapter when the platform
+/// model is loaded, else the never-consulted [`PlaceholderEmbedder`].
+///
+/// A Tier-1-only golden never reaches the embedder, and a tiered golden is escalated by
+/// [`golden_requires_grading`] before any compare when no real embedder is available,
+/// so the placeholder is genuinely never consulted.
+fn grading_embedder<'a>(
+    real: Option<&'a grading::ExpectEmbedder>,
+    placeholder: &'a PlaceholderEmbedder,
+) -> &'a dyn TextEmbedder {
+    match real {
+        Some(adapter) => adapter,
+        None => placeholder,
     }
-    let entries = ledger_queue(entries);
-    json_result(&serde_json::json!({
-        "count": entries.len(),
-        "expectations": entries,
-    }))
+}
+
+/// Whether the real embedder recorded (and clears) a failure while grading the
+/// just-compared golden.
+///
+/// A `true` means the golden was graded on a degraded (empty-vector) embedding — which
+/// would read Approved off a pass==pass compare — so the caller escalates it to
+/// `uncheckable` instead of trusting the verdict. Always `false` when no real embedder
+/// is wired (the placeholder is never consulted on a tiered golden).
+fn embed_failed(real: Option<&grading::ExpectEmbedder>) -> bool {
+    real.is_some_and(grading::ExpectEmbedder::take_failed)
+}
+
+/// One guarded (uncheckable) survey/approve row: the spec identity plus the
+/// NON-approved [`UNCHECKABLE_STATUS`] under the caller's status key (`state` for the
+/// ledger survey, `status` for approve), carrying the teaching message.
+///
+/// The single source of truth for the guard's row shape, so the ledger survey and
+/// both approve passes emit an identical escalation row.
+fn uncheckable_row(path: &str, status_key: &str) -> serde_json::Value {
+    serde_json::json!({
+        "path": path,
+        status_key: UNCHECKABLE_STATUS,
+        "message": UNCHECKABLE_MESSAGE,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1243,23 +1364,48 @@ fn approve_grading(repo_root: &Path) -> GradingPins {
     GradingPins::from_config(&config)
 }
 
-/// A placeholder Tier-2 embedder for the ledger survey/compare ops until a real
-/// pinned embedder is wired into the tool layer.
+/// The tool-layer status surfaced for a tiered golden the available seam cannot
+/// grade faithfully — a NON-approved escalation so a frozen Tier-2/3 divergence can
+/// never be silently read as Approved.
 ///
-/// Returns an empty (cosine-safe) vector and warns on use, so a tiered golden
-/// graded through this seam is **loud**, never silently mis-graded. Wiring a real
-/// pinned `TextEmbedder` + `Grader` panel here (so tolerance/judgment verdicts are
-/// faithful in the tool layer) remains a follow-up; the engine-level
-/// compile/freeze/compare_tiered path is fully real and tested with stub seams.
+/// Deliberately distinct from every [`ApprovalStatus`]/[`LedgerState`]/`CheckStatus`
+/// wire value (`new`/`drifted`/`approved`/`passed`/…), so an "uncheckable" row never
+/// collides with a real graded state on the wire.
+const UNCHECKABLE_STATUS: &str = "uncheckable";
+
+/// The teaching message a guarded (uncheckable) tiered golden carries: it explains
+/// why the row is escalated rather than graded, routing the reviewer to wire/await a
+/// real grading seam instead of trusting a silent pass.
+const UNCHECKABLE_MESSAGE: &str =
+    "the golden carries frozen Tier-2/3 (tolerance/judgment) assertions but no real \
+     pinned embedder + grader panel is available, so the run cannot be graded \
+     faithfully — escalated rather than read as Approved";
+
+/// Whether `golden` carries frozen Tier-2/3 (tolerance/judgment) assertions whose
+/// faithful compare needs a real pinned embedder + grader panel.
+///
+/// The embedder-free Tier-1 compare cannot decide them, and the
+/// [`PlaceholderEmbedder`] would score BOTH sides at cosine 0 (empty vectors) — so a
+/// genuine Tier-2/3 divergence reads as pass==pass ⇒ no drift ⇒ silently Approved.
+/// This predicate is the guard that routes such a golden to a NON-approved
+/// [`UNCHECKABLE_STATUS`] instead. A Tier-1-only golden returns `false` and is graded
+/// normally (its embedder is never consulted).
+fn golden_requires_grading(golden: &Golden) -> bool {
+    !golden.tolerance.is_empty() || !golden.judgment.is_empty()
+}
+
+/// A never-consulted Tier-2 embedder for the Tier-1-only ledger compare in the tool
+/// layer.
+///
+/// A golden with no frozen Tier-2/3 assertions never reaches a tolerance/judgment
+/// resolve, so `embed` is unreachable for it; a tiered golden is short-circuited by
+/// [`golden_requires_grading`] to a NON-approved [`UNCHECKABLE_STATUS`] before any
+/// compare, so this embedder is never consulted on a tiered golden either. It returns
+/// an empty (cosine-safe) vector rather than loading the pinned embedding model.
 struct PlaceholderEmbedder;
 
 impl TextEmbedder for PlaceholderEmbedder {
     fn embed(&self, _text: &str) -> Vec<f32> {
-        tracing::warn!(
-            "expect: a tiered golden reached the ledger compare with a placeholder embedder; \
-             the real pinned Tier-2/3 embedder + grader are not yet wired into the tool layer, \
-             so tolerance/judgment verdicts are not faithful (follow-up)"
-        );
         Vec::new()
     }
 }
@@ -1312,32 +1458,52 @@ fn render_bindings(golden: &Golden) -> Vec<serde_json::Value> {
 /// Shared handler for `approve observation` and `approve observations`: resolve
 /// the `<scope>` (and optional `--tag`), then either preview the would-be diff (no
 /// mode flag) or write the selected goldens.
-fn approve_op(
+async fn approve_op(
     arguments: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
+    embedder: Option<Arc<dyn model_embedding::TextEmbedder>>,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let mode = parse_approve_mode(arguments)?;
     let (repo_root, specs) = resolve_scope_specs(arguments, context)?;
-    let grading = approve_grading(&repo_root);
-    let scrubbers = ScrubberSet::default_set();
-    let embedder = PlaceholderEmbedder;
-    let judgment = placeholder_judgment();
-    let seam = GradingSeam {
-        embedder: &embedder,
-        judgment: &judgment,
-    };
-    match mode {
-        None => approve_preview(&specs, &repo_root, &grading, &scrubbers, &seam),
-        Some(mode) => approve_write(
-            &specs,
-            &repo_root,
-            mode,
-            &grading,
-            &scrubbers,
-            ci_enabled(),
-            &seam,
-        ),
-    }
+    let ci = ci_enabled();
+    let handle = Handle::current();
+    // Grading runs on a blocking thread so the real embedder's async `embed_text` can
+    // be driven via `block_on` off the reactor.
+    tokio::task::spawn_blocking(move || {
+        let grading = approve_grading(&repo_root);
+        let scrubbers = ScrubberSet::default_set();
+        let placeholder = PlaceholderEmbedder;
+        let real = embedder.map(|embedder| grading::ExpectEmbedder::new(embedder, handle));
+        let judgment = placeholder_judgment();
+        let seam = GradingSeam {
+            embedder: grading_embedder(real.as_ref(), &placeholder),
+            judgment: &judgment,
+        };
+        match mode {
+            None => approve_preview(
+                &specs,
+                &repo_root,
+                &grading,
+                &scrubbers,
+                &seam,
+                real.as_ref(),
+            ),
+            Some(mode) => approve_write(
+                &specs,
+                &repo_root,
+                mode,
+                &grading,
+                &scrubbers,
+                ci,
+                &seam,
+                real.as_ref(),
+            ),
+        }
+    })
+    .await
+    .map_err(|err| {
+        rmcp::ErrorData::internal_error(format!("expect approve task join error: {err}"), None)
+    })?
 }
 
 /// Preview the approve pass: for each spec show its [`ApprovalStatus`] and, when
@@ -1349,10 +1515,19 @@ fn approve_preview(
     grading: &GradingPins,
     scrubbers: &ScrubberSet,
     seam: &GradingSeam,
+    real: Option<&grading::ExpectEmbedder>,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let mut preview = Vec::with_capacity(specs.len());
     for spec in specs {
         let (golden, received) = load_golden_and_received(repo_root, &spec.path)?;
+        let tiered = golden.as_ref().is_some_and(golden_requires_grading);
+        // Without a real embedder a tiered golden cannot be graded faithfully, so it is
+        // escalated as `uncheckable` rather than previewed off a silent placeholder
+        // compare. With one, it is previewed like any other golden.
+        if tiered && real.is_none() {
+            preview.push(uncheckable_row(&spec.path, "status"));
+            continue;
+        }
         let status = approval_status(golden.as_ref(), received.as_ref(), scrubbers, seam);
         let entry = match received.as_ref() {
             Some(received) if matches!(status, ApprovalStatus::New | ApprovalStatus::Drifted) => {
@@ -1371,6 +1546,12 @@ fn approve_preview(
             }
             _ => serde_json::json!({ "path": spec.path, "status": status }),
         };
+        // A real embed that failed mid-grade leaves a degraded compare that could read
+        // Approved off pass==pass — escalate the golden instead of trusting the preview.
+        if tiered && embed_failed(real) {
+            preview.push(uncheckable_row(&spec.path, "status"));
+            continue;
+        }
         preview.push(entry);
     }
     json_result(&serde_json::json!({
@@ -1390,6 +1571,10 @@ fn approve_preview(
 /// golden is written; a CI refusal is a hard `invalid_params` failure. (A raw IO
 /// error mid-write is not pre-screened and surfaces per spec; the decision-pass
 /// guard is about reviewable refusals, not disk faults.)
+// The two ledger artifacts, the mode, the pinned grading, the CI flag, the seam, and
+// the real-embedder-available flag are each a distinct, explicitly-injected input, so
+// the argument count is allowed here (it mirrors the engine's `decide_approval`).
+#[allow(clippy::too_many_arguments)]
 fn approve_write(
     specs: &[Expectation],
     repo_root: &Path,
@@ -1398,10 +1583,21 @@ fn approve_write(
     scrubbers: &ScrubberSet,
     ci: bool,
     seam: &GradingSeam,
+    real: Option<&grading::ExpectEmbedder>,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let mut decisions = Vec::with_capacity(specs.len());
+    let mut uncheckable = Vec::new();
     for spec in specs {
         let (golden, received) = load_golden_and_received(repo_root, &spec.path)?;
+        let tiered = golden.as_ref().is_some_and(golden_requires_grading);
+        // Without a real embedder a tiered golden cannot be graded faithfully, so it is
+        // never (silently) selected for a write — it is escalated as `uncheckable`
+        // rather than run through `decide_approval`'s placeholder compare. With one, it
+        // is decided like any other golden.
+        if tiered && real.is_none() {
+            uncheckable.push(uncheckable_row(&spec.path, "status"));
+            continue;
+        }
         let decision = decide_approval(
             spec,
             golden.as_ref(),
@@ -1413,6 +1609,12 @@ fn approve_write(
             seam,
         )
         .map_err(|err| rmcp::ErrorData::invalid_params(err.to_string(), None))?;
+        // A real embed that failed mid-grade leaves a degraded compare the decision was
+        // built on — escalate the golden instead of writing/skipping off a silent verdict.
+        if tiered && embed_failed(real) {
+            uncheckable.push(uncheckable_row(&spec.path, "status"));
+            continue;
+        }
         decisions.push((spec, decision));
     }
 
@@ -1466,6 +1668,7 @@ fn approve_write(
         "count": written.len(),
         "written": written,
         "skipped": skipped,
+        "uncheckable": uncheckable,
     }))
 }
 
@@ -1519,43 +1722,113 @@ fn observe_for_check(
 /// process exit (a malformed spec, an unmet expectation, or an unapproved drift
 /// all fail; a `new` expectation fails only in CI). Both ops share one body
 /// because they differ only in how many specs the scope is expected to match.
-fn check_op(
+async fn check_op(
     arguments: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
+    embedder: Option<Arc<dyn model_embedding::TextEmbedder>>,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let scope = string_arg(arguments, "scope");
     let tag = string_arg(arguments, "tag");
     let repo_root = observe_repo_root(context);
+    let ci = ci_enabled();
+    let handle = Handle::current();
+    // The check composition (observe + tiered compare) runs on a blocking thread: the
+    // observe seam shells out, and the real embedder drives `embed_text` via `block_on`.
+    let value =
+        tokio::task::spawn_blocking(move || -> Result<serde_json::Value, rmcp::ErrorData> {
+            let facts = doctor::production_facts();
+            let config = find_expect_dir(&repo_root)
+                .and_then(|dir| ExpectConfig::load(&dir).ok())
+                .unwrap_or_default();
+            let scrubbers = ScrubberSet::default_set();
+            let placeholder = PlaceholderEmbedder;
+            let real = embedder.map(|embedder| grading::ExpectEmbedder::new(embedder, handle));
+            let real_available = real.is_some();
+            let judgment = placeholder_judgment();
+            let seam = GradingSeam {
+                embedder: grading_embedder(real.as_ref(), &placeholder),
+                judgment: &judgment,
+            };
+            let options = CheckOptions {
+                facts: &facts,
+                config: &config,
+                scrubbers: &scrubbers,
+                seam: &seam,
+                ci,
+            };
 
-    let facts = doctor::production_facts();
-    let config = find_expect_dir(&repo_root)
-        .and_then(|dir| ExpectConfig::load(&dir).ok())
-        .unwrap_or_default();
-    let scrubbers = ScrubberSet::default_set();
-    let embedder = PlaceholderEmbedder;
-    let judgment = placeholder_judgment();
-    let seam = GradingSeam {
-        embedder: &embedder,
-        judgment: &judgment,
-    };
-    let options = CheckOptions {
-        facts: &facts,
-        config: &config,
-        scrubbers: &scrubbers,
-        seam: &seam,
-        ci: ci_enabled(),
-    };
+            let report = check(
+                &repo_root,
+                scope.as_deref(),
+                tag.as_deref(),
+                &options,
+                |spec| observe_for_check(spec, &repo_root),
+            )
+            .map_err(|err| rmcp::ErrorData::internal_error(format!("check failed: {err}"), None))?;
 
-    let report = check(
-        &repo_root,
-        scope.as_deref(),
-        tag.as_deref(),
-        &options,
-        |spec| observe_for_check(spec, &repo_root),
-    )
-    .map_err(|err| rmcp::ErrorData::internal_error(format!("check failed: {err}"), None))?;
+            // With a real embedder that graded every golden cleanly, the engine's report is
+            // faithful and returned as-is. Without an embedder — or when an embed FAILED
+            // mid-pass, leaving a degraded compare — a tiered golden's entry is re-stamped
+            // NON-approved `uncheckable` rather than left reading a placeholder/degraded pass.
+            if real_available && !embed_failed(real.as_ref()) {
+                serde_json::to_value(&report).map_err(|err| {
+                    rmcp::ErrorData::internal_error(
+                        format!("serializing check report failed: {err}"),
+                        None,
+                    )
+                })
+            } else {
+                guard_uncheckable_report(report, &repo_root)
+            }
+        })
+        .await
+        .map_err(|err| {
+            rmcp::ErrorData::internal_error(format!("expect check task join error: {err}"), None)
+        })??;
 
-    json_result(&report)
+    json_result(&value)
+}
+
+/// Re-stamp a [`CheckReport`] so a tiered golden never reads as a placeholder-graded
+/// pass: an entry whose golden carries frozen Tier-2/3 assertions is rewritten to the
+/// NON-approved [`UNCHECKABLE_STATUS`] (with the guard teaching message), and the
+/// rolled-up exit code is raised to [`CHECK_EXIT_FAILED`] when any entry is escalated.
+///
+/// Post-processing the serialized report (rather than the typed `CheckReport`, whose
+/// `CheckStatus` has no uncheckable variant) keeps the guard a tool-layer concern: the
+/// engine's status enum stays a closed set, and the wire status carries the escalation.
+fn guard_uncheckable_report(
+    report: CheckReport,
+    repo_root: &Path,
+) -> Result<serde_json::Value, rmcp::ErrorData> {
+    let mut value = serde_json::to_value(&report).map_err(|err| {
+        rmcp::ErrorData::internal_error(format!("serializing check report failed: {err}"), None)
+    })?;
+    let mut escalated = false;
+    if let Some(entries) = value.get_mut("entries").and_then(|e| e.as_array_mut()) {
+        for entry in entries.iter_mut() {
+            let Some(path) = entry
+                .get("path")
+                .and_then(|p| p.as_str())
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let golden = read_golden(repo_root, &path)
+                .map_err(|err| rmcp::ErrorData::invalid_params(err.to_string(), None))?;
+            if golden.as_ref().is_some_and(golden_requires_grading) {
+                entry["status"] = serde_json::Value::String(UNCHECKABLE_STATUS.to_string());
+                entry["message"] = serde_json::Value::String(UNCHECKABLE_MESSAGE.to_string());
+                escalated = true;
+            }
+        }
+    }
+    if escalated {
+        let current = value.get("exit_code").and_then(serde_json::Value::as_i64);
+        let raised = current.unwrap_or(0).max(CHECK_EXIT_FAILED as i64);
+        value["exit_code"] = serde_json::json!(raised);
+    }
+    Ok(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -1768,6 +2041,11 @@ impl swissarmyhammer_common::health::Doctorable for ExpectTool {
 // observe-over-agent / check ops) consume it in later tasks.
 pub mod expect_op;
 
+// The tool-layer grading seam: the `ExpectEmbedder` adapter bridging the async
+// platform embedder (resolved through review's shared factory) to the engine's sync
+// `TextEmbedder`.
+mod grading;
+
 // The real `Initializable` impl (the `expect init` scaffold) lives in `init`.
 mod init;
 
@@ -1831,19 +2109,25 @@ impl McpTool for ExpectTool {
             GOLDEN_GET_OP => golden_get(&arguments, context),
             OBSERVATIONS_LIST_OP => observations_list(&arguments, context),
             GOLDENS_LIST_OP => goldens_list(&arguments, context),
-            EXPECTATIONS_LIST_OP => expectations_list(&arguments, context),
+            EXPECTATIONS_LIST_OP => {
+                expectations_list(&arguments, context, self.resolve_embedder().await).await
+            }
             EXPECTATION_DELETE_OP => delete_op(&arguments, context, delete_expectation),
             OBSERVATION_DELETE_OP => delete_op(&arguments, context, delete_observation),
             GOLDEN_DELETE_OP => delete_op(&arguments, context, delete_golden),
             EXPECTATION_OBSERVE_OP | EXPECTATIONS_OBSERVE_OP => observe_op(&arguments, context),
-            OBSERVATION_APPROVE_OP | OBSERVATIONS_APPROVE_OP => approve_op(&arguments, context),
+            OBSERVATION_APPROVE_OP | OBSERVATIONS_APPROVE_OP => {
+                approve_op(&arguments, context, self.resolve_embedder().await).await
+            }
             OBSERVATION_EVALUATE_OP | OBSERVATIONS_EVALUATE_OP => {
                 evaluate_op(&arguments, context, EvaluateSource::Received)
             }
             GOLDEN_EVALUATE_OP | GOLDENS_EVALUATE_OP => {
                 evaluate_op(&arguments, context, EvaluateSource::Golden)
             }
-            EXPECTATION_CHECK_OP | EXPECTATIONS_CHECK_OP => check_op(&arguments, context),
+            EXPECTATION_CHECK_OP | EXPECTATIONS_CHECK_OP => {
+                check_op(&arguments, context, self.resolve_embedder().await).await
+            }
             EXPECTATION_CREATE_OP => {
                 let factory = self.agent_factory.as_ref().ok_or_else(|| {
                     rmcp::ErrorData::internal_error(
@@ -1873,8 +2157,16 @@ impl McpTool for ExpectTool {
 }
 
 /// Register the operation-based `expect` tool with the registry.
+///
+/// The tool is wired with the *same* platform-embedder factory `review` uses
+/// ([`review_op::default_embedder_factory`]), so the ledger ops grade a tiered golden
+/// faithfully with the real pinned embedder (shared, loaded once per process). When the
+/// model cannot be loaded (no GPU / model absent) the ops fall back to the loud-and-safe
+/// uncheckable guard. The live authoring agent for `create expectation` is wired
+/// separately via [`register_expect_tool_with_factory`].
 pub fn register_expect_tools(registry: &mut ToolRegistry) {
-    registry.register(ExpectTool::new());
+    registry
+        .register(ExpectTool::new().with_embedder_factory(review_op::default_embedder_factory()));
 }
 
 #[cfg(test)]
@@ -2848,6 +3140,311 @@ mod tests {
         assert_eq!(scoped["expectations"][0]["path"], "drifted");
     }
 
+    /// Write an approved golden for `identity` carrying a frozen Tier-3 judgment
+    /// assertion — a *tiered* golden whose faithful compare needs a real pinned
+    /// embedder + grader panel. The on-disk observation matches the judgment anchor,
+    /// so an honest compare would read Approved; the placeholder seam would too (both
+    /// sides embed to empty vectors), which is exactly the silent-false-negative the
+    /// interim guard must close.
+    fn write_tiered_golden_fixture(repo: &Path, identity: &str) {
+        use swissarmyhammer_expect::{
+            compile, spec_hash, write_golden, BoundValue, Criterion, ExpectConfig, Golden,
+            GradingPins, JudgmentAssertion, Locator,
+        };
+
+        let observation: Observation = serde_json::from_value(serde_json::json!({
+            "path": identity,
+            "checkpoints": [{
+                "after": "final",
+                "state": { "kind": "json", "body": {
+                    "total": 40,
+                    "message": "the coupon is already applied"
+                } },
+                "duration_ms": 1
+            }],
+            "trajectory": { "steps": [] }
+        }))
+        .unwrap();
+        let assertion = compile(
+            &Criterion {
+                text: "the total is $40".to_string(),
+                checked: false,
+            },
+            &observation,
+        )
+        .expect("criterion compiles");
+        let spec = specs_in(repo, Some(identity))
+            .into_iter()
+            .next()
+            .expect("spec on disk");
+        let judgment = JudgmentAssertion {
+            checkpoint: 0,
+            locator: Locator::JsonPath {
+                path: "$.message".to_string(),
+            },
+            anchor: BoundValue::Text("the coupon is already applied".to_string()),
+            sim_threshold: 0.85,
+            rubric: "conveys that the coupon is already applied".to_string(),
+            criterion_text: "an error explains the coupon is already applied".to_string(),
+        };
+        let golden = Golden {
+            observation,
+            assertions: vec![assertion],
+            tolerance: Vec::new(),
+            judgment: vec![judgment],
+            grading: GradingPins::from_config(&ExpectConfig::default()),
+            spec_hash: spec_hash(&spec),
+        };
+        write_golden(repo, &golden).expect("write tiered golden");
+    }
+
+    /// `golden_requires_grading` is the guard predicate: a golden carrying frozen
+    /// Tier-2/3 assertions needs a real seam, a Tier-1-only golden does not.
+    #[test]
+    fn golden_requires_grading_flags_only_a_tiered_golden() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "tier1", &["the total is $40"]);
+        write_spec(repo.path(), "tier3", &["the total is $40"]);
+        write_golden_fixture(repo.path(), "tier1");
+        write_tiered_golden_fixture(repo.path(), "tier3");
+
+        let tier1 = read_golden(repo.path(), "tier1")
+            .unwrap()
+            .expect("tier1 golden");
+        let tier3 = read_golden(repo.path(), "tier3")
+            .unwrap()
+            .expect("tier3 golden");
+
+        assert!(
+            !golden_requires_grading(&tier1),
+            "a Tier-1-only golden is graded normally"
+        );
+        assert!(
+            golden_requires_grading(&tier3),
+            "a golden with a frozen judgment assertion needs a real seam"
+        );
+    }
+
+    /// THE INTERIM-GUARD TEST (no model required): a tiered golden whose received run
+    /// matches its anchor is surfaced NON-approved (`uncheckable`) by the ledger
+    /// survey rather than silently read Approved through the placeholder seam — the
+    /// silent-false-negative footgun, closed.
+    #[tokio::test]
+    async fn expectations_list_escalates_a_tiered_golden_as_uncheckable() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        write_tiered_golden_fixture(repo.path(), "coupon");
+        // A received run matching the golden — an honest pass — so the only way the row
+        // can read NON-approved is the guard, never a (real) drift.
+        write_observation(
+            &repo.path().join(".expect/received/coupon.received.json"),
+            "coupon",
+            serde_json::json!({ "total": 40, "message": "the coupon is already applied" }),
+        );
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let payload = run_op(EXPECTATIONS_LIST_OP, &ctx).await;
+
+        assert_eq!(payload["count"], 1);
+        let row = &payload["expectations"][0];
+        assert_eq!(row["path"], "coupon");
+        assert_eq!(
+            row["state"], UNCHECKABLE_STATUS,
+            "a tiered golden with only the placeholder seam is escalated, not graded"
+        );
+        assert_ne!(
+            row["state"], "approved",
+            "the silent-false-negative (reading Approved off an empty-vector compare) is closed"
+        );
+    }
+
+    /// The approve preview mirrors the survey guard: a tiered golden is escalated as
+    /// `uncheckable` rather than previewed off the placeholder compare, so it is never
+    /// (silently) presented as an Approved/skippable row.
+    #[tokio::test]
+    async fn approve_preview_escalates_a_tiered_golden_as_uncheckable() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        write_tiered_golden_fixture(repo.path(), "coupon");
+        write_observation(
+            &repo.path().join(".expect/received/coupon.received.json"),
+            "coupon",
+            serde_json::json!({ "total": 40, "message": "the coupon is already applied" }),
+        );
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        // A bare `approve observation` (no mode flag) is a preview that writes nothing.
+        let payload = run_evaluate(OBSERVATION_APPROVE_OP, "coupon", &ctx).await;
+
+        let preview = payload["preview"].as_array().expect("preview array");
+        assert_eq!(preview.len(), 1);
+        assert_eq!(preview[0]["path"], "coupon");
+        assert_eq!(
+            preview[0]["status"], UNCHECKABLE_STATUS,
+            "a tiered golden is escalated in the approve preview, not graded"
+        );
+        assert_ne!(preview[0]["status"], "approved");
+    }
+
+    /// The check-report guard re-stamps a tiered golden's entry NON-approved
+    /// (`uncheckable`) and raises the rolled-up exit code to a failure, so a check over
+    /// a tiered golden can never read a placeholder-graded pass. Exercised over a
+    /// synthesized report so it needs no live observe (and no model).
+    #[test]
+    fn guard_uncheckable_report_escalates_a_tiered_entry_and_fails_the_exit_code() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "tier1", &["the total is $40"]);
+        write_spec(repo.path(), "tier3", &["the total is $40"]);
+        write_golden_fixture(repo.path(), "tier1");
+        write_tiered_golden_fixture(repo.path(), "tier3");
+
+        // A report the engine would have produced off the placeholder seam: both pass.
+        let report: CheckReport = serde_json::from_value(serde_json::json!({
+            "entries": [
+                { "path": "tier1", "status": "passed", "message": "ok", "diagnostics": [] },
+                { "path": "tier3", "status": "passed", "message": "ok", "diagnostics": [] },
+            ],
+            "exit_code": 0,
+        }))
+        .expect("synthesized report parses");
+
+        let value = guard_uncheckable_report(report, repo.path()).expect("guard runs");
+
+        let entry_status = |path: &str| {
+            value["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["path"] == path)
+                .and_then(|e| e["status"].as_str())
+                .map(str::to_string)
+        };
+        assert_eq!(
+            entry_status("tier1").as_deref(),
+            Some("passed"),
+            "a Tier-1-only golden is left graded as the engine decided"
+        );
+        assert_eq!(
+            entry_status("tier3").as_deref(),
+            Some(UNCHECKABLE_STATUS),
+            "a tiered golden is re-stamped uncheckable, not left reading passed"
+        );
+        assert_eq!(
+            value["exit_code"], CHECK_EXIT_FAILED,
+            "an escalated tiered golden raises the rolled-up exit code to a failure"
+        );
+    }
+
+    /// THE MODEL-BACKED END-TO-END TEST (GPU-gated): with the real pinned embedder
+    /// wired (the same platform model `review` loads), a tiered golden whose received
+    /// run DIVERGED from its frozen Tier-3 anchor is graded faithfully through the tool
+    /// layer and surfaces as `drifted` — not silently Approved, and not the
+    /// `uncheckable` escalation the placeholder seam would force. Skips when the model
+    /// cannot be loaded (no GPU / model absent), mirroring review's model-backed tests;
+    /// the interim-guard tests above cover the footgun without a model.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tiered_golden_graded_end_to_end_detects_drift_with_a_real_embedder() {
+        // Gate on model availability: the self-hosted CI runner has a Metal GPU, but a
+        // dev box may not. Resolve the embedder once up front and skip if it is absent.
+        if review_op::default_embedder_factory()().await.is_err() {
+            eprintln!(
+                "skipping tiered_golden_graded_end_to_end_detects_drift_with_a_real_embedder: \
+                 the platform embedder could not be loaded (no GPU/model)"
+            );
+            return;
+        }
+
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        write_tiered_golden_fixture(repo.path(), "coupon");
+        // A received run whose JUDGED message diverged from the frozen anchor ("the
+        // coupon is already applied") — a genuine Tier-3 drift a faithful grade detects.
+        write_observation(
+            &repo.path().join(".expect/received/coupon.received.json"),
+            "coupon",
+            serde_json::json!({
+                "total": 40,
+                "message": "the order has shipped and can no longer be modified"
+            }),
+        );
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+        let tool = ExpectTool::new().with_embedder_factory(review_op::default_embedder_factory());
+
+        let result = tool
+            .execute(
+                args(serde_json::json!({ "op": EXPECTATIONS_LIST_OP })),
+                &ctx,
+            )
+            .await
+            .expect("list dispatches with a real embedder");
+        let payload = payload_of(&result);
+
+        let row = &payload["expectations"][0];
+        assert_eq!(row["path"], "coupon");
+        assert_eq!(
+            row["state"], "drifted",
+            "a real embedder grades the tiered golden and detects the divergence, got {row}"
+        );
+        assert_ne!(
+            row["state"], UNCHECKABLE_STATUS,
+            "with a real embedder the tiered golden is graded, not escalated"
+        );
+        assert_eq!(
+            payload["expectations"][0]["comparison"]["criteria"]
+                .as_array()
+                .map(|criteria| criteria.iter().any(|c| c["drifted"] == true)),
+            Some(true),
+            "the drift carries its re-derived old-vs-new evidence"
+        );
+    }
+
+    /// REGRESSION (no model): once the real embedder is LOADED, a per-call `embed_text`
+    /// failure degrades to an empty vector that scores cosine 0 on BOTH sides — so a
+    /// tiered golden would read pass==pass ⇒ no drift ⇒ silently Approved. The
+    /// embed-failure escalation must catch this and surface `uncheckable` instead. A
+    /// `MockEmbedder` forced to fail every embed stands in for the model, so this runs
+    /// unconditionally (no GPU). Without the fix this row reads `approved`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_embed_escalates_a_tiered_golden_instead_of_reading_approved() {
+        use model_embedding::mock::MockEmbedder;
+
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        write_tiered_golden_fixture(repo.path(), "coupon");
+        // A received run that MATCHES the golden — an honest pass — so the only way the
+        // row reads NON-approved is the embed-failure escalation, never a real drift.
+        write_observation(
+            &repo.path().join(".expect/received/coupon.received.json"),
+            "coupon",
+            serde_json::json!({ "total": 40, "message": "the coupon is already applied" }),
+        );
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+        // A factory whose embedder fails every embed (a loaded-but-failing model): the
+        // degraded compare the escalation must refuse to read as Approved.
+        let factory: review_op::EmbedderFactory = Arc::new(|| {
+            Box::pin(async {
+                let embedder: Arc<dyn model_embedding::TextEmbedder> =
+                    Arc::new(MockEmbedder::with_failures(8, (0..64).collect()));
+                Ok(embedder)
+            })
+        });
+        let tool = ExpectTool::new().with_embedder_factory(factory);
+
+        let result = tool
+            .execute(
+                args(serde_json::json!({ "op": EXPECTATIONS_LIST_OP })),
+                &ctx,
+            )
+            .await
+            .expect("list dispatches with a failing embedder");
+        let payload = payload_of(&result);
+
+        assert_eq!(
+            payload["expectations"][0]["state"], UNCHECKABLE_STATUS,
+            "a failed embed must escalate the tiered golden, not read it Approved: {payload}"
+        );
+    }
+
     /// `list expectations` must declare the `scope`/`tag` inputs its handler reads,
     /// so the generated CLI and MCP schema actually accept them — mirroring the
     /// sibling `list observations` / `list goldens` ops.
@@ -2924,6 +3521,7 @@ mod tests {
             &ScrubberSet::default_set(),
             false, // not CI
             placeholder_seam(),
+            None,
         )
         .expect("approve writes");
         let payload = payload_of(&result);
@@ -3072,6 +3670,7 @@ mod tests {
             &ScrubberSet::default_set(),
             false,
             placeholder_seam(),
+            None,
         )
         .expect("approve writes");
         let (written, skipped) = partition(&payload_of(&result));
@@ -3097,6 +3696,7 @@ mod tests {
             &ScrubberSet::default_set(),
             false,
             placeholder_seam(),
+            None,
         )
         .expect("approve writes");
         let (written, skipped) = partition(&payload_of(&result));
@@ -3127,6 +3727,7 @@ mod tests {
             &ScrubberSet::default_set(),
             true, // CI
             placeholder_seam(),
+            None,
         )
         .expect_err("CI must refuse to write a drift");
 
@@ -3152,6 +3753,7 @@ mod tests {
             &ScrubberSet::default_set(),
             true, // CI
             placeholder_seam(),
+            None,
         )
         .expect_err("CI must refuse to baseline a new expectation");
 
