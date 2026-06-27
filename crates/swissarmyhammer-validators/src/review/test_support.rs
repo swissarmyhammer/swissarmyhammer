@@ -324,6 +324,11 @@ use crate::validators::{AgentPool, PoolConfig};
 /// Prompt-token count the mock reports for every saved prefix state.
 pub const MOCK_PREFIX_TOKENS: u64 = 1234;
 
+/// How long a [`ScriptedReply::Stall`] turn sleeps before resolving — far longer
+/// than any test's cancel/idle window, so a stalled turn is always abandoned or
+/// cancelled by the test long before this elapses.
+const STALL_DURATION_SECS: u64 = 60;
+
 /// One scripted reaction, matched in script order by substring needle.
 #[derive(Debug, Clone)]
 pub enum ScriptedReply {
@@ -722,7 +727,7 @@ async fn handle_prompt(
         ScriptedReply::Stall => {
             // Far longer than any test's windows; the test cancels or abandons
             // the turn long before this resolves.
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(STALL_DURATION_SECS)).await;
             mock.config.default_response.clone()
         }
         ScriptedReply::Text(text) => text,
