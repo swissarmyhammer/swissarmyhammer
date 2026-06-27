@@ -12,8 +12,8 @@ comments:
   timestamp: 2026-06-27T14:20:06.647210+00:00
 depends_on:
 - 01KW26CTFQH36STPXTAE8SQQJW
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8280
 project: expect
 title: 'gui surface adapter: macOS AX + Tauri bridge (testable core)'
 ---
