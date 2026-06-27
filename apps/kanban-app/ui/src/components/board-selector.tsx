@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useState } from "react";
-import { ExternalLink, Share2 } from "lucide-react";
+import { ExternalLink, Share2, type LucideIcon } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { useDispatchCommand } from "@/lib/command-scope";
@@ -57,6 +57,60 @@ export function pathStem(path: string): string {
   return last === ".kanban" && parts.length > 1
     ? parts[parts.length - 2]
     : last || path;
+}
+
+/**
+ * Label for the "expose board to your agent" action, shared by the button's
+ * aria-label, its tooltip, and the test assertion so the three never drift.
+ */
+export const EXPOSE_BOARD_LABEL = "Expose this board to your agent";
+
+/**
+ * A single icon button in the board toolbar (tear-off, expose, …).
+ *
+ * Every board-toolbar button shares the same `Pressable` + `Tooltip` + styled
+ * `<button>` shell and differs only by its moniker, aria-label, icon, press
+ * handler, and tooltip text — so they all render through this one component
+ * rather than copy-pasted blocks.
+ */
+function BoardToolbarButton({
+  moniker,
+  ariaLabel,
+  icon: Icon,
+  onPress,
+  tooltip,
+}: {
+  /** Spatial-nav moniker leaf for this button's `<Pressable>`. */
+  moniker: string;
+  /** Accessible name; also used as the visible tooltip when none is given. */
+  ariaLabel: string;
+  /** Lucide icon rendered inside the button. */
+  icon: LucideIcon;
+  /** Activation handler. */
+  onPress: () => void;
+  /** Tooltip text shown on hover/focus. */
+  tooltip: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Pressable
+          asChild
+          moniker={asSegment(moniker)}
+          ariaLabel={ariaLabel}
+          onPress={onPress}
+        >
+          <button
+            type="button"
+            className="inline-flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground/40 hover:bg-accent hover:text-accent-foreground transition-colors"
+          >
+            <Icon className="h-3.5 w-3.5" />
+          </button>
+        </Pressable>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{tooltip}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 interface BoardSelectorProps {
@@ -182,53 +236,29 @@ export function BoardSelector({
       </FocusScope>
 
       {showTearOff && selectedPath && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Pressable
-              asChild
-              moniker={asSegment("board-selector.tear-off")}
-              ariaLabel="Open in new window"
-              onPress={() => {
-                dispatchNewWindow({ args: { board_path: selectedPath } }).catch(
-                  console.error,
-                );
-              }}
-            >
-              <button
-                type="button"
-                className="inline-flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground/40 hover:bg-accent hover:text-accent-foreground transition-colors"
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-              </button>
-            </Pressable>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Open in new window</TooltipContent>
-        </Tooltip>
+        <BoardToolbarButton
+          moniker="board-selector.tear-off"
+          ariaLabel="Open in new window"
+          tooltip="Open in new window"
+          icon={ExternalLink}
+          onPress={() => {
+            dispatchNewWindow({ args: { board_path: selectedPath } }).catch(
+              console.error,
+            );
+          }}
+        />
       )}
 
       {showTearOff && selectedPath && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Pressable
-              asChild
-              moniker={asSegment("board-selector.expose")}
-              ariaLabel="Expose this board to your agent"
-              onPress={() => {
-                handleExpose().catch(console.error);
-              }}
-            >
-              <button
-                type="button"
-                className="inline-flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground/40 hover:bg-accent hover:text-accent-foreground transition-colors"
-              >
-                <Share2 className="h-3.5 w-3.5" />
-              </button>
-            </Pressable>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            Expose this board to your agent
-          </TooltipContent>
-        </Tooltip>
+        <BoardToolbarButton
+          moniker="board-selector.expose"
+          ariaLabel={EXPOSE_BOARD_LABEL}
+          tooltip={EXPOSE_BOARD_LABEL}
+          icon={Share2}
+          onPress={() => {
+            handleExpose().catch(console.error);
+          }}
+        />
       )}
     </div>
   );

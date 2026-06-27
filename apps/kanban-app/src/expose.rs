@@ -18,7 +18,7 @@ use std::sync::Mutex;
 use mirdan::install::register_mcp_server_at;
 use mirdan::mcp_config::McpServerEntry;
 use serde::Serialize;
-use swissarmyhammer_common::lifecycle::{InitResult, InitScope, InitStatus};
+use swissarmyhammer_common::lifecycle::{InitScope, InitStatus};
 use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
 
 /// MCP server name the board registers itself under in each agent's config.
@@ -132,15 +132,9 @@ pub fn expose_board_to_agents_inner(board_root: &Path, cli_path: &Path) -> Vec<A
     summary
         .iter()
         .filter(|r| r.status == InitStatus::Error)
-        .map(summary_to_error_result)
+        .map(|r| AgentExposeResult {
+            ok: false,
+            message: r.message.clone(),
+        })
         .collect()
-}
-
-/// Map an aggregate agent-detection-failure [`InitResult`] to a failed
-/// [`AgentExposeResult`].
-fn summary_to_error_result(result: &InitResult) -> AgentExposeResult {
-    AgentExposeResult {
-        ok: false,
-        message: result.message.clone(),
-    }
 }

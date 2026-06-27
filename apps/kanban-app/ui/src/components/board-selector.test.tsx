@@ -32,7 +32,11 @@ vi.mock("@tauri-apps/api/event", async (importActual) => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-import { BoardSelector, pathStem } from "./board-selector";
+import {
+  BoardSelector,
+  pathStem,
+  EXPOSE_BOARD_LABEL,
+} from "./board-selector";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
@@ -204,7 +208,7 @@ describe("BoardSelector", () => {
     );
 
     const btn = screen.getByRole("button", {
-      name: "Expose this board to your agent",
+      name: EXPOSE_BOARD_LABEL,
     });
     await act(async () => {
       fireEvent.click(btn);
@@ -233,7 +237,7 @@ describe("BoardSelector", () => {
       </Wrapper>,
     );
     const btn = screen.queryByRole("button", {
-      name: "Expose this board to your agent",
+      name: EXPOSE_BOARD_LABEL,
     });
     expect(btn).toBeNull();
   });

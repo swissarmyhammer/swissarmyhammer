@@ -47,6 +47,30 @@ comments:
 
     Leaving in `doing` for /review per the implement workflow.
   timestamp: 2026-06-27T03:07:04.609171+00:00
+- actor: claude-code
+  id: 01kw3jgajgp0cg021xer8kfyxm
+  text: |-
+    Resolved review findings on the NEWLY-ADDED expose-board code (feature commit 5fd57dd6e). All verification green; left in `doing` for /review.
+
+    FIXED (my new code):
+    1. (blocker + related "BoardSelector too long" warning) board-selector.tsx — extracted shared `BoardToolbarButton` sub-component (params: moniker, ariaLabel, icon, onPress, tooltip) and render BOTH the tear-off and expose buttons through it. The two near-verbatim Tooltip/Pressable/button blocks are now one. Behavior/aria-labels/icons/tooltips byte-identical (verified by double-check).
+    2. (warning) Extracted module-scope `export const EXPOSE_BOARD_LABEL = "Expose this board to your agent";` — used for the expose button's ariaLabel + TooltipContent, and imported by board-selector.test.tsx (both getByRole/queryByRole assertions) so the literal is no longer repeated.
+    3. (nit) expose.rs — inlined the single-call-site `summary_to_error_result` helper as a closure in `.map(...)` and deleted the helper; also removed the now-unused `InitResult` import.
+
+    CONFIRMED-PRE-EXISTING-AND-SKIPPED (verified via git log -S; all predate feature commit 5fd57dd6e):
+    - main.rs build_apphandle_shells length — introduced by 87c353dd5; feature commit only added `mod expose;` + `commands::expose_board_to_agents,` handler line (git show 5fd57dd6e confirms).
+    - board-selector.tsx BoardSelector function length + missing JSDoc on BoardSelector/BoardSelectorProps — from a70af2f95.
+    - board-selector.tsx parts[parts.length-1]/.at(-1) board-name parsing — from a70af2f95.
+    - board-selector.test.tsx Wrapper inline props type — from a70af2f95.
+
+    Verification:
+    - cargo nextest run -p kanban-app: 197 passed, 1 skipped.
+    - cd apps/kanban-app/ui && npx tsc --noEmit: exit 0.
+    - npx vitest run board-selector: 11 passed (2 files — happy-dom unit + browser chromium).
+    - cargo fmt -p kanban-app: clean.
+    - cargo clippy -p kanban-app --all-targets: only the 2 KNOWN pre-existing lints (window-service shell.rs:437 manual_contains, menu.rs:1406 empty_line_after_doc); zero new warnings, none in changed files.
+    - double-check agent: PASS (no behavior change, no scope creep, no leftover duplication).
+  timestamp: 2026-06-27T03:38:20.624427+00:00
 depends_on:
 - 01KTVPZ1VE36FVG8CMQ49X8RMK
 position_column: doing
