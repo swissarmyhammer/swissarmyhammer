@@ -217,6 +217,15 @@ where
             if let Ok(text) = std::fs::read_to_string(path.as_str()) {
                 let _ = session.sync_open(Path::new(path.as_str()), &text);
             }
+            // Pull this file so the cache and the session's readiness reflect the
+            // server's CURRENT answer, instead of depending on the watcher's
+            // asynchronous pulls having already populated the cache. A real
+            // report is cached (and `settle` below reads it); a "still loading"
+            // answer (ServerCancelled / ContentModified / retrigger) leaves
+            // `is_ready()` false, which the pending mapping below surfaces. This
+            // is a blocking round-trip, matching the already-blocking `sync_open`
+            // above.
+            let _ = session.pull_diagnostics(Path::new(path.as_str()));
         }
     }
 
@@ -230,14 +239,23 @@ where
         per_report_cap: usize::MAX,
         ..config.clone()
     };
-    let (records, pending) = match settle(session, &watched_uris, &settle_config, timer).await {
-        SettleOutcome::Settled(records) => (records, false),
-        SettleOutcome::Pending => (Vec::new(), true),
-    };
+    let (records, settle_pending) =
+        match settle(session, &watched_uris, &settle_config, timer).await {
+            SettleOutcome::Settled(records) => (records, false),
+            SettleOutcome::Pending => (Vec::new(), true),
+        };
+
+    // A running server that has signalled it is still loading (a pull answered
+    // with ServerCancelled / ContentModified / retrigger — see
+    // [`LspSession::is_ready`]) cannot give an authoritative "clean": an empty
+    // settled set then reflects "not analyzed yet", not "no problems". Report
+    // `pending` so the consumer (e.g. the inline fold-in) surfaces that instead
+    // of mistaking a not-yet-loaded server's silence for a clean file.
+    let not_ready = session.is_running() && !session.is_ready();
 
     DiagnoseOutcome {
         report: build_report(records, &targets, &dependent_files, config),
-        pending,
+        pending: settle_pending || not_ready,
     }
 }
 
@@ -651,5 +669,100 @@ mod tests {
 
         assert!(!outcome.pending, "a settled run is not pending");
         assert_eq!(outcome.report.counts.errors, 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn outcome_pending_when_running_server_is_not_ready() {
+        use crate::test_support::RecordingTransport;
+        // A live client (is_running == true) whose `textDocument/diagnostic`
+        // pull is answered with a ServerCancelled/retrigger error: the session
+        // records the server as not-ready. `diagnose` must then report
+        // `pending` even though the settled set is empty — a not-yet-loaded
+        // server's silence is NOT an authoritative "clean".
+        let client = Arc::new(Mutex::new(Some(RecordingTransport {
+            diagnostic_response: Some(json!({
+                "error": { "code": -32802, "data": { "retriggerRequest": true } }
+            })),
+            ..RecordingTransport::default()
+        })));
+        let session = LspSession::new(Arc::clone(&client), "rust");
+
+        // A pull (as the watcher drives) flips the session to not-ready.
+        let _ = session.pull_diagnostics(Path::new("src/a.rs"));
+        assert!(!session.is_ready(), "the cancelled pull marks not-ready");
+
+        let timer = ManualTimer::default();
+        let driver = timer.clone();
+        let config = DiagnosticsConfig::default();
+        let window = config.settle_window;
+        let paths = vec!["src/a.rs".to_string()];
+        let deps = stub(&[]);
+        let handle = tokio::spawn(async move {
+            diagnose_with_outcome(&session, &paths, &config, &deps, &timer).await
+        });
+        tokio::task::yield_now().await;
+        driver.advance(window);
+        let outcome = handle.await.unwrap();
+
+        assert!(
+            outcome.pending,
+            "a running-but-not-ready server must report pending, not clean"
+        );
+        assert!(
+            outcome.report.diagnostics.is_empty(),
+            "no diagnostics are available while the server is still loading"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn running_session_pulls_targets_so_report_is_populated_without_prior_seed() {
+        use crate::test_support::RecordingTransport;
+        // A live client whose `textDocument/diagnostic` pull returns a real
+        // report. The cache is NOT pre-seeded and nothing pulled beforehand —
+        // `diagnose` must pull the target itself so the report is populated.
+        // This is the fix for the diagnose path depending on the watcher's
+        // asynchronous pulls: `check file` / inline-edit now reflect the
+        // server's current answer directly.
+        let client = Arc::new(Mutex::new(Some(RecordingTransport {
+            diagnostic_response: Some(json!({
+                "kind": "full",
+                "items": [{
+                    "range": {
+                        "start": { "line": 1, "character": 4 },
+                        "end": { "line": 1, "character": 5 }
+                    },
+                    "severity": 1,
+                    "message": "expected String, found integer"
+                }]
+            })),
+            ..RecordingTransport::default()
+        })));
+        let session = LspSession::new(Arc::clone(&client), "rust");
+
+        let timer = ManualTimer::default();
+        let driver = timer.clone();
+        let config = DiagnosticsConfig::default();
+        let window = config.settle_window;
+        let paths = vec!["src/a.rs".to_string()];
+        let deps = stub(&[]);
+        let handle = tokio::spawn(async move {
+            diagnose_with_outcome(&session, &paths, &config, &deps, &timer).await
+        });
+        tokio::task::yield_now().await;
+        driver.advance(window);
+        let outcome = handle.await.unwrap();
+
+        assert!(!outcome.pending, "a real report means ready, not pending");
+        let messages: Vec<&str> = outcome
+            .report
+            .diagnostics
+            .iter()
+            .map(|r| r.message.as_str())
+            .collect();
+        assert_eq!(
+            messages,
+            vec!["expected String, found integer"],
+            "diagnose must pull the target itself and surface the report without a prior seed"
+        );
     }
 }

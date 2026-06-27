@@ -71,6 +71,116 @@ where
     }
 }
 
+/// Compute the whole-file freshness token for `content`.
+///
+/// The token is the lowercase hex MD5 digest of the full file bytes. It is the
+/// *freshness token* the `read files` tool surfaces and the `write files` /
+/// `edit files` guards re-derive from on-disk bytes to detect whole-file
+/// staleness — a model that read a file and then writes it back must present
+/// the token it saw, or the guard re-bases it against the current content.
+///
+/// MD5 is used purely for change detection (not security); a single shared
+/// function keeps the read-side token and the write-side check in lockstep.
+pub fn whole_file_hash(content: &str) -> String {
+    format!("{:x}", md5::compute(content.as_bytes()))
+}
+
+/// Build the SUCCESS result for a mutating file op, carrying the chaining
+/// envelope so the model can issue its next edit without re-reading.
+///
+/// Only a SUCCESSFUL MUTATION calls this (an `edit files` commit, a `write files`
+/// write). Non-mutating successes — an ambiguity / near-miss listing, a
+/// freshness-guard re-base — return a plain success response and never carry the
+/// envelope.
+///
+/// The envelope rides on BOTH surfaces, mirroring the inline-diagnostics
+/// fold-in convention so the model sees it regardless of how the host renders
+/// tool results:
+///
+/// * `structured_content.mutation` — an object carrying `tagged_content`
+///   (the post-mutation file re-tagged with [`swissarmyhammer_hashline::tag`],
+///   so fresh `N:HH` anchors are immediately available), `mutated_paths` (the
+///   absolute paths changed, surfaced to the model — distinct from the typed
+///   `record_mutated_path` diagnostics side-channel), plus any operation-specific
+///   `extra` fields (e.g. an edit's `bytes_written` / `replacements_made`).
+/// * An appended text block carrying the `#hash:<token>` line and the same
+///   tagged content, for hosts that only forward result text.
+///
+/// `message` is the plain first text block (`"OK"` / `"OK: Applied N…"`), kept
+/// intact so existing semantics hold; the envelope is layered on top.
+pub(crate) fn mutation_success_response(
+    message: String,
+    content: &str,
+    mutated_paths: Vec<String>,
+    extra: serde_json::Value,
+) -> rmcp::model::CallToolResult {
+    use crate::mcp::tool_registry::BaseToolImpl;
+    use rmcp::model::Content;
+
+    let tagged_content = swissarmyhammer_hashline::tag(content, 1);
+    let hash = whole_file_hash(content);
+
+    // Build the structured `mutation` object: the envelope fields plus any
+    // operation-specific `extra` fields, so existing typed result fields survive.
+    let mut mutation = match extra {
+        serde_json::Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    mutation.insert(
+        "tagged_content".to_string(),
+        serde_json::Value::String(tagged_content.clone()),
+    );
+    mutation.insert(
+        "mutated_paths".to_string(),
+        serde_json::Value::Array(
+            mutated_paths
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        ),
+    );
+
+    let mut result = BaseToolImpl::create_success_response(message);
+
+    // Structured surface for structured-aware hosts.
+    result.structured_content = Some(serde_json::json!({ "mutation": mutation }));
+
+    // Text surface: a delimited block carrying the freshness token + the
+    // hashline-tagged post-mutation content, so a chained edit can lift an anchor
+    // straight from result text with no intervening read.
+    let text_block = format!(
+        "--- updated file (hashline-tagged for chaining) ---\n{HASH_LINE_PREFIX}{hash}\n{tagged_content}"
+    );
+    result.content.push(Content::text(text_block));
+
+    result
+}
+
+/// Prefix marker for the whole-file freshness-token metadata line, matching the
+/// `read files` / `write files` re-base payload form so a chained edit can
+/// re-derive a staleness token from the envelope's text block.
+const HASH_LINE_PREFIX: &str = "#hash:";
+
+/// Apply line-based `offset`/`limit` windowing to `content`.
+///
+/// `offset` is a 1-based starting line (lines before it are skipped); `limit`
+/// caps the number of lines returned. The window is rejoined with `\n`,
+/// matching the pre-existing read behavior (original line terminators are not
+/// preserved in the plain form). `None`/`None` returns `content` unchanged.
+pub(crate) fn window_lines(content: &str, offset: Option<usize>, limit: Option<usize>) -> String {
+    match (offset, limit) {
+        (None, None) => content.to_string(),
+        (offset, limit) => {
+            let skip = offset.map(|o| o.saturating_sub(1)).unwrap_or(0);
+            let mut lines = content.lines().skip(skip);
+            match limit {
+                Some(limit) => lines.by_ref().take(limit).collect::<Vec<_>>().join("\n"),
+                None => lines.collect::<Vec<_>>().join("\n"),
+            }
+        }
+    }
+}
+
 /// Validate that a file path is absolute and within acceptable boundaries
 ///
 /// This function performs essential security validation for all file operations:
@@ -254,29 +364,6 @@ pub fn reject_filesystem_root(search_dir: &Path) -> Result<(), McpError> {
     Ok(())
 }
 
-/// Check if a file exists and is accessible
-///
-/// This utility function checks file existence and basic accessibility
-/// without performing full validation. Used by tools that need to
-/// verify file existence before operations.
-///
-/// # Arguments
-///
-/// * `path` - The path to check
-///
-/// # Returns
-///
-/// * `Result<bool, McpError>` - True if file exists and is accessible
-pub fn file_exists(path: &Path) -> Result<bool, McpError> {
-    match path.try_exists() {
-        Ok(exists) => Ok(exists),
-        Err(e) => Err(McpError::internal_error(
-            format!("Failed to check file existence: {}", e),
-            None,
-        )),
-    }
-}
-
 /// Get file metadata safely
 ///
 /// Retrieves file metadata with proper error handling and security checks.
@@ -313,6 +400,39 @@ pub fn ensure_directory_exists(dir_path: &Path) -> Result<(), McpError> {
         })?;
     }
     Ok(())
+}
+
+/// Enforce the per-operation rate limit for a file tool.
+///
+/// All three mutating/reading file handlers (`read`, `write`, `edit`) gate on
+/// the shared process-wide rate limiter keyed by the current Tokio task. This is
+/// the single home for that check so the limiter lookup, client-id derivation,
+/// and error mapping are not triplicated across the handlers.
+///
+/// # Arguments
+///
+/// * `operation` - The rate-limit bucket name (`"file_read"`, `"file_write"`,
+///   `"file_edit"`).
+/// * `cost` - Token cost of the operation (1 for read/write; one per edit pair).
+///
+/// # Returns
+///
+/// * `Ok(())` when the operation is within the limit.
+/// * `Err(McpError)` (`invalid_request`) when the limit is exceeded.
+///
+/// Note: the limiter is a process-wide singleton ([`get_rate_limiter`]); its
+/// exceeded branch is only reachable by exhausting that shared budget, which
+/// would make co-resident tests order-dependent. It is therefore deliberately
+/// left without a unit test (documented on the coverage card).
+pub fn enforce_rate_limit(operation: &str, cost: u32) -> Result<(), McpError> {
+    use swissarmyhammer_common::rate_limiter::get_rate_limiter;
+    let client_id = format!("task_{:?}", tokio::task::try_id());
+    get_rate_limiter()
+        .check_rate_limit(&client_id, operation, cost)
+        .map_err(|e| {
+            tracing::warn!("Rate limit exceeded for {operation}: {e}");
+            McpError::invalid_request(format!("Rate limit exceeded: {e}"), None)
+        })
 }
 
 /// Convert file system errors to MCP errors
@@ -962,32 +1082,9 @@ impl SecureFileAccess {
             }
         };
 
-        // Apply offset and limit if specified (same logic as existing read tool)
-        let final_content = match (offset, limit) {
-            (Some(offset), Some(limit)) => {
-                let lines: Vec<&str> = content.lines().collect();
-                lines
-                    .iter()
-                    .skip(offset.saturating_sub(1))
-                    .take(limit)
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
-            (Some(offset), None) => {
-                let lines: Vec<&str> = content.lines().collect();
-                lines
-                    .iter()
-                    .skip(offset.saturating_sub(1))
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
-            (None, Some(limit)) => content.lines().take(limit).collect::<Vec<_>>().join("\n"),
-            (None, None) => content,
-        };
-
-        Ok(final_content)
+        // Apply offset and limit if specified (shared with the read handler's
+        // hashline path via `window_lines`).
+        Ok(window_lines(&content, offset, limit))
     }
 
     /// Securely writes file content with validation
@@ -1259,21 +1356,35 @@ mod tests {
         assert!(validated_path.is_absolute());
     }
 
+    /// A 2-node symlink cycle (`a -> b -> a`) makes `canonicalize()` return an
+    /// `ELOOP` (`ErrorKind::FilesystemLoop`, or `Uncategorized` on older
+    /// toolchains) that falls through the named `NotFound`/`PermissionDenied`/
+    /// `InvalidInput` arms into `validate_file_path`'s `_ =>` catch-all. This
+    /// proves the catch-all rejects the cycle with an error rather than
+    /// panicking or hanging.
+    #[cfg(unix)]
     #[test]
-    fn test_file_exists() {
+    fn test_validate_file_path_symlink_cycle_rejected() {
+        use std::os::unix::fs::symlink;
+
         let temp_dir = TempDir::new().unwrap();
-        let existing_file = temp_dir.path().join("existing.txt");
-        let non_existing_file = temp_dir.path().join("non_existing.txt");
+        let a = temp_dir.path().join("a");
+        let b = temp_dir.path().join("b");
 
-        fs::write(&existing_file, "content").unwrap();
+        // a -> b and b -> a form a cycle; canonicalizing either yields ELOOP.
+        symlink(&b, &a).unwrap();
+        symlink(&a, &b).unwrap();
 
-        let result = file_exists(&existing_file);
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-
-        let result = file_exists(&non_existing_file);
-        assert!(result.is_ok());
-        assert!(!result.unwrap());
+        let result = validate_file_path(&test_base(), &a.to_string_lossy());
+        assert!(
+            result.is_err(),
+            "a symlink cycle must be rejected, not resolved"
+        );
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("Failed to resolve path"),
+            "expected the catch-all 'Failed to resolve path' message, got: {err}"
+        );
     }
 
     #[test]
@@ -1886,5 +1997,274 @@ mod tests {
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(err.contains("too long") || err.contains("Path too long") || err.contains("4096"));
+    }
+
+    // =====================================================================
+    // mutation_success_response: non-object `extra` fallback
+    // =====================================================================
+
+    /// A non-object `extra` (the defensive fallback arm) still produces a valid
+    /// mutation envelope carrying `tagged_content` and `mutated_paths`, just
+    /// without any operation-specific extra fields.
+    #[test]
+    fn test_mutation_response_non_object_extra_falls_back() {
+        let result = mutation_success_response(
+            "OK".to_string(),
+            "alpha\nbeta\n",
+            vec!["/tmp/x.txt".to_string()],
+            serde_json::json!("not an object"),
+        );
+        let mutation = &result
+            .structured_content
+            .expect("mutation envelope present")["mutation"];
+        assert_eq!(
+            mutation["tagged_content"].as_str().unwrap(),
+            swissarmyhammer_hashline::tag("alpha\nbeta\n", 1)
+        );
+        assert_eq!(mutation["mutated_paths"].as_array().unwrap().len(), 1);
+        // No extra fields leaked in from the non-object value.
+        assert!(mutation.get("bytes_written").is_none());
+    }
+
+    // =====================================================================
+    // validate_file_path: error/edge arms
+    // =====================================================================
+
+    /// A path whose parent directory does not exist is rejected with a clear
+    /// "Parent directory does not exist" error.
+    #[test]
+    fn test_validate_file_path_missing_parent() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing = temp_dir.path().join("no_such_dir").join("file.txt");
+        let err = validate_file_path(temp_dir.path(), &missing.to_string_lossy()).unwrap_err();
+        assert!(format!("{err:?}").contains("Parent directory does not exist"));
+    }
+
+    /// A not-yet-existing file in an EXISTING directory is accepted (the
+    /// write-of-new-file path): canonicalize fails with NotFound, but the parent
+    /// exists, so the resolved path is returned.
+    #[test]
+    fn test_validate_file_path_new_file_in_existing_dir_ok() {
+        let temp_dir = TempDir::new().unwrap();
+        let new_file = temp_dir.path().join("brand_new.txt");
+        let resolved = validate_file_path(temp_dir.path(), &new_file.to_string_lossy()).unwrap();
+        assert!(resolved.ends_with("brand_new.txt"));
+    }
+
+    /// Resolving a path INSIDE a directory with no search permission surfaces a
+    /// permission-denied error from canonicalization (the `PermissionDenied`
+    /// arm). The parent exists, so this is distinct from "parent does not exist".
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_file_path_permission_denied() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp_dir = TempDir::new().unwrap();
+        let locked_dir = temp_dir.path().join("locked");
+        fs::create_dir(&locked_dir).unwrap();
+        let inner = locked_dir.join("inner.txt");
+        fs::write(&inner, "data").unwrap();
+        // 0o000: no search/execute permission → canonicalizing a child fails with
+        // PermissionDenied.
+        fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = validate_file_path(temp_dir.path(), &inner.to_string_lossy());
+
+        // Restore perms so TempDir cleanup succeeds regardless of the assertion.
+        fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Running as root bypasses permission bits; only assert when not root.
+        if !is_root() {
+            let err = format!("{:?}", result.unwrap_err());
+            assert!(
+                err.contains("Permission denied") || err.contains("Parent directory"),
+                "expected a permission-related rejection, got: {err}"
+            );
+        }
+    }
+
+    /// True when the test process is running as root (uid 0), where Unix
+    /// permission bits are bypassed.
+    #[cfg(unix)]
+    fn is_root() -> bool {
+        // SAFETY: getuid is always safe; it only reads the caller's uid.
+        unsafe { libc::getuid() == 0 }
+    }
+
+    /// A path containing an interior NUL byte is rejected (canonicalize surfaces
+    /// `InvalidInput` on Unix).
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_file_path_nul_byte_is_invalid() {
+        let temp_dir = TempDir::new().unwrap();
+        let bad = format!("{}/bad\0name.txt", temp_dir.path().display());
+        let result = validate_file_path(temp_dir.path(), &bad);
+        assert!(result.is_err(), "a NUL-byte path must be rejected");
+    }
+
+    // =====================================================================
+    // check_file_permissions: write/edit error arms
+    // =====================================================================
+
+    /// Writing a new file under a non-existent parent directory is rejected.
+    #[test]
+    fn test_check_file_permissions_write_missing_parent() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("absent_dir").join("out.txt");
+        let err = check_file_permissions(&target, FileOperation::Write).unwrap_err();
+        assert!(format!("{err:?}").contains("Parent directory does not exist"));
+    }
+
+    /// Editing a read-only file is rejected with a read-only error, and the file
+    /// is left untouched.
+    #[cfg(unix)]
+    #[test]
+    fn test_check_file_permissions_edit_readonly_rejected() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("ro.txt");
+        fs::write(&file, "locked").unwrap();
+        fs::set_permissions(&file, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        let err = check_file_permissions(&file, FileOperation::Edit).unwrap_err();
+        assert!(format!("{err:?}").contains("read-only"));
+        // Restore writable perms so TempDir cleanup succeeds, then confirm content.
+        fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "locked");
+    }
+
+    /// Editing a non-existent file is rejected.
+    #[test]
+    fn test_check_file_permissions_edit_missing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing = temp_dir.path().join("ghost.txt");
+        let err = check_file_permissions(&missing, FileOperation::Edit).unwrap_err();
+        assert!(format!("{err:?}").contains("non-existent"));
+    }
+
+    // =====================================================================
+    // ensure_workspace_boundary: traversal-rejection arms
+    // =====================================================================
+
+    /// A path resolving OUTSIDE the workspace root is rejected as a boundary
+    /// violation, even when the path exists.
+    #[test]
+    fn test_workspace_boundary_rejects_outside_path() {
+        let workspace = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("secret.txt");
+        fs::write(&outside_file, "secret").unwrap();
+
+        let validator = FilePathValidator::with_workspace_root(workspace.path().to_path_buf());
+        let err = validator
+            .ensure_workspace_boundary(&outside_file, workspace.path())
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("outside workspace boundaries"));
+    }
+
+    /// A NON-existent path nested under the workspace passes the boundary check
+    /// via the deepest-existing-parent reconstruction (covers that branch).
+    #[test]
+    fn test_workspace_boundary_nonexistent_path_under_root_ok() {
+        let workspace = TempDir::new().unwrap();
+        let nested = workspace.path().join("a").join("b").join("new.txt");
+        let validator = FilePathValidator::with_workspace_root(workspace.path().to_path_buf());
+        // The deepest existing parent is the workspace root itself; the
+        // reconstructed path stays inside the boundary.
+        assert!(validator
+            .ensure_workspace_boundary(&nested, workspace.path())
+            .is_ok());
+    }
+
+    /// A non-existent path OUTSIDE the workspace is rejected via the
+    /// deepest-parent reconstruction path (the reconstructed path is outside).
+    #[test]
+    fn test_workspace_boundary_nonexistent_outside_path_rejected() {
+        let workspace = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let nested_outside = outside.path().join("c").join("new.txt");
+        let validator = FilePathValidator::with_workspace_root(workspace.path().to_path_buf());
+        let err = validator
+            .ensure_workspace_boundary(&nested_outside, workspace.path())
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("outside workspace boundaries"));
+    }
+
+    /// An invalid (non-existent) workspace root cannot be canonicalized and is
+    /// rejected.
+    #[test]
+    fn test_workspace_boundary_invalid_workspace_root() {
+        let temp_dir = TempDir::new().unwrap();
+        let bogus_root = temp_dir.path().join("does_not_exist");
+        let some_path = temp_dir.path().join("file.txt");
+        let validator = FilePathValidator::new(temp_dir.path().to_path_buf());
+        let err = validator
+            .ensure_workspace_boundary(&some_path, &bogus_root)
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("Invalid workspace root"));
+    }
+
+    // =====================================================================
+    // FilePathValidator builder: with_base_dir
+    // =====================================================================
+
+    /// A `SecureFileAccess::read` of a file with NO read permission bits is
+    /// rejected by the permission check (the read-failure trace path), and the
+    /// file's bytes are left intact.
+    #[cfg(unix)]
+    #[test]
+    fn test_secure_read_permission_denied() {
+        use std::os::unix::fs::PermissionsExt;
+        let workspace = TempDir::new().unwrap();
+        let file = workspace.path().join("noread.txt");
+        fs::write(&file, "secret bytes").unwrap();
+        fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let secure = SecureFileAccess::default_secure(workspace.path().to_path_buf());
+        let result = secure.read(&file.to_string_lossy(), None, None);
+
+        // Restore perms before asserting so cleanup + read-back succeed.
+        fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(result.is_err(), "an unreadable file must be rejected");
+        assert!(format!("{:?}", result.unwrap_err()).contains("not readable"));
+        // The file content was never altered by the rejected read.
+        assert_eq!(fs::read_to_string(&file).unwrap(), "secret bytes");
+    }
+
+    /// With symlinks ENABLED and a workspace root set, validating an in-workspace
+    /// symlink resolves it and re-checks the boundary (covering
+    /// `resolve_symlink_securely`'s boundary re-check). The resolved target stays
+    /// inside the workspace, so validation succeeds.
+    #[cfg(unix)]
+    #[test]
+    fn test_symlink_resolution_rechecks_workspace_boundary() {
+        use std::os::unix::fs::symlink;
+        let workspace = TempDir::new().unwrap();
+        let target = workspace.path().join("target.txt");
+        let link = workspace.path().join("link.txt");
+        fs::write(&target, "in-workspace target").unwrap();
+        if symlink(&target, &link).is_err() || !link.is_symlink() {
+            return; // platform without symlink support
+        }
+
+        let mut validator = FilePathValidator::with_workspace_root(workspace.path().to_path_buf());
+        validator.set_allow_symlinks(true);
+
+        let resolved = validator.validate_path(&link.to_string_lossy()).unwrap();
+        // The symlink resolved to its in-workspace target.
+        assert!(resolved.starts_with(workspace.path().canonicalize().unwrap()));
+        assert!(resolved.ends_with("target.txt"));
+    }
+
+    /// `with_base_dir` anchors relative-path resolution at the supplied base.
+    #[test]
+    fn test_with_base_dir_anchors_relative_resolution() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("anchored.txt");
+        fs::write(&file, "hi").unwrap();
+
+        let validator =
+            FilePathValidator::new(test_base()).with_base_dir(temp_dir.path().to_path_buf());
+        let resolved = validator.validate_path("anchored.txt").unwrap();
+        assert!(resolved.ends_with("anchored.txt"));
     }
 }

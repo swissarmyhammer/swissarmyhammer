@@ -7,8 +7,36 @@ Paths can be absolute or relative to the working directory. Use `offset` and `li
 ```json
 {"path": "/workspace/src/main.rs"}
 {"path": "logs/application.log", "offset": 1000, "limit": 100}
+{"path": "/workspace/src/main.rs", "format": "plain"}
 ```
+
+## Output format
+
+The first line of a successful read is always a freshness-token metadata line:
+
+```text
+#hash:<hex>
+```
+
+`<hex>` is a whole-file content hash over the **full** on-disk bytes (independent
+of any `offset`/`limit`). Carry it back to `write files` / `edit files` as the
+`expected_hash` token so they can detect whole-file staleness and refuse to
+clobber a file the model has not seen in its current state.
+
+Everything after that first line is the file content (subject to
+`offset`/`limit`), rendered according to `format`:
+
+- `hashline` (default) — each text line is prefixed with a `N:HH|` anchor, where
+  `N` is the **absolute** 1-based line number (stable across `offset`/`limit`
+  windows) and `HH` is a short content hash. `edit files` resolves these anchors
+  back to lines, tolerating small drift and rejecting stale edits.
+- `plain` — untagged content, exactly as it appears on disk (subject to
+  `offset`/`limit`).
+
+Only UTF-8 text is read. Non-UTF-8 (binary) files are rejected with an error
+rather than decoded, so tagged output is always text.
 
 ## Returns
 
-Returns file content (text or base64 for binary), content type, encoding, and line counts.
+Returns the freshness-token line followed by the UTF-8 file content
+(hashline-tagged text by default, untagged with `format: "plain"`).

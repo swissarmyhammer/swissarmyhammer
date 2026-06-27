@@ -1,7 +1,6 @@
 ---
 name: domain-separation
 description: ORM classes are not domain models, no leaking impl types, facade third-party deps
-severity: warn
 ---
 
 # Python Domain Separation

@@ -259,8 +259,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_task_places_in_first_column_by_default() {
-        // The default board has todo/doing/done columns (in that order).
-        // Adding a task without specifying a column should place it in "todo".
+        // The default board's first column is "todo". Adding a task without
+        // specifying a column should place it there.
         let (_temp, ctx) = setup().await;
 
         let cmd = AddTask::new("My new task");
@@ -299,16 +299,16 @@ mod tests {
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(&kanban_dir);
 
-        // Initialize the board (creates todo/doing/done columns)
+        // Initialize the board (creates the default columns)
         InitBoard::new("Empty Board")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        // Delete all three default columns
-        for col_id in &["todo", "doing", "done"] {
-            DeleteColumn::new(*col_id)
+        // Delete every default column so the board has none.
+        for col in crate::types::default_column_entities() {
+            DeleteColumn::new(col.id.to_string())
                 .execute(&ctx)
                 .await
                 .into_result()

@@ -1,0 +1,44 @@
+---
+assignees:
+- claude-code
+comments:
+- actor: claude-code
+  id: 01kvyf8fbxaftg72944b20zjj7
+  text: |-
+    Picked up, moved to doing. TDD: added test `test_files_tool_description_states_native_tools_denied` in files/mod.rs asserting description (lowercased) contains "disabled"/"denied" + "files" + op-table markers "read file"/"edit file". Watched it RED (failed on the disabled/denied assertion), then edited description.md near the top to state the native Read/Write/Edit/Glob/Grep tools are disabled/denied and to call `files` directly with the right `op` rather than trying a native tool first and waiting to be redirected. Preserved the op-mapping table and the op-inference note. read_only() inline string left unchanged (consistent, did not need the note). Out-of-scope items honored: no AGENT.md edits, edit_redirect hook untouched.
+
+    Verification: `cargo nextest run -p swissarmyhammer-tools -E 'test(files::)'` => 281 passed. New test GREEN. `cargo fmt` clean (reverted 3 unrelated pre-existing reformats so diff stays scoped to description.md + mod.rs). `cargo clippy -p swissarmyhammer-tools -- -D warnings` => exit 0, no warnings.
+  timestamp: 2026-06-25T04:05:25.501614+00:00
+- actor: claude-code
+  id: 01kvyfb2wygmqpb23ccb6khys6
+  text: 'really-done complete: verification commands green + double-check agent returned PASS (deny/redirect fact present near top, op table + inference note preserved, genuine RED→GREEN test, diff scoped to description.md + mod.rs only, no out-of-scope edits). Moved to review. Not committed — orchestrator commits separately.'
+  timestamp: 2026-06-25T04:06:51.038561+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffe280
+project: file-edit-tools
+title: files tool description — state native Edit/Write/Read/Glob/Grep are DENIED so agents don't waste a round retrying them
+---
+## What
+Subagents (and the main agent) reflexively reach for the native `Edit`/`Write` tools first, get denied by the closed-write-surface fragment, and waste a turn before falling back to `mcp__sah__files`. The `files` tool description (`crates/swissarmyhammer-tools/src/mcp/tools/files/description.md`, embedded via `include_str!` and returned by `FilesTool::description()` for the `All` subset — see `crates/swissarmyhammer-tools/src/mcp/tools/files/mod.rs:112`) currently says only "**prefer** it over the host's built-in file tools." It never says the native tools are actually **disabled/denied**, which is the one fact that would stop an agent from trying them first.
+
+Context (verified): `sah init` installs the closed-write-surface fragment for the main profile (`apps/swissarmyhammer-cli/src/commands/profile.rs:43`, `edit_redirect: true`) — it sets `permissions.deny` on native `Edit`/`Write` and adds a `PreToolUse` redirect hook (see `doc/src/concepts/closed-write-surface.md` and `crates/mirdan/src/install.rs::desired_edit_redirect_fragment`). That hook is the safety net, but the model's first native-Edit attempt is still a denied, wasted round. The tool description is the single place every subagent uniformly sees file-tool guidance (the DRY alternative to editing all 8 `builtin/agents/*/AGENT.md` prompts), so the fix belongs there.
+
+### Change
+Edit `crates/swissarmyhammer-tools/src/mcp/tools/files/description.md` to state plainly, near the top, that:
+- The native `Edit`, `Write`, `Read`, `Glob`, and `Grep` tools are **disabled / denied** in this environment — attempting one is rejected and wastes a turn.
+- Call this `files` tool directly with the right `op` from the start; do **not** try the native tools first and wait to be redirected.
+Keep the existing op-mapping table and inference note. Keep wording concise (the description ships on every `tools/list`).
+
+Out of scope: editing the per-agent `AGENT.md` prompts and re-enabling/altering the `edit_redirect` hook — this card is description-only. (If per-agent reinforcement is later wanted, a shared `file-tools` skill added to each agent's `skills:` list is the vehicle; note it but do not build it here.)
+
+## Acceptance Criteria
+- [ ] `FilesTool::new().description()` contains an explicit statement that the native `Edit`/`Write` (and `Read`/`Glob`/`Grep`) tools are disabled/denied and that the model should call `files` directly rather than attempting them first.
+- [ ] The existing op-mapping table and the `op`-inference note remain present in the description.
+- [ ] The description stays a single, concise block (no multi-screen prose); the read-only-subset description string (`FilesTool::read_only()`) is unaffected or updated consistently.
+
+## Tests
+- [ ] Extend the description test in `crates/swissarmyhammer-tools/src/mcp/tools/files/mod.rs` (alongside `test_files_tool_has_description`): assert `FilesTool::new().description()` contains the deny/redirect language (e.g. matches both "disabled"/"denied" and "files") and still contains the op table markers (e.g. "read file"/"edit file").
+- [ ] `cargo nextest run -p swissarmyhammer-tools files::` is green (NEVER plain `cargo test`); `cargo fmt` + `cargo clippy -p swissarmyhammer-tools -- -D warnings` clean.
+
+## Workflow
+- Use `/tdd` — write the failing description-content assertion first, then update `description.md` to satisfy it.

@@ -1,7 +1,6 @@
 ---
 name: naming-consistency
 description: Check that naming conventions match existing codebase patterns
-severity: warn
 ---
 
 # Naming Consistency Validator
@@ -31,3 +30,4 @@ Examine the file content for naming inconsistencies:
 - Domain-specific terminology that's standard
 - Well-known acronyms or abbreviations
 - FFI bindings that must match external names
+- **Identifiers that mirror a serialized or wire contract** — parameter, field, and property names that deliberately match a backend JSON payload, IPC/event payload, database column, or other on-the-wire schema. `snake_case` is correct when it mirrors the contract it (de)serializes; do not "fix" it to the language's house case. Mapping wire names to domain names at a boundary is a design choice, not an inconsistency — flagging it suggests a change that diverges from the contract.

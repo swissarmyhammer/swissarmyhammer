@@ -458,6 +458,12 @@ impl KanbanContext {
         if !self.directories_exist() {
             self.create_directories().await?;
         }
+        // Reconcile the `.kanban/.gitignore` on every call — including when the
+        // board is already initialized and directories already exist — so boards
+        // created before the search-cache entries existed self-heal on the next
+        // operation. The reconciliation only rewrites when something changed, so
+        // this stays cheap and idempotent.
+        crate::board::init::ensure_gitignore_entries(self.root()).map_err(KanbanError::Io)?;
         Ok(())
     }
 
@@ -1021,6 +1027,71 @@ mod tests {
 
         // Should work without errors
         assert!(ctx.directories_exist());
+    }
+
+    #[tokio::test]
+    async fn test_ensure_directories_self_heals_gitignore_entries() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        // Simulate a pre-existing board whose .gitignore predates the
+        // search-cache entries: only `mcp.log` is listed.
+        let gitignore_path = kanban_dir.join(".gitignore");
+        std::fs::write(&gitignore_path, "mcp.log\n").unwrap();
+
+        let ctx = KanbanContext::new(&kanban_dir);
+        ctx.ensure_directories().await.unwrap();
+
+        let content = std::fs::read_to_string(&gitignore_path).unwrap();
+        // Pre-existing line is preserved, not clobbered.
+        assert!(
+            content.lines().any(|l| l.trim() == "mcp.log"),
+            "pre-existing mcp.log entry must be preserved, got: {content:?}"
+        );
+        // All required ephemeral entries are now present.
+        for required in crate::board::init::REQUIRED_GITIGNORE_ENTRIES {
+            assert!(
+                content.lines().any(|l| l.trim() == *required),
+                "missing required gitignore entry {required:?}, got: {content:?}"
+            );
+        }
+
+        // Idempotent: a second call does not duplicate any entry.
+        ctx.ensure_directories().await.unwrap();
+        let content2 = std::fs::read_to_string(&gitignore_path).unwrap();
+        for required in crate::board::init::REQUIRED_GITIGNORE_ENTRIES {
+            let count = content2.lines().filter(|l| l.trim() == *required).count();
+            assert_eq!(count, 1, "entry {required:?} duplicated, got: {content2:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ensure_directories_reconciles_gitignore_when_dirs_present() {
+        // Guards against re-introducing the `directories_exist()` early-return
+        // regression: even when all directories already exist, missing
+        // search-cache entries must still be written.
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(&kanban_dir);
+
+        // Make all directories already present.
+        ctx.create_directories().await.unwrap();
+        assert!(ctx.directories_exist());
+
+        // Write a .gitignore lacking the required entries.
+        let gitignore_path = kanban_dir.join(".gitignore");
+        std::fs::write(&gitignore_path, "mcp.log\n").unwrap();
+
+        ctx.ensure_directories().await.unwrap();
+
+        let content = std::fs::read_to_string(&gitignore_path).unwrap();
+        for required in crate::board::init::REQUIRED_GITIGNORE_ENTRIES {
+            assert!(
+                content.lines().any(|l| l.trim() == *required),
+                "missing required gitignore entry {required:?}, got: {content:?}"
+            );
+        }
     }
 
     #[tokio::test]

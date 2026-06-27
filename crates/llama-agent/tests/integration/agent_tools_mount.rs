@@ -55,6 +55,8 @@ async fn agent_tools_mount_lists_intrinsic_tools_with_no_external_servers() {
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
 
     // The intrinsic Agent tool set must be present from the mount alone.
+    // Files are served through the single unified `files` tool (op-dispatched
+    // read/write/edit/glob/grep) — the former split by-name tools are gone.
     for expected in ["files", "web", "skill", "agent", "shell"] {
         assert!(
             names.contains(&expected),
@@ -63,12 +65,12 @@ async fn agent_tools_mount_lists_intrinsic_tools_with_no_external_servers() {
         );
     }
 
-    // The split file tools (the names Hermes-trained models emit) ride along
-    // with the unified `files` tool.
-    for expected in ["read_file", "glob_files", "grep_files"] {
+    // The former split file tools (`read_file`/`glob_files`/`grep_files`) are
+    // no longer registered — the unified `files` tool subsumes them.
+    for gone in ["read_file", "glob_files", "grep_files"] {
         assert!(
-            names.contains(&expected),
-            "expected split file tool `{expected}` from the mount; got {names:?}"
+            !names.contains(&gone),
+            "split file tool `{gone}` must no longer be served by the mount; got {names:?}"
         );
     }
 

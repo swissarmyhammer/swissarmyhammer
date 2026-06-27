@@ -104,6 +104,18 @@ rusqlite = { workspace = true }
 md5 = { workspace = true }
 tree-sitter = { workspace = true }
 
+# Hashline anchor primitives — `read files` tags lines `N:HH|` so models can
+# reference them; `edit files` resolves those anchors back to lines.
+swissarmyhammer-hashline = { workspace = true }
+
+# Literal-find ladder for `edit files`: resolves a bare-string `find` (which may
+# have lost indentation or drifted) to a concrete byte span in the file.
+swissarmyhammer-edit-match = { workspace = true }
+
+# Line-level diffing for the `edit files` no-match near-miss: renders how the
+# supplied `find` diverged from the nearest current text.
+similar = { workspace = true }
+
 # LSP server lifecycle management
 swissarmyhammer-lsp = { workspace = true }
 

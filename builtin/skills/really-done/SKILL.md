@@ -55,6 +55,7 @@ This is an **advisory** gate: it surfaces risk and informs the decision, but the
 | Regression test works | Red-green-red cycle verified | Test passes once |
 | Agent completed | VCS diff shows changes | Agent says "success" |
 | Requirements met | Line-by-line checklist | Tests pass |
+| Behavior change complete | Full **existing** test module for the touched area run green, AND the inverse/edge path exercised | Only the tests you authored pass |
 
 ## Red Flags — STOP
 
@@ -89,6 +90,8 @@ This is an **advisory** gate: it surfaces risk and informs the decision, but the
 **Requirements:** Re-read plan → checklist → verify each → report gaps or completion.
 
 **Agent delegation:** Agent reports success → check VCS diff → verify changes → report actual state. Don't trust the report alone.
+
+**Existing suite, not just new tests:** For a behavior change, run the FULL pre-existing test module for the area you touched (e.g. `pytest path/to/test_module.py`), not only the tests you wrote. Tests you authored to match your own change pass by construction — they are not evidence the change is complete. Before claiming done, ask: *what input would a skeptic try that my tests don't?* — especially the inverse direction (read what you can now write) and sibling paths (every other site that consumes the token/flag you changed).
 
 ## When to Apply
 

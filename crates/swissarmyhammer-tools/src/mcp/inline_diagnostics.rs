@@ -37,11 +37,27 @@ use crate::mcp::tools::diagnostics::produce_outcome;
 /// Abstracted as a trait so the fold-in's gating and JSON-folding logic can be
 /// unit-tested with a stub — no live LSP server, no index. The production
 /// implementation, [`LiveDiagnoser`], drives the shared diagnostics core.
+/// The result of asking a [`MutationDiagnoser`] to analyze mutated paths.
+///
+/// This distinguishes "rust-analyzer answered" from "the analysis could not run
+/// at all" — the two were previously collapsed into an empty [`DiagnoseOutcome`],
+/// so a leader-unreachable analysis was indistinguishable from a genuinely clean
+/// file. Keeping `Unavailable` separate lets the fold-in tell the model *why*
+/// there are no diagnostics instead of implying "looks fine".
+pub enum MutationDiagnosis {
+    /// rust-analyzer was reached; carries the settled-or-pending outcome.
+    Analyzed(DiagnoseOutcome),
+    /// The analysis could not run (e.g. the LSP leader was unreachable or no
+    /// session was bound); carries a human-readable reason.
+    Unavailable(String),
+}
+
 #[async_trait::async_trait]
 pub trait MutationDiagnoser: Send + Sync {
     /// Diagnose the already-filtered, absolute, diagnosable `paths`, returning
-    /// the sharp report plus whether the analysis settled.
-    async fn diagnose(&self, paths: &[String], context: &ToolContext) -> DiagnoseOutcome;
+    /// either the sharp report (with a settled/pending flag) or an explicit
+    /// "unavailable" reason when the analysis could not run.
+    async fn diagnose(&self, paths: &[String], context: &ToolContext) -> MutationDiagnosis;
 }
 
 /// The production [`MutationDiagnoser`]: resolves the live session and
@@ -51,24 +67,24 @@ pub struct LiveDiagnoser;
 
 #[async_trait::async_trait]
 impl MutationDiagnoser for LiveDiagnoser {
-    async fn diagnose(&self, paths: &[String], context: &ToolContext) -> DiagnoseOutcome {
+    async fn diagnose(&self, paths: &[String], context: &ToolContext) -> MutationDiagnosis {
         let repo = repo_root(context);
         // The fold-in is best-effort: it decorates a mutating tool's result and
         // must never fail the underlying edit. If a follower cannot reach the
-        // leader (no session in-process, leader unbound), log the typed error and
-        // fall back to an empty outcome — the edit still succeeds, just without an
-        // inline diagnostics view.
+        // leader (no session in-process, leader unbound), surface a typed
+        // `Unavailable` reason rather than an empty outcome — the edit still
+        // succeeds, but the model is told the file was NOT analyzed instead of
+        // being misled into reading "no diagnostics" as "clean".
         match produce_outcome(paths, &repo, context, &DiagnosticsConfig::default()).await {
-            Ok(outcome) => outcome,
+            Ok(outcome) => MutationDiagnosis::Analyzed(outcome),
             Err(e) => {
                 tracing::debug!(
                     error = %e,
-                    "inline diagnostics: could not reach the LSP leader; skipping fold-in"
+                    "inline diagnostics: analysis unavailable (could not reach the LSP leader)"
                 );
-                DiagnoseOutcome {
-                    report: swissarmyhammer_diagnostics::DiagnosticsReport::new(Vec::new()),
-                    pending: false,
-                }
+                MutationDiagnosis::Unavailable(format!(
+                    "diagnostics unavailable: could not reach the LSP leader ({e})"
+                ))
             }
         }
     }
@@ -122,8 +138,12 @@ pub async fn fold_in_diagnostics_with(
         return Ok(call_result);
     }
 
-    let outcome = diagnoser.diagnose(&diagnosable, context).await;
-    Ok(fold_outcome_into_result(call_result, &outcome))
+    match diagnoser.diagnose(&diagnosable, context).await {
+        MutationDiagnosis::Analyzed(outcome) => Ok(fold_outcome_into_result(call_result, &outcome)),
+        MutationDiagnosis::Unavailable(reason) => {
+            Ok(fold_unavailable_into_result(call_result, &reason))
+        }
+    }
 }
 
 /// The deduplicated, diagnosable subset of `mutated`, as absolute path strings.
@@ -178,6 +198,31 @@ fn fold_outcome_into_result(
     result
 }
 
+/// Fold an "analysis unavailable" marker into a tool result.
+///
+/// Distinct from a clean [`fold_outcome_into_result`] with an empty report: the
+/// edit succeeded but diagnostics could NOT be computed (leader unreachable, no
+/// session). Surfacing `diagnostics_unavailable` on both surfaces stops the model
+/// from reading a missing diagnostics block as "the file is clean".
+fn fold_unavailable_into_result(mut result: CallToolResult, reason: &str) -> CallToolResult {
+    let folded = serde_json::json!({ "diagnostics_unavailable": reason });
+
+    let mut structured = match result.structured_content.take() {
+        Some(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    structured.insert(
+        "diagnostics_unavailable".to_string(),
+        folded["diagnostics_unavailable"].clone(),
+    );
+    result.structured_content = Some(serde_json::Value::Object(structured));
+
+    let text = serde_json::to_string_pretty(&folded).unwrap_or_else(|_| folded.to_string());
+    result.content.push(Content::text(text));
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,9 +244,20 @@ mod tests {
 
     #[async_trait::async_trait]
     impl MutationDiagnoser for StubDiagnoser {
-        async fn diagnose(&self, paths: &[String], _context: &ToolContext) -> DiagnoseOutcome {
+        async fn diagnose(&self, paths: &[String], _context: &ToolContext) -> MutationDiagnosis {
             self.seen.lock().unwrap().extend(paths.iter().cloned());
-            self.outcome.clone()
+            MutationDiagnosis::Analyzed(self.outcome.clone())
+        }
+    }
+
+    /// A stub diagnoser that reports the analysis could not run, for asserting the
+    /// `Unavailable` fold-in path.
+    struct UnavailableStub(&'static str);
+
+    #[async_trait::async_trait]
+    impl MutationDiagnoser for UnavailableStub {
+        async fn diagnose(&self, _paths: &[String], _context: &ToolContext) -> MutationDiagnosis {
+            MutationDiagnosis::Unavailable(self.0.to_string())
         }
     }
 
@@ -244,6 +300,38 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// When the diagnoser reports the analysis could not run, the fold-in marks
+    /// the result `diagnostics_unavailable` on both surfaces — so an empty result
+    /// is never silently read as "clean".
+    #[tokio::test]
+    async fn unavailable_analysis_folds_explicit_marker() {
+        let context = context().await;
+        context.record_mutated_path("/repo/src/lib.rs");
+
+        let diagnoser = UnavailableStub("diagnostics unavailable: could not reach the LSP leader");
+        let folded = fold_in_diagnostics_with(ok_result(), &context, &diagnoser)
+            .await
+            .expect("fold-in succeeds");
+
+        let structured = folded
+            .structured_content
+            .as_ref()
+            .and_then(|v| v.as_object())
+            .expect("structured content present");
+        assert_eq!(
+            structured["diagnostics_unavailable"],
+            serde_json::json!("diagnostics unavailable: could not reach the LSP leader")
+        );
+        assert!(
+            !structured.contains_key("diagnostics"),
+            "unavailable must not masquerade as an empty clean report"
+        );
+        assert!(
+            result_text(&folded).contains("diagnostics_unavailable"),
+            "reason surfaced in text too"
+        );
     }
 
     /// An edit of a diagnosable `.rs` file with an injected error folds the

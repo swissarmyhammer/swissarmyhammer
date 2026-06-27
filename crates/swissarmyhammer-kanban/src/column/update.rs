@@ -145,14 +145,14 @@ mod tests {
     async fn test_update_column_name_and_order() {
         let (_temp, ctx) = setup().await;
 
-        AddColumn::new("review", "Review")
+        AddColumn::new("qa", "QA")
             .with_order(5)
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        let result = UpdateColumn::new("review")
+        let result = UpdateColumn::new("qa")
             .with_name("Code Review")
             .with_order(10)
             .execute(&ctx)

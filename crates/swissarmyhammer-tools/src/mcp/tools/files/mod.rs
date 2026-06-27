@@ -11,18 +11,11 @@
 
 pub mod edit;
 pub mod glob;
-pub mod glob_files;
 pub mod grep;
-pub mod grep_files;
 pub mod read;
-pub mod read_file;
 pub mod schema;
 pub mod shared_utils;
 pub mod write;
-
-pub use glob_files::GlobFilesTool;
-pub use grep_files::GrepFilesTool;
-pub use read_file::ReadFileTool;
 
 use crate::mcp::tool_registry::{McpTool, ToolCategory, ToolContext, ToolRegistry};
 use async_trait::async_trait;
@@ -154,11 +147,11 @@ impl McpTool for FilesTool {
         // surface, so it is a `Replacement` for `Edit`: the primary per-client
         // serve advertises it to Claude (mirroring how `shell` replaces `Bash`)
         // and serve-time deny closes the native `Edit` tool. The validator
-        // surface does not serve this unified tool at all — it serves the split
-        // read-only `read_file`/`glob_files`/`grep_files` tools via the validator
-        // profile (`tools::register_validator_tools`), and the agent-tools /
-        // validator servers serve verbatim (`compose_per_client = false`), so
-        // this category does not change what those endpoints advertise.
+        // surface serves the read-only variant of this same unified tool
+        // ([`FilesTool::read_only`]) via the validator profile
+        // (`tools::register_validator_tools`); the agent-tools and validator
+        // servers serve verbatim (`compose_per_client = false`), so this
+        // category does not change what those endpoints advertise.
         ToolCategory::Replacement { native: "Edit" }
     }
 
@@ -213,9 +206,12 @@ impl McpTool for FilesTool {
                             None,
                         ))
                     }
-                } else if arguments.contains_key("old_string")
-                    || arguments.contains_key("new_string")
-                {
+                } else if edit::looks_like_edit(&arguments) {
+                    // Any find-ish/replace-ish key (canonical or alias) or an
+                    // `edits` array routes to edit. This must precede the
+                    // `content`→write branch so a canonical `{find, replace}`
+                    // call is not misrouted to write or to "Cannot determine
+                    // operation".
                     edit::execute_edit(args, context).await
                 } else if arguments.contains_key("content") {
                     write::execute_write(args, context).await
@@ -281,37 +277,10 @@ impl Doctorable for FilesTool {
 ///
 /// Synchronous — registration is a simple in-memory insert and does not need
 /// an async runtime. Matches the convention used by the other
-/// `register_*_tools` helpers in this crate (see [`register_validator_file_tools`]
-/// and the `register_tool_category!` macro in `tool_registry.rs`).
+/// `register_*_tools` helpers in this crate (and the `register_tool_category!`
+/// macro in `tool_registry.rs`).
 pub fn register_file_tools(registry: &mut ToolRegistry) {
     registry.register(FilesTool::new());
-}
-
-/// Register the validator-facing split file tools with the registry.
-///
-/// Validator agents (Hermes-trained models like Qwen3) call tools by **name**,
-/// not by `op` argument. This helper registers three thin wrappers around the
-/// existing read-only file handlers under the names that match what models
-/// naturally emit:
-///
-/// - `read_file` — wraps [`read::execute_read`]
-/// - `glob_files` — wraps [`glob::execute_glob`]
-/// - `grep_files` — wraps [`grep::execute_grep`]
-///
-/// The unified [`FilesTool`] is **not** registered here — the validator
-/// endpoint exposes only the per-operation tools so its `tools/list` matches
-/// the names a validator's prompt advertises.
-///
-/// This function is synchronous because registration is a simple in-memory
-/// insert; it does not need an async runtime.
-///
-/// # Arguments
-///
-/// * `registry` - The tool registry to add the validator file tools to.
-pub fn register_validator_file_tools(registry: &mut ToolRegistry) {
-    registry.register(ReadFileTool::new());
-    registry.register(GlobFilesTool::new());
-    registry.register(GrepFilesTool::new());
 }
 
 #[cfg(test)]
@@ -330,39 +299,31 @@ mod tests {
         assert!(registry.get_tool("files").is_some());
     }
 
-    /// `register_validator_file_tools` must register exactly the three split
-    /// file tools — `read_file`, `glob_files`, `grep_files` — under the
-    /// validator-friendly per-operation names. Critically, the unified `files`
-    /// tool must NOT be registered, so the validator endpoint never advertises
-    /// the op-dispatched shape that Hermes-trained models will not call.
+    /// The validator file surface is now the unified read-only `files` tool —
+    /// a single op-dispatched tool, not three split by-name tools. Registering
+    /// [`FilesTool::read_only`] adds exactly one tool named `files`, and the
+    /// former split names (`read_file`/`glob_files`/`grep_files`) are no longer
+    /// addressable anywhere.
     #[test]
-    fn test_register_validator_file_tools() {
+    fn test_register_validator_files_tool_is_unified_read_only() {
         let mut registry = ToolRegistry::new();
         assert_eq!(registry.len(), 0);
 
-        register_validator_file_tools(&mut registry);
+        registry.register(FilesTool::read_only());
 
         assert_eq!(
             registry.len(),
-            3,
-            "validator file registration must add exactly 3 tools"
+            1,
+            "the read-only validator file surface must be a single unified tool"
         );
         assert!(
-            registry.get_tool("read_file").is_some(),
-            "register_validator_file_tools must register 'read_file'"
+            registry.get_tool("files").is_some(),
+            "the validator file surface must register the unified 'files' tool"
         );
-        assert!(
-            registry.get_tool("glob_files").is_some(),
-            "register_validator_file_tools must register 'glob_files'"
-        );
-        assert!(
-            registry.get_tool("grep_files").is_some(),
-            "register_validator_file_tools must register 'grep_files'"
-        );
-        assert!(
-            registry.get_tool("files").is_none(),
-            "register_validator_file_tools must NOT register the unified 'files' tool"
-        );
+        // The split by-name forms no longer exist.
+        assert!(registry.get_tool("read_file").is_none());
+        assert!(registry.get_tool("glob_files").is_none());
+        assert!(registry.get_tool("grep_files").is_none());
     }
 
     #[test]
@@ -375,6 +336,31 @@ mod tests {
     fn test_files_tool_has_description() {
         let tool = FilesTool::new();
         assert!(!tool.description().is_empty());
+    }
+
+    #[test]
+    fn test_files_tool_description_states_native_tools_denied() {
+        let description = FilesTool::new().description().to_lowercase();
+        // The description must tell agents the native tools are disabled/denied
+        // so they call this `files` tool directly instead of wasting a round
+        // attempting a native tool first and being redirected.
+        assert!(
+            description.contains("disabled") || description.contains("denied"),
+            "description must state the native tools are disabled/denied"
+        );
+        assert!(
+            description.contains("files"),
+            "description must point agents at the `files` tool"
+        );
+        // The op-mapping table must remain present.
+        assert!(
+            description.contains("read file"),
+            "description must keep the op table (read file)"
+        );
+        assert!(
+            description.contains("edit file"),
+            "description must keep the op table (edit file)"
+        );
     }
 
     #[test]
@@ -715,6 +701,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_infer_edit_from_canonical_find_replace() {
+        let tool = FilesTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("infer_find_replace.txt");
+        std::fs::write(&test_file, "hello world").unwrap();
+
+        // No "op" key, canonical {find, replace} — must route to edit.
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "file_path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("find".to_string(), serde_json::json!("hello"));
+        args.insert("replace".to_string(), serde_json::json!("goodbye"));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            std::fs::read_to_string(&test_file).unwrap(),
+            "goodbye world"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_infer_edit_from_edits_array() {
+        let tool = FilesTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("infer_edits_array.txt");
+        std::fs::write(&test_file, "foo bar").unwrap();
+
+        // No "op" key, an edits[] array — must route to edit, not error.
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "file_path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert(
+            "edits".to_string(),
+            serde_json::json!([{ "find": "foo", "replace": "FOO" }]),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+        assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "FOO bar");
+    }
+
+    #[tokio::test]
     async fn test_infer_write_from_content_key() {
         let tool = FilesTool::new();
         let context = crate::test_utils::create_test_context().await;
@@ -842,5 +879,61 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Cannot determine operation"));
+    }
+
+    // =========================================================================
+    // Trait surface tests (Default, read-only full schema, lifecycle/doctor)
+    // =========================================================================
+
+    /// `FilesTool::default()` must construct the same all-operations tool as
+    /// `new()` — the default surface advertises all five operations.
+    #[test]
+    fn test_files_tool_default_is_all_operations() {
+        let tool = FilesTool::default();
+        assert_eq!(tool.operations, FileOperationSubset::All);
+
+        let op_enum = tool.schema()["properties"]["op"]["enum"]
+            .as_array()
+            .expect("op should have enum")
+            .clone();
+        assert_eq!(op_enum.len(), 5);
+        assert!(op_enum.contains(&serde_json::json!("write file")));
+        assert!(op_enum.contains(&serde_json::json!("edit file")));
+    }
+
+    /// The read-only variant's *full* schema must carry only the three
+    /// read-only operation schemas — exercising the `ReadOnly` arm of
+    /// `schema_full`, distinct from the wire `schema`.
+    #[test]
+    fn test_read_only_full_schema_has_3_operation_schemas() {
+        let tool = FilesTool::read_only();
+        let schema = tool.schema_full();
+
+        let op_schemas = schema["x-operation-schemas"]
+            .as_array()
+            .expect("read-only full schema should carry x-operation-schemas");
+        assert_eq!(
+            op_schemas.len(),
+            3,
+            "read-only full schema must describe exactly read/glob/grep"
+        );
+    }
+
+    /// The `Initializable` and `Doctorable` trait surfaces report the tool's
+    /// human name and category, and `Doctorable` is always applicable with no
+    /// health checks of its own.
+    #[test]
+    fn test_files_tool_lifecycle_and_doctor_metadata() {
+        use swissarmyhammer_common::lifecycle::Initializable;
+
+        let tool = FilesTool::new();
+
+        assert_eq!(Initializable::name(&tool), "Files");
+        assert_eq!(Initializable::category(&tool), "tools");
+
+        assert_eq!(Doctorable::name(&tool), "Files");
+        assert_eq!(Doctorable::category(&tool), "tools");
+        assert!(Doctorable::is_applicable(&tool));
+        assert!(Doctorable::run_health_checks(&tool).is_empty());
     }
 }

@@ -10,7 +10,6 @@ metadata:
 match:
   files:
     - "@file_groups/source_code"
-severity: error
 ---
 
 # Command Safety Validator

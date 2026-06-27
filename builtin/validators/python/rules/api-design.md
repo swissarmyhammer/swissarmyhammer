@@ -1,7 +1,6 @@
 ---
 name: api-design
 description: Keep serialization separate from classes, decorators preserve signatures
-severity: warn
 ---
 
 # Python API Design

@@ -2,7 +2,7 @@
 //!
 //! Validators and RuleSets are markdown files with YAML frontmatter that
 //! specify validation rules. This is the hook-free data layer: it describes
-//! *what* a validator is (its match criteria, severity, body) and *whether it
+//! *what* a validator is (its match criteria, body) and *whether it
 //! matches* a given tool/file context. It does not run anything and is not tied
 //! to any hook event.
 
@@ -15,29 +15,6 @@ use std::path::PathBuf;
 /// frontmatter. 30 seconds provides enough time for LLM-based validators
 /// to complete while preventing indefinite hangs.
 pub const DEFAULT_VALIDATOR_TIMEOUT_SECONDS: u32 = 30;
-
-/// Severity level for validator findings.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Severity {
-    /// Informational finding, does not affect execution.
-    Info,
-    /// Warning finding, logged but does not block.
-    #[default]
-    Warn,
-    /// Error finding, blocks the action.
-    Error,
-}
-
-impl std::fmt::Display for Severity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Severity::Info => write!(f, "info"),
-            Severity::Warn => write!(f, "warn"),
-            Severity::Error => write!(f, "error"),
-        }
-    }
-}
 
 /// Match criteria for filtering when a validator should run.
 ///
@@ -166,7 +143,6 @@ fn default_timeout() -> u32 {
 ///
 /// - `name`: Defaults to the file stem (e.g., `check-types.md` → `check-types`)
 /// - `description`: Defaults to "Validator: {name}"
-/// - `severity`: Defaults to `warn`
 /// - `match.files`: Defaults to source code patterns when `match` is omitted
 /// - `timeout`: Defaults to 30 seconds
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,10 +156,6 @@ pub struct ValidatorFrontmatter {
     /// Defaults to "Validator: {name}" if not provided.
     #[serde(default)]
     pub description: String,
-
-    /// Severity level for findings.
-    #[serde(default)]
-    pub severity: Severity,
 
     /// Optional match criteria for filtering which work triggers this validator.
     ///
@@ -273,7 +245,7 @@ impl std::fmt::Display for ValidatorSource {
 /// A loaded validator with its metadata and instructions.
 ///
 /// Validators are loaded from markdown files with YAML frontmatter.
-/// The frontmatter contains configuration (match criteria, severity)
+/// The frontmatter contains configuration (match criteria)
 /// while the body contains instructions for the validation agent.
 #[derive(Debug, Clone)]
 pub struct Validator {
@@ -299,11 +271,6 @@ impl Validator {
     /// Get the validator description.
     pub fn description(&self) -> &str {
         &self.frontmatter.description
-    }
-
-    /// Get the severity level.
-    pub fn severity(&self) -> Severity {
-        self.frontmatter.severity
     }
 
     /// Check if this validator matches the given context.
@@ -422,7 +389,7 @@ fn matches_files(match_criteria: &ValidatorMatch, ctx: &MatchContext) -> bool {
 /// Result of running a validator.
 ///
 /// The LLM returns just passed/failed with a message. The validator name
-/// and severity are known by the calling code from the validator's frontmatter.
+/// is known by the calling code from the validator's frontmatter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status")]
 pub enum ValidatorResult {
@@ -468,8 +435,6 @@ impl ValidatorResult {
 pub struct ExecutedValidator {
     /// Name of the validator that was executed.
     pub name: String,
-    /// Severity from the validator's frontmatter.
-    pub severity: Severity,
     /// Result returned by the LLM.
     pub result: ValidatorResult,
 }
@@ -478,11 +443,6 @@ impl ExecutedValidator {
     /// Check if the validation passed.
     pub fn passed(&self) -> bool {
         self.result.passed()
-    }
-
-    /// Check if this is a blocking failure (failed + error severity).
-    pub fn is_blocking(&self) -> bool {
-        !self.result.passed() && self.severity == Severity::Error
     }
 
     /// Get the message from the result.
@@ -506,7 +466,7 @@ pub struct RuleSetMetadata {
 /// Manifest for a RuleSet, parsed from VALIDATOR.md.
 ///
 /// The manifest defines shared configuration for all rules in the RuleSet:
-/// common match criteria, default severity and timeout (rules can override),
+/// common match criteria, default timeout (rules can override),
 /// and metadata like name, version, tags.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleSetManifest {
@@ -541,10 +501,6 @@ pub struct RuleSetManifest {
     /// `check validators` command, not by this loader.
     #[serde(default)]
     pub probes: Vec<String>,
-
-    /// Default severity for rules (rules can override).
-    #[serde(default)]
-    pub severity: Severity,
 
     /// Default timeout in seconds (rules can override).
     #[serde(default = "default_timeout")]
@@ -583,7 +539,7 @@ impl RuleSetManifest {
 /// Individual rule within a RuleSet.
 ///
 /// Rules contain the actual validation logic and can override certain
-/// RuleSet defaults (severity, timeout) while inheriting match criteria.
+/// RuleSet defaults (timeout) while inheriting match criteria.
 #[derive(Debug, Clone)]
 pub struct Rule {
     /// Unique identifier for this rule within the RuleSet.
@@ -595,19 +551,11 @@ pub struct Rule {
     /// Markdown body containing validation instructions.
     pub body: String,
 
-    /// Override severity (if None, inherits from RuleSet).
-    pub severity: Option<Severity>,
-
     /// Override timeout (if None, inherits from RuleSet).
     pub timeout: Option<u32>,
 }
 
 impl Rule {
-    /// Get the effective severity for this rule.
-    pub fn effective_severity(&self, ruleset: &RuleSet) -> Severity {
-        self.severity.unwrap_or(ruleset.manifest.severity)
-    }
-
     /// Get the effective timeout for this rule.
     pub fn effective_timeout(&self, ruleset: &RuleSet) -> u32 {
         self.timeout.unwrap_or(ruleset.manifest.timeout)
@@ -622,10 +570,6 @@ pub struct RuleFrontmatter {
 
     /// Human-readable description.
     pub description: String,
-
-    /// Optional severity override.
-    #[serde(default)]
-    pub severity: Option<Severity>,
 
     /// Optional timeout override.
     #[serde(default)]
@@ -713,8 +657,6 @@ impl RuleSet {
 pub struct RuleResult {
     /// Name of the rule that was executed.
     pub rule_name: String,
-    /// Severity of this rule.
-    pub severity: Severity,
     /// Result returned by the agent for this rule.
     pub result: ValidatorResult,
 }
@@ -723,11 +665,6 @@ impl RuleResult {
     /// Check if the rule validation passed.
     pub fn passed(&self) -> bool {
         self.result.passed()
-    }
-
-    /// Check if this is a blocking failure (failed + error severity).
-    pub fn is_blocking(&self) -> bool {
-        !self.result.passed() && self.severity == Severity::Error
     }
 
     /// Get the message from the result.
@@ -751,22 +688,9 @@ impl ExecutedRuleSet {
         self.rule_results.iter().all(|r| r.passed())
     }
 
-    /// Check if any rule is a blocking failure.
-    pub fn has_blocking_failure(&self) -> bool {
-        self.rule_results.iter().any(|r| r.is_blocking())
-    }
-
     /// Get all failed rules.
     pub fn failed_rules(&self) -> Vec<&RuleResult> {
         self.rule_results.iter().filter(|r| !r.passed()).collect()
-    }
-
-    /// Get all blocking failures.
-    pub fn blocking_failures(&self) -> Vec<&RuleResult> {
-        self.rule_results
-            .iter()
-            .filter(|r| r.is_blocking())
-            .collect()
     }
 }
 
@@ -810,7 +734,6 @@ mod tests {
             frontmatter: ValidatorFrontmatter {
                 name: "test".to_string(),
                 description: "Test validator".to_string(),
-                severity: Severity::Error,
                 match_criteria,
                 trigger_matcher,
                 tags: vec![],
@@ -821,11 +744,6 @@ mod tests {
             source: ValidatorSource::Builtin,
             path: PathBuf::from("test.md"),
         }
-    }
-
-    #[test]
-    fn test_severity_default() {
-        assert_eq!(Severity::default(), Severity::Warn);
     }
 
     #[test]
@@ -1114,7 +1032,6 @@ mod tests {
         let mut frontmatter = ValidatorFrontmatter {
             name: "explicit-name".to_string(),
             description: "Explicit description".to_string(),
-            severity: Severity::Error,
             match_criteria: Some(ValidatorMatch {
                 tools: vec!["Bash".to_string()],
                 files: vec!["*.sh".to_string()],
@@ -1130,7 +1047,6 @@ mod tests {
 
         assert_eq!(frontmatter.name, "explicit-name");
         assert_eq!(frontmatter.description, "Explicit description");
-        assert_eq!(frontmatter.severity, Severity::Error);
         let match_criteria = frontmatter.match_criteria.unwrap();
         assert_eq!(match_criteria.tools, vec!["Bash"]);
         assert_eq!(match_criteria.files, vec!["*.sh"]);
@@ -1140,7 +1056,6 @@ mod tests {
         ValidatorFrontmatter {
             name: "test".to_string(),
             description: "Test".to_string(),
-            severity: Severity::default(),
             match_criteria: None,
             trigger_matcher: None,
             tags: vec![],
@@ -1168,7 +1083,6 @@ mod tests {
                 trigger_matcher,
                 tags: vec![],
                 probes: vec![],
-                severity: Severity::Error,
                 timeout: 30,
                 once: false,
             },
@@ -1251,30 +1165,26 @@ mod tests {
     }
 
     #[test]
-    fn test_rule_effective_severity_override() {
+    fn test_rule_effective_timeout_override() {
         let rs = make_ruleset(None, None);
         let rule = Rule {
             name: "test".to_string(),
             description: "Test".to_string(),
             body: "Body".to_string(),
-            severity: Some(Severity::Warn),
             timeout: Some(60),
         };
-        assert_eq!(rule.effective_severity(&rs), Severity::Warn);
         assert_eq!(rule.effective_timeout(&rs), 60);
     }
 
     #[test]
-    fn test_rule_effective_severity_inherits() {
+    fn test_rule_effective_timeout_inherits() {
         let rs = make_ruleset(None, None);
         let rule = Rule {
             name: "test".to_string(),
             description: "Test".to_string(),
             body: "Body".to_string(),
-            severity: None,
             timeout: None,
         };
-        assert_eq!(rule.effective_severity(&rs), Severity::Error);
         assert_eq!(rule.effective_timeout(&rs), 30);
     }
 
@@ -1285,127 +1195,68 @@ mod tests {
             rule_results: vec![
                 RuleResult {
                     rule_name: "r1".to_string(),
-                    severity: Severity::Error,
                     result: ValidatorResult::pass("ok".to_string()),
                 },
                 RuleResult {
                     rule_name: "r2".to_string(),
-                    severity: Severity::Warn,
                     result: ValidatorResult::pass("ok".to_string()),
                 },
             ],
         };
         assert!(executed.passed());
-        assert!(!executed.has_blocking_failure());
         assert!(executed.failed_rules().is_empty());
-        assert!(executed.blocking_failures().is_empty());
     }
 
     #[test]
-    fn test_executed_ruleset_with_warn_failure() {
+    fn test_executed_ruleset_with_failure() {
         let executed = ExecutedRuleSet {
             ruleset_name: "test".to_string(),
             rule_results: vec![RuleResult {
                 rule_name: "r1".to_string(),
-                severity: Severity::Warn,
                 result: ValidatorResult::fail("issue".to_string()),
             }],
         };
         assert!(!executed.passed());
-        assert!(!executed.has_blocking_failure());
         assert_eq!(executed.failed_rules().len(), 1);
-        assert!(executed.blocking_failures().is_empty());
-    }
-
-    #[test]
-    fn test_executed_ruleset_with_error_failure() {
-        let executed = ExecutedRuleSet {
-            ruleset_name: "test".to_string(),
-            rule_results: vec![RuleResult {
-                rule_name: "r1".to_string(),
-                severity: Severity::Error,
-                result: ValidatorResult::fail("bad".to_string()),
-            }],
-        };
-        assert!(!executed.passed());
-        assert!(executed.has_blocking_failure());
-        assert_eq!(executed.blocking_failures().len(), 1);
     }
 
     #[test]
     fn test_rule_result_passed() {
         let rr = RuleResult {
             rule_name: "test".to_string(),
-            severity: Severity::Error,
             result: ValidatorResult::pass("all good".to_string()),
         };
         assert!(rr.passed());
-        assert!(!rr.is_blocking());
         assert_eq!(rr.message(), "all good");
     }
 
     #[test]
-    fn test_rule_result_blocking() {
+    fn test_rule_result_failed() {
         let rr = RuleResult {
             rule_name: "test".to_string(),
-            severity: Severity::Error,
-            result: ValidatorResult::fail("bad".to_string()),
-        };
-        assert!(!rr.passed());
-        assert!(rr.is_blocking());
-        assert_eq!(rr.message(), "bad");
-    }
-
-    #[test]
-    fn test_rule_result_warn_not_blocking() {
-        let rr = RuleResult {
-            rule_name: "test".to_string(),
-            severity: Severity::Warn,
             result: ValidatorResult::fail("warning".to_string()),
         };
         assert!(!rr.passed());
-        assert!(!rr.is_blocking());
+        assert_eq!(rr.message(), "warning");
     }
 
     #[test]
     fn test_executed_validator_passed() {
         let ev = ExecutedValidator {
             name: "test".to_string(),
-            severity: Severity::Error,
             result: ValidatorResult::pass("ok".to_string()),
         };
         assert!(ev.passed());
-        assert!(!ev.is_blocking());
         assert_eq!(ev.message(), "ok");
     }
 
     #[test]
-    fn test_executed_validator_blocking() {
+    fn test_executed_validator_failed() {
         let ev = ExecutedValidator {
             name: "test".to_string(),
-            severity: Severity::Error,
             result: ValidatorResult::fail("bad".to_string()),
         };
         assert!(!ev.passed());
-        assert!(ev.is_blocking());
-    }
-
-    #[test]
-    fn test_executed_validator_warn_not_blocking() {
-        let ev = ExecutedValidator {
-            name: "test".to_string(),
-            severity: Severity::Warn,
-            result: ValidatorResult::fail("warn".to_string()),
-        };
-        assert!(!ev.passed());
-        assert!(!ev.is_blocking());
-    }
-
-    #[test]
-    fn test_severity_display() {
-        assert_eq!(Severity::Info.to_string(), "info");
-        assert_eq!(Severity::Warn.to_string(), "warn");
-        assert_eq!(Severity::Error.to_string(), "error");
     }
 
     #[test]
@@ -1427,7 +1278,6 @@ mod tests {
             trigger_matcher: None,
             tags: vec![],
             probes: vec![],
-            severity: Severity::Warn,
             timeout: 30,
             once: false,
         };
@@ -1449,7 +1299,6 @@ mod tests {
             trigger_matcher: None,
             tags: vec![],
             probes: vec![],
-            severity: Severity::Error,
             timeout: 60,
             once: true,
         };

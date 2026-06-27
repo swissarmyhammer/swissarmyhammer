@@ -157,7 +157,7 @@ fn write_ruleset(base: &Path, name: &str, glob: &str, probes: &[&str]) {
     std::fs::write(
         dir.join("VALIDATOR.md"),
         format!(
-            "---\nname: {name}\ndescription: {name} ruleset\nseverity: error\nmatch:\n  files:\n    - \"{glob}\"\n{probes_yaml}---\n\n# {name}\n"
+            "---\nname: {name}\ndescription: {name} ruleset\nmatch:\n  files:\n    - \"{glob}\"\n{probes_yaml}---\n\n# {name}\n"
         ),
     )
     .unwrap();
@@ -173,11 +173,7 @@ fn write_ruleset(base: &Path, name: &str, glob: &str, probes: &[&str]) {
 fn write_malformed_ruleset(base: &Path, name: &str) {
     let dir = base.join(name);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("VALIDATOR.md"),
-        "---\nseverity: error\nmatch: [unterminated\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join("VALIDATOR.md"), "---\nmatch: [unterminated\n").unwrap();
 }
 
 /// Extract the JSON text body of a tool result.
@@ -534,10 +530,10 @@ async fn review_working_through_the_registered_tool_flags_a_planted_duplicate() 
 
     let markdown = parsed["markdown"].as_str().unwrap();
     assert!(
-        markdown.contains("### Blockers") && markdown.contains("src/lib.rs:1"),
+        markdown.contains("- [ ] `src/lib.rs:1`"),
         "the confirmed blocker must be rendered, got: {markdown}"
     );
-    assert_eq!(parsed["counts"]["blockers"], json!(1));
+    assert_eq!(parsed["counts"]["findings"], json!(1));
     assert_eq!(parsed["counts"]["confirmed"], json!(1));
 }
 
@@ -580,7 +576,6 @@ fn planted_duplicate_fixture(repo: &TestRepo) -> AgentFactory {
             "# Validator: deduplicate".to_string(),
             ScriptedReply::Text(findings_json(
                 "src/lib.rs",
-                "blocker",
                 "compute duplicates old_compute",
             )),
         ),
@@ -625,10 +620,10 @@ async fn mcp_server_set_review_factories_runs_review_working_end_to_end() {
 
     let markdown = parsed["markdown"].as_str().unwrap();
     assert!(
-        markdown.contains("### Blockers") && markdown.contains("src/lib.rs:1"),
+        markdown.contains("- [ ] `src/lib.rs:1`"),
         "the confirmed blocker must be rendered through the server, got: {markdown}"
     );
-    assert_eq!(parsed["counts"]["blockers"], json!(1));
+    assert_eq!(parsed["counts"]["findings"], json!(1));
     assert_eq!(parsed["counts"]["confirmed"], json!(1));
 }
 
@@ -668,7 +663,7 @@ async fn review_tool_with_concurrency_pins_the_pool_worker_count() {
         .await
         .expect("review working dispatch with pinned concurrency");
     let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
-    assert_eq!(parsed["counts"]["blockers"], json!(1));
+    assert_eq!(parsed["counts"]["findings"], json!(1));
     assert_eq!(parsed["counts"]["confirmed"], json!(1));
 }
 
@@ -708,7 +703,6 @@ async fn review_pipelines_run_one_at_a_time_process_wide() {
         backend: Some("local".to_string()),
         validators: Vec::new(),
         concurrency: None,
-        force: false,
     };
     let run = |path: std::path::PathBuf| {
         run_review_request(
@@ -756,204 +750,6 @@ fn concurrency_probe_embedder_factory(
 }
 
 // ---------------------------------------------------------------------------
-// incremental tracking through the production tool path (review_op)
-//
-// pnkrd77 wired the baseline RECORDER into the engine, but no test asserted it
-// fires through the PRODUCTION tool entry point `run_review_request` — the layer
-// the live calcutron run actually drove (it adds the on-disk index connection,
-// the `force` -> `use_tracking` mapping, the process gate, and the
-// spawn_blocking runtime over the agent path). The calcutron symptom was
-// `subtracted=0` forever: `.validators/.hashes/` was never written. These tests
-// pin the recorder at that seam so a regression in any of those layers — not
-// just in the engine `record_reviewed` site — re-surfaces here.
-// ---------------------------------------------------------------------------
-
-/// A `review working` through the production `run_review_request` (tracking on)
-/// records a `.validators/.hashes/<path>.yaml` baseline for every reviewed file
-/// and lazily writes `.validators/.gitignore` ignoring `.hashes/`.
-///
-/// This is the production-path assertion the calcutron run proved missing: the
-/// drive-level test (`drive::incremental_tracking_*`) covers
-/// `run_review_over_agent`, but nothing asserted the baseline survives the extra
-/// `review_op` layers. It must fail if the recorder is not reached through this
-/// path.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial_test::serial(cwd)]
-async fn run_review_request_records_a_tracking_baseline_and_gitignore() {
-    use super::review_op::{run_review_request, ReviewRequest};
-    use swissarmyhammer_validators::review::{read_entry, Scope};
-
-    let _home = IsolatedTestEnvironment::new().expect("isolated env");
-
-    let repo = TestRepo::new();
-    let factory = planted_duplicate_fixture(&repo);
-
-    let report = run_review_request(
-        ReviewRequest {
-            scope: Scope::Working,
-            backend: Some("local".to_string()),
-            validators: Vec::new(),
-            concurrency: None,
-            force: false, // tracking ON — the production default
-        },
-        repo.path().to_path_buf(),
-        mock_embedder_factory(),
-        factory,
-        "2026-06-15 12:00".to_string(),
-    )
-    .await
-    .expect("review working through run_review_request");
-
-    // The pass actually reviewed the changed file (so the recorder is reachable).
-    assert!(
-        report.counts.tasks_attempted > 0,
-        "the working change must have produced fan-out tasks: {:?}",
-        report.counts
-    );
-
-    // The production tool path recorded a baseline entry for the reviewed file.
-    assert!(
-        read_entry(repo.path(), "src/lib.rs").is_some(),
-        "run_review_request must record a .validators/.hashes/ entry for the \
-         reviewed file (the calcutron `subtracted=0` gap)"
-    );
-
-    // The hash dir's gitignore was lazily written, ignoring `.hashes/`.
-    let gitignore = repo.path().join(".validators/.gitignore");
-    let content = std::fs::read_to_string(&gitignore)
-        .expect("run_review_request must write .validators/.gitignore");
-    assert!(
-        content.lines().any(|l| l.trim() == ".hashes/"),
-        "the gitignore must ignore .hashes/, got:\n{content}"
-    );
-}
-
-/// A `review working` through the production `run_review_request` against a repo
-/// whose `.validators/.gitignore` was **already written by swissarmyhammer-directory**
-/// (the store deploy) must append the `.hashes/` ignore line while preserving the
-/// store's original lines.
-///
-/// This reproduces the live calcutron gap (apvst51): the existing baseline test
-/// starts from no gitignore, so it never exercised the append-to-store-content
-/// branch through the production layers. Here the store-authored content
-/// pre-exists exactly as swissarmyhammer-directory's `ValidatorsConfig::GITIGNORE_CONTENT`
-/// writes it, and the recorder must append `.hashes/` to it idempotently.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial_test::serial(cwd)]
-async fn run_review_request_appends_hashes_to_a_store_authored_gitignore() {
-    use super::review_op::{run_review_request, ReviewRequest};
-    use swissarmyhammer_directory::{DirectoryConfig, ValidatorsConfig};
-    use swissarmyhammer_validators::review::Scope;
-
-    // The EXACT content swissarmyhammer-directory writes on store deploy,
-    // referenced from the real source of truth so this test cannot silently
-    // drift from the on-disk store content it asserts against.
-    let store_gitignore = <ValidatorsConfig as DirectoryConfig>::GITIGNORE_CONTENT;
-
-    let _home = IsolatedTestEnvironment::new().expect("isolated env");
-
-    let repo = TestRepo::new();
-    let factory = planted_duplicate_fixture(&repo);
-
-    // The store deployed `.validators/.gitignore` BEFORE any review ran.
-    let validators_dir = repo.path().join(".validators");
-    std::fs::create_dir_all(&validators_dir).expect("create .validators");
-    std::fs::write(validators_dir.join(".gitignore"), store_gitignore)
-        .expect("seed store-authored .validators/.gitignore");
-
-    let report = run_review_request(
-        ReviewRequest {
-            scope: Scope::Working,
-            backend: Some("local".to_string()),
-            validators: Vec::new(),
-            concurrency: None,
-            force: false, // tracking ON — the production default
-        },
-        repo.path().to_path_buf(),
-        mock_embedder_factory(),
-        factory,
-        "2026-06-15 12:00".to_string(),
-    )
-    .await
-    .expect("review working through run_review_request");
-
-    assert!(
-        report.counts.tasks_attempted > 0,
-        "the working change must have produced fan-out tasks: {:?}",
-        report.counts
-    );
-
-    let content = std::fs::read_to_string(validators_dir.join(".gitignore"))
-        .expect("the store gitignore is still present after the review");
-    // The store's original lines are preserved (no clobber).
-    assert!(
-        content.contains("# Keep validator definitions (they should be committed)"),
-        "the store-authored lines must be preserved, got:\n{content}"
-    );
-    // The recorder appended the `.hashes/` ignore line.
-    assert!(
-        content.lines().any(|l| l.trim() == ".hashes/"),
-        "the .hashes/ ignore line must be appended to the store gitignore, got:\n{content}"
-    );
-}
-
-/// Two `review working` passes through `run_review_request` with no edits
-/// between them: the first records baselines, the second subtracts the unchanged
-/// file and short-circuits to zero fan-out tasks. This is the end-to-end
-/// duplicate-avoidance the calcutron run never achieved (`subtracted=0` forever).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial_test::serial(cwd)]
-async fn run_review_request_subtracts_an_unchanged_file_on_a_second_pass() {
-    use super::review_op::{run_review_request, ReviewRequest};
-    use swissarmyhammer_validators::review::Scope;
-
-    let _home = IsolatedTestEnvironment::new().expect("isolated env");
-
-    let repo = TestRepo::new();
-    let factory = planted_duplicate_fixture(&repo);
-
-    let run = |path: std::path::PathBuf, factory: AgentFactory| async move {
-        run_review_request(
-            ReviewRequest {
-                scope: Scope::Working,
-                backend: Some("local".to_string()),
-                validators: Vec::new(),
-                concurrency: None,
-                force: false,
-            },
-            path,
-            mock_embedder_factory(),
-            factory,
-            "2026-06-15 12:00".to_string(),
-        )
-        .await
-        .expect("review working through run_review_request")
-    };
-
-    // Pass 1: reviews the changed file and records its baseline.
-    let first = run(repo.path().to_path_buf(), Arc::clone(&factory)).await;
-    assert!(
-        first.counts.tasks_attempted > 0,
-        "the first pass reviews the changed file: {:?}",
-        first.counts
-    );
-
-    // Pass 2: no edits → the file is subtracted, so the pass attempts zero
-    // fan-out tasks and short-circuits to the empty-scope marker.
-    let second = run(repo.path().to_path_buf(), factory).await;
-    assert_eq!(
-        second.counts.tasks_attempted, 0,
-        "an unchanged second pass subtracts every reviewed file (zero fan-out): {:?}",
-        second.counts
-    );
-    assert!(
-        second.markdown.contains("Nothing in scope to review"),
-        "the subtracted second pass renders the empty-scope marker: {}",
-        second.markdown
-    );
-}
-
-// ---------------------------------------------------------------------------
 // scripted-agent + on-disk-index harness
 //
 // The throwaway git repo (`TestRepo`), the on-disk index builder
@@ -974,10 +770,10 @@ fn seed_on_disk_index(root: &Path, dup: &str) {
 
 /// A findings array as a fleet agent emits it (the `validator` field is tagged by
 /// the engine, but must be present for the finding to deserialize).
-fn findings_json(file: &str, severity: &str, claim: &str) -> String {
+fn findings_json(file: &str, claim: &str) -> String {
     format!(
         "```json\n[{{\"file\":\"{file}\",\"line\":1,\"validator\":\"agent-tagged\",\
-         \"rule\":\"r\",\"severity\":\"{severity}\",\"claim\":\"{claim}\",\
+         \"rule\":\"r\",\"claim\":\"{claim}\",\
          \"evidence\":\"per `duplicates`: 0.99\",\"suggestion\":\"extract a helper\"}}]\n```"
     )
 }

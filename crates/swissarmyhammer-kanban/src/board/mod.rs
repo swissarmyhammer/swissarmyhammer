@@ -1,7 +1,7 @@
 //! Board commands
 
 mod get;
-mod init;
+pub(crate) mod init;
 mod update;
 
 pub use get::GetBoard;

@@ -71,14 +71,14 @@ async fn review_e2e_working_confirms_real_defects_and_refutes_both_red_herrings(
         "report must render the dated GFM section header: {markdown}"
     );
 
-    // --- items 1–5 + 8: confirmed at the right severity ---
+    // --- items 1–5 + 8: confirmed and rendered in the flat checklist ---
+    // Review is binary pass/fail: a confirmed finding renders as one flat
+    // checklist item, with NO severity subsections.
     assert!(
-        markdown.contains("### Blockers"),
-        "blockers section: {markdown}"
-    );
-    assert!(
-        markdown.contains("### Warnings"),
-        "warnings section: {markdown}"
+        !markdown.contains("### Blockers")
+            && !markdown.contains("### Warnings")
+            && !markdown.contains("### Nits"),
+        "no severity sections may render: {markdown}"
     );
 
     assert!(
@@ -106,21 +106,6 @@ async fn review_e2e_working_confirms_real_defects_and_refutes_both_red_herrings(
         "item 8 rust idiom: {markdown}"
     );
 
-    // The three confirmed blockers (1, 4, 5) render under Blockers, before Warnings.
-    let blockers_at = markdown.find("### Blockers").unwrap();
-    let warnings_at = markdown.find("### Warnings").unwrap();
-    assert!(
-        blockers_at < warnings_at,
-        "blockers render before warnings: {markdown}"
-    );
-    for blocker_claim in [CLAIM_DUP, CLAIM_DEAD_ORPHAN, CLAIM_SECRET] {
-        let at = markdown.find(blocker_claim).unwrap();
-        assert!(
-            at > blockers_at && at < warnings_at,
-            "blocker `{blocker_claim}` must render in the Blockers section: {markdown}"
-        );
-    }
-
     // --- item 6: agent-refuted → NOT in the report ---
     assert!(
         !report_has_claim(markdown, CLAIM_RED_HERRING),
@@ -132,17 +117,12 @@ async fn review_e2e_working_confirms_real_defects_and_refutes_both_red_herrings(
         "item 7 (guard red herring) must be refuted and absent: {markdown}"
     );
 
-    // --- counts: confirmed vs refuted, blockers vs warnings ---
+    // --- counts: confirmed vs refuted, and the flat findings tally ---
     let counts = &parsed["counts"];
     assert_eq!(
-        counts["blockers"],
-        json!(3),
-        "items 1,4,5 are confirmed blockers: {counts}"
-    );
-    assert_eq!(
-        counts["warnings"],
-        json!(3),
-        "items 2,3,8 are confirmed warnings: {counts}"
+        counts["findings"],
+        json!(6),
+        "six confirmed findings render in the flat checklist (1,2,3,4,5,8): {counts}"
     );
     assert_eq!(
         counts["confirmed"],
@@ -296,8 +276,8 @@ async fn review_e2e_report_lands_on_a_kanban_task_in_the_dated_gfm_format() {
         "the dated GFM section must land on the task verbatim: {stored}"
     );
     assert!(
-        stored.contains("### Blockers"),
-        "the severity checklist must land on the task: {stored}"
+        stored.contains("- [ ] "),
+        "the flat findings checklist must land on the task: {stored}"
     );
     assert!(
         report_has_claim(stored, CLAIM_DUP),

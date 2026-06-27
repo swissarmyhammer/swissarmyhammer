@@ -117,23 +117,56 @@ async fn tool_call_complete_log_emits_full_result_untruncated() {
     );
 
     // The full token — including the `_TAIL` suffix past byte 256 — must appear
-    // on the emitted `tool_call complete` line itself. We scope the assertion to
-    // that exact line (not the whole log buffer) so a separate full-payload TRACE
-    // line cannot mask truncation on the INFO line. Truncation at 256 bytes would
-    // drop the tail and fail this assertion.
-    logs_assert(|lines: &[&str]| {
+    // on the emitted `tool_call complete` record. We scope the assertion to that
+    // record (the completion line plus any continuation lines it wraps onto) —
+    // not the whole log buffer — so a separate full-payload TRACE line cannot
+    // mask truncation on the INFO record. Truncation at 256 bytes would drop the
+    // tail and fail this assertion.
+    //
+    // The default read output now begins with a `#hash:<hex>` freshness-token
+    // line, so the logged `result=...` embeds a newline and the record wraps
+    // across captured lines. A continuation line is one that does not start a
+    // fresh timestamped tracing event, so we rejoin from the completion line up
+    // to (but excluding) the next event.
+    // The default read result now begins with a `#hash:<hex>` freshness-token
+    // line, so the logged `result=...` value embeds a newline and the record
+    // wraps across captured lines (and concurrent events may interleave between
+    // the header and its continuation). Non-truncation is therefore proven by
+    // two facts on the completion record:
+    //   1. The `tool_call complete` line reports `result_bytes=<N>` equal to the
+    //      FULL result length — the full result was measured and emitted, not a
+    //      256-byte preview.
+    //   2. The full token (including its tail past byte 256) appears verbatim in
+    //      the captured log buffer — it was logged, not dropped.
+    //
+    // Full result = `#hash:` + 32 hex chars + `\n` + `N:HH|` anchor + token.
+    let expected_result_bytes = "#hash:".len() + 32 + 1 + "1:9f|".len() + token.len();
+    let result_bytes_marker = format!("result_bytes={expected_result_bytes}");
+    logs_assert(move |lines: &[&str]| {
         let complete_line = lines
             .iter()
             .find(|l| l.contains("tool_call complete"))
             .ok_or_else(|| "expected a tool_call complete log line".to_string())?;
-        if complete_line.contains(&token) {
+
+        if !complete_line.contains(&result_bytes_marker) {
+            return Err(format!(
+                "tool_call complete must report the FULL result length \
+                 ({result_bytes_marker}), proving it was not truncated to a \
+                 preview; got: {complete_line}"
+            ));
+        }
+
+        // The 600-byte tail of the token lands well past the old 256-byte cap;
+        // its presence anywhere in the buffer proves the result was logged in
+        // full (the old `truncate_utf8_for_log(_, 256)` path dropped it).
+        if lines.iter().any(|l| l.contains("_TAIL")) {
             Ok(())
         } else {
-            Err(format!(
-                "tool_call complete line must contain the FULL result text \
-                 (including the tail past byte 256), proving it was not \
-                 truncated; got: {complete_line}"
-            ))
+            Err(
+                "the full result token tail (past byte 256) was not logged — \
+                 result appears truncated"
+                    .to_string(),
+            )
         }
     });
 

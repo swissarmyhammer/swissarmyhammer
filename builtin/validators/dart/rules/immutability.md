@@ -1,7 +1,6 @@
 ---
 name: immutability
 description: freezed/sealed classes, copyWith, union types for state variants
-severity: warn
 ---
 
 # Dart/Flutter Immutability

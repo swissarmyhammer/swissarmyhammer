@@ -51,6 +51,15 @@ fn extract_response_text(call_result: &rmcp::model::CallToolResult) -> &str {
     }
 }
 
+/// Number of content lines in a `read files` result, excluding the leading
+/// `#hash:<hex>` freshness-token line that the default (hashline) output
+/// prepends. Used by line-count assertions that count file lines, not the
+/// metadata line.
+fn read_body_line_count(call_result: &rmcp::model::CallToolResult) -> usize {
+    let text = extract_response_text(call_result);
+    text.lines().count().saturating_sub(1)
+}
+
 // ============================================================================
 // File Write Tool Size Limit Tests
 // ============================================================================
@@ -257,8 +266,7 @@ async fn test_read_tool_handles_large_files() {
     let call_result = result.unwrap();
     assert_eq!(call_result.is_error, Some(false));
 
-    let response_text = extract_response_text(&call_result);
-    let line_count = response_text.lines().count();
+    let line_count = read_body_line_count(&call_result);
     assert_eq!(line_count, 1000, "Should read exactly 1000 lines");
 }
 
@@ -295,7 +303,7 @@ async fn test_read_tool_with_offset_on_large_file() {
     // Should start from line at offset 5000 (0-indexed), which is Line 5000
     // The offset is 0-based, so line 0 is "Line 0", line 5000 is "Line 5000"
     assert!(response_text.contains("Line 5000") || response_text.contains("Line 5001"));
-    let line_count = response_text.lines().count();
+    let line_count = read_body_line_count(&call_result);
     assert_eq!(line_count, 100, "Should read exactly 100 lines");
 }
 

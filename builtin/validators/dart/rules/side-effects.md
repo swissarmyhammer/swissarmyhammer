@@ -1,7 +1,6 @@
 ---
 name: side-effects
 description: Providers represent reads not writes, mutations in Notifier methods, onDispose cleanup
-severity: warn
 ---
 
 # Dart/Flutter Side Effects

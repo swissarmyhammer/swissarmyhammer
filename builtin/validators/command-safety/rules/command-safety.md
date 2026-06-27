@@ -1,7 +1,6 @@
 ---
 name: command-safety
 description: Check shell commands embedded in the diff for dangerous patterns and destructive operations
-severity: error
 ---
 
 # Command Safety Rule

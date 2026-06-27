@@ -96,8 +96,8 @@ mod tests {
     ];
 
     /// The focused review-time safety/integrity validators migrated from the old
-    /// multi-rule `security-rules` and `test-integrity` sets. Each is a blocker
-    /// (`severity: error`), in-file (no probes), with no `trigger`.
+    /// multi-rule `security-rules` and `test-integrity` sets. Each is in-file
+    /// (no probes), with no `trigger`.
     const SAFETY_VALIDATORS: &[&str] = &[
         "no-secrets",
         "injection",
@@ -199,7 +199,7 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_safety_validators_load_as_blockers_with_no_probes() {
+    fn test_safety_validators_load_with_no_probes() {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
@@ -208,13 +208,6 @@ mod tests {
                 .get_ruleset(name)
                 .unwrap_or_else(|| panic!("safety validator '{name}' should be loaded"));
             assert_eq!(ruleset.name(), *name);
-
-            // Every safety/integrity concern is a blocker.
-            assert_eq!(
-                ruleset.manifest.severity,
-                crate::validators::types::Severity::Error,
-                "{name} should be a blocker (severity: error)"
-            );
 
             // All four are in-file judgments — no engine probes.
             assert!(

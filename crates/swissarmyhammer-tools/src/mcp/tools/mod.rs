@@ -62,15 +62,14 @@ use crate::mcp::tool_registry::ToolRegistry;
 /// The profile is exactly:
 ///
 /// - `code_context` — indexed code intelligence (search/grep/symbols/callgraph)
-/// - `read_file`, `glob_files`, `grep_files` — the **split** read-only file
-///   tools, exposed under their natural names (not the unified `op`-dispatched
-///   `files` tool) so Hermes-trained validator models can call them by name.
+/// - `files` — the unified, read-only [`FilesTool::read_only`](files::FilesTool::read_only)
+///   surface (`read file` / `glob files` / `grep files` ops; no `write`/`edit`).
 ///
-/// The split read-only file tools are [`ToolCategory::Agent`](crate::mcp::tool_registry::ToolCategory::Agent),
-/// so the main per-client serve path correctly does **not** advertise them
-/// (off-the-shelf agents provide file access natively). This profile is the
-/// one path that hands them to validators — the validator server serves this
-/// registry verbatim rather than re-filtering by host/category.
+/// The unified `files` tool is a [`ToolCategory::Replacement`](crate::mcp::tool_registry::ToolCategory::Replacement)
+/// for the host's native `Edit`, so the main per-client serve path advertises it
+/// to the primary client. This profile is the one path that hands the read-only
+/// variant to validators — the validator server serves this registry verbatim
+/// rather than re-filtering by host/category.
 ///
 /// This composition replaces the former per-tool `is_validator_tool()` boolean:
 /// the membership of the validator surface is declared here as data, not
@@ -81,7 +80,7 @@ use crate::mcp::tool_registry::ToolRegistry;
 /// * `registry` - The tool registry to populate with the validator profile.
 pub fn register_validator_tools(registry: &mut ToolRegistry) {
     registry.register(code_context::CodeContextTool::new());
-    files::register_validator_file_tools(registry);
+    registry.register(files::FilesTool::read_only());
 }
 
 #[cfg(test)]
@@ -90,7 +89,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     /// The validator profile is exactly the locked-down AVP subset: the
-    /// `code_context` tool plus the three split read-only file tools. This pins
+    /// `code_context` tool plus the unified read-only `files` tool. This pins
     /// the data-driven membership at its source of truth; the served-set audit
     /// in `mcp::server::tests::test_validator_server_serves_exactly_the_profile`
     /// then proves the validator server serves precisely this set.
@@ -103,9 +102,7 @@ mod tests {
             .iter_tools()
             .map(crate::mcp::tool_registry::McpTool::name)
             .collect();
-        let expected: BTreeSet<&str> = ["code_context", "read_file", "glob_files", "grep_files"]
-            .into_iter()
-            .collect();
+        let expected: BTreeSet<&str> = ["code_context", "files"].into_iter().collect();
 
         assert_eq!(names, expected);
     }

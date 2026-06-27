@@ -1167,9 +1167,10 @@ mod tests {
     async fn dispatch_add_task_on_board_with_no_columns_returns_error() {
         let (_temp, ctx) = setup().await;
 
-        // Delete all default columns (todo, doing, done)
-        for col_id in &["todo", "doing", "done"] {
-            let ops = parse_input(json!({"op": "delete column", "id": col_id})).unwrap();
+        // Delete every default column so the board has none.
+        for col in crate::types::default_column_entities() {
+            let ops =
+                parse_input(json!({"op": "delete column", "id": col.id.to_string()})).unwrap();
             execute_operation(&ctx, &ops[0]).await.unwrap();
         }
 
@@ -1813,11 +1814,10 @@ mod tests {
     async fn dispatch_add_column() {
         let (_temp, ctx) = setup().await;
 
-        let ops =
-            parse_input(json!({"op": "add column", "id": "review", "name": "Review"})).unwrap();
+        let ops = parse_input(json!({"op": "add column", "id": "qa", "name": "QA"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["id"], "review");
-        assert_eq!(result["name"], "Review");
+        assert_eq!(result["id"], "qa");
+        assert_eq!(result["name"], "QA");
     }
 
     #[tokio::test]
@@ -1919,12 +1919,21 @@ mod tests {
         let ops = parse_input(json!({"op": "list columns"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         let columns = result["columns"].as_array().unwrap();
-        // Default board has todo, doing, done
-        assert!(columns.len() >= 3);
         let ids: Vec<&str> = columns.iter().filter_map(|c| c["id"].as_str()).collect();
-        assert!(ids.contains(&"todo"));
-        assert!(ids.contains(&"doing"));
-        assert!(ids.contains(&"done"));
+
+        // Derive the expected columns from the single source of truth
+        // (`default_column_entities`) rather than hardcoding ids, so this
+        // test can never drift from the default set (e.g. when `review`
+        // was added between `doing` and `done`).
+        let expected = crate::types::default_column_entities();
+        assert!(columns.len() >= expected.len());
+        for col in &expected {
+            assert!(
+                ids.contains(&col.id.as_str()),
+                "default column `{}` missing from list columns result; got {ids:?}",
+                col.id
+            );
+        }
     }
 
     // ------------------------------------------------------------------
@@ -2723,10 +2732,9 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         let ops =
-            parse_input(json!({"op": "add column", "id": "review", "name": "Review", "order": 1}))
-                .unwrap();
+            parse_input(json!({"op": "add column", "id": "qa", "name": "QA", "order": 1})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["id"], "review");
+        assert_eq!(result["id"], "qa");
         assert_eq!(result["order"], 1);
     }
 

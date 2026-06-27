@@ -27,7 +27,7 @@ use swissarmyhammer_code_context::db::{configure_connection, create_schema};
 use swissarmyhammer_code_context::serialize_embedding;
 
 use crate::validators::types::{RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch};
-use crate::validators::{Rule, Severity, ValidatorLoader, ValidatorSource};
+use crate::validators::{Rule, ValidatorLoader, ValidatorSource};
 
 /// Embedding dimension shared by the seeded index and the mock embedder.
 pub const DIM: usize = 4;
@@ -202,22 +202,25 @@ pub fn seed_call_edge(
 // ---- validator loader fixture ----------------------------------------
 
 /// A loader carrying one RuleSet named `name` that matches `file_glob` and
-/// declares `probes` at `severity`. `add_builtin_ruleset` is the deterministic
-/// injection seam (no on-disk validators, so tests don't depend on the
-/// machine).
-pub fn loader_with(
-    name: &str,
-    file_glob: &str,
-    probes: &[&str],
-    severity: Severity,
-) -> ValidatorLoader {
+/// declares `probes`.
+///
+/// A shared review-test fixture, re-exported from this crate so downstream test
+/// crates (e.g. `swissarmyhammer-agent`'s review e2e) build the same loader.
+/// `add_builtin_ruleset` is the deterministic injection seam — no on-disk
+/// validators, so a test never depends on what's installed on the machine.
+pub fn loader_with(name: &str, file_glob: &str, probes: &[&str]) -> ValidatorLoader {
     let mut loader = ValidatorLoader::new();
-    loader.add_builtin_ruleset(ruleset(name, file_glob, probes, severity));
+    loader.add_builtin_ruleset(ruleset(name, file_glob, probes));
     loader
 }
 
-/// A single-rule RuleSet matching `file_glob` and declaring `probes`.
-pub fn ruleset(name: &str, file_glob: &str, probes: &[&str], severity: Severity) -> RuleSet {
+/// A single-rule RuleSet named `name` that matches `file_glob` and declares
+/// `probes`.
+///
+/// A shared review-test fixture, re-exported from this crate for downstream
+/// test crates. The rule body is a fixed placeholder — tests assert on matching,
+/// scoping, and probe wiring, not on rule prose.
+pub fn ruleset(name: &str, file_glob: &str, probes: &[&str]) -> RuleSet {
     RuleSet {
         manifest: RuleSetManifest {
             name: name.to_string(),
@@ -232,7 +235,6 @@ pub fn ruleset(name: &str, file_glob: &str, probes: &[&str], severity: Severity)
             trigger_matcher: None,
             tags: vec![],
             probes: probes.iter().map(|p| p.to_string()).collect(),
-            severity,
             timeout: 30,
             once: false,
         },
@@ -240,7 +242,6 @@ pub fn ruleset(name: &str, file_glob: &str, probes: &[&str], severity: Severity)
             name: format!("{name}-rule"),
             description: "rule".to_string(),
             body: "body".to_string(),
-            severity: None,
             timeout: None,
         }],
         source: ValidatorSource::Builtin,
@@ -322,6 +323,11 @@ use crate::validators::{AgentPool, PoolConfig};
 
 /// Prompt-token count the mock reports for every saved prefix state.
 pub const MOCK_PREFIX_TOKENS: u64 = 1234;
+
+/// How long a [`ScriptedReply::Stall`] turn sleeps before resolving — far longer
+/// than any test's cancel/idle window, so a stalled turn is always abandoned or
+/// cancelled by the test long before this elapses.
+const STALL_DURATION_SECS: u64 = 60;
 
 /// One scripted reaction, matched in script order by substring needle.
 #[derive(Debug, Clone)]
@@ -721,7 +727,7 @@ async fn handle_prompt(
         ScriptedReply::Stall => {
             // Far longer than any test's windows; the test cancels or abandons
             // the turn long before this resolves.
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(STALL_DURATION_SECS)).await;
             mock.config.default_response.clone()
         }
         ScriptedReply::Text(text) => text,
@@ -969,16 +975,13 @@ where
 }
 
 /// A findings array as an agent would emit it, fenced in prose.
-pub(crate) fn findings_json(
-    file: &str,
-    line: u32,
-    rule: &str,
-    severity: &str,
-    claim: &str,
-) -> String {
+///
+/// Binary pass/fail: a finding carries no severity field, matching the fan-out
+/// output contract.
+pub(crate) fn findings_json(file: &str, line: u32, rule: &str, claim: &str) -> String {
     format!(
         "Here are my findings:\n\n```json\n[{{\"file\":\"{file}\",\"line\":{line},\
-         \"validator\":\"ignored-by-agent\",\"rule\":\"{rule}\",\"severity\":\"{severity}\",\
+         \"validator\":\"ignored-by-agent\",\"rule\":\"{rule}\",\
          \"claim\":\"{claim}\",\"evidence\":\"per `duplicates`: 0.94\",\
          \"suggestion\":\"extract a helper\"}}]\n```\n"
     )
