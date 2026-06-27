@@ -391,8 +391,12 @@ impl Sections {
 }
 
 /// Which `##` section the parser is currently inside.
+///
+/// `pub(crate)` so the prompt-assembly split in [`crate::drive`] can reuse the
+/// one section-recognition rule when it withholds the `Then`/`Notes` sections
+/// from the driver goal, rather than re-deriving heading detection.
 #[derive(Clone, Copy)]
-enum Section {
+pub(crate) enum Section {
     None,
     Given,
     When,
@@ -403,7 +407,7 @@ enum Section {
 impl Section {
     /// Recognize a `## Given` / `## When` / `## Then` / `## Notes` heading line,
     /// case-insensitively, or `None` for any other line.
-    fn from_heading(line: &str) -> Option<Section> {
+    pub(crate) fn from_heading(line: &str) -> Option<Section> {
         let heading = line.trim().strip_prefix("##")?.trim();
         match heading.to_ascii_lowercase().as_str() {
             "given" => Some(Section::Given),

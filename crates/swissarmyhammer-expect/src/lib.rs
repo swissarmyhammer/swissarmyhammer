@@ -70,7 +70,10 @@ pub use config::{
     ModelConfig, OnMissing, ProvisionConfig, ReliabilityConfig,
 };
 pub use doctor::{diagnose, render, DiagnosticStatus, DoctorFacts, FieldDiagnostic};
-pub use drive::{run_expect_over_agent, DrivenObservation, ExpectScope};
+pub use drive::{
+    build_driver_goal, observe_with_driver, run_expect_over_agent, AcpGoalDriver,
+    DrivenObservation, DriverHandle, ExpectScope, GoalDriver,
+};
 pub use error::ExpectError;
 pub use loader::{ExpectationLoader, RawSpec};
 pub use observe::{observe, received_path, write_received, ObserveConfig, FINAL_CHECKPOINT};

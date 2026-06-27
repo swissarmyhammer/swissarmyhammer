@@ -92,4 +92,20 @@ pub trait SurfaceAdapter {
     ///
     /// Returns [`ExpectError`] when scratch state cannot be cleaned up.
     fn teardown(&self, sut: Self::ProvisionedSut) -> Result<(), ExpectError>;
+
+    /// Whether the adapter can resolve `when_step` into a concrete action and
+    /// drive it mechanically, with no agent interpretation.
+    ///
+    /// This is the gate the agent-fallback path
+    /// ([`observe_with_driver`](crate::drive::observe_with_driver)) consults
+    /// before delegating to a scoped subagent. Deterministic surfaces resolve
+    /// every concrete step — a cli run is always an argv, an http call always a
+    /// request — so the default is `true` and such a run never reaches the
+    /// agent. A surface whose locator or action fails to bind (for example a
+    /// renamed browser/gui accessibility control) returns `false` for that step,
+    /// which routes it through the subagent as the documented runtime fallback
+    /// (`ideas/expect.md` §"The Check Loop").
+    fn resolves_mechanically(&self, _when_step: &str) -> bool {
+        true
+    }
 }

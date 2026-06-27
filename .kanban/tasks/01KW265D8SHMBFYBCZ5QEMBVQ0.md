@@ -27,8 +27,8 @@ comments:
 depends_on:
 - 01KW25ZK93AJ0CR17C9QJ11RXW
 - 01KW263S53NJ1YWNHGPYTTWEEC
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff080
 project: expect
 title: 'Assertion compiler + cli locators (Tier 1: literal + invariant)'
 ---

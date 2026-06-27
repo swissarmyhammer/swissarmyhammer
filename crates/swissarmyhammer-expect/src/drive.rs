@@ -40,8 +40,9 @@
 //! that resolves under the repo's `.expect/` directory — specs, goldens, and
 //! received fixtures are off-limits — while acking writes elsewhere.
 
+use std::future::Future;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::{
     AgentRequest, ClientCapabilities, FileSystemCapabilities, InitializeRequest,
@@ -57,6 +58,10 @@ use swissarmyhammer_validators::{AgentPool, PoolConfig};
 
 use crate::config::EXPECT_DIR;
 use crate::error::ExpectError;
+use crate::observe::{observe, ObserveConfig};
+use crate::spec::{parse_criterion, Expectation, Section};
+use crate::surface::SurfaceAdapter;
+use crate::types::Observation;
 
 /// The set of goals to drive, one scoped subagent per goal.
 ///
@@ -84,6 +89,89 @@ pub struct DrivenObservation {
     pub goal: String,
     /// The tolerant-extracted structured JSON the subagent produced.
     pub structured: serde_json::Value,
+}
+
+/// The preamble that frames a withheld-criteria goal for the driving subagent.
+///
+/// It states the discipline explicitly: the subagent is given the intent and the
+/// `Given`/`When` steps but **not** the acceptance criteria, so it cannot
+/// optimize to the rubric (`ideas/expect.md` §"The Check Loop", hardening rule 1
+/// — the SWE-bench held-out-test discipline).
+const DRIVER_GOAL_PREAMBLE: &str = "You are driving a system under test toward a goal. \
+Explore and act to accomplish the intended behavior described below. You are deliberately NOT \
+given the acceptance criteria — focus on achieving the behavior itself, not on passing a checklist.";
+
+/// The forced structured-output instruction appended to every driver goal.
+///
+/// ACP's prompt turn carries no structured payload, so the `StructuredOutput`
+/// contract is implemented as a prompt-for-JSON: the subagent is asked to end its
+/// turn with a single JSON object, which [`drive_scope`] recovers with the
+/// tolerant [`extract_json_value`] even when the model fences or prefaces it.
+const DRIVER_STRUCTURED_OUTPUT_INSTRUCTION: &str =
+    "When you are finished, report your result as a \
+single JSON object and nothing else, for example {\"summary\": \"<what you did>\", \"actions\": \
+[\"<each concrete action you took>\"]}.";
+
+/// The [`Trajectory`](crate::types::Trajectory) step prefix recording the driving
+/// subagent's structured self-report.
+///
+/// The captured JSON is a *claim* — the subagent's own account of what it did —
+/// kept for triage, never the verdict source (the adapter's authoritative
+/// checkpoints remain ground truth, per `ideas/expect.md` §"The Check Loop",
+/// hardening rule 2).
+const CLAIM_STEP_PREFIX: &str = "claim: ";
+
+/// Assemble the goal prompt that drives one expectation's subagent, **withholding
+/// the acceptance criteria**.
+///
+/// This is the prompt-assembly split that is the main defense against
+/// reward-hacking (`ideas/expect.md` §"The Check Loop", hardening rule 1): the
+/// goal carries the body's stated intent plus the `## Given` and `## When`
+/// sections, but the `## Then` checklist — and any stray GFM criterion item — and
+/// the `## Notes` right-reason text are routed to the grader, never to the driver.
+/// An agent that cannot see the rubric cannot optimize to it.
+///
+/// The split is enforced by construction: this function never reads
+/// [`Expectation::criteria`] or [`Expectation::notes`], and it drops the
+/// `Then`/`Notes` sections (and any checklist line) while walking the body, so a
+/// criterion can only reach the driver if it is neither in a `Then`/`Notes`
+/// section nor formatted as a checklist item. The result is framed with
+/// [`DRIVER_GOAL_PREAMBLE`] and closed with the forced
+/// [`DRIVER_STRUCTURED_OUTPUT_INSTRUCTION`].
+pub fn build_driver_goal(expectation: &Expectation) -> String {
+    let body = withhold_criteria(&expectation.intent);
+    format!("{DRIVER_GOAL_PREAMBLE}\n\n{body}\n\n{DRIVER_STRUCTURED_OUTPUT_INSTRUCTION}")
+}
+
+/// Return the expectation body with the `Then` checklist and `Notes` section
+/// withheld — the intent narrative plus the `Given`/`When` sections only.
+///
+/// Walks the body once, reusing [`Section`] heading detection and
+/// [`parse_criterion`] so the withholding rule matches the parser's own
+/// section/criteria recognition rather than re-deriving it. Every line inside a
+/// `Then` or `Notes` section is dropped (including the heading), and any GFM
+/// checklist item is dropped wherever it appears, so a spec that lists criteria
+/// without a `## Then` header still has them withheld.
+fn withhold_criteria(body: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut section = Section::None;
+    for line in body.lines() {
+        if let Some(heading) = Section::from_heading(line) {
+            section = heading;
+            // Keep the Given/When headings; drop the withheld Then/Notes headings.
+            if !matches!(section, Section::Then | Section::Notes) {
+                kept.push(line);
+            }
+            continue;
+        }
+        // Withhold everything inside a Then/Notes section, and any checklist item
+        // (the acceptance criteria) wherever it appears in the body.
+        if matches!(section, Section::Then | Section::Notes) || parse_criterion(line).is_some() {
+            continue;
+        }
+        kept.push(line);
+    }
+    kept.join("\n").trim().to_string()
 }
 
 /// Drive every goal in `scope` against a live ACP agent and return each
@@ -168,6 +256,198 @@ pub async fn run_expect_over_agent(
             "expect agent connection failed: {e}"
         ))),
     }
+}
+
+/// The seam that delegates one expectation's withheld-criteria goal to a scoped
+/// subagent and returns the subagent's structured self-report (a *claim*).
+///
+/// `observe_with_driver` depends on this trait, not on the concrete ACP wiring,
+/// so the deterministic engine stays testable with a stub driver while the
+/// production path uses [`AcpGoalDriver`]. The returned JSON is the driver's own
+/// account of what it did — recorded in the [`Trajectory`](crate::types::Trajectory)
+/// for triage, never trusted as the observation (`ideas/expect.md` §"The Check
+/// Loop", hardening rule 2: the adapter's authoritative read is ground truth).
+///
+/// The method is expressed as `-> impl Future` rather than `async fn` so the
+/// trait carries no implicit `Send` bound on the returned future — the ACP driver
+/// future is `!Send` and runs on a current-thread runtime (the same reason the
+/// tool layer drives the pipeline under `spawn_blocking`).
+pub trait GoalDriver {
+    /// Drive `goal` through one scoped subagent and return its structured claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExpectError::Agent`] when the subagent cannot be driven or its
+    /// reply is not recoverable JSON.
+    fn drive_goal(
+        &self,
+        goal: &str,
+    ) -> impl Future<Output = Result<serde_json::Value, ExpectError>>;
+}
+
+/// The two halves of a ready ACP agent handle the [`AcpGoalDriver`] consumes: the
+/// [`DynConnectTo<Client>`] component and the broadcast receiver of the agent's
+/// streamed `session/update` notifications.
+///
+/// This is the same shape the tool layer already mints for [`run_expect_over_agent`];
+/// it is named here so [`AcpGoalDriver`] owns a single value rather than two loose
+/// fields.
+pub struct DriverHandle {
+    /// The agent component the driver runs as the ACP server side.
+    pub agent: DynConnectTo<Client>,
+    /// The receiver of the agent's streamed notifications.
+    pub notification_rx: broadcast::Receiver<SessionNotification>,
+}
+
+/// A [`GoalDriver`] backed by a live ACP agent: the goal is driven through **one
+/// scoped session** via [`run_expect_over_agent`], and the subagent's structured
+/// self-report is captured (recovered with the tolerant [`extract_json_value`]).
+///
+/// `run_expect_over_agent` consumes the agent handle when it stands up the
+/// connection, so an [`AcpGoalDriver`] drives a single expectation — one scoped
+/// session per expectation, which is exactly the abstraction this seam provides.
+/// The handle is held in a [`Mutex`] and taken on first use; a second
+/// [`drive_goal`](GoalDriver::drive_goal) returns an error rather than silently
+/// reusing a spent connection. The tool layer mints a fresh handle (and a fresh
+/// driver) per expectation.
+pub struct AcpGoalDriver {
+    /// The agent handle, taken on first drive (single scoped session per driver).
+    handle: Mutex<Option<DriverHandle>>,
+    /// The repo root the subagent's `fs` reads are confined under.
+    repo_root: PathBuf,
+    /// The pool sizing for the single scoped session.
+    pool_config: PoolConfig,
+}
+
+impl AcpGoalDriver {
+    /// Build a driver that drives one scoped session over `handle`, confining the
+    /// subagent's reads under `repo_root` and sizing its pool by `pool_config`.
+    pub fn new(
+        handle: DriverHandle,
+        repo_root: impl Into<PathBuf>,
+        pool_config: PoolConfig,
+    ) -> Self {
+        Self {
+            handle: Mutex::new(Some(handle)),
+            repo_root: repo_root.into(),
+            pool_config,
+        }
+    }
+}
+
+impl GoalDriver for AcpGoalDriver {
+    fn drive_goal(
+        &self,
+        goal: &str,
+    ) -> impl Future<Output = Result<serde_json::Value, ExpectError>> {
+        // Take the handle synchronously so the std `Mutex` guard is never held
+        // across the `await` below (the connection is single-use per driver).
+        let taken = self
+            .handle
+            .lock()
+            .expect("AcpGoalDriver handle mutex poisoned")
+            .take();
+        let scope = ExpectScope {
+            goals: vec![goal.to_string()],
+        };
+        let repo_root = self.repo_root.clone();
+        let pool_config = self.pool_config;
+        async move {
+            let handle = taken.ok_or_else(|| {
+                ExpectError::Agent(
+                    "AcpGoalDriver drives a single scoped session and was already used".to_string(),
+                )
+            })?;
+            let mut observations = run_expect_over_agent(
+                handle.agent,
+                handle.notification_rx,
+                scope,
+                &repo_root,
+                pool_config,
+            )
+            .await?;
+            observations
+                .pop()
+                .map(|observation| observation.structured)
+                .ok_or_else(|| {
+                    ExpectError::Agent(
+                        "the driving subagent produced no structured capture".to_string(),
+                    )
+                })
+        }
+    }
+}
+
+/// Observe `expectation` against its surface, delegating to a scoped subagent
+/// **only** for the steps the adapter cannot resolve mechanically, and recording
+/// the subagent's structured self-report as a claim in the trajectory.
+///
+/// This is the agent-fallback half of `ideas/expect.md` §"The Check Loop". The
+/// three roles stay separate:
+///
+/// - The **adapter** always reads the authoritative state: the returned
+///   [`Observation`]'s checkpoints come from [`observe`], never from the claim.
+/// - The **driver** (the scoped subagent) is consulted only when a `When` step
+///   does not [`resolve_mechanically`](SurfaceAdapter::resolves_mechanically). On
+///   a deterministic surface — every cli step is a concrete argv — no step needs
+///   the agent, so `driver` is never invoked and the mechanical path stands alone.
+/// - When the agent *is* invoked, it is driven with the withheld-criteria goal
+///   from [`build_driver_goal`], and its structured reply is appended to the
+///   trajectory as a [`CLAIM_STEP_PREFIX`]-tagged claim — kept for triage, never
+///   the verdict source.
+///
+/// # Errors
+///
+/// Returns [`ExpectError`] when the adapter cannot provision/drive/observe/tear
+/// down the SUT, when the driver fails, or when the claim cannot be serialized.
+pub async fn observe_with_driver<A, D>(
+    expectation: &Expectation,
+    adapter: &A,
+    config: &ObserveConfig,
+    driver: &D,
+) -> Result<Observation, ExpectError>
+where
+    A: SurfaceAdapter,
+    D: GoalDriver,
+{
+    // Decide whether any `When` step needs interpretation before driving the SUT,
+    // so a deterministic run never stands up the agent at all.
+    let needs_agent = expectation
+        .when
+        .iter()
+        .any(|step| !adapter.resolves_mechanically(step));
+
+    // The subagent supplies the action the adapter could not resolve; capture its
+    // claim first, then let the adapter read the authoritative checkpoints.
+    let claim = if needs_agent {
+        let goal = build_driver_goal(expectation);
+        Some(driver.drive_goal(&goal).await?)
+    } else {
+        None
+    };
+
+    let mut observation = observe(expectation, adapter, config)?;
+
+    if let Some(claim) = claim {
+        observation
+            .trajectory
+            .steps
+            .push(format_claim_step(&claim)?);
+    }
+    Ok(observation)
+}
+
+/// Render the subagent's structured claim as a [`CLAIM_STEP_PREFIX`]-tagged
+/// trajectory step.
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Json`] when the claim cannot be serialized.
+fn format_claim_step(claim: &serde_json::Value) -> Result<String, ExpectError> {
+    Ok(format!(
+        "{CLAIM_STEP_PREFIX}{}",
+        serde_json::to_string(claim)?
+    ))
 }
 
 /// Buffer size for the pool's notification broadcast channel.
@@ -516,7 +796,7 @@ async fn drive_scope(
 mod tests {
     use super::*;
 
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
     use acp_conformance::test_utils::{numbered_session_response, MockAgent, MockAgentAdapter};
@@ -526,6 +806,9 @@ mod tests {
     };
     use futures::future::BoxFuture;
     use tempfile::TempDir;
+
+    use crate::spec::Setup;
+    use crate::types::SurfaceState;
 
     /// How long a wedged pipeline may run before the test fails instead of
     /// hanging CI.
@@ -825,7 +1108,7 @@ mod tests {
             notify_tx,
             reply: STRUCTURED_REPLY.to_string(),
         });
-        let dyn_agent = DynConnectTo::new(MockAgentAdapter(agent));
+        let dyn_agent = DynConnectTo::new(MockAgentAdapter(Arc::clone(&agent)));
 
         const GOAL: &str = "observe src/checkout/coupon";
         let scope = ExpectScope {
@@ -853,5 +1136,277 @@ mod tests {
             "the subagent's structured reply is captured: {:?}",
             observations[0].structured
         );
+        // Exactly one `session/new` was minted for the one driven expectation —
+        // the scoped-session-per-expectation contract — and the turn ran to its
+        // `stopReason` (the pipeline returned, so the session was drained and the
+        // pool tore it down).
+        assert_eq!(
+            agent.next_session.load(Ordering::SeqCst),
+            1,
+            "one session/new per expectation"
+        );
+    }
+
+    // ---- criteria-withholding prompt assembly (build_driver_goal) -------
+
+    /// A spec whose intent narrative, `Given`, `When`, `Then`, and `Notes` each
+    /// carry a unique marker, so the withholding split can be asserted exactly:
+    /// the driver goal must contain the first three markers and none of the last
+    /// two.
+    const WITHHOLD_SPEC: &str = r#"---
+description: a one-line description
+surface: cli
+---
+
+# Title line
+
+NARRATIVE_INTENT the behavior the driver must accomplish.
+
+## Given
+- GIVEN_PRECONDITION an arranged state
+
+## When
+- WHEN_ACTION the action to perform
+
+## Then
+- [ ] THEN_CRITERION the rubric the grader checks
+
+## Notes
+NOTES_RIGHT_REASON the right-reason text routed to the grader.
+"#;
+
+    /// Parse [`WITHHOLD_SPEC`] into an [`Expectation`] addressed under `/repo`.
+    fn withhold_expectation() -> Expectation {
+        Expectation::parse(
+            WITHHOLD_SPEC,
+            Path::new("/repo/feature.expect.md"),
+            Path::new("/repo"),
+        )
+        .expect("parse withhold spec")
+    }
+
+    /// The driver goal carries the intent narrative and the `Given`/`When` steps,
+    /// but NOT the `Then` checklist or the `Notes` right-reason text — the
+    /// SWE-bench held-out discipline that defends against reward-hacking.
+    #[test]
+    fn driver_goal_carries_intent_given_when_and_withholds_then_and_notes() {
+        let goal = build_driver_goal(&withhold_expectation());
+
+        for present in ["NARRATIVE_INTENT", "GIVEN_PRECONDITION", "WHEN_ACTION"] {
+            assert!(
+                goal.contains(present),
+                "the driver goal must carry `{present}` (intent + Given + When): {goal}"
+            );
+        }
+        for withheld in ["THEN_CRITERION", "NOTES_RIGHT_REASON"] {
+            assert!(
+                !goal.contains(withheld),
+                "the driver goal must withhold `{withheld}` (Then criterion / Notes): {goal}"
+            );
+        }
+    }
+
+    // ---- observe-with-driver integration --------------------------------
+
+    /// A stub surface adapter whose checkpoints are a fixed authoritative read,
+    /// with a controllable [`SurfaceAdapter::resolves_mechanically`] gate so a
+    /// test can force the agent-fallback path (`resolves = false`) or the
+    /// deterministic path (`resolves = true`).
+    struct StubAdapter {
+        resolves: bool,
+        state: SurfaceState,
+    }
+
+    impl SurfaceAdapter for StubAdapter {
+        type ProvisionedSut = ();
+
+        fn provision(&self, _setup: Option<&Setup>, _repo_root: &Path) -> Result<(), ExpectError> {
+            Ok(())
+        }
+
+        fn drive(&self, _sut: &mut (), _when_step: &str) -> Result<(), ExpectError> {
+            Ok(())
+        }
+
+        fn observe(&self, _sut: &()) -> Result<SurfaceState, ExpectError> {
+            Ok(self.state.clone())
+        }
+
+        fn teardown(&self, _sut: ()) -> Result<(), ExpectError> {
+            Ok(())
+        }
+
+        fn resolves_mechanically(&self, _when_step: &str) -> bool {
+            self.resolves
+        }
+    }
+
+    /// A [`GoalDriver`] that records whether it was invoked and never drives a
+    /// real agent — used to prove the deterministic path skips the driver.
+    struct RecordingDriver {
+        invoked: AtomicBool,
+    }
+
+    impl GoalDriver for RecordingDriver {
+        fn drive_goal(
+            &self,
+            _goal: &str,
+        ) -> impl Future<Output = Result<serde_json::Value, ExpectError>> {
+            self.invoked.store(true, Ordering::SeqCst);
+            async move { Ok(serde_json::json!({})) }
+        }
+    }
+
+    /// A reply where the structured JSON is prefaced by prose and wrapped in a
+    /// ```json fence — the malformed-then-fenced shape `extract_json_value`
+    /// recovers.
+    const FENCED_CLAIM_REPLY: &str =
+        "Sure! Here is what I did:\n```json\n{\"summary\": \"drove the SUT\", \"verdict\": \"done\"}\n```\nLet me know if you need anything else.";
+
+    /// A marker planted in the stub adapter's checkpoint state, asserted to be the
+    /// source of the observation's checkpoints (never the agent's claim).
+    const GROUND_TRUTH_MARKER: &str = "GROUND_TRUTH";
+
+    /// The agent-fallback path: a subagent returns malformed-then-fenced JSON,
+    /// `extract_json_value` recovers it, the recovered claim lands in the
+    /// trajectory, and the checkpoints come from the adapter's authoritative read
+    /// — not from the claim.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn agent_fallback_records_the_recovered_claim_while_checkpoints_come_from_the_adapter() {
+        let repo = temp_repo();
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = Arc::new(EchoAgent {
+            next_session: AtomicUsize::new(0),
+            notify_tx,
+            reply: FENCED_CLAIM_REPLY.to_string(),
+        });
+        let driver = AcpGoalDriver::new(
+            DriverHandle {
+                agent: DynConnectTo::new(MockAgentAdapter(agent)),
+                notification_rx,
+            },
+            repo.path(),
+            PoolConfig::remote(1),
+        );
+
+        // `resolves = false` forces the When step through the scoped subagent; the
+        // adapter still reads the authoritative ground-truth state.
+        let adapter = StubAdapter {
+            resolves: false,
+            state: SurfaceState::Json {
+                body: serde_json::json!({ "observed": GROUND_TRUTH_MARKER }),
+            },
+        };
+        let expectation = withhold_expectation();
+        let config = ObserveConfig::new(repo.path());
+
+        let observation = tokio::time::timeout(
+            PIPELINE_TIMEOUT,
+            observe_with_driver(&expectation, &adapter, &config, &driver),
+        )
+        .await
+        .expect("the run must not hang")
+        .expect("observe_with_driver must produce an observation");
+
+        // Checkpoints are the adapter's authoritative read — one per When step
+        // plus the final — and carry the ground-truth marker, not the claim.
+        assert!(
+            !observation.checkpoints.is_empty(),
+            "the adapter produced checkpoints"
+        );
+        for checkpoint in &observation.checkpoints {
+            match &checkpoint.state {
+                SurfaceState::Json { body } => assert_eq!(
+                    body["observed"], GROUND_TRUTH_MARKER,
+                    "checkpoints come from the adapter, not the agent's claim"
+                ),
+                other => panic!("expected the stub adapter's json state, got {other:?}"),
+            }
+        }
+
+        // The recovered claim is recorded in the trajectory as a claim step,
+        // never as a checkpoint.
+        let claim_step = observation
+            .trajectory
+            .steps
+            .iter()
+            .find(|step| step.starts_with(CLAIM_STEP_PREFIX))
+            .expect("the subagent's recovered claim is recorded in the trajectory");
+        let claim_json = claim_step
+            .strip_prefix(CLAIM_STEP_PREFIX)
+            .expect("the claim step is prefixed");
+        let claim: serde_json::Value =
+            serde_json::from_str(claim_json).expect("the recorded claim is valid JSON");
+        assert_eq!(
+            claim["verdict"], "done",
+            "the malformed-then-fenced reply was recovered into the claim: {claim:?}"
+        );
+        assert_eq!(
+            claim["summary"], "drove the SUT",
+            "the full claim is captured"
+        );
+        assert!(
+            !claim_json.contains(GROUND_TRUTH_MARKER),
+            "the claim is the agent's self-report, distinct from the adapter's state"
+        );
+    }
+
+    /// The cli adapter resolves every step mechanically by default, so a cli
+    /// expectation is deterministic and never reaches the agent fallback.
+    #[test]
+    fn cli_adapter_resolves_every_step_mechanically() {
+        let adapter = crate::surface::cli::CliAdapter::default();
+        assert!(
+            adapter.resolves_mechanically("any concrete argv"),
+            "cli is a deterministic surface: every step is a concrete argv"
+        );
+    }
+
+    /// On a deterministic cli expectation, `observe_with_driver` drives the SUT
+    /// mechanically and NEVER invokes the agent — the mechanical path stays the
+    /// default.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deterministic_cli_expectation_does_not_invoke_the_agent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = TempDir::new().expect("temp repo");
+        let script = repo.path().join("echo.sh");
+        std::fs::write(&script, "#!/bin/sh\necho \"got $1\"\n").unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let spec = "---\ndescription: a deterministic cli run\nsurface: cli\nsetup: \"./echo.sh\"\n---\n\nRun the echo command and observe its output.\n\n## When\n- hello\n";
+        let expectation =
+            Expectation::parse(spec, &repo.path().join("feature.expect.md"), repo.path())
+                .expect("parse cli spec");
+
+        let adapter = crate::surface::cli::CliAdapter::default();
+        let driver = RecordingDriver {
+            invoked: AtomicBool::new(false),
+        };
+        let config = ObserveConfig::new(repo.path());
+
+        let observation = observe_with_driver(&expectation, &adapter, &config, &driver)
+            .await
+            .expect("the deterministic cli run must succeed");
+
+        assert!(
+            !driver.invoked.load(Ordering::SeqCst),
+            "a deterministic cli expectation must not invoke the agent"
+        );
+        // And the mechanical path produced authoritative checkpoints.
+        let final_state = &observation
+            .checkpoints
+            .last()
+            .expect("a final checkpoint")
+            .state;
+        match final_state {
+            SurfaceState::Cli(cli) => {
+                assert_eq!(cli.stdout, "got hello\n", "the cli SUT ran mechanically")
+            }
+            other => panic!("expected cli state, got {other:?}"),
+        }
     }
 }
