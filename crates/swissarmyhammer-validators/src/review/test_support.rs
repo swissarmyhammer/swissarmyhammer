@@ -202,15 +202,24 @@ pub fn seed_call_edge(
 // ---- validator loader fixture ----------------------------------------
 
 /// A loader carrying one RuleSet named `name` that matches `file_glob` and
-/// declares `probes`. `add_builtin_ruleset` is the deterministic injection seam
-/// (no on-disk validators, so tests don't depend on the machine).
+/// declares `probes`.
+///
+/// A shared review-test fixture, re-exported from this crate so downstream test
+/// crates (e.g. `swissarmyhammer-agent`'s review e2e) build the same loader.
+/// `add_builtin_ruleset` is the deterministic injection seam — no on-disk
+/// validators, so a test never depends on what's installed on the machine.
 pub fn loader_with(name: &str, file_glob: &str, probes: &[&str]) -> ValidatorLoader {
     let mut loader = ValidatorLoader::new();
     loader.add_builtin_ruleset(ruleset(name, file_glob, probes));
     loader
 }
 
-/// A single-rule RuleSet matching `file_glob` and declaring `probes`.
+/// A single-rule RuleSet named `name` that matches `file_glob` and declares
+/// `probes`.
+///
+/// A shared review-test fixture, re-exported from this crate for downstream
+/// test crates. The rule body is a fixed placeholder — tests assert on matching,
+/// scoping, and probe wiring, not on rule prose.
 pub fn ruleset(name: &str, file_glob: &str, probes: &[&str]) -> RuleSet {
     RuleSet {
         manifest: RuleSetManifest {
