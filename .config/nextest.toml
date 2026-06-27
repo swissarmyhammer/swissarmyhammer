@@ -179,3 +179,22 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 filter = "package(swissarmyhammer-embedding)"
 test-group = "llama-embedding-serial"
 slow-timeout = { period = "120s", terminate-after = 3 }
+
+# The kanban-app per-board-host / plugin-baseline tests and the command-service
+# kanban-misc plugin e2e each spin up an in-process plugin host (a V8/deno isolate
+# plus an MCP server) per board. Under full --workspace parallelism (~16 cores,
+# ~15k tests) the concurrent isolate startup + host registration contends: hosts
+# come up too slowly (ServerUnavailable / UnknownServer), the hot-reload FSEvents
+# watcher is starved, and ai_set_streaming's dispatch grinds past its timeout --
+# intermittently, a different subset each CI run, while all pass in isolation and
+# in an uncontended local --workspace run. These tests are NOT real-model tests
+# (no llama/ModelManager), so the GPU serial lane does not apply; cap just this
+# contended host family so their setup is not starved, without serialising the
+# whole kanban-app bin.
+[test-groups.kanban-host-serial]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = "(package(kanban-app) and test(/ai_set_streaming_reaches_per_board_host|reconcile_resolves_per_board_host|all_builtin_command_plugins_load_with_full_baseline|two_boards_get_distinct_platforms|a_project_plugin_shadows_a_user_plugin|closing_a_board_stops_its_hot_reload_watcher/)) or (package(swissarmyhammer-command-service) and test(/kanban_misc_commands_plugin_registers_and_executes/))"
+test-group = "kanban-host-serial"
+slow-timeout = { period = "60s", terminate-after = 6 }
