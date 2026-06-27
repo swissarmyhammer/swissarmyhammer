@@ -407,6 +407,17 @@ impl fmt::Display for Stream {
     }
 }
 
+impl fmt::Display for BoundValue {
+    /// Render a bound value for an evidence snippet: a number in its shortest
+    /// form (`40`, not `40.0`), text verbatim.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BoundValue::Number(number) => write!(f, "{number}"),
+            BoundValue::Text(text) => f.write_str(text),
+        }
+    }
+}
+
 /// The parsed kind of a criterion, before a locator is bound to it.
 enum Intent {
     /// An exit-code comparison against a literal code.

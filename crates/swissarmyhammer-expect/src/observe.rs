@@ -40,6 +40,14 @@ const RECEIVED_SUBDIR: &str = "received";
 /// received observation file.
 const RECEIVED_EXTENSION: &str = ".received.json";
 
+/// The committed subdirectory of `.expect/` that holds the approved, scrubbed
+/// observation per spec (the `golden` baseline `evaluate` re-grades against).
+const GOLDEN_SUBDIR: &str = "goldens";
+
+/// The extension appended to a spec's repo-relative identity to name its golden
+/// baseline file.
+const GOLDEN_EXTENSION: &str = ".golden.json";
+
 /// The trajectory prefix recording a `Given` arrangement the driver performed.
 const ARRANGE_STEP_PREFIX: &str = "arrange: ";
 
@@ -171,7 +179,50 @@ fn capture<A: SurfaceAdapter>(
 /// Returns [`ExpectError::Expectation`] when `path` is absolute or contains a
 /// `..` component.
 pub fn received_path(repo_root: &Path, path: &str) -> Result<PathBuf, ExpectError> {
-    let received_dir = repo_root.join(EXPECT_DIR).join(RECEIVED_SUBDIR);
+    expect_artifact_path(repo_root, RECEIVED_SUBDIR, path, RECEIVED_EXTENSION)
+}
+
+/// Resolve the golden-baseline path for the spec identity `path` under
+/// `repo_root`: `<repo_root>/.expect/goldens/<path>.golden.json`.
+///
+/// The committed counterpart to [`received_path`]: the golden tree mirrors each
+/// spec's repo-relative identity (`ideas/expect.md` §"The dot-folder"). The same
+/// safe-join applies — an absolute or `..`-bearing identity is rejected so a read
+/// or write can never escape `.expect/goldens/`.
+///
+/// The golden store and its write side land with the drift ledger (a later task);
+/// this resolver lets the `golden evaluate` op address the baseline file today.
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Expectation`] when `path` is absolute or contains a
+/// `..` component.
+pub fn golden_path(repo_root: &Path, path: &str) -> Result<PathBuf, ExpectError> {
+    expect_artifact_path(repo_root, GOLDEN_SUBDIR, path, GOLDEN_EXTENSION)
+}
+
+/// Safe-join a spec identity into an `.expect/<subdir>/<path><extension>` file
+/// path under `repo_root`, the shared resolver behind [`received_path`] and
+/// [`golden_path`].
+///
+/// The identity is a repo-relative path the loader derived, but a spec selected
+/// by glob or crafted by hand could in principle carry an absolute or `..`
+/// component; joining it verbatim would let a read or write escape the `.expect/`
+/// subdirectory. Following the safe-join approach in [`crate::surface::cli`], the
+/// identity is accepted only when it is relative and contains no parent-directory
+/// component.
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Expectation`] when `path` is absolute or contains a
+/// `..` component.
+fn expect_artifact_path(
+    repo_root: &Path,
+    subdir: &str,
+    path: &str,
+    extension: &str,
+) -> Result<PathBuf, ExpectError> {
+    let dir = repo_root.join(EXPECT_DIR).join(subdir);
     let relative = Path::new(path);
     if relative.is_absolute()
         || relative
@@ -184,7 +235,7 @@ pub fn received_path(repo_root: &Path, path: &str) -> Result<PathBuf, ExpectErro
                 .to_string(),
         });
     }
-    Ok(received_dir.join(format!("{path}{RECEIVED_EXTENSION}")))
+    Ok(dir.join(format!("{path}{extension}")))
 }
 
 /// Persist `observation` to its received slot under `repo_root`, creating the
@@ -219,6 +270,26 @@ mod tests {
         assert_eq!(
             resolved,
             repo.join(".expect/received/src/checkout/coupon.received.json")
+        );
+    }
+
+    #[test]
+    fn golden_path_follows_the_dot_expect_layout() {
+        let repo = Path::new("/repo");
+        let resolved = golden_path(repo, "src/checkout/coupon").expect("safe identity");
+        assert_eq!(
+            resolved,
+            repo.join(".expect/goldens/src/checkout/coupon.golden.json")
+        );
+    }
+
+    #[test]
+    fn golden_path_rejects_parent_dir_traversal() {
+        let repo = Path::new("/repo");
+        let err = golden_path(repo, "../../etc/passwd").expect_err("traversal must be rejected");
+        assert!(
+            matches!(err, ExpectError::Expectation { .. }),
+            "got {err:?}"
         );
     }
 

@@ -42,8 +42,8 @@ use swissarmyhammer_operations::{
 };
 
 use swissarmyhammer_expect::{
-    observe, surfaces, write_received, CliAdapter, Expectation, ExpectationLoader, Observation,
-    ObserveConfig, Surface,
+    evaluate_spec, golden_path, observe, received_path, surfaces, write_received, CliAdapter,
+    Expectation, ExpectationLoader, Observation, ObserveConfig, Surface,
 };
 
 use crate::mcp::op_tool_helpers::{json_result, string_arg};
@@ -91,14 +91,14 @@ pub struct ExpectationGet;
 #[derive(Debug, Default)]
 pub struct ExpectationDelete;
 
-/// The `scope` / `tag` parameters shared by `observe expectation` and
-/// `observe expectations`: both resolve a `<scope>` (optionally narrowed by a
-/// `--tag`) through [`ExpectationLoader::resolve_scope`], so they declare an
-/// identical parameter set from one source rather than two drifting copies.
-static OBSERVE_PARAMS: &[ParamMeta] = &[
+/// The `scope` / `tag` parameters shared by every op that resolves a `<scope>`
+/// through [`ExpectationLoader::resolve_scope`] — `observe`/`observations` and
+/// the `evaluate` ops alike. Declared once so the scope grammar cannot drift
+/// across ops; each op carries an identical parameter set from this source.
+static SCOPE_PARAMS: &[ParamMeta] = &[
     ParamMeta::new("scope")
         .description(
-            "The expectation scope: a spec path, a folder, or a glob. Omit to observe every spec.",
+            "The expectation scope: a spec path, a folder, or a glob. Omit to select every spec.",
         )
         .param_type(ParamType::String),
     ParamMeta::new("tag")
@@ -109,7 +109,7 @@ static OBSERVE_PARAMS: &[ParamMeta] = &[
 /// `observe expectation` — drive the system and capture an observation.
 ///
 /// A manual [`Operation`] impl (rather than the `#[operation]` macro) so it can
-/// declare the [`OBSERVE_PARAMS`] scope/tag inputs, mirroring [`SurfaceGet`].
+/// declare the [`SCOPE_PARAMS`] scope/tag inputs, mirroring [`SurfaceGet`].
 #[derive(Debug, Default)]
 pub struct ExpectationObserve;
 
@@ -124,7 +124,7 @@ impl Operation for ExpectationObserve {
         "Drive the system and capture an observation for one expectation"
     }
     fn parameters(&self) -> &'static [ParamMeta] {
-        OBSERVE_PARAMS
+        SCOPE_PARAMS
     }
 }
 
@@ -148,7 +148,7 @@ pub struct ExpectationsList;
 
 /// `observe expectations` — capture observations for a batch of expectations.
 ///
-/// Shares [`OBSERVE_PARAMS`] with [`ExpectationObserve`]; the two differ only in
+/// Shares [`SCOPE_PARAMS`] with [`ExpectationObserve`]; the two differ only in
 /// how many specs the scope is expected to match, not in their inputs.
 #[derive(Debug, Default)]
 pub struct ExpectationsObserve;
@@ -164,7 +164,7 @@ impl Operation for ExpectationsObserve {
         "Capture observations for a batch of expectations"
     }
     fn parameters(&self) -> &'static [ParamMeta] {
-        OBSERVE_PARAMS
+        SCOPE_PARAMS
     }
 }
 
@@ -196,13 +196,26 @@ pub struct ObservationGet;
 pub struct ObservationDelete;
 
 /// `evaluate observation` — re-judge a stored observation (no re-run).
-#[operation(
-    verb = "evaluate",
-    noun = "observation",
-    description = "Re-judge a stored observation against its criteria without re-running the system"
-)]
+///
+/// A manual [`Operation`] impl so it can declare the [`SCOPE_PARAMS`] scope/tag
+/// inputs it resolves through [`ExpectationLoader::resolve_scope`].
 #[derive(Debug, Default)]
 pub struct ObservationEvaluate;
+
+impl Operation for ObservationEvaluate {
+    fn verb(&self) -> &'static str {
+        "evaluate"
+    }
+    fn noun(&self) -> &'static str {
+        "observation"
+    }
+    fn description(&self) -> &'static str {
+        "Re-judge a stored observation against its criteria without re-running the system"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SCOPE_PARAMS
+    }
+}
 
 /// `approve observation` — promote a stored observation to its golden baseline.
 #[operation(
@@ -223,13 +236,26 @@ pub struct ObservationApprove;
 pub struct ObservationsList;
 
 /// `evaluate observations` — re-judge a batch of stored observations (no re-run).
-#[operation(
-    verb = "evaluate",
-    noun = "observations",
-    description = "Re-judge a batch of stored observations without re-running the system"
-)]
+///
+/// Shares [`SCOPE_PARAMS`] with [`ObservationEvaluate`]; differs only in how many
+/// specs the scope is expected to match.
 #[derive(Debug, Default)]
 pub struct ObservationsEvaluate;
+
+impl Operation for ObservationsEvaluate {
+    fn verb(&self) -> &'static str {
+        "evaluate"
+    }
+    fn noun(&self) -> &'static str {
+        "observations"
+    }
+    fn description(&self) -> &'static str {
+        "Re-judge a batch of stored observations without re-running the system"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SCOPE_PARAMS
+    }
+}
 
 /// `approve observations` — promote a batch of observations to their goldens.
 #[operation(
@@ -259,13 +285,26 @@ pub struct GoldenGet;
 pub struct GoldenDelete;
 
 /// `evaluate golden` — re-grade a golden baseline (no re-run).
-#[operation(
-    verb = "evaluate",
-    noun = "golden",
-    description = "Re-grade a golden baseline against edited criteria without re-running the system"
-)]
+///
+/// A manual [`Operation`] impl so it can declare the [`SCOPE_PARAMS`] scope/tag
+/// inputs it resolves through [`ExpectationLoader::resolve_scope`].
 #[derive(Debug, Default)]
 pub struct GoldenEvaluate;
+
+impl Operation for GoldenEvaluate {
+    fn verb(&self) -> &'static str {
+        "evaluate"
+    }
+    fn noun(&self) -> &'static str {
+        "golden"
+    }
+    fn description(&self) -> &'static str {
+        "Re-grade a golden baseline against edited criteria without re-running the system"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SCOPE_PARAMS
+    }
+}
 
 /// `list goldens` — survey approved golden baselines.
 #[operation(
@@ -277,13 +316,26 @@ pub struct GoldenEvaluate;
 pub struct GoldensList;
 
 /// `evaluate goldens` — re-grade a batch of golden baselines (no re-run).
-#[operation(
-    verb = "evaluate",
-    noun = "goldens",
-    description = "Re-grade a batch of golden baselines without re-running the system"
-)]
+///
+/// Shares [`SCOPE_PARAMS`] with [`GoldenEvaluate`]; differs only in how many specs
+/// the scope is expected to match.
 #[derive(Debug, Default)]
 pub struct GoldensEvaluate;
+
+impl Operation for GoldensEvaluate {
+    fn verb(&self) -> &'static str {
+        "evaluate"
+    }
+    fn noun(&self) -> &'static str {
+        "goldens"
+    }
+    fn description(&self) -> &'static str {
+        "Re-grade a batch of golden baselines without re-running the system"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SCOPE_PARAMS
+    }
+}
 
 /// `get surface` — read one surface adapter from the catalog.
 ///
@@ -532,6 +584,135 @@ fn observe_op(
     }))
 }
 
+/// The `evaluate observation` op id (verb + noun), matched in `execute`'s dispatch.
+const OBSERVATION_EVALUATE_OP: &str = "evaluate observation";
+
+/// The `evaluate observations` op id (verb + noun), matched in `execute`'s dispatch.
+const OBSERVATIONS_EVALUATE_OP: &str = "evaluate observations";
+
+/// The `evaluate golden` op id (verb + noun), matched in `execute`'s dispatch.
+const GOLDEN_EVALUATE_OP: &str = "evaluate golden";
+
+/// The `evaluate goldens` op id (verb + noun), matched in `execute`'s dispatch.
+const GOLDENS_EVALUATE_OP: &str = "evaluate goldens";
+
+/// The `status` an evaluate op reports for a spec whose source observation file is
+/// absent (a `new` expectation with no golden, or a never-observed received slot).
+const MISSING_SOURCE_STATUS: &str = "missing";
+
+/// Which stored observation an `evaluate` op grades. The source of truth differs
+/// (received vs golden); the pure [`evaluate_spec`] applied to it is identical.
+#[derive(Clone, Copy)]
+enum EvaluateSource {
+    /// The last received observation under `.expect/received/`.
+    Received,
+    /// The approved golden baseline under `.expect/goldens/`.
+    Golden,
+}
+
+impl EvaluateSource {
+    /// Resolve the stored observation path for spec `identity` under `repo_root`.
+    fn path(
+        self,
+        repo_root: &Path,
+        identity: &str,
+    ) -> Result<PathBuf, swissarmyhammer_expect::ExpectError> {
+        match self {
+            EvaluateSource::Received => received_path(repo_root, identity),
+            EvaluateSource::Golden => golden_path(repo_root, identity),
+        }
+    }
+
+    /// The lowercase label naming this source in result payloads and messages.
+    fn label(self) -> &'static str {
+        match self {
+            EvaluateSource::Received => "received",
+            EvaluateSource::Golden => "golden",
+        }
+    }
+}
+
+/// Load the stored observation at `path`, or `Ok(None)` when the file does not
+/// exist yet (handled gracefully — a `new` expectation, not an error).
+fn load_observation(path: &Path) -> Result<Option<Observation>, rmcp::ErrorData> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(path).map_err(|err| {
+        rmcp::ErrorData::internal_error(
+            format!("reading observation `{}` failed: {err}", path.display()),
+            None,
+        )
+    })?;
+    let observation = serde_json::from_str(&text).map_err(|err| {
+        rmcp::ErrorData::internal_error(
+            format!("parsing observation `{}` failed: {err}", path.display()),
+            None,
+        )
+    })?;
+    Ok(Some(observation))
+}
+
+/// Shared handler for the four `evaluate` ops: resolve the `<scope>` (and optional
+/// `--tag`), load each spec's stored `source` observation, and re-judge it with
+/// the pure [`evaluate_spec`] — no system driven, no model consulted.
+///
+/// `observation`/`observations` grade the received slot; `golden`/`goldens`
+/// re-grade the approved baseline against the current (possibly edited) criteria.
+/// A spec whose source observation file is absent is reported (not errored) with
+/// [`MISSING_SOURCE_STATUS`], so a `new` expectation with no golden — or a spec
+/// never observed — surfaces clearly rather than aborting the batch. The golden
+/// store's write side lands with the drift ledger (a later task); this op already
+/// reads the [`golden_path`] that ledger will populate.
+fn evaluate_op(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+    source: EvaluateSource,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let scope = string_arg(arguments, "scope");
+    let tag = string_arg(arguments, "tag");
+    let repo_root = observe_repo_root(context);
+
+    let loader = ExpectationLoader::new(&repo_root);
+    let specs = loader
+        .resolve_scope(scope.as_deref(), tag.as_deref())
+        .map_err(|err| {
+            rmcp::ErrorData::internal_error(format!("scope resolution failed: {err}"), None)
+        })?;
+
+    let mut evaluated = Vec::with_capacity(specs.len());
+    for spec in &specs {
+        let path = source
+            .path(&repo_root, &spec.path)
+            .map_err(|err| rmcp::ErrorData::invalid_params(err.to_string(), None))?;
+        match load_observation(&path)? {
+            Some(observation) => {
+                let verdict = evaluate_spec(spec, &observation);
+                evaluated.push(serde_json::json!({
+                    "path": spec.path,
+                    "verdict": verdict,
+                }));
+            }
+            None => evaluated.push(serde_json::json!({
+                "path": spec.path,
+                "status": MISSING_SOURCE_STATUS,
+                "message": format!(
+                    "no {} observation for `{}` at {}",
+                    source.label(),
+                    spec.path,
+                    path.display()
+                ),
+            })),
+        }
+    }
+
+    json_result(&serde_json::json!({
+        "count": evaluated.len(),
+        "source": source.label(),
+        "evaluated": evaluated,
+    }))
+}
+
 impl swissarmyhammer_common::health::Doctorable for ExpectTool {
     fn name(&self) -> &str {
         <Self as McpTool>::name(self)
@@ -619,6 +800,12 @@ impl McpTool for ExpectTool {
             SURFACE_GET_OP => surface_get(&arguments),
             SURFACES_LIST_OP => surfaces_list(),
             EXPECTATION_OBSERVE_OP | EXPECTATIONS_OBSERVE_OP => observe_op(&arguments, context),
+            OBSERVATION_EVALUATE_OP | OBSERVATIONS_EVALUATE_OP => {
+                evaluate_op(&arguments, context, EvaluateSource::Received)
+            }
+            GOLDEN_EVALUATE_OP | GOLDENS_EVALUATE_OP => {
+                evaluate_op(&arguments, context, EvaluateSource::Golden)
+            }
             known if EXPECT_OPERATIONS.iter().any(|op| op.op_string() == known) => {
                 json_result(&not_implemented(known))
             }
@@ -701,6 +888,10 @@ mod tests {
         SURFACES_LIST_OP,
         EXPECTATION_OBSERVE_OP,
         EXPECTATIONS_OBSERVE_OP,
+        OBSERVATION_EVALUATE_OP,
+        OBSERVATIONS_EVALUATE_OP,
+        GOLDEN_EVALUATE_OP,
+        GOLDENS_EVALUATE_OP,
     ];
 
     /// Pull the JSON payload out of a successful tool result.
@@ -1021,5 +1212,130 @@ mod tests {
             received.is_file(),
             "the batch persists each received observation"
         );
+    }
+
+    /// Write a spec at `identity` carrying the given Tier-1 `criteria`.
+    fn write_spec(repo: &Path, identity: &str, criteria: &[&str]) {
+        let mut body = String::from(
+            "---\ndescription: a coupon reduces the total\nsurface: cli\n---\n\n## Then\n",
+        );
+        for criterion in criteria {
+            body.push_str(&format!("- [ ] {criterion}\n"));
+        }
+        std::fs::write(repo.join(format!("{identity}.expect.md")), body).unwrap();
+    }
+
+    /// Write a single-checkpoint JSON observation for `identity` to `path`,
+    /// creating parent directories — a hand-written received/golden fixture.
+    fn write_observation(path: &Path, identity: &str, body: serde_json::Value) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let observation = serde_json::json!({
+            "path": identity,
+            "checkpoints": [{
+                "after": "final",
+                "state": { "kind": "json", "body": body },
+                "duration_ms": 1
+            }],
+            "trajectory": { "steps": [] }
+        });
+        std::fs::write(path, serde_json::to_string_pretty(&observation).unwrap()).unwrap();
+    }
+
+    /// Dispatch an evaluate `op` over `scope` against the repo rooted at `ctx`,
+    /// returning the success payload.
+    async fn run_evaluate(op: &str, scope: &str, ctx: &ToolContext) -> serde_json::Value {
+        let result = tool()
+            .execute(args(serde_json::json!({ "op": op, "scope": scope })), ctx)
+            .await
+            .unwrap_or_else(|e| panic!("`{op}` should dispatch, got error: {e}"));
+        assert!(!result.is_error.unwrap_or(false), "`{op}` should succeed");
+        payload_of(&result)
+    }
+
+    /// `observation evaluate <scope>` re-judges the stored received observation,
+    /// returning the per-criterion verdict — without re-running the system.
+    #[tokio::test]
+    async fn observation_evaluate_re_judges_a_stored_received_file() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(
+            repo.path(),
+            "coupon",
+            &[
+                "the total is $40",
+                "the item count equals the number of items",
+            ],
+        );
+        write_observation(
+            &repo.path().join(".expect/received/coupon.received.json"),
+            "coupon",
+            serde_json::json!({ "total": 40, "item_count": 3, "items": [{}, {}, {}] }),
+        );
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let payload = run_evaluate(OBSERVATION_EVALUATE_OP, "coupon", &ctx).await;
+
+        assert_eq!(payload["count"], 1);
+        assert_eq!(payload["source"], "received");
+        let verdict = &payload["evaluated"][0]["verdict"];
+        assert_eq!(verdict["path"], "coupon");
+        let criteria = verdict["criteria"].as_array().expect("criteria array");
+        assert_eq!(criteria.len(), 2, "both Tier-1 criteria are graded");
+        assert!(
+            criteria.iter().all(|c| c["pass"] == true),
+            "every criterion holds against the received observation"
+        );
+    }
+
+    /// `golden evaluate <scope>` re-grades the approved golden against the current
+    /// (edited) criterion set — one criterion that still holds, one that no longer
+    /// does — without re-running the system.
+    #[tokio::test]
+    async fn golden_evaluate_re_grades_a_stored_golden_against_an_edited_criterion_set() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(
+            repo.path(),
+            "coupon",
+            &["the total is $40", "the discount is $5"],
+        );
+        write_observation(
+            &repo.path().join(".expect/goldens/coupon.golden.json"),
+            "coupon",
+            serde_json::json!({ "total": 40 }),
+        );
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let payload = run_evaluate(GOLDEN_EVALUATE_OP, "coupon", &ctx).await;
+
+        assert_eq!(payload["source"], "golden");
+        let criteria = payload["evaluated"][0]["verdict"]["criteria"]
+            .as_array()
+            .expect("criteria array");
+        assert_eq!(criteria.len(), 2, "both edited criteria are graded");
+        let passes: Vec<bool> = criteria
+            .iter()
+            .map(|c| c["pass"].as_bool().expect("pass bool"))
+            .collect();
+        assert!(passes.contains(&true), "the holding criterion passes");
+        assert!(
+            passes.contains(&false),
+            "the edited criterion that no longer holds is surfaced as a fail"
+        );
+    }
+
+    /// `golden evaluate` over a spec with no golden yet reports the missing source
+    /// gracefully (a clear status, not a hard error) — the golden store lands in a
+    /// later task, and the op is already wired to its path.
+    #[tokio::test]
+    async fn golden_evaluate_reports_a_missing_golden_gracefully() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let payload = run_evaluate(GOLDEN_EVALUATE_OP, "coupon", &ctx).await;
+
+        assert_eq!(payload["count"], 1);
+        let entry = &payload["evaluated"][0];
+        assert_eq!(entry["path"], "coupon");
+        assert_eq!(entry["status"], MISSING_SOURCE_STATUS);
     }
 }

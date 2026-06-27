@@ -54,6 +54,7 @@ pub mod config;
 pub mod doctor;
 pub mod drive;
 pub mod error;
+pub mod evaluate;
 pub mod loader;
 pub mod observe;
 pub mod spec;
@@ -75,8 +76,11 @@ pub use drive::{
     DrivenObservation, DriverHandle, ExpectScope, GoalDriver,
 };
 pub use error::ExpectError;
+pub use evaluate::{evaluate, evaluate_assertion, evaluate_spec, STRUCTURAL_DRIFT_REASON};
 pub use loader::{ExpectationLoader, RawSpec};
-pub use observe::{observe, received_path, write_received, ObserveConfig, FINAL_CHECKPOINT};
+pub use observe::{
+    golden_path, observe, received_path, write_received, ObserveConfig, FINAL_CHECKPOINT,
+};
 pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};
 pub use surface::cli::{CliAdapter, CliCommands, CliSut};
 pub use surface::SurfaceAdapter;
