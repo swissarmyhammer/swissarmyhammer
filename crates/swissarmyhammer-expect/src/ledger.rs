@@ -39,7 +39,7 @@ use crate::assertion::{compile, AssertionOutcome, CompileError, CompiledAssertio
 use crate::config::ExpectConfig;
 use crate::error::ExpectError;
 use crate::evaluate::evaluate;
-use crate::observe::golden_path;
+use crate::observe::{golden_path, received_path, spec_path};
 use crate::spec::{Criterion, Expectation};
 use crate::types::{
     CliState, CriterionVerdict, LedgerState, Observation, SurfaceState, Trajectory, VerdictTier,
@@ -911,6 +911,158 @@ pub fn decide_approval(
     Ok(ApprovalDecision::Write { status, golden })
 }
 
+// ---------------------------------------------------------------------------
+// Delete: remove a spec's identity-mirrored artifacts. Missing files are clean
+// no-ops, never errors — a delete reports exactly what it removed.
+// ---------------------------------------------------------------------------
+
+/// One leg of an expectation's identity-mirrored fileset: the spec, its received
+/// observation, or its golden baseline. Each maps to a safe-joined file path
+/// under the repo root (`ideas/expect.md` §"The dot-folder").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Artifact {
+    /// The `*.expect.md` spec file, directly under the repo root.
+    Spec,
+    /// The received observation under `.expect/received/`.
+    Received,
+    /// The approved golden baseline under `.expect/goldens/`.
+    Golden,
+}
+
+impl Artifact {
+    /// Safe-join this artifact's file path for spec `identity` under `repo_root`,
+    /// reusing the shared identity-mirror resolvers so no path can escape the repo.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExpectError::Expectation`] when `identity` is absolute or carries
+    /// a `..` component.
+    fn path(self, repo_root: &Path, identity: &str) -> Result<PathBuf, ExpectError> {
+        match self {
+            Artifact::Spec => spec_path(repo_root, identity),
+            Artifact::Received => received_path(repo_root, identity),
+            Artifact::Golden => golden_path(repo_root, identity),
+        }
+    }
+}
+
+/// The outcome of deleting one [`Artifact`]: which leg, the file path acted on,
+/// and whether a file was actually removed (`true`) or already absent (`false`,
+/// a clean no-op).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemovedArtifact {
+    /// Which leg of the identity-mirrored fileset this is.
+    pub artifact: Artifact,
+    /// The resolved file path the delete acted on.
+    pub path: PathBuf,
+    /// `true` when the file existed and was removed; `false` when it was already
+    /// absent (a no-op note, not an error).
+    pub removed: bool,
+}
+
+/// The structured result of a delete op for one spec identity: the identity and
+/// the per-artifact removal results, in identity-mirror order.
+///
+/// Reports exactly what each delete op touched — `expectation delete` carries all
+/// three legs, `observation`/`golden delete` carry one — with absent files
+/// reported as `removed: false` rather than raised as errors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeletionSummary {
+    /// The spec's repo-relative identity.
+    pub path: String,
+    /// Each targeted artifact's removal result.
+    pub removed: Vec<RemovedArtifact>,
+}
+
+/// Delete the full identity-mirrored fileset for `identity` under `repo_root`:
+/// the `*.expect.md` spec, its received observation, and its golden baseline (the
+/// "remove spec + its observation + golden" flow of `ideas/expect.md`).
+///
+/// Any leg that is already absent is reported as a clean no-op, never an error.
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Expectation`] when `identity` is unsafe (absolute or
+/// `..`-bearing), or [`ExpectError::Io`] when an existing file cannot be removed.
+pub fn delete_expectation(
+    repo_root: &Path,
+    identity: &str,
+) -> Result<DeletionSummary, ExpectError> {
+    delete_artifacts(
+        repo_root,
+        identity,
+        &[Artifact::Spec, Artifact::Received, Artifact::Golden],
+    )
+}
+
+/// Delete only the received observation (`.expect/received/<identity>.received.json`)
+/// for `identity` under `repo_root`, leaving the spec and golden in place.
+///
+/// An absent received slot is a clean no-op, never an error.
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Expectation`] when `identity` is unsafe (absolute or
+/// `..`-bearing), or [`ExpectError::Io`] when the file cannot be removed.
+pub fn delete_observation(
+    repo_root: &Path,
+    identity: &str,
+) -> Result<DeletionSummary, ExpectError> {
+    delete_artifacts(repo_root, identity, &[Artifact::Received])
+}
+
+/// Delete only the golden baseline (`.expect/goldens/<identity>.golden.json`) for
+/// `identity` under `repo_root`, leaving the spec and received observation in place.
+///
+/// An absent golden is a clean no-op, never an error.
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Expectation`] when `identity` is unsafe (absolute or
+/// `..`-bearing), or [`ExpectError::Io`] when the file cannot be removed.
+pub fn delete_golden(repo_root: &Path, identity: &str) -> Result<DeletionSummary, ExpectError> {
+    delete_artifacts(repo_root, identity, &[Artifact::Golden])
+}
+
+/// Resolve and remove each of `artifacts` for `identity` under `repo_root`,
+/// collecting the per-artifact outcome — the shared body behind the three public
+/// delete ops, which differ only in which legs they target.
+fn delete_artifacts(
+    repo_root: &Path,
+    identity: &str,
+    artifacts: &[Artifact],
+) -> Result<DeletionSummary, ExpectError> {
+    let mut removed = Vec::with_capacity(artifacts.len());
+    for &artifact in artifacts {
+        let path = artifact.path(repo_root, identity)?;
+        let existed = remove_if_present(&path)?;
+        removed.push(RemovedArtifact {
+            artifact,
+            path,
+            removed: existed,
+        });
+    }
+    Ok(DeletionSummary {
+        path: identity.to_string(),
+        removed,
+    })
+}
+
+/// Remove the file at `path` if it exists, returning whether a file was actually
+/// removed. A missing file is a clean no-op (`Ok(false)`), never an error.
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Io`] when an existing file cannot be removed.
+fn remove_if_present(path: &Path) -> Result<bool, ExpectError> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    std::fs::remove_file(path)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1722,6 +1874,91 @@ mod tests {
                 status: ApprovalStatus::Approved
             },
             "an already-approved spec is nothing to do, even under --all",
+        );
+    }
+
+    /// The full identity-mirrored fileset, in delete order — the source of truth
+    /// the delete tests assert against.
+    const MIRRORED_FILESET: &[Artifact] = &[Artifact::Spec, Artifact::Received, Artifact::Golden];
+
+    /// Write a placeholder file at every identity-mirrored artifact of [`COUPON`]
+    /// under `repo`. Delete only removes files (it never parses them), so each leg
+    /// is seeded with arbitrary content via its safe-joined resolver.
+    fn seed_artifacts(repo: &Path) {
+        for artifact in MIRRORED_FILESET {
+            let path = artifact.path(repo, COUPON).expect("artifact path");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"placeholder").unwrap();
+        }
+    }
+
+    #[test]
+    fn delete_expectation_removes_the_spec_received_and_golden() {
+        let repo = TempDir::new().unwrap();
+        seed_artifacts(repo.path());
+
+        let summary = delete_expectation(repo.path(), COUPON).expect("delete expectation");
+
+        assert_eq!(summary.path, COUPON);
+        assert_eq!(
+            summary.removed.len(),
+            MIRRORED_FILESET.len(),
+            "every identity-mirrored leg is reported",
+        );
+        for (entry, &artifact) in summary.removed.iter().zip(MIRRORED_FILESET) {
+            assert_eq!(entry.artifact, artifact, "legs reported in mirror order");
+            assert!(entry.removed, "{artifact:?} existed and was removed");
+            assert_eq!(
+                entry.path,
+                artifact.path(repo.path(), COUPON).expect("path"),
+                "{artifact:?} path is the safe-joined mirror path",
+            );
+            assert!(!entry.path.exists(), "{artifact:?} file is gone");
+        }
+    }
+
+    #[test]
+    fn a_scoped_delete_removes_only_its_own_artifact() {
+        type DeleteOp = fn(&Path, &str) -> Result<DeletionSummary, ExpectError>;
+        // Each scoped op targets exactly one leg of the fileset; both leave the
+        // other two untouched.
+        let cases: &[(DeleteOp, Artifact)] = &[
+            (delete_observation, Artifact::Received),
+            (delete_golden, Artifact::Golden),
+        ];
+
+        for &(delete, target) in cases {
+            let repo = TempDir::new().unwrap();
+            seed_artifacts(repo.path());
+
+            let summary = delete(repo.path(), COUPON).expect("scoped delete");
+
+            assert_eq!(summary.path, COUPON);
+            assert_eq!(summary.removed.len(), 1, "only one leg for {target:?}");
+            assert_eq!(summary.removed[0].artifact, target);
+            assert!(summary.removed[0].removed, "{target:?} was removed");
+
+            for &artifact in MIRRORED_FILESET {
+                let path = artifact.path(repo.path(), COUPON).expect("path");
+                assert_eq!(
+                    path.exists(),
+                    artifact != target,
+                    "{artifact:?} survives a scoped {target:?} delete iff it is not the target",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deleting_a_missing_artifact_is_a_clean_no_op() {
+        let repo = TempDir::new().unwrap();
+        // Nothing seeded — every leg is absent.
+        let summary = delete_expectation(repo.path(), COUPON).expect("delete with nothing on disk");
+
+        assert_eq!(summary.removed.len(), MIRRORED_FILESET.len());
+        assert!(
+            summary.removed.iter().all(|entry| !entry.removed),
+            "an absent leg is reported as a no-op (removed: false), not an error: {summary:?}",
         );
     }
 }

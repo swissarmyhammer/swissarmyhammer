@@ -33,8 +33,8 @@ comments:
 depends_on:
 - 01KW263S53NJ1YWNHGPYTTWEEC
 - 01KW2694VSQ17BJ1H8QWB0X0C1
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffb80
 project: expect
 title: pass^k reliability + repeat runs + isolation fresh
 ---

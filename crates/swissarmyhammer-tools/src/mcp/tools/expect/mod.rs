@@ -42,12 +42,12 @@ use swissarmyhammer_operations::{
 };
 
 use swissarmyhammer_expect::{
-    approval_diff, approval_status, approve, check, decide_approval, evaluate_spec,
-    find_expect_dir, golden_path, ledger_entry, ledger_queue, observe, observe_repeated,
-    read_golden, received_path, surfaces, write_golden, write_received, ApprovalDecision,
-    ApprovalStatus, ApproveMode, CheckOptions, CliAdapter, CreateSource, ExpectConfig, ExpectError,
-    Expectation, ExpectationLoader, Golden, GradingPins, Observation, ObserveConfig, ScrubberSet,
-    Surface,
+    approval_diff, approval_status, approve, check, decide_approval, delete_expectation,
+    delete_golden, delete_observation, evaluate_spec, find_expect_dir, golden_path, ledger_entry,
+    ledger_queue, observe, observe_repeated, read_golden, received_path, surfaces, write_golden,
+    write_received, ApprovalDecision, ApprovalStatus, ApproveMode, CheckOptions, CliAdapter,
+    CreateSource, DeletionSummary, ExpectConfig, ExpectError, Expectation, ExpectationLoader,
+    Golden, GradingPins, Observation, ObserveConfig, ScrubberSet, Surface,
 };
 use swissarmyhammer_kanban::{comment::AddComment, task::GetTask, Execute, KanbanContext};
 use swissarmyhammer_validators::PoolConfig;
@@ -1104,6 +1104,67 @@ fn expectations_list(
 }
 
 // ---------------------------------------------------------------------------
+// Delete: remove a spec's identity-mirrored artifacts (the spec + observation +
+// golden, or one leg). Missing files are clean no-ops, never errors.
+// ---------------------------------------------------------------------------
+
+/// The `delete expectation` op id (verb + noun), matched in `execute`'s dispatch.
+const EXPECTATION_DELETE_OP: &str = "delete expectation";
+
+/// The `delete observation` op id (verb + noun), matched in `execute`'s dispatch.
+const OBSERVATION_DELETE_OP: &str = "delete observation";
+
+/// The `delete golden` op id (verb + noun), matched in `execute`'s dispatch.
+const GOLDEN_DELETE_OP: &str = "delete golden";
+
+/// The signature of an engine delete: resolve the identity-mirrored path(s) under
+/// the repo root and remove them, returning what was removed.
+type DeleteFn = fn(&Path, &str) -> Result<DeletionSummary, ExpectError>;
+
+/// Shared handler for the three `delete` ops: resolve the `<scope>` (and optional
+/// `--tag`), run the engine `delete` against each matching spec's identity, and
+/// report each [`DeletionSummary`].
+///
+/// `delete expectation` removes a spec's full mirrored fileset; `delete observation`
+/// and `delete golden` remove only that one leg. A leg that is already absent is
+/// reported as a clean no-op (`removed: false`), never an error.
+fn delete_op(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+    delete: DeleteFn,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    // Delete is destructive, so — unlike the read/idempotent scope ops — it refuses
+    // a bare invocation: an empty scope resolves to *every* spec in the repo, which
+    // for a delete would silently remove every expectation, observation, and golden.
+    let has_scope = string_arg(arguments, "scope")
+        .filter(|scope| !scope.is_empty())
+        .is_some();
+    let has_tag = string_arg(arguments, "tag")
+        .filter(|tag| !tag.is_empty())
+        .is_some();
+    if !has_scope && !has_tag {
+        return Err(rmcp::ErrorData::invalid_params(
+            "a `delete` op requires a `scope` (a spec path, folder, or glob) or a `tag`; \
+             refusing to delete every expectation in the repo",
+            None,
+        ));
+    }
+
+    let (repo_root, specs) = resolve_scope_specs(arguments, context)?;
+    let mut deleted = Vec::with_capacity(specs.len());
+    for spec in &specs {
+        let summary = delete(&repo_root, &spec.path).map_err(|err| {
+            rmcp::ErrorData::internal_error(format!("deleting `{}` failed: {err}", spec.path), None)
+        })?;
+        deleted.push(summary);
+    }
+    json_result(&serde_json::json!({
+        "count": deleted.len(),
+        "deleted": deleted,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Approve: the human gate that freezes a golden, with CI refusal and granular
 // modes mirroring `--update-snapshots`.
 // ---------------------------------------------------------------------------
@@ -1706,6 +1767,9 @@ impl McpTool for ExpectTool {
             OBSERVATIONS_LIST_OP => observations_list(&arguments, context),
             GOLDENS_LIST_OP => goldens_list(&arguments, context),
             EXPECTATIONS_LIST_OP => expectations_list(&arguments, context),
+            EXPECTATION_DELETE_OP => delete_op(&arguments, context, delete_expectation),
+            OBSERVATION_DELETE_OP => delete_op(&arguments, context, delete_observation),
+            GOLDEN_DELETE_OP => delete_op(&arguments, context, delete_golden),
             EXPECTATION_OBSERVE_OP | EXPECTATIONS_OBSERVE_OP => observe_op(&arguments, context),
             OBSERVATION_APPROVE_OP | OBSERVATIONS_APPROVE_OP => approve_op(&arguments, context),
             OBSERVATION_EVALUATE_OP | OBSERVATIONS_EVALUATE_OP => {
@@ -1807,8 +1871,11 @@ mod tests {
         SURFACE_GET_OP,
         SURFACES_LIST_OP,
         EXPECTATION_GET_OP,
+        EXPECTATION_DELETE_OP,
         OBSERVATION_GET_OP,
+        OBSERVATION_DELETE_OP,
         GOLDEN_GET_OP,
+        GOLDEN_DELETE_OP,
         OBSERVATIONS_LIST_OP,
         GOLDENS_LIST_OP,
         EXPECTATIONS_LIST_OP,
@@ -2267,6 +2334,158 @@ mod tests {
         let entry = &payload["evaluated"][0];
         assert_eq!(entry["path"], "coupon");
         assert_eq!(entry["status"], MISSING_SOURCE_STATUS);
+    }
+
+    /// The repo-relative paths of `coupon`'s identity-mirrored fileset, the source
+    /// of truth the delete-op tests assert presence/absence against.
+    const COUPON_SPEC_FILE: &str = "coupon.expect.md";
+    const COUPON_RECEIVED_FILE: &str = ".expect/received/coupon.received.json";
+    const COUPON_GOLDEN_FILE: &str = ".expect/goldens/coupon.golden.json";
+    const COUPON_FILESET: &[&str] = &[COUPON_SPEC_FILE, COUPON_RECEIVED_FILE, COUPON_GOLDEN_FILE];
+
+    /// Stand up a repo with `coupon`'s full identity-mirrored fileset on disk: the
+    /// spec, a received observation, and an approved golden.
+    fn coupon_fileset_repo() -> tempfile::TempDir {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        write_observation(
+            &repo.path().join(COUPON_RECEIVED_FILE),
+            "coupon",
+            serde_json::json!({ "total": 40 }),
+        );
+        write_golden_fixture(repo.path(), "coupon");
+        for file in COUPON_FILESET {
+            assert!(repo.path().join(file).is_file(), "seeded {file}");
+        }
+        repo
+    }
+
+    /// `delete expectation <scope>` removes the spec and both its observation and
+    /// golden — the full identity-mirrored set — and reports each removal.
+    #[tokio::test]
+    async fn delete_expectation_op_removes_spec_received_and_golden() {
+        let repo = coupon_fileset_repo();
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let result = tool()
+            .execute(
+                args(serde_json::json!({ "op": EXPECTATION_DELETE_OP, "scope": "coupon" })),
+                &ctx,
+            )
+            .await
+            .expect("delete expectation should dispatch");
+        assert!(!result.is_error.unwrap_or(false), "delete should succeed");
+
+        let payload = payload_of(&result);
+        assert_eq!(payload["count"], 1);
+        let removed = payload["deleted"][0]["removed"]
+            .as_array()
+            .expect("removed array");
+        assert_eq!(removed.len(), 3, "all three legs are reported");
+        assert!(
+            removed.iter().all(|entry| entry["removed"] == true),
+            "every existing leg is removed: {removed:?}",
+        );
+
+        for file in COUPON_FILESET {
+            assert!(
+                !repo.path().join(file).exists(),
+                "{file} is gone after delete expectation",
+            );
+        }
+    }
+
+    /// `observation delete` / `golden delete` remove only their own artifact,
+    /// leaving the other two legs of the fileset in place.
+    #[tokio::test]
+    async fn scoped_delete_op_removes_only_its_artifact() {
+        // (op, the one fileset path it must remove).
+        let cases: &[(&str, &str)] = &[
+            (OBSERVATION_DELETE_OP, COUPON_RECEIVED_FILE),
+            (GOLDEN_DELETE_OP, COUPON_GOLDEN_FILE),
+        ];
+
+        for &(op, target) in cases {
+            let repo = coupon_fileset_repo();
+            let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+            let result = tool()
+                .execute(
+                    args(serde_json::json!({ "op": op, "scope": "coupon" })),
+                    &ctx,
+                )
+                .await
+                .unwrap_or_else(|e| panic!("`{op}` should dispatch, got error: {e}"));
+            assert!(!result.is_error.unwrap_or(false), "`{op}` should succeed");
+
+            let payload = payload_of(&result);
+            let removed = payload["deleted"][0]["removed"]
+                .as_array()
+                .expect("removed array");
+            assert_eq!(removed.len(), 1, "`{op}` reports exactly one leg");
+            assert_eq!(removed[0]["removed"], true, "`{op}` removed its target");
+
+            for file in COUPON_FILESET {
+                assert_eq!(
+                    repo.path().join(file).exists(),
+                    file != &target,
+                    "`{op}`: {file} survives iff it is not the target",
+                );
+            }
+        }
+    }
+
+    /// Deleting a non-existent artifact is reported cleanly — a `removed: false`
+    /// no-op, never a hard error.
+    #[tokio::test]
+    async fn delete_op_reports_a_missing_artifact_cleanly() {
+        let repo = tempfile::TempDir::new().unwrap();
+        // The spec resolves the scope, but no golden was ever approved.
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let result = tool()
+            .execute(
+                args(serde_json::json!({ "op": GOLDEN_DELETE_OP, "scope": "coupon" })),
+                &ctx,
+            )
+            .await
+            .expect("golden delete should dispatch on a missing golden");
+        assert!(
+            !result.is_error.unwrap_or(false),
+            "a missing artifact is a no-op, not an error",
+        );
+
+        let payload = payload_of(&result);
+        assert_eq!(
+            payload["deleted"][0]["removed"][0]["removed"], false,
+            "the absent golden is reported as a clean no-op",
+        );
+    }
+
+    /// A bare `delete` op (no `scope`, no `tag`) is refused rather than silently
+    /// deleting every expectation in the repo.
+    #[tokio::test]
+    async fn delete_op_without_scope_or_tag_is_refused() {
+        let repo = coupon_fileset_repo();
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let err = tool()
+            .execute(
+                args(serde_json::json!({ "op": EXPECTATION_DELETE_OP })),
+                &ctx,
+            )
+            .await
+            .expect_err("a scopeless delete must be refused");
+        assert!(err.message.contains("scope"), "got: {}", err.message);
+
+        // The refusal is total: nothing on disk was touched.
+        for file in COUPON_FILESET {
+            assert!(
+                repo.path().join(file).is_file(),
+                "{file} must survive a refused delete",
+            );
+        }
     }
 
     /// Dispatch a no-scope `op` over the repo rooted at `ctx`, returning the

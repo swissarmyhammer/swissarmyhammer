@@ -98,15 +98,16 @@ pub use grader::{
     JUDGMENT_DRIFT_REASON, PANEL_DISAGREEMENT_REASON,
 };
 pub use ledger::{
-    approval_diff, approval_status, approve, compare, decide_approval, ledger_entry, ledger_queue,
-    ledger_state, read_golden, spec_hash, write_golden, ApprovalBinding, ApprovalDecision,
-    ApprovalStatus, ApproveError, ApproveMode, CriterionComparison, Golden, GradingPins,
-    LedgerComparison, LedgerEntry, Scrubber, ScrubberSet, BINDING_ARROW,
+    approval_diff, approval_status, approve, compare, decide_approval, delete_expectation,
+    delete_golden, delete_observation, ledger_entry, ledger_queue, ledger_state, read_golden,
+    spec_hash, write_golden, ApprovalBinding, ApprovalDecision, ApprovalStatus, ApproveError,
+    ApproveMode, Artifact, CriterionComparison, DeletionSummary, Golden, GradingPins,
+    LedgerComparison, LedgerEntry, RemovedArtifact, Scrubber, ScrubberSet, BINDING_ARROW,
 };
 pub use loader::{ExpectationLoader, RawSpec};
 pub use observe::{
     drives_mechanically, golden_path, observe, observe_repeated, received_path, resolved_repeat,
-    write_received, ObserveConfig, FINAL_CHECKPOINT,
+    spec_path, write_received, ObserveConfig, FINAL_CHECKPOINT,
 };
 pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};
 pub use surface::cli::{CliAdapter, CliCommands, CliSut};

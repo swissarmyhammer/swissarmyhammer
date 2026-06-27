@@ -24,7 +24,7 @@ use std::time::Instant;
 
 use crate::config::EXPECT_DIR;
 use crate::error::ExpectError;
-use crate::spec::{Expectation, Isolation};
+use crate::spec::{Expectation, Isolation, EXPECT_EXTENSION};
 use crate::surface::SurfaceAdapter;
 use crate::types::{Checkpoint, Observation, Trajectory};
 
@@ -332,28 +332,59 @@ pub fn golden_path(repo_root: &Path, path: &str) -> Result<PathBuf, ExpectError>
     expect_artifact_path(repo_root, GOLDEN_SUBDIR, path, GOLDEN_EXTENSION)
 }
 
-/// Safe-join a spec identity into an `.expect/<subdir>/<path><extension>` file
-/// path under `repo_root`, the shared resolver behind [`received_path`] and
-/// [`golden_path`].
+/// Resolve the `*.expect.md` spec file path for the identity `path` under
+/// `repo_root`: `<repo_root>/<path>.expect.md`.
 ///
-/// The identity is a repo-relative path the loader derived, but a spec selected
-/// by glob or crafted by hand could in principle carry an absolute or `..`
-/// component; joining it verbatim would let a read or write escape the `.expect/`
-/// subdirectory. Following the safe-join approach in [`crate::surface::cli`], the
-/// identity is accepted only when it is relative and contains no parent-directory
-/// component.
+/// The mirror of [`received_path`]/[`golden_path`] for the spec leg of a
+/// expectation's identity-mirrored fileset — the file `expectation delete`
+/// removes alongside the received observation and golden. Unlike those two the
+/// spec lives directly under the repo root (not under `.expect/`), but the same
+/// [`validate_identity`] safe-join applies so an absolute or `..`-bearing
+/// identity can never escape the repo root.
 ///
 /// # Errors
 ///
 /// Returns [`ExpectError::Expectation`] when `path` is absolute or contains a
 /// `..` component.
+pub fn spec_path(repo_root: &Path, path: &str) -> Result<PathBuf, ExpectError> {
+    validate_identity(path)?;
+    Ok(repo_root.join(format!("{path}{EXPECT_EXTENSION}")))
+}
+
+/// Safe-join a spec identity into an `.expect/<subdir>/<path><extension>` file
+/// path under `repo_root`, the shared resolver behind [`received_path`] and
+/// [`golden_path`].
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Expectation`] when `path` is absolute or contains a
+/// `..` component (see [`validate_identity`]).
 fn expect_artifact_path(
     repo_root: &Path,
     subdir: &str,
     path: &str,
     extension: &str,
 ) -> Result<PathBuf, ExpectError> {
+    validate_identity(path)?;
     let dir = repo_root.join(EXPECT_DIR).join(subdir);
+    Ok(dir.join(format!("{path}{extension}")))
+}
+
+/// The shared safe-join guard behind every identity-mirrored path resolver
+/// ([`spec_path`], [`received_path`], [`golden_path`]).
+///
+/// The identity is a repo-relative path the loader derived, but a spec selected
+/// by glob or crafted by hand could in principle carry an absolute or `..`
+/// component; joining it verbatim would let a read or write escape the repo (or
+/// the `.expect/` subdirectory). Following the safe-join approach in
+/// [`crate::surface::cli`], the identity is accepted only when it is relative and
+/// contains no parent-directory component.
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Expectation`] when `path` is absolute or contains a
+/// `..` component.
+fn validate_identity(path: &str) -> Result<(), ExpectError> {
     let relative = Path::new(path);
     if relative.is_absolute()
         || relative
@@ -362,11 +393,10 @@ fn expect_artifact_path(
     {
         return Err(ExpectError::Expectation {
             path: path.to_string(),
-            message: "observation identity must be a relative path without `..` components"
-                .to_string(),
+            message: "identity must be a relative path without `..` components".to_string(),
         });
     }
-    Ok(dir.join(format!("{path}{extension}")))
+    Ok(())
 }
 
 /// Persist `observation` to its received slot under `repo_root`, creating the
@@ -614,6 +644,23 @@ mod tests {
         assert_eq!(
             resolved,
             repo.join(".expect/goldens/src/checkout/coupon.golden.json")
+        );
+    }
+
+    #[test]
+    fn spec_path_resolves_directly_under_the_repo_root() {
+        let repo = Path::new("/repo");
+        let resolved = spec_path(repo, "src/checkout/coupon").expect("safe identity");
+        assert_eq!(resolved, repo.join("src/checkout/coupon.expect.md"));
+    }
+
+    #[test]
+    fn spec_path_rejects_parent_dir_traversal() {
+        let repo = Path::new("/repo");
+        let err = spec_path(repo, "../../etc/passwd").expect_err("traversal must be rejected");
+        assert!(
+            matches!(err, ExpectError::Expectation { .. }),
+            "got {err:?}"
         );
     }
 
