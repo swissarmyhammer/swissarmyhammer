@@ -1,7 +1,6 @@
 ---
 name: public-output-contract
 description: Don't needlessly reformat user-facing output, and don't make errors "go away" by dropping the intended side-effect
-severity: warning
 ---
 
 # Public-Output-Contract Validator

@@ -1,7 +1,6 @@
 ---
 name: invariant-propagation
 description: A localized change to how a token/flag/format/case is handled must be applied at every site that handles it
-severity: warning
 ---
 
 # Invariant-Propagation Validator

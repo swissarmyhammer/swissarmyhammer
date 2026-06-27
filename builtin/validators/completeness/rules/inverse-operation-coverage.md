@@ -1,7 +1,6 @@
 ---
 name: inverse-operation-coverage
 description: A change to one direction of a paired operation must exercise the inverse direction
-severity: warning
 ---
 
 # Inverse-Operation Coverage Validator
