@@ -1945,6 +1945,13 @@ Drive the system to a known total.
         }
     }
 
+    /// How long [`StallingAgent`] stays silent after arming the idle window.
+    ///
+    /// Far past every spec-timeout budget in these tests and the pool's
+    /// [`STALL_TURN_CEILING`], so the wedged turn is only ever ended by a
+    /// timeout or cancel — never by the agent itself responding.
+    const STALLING_AGENT_WEDGE_SLEEP: Duration = Duration::from_secs(60);
+
     /// A stub ACP agent that streams one chunk to arm the pool's idle window,
     /// then goes silent far past it — modelling a turn that started decoding then
     /// wedged (e.g. an unanswered nested request). It records the sessions it is
@@ -1976,7 +1983,7 @@ Drive the system to a known total.
                 let _ = self
                     .notify_tx
                     .send(SessionNotification::new(request.session_id.clone(), update));
-                tokio::time::sleep(Duration::from_secs(60)).await;
+                tokio::time::sleep(STALLING_AGENT_WEDGE_SLEEP).await;
                 Ok(PromptResponse::new(StopReason::EndTurn))
             })
         }
@@ -2102,6 +2109,16 @@ Drive the system to a known total.
         }
     }
 
+    /// The spec wall-clock budget for the stub spec-timeout test: tiny so the
+    /// budget elapses well before [`STUB_DRIVER_OUTRUN_DELAY`], proving the wall
+    /// clock — not the driver — ends the run.
+    const STUB_SPEC_TIMEOUT_BUDGET: Duration = Duration::from_millis(100);
+
+    /// The [`ScriptedDriver`] response delay for the stub spec-timeout test: far
+    /// longer than [`STUB_SPEC_TIMEOUT_BUDGET`] so the driver never returns
+    /// before the spec budget elapses, forcing the wall clock to end the run.
+    const STUB_DRIVER_OUTRUN_DELAY: Duration = Duration::from_secs(30);
+
     /// Spec-timeout hard cap: a drive that outruns the spec's wall-clock budget
     /// is aborted with [`ExpectError::Timeout`] carrying that budget, not left to
     /// hang.
@@ -2112,11 +2129,11 @@ Drive the system to a known total.
         // not the agent — ends the run.
         let driver = ScriptedDriver {
             goal_reached: true,
-            delay: Duration::from_secs(30),
+            delay: STUB_DRIVER_OUTRUN_DELAY,
             claim: drove_the_sut_claim(),
         };
         let mut expectation = stop_expectation();
-        expectation.frontmatter.timeout = Duration::from_millis(100);
+        expectation.frontmatter.timeout = STUB_SPEC_TIMEOUT_BUDGET;
         let config = ObserveConfig::new("/repo");
 
         let err = tokio::time::timeout(
@@ -2226,14 +2243,16 @@ Drive the system to a known total.
     }
 
     /// The window the spec-timeout drive must return within: far below the
-    /// wedged agent's 60s sleep and the pool's [`STALL_TURN_CEILING`], so a pass
+    /// wedged agent's [`STALLING_AGENT_WEDGE_SLEEP`] and the pool's
+    /// [`STALL_TURN_CEILING`], so a pass
     /// proves the spec budget — not the agent or the pool floor — aborted the
     /// in-flight drive.
     const SPEC_TIMEOUT_ABORT_WINDOW: Duration = Duration::from_secs(5);
 
     /// The spec budget for the spec-timeout-over-ACP test: small enough that the
-    /// wall clock ends the drive well before the wedged agent's 60s sleep or the
-    /// pool's [`STALL_TURN_CEILING`], yet large enough that the scoped session is
+    /// wall clock ends the drive well before the wedged agent's
+    /// [`STALLING_AGENT_WEDGE_SLEEP`] or the pool's [`STALL_TURN_CEILING`], yet
+    /// large enough that the scoped session is
     /// reliably established (so there is an in-flight session to cancel) before
     /// the budget elapses.
     const SPEC_TIMEOUT_BUDGET: Duration = Duration::from_millis(500);
@@ -2282,7 +2301,7 @@ Drive the system to a known total.
 
         // `resolves = false` routes the When step through the wedged subagent; the
         // spec budget is tiny so the wall clock ends the drive well before the
-        // agent's 60s sleep or the pool's stall floor.
+        // agent's STALLING_AGENT_WEDGE_SLEEP or the pool's stall floor.
         let adapter = json_stub_adapter(serde_json::json!({ "total": STUB_OBSERVED_TOTAL }));
         let mut expectation = stop_expectation_under(repo.path());
         expectation.frontmatter.timeout = SPEC_TIMEOUT_BUDGET;
