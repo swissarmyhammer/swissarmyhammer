@@ -29,6 +29,7 @@ use crate::assertion::{
     compile, AssertionOutcome, BoundValue, CompileError, CompiledAssertion, Locator,
 };
 use crate::config::ExpectConfig;
+use crate::grader::{JudgmentAssertion, JudgmentContext};
 use crate::spec::{Criterion, Expectation};
 use crate::types::{
     CriterionVerdict, Evidence, ExpectationVerdict, Observation, Reliability, VerdictTier,
@@ -475,7 +476,10 @@ fn numeric_assessment(anchor: &BoundValue, found: &BoundValue, tolerance: f64) -
 
 /// The cosine similarity of two equal-length vectors, in `[-1.0, 1.0]`; `0.0`
 /// when either vector has zero magnitude (no direction to compare).
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+///
+/// `pub(crate)` so the Tier 3 [`grader`](crate::grader) module reuses the same
+/// anchor-similarity math the Tier 2 semantic band uses, rather than re-deriving it.
+pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let len = a.len().min(b.len());
     let dot: f32 = (0..len).map(|i| a[i] * b[i]).sum();
     let norm_a = a.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -522,20 +526,59 @@ pub fn similarity_threshold(spec: &Expectation, config: &ExpectConfig) -> f32 {
         .unwrap_or(config.embedder.similarity_threshold)
 }
 
-/// Resolve `tier1` (deterministic) then `tier2` (tolerance) over `observation`,
-/// short-circuiting before Tier 3.
+/// The full verdict of a tiered evaluation: the per-criterion
+/// [`ExpectationVerdict`] plus the criteria the ladder could not resolve with
+/// enough confidence to auto-decide, routed to a human [escalation queue](Escalation).
 ///
-/// This is the verdict ladder so far: Tier 1 decides what it can and its verdicts
-/// come first; only the residual it could not compile is handed to Tier 2, which
-/// is the **only** rung that consults `embedder`. There is no Tier 3 rung yet, so
-/// the ladder stops after Tier 2. The single-run [`Reliability`] passes only when
-/// every criterion across both tiers passes.
+/// The escalation queue is a distinct output from the verdict because an escalated
+/// criterion is **never auto-passed** — it is a non-pass awaiting a human, not a
+/// silent green.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TieredVerdict {
+    /// The per-criterion verdicts across every tier, in `Then`-checklist order.
+    pub verdict: ExpectationVerdict,
+    /// The criteria a grader resolved below the confidence floor, surfaced for a
+    /// human rather than auto-decided. Empty when every criterion cleared the floor.
+    pub escalations: Vec<Escalation>,
+}
+
+/// A criterion the ladder resolved with too little confidence to auto-decide,
+/// routed to the human escalation queue instead of being auto-passed.
+///
+/// Carries the grader's confidence and reason so a human triaging the queue sees
+/// *why* it was escalated (a low single-grader confidence, a split panel, or a
+/// grader that was the driver).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Escalation {
+    /// The criterion text routed for human review.
+    pub criterion: String,
+    /// The grader confidence that fell below the escalation floor.
+    pub confidence: f32,
+    /// The verdict reason explaining the escalation.
+    pub reason: String,
+}
+
+/// Resolve `tier1` (deterministic), then `tier2` (tolerance), then `tier3`
+/// (judgment) over `observation`, each tier running **only** on the residual the
+/// cheaper tiers could not decide.
+///
+/// The full verdict ladder: Tier 1 decides what it can and its verdicts come
+/// first; the residual it could not compile is handed to Tier 2 (the rung that
+/// consults `embedder` for its semantic band); and the residual *of that* is handed
+/// to Tier 3, the [`grader`](crate::grader) rung, which gates the model behind
+/// anchor similarity and consults the `judgment` context's panel only on
+/// divergence. The single-run [`Reliability`] passes only when every criterion
+/// across all three tiers passes, and any criterion a grader resolved below
+/// [`JudgmentContext::escalate_below_confidence`] is collected into the
+/// [escalation queue](TieredVerdict::escalations) rather than auto-passed.
 pub fn evaluate_tiered(
     observation: &Observation,
     tier1: &[CompiledAssertion],
     tier2: &[ToleranceAssertion],
+    tier3: &[JudgmentAssertion],
     embedder: &dyn TextEmbedder,
-) -> ExpectationVerdict {
+    judgment: &JudgmentContext,
+) -> TieredVerdict {
     let mut criteria: Vec<CriterionVerdict> = tier1
         .iter()
         .map(|assertion| evaluate_assertion(assertion, observation))
@@ -545,20 +588,47 @@ pub fn evaluate_tiered(
             .iter()
             .map(|assertion| assertion.resolve(observation, embedder)),
     );
+    criteria.extend(
+        tier3
+            .iter()
+            .map(|assertion| assertion.resolve(observation, embedder, judgment)),
+    );
     let overall = criteria.iter().all(|verdict| verdict.pass);
-    ExpectationVerdict {
-        path: observation.path.clone(),
-        criteria,
-        reliability: Reliability {
-            required: SINGLE_RUN_REQUIRED,
-            runs: vec![overall],
+    let escalations = criteria
+        .iter()
+        .filter_map(|verdict| escalation_for(verdict, judgment.escalate_below_confidence))
+        .collect();
+    TieredVerdict {
+        verdict: ExpectationVerdict {
+            path: observation.path.clone(),
+            criteria,
+            reliability: Reliability {
+                required: SINGLE_RUN_REQUIRED,
+                runs: vec![overall],
+            },
         },
+        escalations,
     }
+}
+
+/// Route `verdict` to the escalation queue when a grader resolved it with
+/// confidence below `floor` — surfaced for a human, never auto-passed.
+///
+/// A criterion with no grader confidence (Tier 1/2, or a Tier 3 anchor-match pass)
+/// carries `None` and is never escalated.
+fn escalation_for(verdict: &CriterionVerdict, floor: f32) -> Option<Escalation> {
+    let confidence = verdict.confidence?;
+    (confidence < floor).then(|| Escalation {
+        criterion: verdict.criterion.clone(),
+        confidence,
+        reason: verdict.reason.clone(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grader::{Grade, GradeRequest, Grader};
     use crate::types::{Checkpoint, CliState, SurfaceState, Trajectory};
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
@@ -897,6 +967,78 @@ mod tests {
         }
     }
 
+    /// A grader that must never be consulted — any call is a test failure. Proves
+    /// the residual handed to Tier 3 is only what Tiers 1-2 could not decide.
+    struct PanicGrader;
+
+    impl Grader for PanicGrader {
+        fn model(&self) -> &str {
+            "panic-grader"
+        }
+
+        fn grade(&self, _request: &GradeRequest) -> Grade {
+            panic!("Tiers 1-2 must not consult the grader");
+        }
+    }
+
+    /// A deterministic stub grader returning a fixed [`Grade`] and counting calls.
+    struct StubGrader {
+        grade: Grade,
+        calls: Cell<usize>,
+    }
+
+    impl StubGrader {
+        fn new(grade: Grade) -> Self {
+            StubGrader {
+                grade,
+                calls: Cell::new(0),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.get()
+        }
+    }
+
+    impl Grader for StubGrader {
+        fn model(&self) -> &str {
+            "stub-grader"
+        }
+
+        fn grade(&self, _request: &GradeRequest) -> Grade {
+            self.calls.set(self.calls.get() + 1);
+            self.grade.clone()
+        }
+    }
+
+    /// The driver model name the Tier 3 fixtures grade against (distinct from the
+    /// stub grader, so the grader is never excluded as the driver).
+    const DRIVER_MODEL: &str = "driver-agent";
+
+    /// A judgment context with `panel`, the fixture driver, and the repo escalation
+    /// floor.
+    fn judgment_context<'a>(panel: &'a [&'a dyn Grader]) -> JudgmentContext<'a> {
+        JudgmentContext {
+            panel,
+            driver_model: DRIVER_MODEL,
+            escalate_below_confidence: ExpectConfig::default().approval.escalate_below_confidence,
+        }
+    }
+
+    /// A Tier 3 judgment assertion over `$.message` against `anchor`.
+    fn judgment_at(anchor: &str) -> JudgmentAssertion {
+        JudgmentAssertion {
+            checkpoint: 0,
+            locator: Locator::JsonPath {
+                path: "$.message".to_string(),
+            },
+            anchor: BoundValue::Text(anchor.to_string()),
+            sim_threshold: 0.85,
+            rubric: "conveys that the coupon is already applied".to_string(),
+            criterion_text: "an error explains the coupon is already applied".to_string(),
+        }
+    }
+
     /// A single-checkpoint JSON observation carrying `body` at `final`.
     fn json_observation(body: Value) -> Observation {
         observation(vec![json_checkpoint("final", body)])
@@ -1043,11 +1185,19 @@ mod tests {
         let obs = json_observation(json!({ "total": 40 }));
         let tier1 = vec![assertion_for("the total is $40", &obs)];
 
-        let verdict = evaluate_tiered(&obs, &tier1, &[], &PanicEmbedder);
+        let outcome = evaluate_tiered(
+            &obs,
+            &tier1,
+            &[],
+            &[],
+            &PanicEmbedder,
+            &judgment_context(&[]),
+        );
 
-        assert_eq!(verdict.criteria.len(), 1);
-        assert_eq!(verdict.criteria[0].tier, VerdictTier::Deterministic);
-        assert!(verdict.criteria[0].pass);
+        assert_eq!(outcome.verdict.criteria.len(), 1);
+        assert_eq!(outcome.verdict.criteria[0].tier, VerdictTier::Deterministic);
+        assert!(outcome.verdict.criteria[0].pass);
+        assert!(outcome.escalations.is_empty());
     }
 
     #[test]
@@ -1066,14 +1216,106 @@ mod tests {
             ToleranceBand::Semantic { threshold: 0.80 },
         )];
 
-        let verdict = evaluate_tiered(&obs, &tier1, &tier2, &embedder);
+        // No Tier 3 criteria, so the grader is never consulted (PanicGrader proves it).
+        let panel: [&dyn Grader; 1] = [&PanicGrader];
+        let outcome = evaluate_tiered(
+            &obs,
+            &tier1,
+            &tier2,
+            &[],
+            &embedder,
+            &judgment_context(&panel),
+        );
 
-        assert_eq!(verdict.criteria.len(), 2);
-        assert_eq!(verdict.criteria[0].tier, VerdictTier::Deterministic);
-        assert_eq!(verdict.criteria[1].tier, VerdictTier::Tolerance);
-        assert!(verdict.criteria.iter().all(|c| c.pass));
+        assert_eq!(outcome.verdict.criteria.len(), 2);
+        assert_eq!(outcome.verdict.criteria[0].tier, VerdictTier::Deterministic);
+        assert_eq!(outcome.verdict.criteria[1].tier, VerdictTier::Tolerance);
+        assert!(outcome.verdict.criteria.iter().all(|c| c.pass));
         assert!(embedder.calls() > 0, "Tier 2 consulted the embedder");
-        assert!(verdict.reliability.satisfied());
+        assert!(outcome.verdict.reliability.satisfied());
+        assert!(outcome.escalations.is_empty());
+    }
+
+    #[test]
+    fn evaluate_tiered_runs_tier3_only_on_the_residual_after_tiers_1_and_2() {
+        // One deterministic, one tolerance, and one judgment criterion: the verdicts
+        // come back in tier order, and the embedder is consulted for Tiers 2 and 3
+        // while the grader is woken only for the Tier 3 residual that diverged.
+        const SEMANTIC_ANCHOR: &str = "the coupon is already applied";
+        const SEMANTIC_REWORD: &str = "this coupon has already been used";
+        const JUDGE_ANCHOR: &str = "the order total dropped to $40";
+        const JUDGE_CHANGED: &str = "your savings were applied at checkout";
+        let embedder = StubEmbedder::new(&[
+            (SEMANTIC_ANCHOR, &[1.0, 0.0]),
+            (SEMANTIC_REWORD, &[0.96, 0.28]),
+            (JUDGE_ANCHOR, &[1.0, 0.0]),
+            (JUDGE_CHANGED, &[0.0, 1.0]),
+        ]);
+        let obs = json_observation(json!({
+            "total": 40,
+            "summary": SEMANTIC_REWORD,
+            "message": JUDGE_CHANGED,
+        }));
+        let tier1 = vec![assertion_for("the total is $40", &obs)];
+        let tier2 = vec![tolerance_at(
+            "summary",
+            BoundValue::Text(SEMANTIC_ANCHOR.to_string()),
+            ToleranceBand::Semantic { threshold: 0.80 },
+        )];
+        let tier3 = vec![judgment_at(JUDGE_ANCHOR)];
+        let grader = StubGrader::new(Grade {
+            pass: true,
+            confidence: 0.9,
+            reason: "still conveys the discount".to_string(),
+        });
+        let panel: [&dyn Grader; 1] = [&grader];
+
+        let outcome = evaluate_tiered(
+            &obs,
+            &tier1,
+            &tier2,
+            &tier3,
+            &embedder,
+            &judgment_context(&panel),
+        );
+
+        assert_eq!(outcome.verdict.criteria.len(), 3);
+        assert_eq!(outcome.verdict.criteria[0].tier, VerdictTier::Deterministic);
+        assert_eq!(outcome.verdict.criteria[1].tier, VerdictTier::Tolerance);
+        assert_eq!(outcome.verdict.criteria[2].tier, VerdictTier::Judgment);
+        assert_eq!(
+            grader.calls(),
+            1,
+            "the judge wakes only on the Tier 3 residual"
+        );
+    }
+
+    #[test]
+    fn evaluate_tiered_routes_a_low_confidence_judgment_to_the_escalation_queue() {
+        // A diverged judgment criterion the grader resolves below the confidence
+        // floor lands in the escalation queue and is NOT auto-passed.
+        const ANCHOR: &str = "the order total dropped to $40";
+        const CHANGED: &str = "your savings were applied at checkout";
+        let embedder = StubEmbedder::new(&[(ANCHOR, &[1.0, 0.0]), (CHANGED, &[0.0, 1.0])]);
+        let obs = json_observation(json!({ "message": CHANGED }));
+        let tier3 = vec![judgment_at(ANCHOR)];
+        let floor = ExpectConfig::default().approval.escalate_below_confidence;
+        let grader = StubGrader::new(Grade {
+            pass: true,
+            confidence: floor - 0.1,
+            reason: "unsure the discount still reads".to_string(),
+        });
+        let panel: [&dyn Grader; 1] = [&grader];
+
+        let outcome = evaluate_tiered(&obs, &[], &[], &tier3, &embedder, &judgment_context(&panel));
+
+        assert_eq!(outcome.escalations.len(), 1, "low confidence escalates");
+        assert_eq!(outcome.escalations[0].confidence, floor - 0.1);
+        assert!(
+            !outcome.verdict.criteria[0].pass,
+            "an escalated criterion is never auto-passed"
+        );
+        assert!(!outcome.verdict.reliability.satisfied());
     }
 
     #[test]

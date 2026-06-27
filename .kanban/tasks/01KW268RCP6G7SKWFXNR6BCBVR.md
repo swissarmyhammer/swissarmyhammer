@@ -35,8 +35,8 @@ comments:
 depends_on:
 - 01KW267C7WHM0ETTDY64V1SDVY
 - 01KW267YT5YS3CXDCWE1YG9JR0
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff780
 project: expect
 title: Drift detection + ledger states + expectations list
 ---

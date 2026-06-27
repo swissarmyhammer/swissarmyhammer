@@ -55,6 +55,7 @@ pub mod doctor;
 pub mod drive;
 pub mod error;
 pub mod evaluate;
+pub mod grader;
 pub mod ledger;
 pub mod loader;
 pub mod observe;
@@ -78,9 +79,13 @@ pub use drive::{
 };
 pub use error::ExpectError;
 pub use evaluate::{
-    evaluate, evaluate_assertion, evaluate_spec, evaluate_tiered, similarity_threshold,
-    TextEmbedder, ToleranceAssertion, ToleranceBand, STRUCTURAL_DRIFT_REASON,
+    evaluate, evaluate_assertion, evaluate_spec, evaluate_tiered, similarity_threshold, Escalation,
+    TextEmbedder, TieredVerdict, ToleranceAssertion, ToleranceBand, STRUCTURAL_DRIFT_REASON,
     TOLERANCE_DRIFT_REASON,
+};
+pub use grader::{
+    Grade, GradeRequest, Grader, JudgmentAssertion, JudgmentContext, GRADER_IS_DRIVER_REASON,
+    JUDGMENT_DRIFT_REASON, PANEL_DISAGREEMENT_REASON,
 };
 pub use ledger::{
     approval_diff, approval_status, approve, compare, decide_approval, ledger_entry, ledger_queue,
