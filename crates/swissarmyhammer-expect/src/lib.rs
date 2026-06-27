@@ -83,10 +83,10 @@ pub use evaluate::{
     TOLERANCE_DRIFT_REASON,
 };
 pub use ledger::{
-    approval_diff, approval_status, approve, compare, decide_approval, read_golden, write_golden,
-    ApprovalBinding, ApprovalDecision, ApprovalStatus, ApproveError, ApproveMode,
-    CriterionComparison, Golden, GradingPins, LedgerComparison, Scrubber, ScrubberSet,
-    BINDING_ARROW,
+    approval_diff, approval_status, approve, compare, decide_approval, ledger_entry, ledger_queue,
+    ledger_state, read_golden, spec_hash, write_golden, ApprovalBinding, ApprovalDecision,
+    ApprovalStatus, ApproveError, ApproveMode, CriterionComparison, Golden, GradingPins,
+    LedgerComparison, LedgerEntry, Scrubber, ScrubberSet, BINDING_ARROW,
 };
 pub use loader::{ExpectationLoader, RawSpec};
 pub use observe::{

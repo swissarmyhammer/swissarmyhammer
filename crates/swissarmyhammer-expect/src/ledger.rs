@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::assertion::{compile, AssertionOutcome, CompileError, CompiledAssertion};
@@ -302,6 +303,10 @@ pub struct Golden {
     pub assertions: Vec<CompiledAssertion>,
     /// The pinned grading model, embedder, and thresholds.
     pub grading: GradingPins,
+    /// The [`spec_hash`] of the spec's criteria at approve time — the
+    /// stale-detection fingerprint [`ledger_state`] recomputes against the
+    /// current spec to flag a [`LedgerState::Stale`] edit since approval.
+    pub spec_hash: String,
 }
 
 /// Persist `golden` to its mirrored committed slot under `repo_root`
@@ -455,6 +460,132 @@ fn judgment_drift(golden: &CriterionVerdict, received: &CriterionVerdict) -> boo
 }
 
 // ---------------------------------------------------------------------------
+// The per-expectation ledger state and the unapproved-drift queue.
+// ---------------------------------------------------------------------------
+
+/// The prefix on a stored [`spec_hash`], naming the digest algorithm so the
+/// fingerprint is self-describing (mirrors the review tracker's `sha256:` form).
+const SPEC_HASH_PREFIX: &str = "sha256:";
+
+/// The stale-detection hash of an expectation's grading-relevant content.
+///
+/// A golden freezes the assertions compiled from a spec's `## Then` criteria, so
+/// the criteria are exactly what the baseline is approved *against*: editing one
+/// invalidates it. [`approve`] stores this hash in the [`Golden`], and
+/// [`ledger_state`] recomputes it from the current spec to detect a
+/// [`LedgerState::Stale`] edit since approval.
+///
+/// The criteria texts are hashed in order, each length-prefixed so a boundary
+/// shift between adjacent criteria (`["ab","c"]` vs `["a","bc"]`) cannot collide.
+/// The ticked/unticked checkbox state is deliberately excluded — it is review
+/// bookkeeping, not grading content.
+pub fn spec_hash(spec: &Expectation) -> String {
+    let mut hasher = Sha256::new();
+    for criterion in &spec.criteria {
+        hasher.update((criterion.text.len() as u64).to_le_bytes());
+        hasher.update(criterion.text.as_bytes());
+    }
+    format!("{SPEC_HASH_PREFIX}{:x}", hasher.finalize())
+}
+
+/// Classify one expectation's drift-ledger state from its golden and last
+/// received run.
+///
+/// The four-state model from `ideas/expect.md` §"The Drift Ledger", in
+/// precedence order:
+///
+/// 1. [`New`](LedgerState::New) — no golden has been approved yet.
+/// 2. [`Stale`](LedgerState::Stale) — the `*.expect.md` was edited since its
+///    golden was approved, detected by comparing [`spec_hash`] of the current
+///    spec against the hash frozen in the golden. Stale outranks drift: once the
+///    criteria change, the golden's frozen assertions are out of date and the
+///    baseline must be re-approved, so a drift comparison against them is moot.
+/// 3. [`Drifted`](LedgerState::Drifted) — the spec is unchanged but the received
+///    verdict diverged from the golden's, re-derived on both sides by [`compare`]
+///    (never a stored verdict), awaiting human approval.
+/// 4. [`Approved`](LedgerState::Approved) — a golden exists, the spec is
+///    unchanged, and either the received run matches it or no new run has been
+///    observed to contradict it.
+pub fn ledger_state(
+    spec: &Expectation,
+    golden: Option<&Golden>,
+    received: Option<&Observation>,
+    scrubbers: &ScrubberSet,
+) -> LedgerState {
+    let Some(golden) = golden else {
+        return LedgerState::New;
+    };
+    if golden.spec_hash != spec_hash(spec) {
+        return LedgerState::Stale;
+    }
+    match received {
+        Some(received) => compare(golden, received, scrubbers).state,
+        None => LedgerState::Approved,
+    }
+}
+
+/// One expectation's row in the drift ledger: its identity, derived
+/// [`LedgerState`], and — only when it has [`Drifted`](LedgerState::Drifted) —
+/// the old-vs-new [`compare`] evidence a reviewer triages before approving.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LedgerEntry {
+    /// The spec's repo-relative identity.
+    pub path: String,
+    /// The expectation's drift-ledger state.
+    pub state: LedgerState,
+    /// The re-derived old-vs-new comparison, present only for a drifted entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparison: Option<LedgerComparison>,
+}
+
+/// Build one expectation's [`LedgerEntry`]: classify its [`ledger_state`] and, for
+/// a drifted entry, attach the old-vs-new [`compare`] evidence awaiting approval.
+///
+/// The comparison is carried only for [`LedgerState::Drifted`] — the one state a
+/// reviewer must act on — so an approved/new/stale row stays free of redundant
+/// re-derived verdicts.
+pub fn ledger_entry(
+    spec: &Expectation,
+    golden: Option<&Golden>,
+    received: Option<&Observation>,
+    scrubbers: &ScrubberSet,
+) -> LedgerEntry {
+    let state = ledger_state(spec, golden, received, scrubbers);
+    let comparison = match (state, golden, received) {
+        (LedgerState::Drifted, Some(golden), Some(received)) => {
+            Some(compare(golden, received, scrubbers))
+        }
+        _ => None,
+    };
+    LedgerEntry {
+        path: spec.path.clone(),
+        state,
+        comparison,
+    }
+}
+
+/// Order a batch of ledger entries into the review queue: unapproved drift FIRST,
+/// every other state after, preserving the input order within each group.
+///
+/// `expect expectations list` surfaces the pending old-vs-new diffs first
+/// (`ideas/expect.md` §"The Drift Ledger") so the rows a human must act on lead
+/// the survey. The sort is stable, so entries that share a rank keep their
+/// incoming (caller-resolved) order.
+pub fn ledger_queue(mut entries: Vec<LedgerEntry>) -> Vec<LedgerEntry> {
+    entries.sort_by_key(|entry| drift_queue_rank(entry.state));
+    entries
+}
+
+/// The review-queue sort rank of a ledger state: drift leads (0), every other
+/// state follows (1). The single source of truth for the drifted-first ordering.
+fn drift_queue_rank(state: LedgerState) -> u8 {
+    match state {
+        LedgerState::Drifted => 0,
+        LedgerState::New | LedgerState::Approved | LedgerState::Stale => 1,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Approve: freeze assertions, render the binding diff, gate CI.
 // ---------------------------------------------------------------------------
 
@@ -601,6 +732,7 @@ pub fn approve(
         observation,
         assertions,
         grading,
+        spec_hash: spec_hash(spec),
     })
 }
 
@@ -842,6 +974,10 @@ mod tests {
             observation,
             assertions,
             grading: GradingPins::from_config(&ExpectConfig::default()),
+            // These fixtures exercise the `compare` path, which never reads the
+            // spec hash; the stale-detection hash is exercised by the
+            // `ledger_state` fixtures, which build goldens through `approve`.
+            spec_hash: String::new(),
         }
     }
 
@@ -1393,6 +1529,173 @@ mod tests {
                 "{mode:?}: a new expectation must not be baselined in CI",
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // The spec hash + the per-expectation ledger state classifier.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn spec_hash_is_stable_for_identical_criteria() {
+        assert_eq!(
+            spec_hash(&spec(&["the total is $40", "the discount is $5"])),
+            spec_hash(&spec(&["the total is $40", "the discount is $5"])),
+            "the same criteria must hash identically",
+        );
+    }
+
+    #[test]
+    fn spec_hash_changes_when_a_criterion_is_edited() {
+        assert_ne!(
+            spec_hash(&spec(&["the total is $40"])),
+            spec_hash(&spec(&["the total is $50"])),
+            "an edited criterion must change the spec hash",
+        );
+    }
+
+    #[test]
+    fn spec_hash_is_not_fooled_by_a_criterion_boundary_shift() {
+        // Without length-prefixing, ["ab","c"] and ["a","bc"] would concatenate
+        // identically; domain separation must keep them distinct.
+        assert_ne!(
+            spec_hash(&spec(&["ab", "c"])),
+            spec_hash(&spec(&["a", "bc"])),
+            "a boundary shift between adjacent criteria must change the hash",
+        );
+    }
+
+    #[test]
+    fn ledger_state_is_new_when_no_golden_exists() {
+        let received = json_observation(json!({ "total": 40 }));
+        assert_eq!(
+            ledger_state(
+                &spec(&["the total is $40"]),
+                None,
+                Some(&received),
+                &ScrubberSet::default_set(),
+            ),
+            LedgerState::New,
+        );
+    }
+
+    #[test]
+    fn ledger_state_is_approved_when_the_received_verdict_matches_the_golden() {
+        let scrubbers = ScrubberSet::default_set();
+        let spec = spec(&["the total is $40"]);
+        let baseline = json_observation(json!({ "total": 40 }));
+        let golden = approve(&spec, &baseline, pins(), None, &scrubbers).expect("approve");
+        assert_eq!(
+            ledger_state(&spec, Some(&golden), Some(&baseline), &scrubbers),
+            LedgerState::Approved,
+        );
+    }
+
+    #[test]
+    fn ledger_state_is_approved_when_no_new_run_has_been_observed() {
+        let scrubbers = ScrubberSet::default_set();
+        let spec = spec(&["the total is $40"]);
+        let baseline = json_observation(json!({ "total": 40 }));
+        let golden = approve(&spec, &baseline, pins(), None, &scrubbers).expect("approve");
+        assert_eq!(
+            ledger_state(&spec, Some(&golden), None, &scrubbers),
+            LedgerState::Approved,
+            "a golden with an unedited spec and no new run is the last approved state",
+        );
+    }
+
+    #[test]
+    fn ledger_state_is_drifted_when_the_received_verdict_changed() {
+        let scrubbers = ScrubberSet::default_set();
+        let spec = spec(&["the total is $40"]);
+        let baseline = json_observation(json!({ "total": 40 }));
+        let golden = approve(&spec, &baseline, pins(), None, &scrubbers).expect("approve");
+        let drifted = json_observation(json!({ "total": 50 }));
+        assert_eq!(
+            ledger_state(&spec, Some(&golden), Some(&drifted), &scrubbers),
+            LedgerState::Drifted,
+        );
+    }
+
+    #[test]
+    fn ledger_state_is_stale_when_the_spec_was_edited_after_approval() {
+        let scrubbers = ScrubberSet::default_set();
+        let original = spec(&["the total is $40"]);
+        let baseline = json_observation(json!({ "total": 40 }));
+        let golden = approve(&original, &baseline, pins(), None, &scrubbers).expect("approve");
+
+        // The `*.expect.md` gained a criterion since approval: its hash no longer
+        // matches the one frozen in the golden, so it is stale even though the
+        // received run still matches the golden.
+        let edited = spec(&["the total is $40", "the discount is $5"]);
+        assert_eq!(
+            ledger_state(&edited, Some(&golden), Some(&baseline), &scrubbers),
+            LedgerState::Stale,
+        );
+    }
+
+    #[test]
+    fn ledger_state_stale_outranks_drift() {
+        // An edited spec whose received run also drifted is reported as stale: the
+        // golden's frozen assertions are out of date, so re-approval — not
+        // drift-triage — is the right action.
+        let scrubbers = ScrubberSet::default_set();
+        let original = spec(&["the total is $40"]);
+        let baseline = json_observation(json!({ "total": 40 }));
+        let golden = approve(&original, &baseline, pins(), None, &scrubbers).expect("approve");
+
+        let edited = spec(&["the total is $40", "the discount is $5"]);
+        let drifted = json_observation(json!({ "total": 50 }));
+        assert_eq!(
+            ledger_state(&edited, Some(&golden), Some(&drifted), &scrubbers),
+            LedgerState::Stale,
+        );
+    }
+
+    #[test]
+    fn ledger_entry_carries_old_vs_new_evidence_only_when_drifted() {
+        let scrubbers = ScrubberSet::default_set();
+        let spec = spec(&["the total is $40"]);
+        let baseline = json_observation(json!({ "total": 40 }));
+        let golden = approve(&spec, &baseline, pins(), None, &scrubbers).expect("approve");
+
+        let approved = ledger_entry(&spec, Some(&golden), Some(&baseline), &scrubbers);
+        assert_eq!(approved.state, LedgerState::Approved);
+        assert!(
+            approved.comparison.is_none(),
+            "an approved entry carries no old-vs-new comparison",
+        );
+
+        let drifted_obs = json_observation(json!({ "total": 50 }));
+        let drifted = ledger_entry(&spec, Some(&golden), Some(&drifted_obs), &scrubbers);
+        assert_eq!(drifted.state, LedgerState::Drifted);
+        let comparison = drifted
+            .comparison
+            .expect("a drifted entry carries old-vs-new evidence");
+        assert!(comparison.criteria[0].drifted);
+        // The verdict is re-derived on both sides, not read from storage.
+        assert!(comparison.criteria[0].golden.pass);
+        assert!(!comparison.criteria[0].received.pass);
+    }
+
+    #[test]
+    fn ledger_queue_orders_unapproved_drift_first() {
+        // Entries arrive in a non-drift-first order; the queue must surface the
+        // drifted ones first and preserve the relative order otherwise.
+        let entry = |path: &str, state: LedgerState| LedgerEntry {
+            path: path.to_string(),
+            state,
+            comparison: None,
+        };
+        let queue = ledger_queue(vec![
+            entry("approved", LedgerState::Approved),
+            entry("drifted", LedgerState::Drifted),
+            entry("new", LedgerState::New),
+        ]);
+        assert_eq!(
+            queue.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+            vec!["drifted", "approved", "new"],
+            "drift leads the queue; the rest keep their incoming order",
+        );
     }
 
     #[test]

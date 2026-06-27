@@ -43,9 +43,10 @@ use swissarmyhammer_operations::{
 
 use swissarmyhammer_expect::{
     approval_diff, approval_status, approve, decide_approval, evaluate_spec, find_expect_dir,
-    golden_path, observe, read_golden, received_path, surfaces, write_golden, write_received,
-    ApprovalDecision, ApprovalStatus, ApproveMode, CliAdapter, ExpectConfig, Expectation,
-    ExpectationLoader, Golden, GradingPins, Observation, ObserveConfig, ScrubberSet, Surface,
+    golden_path, ledger_entry, ledger_queue, observe, read_golden, received_path, surfaces,
+    write_golden, write_received, ApprovalDecision, ApprovalStatus, ApproveMode, CliAdapter,
+    ExpectConfig, Expectation, ExpectationLoader, Golden, GradingPins, Observation, ObserveConfig,
+    ScrubberSet, Surface,
 };
 
 use crate::mcp::op_tool_helpers::{bool_arg, json_result, string_arg};
@@ -154,13 +155,28 @@ impl Operation for ExpectationObserve {
 pub struct ExpectationCheck;
 
 /// `list expectations` — survey every expectation with its ledger state.
-#[operation(
-    verb = "list",
-    noun = "expectations",
-    description = "List every expectation with its ledger state"
-)]
+///
+/// A manual [`Operation`] impl (rather than the `#[operation]` macro) so it can
+/// declare the [`SCOPE_PARAMS`] scope/tag inputs that narrow the survey through
+/// [`ExpectationLoader::resolve_scope`], mirroring [`ObservationsList`] and
+/// [`GoldensList`].
 #[derive(Debug, Default)]
 pub struct ExpectationsList;
+
+impl Operation for ExpectationsList {
+    fn verb(&self) -> &'static str {
+        "list"
+    }
+    fn noun(&self) -> &'static str {
+        "expectations"
+    }
+    fn description(&self) -> &'static str {
+        "List every expectation with its ledger state"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SCOPE_PARAMS
+    }
+}
 
 /// `observe expectations` — capture observations for a batch of expectations.
 ///
@@ -826,6 +842,9 @@ const OBSERVATIONS_LIST_OP: &str = "list observations";
 /// The `list goldens` op id (verb + noun), matched in `execute`'s dispatch.
 const GOLDENS_LIST_OP: &str = "list goldens";
 
+/// The `list expectations` op id (verb + noun), matched in `execute`'s dispatch.
+const EXPECTATIONS_LIST_OP: &str = "list expectations";
+
 /// Resolve the `<scope>` (and optional `--tag`) arguments to the repo root and the
 /// matching specs — the shared front half of every scope-driven op (`get`, `list`,
 /// `observe`, `evaluate`), declared once so the resolution cannot drift across ops.
@@ -964,6 +983,37 @@ fn goldens_list(
     json_result(&serde_json::json!({
         "count": goldens.len(),
         "goldens": goldens,
+    }))
+}
+
+/// `expectations list` — survey every in-scope spec with its drift-ledger state,
+/// ordering the unapproved-drift queue FIRST.
+///
+/// For each spec it loads the approved golden and last received observation,
+/// classifies the row with [`ledger_entry`] (new/approved/drifted/stale), and
+/// orders the rows drifted-first with [`ledger_queue`] so the survey doubles as
+/// the review queue. A drifted row carries its re-derived old-vs-new comparison
+/// as evidence (`ideas/expect.md` §"The Drift Ledger").
+fn expectations_list(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let (repo_root, specs) = resolve_scope_specs(arguments, context)?;
+    let scrubbers = ScrubberSet::default_set();
+    let mut entries = Vec::with_capacity(specs.len());
+    for spec in &specs {
+        let (golden, received) = load_golden_and_received(&repo_root, &spec.path)?;
+        entries.push(ledger_entry(
+            spec,
+            golden.as_ref(),
+            received.as_ref(),
+            &scrubbers,
+        ));
+    }
+    let entries = ledger_queue(entries);
+    json_result(&serde_json::json!({
+        "count": entries.len(),
+        "expectations": entries,
     }))
 }
 
@@ -1305,6 +1355,7 @@ impl McpTool for ExpectTool {
             GOLDEN_GET_OP => golden_get(&arguments, context),
             OBSERVATIONS_LIST_OP => observations_list(&arguments, context),
             GOLDENS_LIST_OP => goldens_list(&arguments, context),
+            EXPECTATIONS_LIST_OP => expectations_list(&arguments, context),
             EXPECTATION_OBSERVE_OP | EXPECTATIONS_OBSERVE_OP => observe_op(&arguments, context),
             OBSERVATION_APPROVE_OP | OBSERVATIONS_APPROVE_OP => approve_op(&arguments, context),
             OBSERVATION_EVALUATE_OP | OBSERVATIONS_EVALUATE_OP => {
@@ -1398,6 +1449,7 @@ mod tests {
         GOLDEN_GET_OP,
         OBSERVATIONS_LIST_OP,
         GOLDENS_LIST_OP,
+        EXPECTATIONS_LIST_OP,
         EXPECTATION_OBSERVE_OP,
         EXPECTATIONS_OBSERVE_OP,
         OBSERVATION_APPROVE_OP,
@@ -1868,7 +1920,7 @@ mod tests {
     /// observation with a real compiled assertion) under `.expect/goldens/`.
     fn write_golden_fixture(repo: &Path, identity: &str) {
         use swissarmyhammer_expect::{
-            compile, write_golden, Criterion, ExpectConfig, Golden, GradingPins,
+            compile, spec_hash, write_golden, Criterion, ExpectConfig, Golden, GradingPins,
         };
 
         let observation: Observation = serde_json::from_value(serde_json::json!({
@@ -1889,10 +1941,17 @@ mod tests {
             &observation,
         )
         .expect("criterion compiles");
+        // Hash the spec on disk so the fixture golden's stale-detection hash
+        // matches its `*.expect.md`, exactly as a real `approve` would freeze it.
+        let spec = specs_in(repo, Some(identity))
+            .into_iter()
+            .next()
+            .expect("spec on disk");
         let golden = Golden {
             observation,
             assertions: vec![assertion],
             grading: GradingPins::from_config(&ExpectConfig::default()),
+            spec_hash: spec_hash(&spec),
         };
         write_golden(repo, &golden).expect("write golden");
     }
@@ -2056,6 +2115,103 @@ mod tests {
 
         assert_eq!(payload["count"], 1, "the scope narrows the survey");
         assert_eq!(payload["goldens"][0], "coupon");
+    }
+
+    /// `expectations list` surveys every spec with its drift-ledger state, ordering
+    /// the unapproved-drift queue FIRST and annotating the drifted row with its
+    /// re-derived old-vs-new evidence — the survey doubling as the review queue.
+    #[tokio::test]
+    async fn expectations_list_returns_ledger_state_and_orders_drifted_first() {
+        let repo = tempfile::TempDir::new().unwrap();
+
+        // `new`: a spec with no golden yet.
+        write_spec(repo.path(), "fresh", &["the total is $40"]);
+
+        // `approved`: a golden plus a matching received run.
+        write_spec(repo.path(), "approved", &["the total is $40"]);
+        seed_golden(repo.path(), "approved", serde_json::json!({ "total": 40 }));
+        write_observation(
+            &repo.path().join(".expect/received/approved.received.json"),
+            "approved",
+            serde_json::json!({ "total": 40 }),
+        );
+
+        // `drifted`: a golden plus a received run whose matched value changed.
+        write_spec(repo.path(), "drifted", &["the total is $40"]);
+        seed_golden(repo.path(), "drifted", serde_json::json!({ "total": 40 }));
+        write_observation(
+            &repo.path().join(".expect/received/drifted.received.json"),
+            "drifted",
+            serde_json::json!({ "total": 50 }),
+        );
+
+        // `stale`: a golden was approved, then the `*.expect.md` was edited.
+        write_spec(repo.path(), "stale", &["the total is $40"]);
+        seed_golden(repo.path(), "stale", serde_json::json!({ "total": 40 }));
+        write_spec(
+            repo.path(),
+            "stale",
+            &["the total is $40", "the discount is $5"],
+        );
+
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+        let payload = run_op(EXPECTATIONS_LIST_OP, &ctx).await;
+
+        assert_eq!(payload["count"], 4, "every spec is surveyed");
+        let entries = payload["expectations"]
+            .as_array()
+            .expect("expectations array");
+
+        // The unapproved drift leads the queue, carrying its old-vs-new evidence.
+        assert_eq!(entries[0]["path"], "drifted");
+        assert_eq!(entries[0]["state"], "drifted");
+        assert_eq!(
+            entries[0]["comparison"]["criteria"][0]["drifted"], true,
+            "the drifted row carries re-derived old-vs-new evidence",
+        );
+
+        // Every other spec carries its classified ledger state.
+        let state_of = |path: &str| {
+            entries
+                .iter()
+                .find(|entry| entry["path"] == path)
+                .and_then(|entry| entry["state"].as_str())
+                .map(str::to_string)
+        };
+        assert_eq!(state_of("fresh").as_deref(), Some("new"));
+        assert_eq!(state_of("approved").as_deref(), Some("approved"));
+        assert_eq!(state_of("stale").as_deref(), Some("stale"));
+
+        // Only the drifted row carries the old-vs-new comparison.
+        let approved_entry = entries
+            .iter()
+            .find(|entry| entry["path"] == "approved")
+            .expect("approved entry");
+        assert!(
+            approved_entry.get("comparison").is_none(),
+            "a non-drifted row carries no comparison",
+        );
+
+        // The op honors a scope, like the sibling list ops, narrowing the survey.
+        let scoped = run_evaluate(EXPECTATIONS_LIST_OP, "drifted", &ctx).await;
+        assert_eq!(scoped["count"], 1, "a scope narrows the survey");
+        assert_eq!(scoped["expectations"][0]["path"], "drifted");
+    }
+
+    /// `list expectations` must declare the `scope`/`tag` inputs its handler reads,
+    /// so the generated CLI and MCP schema actually accept them — mirroring the
+    /// sibling `list observations` / `list goldens` ops.
+    #[test]
+    fn expectations_list_declares_the_scope_inputs() {
+        let op = EXPECT_OPERATIONS
+            .iter()
+            .find(|op| op.op_string() == EXPECTATIONS_LIST_OP)
+            .expect("list expectations op registered");
+        let params: Vec<&str> = op.parameters().iter().map(|param| param.name).collect();
+        assert!(
+            params.contains(&"scope") && params.contains(&"tag"),
+            "list expectations must advertise scope/tag, got {params:?}",
+        );
     }
 
     // -----------------------------------------------------------------------

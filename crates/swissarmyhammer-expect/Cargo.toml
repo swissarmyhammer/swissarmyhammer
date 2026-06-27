@@ -34,6 +34,10 @@ thiserror = { workspace = true }
 # Locator dialect: regex stream-capture and number extraction for the assertion compiler
 regex = { workspace = true }
 
+# Stable content hashing for the golden's stale-detection spec hash (mirrors the
+# review tracker's sha256 content fingerprint).
+sha2 = { workspace = true }
+
 # ACP delegation seam (the `drive` module). The engine is agent-construction-free:
 # it receives a `DynConnectTo<Client>` + notifier and reuses review's machinery.
 agent-client-protocol = { workspace = true }
