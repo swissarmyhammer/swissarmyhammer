@@ -137,6 +137,47 @@ pub fn evaluate_spec(spec: &Expectation, observation: &Observation) -> Expectati
     }
 }
 
+/// Compose a `pass^k` [`ExpectationVerdict`] across the repeated `observations`
+/// of `spec`.
+///
+/// Each observation is graded independently via [`evaluate_spec`]; a run passes
+/// iff all of its criteria held. The per-run outcomes become the [`Reliability`]
+/// spread — kept in full so a 2-of-3 flake is visible rather than hidden behind
+/// an average — with `required` taken from the spec's declared `pass^k` policy.
+/// The verdict is satisfied only when every recorded run passed (and at least
+/// `required` ran).
+///
+/// The returned `criteria` are the **most recent** run's per-criterion verdicts,
+/// the representative detail behind the aggregate reliability (and consistent
+/// with the last observation being the `received` slot compared to the golden).
+/// `observations` is expected non-empty (the producing [`observe_repeated`] runs
+/// at least once); an empty slice yields an unsatisfiable, criterion-less verdict
+/// rather than a panic.
+///
+/// [`observe_repeated`]: crate::observe::observe_repeated
+pub fn evaluate_repeated(spec: &Expectation, observations: &[Observation]) -> ExpectationVerdict {
+    let per_run: Vec<ExpectationVerdict> = observations
+        .iter()
+        .map(|observation| evaluate_spec(spec, observation))
+        .collect();
+    let runs: Vec<bool> = per_run
+        .iter()
+        .map(|verdict| verdict.criteria.iter().all(|criterion| criterion.pass))
+        .collect();
+    let criteria = per_run
+        .last()
+        .map(|verdict| verdict.criteria.clone())
+        .unwrap_or_default();
+    ExpectationVerdict {
+        path: spec.path.clone(),
+        criteria,
+        reliability: Reliability {
+            required: spec.frontmatter.reliability.required(),
+            runs,
+        },
+    }
+}
+
 /// Grade one criterion against `observation`: compile it fresh, then replay.
 ///
 /// Returns `None` for a criterion that carries no Tier 1 assertion
@@ -912,6 +953,35 @@ mod tests {
             when: Vec::new(),
             notes: None,
         }
+    }
+
+    #[test]
+    fn evaluate_repeated_passk_passes_only_when_every_run_passes() {
+        let mut spec = spec_with_criteria(&["the total is $40"]);
+        spec.frontmatter.reliability = serde_yaml_ng::from_str("pass^3").expect("pass^3 policy");
+
+        // Three clean runs: pass^3 is satisfied and the spread is all-green.
+        let clean = vec![
+            observation(vec![json_checkpoint("final", json!({ "total": 40 }))]),
+            observation(vec![json_checkpoint("final", json!({ "total": 40 }))]),
+            observation(vec![json_checkpoint("final", json!({ "total": 40 }))]),
+        ];
+        let verdict = evaluate_repeated(&spec, &clean);
+        assert_eq!(verdict.reliability.required, 3);
+        assert_eq!(verdict.reliability.runs, vec![true, true, true]);
+        assert!(verdict.reliability.satisfied());
+
+        // A 2-of-3 flake: one run fails, so pass^3 fails and the per-run spread
+        // is visible rather than hidden behind an average.
+        let flaky = vec![
+            observation(vec![json_checkpoint("final", json!({ "total": 40 }))]),
+            observation(vec![json_checkpoint("final", json!({ "total": 50 }))]),
+            observation(vec![json_checkpoint("final", json!({ "total": 40 }))]),
+        ];
+        let verdict = evaluate_repeated(&spec, &flaky);
+        assert_eq!(verdict.reliability.runs, vec![true, false, true]);
+        assert_eq!(verdict.reliability.passed(), 2);
+        assert!(!verdict.reliability.satisfied());
     }
 
     // -----------------------------------------------------------------------

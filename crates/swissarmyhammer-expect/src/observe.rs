@@ -24,7 +24,7 @@ use std::time::Instant;
 
 use crate::config::EXPECT_DIR;
 use crate::error::ExpectError;
-use crate::spec::Expectation;
+use crate::spec::{Expectation, Isolation};
 use crate::surface::SurfaceAdapter;
 use crate::types::{Checkpoint, Observation, Trajectory};
 
@@ -103,26 +103,157 @@ pub fn observe<A: SurfaceAdapter>(
     config: &ObserveConfig,
 ) -> Result<Observation, ExpectError> {
     let mut sut = adapter.provision(expectation.frontmatter.setup.as_ref(), &config.repo_root)?;
+    let observation = observe_round(expectation, adapter, &mut sut)?;
+    adapter.teardown(sut)?;
+    Ok(observation)
+}
+
+/// The default repeat count for a mechanically-driven (deterministic) surface
+/// when neither `repeat` nor a wider `pass^k` is declared: a single run.
+const MECHANICAL_DEFAULT_REPEAT: u32 = 1;
+
+/// The default repeat count when an **agent** drives the run (the runtime
+/// fallback): at least two, because a live agent action is the only source of
+/// non-determinism, so one run cannot establish reliability (`ideas/expect.md`
+/// §"Reliability and Non-Determinism").
+const AGENT_DRIVEN_MIN_REPEAT: u32 = 2;
+
+/// Run `expectation` repeatedly to judge `pass^k` reliability, returning one
+/// [`Observation`] per run.
+///
+/// The number of runs is [`resolved_repeat`] of the spec's `reliability`/`repeat`
+/// frontmatter and whether the run is mechanically driven (a deterministic
+/// surface defaults to one run; an agent-driven run defaults to ≥2). Each run
+/// **re-arranges the `Given`** so the repeats are independent — otherwise run 1's
+/// effects bleed into run 2 and `pass^k` is theater (`ideas/expect.md`
+/// §"Provisioning and Isolation"):
+///
+/// - [`Isolation::Shared`] (default) provisions the SUT **once** and re-arranges
+///   `Given` on each run against that one shared instance, the fast path.
+/// - [`Isolation::Fresh`] provisions a **dedicated, pristine instance per run**
+///   (a full provision → arrange → act → observe → teardown each time), for an
+///   expectation that genuinely needs a clean slate, at the cost of the rebuild.
+///
+/// The returned vector is always non-empty (the resolved repeat is ≥ 1). Grading
+/// across the runs — the `pass^k` verdict and its per-run spread — is a separate
+/// step ([`crate::evaluate::evaluate_repeated`]).
+///
+/// # Errors
+///
+/// Returns [`ExpectError`] when the adapter cannot provision, drive, observe, or
+/// tear down the SUT on any run.
+pub fn observe_repeated<A: SurfaceAdapter>(
+    expectation: &Expectation,
+    adapter: &A,
+    config: &ObserveConfig,
+) -> Result<Vec<Observation>, ExpectError> {
+    let runs = resolved_repeat(
+        expectation.frontmatter.reliability.required(),
+        expectation.frontmatter.repeat,
+        drives_mechanically(expectation, adapter),
+    );
+
+    match expectation.frontmatter.isolation {
+        Isolation::Shared => observe_shared(expectation, adapter, config, runs),
+        Isolation::Fresh => observe_fresh(expectation, adapter, config, runs),
+    }
+}
+
+/// Resolve how many times to run `observe` before judging `pass^k`.
+///
+/// `required` is `k` from the declared `pass^k` policy (always ≥ 1) and is the
+/// floor — `pass^k` cannot be judged with fewer than `k` runs. On top of it:
+///
+/// - An explicit `repeat` is honored (clamped up to the `required` floor).
+/// - With no `repeat`, a mechanically-driven run uses `required` itself
+///   ([`MECHANICAL_DEFAULT_REPEAT`] = 1 for the default `pass^1`), because a
+///   deterministic surface reproduces its result and need not be re-run.
+/// - With no `repeat`, an agent-driven run is bumped to at least
+///   [`AGENT_DRIVEN_MIN_REPEAT`], the runtime-fallback non-determinism default.
+pub fn resolved_repeat(required: u32, repeat: Option<u32>, drives_mechanically: bool) -> u32 {
+    let baseline = match repeat {
+        Some(explicit) => explicit,
+        None if drives_mechanically => required.max(MECHANICAL_DEFAULT_REPEAT),
+        None => required.max(AGENT_DRIVEN_MIN_REPEAT),
+    };
+    baseline.max(required)
+}
+
+/// Whether every `When` step of `expectation` resolves mechanically through
+/// `adapter`, with no agent interpretation.
+///
+/// The signal behind the repeat default: a run is deterministic when the adapter
+/// can bind every action itself (a cli step is always an argv), and agent-driven
+/// the moment any step needs the [subagent fallback](SurfaceAdapter::resolves_mechanically).
+/// An expectation with no `When` steps drives nothing, so it is mechanical.
+pub fn drives_mechanically<A: SurfaceAdapter>(expectation: &Expectation, adapter: &A) -> bool {
+    expectation
+        .when
+        .iter()
+        .all(|step| adapter.resolves_mechanically(step))
+}
+
+/// Provision one shared SUT and observe `runs` times against it, re-arranging the
+/// `Given` on each run — the [`Isolation::Shared`] fast path.
+fn observe_shared<A: SurfaceAdapter>(
+    expectation: &Expectation,
+    adapter: &A,
+    config: &ObserveConfig,
+    runs: u32,
+) -> Result<Vec<Observation>, ExpectError> {
+    let mut sut = adapter.provision(expectation.frontmatter.setup.as_ref(), &config.repo_root)?;
+    let mut observations = Vec::with_capacity(runs as usize);
+    for _ in 0..runs {
+        observations.push(observe_round(expectation, adapter, &mut sut)?);
+    }
+    adapter.teardown(sut)?;
+    Ok(observations)
+}
+
+/// Provision a dedicated, pristine SUT for each of `runs` runs — the
+/// [`Isolation::Fresh`] path, a full lifecycle per run.
+fn observe_fresh<A: SurfaceAdapter>(
+    expectation: &Expectation,
+    adapter: &A,
+    config: &ObserveConfig,
+    runs: u32,
+) -> Result<Vec<Observation>, ExpectError> {
+    let mut observations = Vec::with_capacity(runs as usize);
+    for _ in 0..runs {
+        observations.push(observe(expectation, adapter, config)?);
+    }
+    Ok(observations)
+}
+
+/// Run one arrange → act → observe round against an already-provisioned `sut`,
+/// assembling its [`Observation`] timeline.
+///
+/// The provision/teardown bookends live in the caller ([`observe`] for a single
+/// run, [`observe_shared`] for the shared `pass^k` repeats), so this is the unit
+/// that is re-run per `pass^k` iteration and always re-establishes the `Given`.
+fn observe_round<A: SurfaceAdapter>(
+    expectation: &Expectation,
+    adapter: &A,
+    sut: &mut A::ProvisionedSut,
+) -> Result<Observation, ExpectError> {
     let mut steps = Vec::with_capacity(expectation.given.len() + expectation.when.len());
 
     // Arrange (Given): establish preconditions mechanically, without capturing a
     // checkpoint — the Given is setup state, not the behavior under test.
     for given in &expectation.given {
-        adapter.drive(&mut sut, given)?;
+        adapter.drive(sut, given)?;
         steps.push(format!("{ARRANGE_STEP_PREFIX}{given}"));
     }
 
     // Act (When) + observe: one authoritative checkpoint per step, in order.
     let mut checkpoints = Vec::with_capacity(expectation.when.len() + 1);
     for when in &expectation.when {
-        checkpoints.push(drive_and_capture(adapter, &mut sut, when)?);
+        checkpoints.push(drive_and_capture(adapter, sut, when)?);
         steps.push(format!("{ACT_STEP_PREFIX}{when}"));
     }
 
     // The trailing checkpoint reads the SUT's end state — the timeline's close.
-    checkpoints.push(capture(adapter, &sut, FINAL_CHECKPOINT)?);
-
-    adapter.teardown(sut)?;
+    checkpoints.push(capture(adapter, sut, FINAL_CHECKPOINT)?);
 
     Ok(Observation {
         path: expectation.path.clone(),
@@ -262,6 +393,209 @@ pub fn write_received(repo_root: &Path, observation: &Observation) -> Result<Pat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::Setup;
+    use crate::types::SurfaceState;
+    use std::cell::{Cell, RefCell};
+
+    /// A surface adapter that counts its lifecycle calls and records every driven
+    /// step, with a controllable [`SurfaceAdapter::resolves_mechanically`] gate so
+    /// a test can assert the repeat count, the per-run re-arrange, and the
+    /// provision granularity of [`observe_repeated`].
+    #[derive(Default)]
+    struct CountingAdapter {
+        provisions: Cell<usize>,
+        teardowns: Cell<usize>,
+        driven: RefCell<Vec<String>>,
+        mechanical: bool,
+    }
+
+    impl CountingAdapter {
+        /// Build an adapter whose `When` steps resolve mechanically (deterministic
+        /// surface) or not (forcing the agent-fallback repeat default).
+        fn new(mechanical: bool) -> Self {
+            CountingAdapter {
+                mechanical,
+                ..Default::default()
+            }
+        }
+
+        /// How many recorded driven steps equal `step` — used to assert the
+        /// `Given` was re-arranged once per run.
+        fn driven_count(&self, step: &str) -> usize {
+            self.driven.borrow().iter().filter(|s| *s == step).count()
+        }
+    }
+
+    impl SurfaceAdapter for CountingAdapter {
+        type ProvisionedSut = ();
+
+        fn provision(&self, _setup: Option<&Setup>, _repo_root: &Path) -> Result<(), ExpectError> {
+            self.provisions.set(self.provisions.get() + 1);
+            Ok(())
+        }
+
+        fn drive(&self, _sut: &mut (), when_step: &str) -> Result<(), ExpectError> {
+            self.driven.borrow_mut().push(when_step.to_string());
+            Ok(())
+        }
+
+        fn observe(&self, _sut: &()) -> Result<SurfaceState, ExpectError> {
+            Ok(SurfaceState::Json {
+                body: serde_json::json!({}),
+            })
+        }
+
+        fn teardown(&self, _sut: ()) -> Result<(), ExpectError> {
+            self.teardowns.set(self.teardowns.get() + 1);
+            Ok(())
+        }
+
+        fn resolves_mechanically(&self, _when_step: &str) -> bool {
+            self.mechanical
+        }
+    }
+
+    /// Parse a minimal cli spec with the given `reliability`/`isolation`
+    /// frontmatter and `Given`/`When` bullets — the real parser, so the
+    /// frontmatter defaults and section extraction are genuine.
+    fn spec(reliability: &str, isolation: &str, given: &[&str], when: &[&str]) -> Expectation {
+        let mut body = format!(
+            "---\ndescription: a pass^k observe spec\nsurface: cli\nreliability: {reliability}\nisolation: {isolation}\n---\n\nIntent.\n"
+        );
+        if !given.is_empty() {
+            body.push_str("\n## Given\n");
+            for bullet in given {
+                body.push_str(&format!("- {bullet}\n"));
+            }
+        }
+        if !when.is_empty() {
+            body.push_str("\n## When\n");
+            for bullet in when {
+                body.push_str(&format!("- {bullet}\n"));
+            }
+        }
+        body.push_str("\n## Then\n- [ ] the exit code is 0\n");
+        Expectation::parse(
+            &body,
+            Path::new("/repo/sample.expect.md"),
+            Path::new("/repo"),
+        )
+        .expect("parse spec")
+    }
+
+    #[test]
+    fn reliability_resolved_repeat_defaults_by_surface_and_policy() {
+        // The default `pass^1`: a deterministic surface runs once; an agent-driven
+        // run defaults to the ≥2 non-determinism floor.
+        assert_eq!(resolved_repeat(1, None, true), MECHANICAL_DEFAULT_REPEAT);
+        assert_eq!(resolved_repeat(1, None, false), AGENT_DRIVEN_MIN_REPEAT);
+
+        // A declared `pass^3` is the run count for both surfaces (already at/above
+        // the agent floor).
+        assert_eq!(resolved_repeat(3, None, true), 3);
+        assert_eq!(resolved_repeat(3, None, false), 3);
+
+        // An explicit `repeat` is honored, but never below the `pass^k` floor.
+        assert_eq!(resolved_repeat(1, Some(5), true), 5);
+        assert_eq!(resolved_repeat(3, Some(1), true), 3);
+    }
+
+    #[test]
+    fn observe_repeated_runs_pass_k_times_against_one_shared_instance() {
+        let spec = spec("pass^3", "shared", &["seed the cart"], &["run checkout"]);
+        let adapter = CountingAdapter::new(true);
+
+        let observations = observe_repeated(&spec, &adapter, &ObserveConfig::new("/repo"))
+            .expect("observe pass^3");
+
+        assert_eq!(observations.len(), 3, "pass^3 runs observe three times");
+        assert_eq!(
+            adapter.provisions.get(),
+            1,
+            "shared isolation provisions once"
+        );
+        assert_eq!(
+            adapter.teardowns.get(),
+            1,
+            "shared isolation tears down once"
+        );
+        assert_eq!(
+            adapter.driven_count("seed the cart"),
+            3,
+            "the Given is re-established on every run, not just the first"
+        );
+        for observation in &observations {
+            assert!(
+                observation
+                    .trajectory
+                    .steps
+                    .iter()
+                    .any(|step| step.contains("seed the cart")),
+                "each run re-records its arrange step"
+            );
+        }
+    }
+
+    #[test]
+    fn observe_repeated_with_fresh_isolation_provisions_a_dedicated_instance_per_run() {
+        let fresh = spec("pass^3", "fresh", &["seed the cart"], &["run checkout"]);
+        let fresh_adapter = CountingAdapter::new(true);
+        let fresh_runs = observe_repeated(&fresh, &fresh_adapter, &ObserveConfig::new("/repo"))
+            .expect("observe fresh pass^3");
+
+        assert_eq!(fresh_runs.len(), 3);
+        assert_eq!(
+            fresh_adapter.provisions.get(),
+            3,
+            "fresh isolation provisions a dedicated, pristine instance per run"
+        );
+        assert_eq!(fresh_adapter.teardowns.get(), 3);
+
+        // The contrast: shared isolation provisions exactly once for the same
+        // pass^3, so fresh's provision is distinct from the shared instance.
+        let shared = spec("pass^3", "shared", &["seed the cart"], &["run checkout"]);
+        let shared_adapter = CountingAdapter::new(true);
+        observe_repeated(&shared, &shared_adapter, &ObserveConfig::new("/repo"))
+            .expect("observe shared pass^3");
+        assert_eq!(shared_adapter.provisions.get(), 1);
+        assert!(fresh_adapter.provisions.get() > shared_adapter.provisions.get());
+    }
+
+    #[test]
+    fn observe_repeated_defaults_to_a_single_run_for_a_deterministic_surface() {
+        let spec = spec("pass^1", "shared", &[], &["run checkout"]);
+        let adapter = CountingAdapter::new(true);
+
+        let observations = observe_repeated(&spec, &adapter, &ObserveConfig::new("/repo"))
+            .expect("observe deterministic");
+
+        assert_eq!(
+            observations.len(),
+            1,
+            "a deterministic cli spec defaults to a single run"
+        );
+        assert_eq!(adapter.provisions.get(), 1);
+    }
+
+    #[test]
+    fn observe_repeated_defaults_to_at_least_two_runs_when_an_agent_drives() {
+        let spec = spec(
+            "pass^1",
+            "shared",
+            &[],
+            &["explore and accomplish the behavior"],
+        );
+        let adapter = CountingAdapter::new(false);
+
+        let observations =
+            observe_repeated(&spec, &adapter, &ObserveConfig::new("/repo")).expect("observe agent");
+
+        assert_eq!(
+            observations.len(),
+            AGENT_DRIVEN_MIN_REPEAT as usize,
+            "an agent-driven spec defaults to at least two runs"
+        );
+    }
 
     #[test]
     fn received_path_follows_the_dot_expect_layout() {

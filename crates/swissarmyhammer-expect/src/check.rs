@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::ExpectConfig;
 use crate::doctor::{diagnose, DiagnosticStatus, DoctorFacts, FieldDiagnostic};
 use crate::error::ExpectError;
-use crate::evaluate::evaluate_spec;
+use crate::evaluate::evaluate_repeated;
 use crate::ledger::{compare, ledger_state, read_golden, LedgerComparison, ScrubberSet};
 use crate::loader::{ExpectationLoader, RawSpec};
 use crate::spec::{Expectation, EXPECT_EXTENSION};
@@ -209,11 +209,15 @@ pub struct CheckReport {
 /// A well-formed spec is parsed, optionally tag-filtered, observed, evaluated, and
 /// compared to its golden.
 ///
-/// `observe` is the injected driver seam: `FnMut(&Expectation) -> Result<Observation, _>`.
-/// The pure composition never drives a system itself — the tool layer supplies a
-/// closure that runs the real surface adapter and persists the received run, while
-/// tests pass a deterministic stub. An `observe` error becomes a
-/// [`CheckStatus::Errored`] entry rather than aborting the batch.
+/// `observe` is the injected driver seam: `FnMut(&Expectation) -> Result<Vec<Observation>, _>`.
+/// It returns **one observation per `pass^k` run** (the closure owns the adapter,
+/// so it decides the repeat count and re-arranges the `Given` per run via
+/// [`observe_repeated`](crate::observe::observe_repeated)); the composition stays
+/// agnostic to the count and grades the runs with
+/// [`evaluate_repeated`]. The pure composition never drives a system itself — the
+/// tool layer supplies a closure that runs the real surface adapter and persists
+/// the received run, while tests pass a deterministic stub. An `observe` error
+/// becomes a [`CheckStatus::Errored`] entry rather than aborting the batch.
 ///
 /// The `tag` filter narrows only *parseable* specs (tags live in the frontmatter):
 /// a malformed spec's tags are unknowable, so the doctor gate is **scope-wide** and
@@ -233,7 +237,7 @@ pub fn check<O>(
     mut observe: O,
 ) -> Result<CheckReport, ExpectError>
 where
-    O: FnMut(&Expectation) -> Result<Observation, ExpectError>,
+    O: FnMut(&Expectation) -> Result<Vec<Observation>, ExpectError>,
 {
     let loader = ExpectationLoader::new(repo_root);
     let raw_specs = loader.discover_raw(scope)?;
@@ -271,7 +275,7 @@ fn check_one<O>(
     observe: &mut O,
 ) -> Result<Option<CheckEntry>, ExpectError>
 where
-    O: FnMut(&Expectation) -> Result<Observation, ExpectError>,
+    O: FnMut(&Expectation) -> Result<Vec<Observation>, ExpectError>,
 {
     let diagnostics = diagnose(&raw.content, options.facts);
     if has_error(&diagnostics) {
@@ -295,20 +299,32 @@ where
         }
     }
 
-    let received = match observe(&spec) {
-        Ok(observation) => observation,
+    // One observation per `pass^k` run; the verdict's reliability is graded across
+    // all of them, while the golden compare uses the last (the `received` slot).
+    let observations = match observe(&spec) {
+        Ok(observations) => observations,
         Err(err) => return Ok(Some(errored_entry(&spec.path, diagnostics, &err))),
     };
+    let received = match observations.last() {
+        Some(received) => received,
+        None => {
+            return Ok(Some(errored_entry(
+                &spec.path,
+                diagnostics,
+                &ExpectError::Surface(format!("observe produced no run for `{}`", spec.path)),
+            )))
+        }
+    };
 
-    let verdict = evaluate_spec(&spec, &received);
+    let verdict = evaluate_repeated(&spec, &observations);
     let golden = read_golden(repo_root, &spec.path)?;
-    let ledger = ledger_state(&spec, golden.as_ref(), Some(&received), options.scrubbers);
+    let ledger = ledger_state(&spec, golden.as_ref(), Some(received), options.scrubbers);
     let status = derive_status(&verdict, ledger);
 
     // The old-vs-new evidence travels only with a drift — the one outcome a
     // reviewer must act on.
     let comparison = match (status, &golden) {
-        (CheckStatus::Drifted, Some(golden)) => Some(compare(golden, &received, options.scrubbers)),
+        (CheckStatus::Drifted, Some(golden)) => Some(compare(golden, received, options.scrubbers)),
         _ => None,
     };
 
@@ -419,10 +435,11 @@ fn run_message(status: CheckStatus, verdict: &ExpectationVerdict) -> String {
                 .filter(|criterion| !criterion.pass)
                 .map(|criterion| criterion.reason.as_str())
                 .collect();
+            let spread = reliability_spread(verdict);
             if reasons.is_empty() {
-                FAILED_MESSAGE.to_string()
+                format!("{FAILED_MESSAGE}{spread}")
             } else {
-                format!("{FAILED_MESSAGE}: {}", reasons.join("; "))
+                format!("{FAILED_MESSAGE}: {}{spread}", reasons.join("; "))
             }
         }
         CheckStatus::Drifted => DRIFTED_MESSAGE.to_string(),
@@ -432,6 +449,21 @@ fn run_message(status: CheckStatus, verdict: &ExpectationVerdict) -> String {
         // reach this run-time message path.
         CheckStatus::Malformed => MALFORMED_MESSAGE.to_string(),
         CheckStatus::Errored => OBSERVE_FAILED_MESSAGE.to_string(),
+    }
+}
+
+/// A `" (P/N runs passed)"` suffix surfacing the `pass^k` per-run spread, or the
+/// empty string for a single-run expectation.
+///
+/// Keeps a 2-of-3 flake visible in the teaching message — the spread is the
+/// reason a [`CheckStatus::Failed`] verdict can hold even when the latest run's
+/// criteria all passed.
+fn reliability_spread(verdict: &ExpectationVerdict) -> String {
+    let runs = verdict.reliability.runs.len();
+    if runs <= 1 {
+        String::new()
+    } else {
+        format!(" ({}/{runs} runs passed)", verdict.reliability.passed())
     }
 }
 
@@ -572,16 +604,22 @@ mod tests {
         repo
     }
 
+    /// A single `pass^k` run for `identity` carrying `body`, in the
+    /// [`Vec<Observation>`] shape the `observe` seam now returns.
+    fn one_run(identity: &str, body: Value) -> Result<Vec<Observation>, ExpectError> {
+        Ok(vec![json_observation(identity, body)])
+    }
+
     /// The observation each fixture spec resolves to; observing the malformed spec
     /// is a test failure (the doctor gate must block it).
-    fn fixture_observation(spec: &Expectation) -> Result<Observation, ExpectError> {
+    fn fixture_observation(spec: &Expectation) -> Result<Vec<Observation>, ExpectError> {
         let body = match spec.path.as_str() {
             "passing" => json!({ "total": 40 }),
             "failing" => json!({ "total": 50 }),
             "drifted" => json!({ "item_count": 5, "items": [{}, {}, {}, {}, {}] }),
             other => panic!("the doctor gate must block observing `{other}`"),
         };
-        Ok(json_observation(&spec.path, body))
+        one_run(&spec.path, body)
     }
 
     #[test]
@@ -706,7 +744,7 @@ mod tests {
         let facts = facts();
         let config = config();
         let scrubbers = ScrubberSet::default_set();
-        let observe = |spec: &Expectation| Ok(json_observation(&spec.path, json!({ "total": 40 })));
+        let observe = |spec: &Expectation| one_run(&spec.path, json!({ "total": 40 }));
 
         let local = check(
             repo.path(),
@@ -750,7 +788,7 @@ mod tests {
                 if spec.path == "boom" {
                     Err(ExpectError::Surface("provision failed".to_string()))
                 } else {
-                    Ok(json_observation(&spec.path, json!({ "total": 40 })))
+                    one_run(&spec.path, json!({ "total": 40 }))
                 }
             },
         )
@@ -782,7 +820,7 @@ mod tests {
             None,
             Some("pricing"),
             &options(&facts, &config, &scrubbers, false),
-            |spec| Ok(json_observation(&spec.path, json!({ "total": 40 }))),
+            |spec| one_run(&spec.path, json!({ "total": 40 })),
         )
         .expect("check runs");
 
@@ -860,7 +898,7 @@ mod tests {
             None,
             Some("pricing"),
             &options(&facts, &config, &scrubbers, false),
-            |spec| Ok(json_observation(&spec.path, json!({ "total": 40 }))),
+            |spec| one_run(&spec.path, json!({ "total": 40 })),
         )
         .expect("check runs");
 
@@ -871,5 +909,72 @@ mod tests {
             "an untagged parseable spec is narrowed out by the tag scope"
         );
         assert_eq!(report.exit_code, CHECK_EXIT_MALFORMED);
+    }
+
+    #[test]
+    fn check_grades_pass_k_across_runs_and_fails_on_any_flake() {
+        let repo = TempDir::new().unwrap();
+        // A `pass^3` spec: all three runs must pass.
+        fs::write(
+            repo.path().join(format!("flaky{EXPECT_EXTENSION}")),
+            "---\ndescription: a pass^3 spec\nsurface: cli\nreliability: pass^3\n---\n\nThe system under test reports a value.\n\n## Then\n- [ ] the total is $40\n",
+        )
+        .unwrap();
+        seed_golden(repo.path(), "flaky", json!({ "total": 40 }));
+        let facts = facts();
+        let config = config();
+        let scrubbers = ScrubberSet::default_set();
+
+        // Three clean runs: pass^3 holds and matches the golden -> Passed.
+        let clean = check(
+            repo.path(),
+            None,
+            None,
+            &options(&facts, &config, &scrubbers, false),
+            |spec| {
+                Ok(vec![
+                    json_observation(&spec.path, json!({ "total": 40 })),
+                    json_observation(&spec.path, json!({ "total": 40 })),
+                    json_observation(&spec.path, json!({ "total": 40 })),
+                ])
+            },
+        )
+        .expect("clean check");
+        let clean_entry = entry(&clean, "flaky");
+        assert_eq!(clean_entry.status, CheckStatus::Passed);
+        assert_eq!(
+            clean_entry.verdict.as_ref().unwrap().reliability.runs,
+            vec![true, true, true],
+            "pass^3 runs observe three times"
+        );
+
+        // A 2-of-3 flake: the middle run drifts to 50, so pass^3 fails and the
+        // teaching message surfaces the per-run spread rather than an average.
+        let flaky = check(
+            repo.path(),
+            None,
+            None,
+            &options(&facts, &config, &scrubbers, false),
+            |spec| {
+                Ok(vec![
+                    json_observation(&spec.path, json!({ "total": 40 })),
+                    json_observation(&spec.path, json!({ "total": 50 })),
+                    json_observation(&spec.path, json!({ "total": 40 })),
+                ])
+            },
+        )
+        .expect("flaky check");
+        let flaky_entry = entry(&flaky, "flaky");
+        assert_eq!(flaky_entry.status, CheckStatus::Failed);
+        assert_eq!(
+            flaky_entry.verdict.as_ref().unwrap().reliability.runs,
+            vec![true, false, true]
+        );
+        assert!(
+            flaky_entry.message.contains("2/3 runs passed"),
+            "the per-run spread is visible, got: {}",
+            flaky_entry.message
+        );
+        assert_eq!(flaky.exit_code, CHECK_EXIT_FAILED);
     }
 }

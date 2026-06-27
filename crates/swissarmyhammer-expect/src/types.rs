@@ -224,6 +224,13 @@ impl Reliability {
     pub fn satisfied(&self) -> bool {
         self.runs.len() as u32 >= self.required && self.runs.iter().all(|&passed| passed)
     }
+
+    /// How many of the recorded runs passed — the numerator of the per-run
+    /// spread (`passed`/`total`), so a 2-of-3 flake is visible rather than hidden
+    /// behind an average.
+    pub fn passed(&self) -> usize {
+        self.runs.iter().filter(|&&passed| passed).count()
+    }
 }
 
 /// Serialize a [`Duration`] as an integer count of milliseconds.
@@ -410,5 +417,22 @@ mod tests {
             runs: vec![true, true],
         }
         .satisfied());
+    }
+
+    #[test]
+    fn reliability_passed_counts_the_per_run_spread() {
+        // A 2-of-3 flake: the spread is visible, not hidden behind an average.
+        let flake = Reliability {
+            required: 3,
+            runs: vec![true, false, true],
+        };
+        assert_eq!(flake.passed(), 2);
+        assert_eq!(flake.runs.len(), 3);
+
+        let clean = Reliability {
+            required: 3,
+            runs: vec![true, true, true],
+        };
+        assert_eq!(clean.passed(), 3);
     }
 }

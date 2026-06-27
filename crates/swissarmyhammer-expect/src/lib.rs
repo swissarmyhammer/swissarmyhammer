@@ -89,9 +89,9 @@ pub use drive::{
 };
 pub use error::ExpectError;
 pub use evaluate::{
-    evaluate, evaluate_assertion, evaluate_spec, evaluate_tiered, similarity_threshold, Escalation,
-    TextEmbedder, TieredVerdict, ToleranceAssertion, ToleranceBand, STRUCTURAL_DRIFT_REASON,
-    TOLERANCE_DRIFT_REASON,
+    evaluate, evaluate_assertion, evaluate_repeated, evaluate_spec, evaluate_tiered,
+    similarity_threshold, Escalation, TextEmbedder, TieredVerdict, ToleranceAssertion,
+    ToleranceBand, STRUCTURAL_DRIFT_REASON, TOLERANCE_DRIFT_REASON,
 };
 pub use grader::{
     Grade, GradeRequest, Grader, JudgmentAssertion, JudgmentContext, GRADER_IS_DRIVER_REASON,
@@ -105,7 +105,8 @@ pub use ledger::{
 };
 pub use loader::{ExpectationLoader, RawSpec};
 pub use observe::{
-    golden_path, observe, received_path, write_received, ObserveConfig, FINAL_CHECKPOINT,
+    drives_mechanically, golden_path, observe, observe_repeated, received_path, resolved_repeat,
+    write_received, ObserveConfig, FINAL_CHECKPOINT,
 };
 pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};
 pub use surface::cli::{CliAdapter, CliCommands, CliSut};

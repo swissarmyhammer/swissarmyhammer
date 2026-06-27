@@ -43,10 +43,11 @@ use swissarmyhammer_operations::{
 
 use swissarmyhammer_expect::{
     approval_diff, approval_status, approve, check, decide_approval, evaluate_spec,
-    find_expect_dir, golden_path, ledger_entry, ledger_queue, observe, read_golden, received_path,
-    surfaces, write_golden, write_received, ApprovalDecision, ApprovalStatus, ApproveMode,
-    CheckOptions, CliAdapter, CreateSource, ExpectConfig, ExpectError, Expectation,
-    ExpectationLoader, Golden, GradingPins, Observation, ObserveConfig, ScrubberSet, Surface,
+    find_expect_dir, golden_path, ledger_entry, ledger_queue, observe, observe_repeated,
+    read_golden, received_path, surfaces, write_golden, write_received, ApprovalDecision,
+    ApprovalStatus, ApproveMode, CheckOptions, CliAdapter, CreateSource, ExpectConfig, ExpectError,
+    Expectation, ExpectationLoader, Golden, GradingPins, Observation, ObserveConfig, ScrubberSet,
+    Surface,
 };
 use swissarmyhammer_kanban::{comment::AddComment, task::GetTask, Execute, KanbanContext};
 use swissarmyhammer_validators::PoolConfig;
@@ -1368,7 +1369,10 @@ const EXPECTATIONS_CHECK_OP: &str = "check expectations";
 /// clear [`ExpectError::Surface`] (which surfaces as a per-spec `errored` entry
 /// rather than aborting the batch). Persisting the received run here is what later
 /// lets `approve` promote it to a golden.
-fn observe_for_check(spec: &Expectation, repo_root: &Path) -> Result<Observation, ExpectError> {
+fn observe_for_check(
+    spec: &Expectation,
+    repo_root: &Path,
+) -> Result<Vec<Observation>, ExpectError> {
     if spec.frontmatter.surface != Surface::Cli {
         return Err(ExpectError::Surface(format!(
             "`check` currently supports only the cli surface, but `{}` declares `{}`",
@@ -1377,9 +1381,13 @@ fn observe_for_check(spec: &Expectation, repo_root: &Path) -> Result<Observation
         )));
     }
     let adapter = CliAdapter::new(spec.frontmatter.timeout);
-    let observation = observe(spec, &adapter, &ObserveConfig::new(repo_root))?;
-    write_received(repo_root, &observation)?;
-    Ok(observation)
+    // `pass^k`/`repeat` runs observe more than once and re-arranges each run; the
+    // last run is the `received` slot `approve` later promotes to a golden.
+    let observations = observe_repeated(spec, &adapter, &ObserveConfig::new(repo_root))?;
+    if let Some(received) = observations.last() {
+        write_received(repo_root, received)?;
+    }
+    Ok(observations)
 }
 
 /// Shared handler for `check expectation` and `check expectations`: resolve the
