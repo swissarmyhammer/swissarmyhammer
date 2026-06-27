@@ -434,7 +434,7 @@ fn select_menu_target_label<'a>(
     focused: Option<&'a str>,
 ) -> Option<&'a str> {
     let available: Vec<&str> = available.into_iter().collect();
-    let is_open = |label: &str| available.iter().any(|l| *l == label);
+    let is_open = |label: &str| available.contains(&label);
 
     requested
         .filter(|l| is_open(l))

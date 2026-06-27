@@ -1399,11 +1399,11 @@ mod tests {
         );
     }
 
-    /// `open_and_notify` must never assume a literal `"main"` window exists
-    /// when no window initiated the open (`focused_window_label` returns None
-    /// during native dialogs, and windows are created dynamically with no
-    /// static `main` window). These tests pin the pure resolution rule
-    /// `pick_target_window` that drives that behaviour.
+    // `open_and_notify` must never assume a literal `"main"` window exists
+    // when no window initiated the open (`focused_window_label` returns None
+    // during native dialogs, and windows are created dynamically with no
+    // static `main` window). These tests pin the pure resolution rule
+    // `pick_target_window` that drives that behaviour.
 
     /// The still-open `source` window is preferred over the focused / any-open
     /// fallbacks — it is the authoritative originator of the open.
