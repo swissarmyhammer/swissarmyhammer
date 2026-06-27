@@ -65,6 +65,19 @@ export function pathStem(path: string): string {
  */
 export const EXPOSE_BOARD_LABEL = "Expose this board to your agent";
 
+interface BoardToolbarButtonProps {
+  /** Spatial-nav moniker leaf for this button's `<Pressable>`. */
+  moniker: string;
+  /** Accessible name; also used as the visible tooltip when none is given. */
+  ariaLabel: string;
+  /** Lucide icon rendered inside the button. */
+  icon: LucideIcon;
+  /** Activation handler. */
+  onPress: () => void;
+  /** Tooltip text shown on hover/focus. */
+  tooltip: string;
+}
+
 /**
  * A single icon button in the board toolbar (tear-off, expose, …).
  *
@@ -79,18 +92,7 @@ function BoardToolbarButton({
   icon: Icon,
   onPress,
   tooltip,
-}: {
-  /** Spatial-nav moniker leaf for this button's `<Pressable>`. */
-  moniker: string;
-  /** Accessible name; also used as the visible tooltip when none is given. */
-  ariaLabel: string;
-  /** Lucide icon rendered inside the button. */
-  icon: LucideIcon;
-  /** Activation handler. */
-  onPress: () => void;
-  /** Tooltip text shown on hover/focus. */
-  tooltip: string;
-}) {
+}: BoardToolbarButtonProps) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>

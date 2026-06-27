@@ -207,11 +207,11 @@ describe("BoardSelector", () => {
       </Wrapper>,
     );
 
-    const btn = screen.getByRole("button", {
+    const button = screen.getByRole("button", {
       name: EXPOSE_BOARD_LABEL,
     });
     await act(async () => {
-      fireEvent.click(btn);
+      fireEvent.click(button);
     });
 
     // The plain Tauri command is invoked with the window's board path
@@ -236,9 +236,9 @@ describe("BoardSelector", () => {
         />
       </Wrapper>,
     );
-    const btn = screen.queryByRole("button", {
+    const button = screen.queryByRole("button", {
       name: EXPOSE_BOARD_LABEL,
     });
-    expect(btn).toBeNull();
+    expect(button).toBeNull();
   });
 });

@@ -71,6 +71,21 @@ comments:
     - cargo clippy -p kanban-app --all-targets: only the 2 KNOWN pre-existing lints (window-service shell.rs:437 manual_contains, menu.rs:1406 empty_line_after_doc); zero new warnings, none in changed files.
     - double-check agent: PASS (no behavior change, no scope creep, no leftover duplication).
   timestamp: 2026-06-27T03:38:20.624427+00:00
+- actor: claude-code
+  id: 01kw3kbc37v634vcv69t1tp2qw
+  text: |-
+    Review-fix round (targeted).
+
+    FIXED:
+    1. board-selector.tsx — Extracted `interface BoardToolbarButtonProps` above the just-added `BoardToolbarButton` component (was an inline destructured object type), per the codebase's named-FooProps convention. Signature now `function BoardToolbarButton({...}: BoardToolbarButtonProps)`. `LucideIcon` was already imported.
+    2. board-selector.test.tsx — Renamed `btn` -> `button` in the two expose-feature tests (the EXPOSE_BOARD_LABEL click test + the "does not render expose button" test), both added by this feature (commit 5fd57dd6e2, today). Left the two pre-existing tear-off tests' `btn` (commit a379e83274, 2026-04-05) untouched — confirmed via git blame they are unrelated to the expose feature.
+
+    DECLINED (confirmed pre-existing / out of scope, no change):
+    - BoardSelector function length (~80 lines) / "extract handleExpose into a useExposeBoardHandler hook + split the dropdown" — the component size and dropdown are pre-existing structure (verified pre-existing prior round); extracting is bonus refactoring beyond this card.
+    - BoardSelector missing JSDoc (nit) — pre-existing exported function (confirmed pre-existing last round).
+
+    Verification: `npx tsc --noEmit` exit 0; `npx vitest run board-selector` 11 passed (2 files). No Rust touched, so cargo not re-run. Task left in `doing`.
+  timestamp: 2026-06-27T03:53:06.919214+00:00
 depends_on:
 - 01KTVPZ1VE36FVG8CMQ49X8RMK
 position_column: doing
