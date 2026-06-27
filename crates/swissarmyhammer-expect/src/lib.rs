@@ -77,7 +77,11 @@ pub use drive::{
     AcpGoalDriver, DrivenObservation, DriverHandle, DriverTurn, ExpectScope, GoalDriver,
 };
 pub use error::ExpectError;
-pub use evaluate::{evaluate, evaluate_assertion, evaluate_spec, STRUCTURAL_DRIFT_REASON};
+pub use evaluate::{
+    evaluate, evaluate_assertion, evaluate_spec, evaluate_tiered, similarity_threshold,
+    TextEmbedder, ToleranceAssertion, ToleranceBand, STRUCTURAL_DRIFT_REASON,
+    TOLERANCE_DRIFT_REASON,
+};
 pub use ledger::{
     approval_diff, approval_status, approve, compare, decide_approval, read_golden, write_golden,
     ApprovalBinding, ApprovalDecision, ApprovalStatus, ApproveError, ApproveMode,

@@ -27,8 +27,8 @@ comments:
 depends_on:
 - 01KW267C7WHM0ETTDY64V1SDVY
 - 01KW265D8SHMBFYBCZ5QEMBVQ0
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff580
 project: expect
 title: 'observation approve: freeze assertions, diff, human gate, strict first-run'
 ---
