@@ -713,24 +713,66 @@ mod tests {
         }
     }
 
+    /// Dispatch a `commands` op to a platform's host, retrying while the host
+    /// reports a *transient* plugin-lifecycle status.
+    ///
+    /// A per-board host starts its hot-reload watcher immediately after
+    /// discovery (see `build_board_platform_inner`), so a watcher-driven
+    /// reconcile can briefly dispose the `commands` server
+    /// (`Error::ServerUnavailable`), leave it not-yet-registered
+    /// (`Error::UnknownServer`), or hold it mid hot-reload
+    /// (`Error::PluginReloaded`) out from under a dispatch. The production
+    /// dispatch path (`command_tool_call`) is expected to retry those transient
+    /// statuses; CI's slower, more contended scheduling widens that window, so a
+    /// single `.expect()` here races the reconcile and flakes. Retrying within
+    /// `TIMEOUT` makes the test honor the same caller contract — it waits for the
+    /// server to settle — without weakening any assertion. A non-transient error
+    /// (or the deadline) panics with `what`.
+    async fn dispatch_commands_until_ready(
+        platform: &super::PluginPlatform,
+        args: serde_json::Value,
+        what: &str,
+    ) -> serde_json::Value {
+        use swissarmyhammer_plugin::Error;
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let attempt = tokio::time::timeout(
+                TIMEOUT,
+                platform
+                    .host()
+                    .call(CallerId::HostInternal, "commands", "command", args.clone()),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("{what}: dispatch hung"));
+            match attempt {
+                Ok(value) => return value,
+                Err(err) => {
+                    let transient = matches!(
+                        err,
+                        Error::ServerUnavailable | Error::UnknownServer | Error::PluginReloaded
+                    );
+                    if transient && Instant::now() < deadline {
+                        tokio::time::sleep(AVAILABLE_POLL).await;
+                        continue;
+                    }
+                    panic!("{what}: {err:?}");
+                }
+            }
+        }
+    }
+
     /// Call `list command` on a platform's host and return the set of command
     /// ids it reports. Mirrors the production `command_tool_call` path
     /// (`host.call(HostInternal, "commands", "command", { op: "list command" })`).
     async fn list_command_ids(
         platform: &super::PluginPlatform,
     ) -> std::collections::HashSet<String> {
-        let result = tokio::time::timeout(
-            TIMEOUT,
-            platform.host().call(
-                CallerId::HostInternal,
-                "commands",
-                "command",
-                json!({ "op": "list command" }),
-            ),
+        let result = dispatch_commands_until_ready(
+            platform,
+            json!({ "op": "list command" }),
+            "the commands module answers list command",
         )
-        .await
-        .expect("list command should not hang")
-        .expect("the commands module answers list command");
+        .await;
 
         command_ids_from_call_result(&result)
     }
@@ -920,18 +962,12 @@ mod tests {
     /// `command_tool_call` takes: `host.call(HostInternal, "commands",
     /// "command", { op: "available command", id, ctx: {} })`.
     async fn available_command(platform: &super::PluginPlatform, id: &str) -> serde_json::Value {
-        let result = tokio::time::timeout(
-            TIMEOUT,
-            platform.host().call(
-                CallerId::HostInternal,
-                "commands",
-                "command",
-                json!({ "op": "available command", "id": id, "ctx": {} }),
-            ),
+        let result = dispatch_commands_until_ready(
+            platform,
+            json!({ "op": "available command", "id": id, "ctx": {} }),
+            "the commands module answers available command",
         )
-        .await
-        .expect("available command should not hang")
-        .expect("the commands module answers available command");
+        .await;
         // `PluginHost::call` returns the raw rmcp `CallToolResult`; prefer the
         // structured content, fall back to the first text part parsed as JSON.
         result
@@ -1109,23 +1145,17 @@ mod tests {
     /// resolve at dispatch time, not at register/list time, so a placeholder is
     /// enough to prove the command lands in (and is listed by) THIS host.
     async fn register_command_into(platform: &super::PluginPlatform, id: &str) {
-        tokio::time::timeout(
-            TIMEOUT,
-            platform.host().call(
-                CallerId::HostInternal,
-                "commands",
-                "command",
-                json!({
-                    "op": "register command",
-                    "id": id,
-                    "name": id,
-                    "execute": { "$callback": "isolation-test-callback" },
-                }),
-            ),
+        dispatch_commands_until_ready(
+            platform,
+            json!({
+                "op": "register command",
+                "id": id,
+                "name": id,
+                "execute": { "$callback": "isolation-test-callback" },
+            }),
+            "the commands module answers register command",
         )
-        .await
-        .expect("register command should not hang")
-        .expect("the commands module answers register command");
+        .await;
     }
 
     /// REGISTRY ISOLATION: a command registered into board A's host is visible

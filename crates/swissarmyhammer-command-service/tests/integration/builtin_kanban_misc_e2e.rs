@@ -115,11 +115,36 @@ impl ExposedKanban {
     }
 
     /// Invoke the `kanban` tool directly with an arguments object.
+    ///
+    /// Retries while the call returns a *transient* plugin-lifecycle status: the
+    /// in-process tool can briefly report `ServerUnavailable` under CI resource
+    /// pressure (a tool-execute failure is flattened to that variant by
+    /// `ToolModuleServer::invoke`). Retrying within a bounded deadline lets the
+    /// test ride out a transient hiccup instead of failing the first time it
+    /// races one; a persistent failure (or the deadline) still panics.
     async fn call(&self, args: Value) -> Value {
-        self.module
-            .invoke(CallerId::HostInternal, &self.module_id, args)
-            .await
-            .expect("a direct kanban call should succeed")
+        use swissarmyhammer_plugin::Error;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            match self
+                .module
+                .invoke(CallerId::HostInternal, &self.module_id, args.clone())
+                .await
+            {
+                Ok(value) => return value,
+                Err(err) => {
+                    let transient = matches!(
+                        err,
+                        Error::ServerUnavailable | Error::UnknownServer | Error::PluginReloaded
+                    );
+                    if transient && std::time::Instant::now() < deadline {
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                        continue;
+                    }
+                    panic!("a direct kanban call should succeed: {err:?}");
+                }
+            }
+        }
     }
 }
 

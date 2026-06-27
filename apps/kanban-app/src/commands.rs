@@ -3623,6 +3623,50 @@ mod tests {
     use swissarmyhammer_plugin::CallerId;
     use tempfile::TempDir;
 
+    /// Dispatch a `focus` op to a board's PER-BOARD host, retrying while the host
+    /// reports a *transient* plugin-lifecycle status.
+    ///
+    /// A per-board host starts its hot-reload watcher immediately after discovery
+    /// (`build_board_platform_inner`), so a watcher-driven reconcile can briefly
+    /// dispose the `focus` server (`ServerUnavailable`), leave it
+    /// not-yet-registered (`UnknownServer`), or hold it mid hot-reload
+    /// (`PluginReloaded`) out from under a dispatch. The production
+    /// `command_tool_call` path retries those transient statuses; CI's slower
+    /// scheduling widens the window, so a single `.expect()` races the reconcile.
+    /// Retrying within a bounded deadline makes the test wait for the server to
+    /// settle without weakening any assertion; a non-transient error (or the
+    /// deadline) panics with `what`.
+    async fn call_per_board_focus_until_ready(
+        platform: &tokio::sync::Mutex<crate::plugins::PluginPlatform>,
+        args: serde_json::Value,
+        what: &str,
+    ) -> serde_json::Value {
+        use swissarmyhammer_plugin::Error;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let attempt = platform
+                .lock()
+                .await
+                .host()
+                .call(CallerId::HostInternal, "focus", "focus", args.clone())
+                .await;
+            match attempt {
+                Ok(value) => return value,
+                Err(err) => {
+                    let transient = matches!(
+                        err,
+                        Error::ServerUnavailable | Error::UnknownServer | Error::PluginReloaded
+                    );
+                    if transient && std::time::Instant::now() < deadline {
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                        continue;
+                    }
+                    panic!("{what}: {err:?}");
+                }
+            }
+        }
+    }
+
     /// Push a layer for `window` through the global host's `focus` module, the
     /// same way the React side does over `command_tool_call`.
     async fn push_layer_via_host(state: &AppState, fq: &str, window: &str, parent: Option<&str>) {
@@ -3741,25 +3785,19 @@ mod tests {
         window: &str,
         parent: Option<&str>,
     ) {
-        platform
-            .lock()
-            .await
-            .host()
-            .call(
-                CallerId::HostInternal,
-                "focus",
-                "focus",
-                json!({
-                    "op": "push layer",
-                    "fq": fq,
-                    "segment": fq.rsplit('/').next().unwrap_or(fq),
-                    "name": "window",
-                    "parent": parent,
-                    "window": window,
-                }),
-            )
-            .await
-            .expect("push layer through the per-board host should succeed");
+        call_per_board_focus_until_ready(
+            platform,
+            json!({
+                "op": "push layer",
+                "fq": fq,
+                "segment": fq.rsplit('/').next().unwrap_or(fq),
+                "name": "window",
+                "parent": parent,
+                "window": window,
+            }),
+            "push layer through the per-board host should succeed",
+        )
+        .await;
     }
 
     /// Regression for the destroy-path host-routing bug: a board window's
@@ -3833,18 +3871,12 @@ mod tests {
 
         // The PER-BOARD registry is now empty — proven by a follow-up reconcile
         // against the same per-board host removing 0.
-        let again = per_board
-            .lock()
-            .await
-            .host()
-            .call(
-                CallerId::HostInternal,
-                "focus",
-                "focus",
-                json!({ "op": "remove layers", "window": label }),
-            )
-            .await
-            .expect("remove layers should succeed");
+        let again = call_per_board_focus_until_ready(
+            per_board,
+            json!({ "op": "remove layers", "window": label }),
+            "remove layers should succeed",
+        )
+        .await;
         assert_eq!(
             unwrap_tool_result(again)["removed"],
             json!(0),
