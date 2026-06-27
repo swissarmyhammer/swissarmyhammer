@@ -114,10 +114,12 @@ pub use replay::{
     CachedAction, ReplayCache, ReplayKey, ReplaySource, ResolvedAction, MAX_REPLAY_DRIFT,
 };
 pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};
-pub use surface::browser::{BrowserAction, BrowserAdapter, BrowserSut};
+pub use surface::a11y::A11yAction;
+pub use surface::browser::{BrowserAdapter, BrowserSut};
 pub use surface::cli::{CliAdapter, CliCommands, CliSut};
 pub use surface::db::{DbAdapter, DbSut};
 pub use surface::file::{FileAdapter, FileSut};
+pub use surface::gui::{gui_automation_available, GuiAdapter, GuiSut, RawAxNode};
 pub use surface::http::{HttpAdapter, HttpSut};
 pub use surface::SurfaceAdapter;
 pub use surfaces::SurfaceInfo;

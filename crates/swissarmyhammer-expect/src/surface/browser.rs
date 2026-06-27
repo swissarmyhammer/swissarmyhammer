@@ -57,22 +57,11 @@ use tokio::task::JoinHandle;
 use crate::assertion::A11ySelector;
 use crate::error::ExpectError;
 use crate::spec::Setup;
+use crate::surface::a11y::{
+    step_resolves_mechanically, unbound, A11yAction, DEFAULT_ACTION_TIMEOUT,
+};
 use crate::surface::SurfaceAdapter;
 use crate::types::{A11yNode, SurfaceState};
-
-/// The default per-action wall-clock budget when an adapter is built without an
-/// explicit timeout.
-const DEFAULT_ACTION_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// The leading keywords of a "press the control" drive step (synonyms).
-const PRESS_KEYWORDS: &[&str] = &["press", "click", "tap"];
-
-/// The leading keywords of a "type into the control" drive step (synonyms).
-const TYPE_KEYWORDS: &[&str] = &["type", "enter", "fill"];
-
-/// The separator between the typed value and its target selector in a `type`
-/// step (`type "hello" into textbox[name="Email"]`).
-const TYPE_TARGET_SEPARATOR: &str = " into ";
 
 /// The role given to a synthesized root when the observed tree has zero or many
 /// top-level nodes, so a snapshot always has a single root.
@@ -83,53 +72,6 @@ const PRIMARY_CLICK_COUNT: i64 = 1;
 
 /// The number of vertices in a CDP box-model quad (four `(x, y)` corners).
 const QUAD_VERTEX_COUNT: usize = 8;
-
-/// One mechanical action the browser surface can drive against the a11y tree.
-///
-/// The drive dialect is `role[name=…]`-addressed and pixel-free: press a control
-/// by role and name, or type a value into one. Parsed by [`BrowserAction::parse`]
-/// (a pure function, unit-tested without a browser).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BrowserAction {
-    /// Press (click) the node matching `selector`.
-    Press {
-        /// The `role[name=…]` selector for the control to press.
-        selector: A11ySelector,
-    },
-    /// Type `value` into the node matching `selector`.
-    Type {
-        /// The `role[name=…]` selector for the control to type into.
-        selector: A11ySelector,
-        /// The text to insert.
-        value: String,
-    },
-}
-
-impl BrowserAction {
-    /// Parse a `When` step in the browser drive dialect, or `None` when it is not
-    /// a recognized action.
-    ///
-    /// The dialect is `press <selector>` / `click <selector>` / `tap <selector>`
-    /// for a press, and `type <value> into <selector>` (with `enter`/`fill` as
-    /// synonyms) for typing; `<value>` may be quoted to carry spaces, and
-    /// `<selector>` is a single `role[name=…]` selector.
-    pub fn parse(when_step: &str) -> Option<Self> {
-        let (keyword, rest) = split_first_word(when_step.trim());
-        let keyword = keyword.to_ascii_lowercase();
-        if PRESS_KEYWORDS.contains(&keyword.as_str()) {
-            return A11ySelector::parse_exact(rest)
-                .map(|selector| BrowserAction::Press { selector });
-        }
-        if TYPE_KEYWORDS.contains(&keyword.as_str()) {
-            let separator = find_ascii(rest, TYPE_TARGET_SEPARATOR)?;
-            let value = strip_quotes(rest[..separator].trim());
-            let target = &rest[separator + TYPE_TARGET_SEPARATOR.len()..];
-            return A11ySelector::parse_exact(target)
-                .map(|selector| BrowserAction::Type { selector, value });
-        }
-        None
-    }
-}
 
 /// The `browser` surface adapter: launches Chromium, drives a web UI by
 /// `role[name=…]` through CDP `Input`, and snapshots its accessibility tree.
@@ -262,7 +204,7 @@ impl SurfaceAdapter for BrowserAdapter {
             // An empty step drives nothing (mirrors the cli/http/db empty step).
             return Ok(());
         }
-        let action = BrowserAction::parse(when_step).ok_or_else(|| {
+        let action = A11yAction::parse(when_step).ok_or_else(|| {
             ExpectError::Surface(format!(
                 "browser drive step is not a recognized action \
                  (press/type by `role[name=…]`): `{when_step}`"
@@ -300,10 +242,7 @@ impl SurfaceAdapter for BrowserAdapter {
     }
 
     fn resolves_mechanically(&self, when_step: &str) -> bool {
-        // A blank step is a mechanical no-op; otherwise the step must parse into a
-        // concrete `role[name=…]` action. An unparseable step returns `false` and
-        // routes to the agent fallback.
-        when_step.trim().is_empty() || BrowserAction::parse(when_step).is_some()
+        step_resolves_mechanically(when_step)
     }
 }
 
@@ -314,15 +253,15 @@ async fn open_page(browser: &Browser, url: String) -> Result<Page, ExpectError> 
     Ok(page)
 }
 
-/// Perform one parsed [`BrowserAction`] against the page through CDP.
-async fn perform_action(page: &Page, action: &BrowserAction) -> Result<(), ExpectError> {
+/// Perform one parsed [`A11yAction`] against the page through CDP.
+async fn perform_action(page: &Page, action: &A11yAction) -> Result<(), ExpectError> {
     let nodes = full_ax_tree(page).await?;
     match action {
-        BrowserAction::Press { selector } => {
+        A11yAction::Press { selector } => {
             let backend = find_backend_node(&nodes, selector).ok_or_else(|| unbound(selector))?;
             click_backend_node(page, backend).await
         }
-        BrowserAction::Type { selector, value } => {
+        A11yAction::Type { selector, value } => {
             let backend = find_backend_node(&nodes, selector).ok_or_else(|| unbound(selector))?;
             focus_backend_node(page, backend).await?;
             insert_text(page, value).await
@@ -509,46 +448,6 @@ where
     }
 }
 
-/// Split `text` into its first whitespace-delimited word and the trimmed
-/// remainder (`("", "")` for blank input).
-fn split_first_word(text: &str) -> (&str, &str) {
-    let trimmed = text.trim_start();
-    match trimmed.find(char::is_whitespace) {
-        Some(index) => (&trimmed[..index], trimmed[index..].trim_start()),
-        None => (trimmed, ""),
-    }
-}
-
-/// The byte offset of the first occurrence of the ASCII `needle` in `haystack`,
-/// case-insensitively. The offset is valid in `haystack` because ASCII-lowercasing
-/// is a length-preserving, 1:1 byte mapping.
-fn find_ascii(haystack: &str, needle: &str) -> Option<usize> {
-    haystack.to_ascii_lowercase().find(needle)
-}
-
-/// Strip a matching pair of surrounding quotes from `value`, else return it
-/// unchanged.
-fn strip_quotes(value: &str) -> String {
-    let first = value.chars().next();
-    let last = value.chars().next_back();
-    if value.len() >= 2
-        && matches!(
-            (first, last),
-            (Some('"'), Some('"')) | (Some('\''), Some('\''))
-        )
-    {
-        return value[1..value.len() - 1].to_string();
-    }
-    value.to_string()
-}
-
-/// A surface error for a drive selector that matched no accessibility node.
-fn unbound(selector: &A11ySelector) -> ExpectError {
-    ExpectError::Surface(format!(
-        "no accessibility node matched `{selector}` to drive"
-    ))
-}
-
 /// Map a chromiumoxide CDP failure to an [`ExpectError::Surface`].
 fn map_cdp(err: CdpError) -> ExpectError {
     ExpectError::Surface(format!("browser CDP error: {err}"))
@@ -567,62 +466,10 @@ mod tests {
     }
 
     #[test]
-    fn parses_press_synonyms_into_a_press_action() {
-        for keyword in PRESS_KEYWORDS {
-            let step = format!("{keyword} button[name=\"Go\"]");
-            assert_eq!(
-                BrowserAction::parse(&step),
-                Some(BrowserAction::Press {
-                    selector: selector("button", Some("Go")),
-                }),
-                "{keyword}"
-            );
-        }
-    }
-
-    #[test]
-    fn parses_a_type_step_with_value_and_target() {
-        assert_eq!(
-            BrowserAction::parse("type \"hello world\" into textbox[name=\"Email\"]"),
-            Some(BrowserAction::Type {
-                selector: selector("textbox", Some("Email")),
-                value: "hello world".to_string(),
-            })
-        );
-        // An unquoted single-word value also parses.
-        assert_eq!(
-            BrowserAction::parse("fill bob into textbox[name=\"User\"]"),
-            Some(BrowserAction::Type {
-                selector: selector("textbox", Some("User")),
-                value: "bob".to_string(),
-            })
-        );
-    }
-
-    #[test]
-    fn rejects_a_step_that_is_not_a_recognized_action() {
-        // No action keyword, and no selector to bind.
-        assert_eq!(BrowserAction::parse("the page looks right"), None);
-        // A press with no selector.
-        assert_eq!(BrowserAction::parse("press the shiny button"), None);
-        // A type with no `into <selector>`.
-        assert_eq!(BrowserAction::parse("type hello"), None);
-    }
-
-    #[test]
-    fn rejects_a_press_with_trailing_scope_or_garbage() {
-        // The drive dialect is a single bare selector: a trailing `within` scope
-        // (only the observe-side locator honors it) or stray tokens must NOT be
-        // silently dropped and pressed against the wrong control.
-        assert_eq!(
-            BrowserAction::parse("press button[name=\"Go\"] within form[name=\"Login\"]"),
-            None
-        );
-        assert_eq!(BrowserAction::parse("press button[name=\"Go\"] now"), None);
-    }
-
-    #[test]
-    fn resolves_mechanically_only_for_recognized_or_empty_steps() {
+    fn resolves_mechanically_delegates_to_the_shared_a11y_dialect() {
+        // The browser adapter resolves a recognized press/type or blank step
+        // itself, and routes an unparseable step to the agent fallback — the
+        // shared `step_resolves_mechanically` gate, wired through the trait.
         let adapter = BrowserAdapter::new("http://127.0.0.1:0/");
         assert!(adapter.resolves_mechanically("press button[name=\"Go\"]"));
         assert!(adapter.resolves_mechanically("   "));

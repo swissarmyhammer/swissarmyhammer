@@ -16,8 +16,8 @@ comments:
   timestamp: 2026-06-27T13:29:10.149805+00:00
 depends_on:
 - 01KW26C3MSTK5T2QVE4XBV9CH8
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8180
 project: expect
 title: browser surface adapter (CDP a11y via chromiumoxide)
 ---

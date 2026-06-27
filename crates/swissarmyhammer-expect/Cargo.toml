@@ -81,6 +81,17 @@ futures = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true }
 
+# The gui surface adapter's macOS accessibility (AX) backend: drive native/Tauri
+# apps via AXUIElementPerformAction/AXPress and snapshot the AX subtree — pure
+# Rust over the OS AX API, no CDP/Node. `accessibility` is the safe AXUIElement
+# wrapper, `accessibility-sys` provides AXIsProcessTrusted + kAXPressAction, and
+# `core-foundation` carries the CFString/CFType values the AX API returns. All
+# macOS-only; the Windows/Linux backends are a separate follow-on task.
+[target.'cfg(target_os = "macos")'.dependencies]
+accessibility = { workspace = true }
+accessibility-sys = { workspace = true }
+core-foundation = { workspace = true }
+
 [dev-dependencies]
 serde_json = { workspace = true }
 

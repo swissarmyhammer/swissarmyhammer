@@ -571,7 +571,11 @@ impl A11ySelector {
 
     /// Whether `node`'s role matches and, when [`name`](A11ySelector::name) is
     /// set, its accessible name matches too.
-    fn matches(&self, node: &A11yNode) -> bool {
+    ///
+    /// `pub(crate)` so the gui surface's native-AX walk binds a live element by
+    /// the *same* predicate the observe-side tree resolution uses — one source of
+    /// truth for `role[name=…]` matching across the browser and gui surfaces.
+    pub(crate) fn matches(&self, node: &A11yNode) -> bool {
         node.role == self.role && self.name.as_ref().is_none_or(|name| &node.name == name)
     }
 }
