@@ -66,6 +66,13 @@ use crate::spec::{parse_criterion, Expectation, Section};
 use crate::surface::SurfaceAdapter;
 use crate::types::{ExpectationVerdict, Observation, Surface};
 
+/// The ACP protocol version advertised in the `initialize` handshake.
+///
+/// This is the single, named source for the version the client negotiates with
+/// the agent in [`run_pipeline_in_connection`]'s once-per-connection
+/// `initialize` handshake, rather than a bare `1` embedded at the call site.
+const ACP_PROTOCOL_VERSION: u16 = 1;
+
 /// The set of goals to drive, one scoped subagent per goal.
 ///
 /// This is the resolved-scope input to [`run_expect_over_agent`]: each goal is
@@ -1053,7 +1060,7 @@ async fn run_pipeline_in_connection(
     // `fs/write_text_file` (handled — ledger writes refused, others acked) so the
     // agent's capability view matches `answer_agent_request`.
     cx.send_request(
-        InitializeRequest::new(1.into()).client_capabilities(
+        InitializeRequest::new(ACP_PROTOCOL_VERSION.into()).client_capabilities(
             ClientCapabilities::new().fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true)),
@@ -1149,6 +1156,11 @@ mod tests {
     /// A representative structured reply: the JSON object shape a driven subagent
     /// emits and [`drive_scope`] captures via [`extract_json_value`].
     const STRUCTURED_REPLY: &str = r#"{"path": "src/checkout/coupon", "verdict": "pass"}"#;
+
+    /// The total the stub adapter reports as the system's observed surface JSON.
+    /// An arbitrary fixed fixture value, distinct from any authoritative
+    /// checkpoint total, shared by the driver tests that stub the surface state.
+    const STUB_OBSERVED_TOTAL: u32 = 40;
 
     // ---- a temp repo fixture --------------------------------------------
 
@@ -1776,7 +1788,7 @@ NOTES_RIGHT_REASON the right-reason text routed to the grader.
     #[tokio::test]
     async fn observe_with_driver_replays_the_cached_action_without_the_agent() {
         let repo = temp_repo();
-        let adapter = json_stub_adapter(serde_json::json!({ "total": 40 }));
+        let adapter = json_stub_adapter(serde_json::json!({ "total": STUB_OBSERVED_TOTAL }));
         let driver = CountingDriver {
             calls: AtomicUsize::new(0),
         };
@@ -1818,7 +1830,7 @@ NOTES_RIGHT_REASON the right-reason text routed to the grader.
     #[tokio::test]
     async fn observe_with_driver_re_resolves_and_surfaces_drift_on_state_change() {
         let repo = temp_repo();
-        let adapter = json_stub_adapter(serde_json::json!({ "total": 40 }));
+        let adapter = json_stub_adapter(serde_json::json!({ "total": STUB_OBSERVED_TOTAL }));
         let driver = CountingDriver {
             calls: AtomicUsize::new(0),
         };
@@ -2064,7 +2076,7 @@ Drive the system to a known total.
     /// not mistaken for success.
     #[tokio::test]
     async fn stop_conditions_max_turns_cap_terminates_with_a_clear_error() {
-        let adapter = json_stub_adapter(serde_json::json!({ "total": 40 }));
+        let adapter = json_stub_adapter(serde_json::json!({ "total": STUB_OBSERVED_TOTAL }));
         let driver = ScriptedDriver {
             goal_reached: false,
             delay: Duration::ZERO,
@@ -2095,7 +2107,7 @@ Drive the system to a known total.
     /// hang.
     #[tokio::test]
     async fn stop_conditions_spec_timeout_terminates_with_a_clear_error() {
-        let adapter = json_stub_adapter(serde_json::json!({ "total": 40 }));
+        let adapter = json_stub_adapter(serde_json::json!({ "total": STUB_OBSERVED_TOTAL }));
         // The driver sleeps far longer than the spec budget, so the wall clock —
         // not the agent — ends the run.
         let driver = ScriptedDriver {
@@ -2271,7 +2283,7 @@ Drive the system to a known total.
         // `resolves = false` routes the When step through the wedged subagent; the
         // spec budget is tiny so the wall clock ends the drive well before the
         // agent's 60s sleep or the pool's stall floor.
-        let adapter = json_stub_adapter(serde_json::json!({ "total": 40 }));
+        let adapter = json_stub_adapter(serde_json::json!({ "total": STUB_OBSERVED_TOTAL }));
         let mut expectation = stop_expectation_under(repo.path());
         expectation.frontmatter.timeout = SPEC_TIMEOUT_BUDGET;
         let config = ObserveConfig::new(repo.path());
