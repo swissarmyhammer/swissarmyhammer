@@ -52,6 +52,7 @@
 pub mod assertion;
 pub mod check;
 pub mod config;
+pub mod create;
 pub mod doctor;
 pub mod drive;
 pub mod error;
@@ -76,6 +77,10 @@ pub use check::{
 pub use config::{
     find_expect_dir, AgentConfig, ApprovalConfig, EmbedderConfig, ExpectConfig, Granularity,
     ModelConfig, OnMissing, ProvisionConfig, ReliabilityConfig,
+};
+pub use create::{
+    create, parse_draft, render_authoring_goal, render_schema, AuthoringRequest, CreateOutcome,
+    CreateSource, DraftSpec, Provenance, RepairContext, SpecAuthor,
 };
 pub use doctor::{diagnose, render, DiagnosticStatus, DoctorFacts, FieldDiagnostic};
 pub use drive::{

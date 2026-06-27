@@ -189,7 +189,7 @@ impl FieldDiagnostic {
 /// The closed set of frontmatter keys (`ideas/expect.md` §"Frontmatter
 /// Reference"), kept in lockstep with [`crate::spec::Frontmatter`]. Anything
 /// outside this set is an unknown key.
-const KNOWN_KEYS: &[&str] = &[
+pub(crate) const KNOWN_KEYS: &[&str] = &[
     "description",
     "surface",
     "model",
@@ -204,7 +204,7 @@ const KNOWN_KEYS: &[&str] = &[
 ];
 
 /// The frontmatter keys that must be present.
-const REQUIRED_KEYS: &[&str] = &["description", "surface"];
+pub(crate) const REQUIRED_KEYS: &[&str] = &["description", "surface"];
 
 /// The largest edit distance at which a "did you mean" suggestion is offered for
 /// a misspelled key or enum value.
@@ -271,17 +271,17 @@ fn wire<T: Serialize>(value: &T) -> String {
 }
 
 /// The allowed `surface` values, derived from [`ALL_SURFACES`].
-fn surface_values() -> Vec<String> {
+pub(crate) fn surface_values() -> Vec<String> {
     ALL_SURFACES.iter().map(wire).collect()
 }
 
 /// The allowed `tiers` values, derived from [`ALL_TIERS`].
-fn tier_values() -> Vec<String> {
+pub(crate) fn tier_values() -> Vec<String> {
     ALL_TIERS.iter().map(wire).collect()
 }
 
 /// The allowed `isolation` values, derived from [`ALL_ISOLATIONS`].
-fn isolation_values() -> Vec<String> {
+pub(crate) fn isolation_values() -> Vec<String> {
     ALL_ISOLATIONS.iter().map(wire).collect()
 }
 

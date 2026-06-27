@@ -24,8 +24,8 @@ depends_on:
 - 01KW263S53NJ1YWNHGPYTTWEEC
 - 01KW266J4AJCJH9HM4DYFJRK09
 - 01KW268RCP6G7SKWFXNR6BCBVR
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff980
 project: expect
 title: expect expectation/expectations check = doctor + observe + evaluate + compare
 ---

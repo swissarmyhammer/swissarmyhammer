@@ -45,9 +45,11 @@ use swissarmyhammer_expect::{
     approval_diff, approval_status, approve, check, decide_approval, evaluate_spec,
     find_expect_dir, golden_path, ledger_entry, ledger_queue, observe, read_golden, received_path,
     surfaces, write_golden, write_received, ApprovalDecision, ApprovalStatus, ApproveMode,
-    CheckOptions, CliAdapter, ExpectConfig, ExpectError, Expectation, ExpectationLoader, Golden,
-    GradingPins, Observation, ObserveConfig, ScrubberSet, Surface,
+    CheckOptions, CliAdapter, CreateSource, ExpectConfig, ExpectError, Expectation,
+    ExpectationLoader, Golden, GradingPins, Observation, ObserveConfig, ScrubberSet, Surface,
 };
+use swissarmyhammer_kanban::{comment::AddComment, task::GetTask, Execute, KanbanContext};
+use swissarmyhammer_validators::PoolConfig;
 
 use crate::mcp::op_tool_helpers::{bool_arg, json_result, string_arg};
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
@@ -67,14 +69,53 @@ const NOT_IMPLEMENTED_STATUS: &str = "not_implemented";
 // implemented `get surface` declares its `name` parameter.
 // ---------------------------------------------------------------------------
 
-/// `create expectation` — draft a new expectation spec.
-#[operation(
-    verb = "create",
-    noun = "expectation",
-    description = "Draft a new expectation spec"
-)]
+/// `create expectation` — draft a new expectation spec via the doctor green-loop.
+///
+/// A manual [`Operation`] impl (rather than the `#[operation]` macro) so it can
+/// declare the [`CREATE_PARAMS`] source inputs the authoring pipeline resolves.
 #[derive(Debug, Default)]
 pub struct ExpectationCreate;
+
+/// The source inputs of `create expectation`: a bare `intent` string, or one of
+/// the `--from-*` sources. All feed one draft → doctor → confirm pipeline; they
+/// differ only in where the intent is mined from and what provenance is recorded.
+static CREATE_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("intent")
+        .description("A bare intent string to capture as an expectation.")
+        .param_type(ParamType::String),
+    ParamMeta::new("from_task")
+        .description(
+            "Draft from a kanban task's acceptance criteria; recorded as provenance only, not \
+             coupled to the task lifecycle.",
+        )
+        .param_type(ParamType::String),
+    ParamMeta::new("from_spec")
+        .description(
+            "Draft from a design doc / PRD (a repo-relative path), mining should/must/example.",
+        )
+        .param_type(ParamType::String),
+    ParamMeta::new("from_session")
+        .description("Capture a hand-verified run described by this text.")
+        .param_type(ParamType::String),
+    ParamMeta::new("from_chat")
+        .description("Draft from conversation-mined intent text (the default interactive source).")
+        .param_type(ParamType::String),
+];
+
+impl Operation for ExpectationCreate {
+    fn verb(&self) -> &'static str {
+        "create"
+    }
+    fn noun(&self) -> &'static str {
+        "expectation"
+    }
+    fn description(&self) -> &'static str {
+        "Draft a new expectation spec from intent and loop it through doctor until valid"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        CREATE_PARAMS
+    }
+}
 
 /// `get expectation` — read one expectation spec.
 ///
@@ -569,13 +610,30 @@ pub static EXPECT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
 // ---------------------------------------------------------------------------
 
 /// The operation-based `expect` MCP tool.
-#[derive(Debug, Default)]
-pub struct ExpectTool;
+///
+/// Holds an optional [`AgentFactory`](expect_op::AgentFactory): every op except
+/// `create expectation` works without it, but `create` drives a live authoring
+/// agent and so requires one. The production server injects a factory that builds
+/// the configured backend; a tool built without one (the default) returns an
+/// actionable error for `create` and serves every other op.
+#[derive(Default)]
+pub struct ExpectTool {
+    /// The live-agent factory the `create expectation` op drives, if wired.
+    agent_factory: Option<expect_op::AgentFactory>,
+}
 
 impl ExpectTool {
-    /// Build the tool.
+    /// Build the tool with no agent factory — every op but `create` is served.
     pub fn new() -> Self {
-        Self
+        Self {
+            agent_factory: None,
+        }
+    }
+
+    /// Attach the live-agent factory the `create expectation` op drives.
+    pub fn with_agent_factory(mut self, factory: expect_op::AgentFactory) -> Self {
+        self.agent_factory = Some(factory);
+        self
     }
 }
 
@@ -1366,6 +1424,188 @@ fn check_op(
     json_result(&report)
 }
 
+// ---------------------------------------------------------------------------
+// Create: the authoring op a coding agent drives — draft a spec from intent,
+// loop it through doctor until green, record a candidate observation, leave new.
+// ---------------------------------------------------------------------------
+
+/// The `create expectation` op id (verb + noun), matched in `execute`'s dispatch.
+const EXPECTATION_CREATE_OP: &str = "create expectation";
+
+/// The pool sizing for an authoring run: a single scoped session per draft.
+const CREATE_POOL_WORKERS: usize = 1;
+
+/// `create expectation` — resolve the intent source, drive the authoring agent
+/// through the doctor green-loop, and leave a candidate observation (ledger state
+/// `new`) for a human to confirm.
+///
+/// The op requires a live `factory` (authoring drives an agent); the source is one
+/// of `intent` / `--from-task` / `--from-spec` / `--from-session` / `--from-chat`,
+/// all feeding the one pipeline. A `--from-task` draft links back to the task as
+/// provenance only — a best-effort kanban comment, never lifecycle coupling.
+async fn expectation_create(
+    factory: &expect_op::AgentFactory,
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let repo_root = observe_repo_root(context);
+    let source = resolve_create_source(arguments, context, &repo_root).await?;
+    // Capture the task id (if any) before the source is moved, so a successful
+    // create can record the provenance link-back on the kanban task.
+    let task_id = match &source {
+        CreateSource::Task { id, .. } => Some(id.clone()),
+        _ => None,
+    };
+
+    let outcome = expect_op::run_create_request(
+        source,
+        repo_root,
+        doctor::production_facts(),
+        PoolConfig::remote(CREATE_POOL_WORKERS),
+        factory.clone(),
+    )
+    .await
+    .map_err(|err| rmcp::ErrorData::internal_error(err, None))?;
+
+    if let Some(task_id) = task_id {
+        record_task_provenance(context, &task_id, &outcome.path).await;
+    }
+
+    json_result(&outcome)
+}
+
+/// Resolve the `create` arguments to a [`CreateSource`].
+///
+/// The sources are checked in precedence order; `--from-spec` reads the design doc
+/// from disk (safe-joined under the repo root), `--from-task` reads the task's
+/// acceptance criteria from the kanban board. A `create` with no source argument is
+/// an `invalid_params` error.
+async fn resolve_create_source(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+    repo_root: &Path,
+) -> Result<CreateSource, rmcp::ErrorData> {
+    if let Some(id) = string_arg(arguments, "from_task") {
+        let criteria = read_task_criteria(context, &id).await?;
+        return Ok(CreateSource::Task { id, criteria });
+    }
+    if let Some(path) = string_arg(arguments, "from_spec") {
+        let content = read_repo_file(repo_root, &path)?;
+        return Ok(CreateSource::Spec { path, content });
+    }
+    if let Some(text) = string_arg(arguments, "from_session") {
+        return Ok(CreateSource::Session(text));
+    }
+    if let Some(text) = string_arg(arguments, "from_chat") {
+        return Ok(CreateSource::Chat(text));
+    }
+    if let Some(text) = string_arg(arguments, "intent") {
+        return Ok(CreateSource::Intent(text));
+    }
+    Err(rmcp::ErrorData::invalid_params(
+        "`create expectation` needs an intent: pass `intent`, or one of `from_task`, `from_spec`, \
+         `from_session`, `from_chat`"
+            .to_string(),
+        None,
+    ))
+}
+
+/// Read a `--from-spec` design doc, safe-joined under `repo_root`.
+///
+/// The path comes from the caller, so an absolute or `..`-bearing path would read
+/// outside the repository; it is accepted only when relative and free of
+/// parent-directory components (the same safe-join the engine applies on the write
+/// side).
+fn read_repo_file(repo_root: &Path, relative: &str) -> Result<String, rmcp::ErrorData> {
+    let candidate = Path::new(relative);
+    if candidate.is_absolute()
+        || candidate
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(rmcp::ErrorData::invalid_params(
+            format!("`from_spec` path `{relative}` must be relative without `..` components"),
+            None,
+        ));
+    }
+    std::fs::read_to_string(repo_root.join(candidate)).map_err(|err| {
+        rmcp::ErrorData::invalid_params(
+            format!("reading `from_spec` `{relative}` failed: {err}"),
+            None,
+        )
+    })
+}
+
+/// The kanban board context rooted at the session working directory's `.kanban`
+/// (mirroring the kanban tool's own resolution).
+fn kanban_context(context: &ToolContext) -> KanbanContext {
+    let working_dir = context
+        .working_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("."));
+    KanbanContext::new(working_dir.join(".kanban"))
+}
+
+/// Read a kanban task's acceptance criteria (its description) for `--from-task`.
+///
+/// # Errors
+///
+/// Returns `invalid_params` when the task cannot be read.
+async fn read_task_criteria(context: &ToolContext, id: &str) -> Result<String, rmcp::ErrorData> {
+    let ctx = kanban_context(context);
+    let task = GetTask::new(id)
+        .execute(&ctx)
+        .await
+        .into_result()
+        .map_err(|err| {
+            rmcp::ErrorData::invalid_params(
+                format!("reading kanban task `{id}` failed: {err}"),
+                None,
+            )
+        })?;
+    let criteria = task["description"]
+        .as_str()
+        .or_else(|| task["title"].as_str())
+        .unwrap_or_default()
+        .to_string();
+    Ok(criteria)
+}
+
+/// Record the spec's lineage back on the kanban task as a comment — provenance
+/// only, never coupling the spec to the task lifecycle.
+///
+/// Best-effort: a failed comment is logged and does not fail the create (the spec
+/// and its candidate observation are already written).
+async fn record_task_provenance(context: &ToolContext, task_id: &str, identity: &str) {
+    let ctx = kanban_context(context);
+    let text = format!(
+        "expect: drafted expectation `{identity}` from this task's acceptance criteria \
+         (provenance only — the expectation stands on its own)"
+    );
+    if let Err(err) = AddComment::new(task_id, text)
+        .execute(&ctx)
+        .await
+        .into_result()
+    {
+        tracing::warn!("expect create could not record task provenance on `{task_id}`: {err}");
+    }
+}
+
+/// Register an `expect` tool configured with a live agent factory, replacing the
+/// bare tool already registered under the `expect` name.
+///
+/// The wiring layer (which may depend on `swissarmyhammer-agent`) builds the
+/// production [`AgentFactory`](expect_op::AgentFactory) from the session's
+/// `ModelConfig` and calls this so the `create expectation` op can drive a live
+/// authoring agent. Registration is by tool name, so it overwrites the bare tool
+/// the default [`register_expect_tools`] installed.
+pub fn register_expect_tool_with_factory(
+    registry: &mut ToolRegistry,
+    agent_factory: expect_op::AgentFactory,
+) {
+    registry.register(ExpectTool::new().with_agent_factory(agent_factory));
+}
+
 impl swissarmyhammer_common::health::Doctorable for ExpectTool {
     fn name(&self) -> &str {
         <Self as McpTool>::name(self)
@@ -1467,6 +1707,16 @@ impl McpTool for ExpectTool {
                 evaluate_op(&arguments, context, EvaluateSource::Golden)
             }
             EXPECTATION_CHECK_OP | EXPECTATIONS_CHECK_OP => check_op(&arguments, context),
+            EXPECTATION_CREATE_OP => {
+                let factory = self.agent_factory.as_ref().ok_or_else(|| {
+                    rmcp::ErrorData::internal_error(
+                        "the `create expectation` op needs a live agent; this tool was built \
+                         without an agent factory",
+                        None,
+                    )
+                })?;
+                expectation_create(factory, &arguments, context).await
+            }
             known if EXPECT_OPERATIONS.iter().any(|op| op.op_string() == known) => {
                 json_result(&not_implemented(known))
             }
@@ -1545,6 +1795,7 @@ mod tests {
     /// The grid ops that now have a real implementation rather than the stub.
     /// The not-implemented dispatch test skips these.
     const IMPLEMENTED_OPS: &[&str] = &[
+        EXPECTATION_CREATE_OP,
         SURFACE_GET_OP,
         SURFACES_LIST_OP,
         EXPECTATION_GET_OP,
@@ -2724,6 +2975,234 @@ mod tests {
                 .join(".expect/received/broken.received.json")
                 .exists(),
             "the malformed spec was never observed",
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // create expectation.
+    //
+    // Exercised through the full dispatch with a scripted authoring agent
+    // injected as the agent factory, so the op drives the agent seam end to end
+    // and leaves a doctor-green spec + candidate observation in `new` state.
+    // -----------------------------------------------------------------------
+
+    /// A doctor-green spec the scripted authoring agent returns as its draft.
+    const CREATE_GREEN_SPEC: &str = "---\n\
+        description: a valid coupon reduces the order total by its discount, once\n\
+        surface: cli\n\
+        ---\n\
+        \n\
+        When a shopper applies a valid coupon the displayed total drops by the discount, and \
+        applying the same coupon again does not stack.\n\
+        \n\
+        ## Then\n\
+        - [ ] after the first apply, the total is $40\n\
+        - [ ] after a second apply, the total is still $40\n";
+
+    /// An [`AgentFactory`](expect_op::AgentFactory) backed by a scripted agent that
+    /// returns the `{path, content}` draft JSON for any prompt — the authoring
+    /// agent the green-loop drives, deterministically.
+    fn create_scripted_factory(spec_path: &str, content: &str) -> expect_op::AgentFactory {
+        use agent_client_protocol::DynConnectTo;
+        use swissarmyhammer_validators::review::test_support::{
+            ScriptedAdapter, ScriptedAgent, ScriptedAgentConfig,
+        };
+        use tokio::sync::broadcast;
+
+        let draft = serde_json::json!({ "path": spec_path, "content": content }).to_string();
+        let agent = ScriptedAgent::with_config(
+            vec![],
+            ScriptedAgentConfig {
+                default_response: draft,
+                ..ScriptedAgentConfig::default()
+            },
+        );
+        Arc::new(move || {
+            let agent = Arc::clone(&agent);
+            Box::pin(async move {
+                let (notify_tx, notification_rx) = broadcast::channel(64);
+                let agent = ScriptedAgent::rebind_broadcast(&agent, notify_tx, true);
+                Ok(expect_op::AgentHandle {
+                    agent: DynConnectTo::new(ScriptedAdapter(agent)),
+                    notification_rx,
+                })
+            })
+        })
+    }
+
+    /// `create expectation "<intent>"` drives the scripted authoring agent through
+    /// the doctor green-loop, writes the spec plus a candidate observation, and
+    /// leaves the result unapproved (`new`).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn create_expectation_authors_a_green_spec_left_new() {
+        const SPEC_PATH: &str = "src/checkout/coupon.expect.md";
+        let repo = tempfile::TempDir::new().unwrap();
+        let factory = create_scripted_factory(SPEC_PATH, CREATE_GREEN_SPEC);
+        let tool = ExpectTool::new().with_agent_factory(factory);
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let result = tool
+            .execute(
+                args(serde_json::json!({
+                    "op": EXPECTATION_CREATE_OP,
+                    "intent": "a coupon reduces the order total once",
+                })),
+                &ctx,
+            )
+            .await
+            .expect("create expectation should dispatch");
+        assert!(!result.is_error.unwrap_or(false), "create should succeed");
+
+        let payload = payload_of(&result);
+        assert_eq!(payload["state"], "new", "the candidate is left unapproved");
+        assert_eq!(payload["path"], "src/checkout/coupon");
+
+        // The spec and its candidate observation were written under the repo.
+        assert!(
+            repo.path().join(SPEC_PATH).is_file(),
+            "the drafted spec is written"
+        );
+        assert!(
+            repo.path()
+                .join(".expect/received/src/checkout/coupon.received.json")
+                .is_file(),
+            "the candidate observation is written",
+        );
+    }
+
+    /// `create expectation` on a tool built without an agent factory is a clear
+    /// error — authoring requires a live agent.
+    #[tokio::test]
+    async fn create_expectation_requires_an_agent_factory() {
+        let err = tool()
+            .execute(
+                args(serde_json::json!({ "op": EXPECTATION_CREATE_OP, "intent": "x" })),
+                &context(),
+            )
+            .await
+            .expect_err("create without a factory must error");
+        assert!(
+            err.message.contains("agent"),
+            "the error names the missing agent: {}",
+            err.message
+        );
+    }
+
+    /// `create expectation --from-task <id>` reads the task's acceptance criteria
+    /// from a real kanban board, drafts a green spec, and records the provenance
+    /// link-back as a comment on the task — without coupling to its lifecycle.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn create_expectation_from_task_drafts_from_criteria_and_records_provenance() {
+        use swissarmyhammer_kanban::{board::InitBoard, comment::ListComments, task::AddTask};
+
+        const SPEC_PATH: &str = "src/checkout/coupon.expect.md";
+        const CRITERIA: &str = "the coupon should only apply once and reduce the total";
+        let repo = tempfile::TempDir::new().unwrap();
+
+        // Stand up a real kanban board with one task carrying the criteria.
+        let kctx = KanbanContext::new(repo.path().join(".kanban"));
+        InitBoard::new("test")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .expect("init board");
+        let added = AddTask::new("coupon")
+            .with_description(CRITERIA)
+            .execute(&kctx)
+            .await
+            .into_result()
+            .expect("add task");
+        let task_id = added["id"].as_str().expect("created task id").to_string();
+
+        let factory = create_scripted_factory(SPEC_PATH, CREATE_GREEN_SPEC);
+        let tool = ExpectTool::new().with_agent_factory(factory);
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let result = tool
+            .execute(
+                args(serde_json::json!({ "op": EXPECTATION_CREATE_OP, "from_task": task_id })),
+                &ctx,
+            )
+            .await
+            .expect("create from_task should dispatch");
+        assert!(!result.is_error.unwrap_or(false), "create should succeed");
+
+        let payload = payload_of(&result);
+        assert_eq!(payload["state"], "new");
+        assert_eq!(payload["provenance"]["source"], "task");
+        assert_eq!(payload["provenance"]["reference"], task_id);
+        assert!(repo.path().join(SPEC_PATH).is_file(), "the spec is written");
+
+        // The provenance link-back landed as a kanban comment naming the spec.
+        // Read through a FRESH context: the create op wrote via its own
+        // KanbanContext instance, and the test's `kctx` memoizes an entity context
+        // that would not reflect that external write.
+        let read_ctx = KanbanContext::new(repo.path().join(".kanban"));
+        let comments = ListComments::new(task_id.as_str())
+            .execute(&read_ctx)
+            .await
+            .into_result()
+            .expect("list comments");
+        assert!(
+            comments.to_string().contains("src/checkout/coupon"),
+            "a provenance comment names the drafted spec: {comments}",
+        );
+    }
+
+    /// `create expectation --from-spec <path>` reads the design doc from disk and
+    /// routes it through the same pipeline, recording the doc path as provenance.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn create_expectation_from_spec_reads_the_doc_and_routes_through() {
+        const SPEC_PATH: &str = "src/checkout/coupon.expect.md";
+        let repo = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            repo.path().join("design.md"),
+            "The coupon must only apply once and reduce the total.",
+        )
+        .unwrap();
+
+        let factory = create_scripted_factory(SPEC_PATH, CREATE_GREEN_SPEC);
+        let tool = ExpectTool::new().with_agent_factory(factory);
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let result = tool
+            .execute(
+                args(serde_json::json!({ "op": EXPECTATION_CREATE_OP, "from_spec": "design.md" })),
+                &ctx,
+            )
+            .await
+            .expect("create from_spec should dispatch");
+        assert!(!result.is_error.unwrap_or(false), "create should succeed");
+
+        let payload = payload_of(&result);
+        assert_eq!(payload["state"], "new");
+        assert_eq!(payload["provenance"]["source"], "spec");
+        assert_eq!(payload["provenance"]["reference"], "design.md");
+        assert!(repo.path().join(SPEC_PATH).is_file(), "the spec is written");
+    }
+
+    /// `create expectation --from-spec` refuses a `..`-escaping doc path.
+    #[tokio::test]
+    async fn create_expectation_from_spec_rejects_path_traversal() {
+        let repo = tempfile::TempDir::new().unwrap();
+        let factory = create_scripted_factory("src/x.expect.md", CREATE_GREEN_SPEC);
+        let tool = ExpectTool::new().with_agent_factory(factory);
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let err = tool
+            .execute(
+                args(serde_json::json!({
+                    "op": EXPECTATION_CREATE_OP,
+                    "from_spec": "../escape.md",
+                })),
+                &ctx,
+            )
+            .await
+            .expect_err("a `..`-escaping from_spec path must be refused");
+        assert!(
+            err.message.contains(".."),
+            "the error names the boundary: {}",
+            err.message
         );
     }
 }

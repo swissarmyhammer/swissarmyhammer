@@ -31,7 +31,11 @@ use agent_client_protocol::{Client, DynConnectTo};
 use tokio::sync::{broadcast, Semaphore};
 
 use swissarmyhammer_config::{AgentUseCase, ModelConfig};
-use swissarmyhammer_expect::{run_expect_over_agent, DrivenObservation, ExpectScope};
+use swissarmyhammer_expect::{
+    create, parse_draft, render_authoring_goal, run_expect_over_agent, AcpGoalDriver,
+    AuthoringRequest, CreateOutcome, CreateSource, DoctorFacts, DraftSpec, DrivenObservation,
+    DriverHandle, ExpectError, ExpectScope, GoalDriver, SpecAuthor,
+};
 use swissarmyhammer_validators::PoolConfig;
 
 use crate::mcp::tool_registry::ToolContext;
@@ -146,6 +150,97 @@ async fn run_expect_request_inner(
     )
     .await
     .map_err(|e| format!("expect pipeline failed: {e}"))
+}
+
+/// A [`SpecAuthor`] backed by the ACP agent seam — the production authoring agent.
+///
+/// Each draft is authored over a **fresh scoped session**: an
+/// [`AcpGoalDriver`](swissarmyhammer_expect::AcpGoalDriver) is single-use per
+/// session, and the green-loop calls [`author`](SpecAuthor::author) once per repair
+/// turn, so a new agent is minted (via the [`AgentFactory`]) for every call. The
+/// request is rendered to a goal with
+/// [`render_authoring_goal`](swissarmyhammer_expect::render_authoring_goal), the
+/// agent is driven, and its structured reply is parsed back into a [`DraftSpec`]
+/// with [`parse_draft`](swissarmyhammer_expect::parse_draft).
+struct AgentSpecAuthor {
+    /// Mints a fresh agent handle per authoring turn.
+    factory: AgentFactory,
+    /// The repo root the authoring subagent's reads are confined under.
+    repo_root: PathBuf,
+    /// The pool sizing for the single scoped authoring session.
+    pool_config: PoolConfig,
+}
+
+impl SpecAuthor for AgentSpecAuthor {
+    fn author(
+        &self,
+        request: &AuthoringRequest,
+    ) -> impl Future<Output = Result<DraftSpec, ExpectError>> {
+        let goal = render_authoring_goal(request);
+        let factory = Arc::clone(&self.factory);
+        let repo_root = self.repo_root.clone();
+        let pool_config = self.pool_config;
+        async move {
+            let handle = factory().await.map_err(ExpectError::Agent)?;
+            let driver = AcpGoalDriver::new(
+                DriverHandle {
+                    agent: handle.agent,
+                    notification_rx: handle.notification_rx,
+                },
+                repo_root,
+                pool_config,
+            );
+            let turn = driver.drive_goal(&goal).await?;
+            parse_draft(&turn.claim)
+        }
+    }
+}
+
+/// Author one expectation from `source` end to end behind the pipeline gate, on
+/// the spawn-blocking current-thread runtime, and return the [`CreateOutcome`].
+///
+/// The same gate + spawn-blocking pattern as [`run_expect_request`]: authoring
+/// drives an ACP connection across `await`s (`!Send`), so it runs off the shared
+/// async-trait executor, and the gate serializes whole pipelines. The green-loop
+/// itself ([`create`](swissarmyhammer_expect::create)) mints a fresh agent per
+/// draft via [`AgentSpecAuthor`].
+///
+/// # Errors
+///
+/// Returns a message on agent-construction failure, a draft that cannot be made
+/// doctor-green within the repair budget, or a write failure.
+pub async fn run_create_request(
+    source: CreateSource,
+    repo_root: PathBuf,
+    facts: DoctorFacts,
+    pool_config: PoolConfig,
+    agent_factory: AgentFactory,
+) -> Result<CreateOutcome, String> {
+    let _permit = EXPECT_PIPELINE_GATE
+        .acquire()
+        .await
+        .map_err(|e| format!("expect pipeline gate closed: {e}"))?;
+
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || {
+        let _entered = span.enter();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build expect runtime: {e}"))?;
+        rt.block_on(async move {
+            let author = AgentSpecAuthor {
+                factory: agent_factory,
+                repo_root: repo_root.clone(),
+                pool_config,
+            };
+            create(&source, &repo_root, &facts, &author)
+                .await
+                .map_err(|e| format!("expect create failed: {e}"))
+        })
+    })
+    .await
+    .map_err(|e| format!("expect create task join error: {e}"))?
 }
 
 #[cfg(test)]
