@@ -84,3 +84,7 @@ futures-util = { workspace = true }
 serde_json = { workspace = true }
 rmcp = { workspace = true }
 reqwest = { workspace = true }
+serial_test = { workspace = true }
+# Enable mirdan's `test-support` helpers (MirdanConfigGuard, write_fake_agents_config)
+# for the `expose_board` integration test's hermetic agent-detection harness.
+mirdan = { workspace = true, features = ["test-support"] }

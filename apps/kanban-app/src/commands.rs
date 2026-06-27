@@ -24,10 +24,10 @@
 //! Tauri commands for board operations.
 
 use crate::menu;
-use crate::state::{AppState, BoardHandle};
+use crate::state::{resolve_kanban_path, AppState, BoardHandle};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_kanban::task_helpers::{
@@ -2906,6 +2906,80 @@ fn spawn_window_forwarder(
             }
         }
     })
+}
+
+/// Resolve the board root (the directory containing `.kanban/`) for an open
+/// board, given the frontend's optional `board_path`.
+///
+/// `board_path` is the canonical `.kanban` path the frontend holds (the
+/// `AppState::boards` map key); when absent, falls back to the
+/// most-recently-used board. The board is confirmed open via [`resolve_handle`]
+/// so a stale or unknown path yields a clear "Board not open" error rather than
+/// registering against a phantom directory. The board root is the parent of the
+/// resolved `.kanban` directory — the same root [`start_board_mcp_server`] and
+/// `deploy_workspace_tools` use.
+///
+/// [`start_board_mcp_server`]: crate::state
+async fn resolve_board_root(
+    state: &AppState,
+    board_path: Option<String>,
+) -> Result<PathBuf, String> {
+    let board_path = board_path
+        .or_else(|| state.ui_state.most_recent_board())
+        .ok_or_else(|| "No board is open to expose".to_string())?;
+    // Confirm the board is open (clean error on mismatch).
+    let _handle = resolve_handle(state, Some(board_path.clone())).await?;
+    let kanban_path = resolve_kanban_path(Path::new(&board_path)).map_err(|e| e.to_string())?;
+    kanban_path
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| format!("board path has no parent: {}", kanban_path.display()))
+}
+
+/// Register THIS board's `kanban` MCP server into every mirdan-detected agent's
+/// project-scope config, so an external coding agent (Claude Code, Codex, …) can
+/// talk to the board.
+///
+/// This is an OS-level filesystem operation, not board-state mutation, so it is
+/// a plain Tauri command — NOT routed through `dispatch_command` (see the file
+/// header). It resolves the board root and the bundled `kanban` CLI on the async
+/// path, then runs the blocking registration (agent detection + config writes)
+/// on a worker thread. Returns one [`AgentExposeResult`] per detected agent for
+/// the frontend to render.
+///
+/// [`AgentExposeResult`]: crate::expose::AgentExposeResult
+#[tauri::command]
+pub async fn expose_board_to_agents(
+    state: State<'_, AppState>,
+    board_path: Option<String>,
+) -> Result<Vec<crate::expose::AgentExposeResult>, String> {
+    let board_root = resolve_board_root(&state, board_path).await?;
+
+    // The bundled CLI is the `kanban` sibling of the running app executable
+    // (Tauri sidecar in production; the `before-dev.sh`-staged binary, which
+    // also lands beside the exe, in a dev build).
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("cannot resolve the running executable: {e}"))?;
+    let cli_path = crate::cli_install::resolve_bundled_cli(&exe).ok_or_else(|| {
+        "The kanban command-line tool is not bundled next to the app. In a dev \
+         build, run scripts/before-dev.sh (or `cargo build -p kanban-cli`) to \
+         stage it."
+            .to_string()
+    })?;
+
+    tracing::info!(
+        board_root = %board_root.display(),
+        cli = %cli_path.display(),
+        "exposing board to detected agents"
+    );
+
+    // Registration is synchronous filesystem + agent-detection work; keep it
+    // off the async runtime.
+    tokio::task::spawn_blocking(move || {
+        crate::expose::expose_board_to_agents_inner(&board_root, &cli_path)
+    })
+    .await
+    .map_err(|e| format!("expose task failed: {e}"))
 }
 
 #[cfg(test)]

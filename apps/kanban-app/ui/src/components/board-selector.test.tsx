@@ -1,8 +1,23 @@
 import { describe, it, expect, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, fireEvent, act } from "@testing-library/react";
 import { renderInAct } from "@/test/act-render";
 
-const mockInvoke = vi.fn((..._args: unknown[]) => Promise.resolve("ok"));
+const mockInvoke = vi.fn(
+  (..._args: unknown[]): Promise<unknown> => Promise.resolve("ok"),
+);
+
+// `mock`-prefixed so the hoisted `vi.mock("sonner", …)` factory may reference
+// them (vitest allowlists names starting with `mock`).
+const mockToastSuccess = vi.fn();
+const mockToastError = vi.fn();
+const mockToastInfo = vi.fn();
+vi.mock("sonner", () => ({
+  toast: {
+    success: (...args: unknown[]) => mockToastSuccess(...args),
+    error: (...args: unknown[]) => mockToastError(...args),
+    info: (...args: unknown[]) => mockToastInfo(...args),
+  },
+}));
 
 // Spread the real module and override only the parts the test controls.
 // @tauri-apps/api >=2.11 pulls submodules that import named exports from core
@@ -160,6 +175,66 @@ describe("BoardSelector", () => {
       </Wrapper>,
     );
     const btn = screen.queryByRole("button", { name: "Open in new window" });
+    expect(btn).toBeNull();
+  });
+
+  it("invokes expose_board_to_agents with the board path and toasts each per-agent result", async () => {
+    mockInvoke.mockClear();
+    mockToastSuccess.mockClear();
+    mockToastError.mockClear();
+    mockInvoke.mockImplementation((...args: unknown[]) => {
+      if (args[0] === "expose_board_to_agents") {
+        return Promise.resolve([
+          { ok: true, message: "kanban MCP server for Claude Code" },
+          { ok: false, message: "Codex (project): boom" },
+        ]);
+      }
+      return Promise.resolve("ok");
+    });
+
+    await renderInAct(
+      <Wrapper>
+        <BoardSelector
+          boards={twoBoards}
+          selectedPath={twoBoards[0].path}
+          onSelect={() => {}}
+          showTearOff
+        />
+      </Wrapper>,
+    );
+
+    const btn = screen.getByRole("button", {
+      name: "Expose this board to your agent",
+    });
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    // The plain Tauri command is invoked with the window's board path
+    // (camelCase per Tauri's arg convention).
+    expect(mockInvoke).toHaveBeenCalledWith("expose_board_to_agents", {
+      boardPath: twoBoards[0].path,
+    });
+    // Each per-agent result is rendered: a success toast and a failure toast.
+    expect(mockToastSuccess).toHaveBeenCalledWith(
+      "kanban MCP server for Claude Code",
+    );
+    expect(mockToastError).toHaveBeenCalledWith("Codex (project): boom");
+  });
+
+  it("does not render the expose button when showTearOff is false", async () => {
+    await renderInAct(
+      <Wrapper>
+        <BoardSelector
+          boards={twoBoards}
+          selectedPath={twoBoards[0].path}
+          onSelect={() => {}}
+        />
+      </Wrapper>,
+    );
+    const btn = screen.queryByRole("button", {
+      name: "Expose this board to your agent",
+    });
     expect(btn).toBeNull();
   });
 });

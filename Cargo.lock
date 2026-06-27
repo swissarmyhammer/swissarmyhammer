@@ -4571,6 +4571,7 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
+ "serial_test",
  "swissarmyhammer-agent",
  "swissarmyhammer-app-service",
  "swissarmyhammer-command-service",

@@ -8,6 +8,7 @@ mod command_services;
 mod commands;
 mod confine;
 mod deeplink;
+mod expose;
 mod menu;
 mod plugins;
 mod state;
@@ -77,6 +78,7 @@ fn run_app(app_state: AppState) {
             commands::list_views,
             commands::get_undo_state,
             commands::create_window,
+            commands::expose_board_to_agents,
             commands::save_dropped_file,
             commands::command_tool_call,
             commands::mcp_subscribe,

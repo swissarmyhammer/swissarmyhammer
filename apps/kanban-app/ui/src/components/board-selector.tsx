@@ -15,8 +15,10 @@
  * peer zone with its own leaves.
  */
 
-import { useState } from "react";
-import { ExternalLink } from "lucide-react";
+import { useCallback, useState } from "react";
+import { ExternalLink, Share2 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { useDispatchCommand } from "@/lib/command-scope";
 import {
   Tooltip,
@@ -36,6 +38,17 @@ import { useSchema } from "@/lib/schema-context";
 import { useFieldValue } from "@/lib/entity-store-context";
 import { asSegment } from "@/types/spatial";
 import type { Entity, OpenBoard } from "@/types/kanban";
+
+/**
+ * Per-agent result of exposing the board, returned by the
+ * `expose_board_to_agents` Tauri command. `ok` distinguishes a successful
+ * registration from a failure; `message` is a human-readable line that already
+ * names the agent.
+ */
+interface AgentExposeResult {
+  ok: boolean;
+  message: string;
+}
 
 /** Extract the last meaningful path segment (parent of .kanban). */
 export function pathStem(path: string): string {
@@ -79,6 +92,31 @@ export function BoardSelector({
     boardEntity?.id ?? "",
     displayFieldName,
   );
+
+  // Register this board's MCP server into every detected agent's config so an
+  // external coding agent (Claude Code, Codex, …) can talk to it. This is an
+  // OS-level filesystem operation, so it invokes the plain Tauri command
+  // directly (not a dispatched board command); per-agent results are surfaced
+  // as toasts.
+  const handleExpose = useCallback(async () => {
+    if (!selectedPath) return;
+    try {
+      const results = await invoke<AgentExposeResult[]>(
+        "expose_board_to_agents",
+        { boardPath: selectedPath },
+      );
+      if (results.length === 0) {
+        toast.info("No agents detected to expose this board to.");
+        return;
+      }
+      for (const result of results) {
+        if (result.ok) toast.success(result.message);
+        else toast.error(result.message);
+      }
+    } catch (e) {
+      toast.error(`Failed to expose board to your agent: ${String(e)}`);
+    }
+  }, [selectedPath]);
 
   if (boards.length === 0) return null;
 
@@ -165,6 +203,31 @@ export function BoardSelector({
             </Pressable>
           </TooltipTrigger>
           <TooltipContent side="bottom">Open in new window</TooltipContent>
+        </Tooltip>
+      )}
+
+      {showTearOff && selectedPath && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Pressable
+              asChild
+              moniker={asSegment("board-selector.expose")}
+              ariaLabel="Expose this board to your agent"
+              onPress={() => {
+                handleExpose().catch(console.error);
+              }}
+            >
+              <button
+                type="button"
+                className="inline-flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground/40 hover:bg-accent hover:text-accent-foreground transition-colors"
+              >
+                <Share2 className="h-3.5 w-3.5" />
+              </button>
+            </Pressable>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            Expose this board to your agent
+          </TooltipContent>
         </Tooltip>
       )}
     </div>

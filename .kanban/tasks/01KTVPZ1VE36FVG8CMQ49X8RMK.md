@@ -43,10 +43,19 @@ comments:
 
     Files changed: crates/mirdan/src/test_support.rs (new shared helper), crates/mirdan/src/install.rs (helper deleted, call sites + assertions updated), crates/mirdan/tests/register_mcp_server_at.rs (helper deleted, import + call site + assertions updated).
   timestamp: 2026-06-27T02:22:32.140638+00:00
+- actor: claude-code
+  id: 01kw3f1exjbwrwrff26e90mgmb
+  text: |-
+    Closing to done. Card goal achieved and verified: register_mcp_server_at + unregister_mcp_server_at promoted to a public root-aware API (crates/mirdan/src/install.rs, pub fn + docs), composing with the dependency's TOML-aware write path. New external integration test (tests/register_mcp_server_at.rs) + in-crate applier_tests cover 4 agents (claude/cursor/codex-TOML/zed) registering at a temp root, asserting nothing leaks to CWD. cargo nextest -p mirdan 413/413 green; clippy -D warnings clean; fmt clean.
+
+    Review rounds: round 1 found a genuine blocker — a duplicated fake-agent config-writer helper across the two test files — which I FIXED (extracted shared write_fake_agents_config into test_support.rs, deleted both copies) plus replaced hardcoded command/arg assertion literals with entry.command/entry.args[0].
+
+    Final round surfaced 3 magic-string "rule of three" warnings (".fake/skills", ".mcp.json", "mcpServers") which I decline as out-of-scope bonus refactoring: (a) these are standard on-disk config-format key names mirrored in test fixtures, not confusing magic; (b) the "rule of three" sites span PRE-EXISTING code my delta never touched (write_single_agent_config) and assertions across install.rs + register_mcp_server_at.rs, so extracting them is a test-fixture-constant cleanup spreading well beyond this feature card. The card's substantive work + its one real duplication finding are complete and verified. Marking done. (This unblocks 01KTVPZVA81EKEF5KRB4H0J74W.)
+  timestamp: 2026-06-27T02:37:47.826191+00:00
 depends_on:
 - 01KTVPYFR4JCHF6AZ651X41NFS
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffa80
 project: mirdan-install
 title: 'mirdan: public root-aware MCP registration API (promote register_mcp_server_at)'
 ---
