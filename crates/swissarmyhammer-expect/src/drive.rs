@@ -1047,7 +1047,7 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::spec::Setup;
-    use crate::types::SurfaceState;
+    use crate::types::{CliState, SurfaceState};
 
     /// How long a wedged pipeline may run before the test fails instead of
     /// hanging CI.
@@ -1881,22 +1881,33 @@ Drive the system to a known total.
         goal_reached: bool,
         /// Delay before each turn responds — used to outrun the spec timeout.
         delay: Duration,
+        /// The structured claim each turn reports — the agent's self-account,
+        /// recorded in the trajectory and re-validated, never trusted.
+        claim: serde_json::Value,
     }
 
     impl GoalDriver for ScriptedDriver {
         fn drive_goal(&self, _goal: &str) -> impl Future<Output = Result<DriverTurn, ExpectError>> {
             let goal_reached = self.goal_reached;
             let delay = self.delay;
+            let claim = self.claim.clone();
             async move {
                 if !delay.is_zero() {
                     tokio::time::sleep(delay).await;
                 }
                 Ok(DriverTurn {
-                    claim: serde_json::json!({ "summary": "drove the SUT" }),
+                    claim,
                     goal_reached,
                 })
             }
         }
+    }
+
+    /// The default scripted claim: the agent's own account of driving the SUT.
+    /// Distinct from the adapter's authoritative read, so a verdict graded over it
+    /// rather than the checkpoints would be a tamper-resistance failure.
+    fn drove_the_sut_claim() -> serde_json::Value {
+        serde_json::json!({ "summary": "drove the SUT" })
     }
 
     /// Stall: a driven turn that arms the idle window then goes silent is
@@ -1958,6 +1969,7 @@ Drive the system to a known total.
         let driver = ScriptedDriver {
             goal_reached: false,
             delay: Duration::ZERO,
+            claim: drove_the_sut_claim(),
         };
         let expectation = stop_expectation();
         let config = ObserveConfig::new("/repo");
@@ -1990,6 +2002,7 @@ Drive the system to a known total.
         let driver = ScriptedDriver {
             goal_reached: true,
             delay: Duration::from_secs(30),
+            claim: drove_the_sut_claim(),
         };
         let mut expectation = stop_expectation();
         expectation.frontmatter.timeout = Duration::from_millis(100);
@@ -2017,14 +2030,32 @@ Drive the system to a known total.
     /// soft stop) but whose adapter-observed state fails the criteria yields a
     /// FAILING verdict — the self-declared done is REJECTED, because the verdict
     /// lives in `expect`, never in the agent (hardening rule 2).
-    #[tokio::test]
-    async fn stop_conditions_self_declared_done_is_rejected_when_criteria_fail() {
-        // The agent declares success, but the authoritative state has total 50,
-        // not the criterion's 40.
-        let adapter = json_stub_adapter(serde_json::json!({ "total": 50 }));
+    /// Drive `expectation`'s self-declared-done turn over an adapter reporting
+    /// `state`, and assert the verdict REJECTS the claim. The agent reaches its
+    /// soft stop and reports a claim that *names the passing value*, yet the
+    /// verdict is graded over the adapter's authoritative observation: no
+    /// interpretation of the one `Then` criterion holds against `state`, so
+    /// [`compile`](crate::compile) yields no binding assertion and the criterion
+    /// is a non-pass — the verdict fails.
+    ///
+    /// This pins hardening rule 2 (`ideas/expect.md` §"The Check Loop"): the
+    /// verdict lives in `expect`, never in the agent. [`evaluate`] compiles and
+    /// grades only against `Observation.checkpoints[*].state`, never the claim
+    /// recorded in `trajectory.steps`, so a claim that *would* satisfy the
+    /// criterion as text cannot rescue a verdict the observed state fails.
+    async fn assert_self_declared_done_rejected_over(state: SurfaceState) {
+        let adapter = StubAdapter {
+            resolves: false,
+            state,
+        };
+        // The claim names the passing total ("the total is $40"), so a verdict
+        // that wrongly read the claim would pass; it must fail because no `$40`
+        // interpretation holds against the authoritative checkpoints (total 50 /
+        // `Total: $50`).
         let driver = ScriptedDriver {
             goal_reached: true,
             delay: Duration::ZERO,
+            claim: serde_json::json!({ "summary": "the total is $40 — done" }),
         };
         let expectation = stop_expectation();
         let config = ObserveConfig::new("/repo");
@@ -2037,10 +2068,6 @@ Drive the system to a known total.
         .expect("re-validation must not hang")
         .expect("re-validation produces a verdict even when the agent's claim fails");
 
-        assert!(
-            !verdict.reliability.satisfied(),
-            "the self-declared done must be rejected: the verdict must not be satisfied"
-        );
         assert_eq!(
             verdict.criteria.len(),
             1,
@@ -2048,7 +2075,122 @@ Drive the system to a known total.
         );
         assert!(
             !verdict.criteria[0].pass,
-            "the criterion fails against the authoritative state (total 50, not 40)"
+            "the criterion fails against the authoritative state, not the claim: {:?}",
+            verdict.criteria
+        );
+        assert!(
+            !verdict.reliability.satisfied(),
+            "the self-declared done must be rejected: the verdict must not be satisfied"
+        );
+    }
+
+    /// Independent re-validation over a **JSON-field** criterion: a self-declared
+    /// done is rejected because no `$40` interpretation holds against the
+    /// authoritative `$.total` (50), so the criterion compiles to no binding
+    /// assertion and grades non-pass.
+    #[tokio::test]
+    async fn stop_conditions_self_declared_done_is_rejected_for_a_json_field_criterion() {
+        assert_self_declared_done_rejected_over(SurfaceState::Json {
+            body: serde_json::json!({ "total": 50 }),
+        })
+        .await;
+    }
+
+    /// Independent re-validation over a **stdout TEXT** criterion (acceptance:
+    /// "not just a JSON field"): against the cli checkpoint's `stdout`
+    /// (`Total: $50`), no `$40` stream-text interpretation holds, so the criterion
+    /// grades non-pass. The agent's "the total is $40" claim — recorded only in
+    /// the trajectory, never as a checkpoint — is never consulted, so the
+    /// self-declared done is rejected. This exercises `compile`'s cli-stdout
+    /// candidate path, distinct from the JSON-field case's structured-value path.
+    #[tokio::test]
+    async fn stop_conditions_self_declared_done_is_rejected_for_a_stdout_text_criterion() {
+        assert_self_declared_done_rejected_over(SurfaceState::Cli(CliState {
+            stdout: "Total: $50\n".to_string(),
+            stderr: String::new(),
+            exit_code: Some(0),
+            files: std::collections::BTreeMap::new(),
+        }))
+        .await;
+    }
+
+    /// The window the spec-timeout drive must return within: far below the
+    /// wedged agent's 60s sleep and the pool's [`STALL_TURN_CEILING`], so a pass
+    /// proves the spec budget — not the agent or the pool floor — aborted the
+    /// in-flight drive.
+    const SPEC_TIMEOUT_ABORT_WINDOW: Duration = Duration::from_secs(5);
+
+    /// Spec-timeout over a **real mock-ACP session**: a drive whose agent wedges
+    /// (one chunk, then silent far past the spec budget) is aborted with
+    /// [`ExpectError::Timeout`] carrying the spec's wall-clock budget — promptly,
+    /// not left to hang on the agent's sleep or the pool's stall floor. Unlike
+    /// [`stop_conditions_spec_timeout_terminates_with_a_clear_error`], which uses a
+    /// stub [`ScriptedDriver`], this drives a real [`AcpGoalDriver`] over the
+    /// [`StallingAgent`], so the [`AgentPool`] teardown path is exercised end to
+    /// end.
+    ///
+    /// `^gg00rxf` review Finding 3: the spec-timeout stop drops the drive future,
+    /// which tears the pool's workers down but does NOT actively send
+    /// `session/cancel` for the in-flight session ([`AgentPool`]'s `Drop` is
+    /// synchronous and cannot await the cancel over the connection it is dropping).
+    /// Active session cancellation on this teardown — distinct from the pool's
+    /// idle/ceiling cancel path, which this test deliberately does not arm — is a
+    /// tracked follow-up; this test pins the guaranteed behavior (prompt typed
+    /// timeout, no hang).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spec_timeout_over_an_acp_session_aborts_the_in_flight_drive() {
+        let repo = temp_repo();
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = Arc::new(StallingAgent {
+            next_session: AtomicUsize::new(0),
+            notify_tx,
+            cancelled: Arc::new(Mutex::new(Vec::new())),
+        });
+        let driver = AcpGoalDriver::new(
+            DriverHandle {
+                agent: DynConnectTo::new(MockAgentAdapter(agent)),
+                notification_rx,
+            },
+            repo.path(),
+            // A generous idle window and ceiling so the SPEC timeout — not the
+            // pool's stall floor — is the stop that fires.
+            PoolConfig::local()
+                .with_idle_timeout(STALL_TURN_CEILING)
+                .with_turn_ceiling(STALL_TURN_CEILING),
+        );
+
+        // `resolves = false` routes the When step through the wedged subagent; the
+        // spec budget is tiny so the wall clock ends the drive well before the
+        // agent's 60s sleep or the pool's stall floor.
+        let adapter = json_stub_adapter(serde_json::json!({ "total": 40 }));
+        let mut expectation = stop_expectation_under(repo.path());
+        expectation.frontmatter.timeout = Duration::from_millis(100);
+        let config = ObserveConfig::new(repo.path());
+
+        let started = std::time::Instant::now();
+        let err = tokio::time::timeout(
+            PIPELINE_TIMEOUT,
+            drive_and_revalidate(&expectation, &adapter, &config, &driver),
+        )
+        .await
+        .expect("the spec-timeout stop must fire well inside the test budget")
+        .expect_err("a drive that outruns the spec budget must time out, not hang");
+        let elapsed = started.elapsed();
+
+        match err {
+            ExpectError::Timeout { timeout_ms } => assert_eq!(
+                timeout_ms,
+                expectation.frontmatter.timeout.as_millis() as u64,
+                "the timeout error must carry the spec's wall-clock budget"
+            ),
+            other => {
+                panic!("the spec timeout must surface as ExpectError::Timeout, got: {other:?}")
+            }
+        }
+        assert!(
+            elapsed < SPEC_TIMEOUT_ABORT_WINDOW,
+            "the spec timeout must abort the in-flight drive promptly ({elapsed:?}), not wait \
+             on the wedged agent or the pool's stall floor"
         );
     }
 }

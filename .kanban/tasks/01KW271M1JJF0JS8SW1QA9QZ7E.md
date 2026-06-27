@@ -25,8 +25,8 @@ comments:
   timestamp: 2026-06-27T15:21:04.181367+00:00
 depends_on:
 - 01KW26D5MKKB4V5EJR0HYFRTGS
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8480
 project: expect
 title: 'gui surface adapter: Windows UIA + Linux AT-SPI (behind cfg)'
 ---

@@ -32,9 +32,10 @@ use tokio::sync::{broadcast, Semaphore};
 
 use swissarmyhammer_config::{AgentUseCase, ModelConfig};
 use swissarmyhammer_expect::{
-    create, parse_draft, render_authoring_goal, run_expect_over_agent, AcpGoalDriver,
-    AuthoringRequest, CreateOutcome, CreateSource, DoctorFacts, DraftSpec, DrivenObservation,
-    DriverHandle, ExpectError, ExpectScope, GoalDriver, SpecAuthor,
+    create, drive_and_revalidate, parse_draft, render_authoring_goal, run_expect_over_agent,
+    AcpGoalDriver, AuthoringRequest, CreateOutcome, CreateSource, DoctorFacts, DraftSpec,
+    DrivenObservation, DriverHandle, ExpectError, ExpectScope, Expectation, ExpectationVerdict,
+    GoalDriver, ObserveConfig, SpecAuthor, SurfaceAdapter,
 };
 use swissarmyhammer_validators::PoolConfig;
 
@@ -152,6 +153,96 @@ async fn run_expect_request_inner(
     .map_err(|e| format!("expect pipeline failed: {e}"))
 }
 
+/// Drive one expectation toward its goal under the spec's stop conditions and
+/// return the **independent** re-validated [`ExpectationVerdict`], behind the
+/// pipeline gate, over a freshly-minted agent and the chosen surface `adapter`.
+///
+/// The stop-conditioned mirror of [`run_expect_request`]: where that returns each
+/// driven subagent's raw [`DrivenObservation`], this threads the [`Expectation`]
+/// and its [`SurfaceAdapter`] through
+/// [`drive_and_revalidate`](swissarmyhammer_expect::drive_and_revalidate) so the
+/// verdict is produced over the adapter's authoritative observation — never the
+/// agent's self-declared claim. The agent is consulted only for a `When` step the
+/// adapter cannot resolve mechanically (the agent-fallback gate,
+/// [`SurfaceAdapter::resolves_mechanically`]); on a deterministic surface the
+/// adapter drives every step and the minted agent is left unused.
+///
+/// The gate permit, the spawn-blocking current-thread runtime, and the
+/// [`AgentFactory`] seam are exactly those of [`run_expect_request`]: the permit
+/// is held for the whole run so only one agent set is resident, and the
+/// `!Send` ACP drive runs off the shared async-trait executor.
+///
+/// # Errors
+///
+/// Returns a message on agent-construction failure or any [`ExpectError`] the
+/// drive raises — a spec-timeout stop, a pool abandonment, the max-turns cap, or
+/// an adapter failure while observing.
+pub async fn run_drive_request<A>(
+    expectation: Expectation,
+    adapter: A,
+    repo_path: PathBuf,
+    pool_config: PoolConfig,
+    agent_factory: AgentFactory,
+) -> Result<ExpectationVerdict, String>
+where
+    A: SurfaceAdapter + Send + 'static,
+{
+    // Serialize `expect` pipelines process-wide: hold a permit for the whole run
+    // so only one agent set is resident at a time (see `EXPECT_PIPELINE_GATE`).
+    let _permit = EXPECT_PIPELINE_GATE
+        .acquire()
+        .await
+        .map_err(|e| format!("expect pipeline gate closed: {e}"))?;
+
+    // Carry the current span across the thread boundary so the engine's
+    // observability lines stay correlated with the originating tool-call span.
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || {
+        let _entered = span.enter();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build expect runtime: {e}"))?;
+        rt.block_on(run_drive_request_inner(
+            expectation,
+            adapter,
+            repo_path,
+            pool_config,
+            agent_factory,
+        ))
+    })
+    .await
+    .map_err(|e| format!("expect drive task join error: {e}"))?
+}
+
+/// The drive body, run inside the dedicated current-thread runtime: mint the
+/// agent into a single-session [`AcpGoalDriver`], then drive and re-validate the
+/// expectation over the adapter.
+async fn run_drive_request_inner<A>(
+    expectation: Expectation,
+    adapter: A,
+    repo_path: PathBuf,
+    pool_config: PoolConfig,
+    agent_factory: AgentFactory,
+) -> Result<ExpectationVerdict, String>
+where
+    A: SurfaceAdapter,
+{
+    let handle = agent_factory().await?;
+    let driver = AcpGoalDriver::new(
+        DriverHandle {
+            agent: handle.agent,
+            notification_rx: handle.notification_rx,
+        },
+        repo_path.clone(),
+        pool_config,
+    );
+    let config = ObserveConfig::new(repo_path);
+    drive_and_revalidate(&expectation, &adapter, &config, &driver)
+        .await
+        .map_err(|e| format!("expect drive failed: {e}"))
+}
+
 /// A [`SpecAuthor`] backed by the ACP agent seam — the production authoring agent.
 ///
 /// Each draft is authored over a **fresh scoped session**: an
@@ -249,6 +340,9 @@ mod tests {
 
     use std::collections::HashMap;
 
+    use std::path::Path;
+
+    use swissarmyhammer_expect::{Setup, SurfaceState};
     use swissarmyhammer_validators::review::test_support::{
         ScriptedAdapter, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
     };
@@ -365,6 +459,108 @@ mod tests {
             observations[0].structured["verdict"], "pass",
             "the subagent's structured reply is captured: {:?}",
             observations[0].structured
+        );
+    }
+
+    /// A repo-relative cli spec carrying one `When` step and one deterministic
+    /// `Then` criterion, so a [`StubAdapter`] with a non-mechanical step forces
+    /// the agent-fallback drive and the criterion is graded against the adapter's
+    /// observed state.
+    const DRIVE_SPEC: &str = "---\ndescription: a drive-and-revalidate spec\nsurface: cli\n---\n\nDrive the system to a known total.\n\n## When\n- perform the action\n\n## Then\n- [ ] the total is $40\n";
+
+    /// The stable preamble substring present in every driver goal
+    /// ([`build_driver_goal`](swissarmyhammer_expect::build_driver_goal)), used to
+    /// key the scripted agent's reply regardless of the rendered goal body.
+    const DRIVER_GOAL_NEEDLE: &str = "driving a system under test";
+
+    /// A stub surface adapter whose checkpoints are a fixed authoritative read.
+    /// `resolves_mechanically` returns `false`, so every `When` step is routed
+    /// through the scoped subagent — the agent-fallback path
+    /// [`drive_and_revalidate`](swissarmyhammer_expect::drive_and_revalidate)
+    /// exercises — while the adapter still reads the ground-truth `state`.
+    struct StubAdapter {
+        state: SurfaceState,
+    }
+
+    impl SurfaceAdapter for StubAdapter {
+        type ProvisionedSut = ();
+
+        fn provision(&self, _setup: Option<&Setup>, _repo_root: &Path) -> Result<(), ExpectError> {
+            Ok(())
+        }
+
+        fn drive(&self, _sut: &mut (), _when_step: &str) -> Result<(), ExpectError> {
+            Ok(())
+        }
+
+        fn observe(&self, _sut: &()) -> Result<SurfaceState, ExpectError> {
+            Ok(self.state.clone())
+        }
+
+        fn teardown(&self, _sut: ()) -> Result<(), ExpectError> {
+            Ok(())
+        }
+
+        fn resolves_mechanically(&self, _when_step: &str) -> bool {
+            false
+        }
+    }
+
+    /// `run_drive_request` mints the agent through the factory, drives the
+    /// expectation under the spec's stop conditions, and re-validates over the
+    /// adapter's authoritative observation — producing the verdict, not the raw
+    /// `DrivenObservation`. The agent's claim never decides the verdict: it is
+    /// graded against the adapter's observed `total = 40`. This is the production
+    /// op-layer seam wiring `drive_and_revalidate` into the live tool, exercised
+    /// over a real `AcpGoalDriver` and a real `SurfaceAdapter` (not a stub driver).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_drive_request_revalidates_over_the_adapter_through_the_seam() {
+        let repo = tempfile::TempDir::new().expect("temp repo");
+        let expectation = Expectation::parse(
+            DRIVE_SPEC,
+            &repo.path().join("feature.expect.md"),
+            repo.path(),
+        )
+        .expect("parse drive spec");
+
+        let agent = ScriptedAgent::with_config(
+            vec![(
+                DRIVER_GOAL_NEEDLE.to_string(),
+                ScriptedReply::Text(r#"{"summary": "drove the total to 40"}"#.to_string()),
+            )],
+            ScriptedAgentConfig::default(),
+        );
+        let factory = scripted_factory(agent);
+
+        let adapter = StubAdapter {
+            state: SurfaceState::Json {
+                body: serde_json::json!({ "total": 40 }),
+            },
+        };
+
+        let verdict = run_drive_request(
+            expectation,
+            adapter,
+            repo.path().to_path_buf(),
+            PoolConfig::remote(1),
+            factory,
+        )
+        .await
+        .expect("the drive request must produce a re-validated verdict");
+
+        assert_eq!(
+            verdict.criteria.len(),
+            1,
+            "the one Then criterion was graded"
+        );
+        assert!(
+            verdict.criteria[0].pass,
+            "the criterion is graded over the adapter's observed total=40: {:?}",
+            verdict.criteria
+        );
+        assert!(
+            verdict.reliability.satisfied(),
+            "the verdict is satisfied over the adapter-observed state"
         );
     }
 }
