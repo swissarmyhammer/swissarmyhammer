@@ -42,8 +42,8 @@ use swissarmyhammer_operations::{
 };
 
 use swissarmyhammer_expect::{
-    evaluate_spec, golden_path, observe, received_path, surfaces, write_received, CliAdapter,
-    Expectation, ExpectationLoader, Observation, ObserveConfig, Surface,
+    evaluate_spec, golden_path, observe, read_golden, received_path, surfaces, write_received,
+    CliAdapter, Expectation, ExpectationLoader, Observation, ObserveConfig, Surface,
 };
 
 use crate::mcp::op_tool_helpers::{json_result, string_arg};
@@ -74,13 +74,27 @@ const NOT_IMPLEMENTED_STATUS: &str = "not_implemented";
 pub struct ExpectationCreate;
 
 /// `get expectation` — read one expectation spec.
-#[operation(
-    verb = "get",
-    noun = "expectation",
-    description = "Get one expectation spec"
-)]
+///
+/// A manual [`Operation`] impl (rather than the `#[operation]` macro) so it can
+/// declare the [`SCOPE_PARAMS`] scope/tag inputs it resolves through
+/// [`ExpectationLoader::resolve_scope`].
 #[derive(Debug, Default)]
 pub struct ExpectationGet;
+
+impl Operation for ExpectationGet {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "expectation"
+    }
+    fn description(&self) -> &'static str {
+        "Get one expectation spec (frontmatter, intent, criteria, and Given/When/Then)"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SCOPE_PARAMS
+    }
+}
 
 /// `delete expectation` — remove a spec and its observation and golden.
 #[operation(
@@ -178,13 +192,26 @@ impl Operation for ExpectationsObserve {
 pub struct ExpectationsCheck;
 
 /// `get observation` — read one stored observation.
-#[operation(
-    verb = "get",
-    noun = "observation",
-    description = "Get one stored observation (checkpoint timeline + trajectory)"
-)]
+///
+/// A manual [`Operation`] impl so it can declare the [`SCOPE_PARAMS`] scope/tag
+/// inputs it resolves through [`ExpectationLoader::resolve_scope`].
 #[derive(Debug, Default)]
 pub struct ObservationGet;
+
+impl Operation for ObservationGet {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "observation"
+    }
+    fn description(&self) -> &'static str {
+        "Get one stored observation (checkpoint timeline + trajectory)"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SCOPE_PARAMS
+    }
+}
 
 /// `delete observation` — remove a stored observation.
 #[operation(
@@ -227,13 +254,26 @@ impl Operation for ObservationEvaluate {
 pub struct ObservationApprove;
 
 /// `list observations` — survey stored observations.
-#[operation(
-    verb = "list",
-    noun = "observations",
-    description = "List stored observations"
-)]
+///
+/// A manual [`Operation`] impl so it can declare the [`SCOPE_PARAMS`] scope/tag
+/// inputs that narrow the survey through [`ExpectationLoader::resolve_scope`].
 #[derive(Debug, Default)]
 pub struct ObservationsList;
+
+impl Operation for ObservationsList {
+    fn verb(&self) -> &'static str {
+        "list"
+    }
+    fn noun(&self) -> &'static str {
+        "observations"
+    }
+    fn description(&self) -> &'static str {
+        "List the specs that carry a stored received observation"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SCOPE_PARAMS
+    }
+}
 
 /// `evaluate observations` — re-judge a batch of stored observations (no re-run).
 ///
@@ -267,13 +307,26 @@ impl Operation for ObservationsEvaluate {
 pub struct ObservationsApprove;
 
 /// `get golden` — read one approved golden baseline.
-#[operation(
-    verb = "get",
-    noun = "golden",
-    description = "Get one approved golden baseline"
-)]
+///
+/// A manual [`Operation`] impl so it can declare the [`SCOPE_PARAMS`] scope/tag
+/// inputs it resolves through [`ExpectationLoader::resolve_scope`].
 #[derive(Debug, Default)]
 pub struct GoldenGet;
+
+impl Operation for GoldenGet {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "golden"
+    }
+    fn description(&self) -> &'static str {
+        "Get one approved golden baseline (scrubbed observation, frozen assertions, grading pins)"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SCOPE_PARAMS
+    }
+}
 
 /// `delete golden` — remove a golden baseline.
 #[operation(
@@ -307,13 +360,26 @@ impl Operation for GoldenEvaluate {
 }
 
 /// `list goldens` — survey approved golden baselines.
-#[operation(
-    verb = "list",
-    noun = "goldens",
-    description = "List approved golden baselines"
-)]
+///
+/// A manual [`Operation`] impl so it can declare the [`SCOPE_PARAMS`] scope/tag
+/// inputs that narrow the survey through [`ExpectationLoader::resolve_scope`].
 #[derive(Debug, Default)]
 pub struct GoldensList;
+
+impl Operation for GoldensList {
+    fn verb(&self) -> &'static str {
+        "list"
+    }
+    fn noun(&self) -> &'static str {
+        "goldens"
+    }
+    fn description(&self) -> &'static str {
+        "List the specs that carry an approved golden baseline"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SCOPE_PARAMS
+    }
+}
 
 /// `evaluate goldens` — re-grade a batch of golden baselines (no re-run).
 ///
@@ -548,16 +614,7 @@ fn observe_op(
     arguments: &serde_json::Map<String, serde_json::Value>,
     context: &ToolContext,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let scope = string_arg(arguments, "scope");
-    let tag = string_arg(arguments, "tag");
-    let repo_root = observe_repo_root(context);
-
-    let loader = ExpectationLoader::new(&repo_root);
-    let specs = loader
-        .resolve_scope(scope.as_deref(), tag.as_deref())
-        .map_err(|err| {
-            rmcp::ErrorData::internal_error(format!("scope resolution failed: {err}"), None)
-        })?;
+    let (repo_root, specs) = resolve_scope_specs(arguments, context)?;
 
     let mut observed = Vec::with_capacity(specs.len());
     for spec in &specs {
@@ -669,16 +726,7 @@ fn evaluate_op(
     context: &ToolContext,
     source: EvaluateSource,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let scope = string_arg(arguments, "scope");
-    let tag = string_arg(arguments, "tag");
-    let repo_root = observe_repo_root(context);
-
-    let loader = ExpectationLoader::new(&repo_root);
-    let specs = loader
-        .resolve_scope(scope.as_deref(), tag.as_deref())
-        .map_err(|err| {
-            rmcp::ErrorData::internal_error(format!("scope resolution failed: {err}"), None)
-        })?;
+    let (repo_root, specs) = resolve_scope_specs(arguments, context)?;
 
     let mut evaluated = Vec::with_capacity(specs.len());
     for spec in &specs {
@@ -710,6 +758,162 @@ fn evaluate_op(
         "count": evaluated.len(),
         "source": source.label(),
         "evaluated": evaluated,
+    }))
+}
+
+/// The `get expectation` op id (verb + noun), matched in `execute`'s dispatch.
+const EXPECTATION_GET_OP: &str = "get expectation";
+
+/// The `get observation` op id (verb + noun), matched in `execute`'s dispatch.
+const OBSERVATION_GET_OP: &str = "get observation";
+
+/// The `get golden` op id (verb + noun), matched in `execute`'s dispatch.
+const GOLDEN_GET_OP: &str = "get golden";
+
+/// The `list observations` op id (verb + noun), matched in `execute`'s dispatch.
+const OBSERVATIONS_LIST_OP: &str = "list observations";
+
+/// The `list goldens` op id (verb + noun), matched in `execute`'s dispatch.
+const GOLDENS_LIST_OP: &str = "list goldens";
+
+/// Resolve the `<scope>` (and optional `--tag`) arguments to the repo root and the
+/// matching specs — the shared front half of every scope-driven op (`get`, `list`,
+/// `observe`, `evaluate`), declared once so the resolution cannot drift across ops.
+fn resolve_scope_specs(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<(PathBuf, Vec<Expectation>), rmcp::ErrorData> {
+    let scope = string_arg(arguments, "scope");
+    let tag = string_arg(arguments, "tag");
+    let repo_root = observe_repo_root(context);
+    let loader = ExpectationLoader::new(&repo_root);
+    let specs = loader
+        .resolve_scope(scope.as_deref(), tag.as_deref())
+        .map_err(|err| {
+            rmcp::ErrorData::internal_error(format!("scope resolution failed: {err}"), None)
+        })?;
+    Ok((repo_root, specs))
+}
+
+/// The structured "no stored artifact yet" entry a `get` op returns for a spec
+/// whose received observation or golden is absent — a clear status, not an error.
+fn missing_artifact(identity: &str, label: &str, path: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "path": identity,
+        "status": MISSING_SOURCE_STATUS,
+        "message": format!("no {label} artifact for `{identity}` at {}", path.display()),
+    })
+}
+
+/// `expectation get <scope>` — return the parsed spec(s) the scope resolves to,
+/// each carrying its frontmatter, intent, criteria, and Given/When/Then.
+fn expectation_get(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let (_repo_root, specs) = resolve_scope_specs(arguments, context)?;
+    json_result(&serde_json::json!({
+        "count": specs.len(),
+        "expectations": specs,
+    }))
+}
+
+/// `observation get <scope>` — return each spec's last received observation (its
+/// checkpoint timeline + driver trajectory), or a missing marker when no run has
+/// been observed yet.
+fn observation_get(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let (repo_root, specs) = resolve_scope_specs(arguments, context)?;
+    let mut observations = Vec::with_capacity(specs.len());
+    for spec in &specs {
+        let path = received_path(&repo_root, &spec.path)
+            .map_err(|err| rmcp::ErrorData::invalid_params(err.to_string(), None))?;
+        match load_observation(&path)? {
+            Some(observation) => observations.push(serde_json::json!({
+                "path": spec.path,
+                "observation": observation,
+            })),
+            None => observations.push(missing_artifact(&spec.path, "received", &path)),
+        }
+    }
+    json_result(&serde_json::json!({
+        "count": observations.len(),
+        "observations": observations,
+    }))
+}
+
+/// `golden get <scope>` — return each spec's approved golden baseline (the
+/// scrubbed observation, frozen assertions, and grading pins), or a missing marker
+/// when no golden has been approved yet.
+fn golden_get(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let (repo_root, specs) = resolve_scope_specs(arguments, context)?;
+    let mut goldens = Vec::with_capacity(specs.len());
+    for spec in &specs {
+        match read_golden(&repo_root, &spec.path)
+            .map_err(|err| rmcp::ErrorData::invalid_params(err.to_string(), None))?
+        {
+            Some(golden) => goldens.push(serde_json::json!({
+                "path": spec.path,
+                "golden": golden,
+            })),
+            None => {
+                let path = golden_path(&repo_root, &spec.path)
+                    .map_err(|err| rmcp::ErrorData::invalid_params(err.to_string(), None))?;
+                goldens.push(missing_artifact(&spec.path, "golden", &path));
+            }
+        }
+    }
+    json_result(&serde_json::json!({
+        "count": goldens.len(),
+        "goldens": goldens,
+    }))
+}
+
+/// `observations list` — survey the spec identities that carry a stored received
+/// observation under `.expect/received/`.
+fn observations_list(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let (repo_root, specs) = resolve_scope_specs(arguments, context)?;
+    let mut observations = Vec::new();
+    for spec in &specs {
+        let path = received_path(&repo_root, &spec.path)
+            .map_err(|err| rmcp::ErrorData::invalid_params(err.to_string(), None))?;
+        if path.exists() {
+            observations.push(spec.path.clone());
+        }
+    }
+    json_result(&serde_json::json!({
+        "count": observations.len(),
+        "observations": observations,
+    }))
+}
+
+/// `goldens list` — survey the spec identities that carry an approved golden under
+/// `.expect/goldens/`.
+fn goldens_list(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let (repo_root, specs) = resolve_scope_specs(arguments, context)?;
+    let mut goldens = Vec::new();
+    for spec in &specs {
+        if read_golden(&repo_root, &spec.path)
+            .map_err(|err| rmcp::ErrorData::invalid_params(err.to_string(), None))?
+            .is_some()
+        {
+            goldens.push(spec.path.clone());
+        }
+    }
+    json_result(&serde_json::json!({
+        "count": goldens.len(),
+        "goldens": goldens,
     }))
 }
 
@@ -799,6 +1003,11 @@ impl McpTool for ExpectTool {
         match op_str {
             SURFACE_GET_OP => surface_get(&arguments),
             SURFACES_LIST_OP => surfaces_list(),
+            EXPECTATION_GET_OP => expectation_get(&arguments, context),
+            OBSERVATION_GET_OP => observation_get(&arguments, context),
+            GOLDEN_GET_OP => golden_get(&arguments, context),
+            OBSERVATIONS_LIST_OP => observations_list(&arguments, context),
+            GOLDENS_LIST_OP => goldens_list(&arguments, context),
             EXPECTATION_OBSERVE_OP | EXPECTATIONS_OBSERVE_OP => observe_op(&arguments, context),
             OBSERVATION_EVALUATE_OP | OBSERVATIONS_EVALUATE_OP => {
                 evaluate_op(&arguments, context, EvaluateSource::Received)
@@ -886,6 +1095,11 @@ mod tests {
     const IMPLEMENTED_OPS: &[&str] = &[
         SURFACE_GET_OP,
         SURFACES_LIST_OP,
+        EXPECTATION_GET_OP,
+        OBSERVATION_GET_OP,
+        GOLDEN_GET_OP,
+        OBSERVATIONS_LIST_OP,
+        GOLDENS_LIST_OP,
         EXPECTATION_OBSERVE_OP,
         EXPECTATIONS_OBSERVE_OP,
         OBSERVATION_EVALUATE_OP,
@@ -1337,5 +1551,210 @@ mod tests {
         let entry = &payload["evaluated"][0];
         assert_eq!(entry["path"], "coupon");
         assert_eq!(entry["status"], MISSING_SOURCE_STATUS);
+    }
+
+    /// Dispatch a no-scope `op` over the repo rooted at `ctx`, returning the
+    /// success payload — the list ops survey every spec, so they take no scope.
+    async fn run_op(op: &str, ctx: &ToolContext) -> serde_json::Value {
+        let result = tool()
+            .execute(args(serde_json::json!({ "op": op })), ctx)
+            .await
+            .unwrap_or_else(|e| panic!("`{op}` should dispatch, got error: {e}"));
+        assert!(!result.is_error.unwrap_or(false), "`{op}` should succeed");
+        payload_of(&result)
+    }
+
+    /// Write an approved golden for `identity` (a single-checkpoint json
+    /// observation with a real compiled assertion) under `.expect/goldens/`.
+    fn write_golden_fixture(repo: &Path, identity: &str) {
+        use swissarmyhammer_expect::{
+            compile, write_golden, Criterion, ExpectConfig, Golden, GradingPins,
+        };
+
+        let observation: Observation = serde_json::from_value(serde_json::json!({
+            "path": identity,
+            "checkpoints": [{
+                "after": "final",
+                "state": { "kind": "json", "body": { "total": 40 } },
+                "duration_ms": 1
+            }],
+            "trajectory": { "steps": [] }
+        }))
+        .unwrap();
+        let assertion = compile(
+            &Criterion {
+                text: "the total is $40".to_string(),
+                checked: false,
+            },
+            &observation,
+        )
+        .expect("criterion compiles");
+        let golden = Golden {
+            observation,
+            assertions: vec![assertion],
+            grading: GradingPins::from_config(&ExpectConfig::default()),
+        };
+        write_golden(repo, &golden).expect("write golden");
+    }
+
+    /// `expectation get <scope>` returns the parsed spec: frontmatter, intent, and
+    /// the `## Then` criteria.
+    #[tokio::test]
+    async fn expectation_get_returns_the_parsed_spec() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(
+            repo.path(),
+            "coupon",
+            &["the total is $40", "the discount is $5"],
+        );
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let payload = run_evaluate(EXPECTATION_GET_OP, "coupon", &ctx).await;
+
+        assert_eq!(payload["count"], 1);
+        let spec = &payload["expectations"][0];
+        assert_eq!(spec["path"], "coupon");
+        assert_eq!(spec["frontmatter"]["surface"], "cli");
+        let criteria = spec["criteria"].as_array().expect("criteria array");
+        assert_eq!(criteria.len(), 2);
+        assert_eq!(criteria[0]["text"], "the total is $40");
+        assert!(
+            spec["intent"].as_str().is_some(),
+            "the parsed spec carries its intent body",
+        );
+    }
+
+    /// `observation get <scope>` returns the stored received observation's
+    /// checkpoint timeline and driver trajectory.
+    #[tokio::test]
+    async fn observation_get_returns_the_checkpoint_timeline_and_trajectory() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        write_observation(
+            &repo.path().join(".expect/received/coupon.received.json"),
+            "coupon",
+            serde_json::json!({ "total": 40 }),
+        );
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let payload = run_evaluate(OBSERVATION_GET_OP, "coupon", &ctx).await;
+
+        assert_eq!(payload["count"], 1);
+        let observation = &payload["observations"][0]["observation"];
+        assert_eq!(observation["path"], "coupon");
+        assert_eq!(
+            observation["checkpoints"]
+                .as_array()
+                .expect("checkpoints")
+                .len(),
+            1,
+        );
+        assert!(
+            observation["trajectory"]["steps"].is_array(),
+            "the trajectory travels with the observation",
+        );
+    }
+
+    /// `observation get <scope>` over a never-observed spec reports the missing
+    /// received slot gracefully rather than erroring.
+    #[tokio::test]
+    async fn observation_get_reports_a_missing_observation_gracefully() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let payload = run_evaluate(OBSERVATION_GET_OP, "coupon", &ctx).await;
+
+        assert_eq!(payload["observations"][0]["status"], MISSING_SOURCE_STATUS,);
+    }
+
+    /// `golden get <scope>` returns the stored golden: its scrubbed observation,
+    /// frozen assertions, and grading pins.
+    #[tokio::test]
+    async fn golden_get_returns_the_stored_golden() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        write_golden_fixture(repo.path(), "coupon");
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let payload = run_evaluate(GOLDEN_GET_OP, "coupon", &ctx).await;
+
+        assert_eq!(payload["count"], 1);
+        let golden = &payload["goldens"][0]["golden"];
+        assert_eq!(golden["observation"]["path"], "coupon");
+        assert_eq!(
+            golden["assertions"].as_array().expect("assertions").len(),
+            1,
+        );
+        assert!(
+            golden["grading"]["embedder"].as_str().is_some(),
+            "the golden pins its grading embedder",
+        );
+    }
+
+    /// `golden get <scope>` over a spec with no approved golden reports the missing
+    /// baseline gracefully.
+    #[tokio::test]
+    async fn golden_get_reports_a_missing_golden_gracefully() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let payload = run_evaluate(GOLDEN_GET_OP, "coupon", &ctx).await;
+
+        assert_eq!(payload["goldens"][0]["status"], MISSING_SOURCE_STATUS);
+    }
+
+    /// `goldens list` surveys exactly the spec identities that carry an approved
+    /// golden, not every spec.
+    #[tokio::test]
+    async fn goldens_list_surveys_specs_with_an_approved_golden() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        write_spec(repo.path(), "refund", &["the total is $40"]);
+        write_golden_fixture(repo.path(), "coupon");
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let payload = run_op(GOLDENS_LIST_OP, &ctx).await;
+
+        assert_eq!(payload["count"], 1, "only the approved spec is listed");
+        assert_eq!(payload["goldens"][0], "coupon");
+    }
+
+    /// `observations list` surveys exactly the spec identities that carry a stored
+    /// received observation.
+    #[tokio::test]
+    async fn observations_list_surveys_specs_with_a_received_observation() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        write_spec(repo.path(), "refund", &["the total is $40"]);
+        write_observation(
+            &repo.path().join(".expect/received/coupon.received.json"),
+            "coupon",
+            serde_json::json!({ "total": 40 }),
+        );
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let payload = run_op(OBSERVATIONS_LIST_OP, &ctx).await;
+
+        assert_eq!(payload["count"], 1, "only the observed spec is listed");
+        assert_eq!(payload["observations"][0], "coupon");
+    }
+
+    /// `goldens list <scope>` narrows the survey to the scoped specs — both specs
+    /// have goldens, but a specific-spec scope restricts the listing to one.
+    #[tokio::test]
+    async fn goldens_list_honors_a_scope() {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        write_spec(repo.path(), "refund", &["the total is $40"]);
+        write_golden_fixture(repo.path(), "coupon");
+        write_golden_fixture(repo.path(), "refund");
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let payload = run_evaluate(GOLDENS_LIST_OP, "coupon", &ctx).await;
+
+        assert_eq!(payload["count"], 1, "the scope narrows the survey");
+        assert_eq!(payload["goldens"][0], "coupon");
     }
 }

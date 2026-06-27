@@ -55,6 +55,7 @@ pub mod doctor;
 pub mod drive;
 pub mod error;
 pub mod evaluate;
+pub mod ledger;
 pub mod loader;
 pub mod observe;
 pub mod spec;
@@ -77,6 +78,10 @@ pub use drive::{
 };
 pub use error::ExpectError;
 pub use evaluate::{evaluate, evaluate_assertion, evaluate_spec, STRUCTURAL_DRIFT_REASON};
+pub use ledger::{
+    compare, read_golden, write_golden, CriterionComparison, Golden, GradingPins, LedgerComparison,
+    Scrubber, ScrubberSet,
+};
 pub use loader::{ExpectationLoader, RawSpec};
 pub use observe::{
     golden_path, observe, received_path, write_received, ObserveConfig, FINAL_CHECKPOINT,

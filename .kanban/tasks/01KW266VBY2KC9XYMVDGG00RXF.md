@@ -28,8 +28,8 @@ comments:
   timestamp: 2026-06-27T04:41:33.057782+00:00
 depends_on:
 - 01KW26600YD3PM22S8F4VJJTE5
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff380
 project: expect
 title: Stop conditions + independent re-validation of agent "done"
 ---
