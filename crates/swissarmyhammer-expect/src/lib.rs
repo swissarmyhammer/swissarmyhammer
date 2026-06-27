@@ -50,6 +50,7 @@
 //! ```
 
 pub mod assertion;
+pub mod check;
 pub mod config;
 pub mod doctor;
 pub mod drive;
@@ -67,6 +68,10 @@ pub mod types;
 pub use assertion::{
     compile, AssertOp, AssertionOutcome, BoundValue, CompileError, CompiledAssertion, Expected,
     Locator, Stream,
+};
+pub use check::{
+    check, CheckEntry, CheckOptions, CheckReport, CheckStatus, CHECK_EXIT_FAILED,
+    CHECK_EXIT_MALFORMED, CHECK_EXIT_OK,
 };
 pub use config::{
     find_expect_dir, AgentConfig, ApprovalConfig, EmbedderConfig, ExpectConfig, Granularity,

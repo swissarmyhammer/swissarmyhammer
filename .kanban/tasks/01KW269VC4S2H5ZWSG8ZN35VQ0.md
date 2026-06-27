@@ -1,13 +1,31 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kw41ada8hm412g4a2j2wg896
+  text: 'Picked up. Researched the building blocks: doctor::diagnose (gate), loader::discover_raw (surfaces malformed specs, unlike resolve_scope which aborts), evaluate_spec (meet), ledger_state/compare (drift), read_golden. Plan: new crates/swissarmyhammer-expect/src/check.rs with check(repo_root, scope, tag, &CheckOptions, observe-closure) -> CheckReport. Doctor gate runs first per raw spec; an error finding -> Malformed status, observe never called. Observe is an injected closure (FnMut(&Expectation)->Result<Observation,ExpectError>) so the gate is testable and the tools layer wires the real CliAdapter. Per-spec CheckStatus: Passed/Failed(program wrong)/Drifted/Stale/New/Malformed/Errored. Exit codes as pub consts: OK=0, FAILED=1, MALFORMED=2; New fails only in CI; Drift suppressed only by ci && config.approval.ci_autoapprove. Teaching message routes malformed/uncheckable->fix the spec, Failed->program is wrong. Wiring check expectation/expectations ops in tools/expect/mod.rs.'
+  timestamp: 2026-06-27T07:57:15.464110+00:00
+- actor: claude-code
+  id: 01kw420z68tb8f4324p9gvwv2n
+  text: |-
+    Implemented and verified green. Files: NEW crates/swissarmyhammer-expect/src/check.rs (check() composition + CheckReport/CheckEntry/CheckStatus + CHECK_EXIT_* consts); lib.rs exports; crates/swissarmyhammer-tools/src/mcp/tools/expect/mod.rs (ExpectationCheck/ExpectationsCheck -> manual Operation impls with SCOPE_PARAMS, observe_for_check, check_op, dispatch arm, IMPLEMENTED_OPS, integration test).
+
+    Verification: cargo nextest -p swissarmyhammer-expect -p swissarmyhammer-tools -E 'test(check) or test(expect)' = 131 passed; cargo check --workspace ok; cargo clippy (both crates, --all-targets, -D warnings) clean; cargo fmt applied.
+
+    really-done adversarial double-check: VERDICT REVISE, two findings.
+    - Finding 1 (low): tag filter is applied after the doctor gate, so a malformed spec is reported even under a tag scope (its tags are unparseable). FIXED: documented the intended fail-safe semantics on check() and added a regression test (a_malformed_spec_is_reported_even_under_a_tag_scope) asserting the malformed spec surfaces while untagged parseable specs are narrowed out.
+    - Finding 2 (informational): an unsupported (non-cli) surface becomes an Errored entry (exit 1), same class as program-wrong. ACCEPTED, not fixed: only the cli surface is wired today (an acknowledged stub limitation, same as the existing observe op); distinguishing "surface unsupported" from a genuine observe failure belongs with the multi-surface work, out of scope for this task. The doctor gate + exit-code distinctness for malformed-vs-code (the load-bearing acceptance criteria) are unaffected.
+
+    Doctor gate works: diagnose runs first per raw spec (loader.discover_raw surfaces malformed specs that resolve_scope would abort on); an error finding short-circuits to Malformed before parse/observe (proven by panic-closure tests). Exit codes: OK=0, FAILED=1 (unmet/drift/observe-error/new-in-CI), MALFORMED=2 (distinct, fail-safe); aggregate = max. Task left in doing for review.
+  timestamp: 2026-06-27T08:09:34.664342+00:00
 depends_on:
 - 01KW263EW64TVAPZD7CYCBMNVV
 - 01KW263S53NJ1YWNHGPYTTWEEC
 - 01KW266J4AJCJH9HM4DYFJRK09
 - 01KW268RCP6G7SKWFXNR6BCBVR
-position_column: todo
-position_ordinal: b980
+position_column: doing
+position_ordinal: '8280'
 project: expect
 title: expect expectation/expectations check = doctor + observe + evaluate + compare
 ---

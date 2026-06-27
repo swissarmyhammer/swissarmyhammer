@@ -42,11 +42,11 @@ use swissarmyhammer_operations::{
 };
 
 use swissarmyhammer_expect::{
-    approval_diff, approval_status, approve, decide_approval, evaluate_spec, find_expect_dir,
-    golden_path, ledger_entry, ledger_queue, observe, read_golden, received_path, surfaces,
-    write_golden, write_received, ApprovalDecision, ApprovalStatus, ApproveMode, CliAdapter,
-    ExpectConfig, Expectation, ExpectationLoader, Golden, GradingPins, Observation, ObserveConfig,
-    ScrubberSet, Surface,
+    approval_diff, approval_status, approve, check, decide_approval, evaluate_spec,
+    find_expect_dir, golden_path, ledger_entry, ledger_queue, observe, read_golden, received_path,
+    surfaces, write_golden, write_received, ApprovalDecision, ApprovalStatus, ApproveMode,
+    CheckOptions, CliAdapter, ExpectConfig, ExpectError, Expectation, ExpectationLoader, Golden,
+    GradingPins, Observation, ObserveConfig, ScrubberSet, Surface,
 };
 
 use crate::mcp::op_tool_helpers::{bool_arg, json_result, string_arg};
@@ -146,13 +146,27 @@ impl Operation for ExpectationObserve {
 }
 
 /// `check expectation` — doctor, observe, evaluate, and compare one expectation.
-#[operation(
-    verb = "check",
-    noun = "expectation",
-    description = "Doctor, observe, evaluate, and compare one expectation"
-)]
+///
+/// A manual [`Operation`] impl (rather than the `#[operation]` macro) so it can
+/// declare the [`SCOPE_PARAMS`] scope/tag inputs the check resolves through
+/// [`ExpectationLoader::discover_raw`].
 #[derive(Debug, Default)]
 pub struct ExpectationCheck;
+
+impl Operation for ExpectationCheck {
+    fn verb(&self) -> &'static str {
+        "check"
+    }
+    fn noun(&self) -> &'static str {
+        "expectation"
+    }
+    fn description(&self) -> &'static str {
+        "Doctor, observe, evaluate, and compare one expectation"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SCOPE_PARAMS
+    }
+}
 
 /// `list expectations` — survey every expectation with its ledger state.
 ///
@@ -201,13 +215,26 @@ impl Operation for ExpectationsObserve {
 }
 
 /// `check expectations` — doctor, observe, evaluate, and compare a batch.
-#[operation(
-    verb = "check",
-    noun = "expectations",
-    description = "Doctor, observe, evaluate, and compare a batch of expectations"
-)]
+///
+/// Shares [`SCOPE_PARAMS`] with [`ExpectationCheck`]; the two differ only in how
+/// many specs the scope is expected to match.
 #[derive(Debug, Default)]
 pub struct ExpectationsCheck;
+
+impl Operation for ExpectationsCheck {
+    fn verb(&self) -> &'static str {
+        "check"
+    }
+    fn noun(&self) -> &'static str {
+        "expectations"
+    }
+    fn description(&self) -> &'static str {
+        "Doctor, observe, evaluate, and compare a batch of expectations"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        SCOPE_PARAMS
+    }
+}
 
 /// `get observation` — read one stored observation.
 ///
@@ -1264,6 +1291,81 @@ fn approve_write(
     }))
 }
 
+// ---------------------------------------------------------------------------
+// Check: the composed inner-loop / CI verb (doctor + observe + evaluate +
+// compare), with the doctor gate refusing a malformed spec before any observe.
+// ---------------------------------------------------------------------------
+
+/// The `check expectation` op id (verb + noun), matched in `execute`'s dispatch.
+const EXPECTATION_CHECK_OP: &str = "check expectation";
+
+/// The `check expectations` op id (verb + noun), matched in `execute`'s dispatch.
+const EXPECTATIONS_CHECK_OP: &str = "check expectations";
+
+/// Observe one spec for `check` against the cli surface and persist its received
+/// observation, returning the captured [`Observation`].
+///
+/// The driver seam the engine's [`check`] composition calls per well-formed spec:
+/// only the cli surface drives deterministically today, so any other surface is a
+/// clear [`ExpectError::Surface`] (which surfaces as a per-spec `errored` entry
+/// rather than aborting the batch). Persisting the received run here is what later
+/// lets `approve` promote it to a golden.
+fn observe_for_check(spec: &Expectation, repo_root: &Path) -> Result<Observation, ExpectError> {
+    if spec.frontmatter.surface != Surface::Cli {
+        return Err(ExpectError::Surface(format!(
+            "`check` currently supports only the cli surface, but `{}` declares `{}`",
+            spec.path,
+            surface_wire_name(spec.frontmatter.surface)
+        )));
+    }
+    let adapter = CliAdapter::new(spec.frontmatter.timeout);
+    let observation = observe(spec, &adapter, &ObserveConfig::new(repo_root))?;
+    write_received(repo_root, &observation)?;
+    Ok(observation)
+}
+
+/// Shared handler for `check expectation` and `check expectations`: resolve the
+/// `<scope>` (and optional `--tag`), then run the engine's [`check`] composition —
+/// doctor gate → observe → evaluate → compare — over every matching spec.
+///
+/// The doctor pass runs first per spec and refuses to run a malformed one, so a
+/// non-zero exit is never ambiguous between a bad spec and bad code. The report
+/// carries a per-expectation status and a rolled-up `exit_code` the CLI maps to a
+/// process exit (a malformed spec, an unmet expectation, or an unapproved drift
+/// all fail; a `new` expectation fails only in CI). Both ops share one body
+/// because they differ only in how many specs the scope is expected to match.
+fn check_op(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let scope = string_arg(arguments, "scope");
+    let tag = string_arg(arguments, "tag");
+    let repo_root = observe_repo_root(context);
+
+    let facts = doctor::production_facts();
+    let config = find_expect_dir(&repo_root)
+        .and_then(|dir| ExpectConfig::load(&dir).ok())
+        .unwrap_or_default();
+    let scrubbers = ScrubberSet::default_set();
+    let options = CheckOptions {
+        facts: &facts,
+        config: &config,
+        scrubbers: &scrubbers,
+        ci: ci_enabled(),
+    };
+
+    let report = check(
+        &repo_root,
+        scope.as_deref(),
+        tag.as_deref(),
+        &options,
+        |spec| observe_for_check(spec, &repo_root),
+    )
+    .map_err(|err| rmcp::ErrorData::internal_error(format!("check failed: {err}"), None))?;
+
+    json_result(&report)
+}
+
 impl swissarmyhammer_common::health::Doctorable for ExpectTool {
     fn name(&self) -> &str {
         <Self as McpTool>::name(self)
@@ -1364,6 +1466,7 @@ impl McpTool for ExpectTool {
             GOLDEN_EVALUATE_OP | GOLDENS_EVALUATE_OP => {
                 evaluate_op(&arguments, context, EvaluateSource::Golden)
             }
+            EXPECTATION_CHECK_OP | EXPECTATIONS_CHECK_OP => check_op(&arguments, context),
             known if EXPECT_OPERATIONS.iter().any(|op| op.op_string() == known) => {
                 json_result(&not_implemented(known))
             }
@@ -1458,6 +1561,8 @@ mod tests {
         OBSERVATIONS_EVALUATE_OP,
         GOLDEN_EVALUATE_OP,
         GOLDENS_EVALUATE_OP,
+        EXPECTATION_CHECK_OP,
+        EXPECTATIONS_CHECK_OP,
     ];
 
     /// Pull the JSON payload out of a successful tool result.
@@ -2539,5 +2644,86 @@ mod tests {
             Some(value) => std::env::set_var(CI_ENV_KEY, value),
             None => std::env::remove_var(CI_ENV_KEY),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // check expectation / expectations.
+    // -----------------------------------------------------------------------
+
+    /// `check expectations` runs the doctor gate, then observe → evaluate →
+    /// compare: a malformed spec is refused before any observe (status
+    /// `malformed`, never observed), a well-formed cli spec with no golden is
+    /// `new`, and the rolled-up exit code is the worst per-spec code (the malformed
+    /// spec's, distinct from a code-failure exit).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn check_expectations_gates_malformed_and_runs_wellformed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = tempfile::TempDir::new().unwrap();
+        let app = repo.path().join("app.sh");
+        std::fs::write(&app, "#!/bin/sh\necho \"$@\"\n").unwrap();
+        let mut perms = std::fs::metadata(&app).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&app, perms).unwrap();
+
+        // A well-formed cli spec: drives one When step, asserts a deterministic
+        // exit code — passes evaluate, no golden yet, so it is `new`.
+        std::fs::write(
+            repo.path().join("echo.expect.md"),
+            "---\ndescription: the app echoes and exits cleanly\nsurface: cli\nsetup: ./app.sh\n---\n\nThe app echoes its argument and exits zero.\n\n## When\n- hello\n\n## Then\n- [ ] the command exits with code 0\n",
+        )
+        .unwrap();
+        // A malformed spec: an unknown frontmatter key the doctor gate rejects.
+        std::fs::write(
+            repo.path().join("broken.expect.md"),
+            "---\ndescription: a malformed spec\nsurfce: cli\n---\n\nIntent.\n\n## Then\n- [ ] the command exits with code 0\n",
+        )
+        .unwrap();
+
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+        let result = tool()
+            .execute(
+                args(serde_json::json!({ "op": EXPECTATIONS_CHECK_OP })),
+                &ctx,
+            )
+            .await
+            .expect("check expectations should dispatch");
+        assert!(!result.is_error.unwrap_or(false), "check should succeed");
+        let payload = payload_of(&result);
+
+        let entries = payload["entries"].as_array().expect("entries array");
+        let status_of = |path: &str| {
+            entries
+                .iter()
+                .find(|entry| entry["path"] == path)
+                .and_then(|entry| entry["status"].as_str())
+                .map(str::to_string)
+        };
+        assert_eq!(status_of("broken").as_deref(), Some("malformed"));
+        assert_eq!(status_of("echo").as_deref(), Some("new"));
+
+        // The malformed spec dominates the aggregate exit code, distinct from a
+        // code-failure exit.
+        assert_eq!(
+            payload["exit_code"],
+            swissarmyhammer_expect::CHECK_EXIT_MALFORMED
+        );
+
+        // The doctor gate observed the well-formed spec (its received run was
+        // persisted) but never observed the malformed one.
+        assert!(
+            repo.path()
+                .join(".expect/received/echo.received.json")
+                .is_file(),
+            "the well-formed spec was observed and its received run persisted",
+        );
+        assert!(
+            !repo
+                .path()
+                .join(".expect/received/broken.received.json")
+                .exists(),
+            "the malformed spec was never observed",
+        );
     }
 }
