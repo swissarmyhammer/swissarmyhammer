@@ -269,16 +269,9 @@ pub async fn run_review(
     pool: &AgentPool,
     fleet_config: FleetConfig,
     now: &str,
-    use_tracking: bool,
 ) -> Result<ReviewReport, AvpError> {
-    // Only the working scope participates in incremental tracking; sha/file/glob
-    // are explicit, one-shot targets whose files must never seed the baseline.
-    let is_working = matches!(scope, Scope::Working);
-
-    // Stage 1: scope → work-list (deterministic). `use_tracking` narrows a
-    // working scope to files edited since their last review (the `/finish`
-    // fix-loop win); it is inert for every other scope.
-    let work = scope_review(scope, repo_path, loader, conn, embedder, use_tracking).await?;
+    // Stage 1: scope → work-list (deterministic, LLM-free).
+    let work = scope_review(scope, repo_path, loader, conn, embedder).await?;
 
     let total_files: usize = work.validators.iter().map(|v| v.files.len()).sum();
     tracing::info!(
@@ -321,21 +314,6 @@ pub async fn run_review(
     // rides into the report so the tool boundary can flag/fail an incomplete run;
     // the engine itself stays a pure data barrier and never errors on it.
     let report = synthesize(outcome.verified, &tally, now);
-
-    // Record the incremental-tracking baseline through the single shared helper
-    // every pipeline driver reaches: for a working-scope pass that actually ran,
-    // it stamps a fresh `.validators/.hashes/` entry per reviewed file so the next
-    // `review working` subtracts it unless its content (or the rules) changed. The
-    // helper owns the gate and the best-effort error handling, so there is exactly
-    // one recording site for both the pure and the agent-driven drivers.
-    crate::review::tracking::record_baseline_if_working(
-        is_working,
-        repo_path,
-        loader,
-        &work,
-        &tally,
-        &crate::review::tracking::now_rfc3339(),
-    );
 
     Ok(report)
 }

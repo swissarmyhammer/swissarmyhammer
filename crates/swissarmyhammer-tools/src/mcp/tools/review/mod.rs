@@ -36,7 +36,7 @@ use swissarmyhammer_operations::{
 };
 use swissarmyhammer_validators::review::Scope;
 
-use crate::mcp::op_tool_helpers::{bool_arg, json_result, string_arg, string_array_arg};
+use crate::mcp::op_tool_helpers::{json_result, string_arg, string_array_arg};
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use review_op::{AgentFactory, EmbedderFactory, ReviewRequest, ReviewResponse};
 
@@ -311,15 +311,11 @@ impl ReviewTool {
         })?;
 
         let repo_path = self.resolve_repo_path(context)?;
-        // `force` (alias `all`) is the escape hatch that ignores the incremental
-        // tracking baseline and reviews the whole resolved set; default-narrow
-        // otherwise once a baseline exists.
         let request = ReviewRequest {
             scope,
             backend: string_arg(args, "backend"),
             validators: string_array_arg(args, "validators"),
             concurrency: self.concurrency,
-            force: bool_arg(args, "force") || bool_arg(args, "all"),
         };
 
         let embedder_factory = self

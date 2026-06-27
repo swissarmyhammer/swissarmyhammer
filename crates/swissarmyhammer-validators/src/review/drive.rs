@@ -80,11 +80,6 @@ use crate::validators::{AgentPool, PoolConfig, ValidatorLoader};
 /// caller from the MCP session/work-dir (never `current_dir()`); `now` is the
 /// caller-formatted local timestamp rendered verbatim into the report header.
 ///
-/// `use_tracking` enables the incremental working-scope filter: a working review
-/// only carries files edited since their last review (recording a fresh baseline
-/// when it completes), while `false` is the force/all hatch that reviews the
-/// whole set. It is inert for every non-working scope.
-///
 /// # Errors
 ///
 /// Returns the [`AvpError`] from [`run_review`](crate::review::run_review) on a
@@ -102,7 +97,6 @@ pub async fn run_review_over_agent(
     pool_config: PoolConfig,
     fleet_config: FleetConfig,
     now: &str,
-    use_tracking: bool,
 ) -> Result<ReviewReport, AvpError> {
     // A fresh notifier whose broadcast the pool's workers subscribe to, fed by a
     // single forwarding task draining the agent's `notification_rx`. This is the
@@ -153,7 +147,6 @@ pub async fn run_review_over_agent(
                     embedder,
                     fleet_config,
                     now,
-                    use_tracking,
                 )
             }
         })
@@ -377,7 +370,6 @@ async fn run_pipeline_in_connection(
     embedder: &dyn TextEmbedder,
     fleet_config: FleetConfig,
     now: &str,
-    use_tracking: bool,
 ) -> agent_client_protocol::Result<Result<ReviewReport, AvpError>> {
     // ACP `initialize` is a ONCE-per-connection handshake. Do it here, before
     // the pool's workers issue any prompts, rather than per prompt: the pool
@@ -411,7 +403,6 @@ async fn run_pipeline_in_connection(
         &pool,
         fleet_config,
         now,
-        use_tracking,
     )
     .await;
     Ok(report)
@@ -437,7 +428,7 @@ mod tests {
     use crate::review::scope::Scope;
     use crate::review::test_support::{
         findings_json as shared_findings_json, loader_with, prompt_text, ruleset, seeded_dup_repo,
-        verdict_json, ScriptedAdapter, ScriptedAgent, ScriptedAgentConfig, ScriptedReply, TestRepo,
+        verdict_json, ScriptedAdapter, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
     };
     use crate::validators::Severity;
 
@@ -563,7 +554,6 @@ mod tests {
             PoolConfig::remote(2),
             FleetConfig::default(),
             TEST_NOW,
-            false,
         )
         .await;
 
@@ -587,92 +577,6 @@ mod tests {
         );
         assert_eq!(report.counts.findings, 1);
         assert_eq!(report.counts.confirmed, 1);
-    }
-
-    // ---- incremental tracking end to end --------------------------------
-
-    /// Drive `review working` with tracking on, three times over one repo:
-    ///
-    /// 1. First pass reviews the changed file, records a `.validators/.hashes/`
-    ///    entry for it, and writes `.validators/.gitignore`.
-    /// 2. A second pass with NO file changes subtracts everything and
-    ///    short-circuits to a clean "nothing in scope" report — the scripted agent
-    ///    is never prompted.
-    /// 3. Touching the file re-enters it into scope, and only that file is
-    ///    reviewed again.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn incremental_tracking_records_then_short_circuits_then_re_reviews_on_edit() {
-        let (repo, conn, embedder) = seeded_dup_repo();
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Error);
-
-        // Run the full pipeline once over a fresh scripted-agent handle. A free
-        // async fn (not a closure) keeps the borrowed inputs' lifetimes simple.
-        async fn run_once(
-            repo: &TestRepo,
-            loader: &ValidatorLoader,
-            conn: &Connection,
-            embedder: &model_embedding::mock::MockEmbedder,
-        ) -> ReviewReport {
-            let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
-            let agent = broadcast_agent(dedup_script(), notify_tx, true);
-            let dyn_agent = DynConnectTo::new(ScriptedAdapter(agent));
-            run_review_over_agent(
-                dyn_agent,
-                notification_rx,
-                Scope::Working,
-                repo.path(),
-                loader,
-                conn,
-                embedder,
-                PoolConfig::remote(2),
-                FleetConfig::default(),
-                TEST_NOW,
-                true, // incremental tracking on
-            )
-            .await
-            .expect("review run")
-        }
-
-        // ---- pass 1: review, record the baseline, write the gitignore --------
-        let first = run_once(&repo, &loader, &conn, &embedder).await;
-        assert_eq!(first.counts.findings, 1, "the first pass finds the dup");
-
-        // The baseline was recorded: an entry exists for the reviewed file, and the
-        // hash dir's gitignore was lazily written.
-        assert!(
-            crate::review::tracking::read_entry(repo.path(), "src/lib.rs").is_some(),
-            "the first pass records a tracking entry for the reviewed file"
-        );
-        assert!(
-            repo.path().join(".validators/.gitignore").exists(),
-            "the first pass writes .validators/.gitignore"
-        );
-
-        // ---- pass 2: no edits → zero survivors → clean short-circuit --------
-        let second = run_once(&repo, &loader, &conn, &embedder).await;
-        assert_eq!(
-            second.counts.findings, 0,
-            "an unchanged second pass finds nothing (the file was subtracted)"
-        );
-        assert_eq!(
-            second.counts.tasks_attempted, 0,
-            "zero survivors short-circuits with no fan-out tasks"
-        );
-        assert!(
-            second.markdown.contains("Nothing in scope to review"),
-            "the short-circuit renders the empty-scope marker: {}",
-            second.markdown
-        );
-
-        // ---- pass 3: touch the file → only it is re-reviewed ----------------
-        let current = std::fs::read_to_string(repo.path().join("src/lib.rs")).unwrap();
-        repo.write("src/lib.rs", &format!("{current}\n// a fresh edit\n"));
-
-        let third = run_once(&repo, &loader, &conn, &embedder).await;
-        assert!(
-            third.counts.tasks_attempted > 0,
-            "an edited file re-enters scope and is reviewed again"
-        );
     }
 
     // ---- agent↔client permission deadlock reproduction (the keystone) ------
@@ -730,7 +634,6 @@ mod tests {
                 PoolConfig::remote(2),
                 FleetConfig::default(),
                 TEST_NOW,
-                false,
             ),
         )
         .await
@@ -786,7 +689,6 @@ mod tests {
                 PoolConfig::remote(2),
                 FleetConfig::default(),
                 TEST_NOW,
-                false,
             ),
         )
         .await
@@ -1187,7 +1089,6 @@ mod tests {
                     .with_idle_timeout(Duration::from_millis(ABANDON_IDLE_WINDOW_MS)),
                 FleetConfig::default(),
                 TEST_NOW,
-                false,
             ),
         )
         .await

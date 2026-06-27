@@ -162,7 +162,6 @@ async fn review_runs_over_acp_against_a_real_local_model() {
         // keeping this the minimum real end-to-end (see the module doc).
         validators: vec!["function-length".to_string()],
         concurrency: None,
-        force: false,
     };
 
     let outcome = run_review_request(

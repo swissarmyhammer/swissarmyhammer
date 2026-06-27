@@ -45,7 +45,6 @@ use swissarmyhammer_sem::parser::plugins::create_default_registry;
 
 use crate::error::AvpError;
 use crate::review::probes::{run_probes, ChangeEntry, FileChange as ProbeChange, ProbeResult};
-use crate::review::tracking;
 use crate::validators::{MatchContext, RuleSet, Severity, ValidatorLoader};
 
 /// How many lines of context to keep on each side of a changed hunk in the
@@ -160,11 +159,9 @@ impl WorkList {
     ///
     /// Several validators can match the same file; this yields each file once,
     /// the first time its path appears. It is the single dedup the fan-out prime
-    /// ([`render_run_prime`](crate::review::fleet::render_run_prime)) and the
-    /// incremental-tracking baseline
-    /// ([`record_baseline_if_working`](crate::review::tracking::record_baseline_if_working))
-    /// both build their file set from. First-seen order keeps the rendered prime
-    /// byte-stable across calls.
+    /// ([`render_run_prime`](crate::review::fleet::render_run_prime)) builds its
+    /// file set from. First-seen order keeps the rendered prime byte-stable
+    /// across calls.
     pub fn distinct_files(&self) -> impl Iterator<Item = &FileWork> {
         let mut seen = std::collections::BTreeSet::new();
         self.validators
@@ -234,16 +231,6 @@ pub struct FileWork {
 /// this signature: task context is plumbed in a later wiring stage that wraps
 /// this call, not derived inside the deterministic scope stage.
 ///
-/// # Incremental working scope
-///
-/// When `use_tracking` is `true` and `scope` is [`Scope::Working`], the resolved
-/// candidate set is narrowed by the [`tracking`] filter: a file whose current
-/// `context_hash` (path + content + global rules hash) matches its recorded
-/// `.validators/.hashes/<path>.yaml` entry is **subtracted**, so a `/finish`
-/// fix-loop only re-reviews files actually edited since the last pass. `false`
-/// (the force/all hatch) ignores tracking and reviews the whole set. The flag is
-/// inert for every non-working scope (`sha`/`file`/`glob` are explicit targets).
-///
 /// # Errors
 ///
 /// Returns [`AvpError::Context`] on git or index failure, or
@@ -254,12 +241,8 @@ pub async fn scope_review(
     loader: &ValidatorLoader,
     conn: &Connection,
     embedder: &dyn TextEmbedder,
-    use_tracking: bool,
 ) -> Result<WorkList, AvpError> {
-    // The global rules hash feeds the working-scope tracking filter so a rule
-    // edit invalidates every entry; computed once per run from the loaded rules.
-    let rules_hash = tracking::rules_hash(loader);
-    let resolved = resolve_scope_files(&scope, repo_path, use_tracking, &rules_hash)?;
+    let resolved = resolve_scope_files(&scope, repo_path)?;
 
     // The single semantic-diff pass: one `FileChange` per resolved file fed to
     // the sem differ once. Whole-content files (glob / unchanged single file)
@@ -450,18 +433,9 @@ fn to_probe_entry(change: &SemanticChange) -> ChangeEntry {
 
 /// Resolve a [`Scope`] to its changed-file set and the inputs every later step
 /// needs (sem-diff `FileChange`s, after-content, change purpose).
-///
-/// `use_tracking`/`rules_hash` only steer [`Scope::Working`]: they drive the
-/// incremental subtract-unchanged filter. Every other scope is an explicit
-/// target and ignores them.
-fn resolve_scope_files(
-    scope: &Scope,
-    repo_path: &Path,
-    use_tracking: bool,
-    rules_hash: &str,
-) -> Result<ResolvedScope, AvpError> {
+fn resolve_scope_files(scope: &Scope, repo_path: &Path) -> Result<ResolvedScope, AvpError> {
     match scope {
-        Scope::Working => resolve_working(repo_path, use_tracking, rules_hash),
+        Scope::Working => resolve_working(repo_path),
         Scope::Sha(range) => resolve_sha(repo_path, range),
         Scope::File(path) => resolve_file(repo_path, path),
         Scope::Glob(pattern) => resolve_glob(repo_path, pattern),
@@ -530,18 +504,7 @@ fn read_at_ref(
 
 /// Resolve the working-tree scope: uncommitted changes vs HEAD (staged +
 /// unstaged + untracked), reusing the git tool's changed-file accounting.
-///
-/// When `use_tracking` is set, the candidate set is narrowed by the [`tracking`]
-/// subtract-unchanged filter: a file whose current content hashes to the same
-/// `context_hash` recorded on its last review is dropped before any diff/probe
-/// work, so an incremental `review working` only carries files edited since the
-/// baseline. Each survivor's `before` stays HEAD, so its semantic diff still
-/// shows the real change — tracking decides *inclusion* only, never the diff.
-fn resolve_working(
-    repo_path: &Path,
-    use_tracking: bool,
-    rules_hash: &str,
-) -> Result<ResolvedScope, AvpError> {
+fn resolve_working(repo_path: &Path) -> Result<ResolvedScope, AvpError> {
     let repo = open_repo(repo_path)?;
     let status = repo
         .get_status()
@@ -556,36 +519,12 @@ fn resolve_working(
     files.sort();
     files.dedup();
 
-    // Read each candidate's working-tree content once, then (when tracking is on)
-    // subtract files unchanged since their last review. A file with no readable
-    // content (a deletion) carries an empty string here; it has no tracking entry
-    // to match, so it always survives the filter and is diffed as a deletion.
+    // Read each candidate's working-tree content once. A file with no readable
+    // content (a deletion) carries `None` here and is diffed as a deletion.
     let after_by_path: BTreeMap<String, Option<String>> = files
         .iter()
         .map(|path| Ok((path.clone(), read_working(repo_path, path)?)))
         .collect::<Result<_, AvpError>>()?;
-
-    if use_tracking {
-        let candidates: Vec<(String, String)> = files
-            .iter()
-            .map(|path| {
-                let content = after_by_path
-                    .get(path)
-                    .and_then(|c| c.clone())
-                    .unwrap_or_default();
-                (path.clone(), content)
-            })
-            .collect();
-        let before = files.len();
-        files = tracking::subtract_unchanged(repo_path, &candidates, rules_hash);
-        files.sort();
-        tracing::info!(
-            candidates = before,
-            survivors = files.len(),
-            subtracted = before - files.len(),
-            "review working: incremental tracking filter applied"
-        );
-    }
 
     let mut builder = FileChangeBuilder::new();
     for path in &files {
@@ -969,16 +908,9 @@ mod tests {
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         let validator = work
             .validators
@@ -1047,16 +979,9 @@ mod tests {
         let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         let validator = work
             .validators
@@ -1089,16 +1014,9 @@ mod tests {
         let loader = loader_with("everything", "*", &[], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         assert!(
             work.validators.is_empty(),
@@ -1124,16 +1042,9 @@ mod tests {
         let loader = loader_with("everything", "*", &[], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         let validator = work
             .validators
@@ -1196,196 +1107,6 @@ mod tests {
         );
     }
 
-    // ---- scope_review: incremental tracking filter -----------------------
-
-    /// Every file path that appears anywhere in a work-list, deduped.
-    fn worklist_files(work: &WorkList) -> BTreeSet<String> {
-        work.validators
-            .iter()
-            .flat_map(|v| v.files.iter().map(|f| f.path.clone()))
-            .collect()
-    }
-
-    /// Seed a tracking entry whose `context_hash` matches `content` for `path`,
-    /// so a later `subtract_unchanged` over the same content drops it.
-    fn seed_tracking(repo_path: &Path, path: &str, content: &str, rules_hash: &str) {
-        let entry = crate::review::tracking::TrackingEntry::new(
-            path,
-            content,
-            rules_hash,
-            "2026-06-14T00:00:00Z",
-        );
-        crate::review::tracking::upsert_entry(repo_path, &entry).unwrap();
-    }
-
-    #[tokio::test]
-    async fn tracking_subtracts_unchanged_keeps_changed_and_new() {
-        let repo = TestRepo::new();
-        // Two committed files; a third is added untracked. After commit, edit one.
-        let stable = format!("{}\n", body("stable_fn"));
-        let edited_before = format!("{}\n", body("edited_fn"));
-        repo.write("src/stable.rs", &stable);
-        repo.write("src/edited.rs", &edited_before);
-        repo.commit("initial");
-
-        // Edit one file and add a brand-new one.
-        let edited_after = format!("{}\n// edited\n", body("edited_fn"));
-        repo.write("src/edited.rs", &edited_after);
-        repo.write("src/fresh.rs", &format!("{}\n", body("fresh_fn")));
-
-        let conn = index_conn();
-        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
-        let embedder = MockEmbedder::new(DIM);
-
-        // Baseline tracking: stable matches its current content; edited's entry is
-        // for the OLD content; fresh has no entry. The rules hash must match what
-        // scope_review computes from this loader.
-        let rules = crate::review::tracking::rules_hash(&loader);
-        seed_tracking(repo.path(), "src/stable.rs", &stable, &rules);
-        seed_tracking(repo.path(), "src/edited.rs", &edited_before, &rules);
-
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, true)
-            .await
-            .unwrap();
-        let files = worklist_files(&work);
-
-        assert!(
-            !files.contains("src/stable.rs"),
-            "an unchanged tracked file is subtracted, got: {files:?}"
-        );
-        assert!(
-            files.contains("src/edited.rs"),
-            "an edited file (its tracked content differs) survives, got: {files:?}"
-        );
-        assert!(
-            files.contains("src/fresh.rs"),
-            "a brand-new file (no entry) survives, got: {files:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn force_full_ignores_tracking_and_reviews_everything() {
-        let repo = TestRepo::new();
-        let stable = format!("{}\n", body("stable_fn"));
-        repo.write("src/stable.rs", &stable);
-        repo.commit("initial");
-        // A working-tree edit so there is at least one change in scope.
-        repo.write("src/stable.rs", &format!("{stable}// touched\n"));
-
-        let conn = index_conn();
-        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
-        let embedder = MockEmbedder::new(DIM);
-
-        // Seed an entry matching the CURRENT (touched) content, which `use_tracking`
-        // would subtract — but the force hatch must ignore it.
-        let rules = crate::review::tracking::rules_hash(&loader);
-        seed_tracking(
-            repo.path(),
-            "src/stable.rs",
-            &format!("{stable}// touched\n"),
-            &rules,
-        );
-
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
-        assert!(
-            worklist_files(&work).contains("src/stable.rs"),
-            "the force/all hatch reviews the file even though tracking would subtract it"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_rules_change_keeps_every_file_in_scope() {
-        let repo = TestRepo::new();
-        let stable = format!("{}\n", body("stable_fn"));
-        repo.write("src/stable.rs", &stable);
-        repo.commit("initial");
-        // Touch it so it is a working change.
-        repo.write("src/stable.rs", &format!("{stable}// change\n"));
-        let current = format!("{stable}// change\n");
-
-        let conn = index_conn();
-        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
-        let embedder = MockEmbedder::new(DIM);
-
-        // The entry matches the current content but under a DIFFERENT (stale) rules
-        // hash, so its context hash no longer matches and the file must survive.
-        seed_tracking(repo.path(), "src/stable.rs", &current, "sha256:stale-rules");
-
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, true)
-            .await
-            .unwrap();
-        assert!(
-            worklist_files(&work).contains("src/stable.rs"),
-            "a rules change invalidates the tracking entry and keeps the file in scope"
-        );
-    }
-
-    /// The production round-trip: a real `review working` pass records its
-    /// baseline through the live recorder ([`record_baseline_if_working`]) — NOT a
-    /// hand-seeded entry — and a second pass over the unedited content must
-    /// subtract the file. This is the one test that exercises the record↔lookup
-    /// key agreement end to end: the recorder's write-side key and
-    /// `subtract_unchanged`'s read-side key must collapse to the same on-disk
-    /// entry, which the fixture-seeding `tracking_subtracts_*` tests cannot prove.
-    #[tokio::test]
-    async fn working_round_trip_subtracts_after_real_baseline_record() {
-        use crate::review::synthesize::FleetTally;
-        use crate::review::tracking::record_baseline_if_working;
-
-        let repo = TestRepo::new();
-        // A committed file, then a working-tree edit so it is genuinely in scope
-        // for the first pass.
-        let base = format!("{}\n", body("round_trip_fn"));
-        repo.write("src/round_trip.rs", &base);
-        repo.commit("initial");
-        let edited = format!("{base}// working edit\n");
-        repo.write("src/round_trip.rs", &edited);
-
-        let conn = index_conn();
-        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
-        let embedder = MockEmbedder::new(DIM);
-
-        // First pass: tracking on, no baseline yet, so the edited file is in scope.
-        let first = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, true)
-            .await
-            .unwrap();
-        assert!(
-            worklist_files(&first).contains("src/round_trip.rs"),
-            "the first pass must review the edited file, got: {:?}",
-            worklist_files(&first)
-        );
-
-        // Record the baseline the way production does — from the real work-list
-        // through the shared recorder, with a tally showing fan-out actually ran.
-        record_baseline_if_working(
-            true,
-            repo.path(),
-            &loader,
-            &first,
-            &FleetTally::new(1, 0),
-            "2026-06-20T00:00:00Z",
-        );
-
-        // Second pass over the SAME (unedited) content must subtract the file.
-        let second = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, true)
-            .await
-            .unwrap();
-        assert!(
-            !worklist_files(&second).contains("src/round_trip.rs"),
-            "an unedited second pass must subtract the file recorded by the real baseline, got: {:?}",
-            worklist_files(&second)
-        );
-    }
-
     // ---- scope_review: observability tracing -----------------------------
 
     #[tokio::test]
@@ -1404,16 +1125,9 @@ mod tests {
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let _work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         // The selection summary names the matched validator and file count.
         assert!(logs_contain("review scope resolved"));
@@ -1437,16 +1151,9 @@ mod tests {
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let _work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         // The summary still fires, reporting zero matched validators.
         assert!(logs_contain("review scope resolved"));
@@ -1480,7 +1187,6 @@ mod tests {
             &single,
             &conn,
             &baseline_embedder,
-            false,
         )
         .await
         .unwrap();
@@ -1493,16 +1199,9 @@ mod tests {
         loader.add_builtin_ruleset(ruleset("dedupe-b", "*.rs", &["duplicates"], Severity::Warn));
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         // Execution count: the shared (file, probe) run embeds exactly as often
         // as the single-validator baseline — a per-validator re-run would
@@ -1558,16 +1257,9 @@ mod tests {
         let loader = loader_with("reuse", "*.rs", &["callers", "similar"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         let validator = work
             .validators
@@ -1634,7 +1326,6 @@ mod tests {
             &loader,
             &conn,
             &embedder,
-            false,
         )
         .await
         .unwrap();
@@ -1665,7 +1356,6 @@ mod tests {
             &loader,
             &conn,
             &embedder,
-            false,
         )
         .await
         .unwrap();
@@ -1707,16 +1397,9 @@ mod tests {
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         assert!(
             work.validators.is_empty(),

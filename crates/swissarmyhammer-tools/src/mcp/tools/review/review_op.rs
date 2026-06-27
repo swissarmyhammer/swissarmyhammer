@@ -163,11 +163,6 @@ pub struct ReviewRequest {
     /// The pinned pool worker count from `review.concurrency`, applied by the
     /// server at the wiring layer. `None` defers to the coarse `backend` policy.
     pub concurrency: Option<usize>,
-    /// The force/all escape hatch. `false` (the default) keeps `review working`
-    /// incremental — files unchanged since their last review are subtracted via
-    /// the `.validators/.hashes/` tracking baseline. `true` ignores tracking and
-    /// reviews the whole resolved set. Inert for non-working scopes.
-    pub force: bool,
 }
 
 /// Run a resolved review request end to end and return the report.
@@ -247,10 +242,6 @@ async fn run_review_request_inner(
 
     let handle = agent_factory().await?;
 
-    // Incremental working review unless the caller forced a full pass: the engine
-    // subtracts files unchanged since their last review (via `.validators/.hashes/`)
-    // and records a fresh baseline for every reviewed file when the pass completes.
-    let use_tracking = !request.force;
     let report = run_review_over_agent(
         handle.agent,
         handle.notification_rx,
@@ -262,7 +253,6 @@ async fn run_review_request_inner(
         pool_config_for(request.backend.as_deref(), request.concurrency),
         FleetConfig::default(),
         &now,
-        use_tracking,
     )
     .await
     .map_err(|e| format!("review pipeline failed: {e}"))?;
