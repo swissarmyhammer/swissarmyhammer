@@ -177,7 +177,10 @@ fn write_probe_plugin(project_root: &Path, output_dir: &Path) {
          \x20 if (typeof text !== 'string') {{\n\
          \x20   throw new Error('read file content[0].text was not a string');\n\
          \x20 }}\n\
-         \x20 return text;\n\
+         \x20 // Strip the leading `#hash:<hex>` freshness-token line; with\n\
+         \x20 // `format: 'plain'` the remainder is the raw file bytes.\n\
+         \x20 const nl = text.indexOf('\\n');\n\
+         \x20 return nl < 0 ? '' : text.slice(nl + 1);\n\
          }}\n\
          \n\
          export default class ProbePlugin extends Plugin {{\n\
@@ -197,6 +200,7 @@ fn write_probe_plugin(project_root: &Path, output_dir: &Path) {
          \x20   const readResult = await this.fs.files({{\n\
          \x20     op: 'read file',\n\
          \x20     path: {path_form},\n\
+         \x20     format: 'plain',\n\
          \x20   }});\n\
          \x20   const readBack = readBackText(readResult);\n\
          \x20   if (readBack.indexOf({payload}) < 0) {{\n\

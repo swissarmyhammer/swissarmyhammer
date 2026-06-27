@@ -72,14 +72,20 @@ const ECHO_NOTE = "notes/echo.txt";
 const NOTE_BODY = "a note round-tripped through the in-process files tool";
 
 /**
- * Extracts the file text from a `files` `read file` result.
+ * Extracts the raw file text from a `files` `read file` result.
  *
  * A `read file` call returns a `CallToolResult` shape — an object with a
- * `content` array whose first entry's `text` is the file's content. This walks
- * that shape and returns the text, so `load()` can echo it into a second note.
+ * `content` array whose first entry's `text` is the read payload. That payload
+ * is NOT the bare file bytes: `read file` prepends a `#hash:<hex>` freshness-
+ * token line (the whole-file hash that `write file` / `edit files` use to
+ * detect stale edits) and, in its default `"hashline"` form, additionally tags
+ * every body line with an `N:HH|` anchor. This plugin asks for
+ * `format: "plain"` so the body stays untagged, then strips the single leading
+ * `#hash:` line here — what remains is exactly the bytes that were written, so
+ * `load()` can echo them verbatim into a second note.
  *
  * @param result - the value returned by `this.fs.files({ op: "read file", ... })`.
- * @returns the read-back file content.
+ * @returns the read-back file content, with the `#hash:` metadata line removed.
  * @throws if the result is not the expected `CallToolResult` shape.
  */
 function readBackText(result: unknown): string {
@@ -91,7 +97,11 @@ function readBackText(result: unknown): string {
   if (typeof text !== "string") {
     throw new Error("read file content[0].text was not a string");
   }
-  return text;
+  // Drop the leading `#hash:<hex>` freshness-token line; the file content
+  // follows on the next line. Because the read asked for `format: "plain"`,
+  // that content is untagged, so the remainder is the raw file bytes.
+  const newlineIndex = text.indexOf("\n");
+  return newlineIndex < 0 ? "" : text.slice(newlineIndex + 1);
 }
 
 /**
@@ -148,6 +158,7 @@ export default class FileNotesPlugin extends Plugin {
     const readResult = await this.fs.files({
       op: "read file",
       path: HELLO_NOTE,
+      format: "plain",
     });
     const readBack = readBackText(readResult);
     if (readBack !== NOTE_BODY) {
