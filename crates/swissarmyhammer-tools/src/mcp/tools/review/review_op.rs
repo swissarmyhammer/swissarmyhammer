@@ -164,7 +164,7 @@ pub struct ReviewRequest {
     /// server at the wiring layer. `None` defers to the coarse `backend` policy.
     pub concurrency: Option<usize>,
     /// The content-budgeted batch size in BYTES, from the `batch_size` modifier.
-    /// `None` defers to [`FleetConfig`]'s default (32 KiB). Applies to every scope.
+    /// `None` defers to [`FleetConfig`]'s default (128 KiB). Applies to every scope.
     pub batch_size: Option<usize>,
 }
 
@@ -246,7 +246,7 @@ async fn run_review_request_inner(
     let handle = agent_factory().await?;
 
     // Thread the `batch_size` modifier into the engine config; `None` keeps the
-    // FleetConfig default (32 KiB).
+    // FleetConfig default (128 KiB).
     let fleet_config = FleetConfig {
         batch_size: request
             .batch_size

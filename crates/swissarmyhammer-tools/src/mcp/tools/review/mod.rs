@@ -62,7 +62,7 @@ const BACKEND_PARAM: ParamMeta = ParamMeta::new("backend")
 /// `review` op's parameter list.
 const BATCH_SIZE_PARAM: ParamMeta = ParamMeta::new("batch_size")
     .description(
-        "Max inlined file content per review batch, in BYTES (default 32768 = 32 KiB). Changed files are packed whole into batches up to this budget and each batch is reviewed independently; a single file larger than this is an error. Raise it to review larger files in one batch, lower it for smaller batches.",
+        "Max inlined file content per review batch, in BYTES (default 131072 = 128 KiB). Changed files are packed whole into batches up to this budget and each batch is reviewed independently; a single file larger than this is an error. Raise it to review larger files in one batch, lower it for smaller batches.",
     )
     .param_type(ParamType::Integer);
 

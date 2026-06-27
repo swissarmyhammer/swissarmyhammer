@@ -78,15 +78,20 @@ use crate::validators::{
 };
 use agent_client_protocol_extras::SessionStateStatusResponse;
 
-/// The default review `batch_size` in **bytes** (32 KiB).
+/// The default review `batch_size` in **bytes** (128 KiB).
 ///
 /// Cramming every changed file's full source into one shared prime overflows the
 /// review model's context on a large diff (every fan-out validator then fails
 /// uniformly), and even when it fits it dilutes attention. So a run is split into
 /// byte-budgeted batches and each batch fans out independently. This budget is a
-/// deliberate, tunable knob — kept small on purpose — not derived from the model's
-/// context window.
-pub const DEFAULT_BATCH_SIZE: usize = 32 * 1024;
+/// deliberate, tunable knob — not derived from the model's context window.
+///
+/// It is sized to clear the largest single source file in a typical change
+/// (~95 KB) so an ordinary commit reviews in one or a few batches instead of
+/// tripping the oversize-file error, while a genuinely large multi-file diff
+/// still splits across batches. (32 KiB — the previous default — was smaller
+/// than many real source files, so default reviews of normal commits errored.)
+pub const DEFAULT_BATCH_SIZE: usize = 128 * 1024;
 
 /// Configuration for a fan-out run.
 ///
@@ -1127,6 +1132,18 @@ mod tests {
             prime: None,
             ..outcome
         }
+    }
+
+    // ---- config tests ----------------------------------------------------
+
+    #[test]
+    fn default_batch_size_is_128_kib() {
+        // The default budget clears the largest single source file in a typical
+        // change (~95 KB) so an ordinary commit reviews without tripping the
+        // oversize-file error; only genuinely huge multi-file diffs still split.
+        assert_eq!(DEFAULT_BATCH_SIZE, 128 * 1024);
+        assert_eq!(DEFAULT_BATCH_SIZE, 131072);
+        assert_eq!(FleetConfig::default().batch_size, DEFAULT_BATCH_SIZE);
     }
 
     // ---- renderer tests (pure) -------------------------------------------

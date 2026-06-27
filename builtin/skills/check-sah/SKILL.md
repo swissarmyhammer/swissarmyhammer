@@ -35,7 +35,7 @@ Pin `REPO` and `TRANSCRIPTS` for the whole run and pass them forward in every sc
 - `$TRANSCRIPTS/<uuid>.jsonl` — a session (the orchestrator for `/finish`, `/plan`, etc.).
 - `$TRANSCRIPTS/<uuid>/subagents/agent-*.jsonl` — that session's delegated subagents (implementer/tester/reviewer/committer/double-check).
 - `$TRANSCRIPTS/019*-*.jsonl` (top-level) — the **review engine** fans out into *separate* top-level sessions (content contains `Files under review` / `current contents`). These are NOT under the finish session's `subagents/` dir and are easy to miss when summing tokens.
-- Each `/finish` review is scoped to that checkpoint's commit delta (`sha HEAD~1..HEAD`) and content-batched by `batch_size` (default 32 KB). There is **no per-file hash store / skip-hash cache** to inspect — the old `.validators/.hashes/` incremental-tracking subsystem was removed, so there is nothing on disk that records what was reviewed.
+- Each `/finish` review is scoped to that checkpoint's commit delta (`sha HEAD~1..HEAD`) and content-batched by `batch_size` (default 128 KB). There is **no per-file hash store / skip-hash cache** to inspect — the old `.validators/.hashes/` incremental-tracking subsystem was removed, so there is nothing on disk that records what was reviewed.
 - The project repo is typically reset between runs; per-task `/finish` commits are **local, never pushed**.
 
 ## Locate the active finish session
