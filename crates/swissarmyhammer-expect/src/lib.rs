@@ -49,6 +49,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+pub mod assertion;
 pub mod config;
 pub mod doctor;
 pub mod drive;
@@ -60,6 +61,10 @@ pub mod surface;
 pub mod surfaces;
 pub mod types;
 
+pub use assertion::{
+    compile, AssertOp, AssertionOutcome, BoundValue, CompileError, CompiledAssertion, Expected,
+    Locator, Stream,
+};
 pub use config::{
     find_expect_dir, AgentConfig, ApprovalConfig, EmbedderConfig, ExpectConfig, Granularity,
     ModelConfig, OnMissing, ProvisionConfig, ReliabilityConfig,

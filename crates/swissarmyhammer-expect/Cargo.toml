@@ -31,6 +31,9 @@ glob = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
+# Locator dialect: regex stream-capture and number extraction for the assertion compiler
+regex = { workspace = true }
+
 # ACP delegation seam (the `drive` module). The engine is agent-construction-free:
 # it receives a `DynConnectTo<Client>` + notifier and reuses review's machinery.
 agent-client-protocol = { workspace = true }

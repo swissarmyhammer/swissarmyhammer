@@ -38,8 +38,8 @@ comments:
 depends_on:
 - 01KW263EW64TVAPZD7CYCBMNVV
 - 01KW260M8QZ8T37A8RZGDDVZ81
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffef80
 project: expect
 title: expect doctor op + register diagnostics into sah doctor
 ---
