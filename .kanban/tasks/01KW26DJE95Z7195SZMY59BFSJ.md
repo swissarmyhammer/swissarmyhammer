@@ -12,8 +12,8 @@ comments:
   timestamp: 2026-06-27T14:49:06.685194+00:00
 depends_on:
 - 01KW26ART916Q6N6JX037Q4QSX
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8380
 project: expect
 title: 'Authoring skill: proactively capture expectations from chat'
 ---

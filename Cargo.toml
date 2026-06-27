@@ -344,6 +344,21 @@ accessibility = "0.1"
 accessibility-sys = "0.1"
 core-foundation = "0.9"
 
+# Windows UI Automation (UIA) bindings for the gui surface adapter's Windows
+# backend: drive native/Tauri apps via IUIAutomation `InvokePattern`/`ValuePattern`
+# and snapshot the UIA tree. Windows-only consumer (a `cfg(target_os = "windows")`
+# target dependency), so the macOS/Linux builds never pull it.
+uiautomation = "0.25"
+
+# Linux AT-SPI bindings for the gui surface adapter's Linux backend: drive and
+# observe native/Tauri (WebKitGTK-bridged) apps by role+name over D-Bus. `tokio`
+# runs atspi/zbus on a tokio runtime (the backend owns one, like the browser
+# adapter); `zbus` re-exports the zbus proxy-builder types the backend builds
+# sibling-interface (Action/EditableText) proxies with. Linux-only consumer (a
+# `cfg(target_os = "linux")` target dependency), so the macOS/Windows builds never
+# pull it.
+atspi = { version = "0.30", features = ["tokio", "zbus"] }
+
 # Additional crate dependencies
 infer = "0.16"
 typed-builder = "0.20"

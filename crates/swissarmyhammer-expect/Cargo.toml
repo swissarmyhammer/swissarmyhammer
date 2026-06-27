@@ -92,6 +92,22 @@ accessibility = { workspace = true }
 accessibility-sys = { workspace = true }
 core-foundation = { workspace = true }
 
+# The gui surface adapter's Windows accessibility (UIA) backend: drive native/Tauri
+# apps via IUIAutomation `InvokePattern`/`ValuePattern` and snapshot the UIA tree.
+# Windows-only (a `cfg(target_os = "windows")` target dependency) so the macOS and
+# Linux builds never pull it.
+[target.'cfg(target_os = "windows")'.dependencies]
+uiautomation = { workspace = true }
+
+# The gui surface adapter's Linux accessibility (AT-SPI) backend: drive and observe
+# native/Tauri (WebKitGTK-bridged) apps by role+name over D-Bus. `atspi` re-exports
+# the zbus types the backend builds Action/EditableText proxies with, and runs on a
+# tokio runtime (the `tokio` dependency above, already present for the drive seam).
+# Linux-only (a `cfg(target_os = "linux")` target dependency) so the macOS and
+# Windows builds never pull it.
+[target.'cfg(target_os = "linux")'.dependencies]
+atspi = { workspace = true }
+
 [dev-dependencies]
 serde_json = { workspace = true }
 

@@ -1,28 +1,41 @@
 //! Integration coverage for the `gui` surface adapter driving a real native app
-//! through the OS accessibility (AX) tree.
+//! through the OS accessibility tree.
 //!
-//! **Doubly gated, and fixture-agnostic.** Driving a native app over AX needs (a)
-//! a supported OS with the *test runner* holding Accessibility permission —
-//! frequently unavailable in automated/headless CI — and (b) a launchable fixture
-//! app whose controls the test cannot know in advance. So the test is configured
-//! entirely by environment variables and skips cleanly (with a log) when any are
-//! absent, rather than failing the suite:
+//! **One OS-neutral test for every backend.** The adapter selects its backend by
+//! `cfg` — macOS AX, Windows UIA, Linux AT-SPI — but this test is identical across
+//! them: it gates on [`gui_automation_available`] (the per-OS availability probe)
+//! and is configured by role vocabulary in environment variables, so the same loop
+//! exercises whichever backend the host compiles in. The CI runners that exercise
+//! it are the macOS, Windows, and Linux runners respectively; everywhere else it
+//! skips cleanly.
 //!
-//! - [`FIXTURE_APP_ENV`] — the executable to launch (a macOS `.app` bundle's
-//!   binary inside `Contents/MacOS/`, e.g. the in-repo `kanban-app`).
-//! - [`DRIVE_STEP_ENV`] — the press step in the a11y drive dialect, e.g.
-//!   `press AXButton[name="Go"]`. Required so the run exercises the **drive**
-//!   path (`role[name=…]` → `find_element` → `AXPress`), not just a snapshot.
-//! - [`ASSERT_ENV`] — optional `role[name=…]` criterion, e.g.
-//!   `AXTextField[name="Result"] equals clicked`, compiled and evaluated against
-//!   the observed tree to assert a concrete bridged AX node value.
+//! **Doubly gated, and fixture-agnostic.** Driving a native app over the OS
+//! accessibility API needs (a) a supported OS where the *test runner* can reach
+//! that API — macOS Accessibility permission, a Windows UIA client, a Linux AT-SPI
+//! bus — frequently unavailable in automated/headless CI — and (b) a launchable
+//! fixture app whose controls the test cannot know in advance. So the test is
+//! configured entirely by environment variables and skips cleanly (with a log)
+//! when any are absent, rather than failing the suite:
+//!
+//! - [`FIXTURE_APP_ENV`] — the executable to launch (e.g. a macOS `.app` bundle's
+//!   binary inside `Contents/MacOS/`, a Windows `.exe`, a Linux binary — such as
+//!   the in-repo `kanban-app`).
+//! - [`DRIVE_STEP_ENV`] — the press step in the a11y drive dialect in this OS's
+//!   role vocabulary (`press AXButton[name="Go"]` on macOS, `press Button[name="Go"]`
+//!   on Windows, `press push-button[name="Go"]` on Linux). Required so the run
+//!   exercises the **drive** path (`role[name=…]` → `find_element` → native press),
+//!   not just a snapshot.
+//! - [`ASSERT_ENV`] — optional `role[name=…]` criterion (e.g.
+//!   `AXTextField[name="Result"] equals clicked`), compiled and evaluated against
+//!   the observed tree to assert a concrete bridged node value.
 //!
 //! When fully configured (permission + app + drive step) this runs the same
-//! provision → drive-by-`role[name=…]` → observe → (assert) → teardown loop as
-//! the browser surface's integration test. The load-bearing, AX-free coverage —
-//! the `RawAxNode` → `A11yNode` mapping, the shared `role[name=…]` matcher, and
-//! structural-drift-on-rename — lives in the `gui` module unit tests and always
-//! runs regardless of AX permission.
+//! provision → drive-by-`role[name=…]` → observe → (assert) → teardown loop as the
+//! browser surface's integration test. The load-bearing, API-free coverage — the
+//! `RawAxNode` → `A11yNode` mapping, the `atspi_role_token` role normalization, the
+//! shared `role[name=…]` matcher, and structural-drift-on-rename across every
+//! backend's role vocabulary — lives in the `gui` module unit tests and always
+//! runs on any OS regardless of accessibility permission.
 
 use std::path::Path;
 use std::time::Duration;
@@ -75,9 +88,10 @@ fn presses_a_control_by_role_name_and_snapshots_the_ax_tree() {
     if !gui_automation_available() {
         eprintln!(
             "SKIP presses_a_control_by_role_name_and_snapshots_the_ax_tree: \
-             gui automation unavailable (unsupported OS, or the test runner lacks \
-             macOS Accessibility permission); the AX-free gui mapping/matcher/drift \
-             unit tests still cover the logic"
+             gui automation unavailable (unsupported OS, or the test runner cannot \
+             reach the OS accessibility API — macOS Accessibility permission, a \
+             Windows UIA client, or a Linux AT-SPI bus); the API-free gui \
+             mapping/matcher/drift unit tests still cover the logic"
         );
         return;
     }
