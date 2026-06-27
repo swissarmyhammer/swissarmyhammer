@@ -22,18 +22,6 @@ pub(crate) fn string_arg(
     args.get(key).and_then(|v| v.as_str()).map(str::to_string)
 }
 
-/// Read an optional boolean flag (`false` when absent or wrong-typed).
-///
-/// Accepts a real JSON `true`/`false` or the strings `"true"`/`"false"` so a
-/// forgiving caller can pass either shape.
-pub(crate) fn bool_arg(args: &serde_json::Map<String, serde_json::Value>, key: &str) -> bool {
-    match args.get(key) {
-        Some(serde_json::Value::Bool(b)) => *b,
-        Some(serde_json::Value::String(s)) => s.eq_ignore_ascii_case("true"),
-        _ => false,
-    }
-}
-
 /// Read an optional string-array argument (empty when absent or wrong-typed).
 ///
 /// Non-string array elements are silently skipped.
@@ -77,23 +65,6 @@ mod tests {
         assert_eq!(string_arg(&args, "missing"), None);
         // Wrong-typed (number) is treated as absent.
         assert_eq!(string_arg(&args, "n"), None);
-    }
-
-    #[test]
-    fn bool_arg_accepts_json_bool_and_string() {
-        let args = map(serde_json::json!({
-            "t": true,
-            "f": false,
-            "st": "TrUe",
-            "sf": "no",
-            "n": 1
-        }));
-        assert!(bool_arg(&args, "t"));
-        assert!(!bool_arg(&args, "f"));
-        assert!(bool_arg(&args, "st"));
-        assert!(!bool_arg(&args, "sf"));
-        assert!(!bool_arg(&args, "n"));
-        assert!(!bool_arg(&args, "missing"));
     }
 
     #[test]

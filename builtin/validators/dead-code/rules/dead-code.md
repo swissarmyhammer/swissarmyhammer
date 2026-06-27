@@ -1,7 +1,6 @@
 ---
 name: dead-code
 description: Detect added symbols with no inbound callers, orphaned modules, unreachable branches, and commented-out code
-severity: error
 ---
 
 # Dead Code Validator

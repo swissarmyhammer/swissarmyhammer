@@ -1,7 +1,6 @@
 ---
 name: typescript
 description: unknown over any, no object/Function types, descriptive generics, readonly
-severity: warn
 ---
 
 # TypeScript

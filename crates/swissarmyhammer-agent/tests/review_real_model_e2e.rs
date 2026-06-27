@@ -87,18 +87,26 @@ fn resolve_qwen_test_config() -> ModelConfig {
         .unwrap_or_else(|e| panic!("test model `{MODEL_ID}` must parse to a ModelConfig: {e}"))
 }
 
+/// Lowercased substrings that mark an agent-build failure as a model
+/// *availability* problem — an HF rate-limit or an offline first-run download —
+/// rather than a wiring bug. Matched case-insensitively in
+/// [`is_model_unavailable`].
+const MODEL_UNAVAILABLE_PATTERNS: &[&str] = &[
+    "429",
+    "too many requests",
+    "rate limited",
+    "loadingfailed",
+    "failed to load",
+    "model loading failed",
+];
+
 /// Skip (return true) when the agent could not be built because the model was
 /// unavailable — an HF rate-limit or an offline first-run download. Mirrors the
 /// `is_model_unavailable` skip idiom across the real-model tests; on the
 /// model-cached GPU runner the model loads and the assertions always run.
 fn is_model_unavailable(message: &str) -> bool {
     let m = message.to_lowercase();
-    m.contains("429")
-        || m.contains("too many requests")
-        || m.contains("rate limited")
-        || m.contains("loadingfailed")
-        || m.contains("failed to load")
-        || m.contains("model loading failed")
+    MODEL_UNAVAILABLE_PATTERNS.iter().any(|p| m.contains(p))
 }
 
 /// The production review pipeline, driven over a real local model end-to-end:
@@ -162,7 +170,6 @@ async fn review_runs_over_acp_against_a_real_local_model() {
         // keeping this the minimum real end-to-end (see the module doc).
         validators: vec!["function-length".to_string()],
         concurrency: None,
-        force: false,
     };
 
     let outcome = run_review_request(
@@ -214,16 +221,16 @@ async fn review_runs_over_acp_against_a_real_local_model() {
         report.markdown
     );
 
-    // The counts must be internally consistent: the per-severity confirmed
-    // tallies sum to no more than the total confirmed count. `counts.confirmed`
-    // is the pre-dedup confirmed count, while the per-severity tallies are taken
-    // over the set returned by `dedup_exact`, which collapses exact-duplicate
-    // confirmed findings. A nondeterministic 0.6B model can emit identical
-    // confirmed findings on a tiny diff, so the kept (deduped) findings never
-    // exceed the confirmed count — they may be strictly fewer.
+    // The counts must be internally consistent: the rendered-findings count is
+    // no more than the total confirmed count. `counts.confirmed` is the pre-dedup
+    // confirmed count, while `counts.findings` is taken over the set returned by
+    // `dedup_exact`, which collapses exact-duplicate confirmed findings. A
+    // nondeterministic 0.6B model can emit identical confirmed findings on a tiny
+    // diff, so the kept (deduped) findings never exceed the confirmed count —
+    // they may be strictly fewer.
     let counts = &report.counts;
     assert!(
-        counts.blockers + counts.warnings + counts.nits <= counts.confirmed,
-        "the per-severity tallies must not exceed the confirmed findings: {counts:?}"
+        counts.findings <= counts.confirmed,
+        "the rendered findings count must not exceed the confirmed findings: {counts:?}"
     );
 }

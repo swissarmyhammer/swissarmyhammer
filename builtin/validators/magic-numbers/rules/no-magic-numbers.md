@@ -1,7 +1,6 @@
 ---
 name: no-magic-numbers
 description: Detect unexplained numeric literals in code
-severity: info
 ---
 
 # No Magic Numbers Validator

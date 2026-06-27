@@ -1,7 +1,6 @@
 ---
 name: data-driven
 description: Detect hardcoding that should be data — tables, named constants, config
-severity: warn
 ---
 
 # Data-Driven Validator

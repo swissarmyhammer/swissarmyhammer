@@ -61,7 +61,7 @@
 //!   then the prime handoff. No validator text.
 //! - [`render_validator_suffix`] (forked per validator): the **validator
 //!   instructions** — the mandate (the validator's `description`), the paths of
-//!   the validator's files in scope, every rule body verbatim, the severity
+//!   the validator's files in scope, every rule body verbatim, the
 //!   default, and the output contract (every finding emits `rule` + `claim` +
 //!   `evidence` + `suggestion`, matching the [`Finding`] type).
 //! - [`render_fleet_prompt`] (degraded fallback): the change purpose, the
@@ -74,7 +74,7 @@ use crate::review::scope::{FileWork, ValidatorWork, WorkList};
 use crate::review::types::{parse_findings, Finding};
 use crate::validators::{
     AgentPool, ForkAttachment, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult,
-    Severity, ValidatorLoader,
+    ValidatorLoader,
 };
 use agent_client_protocol_extras::SessionStateStatusResponse;
 
@@ -724,7 +724,7 @@ fn tag_findings(mut findings: Vec<Finding>, validator: &str) -> Vec<Finding> {
 /// Self-contained and scoped exactly as the old per-validator prompt was: the
 /// change purpose, that validator's own files (path + semantic diff + bounded
 /// source slice + probe evidence), and the validator's instructions (mandate +
-/// every rule body + severity default + output contract). It is the cold fallback
+/// every rule body + output contract). It is the cold fallback
 /// when priming or this validator's fork fails — correct, just not warm.
 ///
 /// The warm path splits the run's large shared content into the run prime
@@ -787,7 +787,7 @@ pub fn render_run_prime(work: &WorkList) -> String {
 
 /// Render the per-validator suffix a forked session is prompted with: the
 /// validator header, mandate, the files this validator must focus on, every one
-/// of the validator's rule bodies, the severity default, and the output contract.
+/// of the validator's rule bodies, and the output contract.
 /// The files' contents are already in the fork's inherited prime; only their
 /// paths are named here so the validator stays scoped to its matched files (not
 /// every file in the prime), without re-sending any diff.
@@ -809,12 +809,6 @@ pub fn render_validator_suffix(validator: &ValidatorWork, ruleset: &RuleSet) -> 
         out.push_str(rule.body.trim());
         out.push_str("\n\n");
     }
-
-    let _ = writeln!(
-        out,
-        "## Default severity\n\nUnless a rule states otherwise, findings default to severity `{}`.\n",
-        severity_default(validator.severity)
-    );
 
     out.push_str(OUTPUT_CONTRACT);
     out.push('\n');
@@ -846,17 +840,6 @@ pub fn render_file_payload(files: &[FileWork]) -> String {
         render_file_block(&mut out, file);
     }
     out
-}
-
-/// The validator's default severity as the `blocker`/`warning`/`nit` word the
-/// [`Finding`] severity field uses, so the contract speaks the agent's output
-/// vocabulary rather than the loader's internal `info`/`warn`/`error`.
-fn severity_default(severity: Severity) -> &'static str {
-    match severity {
-        Severity::Error => "blocker",
-        Severity::Warn => "warning",
-        Severity::Info => "nit",
-    }
 }
 
 /// The finding output contract, shared verbatim by every fan-out prompt.
@@ -895,11 +878,16 @@ Each finding is one object with these fields:
 - `file`: the path of the file the finding is about.
 - `line`: the 1-based line number the finding points at.
 - `rule`: which rule of this validator fired.
-- `severity`: one of `blocker`, `warning`, `nit`.
 - `claim`: what is wrong AND why it matters — one concern per finding.
 - `evidence`: the proof the issue is real — cite the injected probe result \
 (e.g. \"per `duplicates`: 0.94 at `bar.rs:88`\") or a `file:line` citation.
 - `suggestion`: the fix.
+
+Report every occurrence of every rule that fires, in this single pass: when a \
+rule matches on several lines, emit a separate finding for each match — one \
+finding per `file:line`. Do not stop at the first match and do not collapse \
+repeated matches into one finding; list them all so the whole file can be fixed \
+in one go rather than re-reviewed match by match.
 
 Report only real issues. If you find none, emit an empty array `[]`.
 ";
@@ -1003,7 +991,6 @@ mod tests {
                 trigger_matcher: None,
                 tags: vec![],
                 probes: vec![],
-                severity: Severity::Warn,
                 timeout: 30,
                 once: false,
             },
@@ -1013,7 +1000,6 @@ mod tests {
                     name: rname.to_string(),
                     description: format!("{rname} description"),
                     body: body.to_string(),
-                    severity: None,
                     timeout: None,
                 })
                 .collect(),
@@ -1072,7 +1058,6 @@ mod tests {
     fn validator_work(name: &str, files: Vec<FileWork>) -> ValidatorWork {
         ValidatorWork {
             validator_name: name.to_string(),
-            severity: Severity::Warn,
             rules: vec![format!("{name}-rule")],
             probes: vec!["duplicates".to_string()],
             files,
@@ -1173,8 +1158,8 @@ mod tests {
         assert!(prompt.contains("`claim`"), "{prompt}");
         assert!(prompt.contains("`evidence`"), "{prompt}");
         assert!(prompt.contains("`suggestion`"), "{prompt}");
-        // Severity default rendered from the validator severity (warn → warning).
-        assert!(prompt.contains("severity `warning`"), "{prompt}");
+        // Binary pass/fail: the contract carries no severity field at all.
+        assert!(!prompt.contains("`severity`"), "{prompt}");
     }
 
     #[test]
@@ -1400,11 +1385,25 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         );
     }
 
+    /// The contract must demand reporting EVERY occurrence of every rule that
+    /// fires in a single pass — one finding per `file:line`, never stopping at the
+    /// first match. Bail-fast (find-one → fix → re-review) is the re-review token
+    /// storm this contract exists to prevent.
     #[test]
-    fn severity_default_maps_to_finding_vocabulary() {
-        assert_eq!(severity_default(Severity::Error), "blocker");
-        assert_eq!(severity_default(Severity::Warn), "warning");
-        assert_eq!(severity_default(Severity::Info), "nit");
+    fn output_contract_demands_every_occurrence_with_no_bail_fast() {
+        let lower = OUTPUT_CONTRACT.to_lowercase();
+        assert!(
+            lower.contains("every occurrence of every rule"),
+            "the contract must demand every occurrence of every rule: {OUTPUT_CONTRACT}"
+        );
+        assert!(
+            lower.contains("do not stop at the first"),
+            "the contract must forbid stopping at the first match: {OUTPUT_CONTRACT}"
+        );
+        assert!(
+            OUTPUT_CONTRACT.contains("one finding per `file:line`"),
+            "the contract must require one finding per file:line: {OUTPUT_CONTRACT}"
+        );
     }
 
     // ---- orchestrator tests (scripted mock agent) ------------------------
@@ -1449,7 +1448,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "ra",
-                    "warning",
                     "dup in a",
                 )),
             ),
@@ -1459,7 +1457,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/b.rs",
                     TEST_FINDING_LINE,
                     "rb",
-                    "warning",
                     "dup in b",
                 )),
             ),
@@ -1649,7 +1646,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                 "src/f0.rs",
                 TEST_FINDING_LINE,
                 "r1",
-                "warning",
                 "warm finding",
             )),
         )]);
@@ -1798,7 +1794,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "r",
-                    "warning",
                     "found despite fork failure",
                 )),
             )],
@@ -1861,7 +1856,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/b.rs",
                     TEST_FINDING_LINE,
                     "r",
-                    "warning",
                     "found without forks",
                 )),
             )],
@@ -1919,7 +1913,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "r",
-                    "warning",
                     "cold but correct",
                 )),
             )],
@@ -1967,7 +1960,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "r",
-                    "warning",
                     "warm on claude",
                 )),
             )],
@@ -2137,7 +2129,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "good-rule",
-                    "warning",
                     "real issue",
                 )),
             ),

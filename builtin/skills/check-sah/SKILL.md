@@ -67,6 +67,7 @@ Run every wake-up (keep each shell command **< 4000 chars**; split into multiple
 2. **Error scan** — count `"is_error":true` across finish + subagents; count `security check failed` blocks. Classify new ones (see Benign patterns). Flag NEW/fatal.
 3. **Token quant** (below).
 4. **sah tool errors & behavior** (below).
+5. **Review-rule health** (below) — contradictions, invalid-code findings, declined/force-closed findings, churn, stuck tasks.
 
 ## Token quant (cache_creation + cache_read = the cost driver)
 
@@ -115,6 +116,18 @@ Known tooling issues to recognize (examples, not exhaustive):
 - **`kanban`** — `delete column: missing id` / `get task: missing id` (parse retries); `init board: already exists`.
 - **`shell`** — `security check failed` false-positives (see Benign patterns); `Unknown operation 'detect projects'` when `detect projects` is mis-routed to `shell` instead of `code_context`.
 
+## Review-rule health (the agent should obey findings, not fight them)
+
+The finish agent must **obey** every review finding (fix the code) or — only for a genuine contradiction / impossibility — **report it and park the task stuck** for a human to fix the rule. It must **never** dismiss a finding, rewrite a validator to silence one, or force a task to `done` with findings open. Each cycle, watch for these and surface each with the offending finding quoted verbatim and the likely validator named:
+
+1. **Force-closed / declined findings — cardinal violation, flag hard.** The orchestrator moved a task to `done` (`complete task`, or `move task … done`) while its latest `/review` was non-clean, or prior `- [ ]` items were still unchecked. Tell-tale prose around the close: "decline", "exercise (orchestrator) judgment", "review-churn", "pedantic", "no bonus refactoring", "I'll close/exercise judgment". This is the behavior the updated finish/review skills forbid; report the close **and** the open findings it skipped.
+2. **Genuine bad rule — a finding that demands invalid code or fights a deliberate contract.** e.g. `null`→`undefined` where `tsc` needs `T | null`; `snake_case`→camelCase on a parameter mirroring a backend/IPC payload; any suggestion that wouldn't compile. Here the agent is *right* to refuse to hand-apply it — but the correct resolution is a **human-made builtin validator fix**, not a silent close. Surface as a "candidate validator bug" naming the rule (`js-ts/api-design` undefined-over-null, `naming/naming-consistency`, etc.).
+3. **Contradictory findings.** Two findings on the same file/lines whose fixes are mutually exclusive. NB: `data-driven`/reuse (consolidate) vs `function-length` (split) is **not** a true contradiction — a spec-table + generator satisfies both; if the agent declined citing that "conflict," that is an agent failure, not a rule bug. A true contradiction is two rules that genuinely cannot both hold.
+4. **Review-churn / non-convergence.** Re-review of byte-identical (or trivially-changed) content surfaces *new* findings each round instead of converging to zero — rising finding `counts` across dated `## Review Findings` sections, or fresh findings on unchanged lines. This is review-engine instability (non-deterministic fan-out, no suppression of already-declined items) and is what pressures the agent into force-closing.
+5. **Stuck tasks.** A task that hit the step-7 guardrail (same finding ×3) or has sat in `review` many iterations on the same finding. Under the current skill this should be **parked stuck with the contradiction reported** — confirm that happened and surface it as a human-actionable rule-fix candidate; flag hard if the agent force-closed it instead.
+
+Detection: diff the dated `## Review Findings (...)` sections on each in-`review` task round-over-round (from `get task` and the orchestrator's `update task` calls); pull each `review` tool_result's `counts`; and check every `complete task` / `move task→done` against the immediately-preceding review verdict and the task's unchecked boxes. Classify each into one of the five above; (1) and a force-closed (5) are agent disobedience, (2)–(3) are validator bugs to escalate, (4) is engine instability.
+
 ## Stop & final summary
 
 STOP (do not reschedule) when the board is fully clear (all tasks `done`) **or** finish did `clear ralph` / went idle (subagents *and* orchestrator not advancing across two checks). Final summary:
@@ -122,6 +135,7 @@ STOP (do not reschedule) when the board is fully clear (all tasks `done`) **or**
 - **sah tool** op breakdown (every `mcp__sah__*` tool/op) + any errors (exact tool + op + input + result).
 - All commits (`git -C "$REPO" log --oneline`).
 - Full error list (classified), review-fix loops, committer slowness, scope adherence.
+- **Review-rule health**: every force-closed/declined finding (the close + the open findings it skipped, quoted), candidate validator bugs (invalid-code / contract-fighting findings, naming the rule to fix in `builtin/validators/…`), true contradictions, churn/non-convergence, and stuck tasks correctly parked for a human rule-fix — classified as agent-disobedience vs validator-bug vs engine-instability.
 - **Standing token-saving recs**: (1) review-engine — cut per-round fan-out, don't full-sweep on re-review, share a cached file prefix, stop `force:true`; (2) orchestrator slimming (large fixed overhead); (3) committer — stop re-running clippy/nextest/fmt on an already-verified tree (commit inline); (4) test skill — empty suite ≠ failure, never author tests to force green; (5) `get-lines` — shell `execute` should inline small output instead of a mandatory 2nd call (median output ~13 lines; ~46% of shell calls were paging); (6) fix the security-guard false-positive (see below) and the `code_context` "invalid regex pattern" mislabel.
 
 ## Benign / known error patterns

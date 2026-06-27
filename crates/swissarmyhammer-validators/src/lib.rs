@@ -34,7 +34,7 @@ pub mod validators;
 pub use builtin::load_builtins;
 pub use error::AvpError;
 pub use validators::{
-    AgentPool, MatchContext, PoolConfig, PoolError, PromptResult, RuleSet, Severity, Validator,
+    AgentPool, MatchContext, PoolConfig, PoolError, PromptResult, RuleSet, Validator,
     ValidatorLoader, ValidatorResult,
 };
 

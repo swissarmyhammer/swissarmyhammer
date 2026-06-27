@@ -115,50 +115,69 @@ mod tests {
         ctx
     }
 
-    #[tokio::test]
-    async fn reorder_moves_first_to_last() {
-        let (_temp, ctx) = setup().await;
-
-        // InitBoard creates todo, doing, done columns
-        // Move todo (index 0) to index 2
-        let kanban = Arc::new(ctx);
-        let mut args = HashMap::new();
-        args.insert("id".into(), Value::String("todo".into()));
-        args.insert("target_index".into(), Value::Number(2.into()));
-
-        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
-        let cmd = ColumnReorderCmd;
-        let result = cmd.execute(&cmd_ctx).await.unwrap();
-        assert_eq!(result["updated"], 3);
-
-        // Verify order: doing=0, done=1, todo=2
+    /// Column ids sorted by their current `order`. Lets the reorder tests
+    /// reason about position and grouping without hardcoding the default
+    /// column set.
+    async fn sorted_ids(kanban: &KanbanContext) -> Vec<String> {
         let ectx = kanban.entity_context().await.unwrap();
         let mut cols = ectx.list("column").await.unwrap();
         cols.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0));
-        let ids: Vec<&str> = cols.iter().map(|c| c.id.as_str()).collect();
-        assert_eq!(ids, vec!["doing", "done", "todo"]);
+        cols.iter().map(|c| c.id.to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn reorder_moves_first_to_last() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        // Drag the first column to the last slot.
+        let original = sorted_ids(&kanban).await;
+        let first = original[0].clone();
+        let last_index = original.len() - 1;
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(first.clone()));
+        args.insert(
+            "target_index".into(),
+            Value::Number((last_index as u64).into()),
+        );
+
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let result = ColumnReorderCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["updated"], original.len());
+
+        // The first column now sits last; the rest keep their relative order.
+        let expected: Vec<String> = original
+            .iter()
+            .filter(|id| **id != first)
+            .cloned()
+            .chain(std::iter::once(first.clone()))
+            .collect();
+        assert_eq!(sorted_ids(&kanban).await, expected);
     }
 
     #[tokio::test]
     async fn reorder_moves_last_to_first() {
         let (_temp, ctx) = setup().await;
-
-        // Move done (index 2) to index 0
         let kanban = Arc::new(ctx);
+
+        // Drag the last column to the first slot.
+        let original = sorted_ids(&kanban).await;
+        let last = original.last().unwrap().clone();
+
         let mut args = HashMap::new();
-        args.insert("id".into(), Value::String("done".into()));
+        args.insert("id".into(), Value::String(last.clone()));
         args.insert("target_index".into(), Value::Number(0.into()));
 
         let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
-        let cmd = ColumnReorderCmd;
-        let result = cmd.execute(&cmd_ctx).await.unwrap();
-        assert_eq!(result["updated"], 3);
+        let result = ColumnReorderCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["updated"], original.len());
 
-        let ectx = kanban.entity_context().await.unwrap();
-        let mut cols = ectx.list("column").await.unwrap();
-        cols.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0));
-        let ids: Vec<&str> = cols.iter().map(|c| c.id.as_str()).collect();
-        assert_eq!(ids, vec!["done", "todo", "doing"]);
+        // The last column now sits first; the rest keep their relative order.
+        let expected: Vec<String> = std::iter::once(last.clone())
+            .chain(original.iter().filter(|id| **id != last).cloned())
+            .collect();
+        assert_eq!(sorted_ids(&kanban).await, expected);
     }
 
     #[tokio::test]
@@ -194,22 +213,21 @@ mod tests {
     #[tokio::test]
     async fn reorder_clamps_target_index_to_end() {
         let (_temp, ctx) = setup().await;
-
-        // target_index=99 should clamp to last position
         let kanban = Arc::new(ctx);
+
+        // target_index far past the end should clamp to the last position.
+        let original = sorted_ids(&kanban).await;
+        let first = original[0].clone();
+
         let mut args = HashMap::new();
-        args.insert("id".into(), Value::String("todo".into()));
+        args.insert("id".into(), Value::String(first.clone()));
         args.insert("target_index".into(), Value::Number(99.into()));
 
         let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
-        let cmd = ColumnReorderCmd;
-        let result = cmd.execute(&cmd_ctx).await.unwrap();
-        assert_eq!(result["updated"], 3);
+        let result = ColumnReorderCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["updated"], original.len());
 
-        let ectx = kanban.entity_context().await.unwrap();
-        let mut cols = ectx.list("column").await.unwrap();
-        cols.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0));
-        // todo should be at the end
-        assert_eq!(cols.last().unwrap().id, "todo");
+        // The moved column lands at the end.
+        assert_eq!(sorted_ids(&kanban).await.last(), Some(&first));
     }
 }

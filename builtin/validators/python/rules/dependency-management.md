@@ -1,7 +1,6 @@
 ---
 name: dependency-management
 description: Pin transitive deps in apps, minimum constraints in libraries, treat updates as breaking
-severity: warn
 ---
 
 # Python Dependency Management

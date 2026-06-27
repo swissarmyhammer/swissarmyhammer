@@ -65,7 +65,6 @@ members = [
     "crates/swissarmyhammer-commands",
     "benches/embedding_benchmark",
     "crates/swissarmyhammer-sem",
-    "crates/heb",
     "apps/shelltool-cli",
     "apps/code-context-cli",
     "crates/swissarmyhammer-cli-completions",
@@ -81,7 +80,7 @@ tag-name = "v{{version}}"      # Single tag for workspace
 consolidate-commits = true     # One commit for all version bumps
 
 [workspace.package]
-version = "0.16.0"
+version = "0.17.0"
 edition = "2021"
 rust-version = "1.92"
 authors = ["SwissArmyHammer Team"]

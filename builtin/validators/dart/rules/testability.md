@@ -1,7 +1,6 @@
 ---
 name: testability
 description: Business logic in providers/notifiers, one ProviderContainer per test, mock at service layer
-severity: warn
 ---
 
 # Dart/Flutter Testability

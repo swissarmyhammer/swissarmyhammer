@@ -1,7 +1,6 @@
 ---
 name: no-secrets
 description: Detect hardcoded secrets, API keys, and credentials in code
-severity: error
 ---
 
 # No Secrets Rule

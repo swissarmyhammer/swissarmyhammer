@@ -1,7 +1,6 @@
 ---
 name: ephemeral-state
 description: Providers for shared business state, hooks/StatefulWidget for widget-local state
-severity: warn
 ---
 
 # Dart/Flutter Ephemeral State

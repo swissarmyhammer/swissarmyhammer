@@ -12,7 +12,6 @@ match:
     - "@file_groups/source_code"
 probes:
   - duplicates
-severity: error
 ---
 
 # Duplication Validator

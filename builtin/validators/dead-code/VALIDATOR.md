@@ -12,7 +12,6 @@ match:
     - "@file_groups/source_code"
 probes:
   - callers
-severity: error
 ---
 
 # Dead Code Validator

@@ -495,7 +495,6 @@ pub fn render_verify_prompt(candidate: &Candidate) -> String {
     if let Some(rule) = &finding.rule {
         let _ = writeln!(out, "- Rule: {rule}");
     }
-    let _ = writeln!(out, "- Severity: {}", finding.severity);
     let _ = writeln!(out, "- Claim: {}", finding.claim);
     let _ = writeln!(out, "- Cited evidence: {}", finding.evidence);
     out.push('\n');
@@ -530,7 +529,6 @@ merely plausible.
 mod tests {
     use super::*;
     use crate::review::probes::ProbeRow;
-    use crate::review::types::Severity;
 
     /// A `dead-code` finding about `symbol` in `file`.
     fn dead_code_finding(file: &str, symbol: &str) -> Finding {
@@ -539,7 +537,6 @@ mod tests {
             line: 10,
             validator: "dead-code".to_string(),
             rule: Some("no-unused".to_string()),
-            severity: Severity::Warning,
             claim: format!("`{symbol}` is dead code — nothing calls it."),
             evidence: format!("`callers` on `{symbol}`: no inbound callers"),
             suggestion: Some("Remove it.".to_string()),
@@ -635,7 +632,6 @@ mod tests {
             line: 5,
             validator: "deduplicate".to_string(),
             rule: Some("prefer-reuse".to_string()),
-            severity: Severity::Nit,
             claim: "Reimplements an existing util — reuse `mean_squared_error`.".to_string(),
             evidence: "`similar`: 0.91 match at `util.rs:3`".to_string(),
             suggestion: Some("Call the existing util.".to_string()),
@@ -675,7 +671,6 @@ mod tests {
             line: 12,
             validator: "duplication".to_string(),
             rule: Some("no-copy-paste".to_string()),
-            severity: Severity::Warning,
             claim: "Duplicated block also lives in b.rs.".to_string(),
             evidence: "`duplicates`: 0.94 match".to_string(),
             suggestion: None,
@@ -710,7 +705,6 @@ mod tests {
             line: 12,
             validator: "duplication".to_string(),
             rule: None,
-            severity: Severity::Warning,
             claim: "Duplicated block also lives in b.rs.".to_string(),
             evidence: "`duplicates`: 0.94 match at b.rs".to_string(),
             suggestion: None,
@@ -857,7 +851,6 @@ mod tests {
                 line: 1,
                 validator: "deduplicate".to_string(),
                 rule: Some("prefer-reuse".to_string()),
-                severity: Severity::Warning,
                 claim: format!("CLAIM[{marker}]: reimplements an existing util."),
                 evidence: "`similar`: 0.9 match".to_string(),
                 suggestion: None,

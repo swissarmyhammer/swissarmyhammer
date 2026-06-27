@@ -1,7 +1,6 @@
 ---
 name: testing
 description: src/ layout, mandatory test docstrings, do not mock what you do not own
-severity: warn
 ---
 
 # Python Testing
