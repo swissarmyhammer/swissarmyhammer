@@ -2533,6 +2533,8 @@ mod tests {
         let golden = Golden {
             observation,
             assertions: vec![assertion],
+            tolerance: Vec::new(),
+            judgment: Vec::new(),
             grading: GradingPins::from_config(&ExpectConfig::default()),
             spec_hash: spec_hash(&spec),
         };

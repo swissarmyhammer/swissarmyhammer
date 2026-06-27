@@ -30,8 +30,8 @@ comments:
   timestamp: 2026-06-27T16:12:04.987707+00:00
 depends_on:
 - 01KW266VBY2KC9XYMVDGG00RXF
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8580
 project: expect
 title: Wire drive_and_revalidate into the live expect tool + real-path test
 ---
