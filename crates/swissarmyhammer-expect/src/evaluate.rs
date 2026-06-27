@@ -26,7 +26,8 @@
 //! then replays through [`evaluate`].
 
 use crate::assertion::{
-    compile, AssertionOutcome, BoundValue, CompileError, CompiledAssertion, Locator,
+    compile, locate_text_evidence, resolve_checkpoint, word_present, AssertionOutcome, BoundValue,
+    CompileError, CompiledAssertion, Locator,
 };
 use crate::config::ExpectConfig;
 use crate::grader::{JudgmentAssertion, JudgmentContext};
@@ -565,6 +566,170 @@ pub fn similarity_threshold(spec: &Expectation, config: &ExpectConfig) -> f32 {
     spec.frontmatter
         .similarity_threshold
         .unwrap_or(config.embedder.similarity_threshold)
+}
+
+// ---------------------------------------------------------------------------
+// compile_tiered — prose → the cheapest faithful tier of the verdict ladder.
+// ---------------------------------------------------------------------------
+
+/// A residual criterion compiled into the cheapest faithful tier of the verdict
+/// ladder — the typed assertion a golden freezes for replay.
+///
+/// [`compile_tiered`] selects the tier; the author never picks one. A criterion the
+/// deterministic compiler binds is [`Deterministic`](CompiledTier::Deterministic)
+/// (Tier 1); a residual that binds locatable textual evidence is
+/// [`Tolerance`](CompiledTier::Tolerance) (Tier 2); a *subjective* residual is
+/// [`Judgment`](CompiledTier::Judgment) (Tier 3, the residual-of-the-residual).
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompiledTier {
+    /// A Tier 1 deterministic assertion (literal / invariant / exit / status / …).
+    Deterministic(CompiledAssertion),
+    /// A Tier 2 tolerance band against the approved-evidence anchor.
+    Tolerance(ToleranceAssertion),
+    /// A Tier 3 judgment (rubric + anchor) — the residual-of-the-residual.
+    Judgment(JudgmentAssertion),
+}
+
+/// Subjective cues that mark a residual criterion as needing a Tier 3 rubric
+/// judgment rather than a Tier 2 tolerance band: verbs and qualities about what the
+/// evidence *means or conveys*, not what value it equals. Matched whole-word and
+/// case-insensitively. This is the cheapest-faithful-tier heuristic the compiler
+/// applies — Tier 2 (an embedding band, no model) wins unless the criterion asks a
+/// question only a rubric grade can answer.
+///
+/// Ambiguous *perception* verbs (`reads`, `looks`, `sounds`) are deliberately
+/// excluded: they are as often literal text checks (`the label reads "Sold Out"`)
+/// as quality judgments, so defaulting them to the cheaper Tier 2 semantic band —
+/// which still catches meaning drift via embeddings — is the faithful-cheapest call.
+const JUDGMENT_CUES: &[&str] = &[
+    "explains",
+    "explain",
+    "conveys",
+    "convey",
+    "describes",
+    "describe",
+    "indicates",
+    "indicate",
+    "communicates",
+    "communicate",
+    "clarifies",
+    "clarify",
+    "suggests",
+    "suggest",
+    "expresses",
+    "express",
+    "mentions",
+    "mention",
+    "warns",
+    "warn",
+    "informs",
+    "inform",
+    "acknowledges",
+    "acknowledge",
+    "reassures",
+    "reassure",
+    "feels",
+    "feel",
+    "seems",
+    "seem",
+];
+
+/// Compile one `Then` `criterion` into the cheapest faithful tier of the verdict
+/// ladder, bound against `observation` — the single compile-bundle path
+/// [`approve`](crate::approve) freezes from and any [`evaluate_tiered`] caller reuses.
+///
+/// The cheapest faithful tier wins (`ideas/expect.md` §"How `evaluate` turns prose
+/// into a check"); the author never picks:
+///
+/// 1. The deterministic [`compile`] binds it (literal / invariant / exit / …) ⇒
+///    [`CompiledTier::Deterministic`] (Tier 1).
+/// 2. A residual ([`CompileError::Unrecognized`]) that binds locatable textual
+///    evidence ([`locate_text_evidence`]) ⇒ a [`CompiledTier::Tolerance`] semantic
+///    band anchored to the approved evidence (Tier 2) — unless the prose carries a
+///    subjective cue, in which case it is a [`CompiledTier::Judgment`] rubric grade
+///    anchored to the same evidence (Tier 3, the residual-of-the-residual).
+///
+/// Both residual tiers are **self-verifying** like Tier 1: the derived locator must
+/// re-bind to the frozen anchor against the very observation it was compiled from (a
+/// binding-only check — the band/rubric pass against the anchor itself is trivially
+/// true and needs no embedder or model at compile time).
+///
+/// `threshold` is the effective Tier-2 cosine cutoff (and the Tier-3 anchor-
+/// similarity gate): the per-spec `similarity_threshold` override, else the repo
+/// `[embedder]` cutoff (see [`similarity_threshold`]).
+///
+/// # Errors
+///
+/// Returns [`CompileError::Unrecognized`] when a residual binds no textual evidence
+/// (left for the doctor gate to surface as uncheckable), or any other
+/// [`CompileError`] the deterministic compiler raises (a hallucinated Tier-1 locator
+/// above all).
+pub fn compile_tiered(
+    criterion: &Criterion,
+    observation: &Observation,
+    threshold: f32,
+) -> Result<CompiledTier, CompileError> {
+    match compile(criterion, observation) {
+        Ok(assertion) => Ok(CompiledTier::Deterministic(assertion)),
+        Err(CompileError::Unrecognized { .. }) => {
+            compile_residual(criterion, observation, threshold)
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// Compile a residual criterion into its Tier 2 or Tier 3 assertion — the
+/// non-deterministic half of [`compile_tiered`].
+fn compile_residual(
+    criterion: &Criterion,
+    observation: &Observation,
+    threshold: f32,
+) -> Result<CompiledTier, CompileError> {
+    let text = criterion.text.as_str();
+    let checkpoint = resolve_checkpoint(text, observation)?;
+    let state = &observation.checkpoints[checkpoint].state;
+
+    let Some((locator, anchor)) = locate_text_evidence(text, state) else {
+        return Err(CompileError::Unrecognized {
+            criterion: text.to_string(),
+        });
+    };
+
+    // Self-verify (binding-only, like Tier 1): the derived locator must re-bind to
+    // the anchor it froze against this very observation, or it is a hallucinated
+    // locator refused before it reaches a golden.
+    if locator.resolve(state).as_ref() != Some(&anchor) {
+        return Err(CompileError::HallucinatedLocator {
+            criterion: text.to_string(),
+        });
+    }
+
+    let tier = if is_subjective(text) {
+        CompiledTier::Judgment(JudgmentAssertion {
+            checkpoint,
+            locator,
+            anchor,
+            sim_threshold: threshold,
+            rubric: text.to_string(),
+            criterion_text: text.to_string(),
+        })
+    } else {
+        CompiledTier::Tolerance(ToleranceAssertion {
+            checkpoint,
+            locator,
+            anchor,
+            band: ToleranceBand::Semantic { threshold },
+            criterion_text: text.to_string(),
+        })
+    };
+    Ok(tier)
+}
+
+/// Whether `text` carries a [`JUDGMENT_CUES`] subjective cue — the signal that a
+/// residual criterion needs a Tier 3 rubric judgment rather than a Tier 2 band.
+fn is_subjective(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    JUDGMENT_CUES.iter().any(|cue| word_present(&lower, cue))
 }
 
 /// The full verdict of a tiered evaluation: the per-criterion
@@ -1423,5 +1588,141 @@ mod tests {
         assert_eq!(levenshtein_similarity("", ""), 1.0);
         assert!(levenshtein_similarity("colour", "color") > 0.80);
         assert!(levenshtein_similarity("colour", "banana") < 0.80);
+    }
+
+    // -----------------------------------------------------------------------
+    // compile_tiered — residual prose → the cheapest faithful tier.
+    // -----------------------------------------------------------------------
+
+    /// The Tier-2/3 cutoff the compile_tiered fixtures freeze (the repo default).
+    const TIER_THRESHOLD: f32 = 0.80;
+
+    #[test]
+    fn compile_tiered_returns_a_deterministic_assertion_for_a_tier1_criterion() {
+        // A criterion the compiler binds to a literal is Tier 1 — the cheapest tier
+        // wins, and no tolerance/judgment is synthesized for it.
+        let obs = json_observation(json!({ "total": 40 }));
+        let tier = compile_tiered(&criterion("the total is $40"), &obs, TIER_THRESHOLD)
+            .expect("a Tier-1 criterion compiles");
+        let CompiledTier::Deterministic(assertion) = tier else {
+            panic!("expected Tier 1, got {tier:?}");
+        };
+        assert_eq!(assertion.tier, VerdictTier::Deterministic);
+    }
+
+    #[test]
+    fn compile_tiered_compiles_a_residual_value_criterion_to_a_tier2_tolerance_band() {
+        // A residual criterion that names a textual field is a tolerance band, the
+        // anchor frozen to the approved evidence value at the bound locator.
+        const ANCHOR: &str = "the coupon is already applied";
+        let obs = json_observation(json!({ "message": ANCHOR }));
+        let tier = compile_tiered(
+            &criterion("the message matches the approved value"),
+            &obs,
+            TIER_THRESHOLD,
+        )
+        .expect("a residual value criterion compiles to Tier 2");
+        let CompiledTier::Tolerance(assertion) = tier else {
+            panic!("expected Tier 2, got {tier:?}");
+        };
+        assert_eq!(
+            assertion.locator,
+            Locator::JsonPath {
+                path: "$.message".to_string()
+            }
+        );
+        assert_eq!(assertion.anchor, BoundValue::Text(ANCHOR.to_string()));
+        assert_eq!(
+            assertion.band,
+            ToleranceBand::Semantic {
+                threshold: TIER_THRESHOLD
+            }
+        );
+    }
+
+    #[test]
+    fn compile_tiered_compiles_a_subjective_criterion_to_a_tier3_judgment() {
+        // A subjective criterion (a judgment cue: "explains") needs a rubric grade,
+        // so it is the residual-of-the-residual: a Tier 3 judgment with the rubric
+        // derived from the prose and the anchor frozen to the approved evidence.
+        const ANCHOR: &str = "the coupon is already applied";
+        let obs = json_observation(json!({ "message": ANCHOR }));
+        let prose = "an error explains the coupon is already applied";
+        let tier = compile_tiered(&criterion(prose), &obs, TIER_THRESHOLD)
+            .expect("a subjective criterion compiles to Tier 3");
+        let CompiledTier::Judgment(assertion) = tier else {
+            panic!("expected Tier 3, got {tier:?}");
+        };
+        assert_eq!(
+            assertion.locator,
+            Locator::JsonPath {
+                path: "$.message".to_string()
+            }
+        );
+        assert_eq!(assertion.anchor, BoundValue::Text(ANCHOR.to_string()));
+        assert_eq!(assertion.sim_threshold, TIER_THRESHOLD);
+        assert_eq!(
+            assertion.rubric, prose,
+            "the rubric is derived from the prose"
+        );
+    }
+
+    #[test]
+    fn a_compiled_tier2_assertion_self_verifies_against_its_source_observation() {
+        // The frozen tolerance assertion must re-bind to the very observation it was
+        // compiled from (binding-only self-check, like Tier 1) — its locator
+        // resolves to the frozen anchor.
+        const ANCHOR: &str = "the coupon is already applied";
+        let obs = json_observation(json!({ "message": ANCHOR }));
+        let tier = compile_tiered(
+            &criterion("the message matches the approved value"),
+            &obs,
+            TIER_THRESHOLD,
+        )
+        .expect("compiles");
+        let CompiledTier::Tolerance(assertion) = tier else {
+            panic!("expected Tier 2");
+        };
+        let resolved = assertion
+            .locator
+            .resolve(&obs.checkpoints[assertion.checkpoint].state);
+        assert_eq!(resolved, Some(assertion.anchor.clone()));
+    }
+
+    #[test]
+    fn a_compiled_tier3_assertion_self_verifies_against_its_source_observation() {
+        const ANCHOR: &str = "the coupon is already applied";
+        let obs = json_observation(json!({ "message": ANCHOR }));
+        let tier = compile_tiered(
+            &criterion("an error explains the coupon is already applied"),
+            &obs,
+            TIER_THRESHOLD,
+        )
+        .expect("compiles");
+        let CompiledTier::Judgment(assertion) = tier else {
+            panic!("expected Tier 3");
+        };
+        let resolved = assertion
+            .locator
+            .resolve(&obs.checkpoints[assertion.checkpoint].state);
+        assert_eq!(resolved, Some(assertion.anchor.clone()));
+    }
+
+    #[test]
+    fn compile_tiered_leaves_a_residual_with_no_bindable_evidence_unrecognized() {
+        // No textual evidence to anchor against (a numeric-only observation): the
+        // residual cannot be bound to any tier, so it stays Unrecognized for the
+        // doctor gate to surface as uncheckable rather than being mis-frozen.
+        let obs = json_observation(json!({ "total": 40, "count": 3 }));
+        let error = compile_tiered(
+            &criterion("the message conveys success"),
+            &obs,
+            TIER_THRESHOLD,
+        )
+        .expect_err("no textual evidence to bind");
+        assert!(
+            matches!(error, CompileError::Unrecognized { .. }),
+            "got {error:?}"
+        );
     }
 }

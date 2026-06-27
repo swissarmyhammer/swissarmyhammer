@@ -47,7 +47,8 @@ use swissarmyhammer_expect::{
     ledger_queue, observe, observe_repeated, read_golden, received_path, surfaces, write_golden,
     write_received, ApprovalDecision, ApprovalStatus, ApproveMode, CheckOptions, CliAdapter,
     CreateSource, DeletionSummary, ExpectConfig, ExpectError, Expectation, ExpectationLoader,
-    Golden, GradingPins, Observation, ObserveConfig, ScrubberSet, Surface,
+    Golden, GradingPins, GradingSeam, JudgmentContext, Observation, ObserveConfig, ScrubberSet,
+    Surface, TextEmbedder,
 };
 use swissarmyhammer_kanban::{comment::AddComment, task::GetTask, Execute, KanbanContext};
 use swissarmyhammer_validators::PoolConfig;
@@ -1086,6 +1087,12 @@ fn expectations_list(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let (repo_root, specs) = resolve_scope_specs(arguments, context)?;
     let scrubbers = ScrubberSet::default_set();
+    let embedder = PlaceholderEmbedder;
+    let judgment = placeholder_judgment();
+    let seam = GradingSeam {
+        embedder: &embedder,
+        judgment: &judgment,
+    };
     let mut entries = Vec::with_capacity(specs.len());
     for spec in &specs {
         let (golden, received) = load_golden_and_received(&repo_root, &spec.path)?;
@@ -1094,6 +1101,7 @@ fn expectations_list(
             golden.as_ref(),
             received.as_ref(),
             &scrubbers,
+            &seam,
         ));
     }
     let entries = ledger_queue(entries);
@@ -1235,6 +1243,39 @@ fn approve_grading(repo_root: &Path) -> GradingPins {
     GradingPins::from_config(&config)
 }
 
+/// A placeholder Tier-2 embedder for the ledger survey/compare ops until a real
+/// pinned embedder is wired into the tool layer.
+///
+/// Returns an empty (cosine-safe) vector and warns on use, so a tiered golden
+/// graded through this seam is **loud**, never silently mis-graded. Wiring a real
+/// pinned `TextEmbedder` + `Grader` panel here (so tolerance/judgment verdicts are
+/// faithful in the tool layer) remains a follow-up; the engine-level
+/// compile/freeze/compare_tiered path is fully real and tested with stub seams.
+struct PlaceholderEmbedder;
+
+impl TextEmbedder for PlaceholderEmbedder {
+    fn embed(&self, _text: &str) -> Vec<f32> {
+        tracing::warn!(
+            "expect: a tiered golden reached the ledger compare with a placeholder embedder; \
+             the real pinned Tier-2/3 embedder + grader are not yet wired into the tool layer, \
+             so tolerance/judgment verdicts are not faithful (follow-up)"
+        );
+        Vec::new()
+    }
+}
+
+/// The placeholder Tier-3 judgment context the tool-layer seam carries: an empty
+/// grader panel and no driver. With no panel, a diverged Tier-3 criterion escalates
+/// rather than auto-deciding, so the escalation floor is immaterial here and takes
+/// the documented default.
+fn placeholder_judgment() -> JudgmentContext<'static> {
+    JudgmentContext {
+        panel: &[],
+        driver_model: "",
+        escalate_below_confidence: ExpectConfig::default().approval.escalate_below_confidence,
+    }
+}
+
 /// Load both ledger artifacts for spec `identity`: its approved golden (if any)
 /// and its last received observation (if any).
 fn load_golden_and_received(
@@ -1279,9 +1320,23 @@ fn approve_op(
     let (repo_root, specs) = resolve_scope_specs(arguments, context)?;
     let grading = approve_grading(&repo_root);
     let scrubbers = ScrubberSet::default_set();
+    let embedder = PlaceholderEmbedder;
+    let judgment = placeholder_judgment();
+    let seam = GradingSeam {
+        embedder: &embedder,
+        judgment: &judgment,
+    };
     match mode {
-        None => approve_preview(&specs, &repo_root, &grading, &scrubbers),
-        Some(mode) => approve_write(&specs, &repo_root, mode, &grading, &scrubbers, ci_enabled()),
+        None => approve_preview(&specs, &repo_root, &grading, &scrubbers, &seam),
+        Some(mode) => approve_write(
+            &specs,
+            &repo_root,
+            mode,
+            &grading,
+            &scrubbers,
+            ci_enabled(),
+            &seam,
+        ),
     }
 }
 
@@ -1293,11 +1348,12 @@ fn approve_preview(
     repo_root: &Path,
     grading: &GradingPins,
     scrubbers: &ScrubberSet,
+    seam: &GradingSeam,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let mut preview = Vec::with_capacity(specs.len());
     for spec in specs {
         let (golden, received) = load_golden_and_received(repo_root, &spec.path)?;
-        let status = approval_status(golden.as_ref(), received.as_ref(), scrubbers);
+        let status = approval_status(golden.as_ref(), received.as_ref(), scrubbers, seam);
         let entry = match received.as_ref() {
             Some(received) if matches!(status, ApprovalStatus::New | ApprovalStatus::Drifted) => {
                 match approve(spec, received, grading.clone(), golden.as_ref(), scrubbers) {
@@ -1341,6 +1397,7 @@ fn approve_write(
     grading: &GradingPins,
     scrubbers: &ScrubberSet,
     ci: bool,
+    seam: &GradingSeam,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let mut decisions = Vec::with_capacity(specs.len());
     for spec in specs {
@@ -1353,6 +1410,7 @@ fn approve_write(
             grading.clone(),
             ci,
             scrubbers,
+            seam,
         )
         .map_err(|err| rmcp::ErrorData::invalid_params(err.to_string(), None))?;
         decisions.push((spec, decision));
@@ -1474,10 +1532,17 @@ fn check_op(
         .and_then(|dir| ExpectConfig::load(&dir).ok())
         .unwrap_or_default();
     let scrubbers = ScrubberSet::default_set();
+    let embedder = PlaceholderEmbedder;
+    let judgment = placeholder_judgment();
+    let seam = GradingSeam {
+        embedder: &embedder,
+        judgment: &judgment,
+    };
     let options = CheckOptions {
         facts: &facts,
         config: &config,
         scrubbers: &scrubbers,
+        seam: &seam,
         ci: ci_enabled(),
     };
 
@@ -2813,6 +2878,16 @@ mod tests {
         GradingPins::from_config(&ExpectConfig::default())
     }
 
+    /// A never-consulted placeholder grading seam for the approve tests, leaked to
+    /// `'static` for convenience (every approve fixture spec is Tier-1, so the
+    /// embedder/grader are never reached). A trait-object seam cannot be a `static`
+    /// (it is not `Sync`), so the test leaks one.
+    fn placeholder_seam() -> &'static GradingSeam<'static> {
+        let embedder: &'static dyn TextEmbedder = Box::leak(Box::new(PlaceholderEmbedder));
+        let judgment: &'static JudgmentContext = Box::leak(Box::new(placeholder_judgment()));
+        Box::leak(Box::new(GradingSeam { embedder, judgment }))
+    }
+
     /// Resolve the specs in `repo` for `scope` (every spec when `None`).
     fn specs_in(repo: &Path, scope: Option<&str>) -> Vec<Expectation> {
         ExpectationLoader::new(repo)
@@ -2848,6 +2923,7 @@ mod tests {
             &default_grading(),
             &ScrubberSet::default_set(),
             false, // not CI
+            placeholder_seam(),
         )
         .expect("approve writes");
         let payload = payload_of(&result);
@@ -2995,6 +3071,7 @@ mod tests {
             &default_grading(),
             &ScrubberSet::default_set(),
             false,
+            placeholder_seam(),
         )
         .expect("approve writes");
         let (written, skipped) = partition(&payload_of(&result));
@@ -3019,6 +3096,7 @@ mod tests {
             &default_grading(),
             &ScrubberSet::default_set(),
             false,
+            placeholder_seam(),
         )
         .expect("approve writes");
         let (written, skipped) = partition(&payload_of(&result));
@@ -3048,6 +3126,7 @@ mod tests {
             &default_grading(),
             &ScrubberSet::default_set(),
             true, // CI
+            placeholder_seam(),
         )
         .expect_err("CI must refuse to write a drift");
 
@@ -3072,6 +3151,7 @@ mod tests {
             &default_grading(),
             &ScrubberSet::default_set(),
             true, // CI
+            placeholder_seam(),
         )
         .expect_err("CI must refuse to baseline a new expectation");
 

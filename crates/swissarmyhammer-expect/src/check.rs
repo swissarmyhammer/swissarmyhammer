@@ -14,7 +14,7 @@
 //!    surface-specific driver and is deterministically testable), **evaluates**
 //!    the received observation against the criteria ([`evaluate_spec`] — "does the
 //!    code meet the spec?"), and **compares** it to the approved golden
-//!    ([`ledger_state`]/[`compare`] — "did the verdict drift?").
+//!    ([`ledger_state`]/[`compare_tiered`] — "did the verdict drift?").
 //! 3. **Derives** a per-expectation [`CheckStatus`] and a teaching message that
 //!    routes a failure to either *the program is wrong* ([`CheckStatus::Failed`])
 //!    or *fix the spec / the criterion is uncheckable* ([`CheckStatus::Malformed`]).
@@ -32,7 +32,9 @@ use crate::config::ExpectConfig;
 use crate::doctor::{diagnose, DiagnosticStatus, DoctorFacts, FieldDiagnostic};
 use crate::error::ExpectError;
 use crate::evaluate::evaluate_repeated;
-use crate::ledger::{compare, ledger_state, read_golden, LedgerComparison, ScrubberSet};
+use crate::ledger::{
+    compare_tiered, ledger_state, read_golden, GradingSeam, LedgerComparison, ScrubberSet,
+};
 use crate::loader::{ExpectationLoader, RawSpec};
 use crate::spec::{Expectation, EXPECT_EXTENSION};
 use crate::types::{ExpectationVerdict, LedgerState, Observation};
@@ -161,6 +163,10 @@ pub struct CheckOptions<'a> {
     pub config: &'a ExpectConfig,
     /// The scrubbers the golden compare normalizes volatile content with.
     pub scrubbers: &'a ScrubberSet,
+    /// The Tier-2 embedder + Tier-3 grader panel the tiered golden compare threads
+    /// through [`compare_tiered`], so a tiered golden is graded with the pinned
+    /// grading seam rather than the embedder-free Tier-1 path.
+    pub seam: &'a GradingSeam<'a>,
     /// Whether this is a CI run (`new` fails, drift never auto-approves unless
     /// configured).
     pub ci: bool,
@@ -318,13 +324,25 @@ where
 
     let verdict = evaluate_repeated(&spec, &observations);
     let golden = read_golden(repo_root, &spec.path)?;
-    let ledger = ledger_state(&spec, golden.as_ref(), Some(received), options.scrubbers);
+    let ledger = ledger_state(
+        &spec,
+        golden.as_ref(),
+        Some(received),
+        options.scrubbers,
+        options.seam,
+    );
     let status = derive_status(&verdict, ledger);
 
     // The old-vs-new evidence travels only with a drift — the one outcome a
-    // reviewer must act on.
+    // reviewer must act on. A tiered golden is re-graded through the pinned seam.
     let comparison = match (status, &golden) {
-        (CheckStatus::Drifted, Some(golden)) => Some(compare(golden, received, options.scrubbers)),
+        (CheckStatus::Drifted, Some(golden)) => Some(compare_tiered(
+            golden,
+            received,
+            options.scrubbers,
+            options.seam.embedder,
+            options.seam.judgment,
+        )),
         _ => None,
     };
 
@@ -520,8 +538,35 @@ mod tests {
         ExpectConfig::default()
     }
 
+    /// A zero-vector Tier-2 embedder for the check fixtures. Every fixture golden
+    /// is Tier-1-only (numeric criteria), so the embedder is never consulted; it is
+    /// present only to satisfy the [`GradingSeam`] the tiered compare threads.
+    struct ZeroEmbedder;
+
+    impl crate::evaluate::TextEmbedder for ZeroEmbedder {
+        fn embed(&self, _text: &str) -> Vec<f32> {
+            Vec::new()
+        }
+    }
+
+    /// The Tier-1-only grading seam the check fixtures thread through the tiered
+    /// compare (never consulted, since every fixture golden is deterministic). The
+    /// never-touched embedder + empty judgment context are leaked to `'static` (a
+    /// trait-object seam cannot be a `static`, which would require `Sync`).
+    fn seam() -> &'static GradingSeam<'static> {
+        let embedder: &'static dyn crate::evaluate::TextEmbedder =
+            Box::leak(Box::new(ZeroEmbedder));
+        let judgment: &'static crate::grader::JudgmentContext =
+            Box::leak(Box::new(crate::grader::JudgmentContext {
+                panel: &[],
+                driver_model: "",
+                escalate_below_confidence: 0.0,
+            }));
+        Box::leak(Box::new(GradingSeam { embedder, judgment }))
+    }
+
     /// Build [`CheckOptions`] from borrowed `facts`/`config`/`scrubbers` and a
-    /// `ci` flag.
+    /// `ci` flag, threading the Tier-1-only [`seam`].
     fn options<'a>(
         facts: &'a DoctorFacts,
         config: &'a ExpectConfig,
@@ -532,6 +577,7 @@ mod tests {
             facts,
             config,
             scrubbers,
+            seam: seam(),
             ci,
         }
     }

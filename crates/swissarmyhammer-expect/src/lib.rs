@@ -90,9 +90,9 @@ pub use drive::{
 };
 pub use error::ExpectError;
 pub use evaluate::{
-    evaluate, evaluate_assertion, evaluate_repeated, evaluate_spec, evaluate_tiered,
-    similarity_threshold, Escalation, TextEmbedder, TieredVerdict, ToleranceAssertion,
-    ToleranceBand, STRUCTURAL_DRIFT_REASON, TOLERANCE_DRIFT_REASON,
+    compile_tiered, evaluate, evaluate_assertion, evaluate_repeated, evaluate_spec,
+    evaluate_tiered, similarity_threshold, CompiledTier, Escalation, TextEmbedder, TieredVerdict,
+    ToleranceAssertion, ToleranceBand, STRUCTURAL_DRIFT_REASON, TOLERANCE_DRIFT_REASON,
 };
 pub use grader::{
     Grade, GradeRequest, Grader, JudgmentAssertion, JudgmentContext, GRADER_IS_DRIVER_REASON,
@@ -103,8 +103,8 @@ pub use ledger::{
     delete_expectation, delete_golden, delete_observation, ledger_entry, ledger_queue,
     ledger_state, read_golden, spec_hash, write_golden, ApprovalBinding, ApprovalDecision,
     ApprovalStatus, ApproveError, ApproveMode, Artifact, CriterionComparison, DeletionSummary,
-    Golden, GradingPins, LedgerComparison, LedgerEntry, RemovedArtifact, Scrubber, ScrubberSet,
-    BINDING_ARROW,
+    Golden, GradingPins, GradingSeam, LedgerComparison, LedgerEntry, RemovedArtifact, Scrubber,
+    ScrubberSet, BINDING_ARROW,
 };
 pub use loader::{ExpectationLoader, RawSpec};
 pub use observe::{

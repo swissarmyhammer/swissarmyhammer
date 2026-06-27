@@ -42,7 +42,9 @@ use thiserror::Error;
 use crate::assertion::{compile, AssertionOutcome, CompileError, CompiledAssertion};
 use crate::config::ExpectConfig;
 use crate::error::ExpectError;
-use crate::evaluate::{evaluate_tiered, TextEmbedder, ToleranceAssertion};
+use crate::evaluate::{
+    compile_tiered, evaluate_tiered, CompiledTier, TextEmbedder, ToleranceAssertion,
+};
 use crate::grader::{JudgmentAssertion, JudgmentContext};
 use crate::observe::{golden_path, received_path, spec_path};
 use crate::spec::{Criterion, Expectation};
@@ -429,33 +431,45 @@ pub struct LedgerComparison {
     pub criteria: Vec<CriterionComparison>,
 }
 
-/// Compare a `received` observation against its `golden`, per criterion, by tier.
+/// The grading seam threaded through the tiered ledger entry points: the pinned
+/// Tier-2 [`TextEmbedder`] (the semantic band) and the Tier-3 [`JudgmentContext`]
+/// (the grader panel, driver-distinctness model, and escalation floor).
 ///
-/// Both sides are scrubbed (the golden again, idempotently) and re-graded with
-/// the golden's frozen assertions, so the comparison is apples-to-apples and free
+/// Bundled so [`ledger_state`], [`approval_status`], [`ledger_entry`], and
+/// [`decide_approval`] stay shallow while every grading knob travels together and
+/// stays explicit and injected — the evaluate layer stays pure (no SUT) and the
+/// grading dependencies are supplied by the caller, never the ambient environment.
+pub struct GradingSeam<'a> {
+    /// The pinned embedder behind the Tier-2 semantic band (and the Tier-3 anchor
+    /// similarity gate).
+    pub embedder: &'a dyn TextEmbedder,
+    /// The Tier-3 grading context: panel, driver model, and escalation floor.
+    pub judgment: &'a JudgmentContext<'a>,
+}
+
+/// Compare a `received` observation against a **Tier-1-only** `golden`, per
+/// criterion, by tier — the embedder-free convenience for a golden that carries no
+/// frozen Tier 2/3 assertions.
+///
+/// Both sides are scrubbed (the golden again, idempotently) and re-graded with the
+/// golden's frozen Tier-1 assertions, so the comparison is apples-to-apples and free
 /// of volatile noise. The verdict is re-derived on both sides — never read from
-/// storage. The overall [`LedgerState`] is [`LedgerState::Drifted`] if any
-/// criterion drifted, else [`LedgerState::Approved`].
+/// storage. The overall [`LedgerState`] is [`LedgerState::Drifted`] if any criterion
+/// drifted, else [`LedgerState::Approved`].
+///
+/// This path passes a never-consulted embedder and an empty grader panel, which is
+/// safe **only** because a Tier-1 golden never reaches a tolerance/judgment resolve.
+/// A golden that carries Tier 2/3 assertions must be compared through
+/// [`compare_tiered`] with the pinned embedder + grader — every production entry
+/// point ([`ledger_state`]/[`approval_status`]/[`ledger_entry`], and `check.rs`)
+/// routes through [`compare_tiered`] via a [`GradingSeam`], so this convenience is
+/// reserved for callers and tests working with a known Tier-1-only golden (or a
+/// pre-tiered golden whose `tolerance`/`judgment` deserialized empty).
 pub fn compare(
     golden: &Golden,
     received: &Observation,
     scrubbers: &ScrubberSet,
 ) -> LedgerComparison {
-    // A Tier-1 golden carries no frozen Tier 2/3 assertions, so the tolerance and
-    // judgment rungs are never reached: the placeholder embedder and empty grader
-    // panel are never consulted, keeping this path model-free while still routing
-    // through the single `compare_tiered` evaluation. A pre-tiered golden (whose
-    // `tolerance`/`judgment` deserialized to empty) degrades to exactly this.
-    //
-    // Guard the footgun loudly: a golden that *does* carry Tier 2/3 assertions must
-    // be compared through `compare_tiered` with the pinned embedder + grader, or the
-    // placeholder embedder would silently mis-grade those tiers (an empty vector
-    // scores 0, failing both sides, so a real divergence reads as no drift).
-    debug_assert!(
-        golden.tolerance.is_empty() && golden.judgment.is_empty(),
-        "compare() is the Tier-1-only path; a golden with frozen Tier 2/3 assertions \
-         must be compared with compare_tiered, which threads the pinned embedder/grader",
-    );
     compare_tiered(
         golden,
         received,
@@ -654,6 +668,7 @@ pub fn ledger_state(
     golden: Option<&Golden>,
     received: Option<&Observation>,
     scrubbers: &ScrubberSet,
+    seam: &GradingSeam,
 ) -> LedgerState {
     let Some(golden) = golden else {
         return LedgerState::New;
@@ -662,7 +677,9 @@ pub fn ledger_state(
         return LedgerState::Stale;
     }
     match received {
-        Some(received) => compare(golden, received, scrubbers).state,
+        Some(received) => {
+            compare_tiered(golden, received, scrubbers, seam.embedder, seam.judgment).state
+        }
         None => LedgerState::Approved,
     }
 }
@@ -692,12 +709,17 @@ pub fn ledger_entry(
     golden: Option<&Golden>,
     received: Option<&Observation>,
     scrubbers: &ScrubberSet,
+    seam: &GradingSeam,
 ) -> LedgerEntry {
-    let state = ledger_state(spec, golden, received, scrubbers);
+    let state = ledger_state(spec, golden, received, scrubbers, seam);
     let comparison = match (state, golden, received) {
-        (LedgerState::Drifted, Some(golden), Some(received)) => {
-            Some(compare(golden, received, scrubbers))
-        }
+        (LedgerState::Drifted, Some(golden), Some(received)) => Some(compare_tiered(
+            golden,
+            received,
+            scrubbers,
+            seam.embedder,
+            seam.judgment,
+        )),
         _ => None,
     };
     LedgerEntry {
@@ -842,15 +864,22 @@ pub enum ApproveError {
 }
 
 /// Build the golden for `spec` from its `received` observation: scrub the run,
-/// freeze its compiled assertions, and pin the grading inputs.
+/// freeze its compiled assertions across **all three tiers**, and pin the grading
+/// inputs.
 ///
 /// Compilation happens *here*, at approve time, bound against the **scrubbed**
 /// observation that is actually stored — so each frozen assertion is guaranteed
-/// to bind and pass against the golden it ships with ([`compile`] self-verifies,
-/// and a criterion whose locator does not bind is refused as
-/// [`ApproveError::Compile`], never written). A Tier-2/Tier-3 criterion that
-/// carries no deterministic assertion ([`CompileError::Unrecognized`]) is left
-/// out of the frozen set for a later tier to grade.
+/// to bind and pass against the golden it ships with ([`compile_tiered`]
+/// self-verifies, and a criterion whose locator does not bind is refused as
+/// [`ApproveError::Compile`], never written). Each criterion is routed to the
+/// cheapest faithful tier (the author never picks): a deterministic assertion
+/// (Tier 1), a tolerance band anchored to the approved evidence (Tier 2), or a
+/// rubric judgment anchored to the approved evidence (Tier 3). A residual that
+/// binds no locatable evidence at all ([`CompileError::Unrecognized`]) is left out
+/// of every frozen set for the doctor gate to surface as uncheckable.
+///
+/// The frozen Tier-2/3 sets are what [`compare_tiered`] replays with the pinned
+/// embedder + grader, so a tiered golden exercises the full ladder end-to-end.
 ///
 /// When a `prior` golden is supplied, a frozen assertion whose criterion prose is
 /// unchanged and that still holds against the new observation is **preserved**
@@ -870,38 +899,64 @@ pub fn approve(
     scrubbers: &ScrubberSet,
 ) -> Result<Golden, ApproveError> {
     let observation = scrubbers.scrub_observation(received);
-    let assertions = freeze_assertions(spec, &observation, prior)?;
-    // The Tier 2/3 frozen sets are carried on every golden so [`compare_tiered`]
-    // can replay them. They are populated by the Tier 2/3 prose compiler (a
-    // separate concern): until that lands, a residual criterion that carries no
-    // deterministic assertion is left ungraded rather than frozen, so these stay
-    // empty here — a pre-tiered golden, which `compare` degrades to gracefully.
+    let threshold = spec
+        .frontmatter
+        .similarity_threshold
+        .unwrap_or(grading.similarity_threshold);
+    let frozen = freeze_tiers(spec, &observation, prior, threshold)?;
     Ok(Golden {
         observation,
-        assertions,
-        tolerance: Vec::new(),
-        judgment: Vec::new(),
+        assertions: frozen.assertions,
+        tolerance: frozen.tolerance,
+        judgment: frozen.judgment,
         grading,
         spec_hash: spec_hash(spec),
     })
 }
 
-/// Compile (or preserve) the frozen assertion set for `spec` against the scrubbed
-/// `observation`, the load-bearing half of [`approve`].
-fn freeze_assertions(
+/// The frozen assertion sets [`approve`] compiles for a golden, one per verdict
+/// tier — the compile-bundle the golden carries and [`compare_tiered`] replays.
+struct FrozenTiers {
+    /// Tier 1 deterministic assertions (literal / invariant / exit / …).
+    assertions: Vec<CompiledAssertion>,
+    /// Tier 2 tolerance bands against approved-evidence anchors.
+    tolerance: Vec<ToleranceAssertion>,
+    /// Tier 3 judgments (rubric + anchor) — the residual-of-the-residual.
+    judgment: Vec<JudgmentAssertion>,
+}
+
+/// Compile (or preserve) the per-tier frozen assertion sets for `spec` against the
+/// scrubbed `observation`, the load-bearing half of [`approve`].
+///
+/// Each criterion is routed to the cheapest faithful tier by [`compile_tiered`]
+/// (the author never picks): a deterministic assertion joins
+/// [`assertions`](FrozenTiers::assertions), a tolerance band
+/// [`tolerance`](FrozenTiers::tolerance), a judgment
+/// [`judgment`](FrozenTiers::judgment). A Tier-1 assertion whose criterion prose is
+/// unchanged and that still holds is **preserved** verbatim (a reviewer hand-edit
+/// surviving re-approval); the `threshold` is the effective Tier-2/3 cutoff.
+fn freeze_tiers(
     spec: &Expectation,
     observation: &Observation,
     prior: Option<&Golden>,
-) -> Result<Vec<CompiledAssertion>, ApproveError> {
-    let mut frozen = Vec::with_capacity(spec.criteria.len());
+    threshold: f32,
+) -> Result<FrozenTiers, ApproveError> {
+    let mut frozen = FrozenTiers {
+        assertions: Vec::new(),
+        tolerance: Vec::new(),
+        judgment: Vec::new(),
+    };
     for criterion in &spec.criteria {
         if let Some(preserved) = preserved_assertion(criterion, observation, prior) {
-            frozen.push(preserved);
+            frozen.assertions.push(preserved);
             continue;
         }
-        match compile(criterion, observation) {
-            Ok(assertion) => frozen.push(assertion),
-            // A non-deterministic criterion is graded by a later tier, not frozen.
+        match compile_tiered(criterion, observation, threshold) {
+            Ok(CompiledTier::Deterministic(assertion)) => frozen.assertions.push(assertion),
+            Ok(CompiledTier::Tolerance(assertion)) => frozen.tolerance.push(assertion),
+            Ok(CompiledTier::Judgment(assertion)) => frozen.judgment.push(assertion),
+            // A residual that binds no evidence is graded by neither tier — left for
+            // the doctor gate to surface as uncheckable, never mis-frozen.
             Err(CompileError::Unrecognized { .. }) => {}
             // Any other rejection (a hallucinated locator above all) refuses the
             // whole approve: no unverified locator reaches the golden.
@@ -984,16 +1039,19 @@ pub fn approval_status(
     golden: Option<&Golden>,
     received: Option<&Observation>,
     scrubbers: &ScrubberSet,
+    seam: &GradingSeam,
 ) -> ApprovalStatus {
     let Some(received) = received else {
         return ApprovalStatus::Unobserved;
     };
     match golden {
         None => ApprovalStatus::New,
-        Some(golden) => match compare(golden, received, scrubbers).state {
-            LedgerState::Approved => ApprovalStatus::Approved,
-            _ => ApprovalStatus::Drifted,
-        },
+        Some(golden) => {
+            match compare_tiered(golden, received, scrubbers, seam.embedder, seam.judgment).state {
+                LedgerState::Approved => ApprovalStatus::Approved,
+                _ => ApprovalStatus::Drifted,
+            }
+        }
     }
 }
 
@@ -1040,6 +1098,11 @@ pub enum ApprovalDecision {
 ///
 /// Returns [`ApproveError`] when the spec is selected for a write but a
 /// deterministic criterion fails to compile against its observation.
+// Each parameter is a distinct, explicitly-injected policy input (the spec, both
+// ledger artifacts, the mode, the pinned grading, the CI flag, the scrubbers, and
+// the tiered grading seam) — bundling them would only obscure that they are
+// independent knobs, so the argument count is allowed here.
+#[allow(clippy::too_many_arguments)]
 pub fn decide_approval(
     spec: &Expectation,
     golden: Option<&Golden>,
@@ -1048,8 +1111,9 @@ pub fn decide_approval(
     grading: GradingPins,
     ci: bool,
     scrubbers: &ScrubberSet,
+    seam: &GradingSeam,
 ) -> Result<ApprovalDecision, ApproveError> {
-    let status = approval_status(golden, received, scrubbers);
+    let status = approval_status(golden, received, scrubbers, seam);
     if !mode.selects(status) {
         return Ok(ApprovalDecision::Skipped { status });
     }
@@ -1261,6 +1325,34 @@ mod tests {
                 .cloned()
                 .unwrap_or_else(|| vec![0.0, 0.0])
         }
+    }
+
+    /// A zero-vector embedder for the Tier-1 ledger fixtures: every Tier-1-only
+    /// golden compare reaches no tolerance/judgment resolve, so it is never
+    /// consulted — it exists only to satisfy the [`GradingSeam`] the entry points
+    /// now require.
+    struct ZeroEmbedder;
+
+    impl TextEmbedder for ZeroEmbedder {
+        fn embed(&self, _text: &str) -> Vec<f32> {
+            Vec::new()
+        }
+    }
+
+    /// The Tier-1-only grading seam the `ledger_state`/`approval_status`/
+    /// `ledger_entry`/`decide_approval` fixtures thread (never consulted, since
+    /// their goldens carry only deterministic assertions). The never-touched
+    /// embedder + empty judgment context are leaked to `'static` so the seam is a
+    /// convenient by-value temporary at each call site (a trait-object seam cannot
+    /// be a `static`, which would require `Sync`).
+    fn seam() -> GradingSeam<'static> {
+        let embedder: &'static dyn TextEmbedder = Box::leak(Box::new(ZeroEmbedder));
+        let judgment: &'static JudgmentContext = Box::leak(Box::new(JudgmentContext {
+            panel: &[],
+            driver_model: "",
+            escalate_below_confidence: 0.0,
+        }));
+        GradingSeam { embedder, judgment }
     }
 
     /// A deterministic stub grader returning a fixed [`Grade`] and counting calls.
@@ -1881,6 +1973,107 @@ mod tests {
     }
 
     #[test]
+    fn approve_freezes_tier2_and_tier3_assertions_against_the_approved_observation() {
+        // A residual value criterion freezes a Tier 2 tolerance band; a subjective
+        // criterion freezes a Tier 3 judgment — both anchored to the approved
+        // evidence, both binding against the very observation they were compiled from.
+        const SUMMARY: &str = "your savings were applied at checkout";
+        const MESSAGE: &str = "the coupon is already applied";
+        let spec = spec(&[
+            "the summary matches the approved value",
+            "the message explains the coupon is already applied",
+        ]);
+        let received = json_observation(json!({ "summary": SUMMARY, "message": MESSAGE }));
+
+        let golden = approve(&spec, &received, pins(), None, &ScrubberSet::default_set())
+            .expect("approve compiles and freezes all tiers");
+
+        assert!(
+            golden.assertions.is_empty(),
+            "neither criterion is deterministic"
+        );
+        assert_eq!(golden.tolerance.len(), 1, "the value criterion is Tier 2");
+        assert_eq!(
+            golden.judgment.len(),
+            1,
+            "the subjective criterion is Tier 3"
+        );
+
+        // Each frozen assertion self-verifies: its locator re-binds to the frozen
+        // anchor against the stored observation.
+        let tolerance = &golden.tolerance[0];
+        assert_eq!(
+            tolerance
+                .locator
+                .resolve(&golden.observation.checkpoints[tolerance.checkpoint].state),
+            Some(tolerance.anchor.clone()),
+        );
+        let judgment = &golden.judgment[0];
+        assert_eq!(
+            judgment
+                .locator
+                .resolve(&golden.observation.checkpoints[judgment.checkpoint].state),
+            Some(judgment.anchor.clone()),
+        );
+    }
+
+    #[test]
+    fn compare_tiered_detects_tier2_and_tier3_drift_on_an_approve_produced_golden() {
+        // The golden is produced by the real approve compiler (not hand-built), so
+        // this is the end-to-end approve → compare path: a drifted received leaves
+        // the Tier 2 band and diverges from the Tier 3 anchor, and compare_tiered
+        // re-derives both sides through the golden's frozen tier sets.
+        const SUMMARY_ANCHOR: &str = "your savings were applied at checkout";
+        const SUMMARY_CHANGED: &str = "the order has shipped";
+        const MESSAGE_ANCHOR: &str = "the coupon is already applied";
+        const MESSAGE_DIVERGED: &str = "the order has shipped";
+
+        let spec = spec(&[
+            "the summary matches the approved value",
+            "the message explains the coupon is already applied",
+        ]);
+        let approved =
+            json_observation(json!({ "summary": SUMMARY_ANCHOR, "message": MESSAGE_ANCHOR }));
+        let golden = approve(&spec, &approved, pins(), None, &ScrubberSet::default_set())
+            .expect("approve freezes the tiered golden");
+
+        let received =
+            json_observation(json!({ "summary": SUMMARY_CHANGED, "message": MESSAGE_DIVERGED }));
+        let embedder = StubEmbedder::new(&[
+            (SUMMARY_ANCHOR, &[1.0, 0.0]),
+            (SUMMARY_CHANGED, &[0.0, 1.0]),
+            (MESSAGE_ANCHOR, &[1.0, 0.0]),
+            (MESSAGE_DIVERGED, &[0.0, 1.0]),
+        ]);
+        let grader = StubGrader::new(Grade {
+            pass: true,
+            confidence: 0.9,
+            reason: "still conveys the approved meaning".to_string(),
+        });
+        let panel: [&dyn Grader; 1] = [&grader];
+
+        let comparison = compare_tiered(
+            &golden,
+            &received,
+            &ScrubberSet::default_set(),
+            &embedder,
+            &judgment_context(&panel),
+        );
+
+        assert_eq!(comparison.state, LedgerState::Drifted);
+        assert_eq!(comparison.criteria.len(), 2);
+        assert_eq!(comparison.criteria[0].tier, VerdictTier::Tolerance);
+        assert!(comparison.criteria[0].drifted, "the value left the band");
+        assert_eq!(comparison.criteria[1].tier, VerdictTier::Judgment);
+        assert!(comparison.criteria[1].drifted, "the evidence diverged");
+        assert_eq!(
+            grader.calls(),
+            1,
+            "only the diverged received side wakes the judge; the golden anchor-matches"
+        );
+    }
+
+    #[test]
     fn approve_writes_the_golden_to_its_mirrored_path() {
         let repo = TempDir::new().unwrap();
         let spec = spec(&["the total is $40"]);
@@ -2052,23 +2245,23 @@ mod tests {
 
         // No received run at all.
         assert_eq!(
-            approval_status(Some(&golden), None, &scrubbers),
+            approval_status(Some(&golden), None, &scrubbers, &seam()),
             ApprovalStatus::Unobserved,
         );
         // No golden yet.
         assert_eq!(
-            approval_status(None, Some(&baseline), &scrubbers),
+            approval_status(None, Some(&baseline), &scrubbers, &seam()),
             ApprovalStatus::New,
         );
         // Golden + matching received.
         assert_eq!(
-            approval_status(Some(&golden), Some(&baseline), &scrubbers),
+            approval_status(Some(&golden), Some(&baseline), &scrubbers, &seam()),
             ApprovalStatus::Approved,
         );
         // Golden + drifted received.
         let drifted = json_observation(json!({ "total": 50 }));
         assert_eq!(
-            approval_status(Some(&golden), Some(&drifted), &scrubbers),
+            approval_status(Some(&golden), Some(&drifted), &scrubbers, &seam()),
             ApprovalStatus::Drifted,
         );
     }
@@ -2087,6 +2280,7 @@ mod tests {
             pins(),
             false, // not CI: a local first run mints the baseline
             &scrubbers,
+            &seam(),
         )
         .expect("decide");
 
@@ -2119,6 +2313,7 @@ mod tests {
             pins(),
             true, // CI
             &scrubbers,
+            &seam(),
         )
         .expect("decide");
 
@@ -2148,6 +2343,7 @@ mod tests {
                 pins(),
                 true, // CI
                 &scrubbers,
+                &seam(),
             )
             .expect("decide");
             assert_eq!(
@@ -2202,6 +2398,7 @@ mod tests {
                 None,
                 Some(&received),
                 &ScrubberSet::default_set(),
+                &seam(),
             ),
             LedgerState::New,
         );
@@ -2214,7 +2411,7 @@ mod tests {
         let baseline = json_observation(json!({ "total": 40 }));
         let golden = approve(&spec, &baseline, pins(), None, &scrubbers).expect("approve");
         assert_eq!(
-            ledger_state(&spec, Some(&golden), Some(&baseline), &scrubbers),
+            ledger_state(&spec, Some(&golden), Some(&baseline), &scrubbers, &seam()),
             LedgerState::Approved,
         );
     }
@@ -2226,7 +2423,7 @@ mod tests {
         let baseline = json_observation(json!({ "total": 40 }));
         let golden = approve(&spec, &baseline, pins(), None, &scrubbers).expect("approve");
         assert_eq!(
-            ledger_state(&spec, Some(&golden), None, &scrubbers),
+            ledger_state(&spec, Some(&golden), None, &scrubbers, &seam()),
             LedgerState::Approved,
             "a golden with an unedited spec and no new run is the last approved state",
         );
@@ -2240,7 +2437,7 @@ mod tests {
         let golden = approve(&spec, &baseline, pins(), None, &scrubbers).expect("approve");
         let drifted = json_observation(json!({ "total": 50 }));
         assert_eq!(
-            ledger_state(&spec, Some(&golden), Some(&drifted), &scrubbers),
+            ledger_state(&spec, Some(&golden), Some(&drifted), &scrubbers, &seam()),
             LedgerState::Drifted,
         );
     }
@@ -2257,7 +2454,7 @@ mod tests {
         // received run still matches the golden.
         let edited = spec(&["the total is $40", "the discount is $5"]);
         assert_eq!(
-            ledger_state(&edited, Some(&golden), Some(&baseline), &scrubbers),
+            ledger_state(&edited, Some(&golden), Some(&baseline), &scrubbers, &seam()),
             LedgerState::Stale,
         );
     }
@@ -2275,7 +2472,7 @@ mod tests {
         let edited = spec(&["the total is $40", "the discount is $5"]);
         let drifted = json_observation(json!({ "total": 50 }));
         assert_eq!(
-            ledger_state(&edited, Some(&golden), Some(&drifted), &scrubbers),
+            ledger_state(&edited, Some(&golden), Some(&drifted), &scrubbers, &seam()),
             LedgerState::Stale,
         );
     }
@@ -2287,7 +2484,7 @@ mod tests {
         let baseline = json_observation(json!({ "total": 40 }));
         let golden = approve(&spec, &baseline, pins(), None, &scrubbers).expect("approve");
 
-        let approved = ledger_entry(&spec, Some(&golden), Some(&baseline), &scrubbers);
+        let approved = ledger_entry(&spec, Some(&golden), Some(&baseline), &scrubbers, &seam());
         assert_eq!(approved.state, LedgerState::Approved);
         assert!(
             approved.comparison.is_none(),
@@ -2295,7 +2492,13 @@ mod tests {
         );
 
         let drifted_obs = json_observation(json!({ "total": 50 }));
-        let drifted = ledger_entry(&spec, Some(&golden), Some(&drifted_obs), &scrubbers);
+        let drifted = ledger_entry(
+            &spec,
+            Some(&golden),
+            Some(&drifted_obs),
+            &scrubbers,
+            &seam(),
+        );
         assert_eq!(drifted.state, LedgerState::Drifted);
         let comparison = drifted
             .comparison
@@ -2342,6 +2545,7 @@ mod tests {
             pins(),
             false,
             &scrubbers,
+            &seam(),
         )
         .expect("decide");
 

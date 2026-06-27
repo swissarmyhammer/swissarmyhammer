@@ -649,7 +649,14 @@ enum Intent {
 
 /// Resolve which checkpoint a criterion binds to: the ordinal it names, else the
 /// final checkpoint.
-fn resolve_checkpoint(text: &str, observation: &Observation) -> Result<usize, CompileError> {
+///
+/// `pub(crate)` so the tiered compiler ([`compile_tiered`](crate::compile_tiered))
+/// resolves a residual criterion's checkpoint with the same ordinal rule Tier 1
+/// uses — one source of truth for checkpoint binding across all three tiers.
+pub(crate) fn resolve_checkpoint(
+    text: &str,
+    observation: &Observation,
+) -> Result<usize, CompileError> {
     let count = observation.checkpoints.len();
     if count == 0 {
         return Err(CompileError::EmptyObservation {
@@ -1220,7 +1227,10 @@ fn ordinal_checkpoint(text: &str) -> Option<usize> {
 }
 
 /// Whether `word` appears as a whole alphabetic token in `lower`.
-fn word_present(lower: &str, word: &str) -> bool {
+///
+/// `pub(crate)` so the tiered compiler's subjective-cue detector reuses the same
+/// whole-word match rather than re-deriving one.
+pub(crate) fn word_present(lower: &str, word: &str) -> bool {
     lower
         .split(|c: char| !c.is_ascii_alphabetic())
         .any(|token| token == word)
@@ -1355,6 +1365,54 @@ fn find_array_path_by_keys(json: &Value, key_tokens: &[String]) -> Option<(Strin
         let array = value.as_array()?;
         key_matches(final_key(path), key_tokens).then(|| (path.clone(), array.len()))
     })
+}
+
+/// Locate textual evidence for a residual (Tier 1-undecidable) criterion: the
+/// string scalar in the checkpoint's structured JSON that best answers the prose,
+/// returned as the most durable locator and the approved evidence value it
+/// resolves to — the anchor a Tier 2 tolerance band or a Tier 3 judgment freezes.
+///
+/// A residual criterion names no number to bind (that would be Tier 1), so the
+/// evidence is the string scalar whose json key matches the criterion's key hints;
+/// failing a key match, the **sole** string scalar in the checkpoint (the common
+/// one-message observation). Ambiguous (several unmatched strings) or absent
+/// textual evidence yields `None`, so the criterion is left for a later tier or the
+/// doctor gate rather than bound to a guessed value.
+///
+/// `pub(crate)` so the tiered compiler builds both a [`ToleranceAssertion`] and a
+/// [`JudgmentAssertion`] from one shared evidence-location rule.
+///
+/// [`ToleranceAssertion`]: crate::ToleranceAssertion
+/// [`JudgmentAssertion`]: crate::JudgmentAssertion
+pub(crate) fn locate_text_evidence(
+    text: &str,
+    state: &SurfaceState,
+) -> Option<(Locator, BoundValue)> {
+    let json = checkpoint_json(state)?;
+    let mut nodes = Vec::new();
+    collect_nodes(&json, ROOT, &mut nodes);
+    let strings: Vec<(String, String)> = nodes
+        .iter()
+        .filter_map(|(path, value)| value.as_str().map(|text| (path.clone(), text.to_string())))
+        .collect();
+
+    let key_tokens = tokens(text);
+    let chosen = match strings
+        .iter()
+        .find(|(path, _)| key_matches(final_key(path), &key_tokens))
+    {
+        Some(keyed) => keyed,
+        None => match strings.as_slice() {
+            [only] => only,
+            _ => return None,
+        },
+    };
+    Some((
+        Locator::JsonPath {
+            path: chosen.0.clone(),
+        },
+        BoundValue::Text(chosen.1.clone()),
+    ))
 }
 
 /// The trailing object key of a json-path (`$.a.b` → `b`, `$.items[0]` → `items`).
