@@ -460,7 +460,11 @@ mod tests {
 
     /// Keep-alive interval for the live turn — a small fraction of the idle
     /// window so the streaming turn never looks stalled.
-    const KEEP_ALIVE_INTERVAL: Duration = Duration::from_millis(ABANDON_IDLE_WINDOW_MS / 16);
+    // Keep-alive cadence as a fraction of the idle window: this many keep-alives
+    // per idle window keeps the streaming turn well clear of the idle-abandon deadline.
+    const KEEP_ALIVES_PER_IDLE_WINDOW: u64 = 16;
+    const KEEP_ALIVE_INTERVAL: Duration =
+        Duration::from_millis(ABANDON_IDLE_WINDOW_MS / KEEP_ALIVES_PER_IDLE_WINDOW);
 
     // ---- scripted ACP agent (shared harness) ------------------------------
     //

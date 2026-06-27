@@ -740,9 +740,12 @@ fn concurrency_probe_embedder_factory(
         let active = Arc::clone(&active);
         let peak = Arc::clone(&peak);
         Box::pin(async move {
+            // Hold each embedder "active" long enough that two overlapping review
+            // pipelines are observable via the peak counter before either releases.
+            const CONCURRENCY_PROBE_HOLD_MS: u64 = 150;
             let now = active.fetch_add(1, Ordering::SeqCst) + 1;
             peak.fetch_max(now, Ordering::SeqCst);
-            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(CONCURRENCY_PROBE_HOLD_MS)).await;
             active.fetch_sub(1, Ordering::SeqCst);
             Ok(Arc::new(model_embedding::mock::MockEmbedder::new(DIM))
                 as Arc<dyn model_embedding::TextEmbedder>)
