@@ -61,6 +61,7 @@ pub mod grader;
 pub mod ledger;
 pub mod loader;
 pub mod observe;
+pub mod replay;
 pub mod spec;
 pub mod surface;
 pub mod surfaces;
@@ -106,8 +107,11 @@ pub use ledger::{
 };
 pub use loader::{ExpectationLoader, RawSpec};
 pub use observe::{
-    drives_mechanically, golden_path, observe, observe_repeated, received_path, resolved_repeat,
-    spec_path, write_received, ObserveConfig, FINAL_CHECKPOINT,
+    cache_path, drives_mechanically, golden_path, observe, observe_repeated, received_path,
+    resolved_repeat, spec_path, write_received, ObserveConfig, FINAL_CHECKPOINT,
+};
+pub use replay::{
+    CachedAction, ReplayCache, ReplayKey, ReplaySource, ResolvedAction, MAX_REPLAY_DRIFT,
 };
 pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};
 pub use surface::cli::{CliAdapter, CliCommands, CliSut};

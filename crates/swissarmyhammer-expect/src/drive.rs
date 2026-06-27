@@ -60,9 +60,10 @@ use crate::config::EXPECT_DIR;
 use crate::error::ExpectError;
 use crate::evaluate::evaluate_spec;
 use crate::observe::{observe, ObserveConfig};
+use crate::replay::{ReplayCache, ReplayKey, ReplaySource, ResolvedAction};
 use crate::spec::{parse_criterion, Expectation, Section};
 use crate::surface::SurfaceAdapter;
-use crate::types::{ExpectationVerdict, Observation};
+use crate::types::{ExpectationVerdict, Observation, Surface};
 
 /// The set of goals to drive, one scoped subagent per goal.
 ///
@@ -468,23 +469,112 @@ where
 
     // The subagent supplies the action the adapter could not resolve; capture its
     // claim first, then let the adapter read the authoritative checkpoints. The
-    // drive is bounded by the soft stop (the agent declaring the goal reached)
-    // and the [`MAX_PROMPT_TURNS`] hard cap — see [`drive_for_goal`].
-    let claim = if needs_agent {
-        Some(drive_for_goal(expectation, driver).await?)
+    // resolved action is served from the replay cache by default — the agent is
+    // hit only on a cache miss or fingerprint drift (`ideas/expect.md`
+    // §"Determinism comes from not calling the model"). The drive itself is
+    // bounded by the soft stop (the agent declaring the goal reached) and the
+    // [`MAX_PROMPT_TURNS`] hard cap — see [`drive_for_goal`].
+    let resolved = if needs_agent {
+        Some(resolve_action(expectation, driver, &config.repo_root).await?)
     } else {
         None
     };
 
     let mut observation = observe(expectation, adapter, config)?;
 
-    if let Some(claim) = claim {
+    if let Some(resolved) = resolved {
+        // A fingerprint-drift re-resolve is surfaced in the trajectory, never
+        // silently applied — "a wrong cached click is worse than a slow click."
+        if resolved.source.is_drift() {
+            observation
+                .trajectory
+                .steps
+                .push(format!("{DRIFT_STEP_PREFIX}{}", expectation.path));
+        }
         observation
             .trajectory
             .steps
-            .push(format_claim_step(&claim)?);
+            .push(format_claim_step(&resolved.action)?);
     }
     Ok(observation)
+}
+
+/// The trajectory prefix recording a fingerprint-drift re-resolve: a cached
+/// action could not be safely replayed, so the agent was consulted again and the
+/// drift surfaced (never silently applied).
+const DRIFT_STEP_PREFIX: &str = "drift: ";
+
+/// Resolve `expectation`'s driven action through the [`ReplayCache`], invoking
+/// the agent (`driver`) only on a cache miss or fingerprint drift — the cached
+/// path is the default (`ideas/expect.md` §"Determinism comes from not calling
+/// the model"). An unchanged target + state replays the stored action with no
+/// model call.
+///
+/// The cache is a determinism optimization layered over the authoritative
+/// observation, so its write is best-effort: a failed persist only costs a
+/// re-resolve on the next run and never fails the check. A drift re-resolve is
+/// surfaced (logged here, recorded in the trajectory by the caller), never
+/// silently applied.
+///
+/// # Errors
+///
+/// Propagates [`drive_for_goal`]'s error on a miss or drift, and
+/// [`ExpectError`] when the existing cache cannot be read.
+async fn resolve_action<D: GoalDriver>(
+    expectation: &Expectation,
+    driver: &D,
+    repo_root: &Path,
+) -> Result<ResolvedAction, ExpectError> {
+    let mut cache = ReplayCache::load(repo_root, &expectation.path)?;
+    let (key, state) = replay_inputs(expectation);
+    let resolved = cache
+        .resolve_or_replay(&key, &state, || drive_for_goal(expectation, driver))
+        .await?;
+
+    if !matches!(resolved.source, ReplaySource::Cached) {
+        if let Err(err) = cache.save(repo_root, &expectation.path) {
+            tracing::warn!(
+                identity = %expectation.path,
+                error = %err,
+                "failed to persist the replay cache; the next run will re-resolve"
+            );
+        }
+    }
+    if resolved.source.is_drift() {
+        tracing::warn!(
+            identity = %expectation.path,
+            "a cached action drifted past the replay threshold; re-resolved via the agent (DRIFT)"
+        );
+    }
+    Ok(resolved)
+}
+
+/// Derive the [`ReplayKey`] and state snapshot for `expectation`'s driven
+/// action: the spec identity is the normalized target, the surface is the
+/// method, and the `Given`/`When` steps the agent acts on are the state snapshot
+/// whose drift re-triggers a re-resolve.
+fn replay_inputs(expectation: &Expectation) -> (ReplayKey, String) {
+    let key = ReplayKey::new(
+        &expectation.path,
+        surface_method(expectation.frontmatter.surface),
+    );
+    let state = expectation
+        .given
+        .iter()
+        .chain(expectation.when.iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    (key, state)
+}
+
+/// The replay-cache method string for a [`Surface`] — its lowercase serde form
+/// (`"cli"`, `"http"`, …), the single source of truth for the surface name.
+fn surface_method(surface: Surface) -> String {
+    serde_json::to_value(surface)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default()
 }
 
 /// Drive `expectation`'s withheld-criteria goal through one scoped session and
@@ -1567,6 +1657,117 @@ NOTES_RIGHT_REASON the right-reason text routed to the grader.
             }
             other => panic!("expected cli state, got {other:?}"),
         }
+    }
+
+    // ---- replay-cache integration (deterministic replay) ----------------
+
+    /// A [`GoalDriver`] that counts how many times the agent was invoked,
+    /// returning a fixed reached-goal claim — so a test can prove the cached
+    /// path skips it.
+    struct CountingDriver {
+        calls: AtomicUsize,
+    }
+
+    impl GoalDriver for CountingDriver {
+        fn drive_goal(&self, _goal: &str) -> impl Future<Output = Result<DriverTurn, ExpectError>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            async move {
+                Ok(DriverTurn {
+                    claim: serde_json::json!({ "summary": "resolved" }),
+                    goal_reached: true,
+                })
+            }
+        }
+    }
+
+    /// Parse [`STOP_SPEC`] under `repo_root` so the replay cache persists to a
+    /// real writable `.expect/cache` slot.
+    fn stop_expectation_under(repo_root: &Path) -> Expectation {
+        Expectation::parse(STOP_SPEC, &repo_root.join("feature.expect.md"), repo_root)
+            .expect("parse stop spec")
+    }
+
+    /// The cached path is the default: a second run with an unchanged
+    /// target+state replays the cached action with NO model call.
+    #[tokio::test]
+    async fn observe_with_driver_replays_the_cached_action_without_the_agent() {
+        let repo = temp_repo();
+        let adapter = json_stub_adapter(serde_json::json!({ "total": 40 }));
+        let driver = CountingDriver {
+            calls: AtomicUsize::new(0),
+        };
+        let expectation = stop_expectation_under(repo.path());
+        let config = ObserveConfig::new(repo.path());
+
+        // First run: a cache miss resolves via the agent and persists the action.
+        observe_with_driver(&expectation, &adapter, &config, &driver)
+            .await
+            .expect("first observe");
+        assert_eq!(
+            driver.calls.load(Ordering::SeqCst),
+            1,
+            "the first run resolves via the agent"
+        );
+
+        // Second run, unchanged target+state: the cached action replays with no
+        // model call (the cache is reloaded fresh from disk).
+        let observation = observe_with_driver(&expectation, &adapter, &config, &driver)
+            .await
+            .expect("second observe");
+        assert_eq!(
+            driver.calls.load(Ordering::SeqCst),
+            1,
+            "the second run replays the cached action without the agent"
+        );
+        assert!(
+            !observation
+                .trajectory
+                .steps
+                .iter()
+                .any(|step| step.starts_with(DRIFT_STEP_PREFIX)),
+            "an unchanged replay is not surfaced as drift"
+        );
+    }
+
+    /// A changed state snapshot drifts the cached action past the threshold: the
+    /// agent re-resolves AND the drift is surfaced, not silently applied.
+    #[tokio::test]
+    async fn observe_with_driver_re_resolves_and_surfaces_drift_on_state_change() {
+        let repo = temp_repo();
+        let adapter = json_stub_adapter(serde_json::json!({ "total": 40 }));
+        let driver = CountingDriver {
+            calls: AtomicUsize::new(0),
+        };
+        let config = ObserveConfig::new(repo.path());
+
+        let first = stop_expectation_under(repo.path());
+        observe_with_driver(&first, &adapter, &config, &driver)
+            .await
+            .expect("first observe");
+        assert_eq!(driver.calls.load(Ordering::SeqCst), 1);
+
+        // The `When` steps the agent acts on change: the cached action's state
+        // fingerprint drifts, so the agent re-resolves and the drift surfaces.
+        let mut drifted = first.clone();
+        drifted.when = vec!["a completely different action to perform now".to_string()];
+        let observation = observe_with_driver(&drifted, &adapter, &config, &driver)
+            .await
+            .expect("drift observe");
+
+        assert_eq!(
+            driver.calls.load(Ordering::SeqCst),
+            2,
+            "a drifted state re-resolves via the agent"
+        );
+        assert!(
+            observation
+                .trajectory
+                .steps
+                .iter()
+                .any(|step| step.starts_with(DRIFT_STEP_PREFIX)),
+            "the drift re-resolve is surfaced in the trajectory: {:?}",
+            observation.trajectory.steps
+        );
     }
 
     // ---- stop conditions + independent re-validation ---------------------

@@ -44,6 +44,15 @@ const RECEIVED_EXTENSION: &str = ".received.json";
 /// observation per spec (the `golden` baseline `evaluate` re-grades against).
 const GOLDEN_SUBDIR: &str = "goldens";
 
+/// The committed subdirectory of `.expect/` that holds the resolved-action
+/// replay cache per spec (the deterministic-replay store of
+/// [`crate::replay`]).
+const CACHE_SUBDIR: &str = "cache";
+
+/// The extension appended to a spec's repo-relative identity to name its
+/// replay-cache file.
+const CACHE_EXTENSION: &str = ".cache.json";
+
 /// The extension appended to a spec's repo-relative identity to name its golden
 /// baseline file.
 const GOLDEN_EXTENSION: &str = ".golden.json";
@@ -330,6 +339,26 @@ pub fn received_path(repo_root: &Path, path: &str) -> Result<PathBuf, ExpectErro
 /// `..` component.
 pub fn golden_path(repo_root: &Path, path: &str) -> Result<PathBuf, ExpectError> {
     expect_artifact_path(repo_root, GOLDEN_SUBDIR, path, GOLDEN_EXTENSION)
+}
+
+/// Resolve the replay-cache path for the spec identity `path` under `repo_root`:
+/// `<repo_root>/.expect/cache/<path>.cache.json`.
+///
+/// The store of resolved agent actions [`crate::replay`] replays without a model
+/// call (`ideas/expect.md` §"Determinism comes from not calling the model").
+/// Like the committed [`golden_path`] baseline — and unlike the gitignored
+/// [`received_path`] — the cache is **committed**: deterministic replay only
+/// gates CI if a fresh checkout can replay the cached actions, and a gitignored
+/// cache (empty on CI) would force a model call every run, defeating the very
+/// determinism it exists to provide. The same safe-join applies, so an absolute
+/// or `..`-bearing identity can never escape `.expect/cache/`.
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Expectation`] when `path` is absolute or contains a
+/// `..` component.
+pub fn cache_path(repo_root: &Path, path: &str) -> Result<PathBuf, ExpectError> {
+    expect_artifact_path(repo_root, CACHE_SUBDIR, path, CACHE_EXTENSION)
 }
 
 /// Resolve the `*.expect.md` spec file path for the identity `path` under
@@ -644,6 +673,26 @@ mod tests {
         assert_eq!(
             resolved,
             repo.join(".expect/goldens/src/checkout/coupon.golden.json")
+        );
+    }
+
+    #[test]
+    fn cache_path_follows_the_dot_expect_layout() {
+        let repo = Path::new("/repo");
+        let resolved = cache_path(repo, "src/checkout/coupon").expect("safe identity");
+        assert_eq!(
+            resolved,
+            repo.join(".expect/cache/src/checkout/coupon.cache.json")
+        );
+    }
+
+    #[test]
+    fn cache_path_rejects_parent_dir_traversal() {
+        let repo = Path::new("/repo");
+        let err = cache_path(repo, "../../etc/passwd").expect_err("traversal must be rejected");
+        assert!(
+            matches!(err, ExpectError::Expectation { .. }),
+            "got {err:?}"
         );
     }
 
