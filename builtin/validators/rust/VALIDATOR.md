@@ -9,7 +9,6 @@ metadata:
 match:
   files:
     - "**/*.rs"
-severity: warn
 ---
 
 # Rust Review Validator

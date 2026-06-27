@@ -1,7 +1,6 @@
 ---
 name: no-hard-code
 description: Detect the misuse of hard coding to make tests appear to pass
-severity: error
 ---
 
 # No Hard-Coded Test Values Validator

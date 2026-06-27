@@ -9,7 +9,6 @@ metadata:
 match:
   files:
     - "**/*.dart"
-severity: warn
 ---
 
 # Dart/Flutter Review Validator

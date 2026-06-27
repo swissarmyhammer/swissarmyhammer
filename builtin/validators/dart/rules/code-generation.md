@@ -1,7 +1,6 @@
 ---
 name: code-generation
 description: riverpod annotations, functional vs class-based providers, params over .family
-severity: warn
 ---
 
 # Dart/Flutter Code Generation

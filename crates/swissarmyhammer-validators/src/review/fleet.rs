@@ -61,7 +61,7 @@
 //!   then the prime handoff. No validator text.
 //! - [`render_validator_suffix`] (forked per validator): the **validator
 //!   instructions** — the mandate (the validator's `description`), the paths of
-//!   the validator's files in scope, every rule body verbatim, the severity
+//!   the validator's files in scope, every rule body verbatim, the
 //!   default, and the output contract (every finding emits `rule` + `claim` +
 //!   `evidence` + `suggestion`, matching the [`Finding`] type).
 //! - [`render_fleet_prompt`] (degraded fallback): the change purpose, the
@@ -724,7 +724,7 @@ fn tag_findings(mut findings: Vec<Finding>, validator: &str) -> Vec<Finding> {
 /// Self-contained and scoped exactly as the old per-validator prompt was: the
 /// change purpose, that validator's own files (path + semantic diff + bounded
 /// source slice + probe evidence), and the validator's instructions (mandate +
-/// every rule body + severity default + output contract). It is the cold fallback
+/// every rule body + output contract). It is the cold fallback
 /// when priming or this validator's fork fails — correct, just not warm.
 ///
 /// The warm path splits the run's large shared content into the run prime
@@ -964,7 +964,7 @@ mod tests {
     use crate::validators::types::{
         Rule, RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch,
     };
-    use crate::validators::{PoolConfig, Severity, ValidatorLoader, ValidatorSource};
+    use crate::validators::{PoolConfig, ValidatorLoader, ValidatorSource};
     use claude_agent::protocol_translator::CacheUsage;
 
     // ---- fixtures --------------------------------------------------------
@@ -991,7 +991,6 @@ mod tests {
                 trigger_matcher: None,
                 tags: vec![],
                 probes: vec![],
-                severity: Severity::Warn,
                 timeout: 30,
                 once: false,
             },
@@ -1001,7 +1000,6 @@ mod tests {
                     name: rname.to_string(),
                     description: format!("{rname} description"),
                     body: body.to_string(),
-                    severity: None,
                     timeout: None,
                 })
                 .collect(),
@@ -1060,7 +1058,6 @@ mod tests {
     fn validator_work(name: &str, files: Vec<FileWork>) -> ValidatorWork {
         ValidatorWork {
             validator_name: name.to_string(),
-            severity: Severity::Warn,
             rules: vec![format!("{name}-rule")],
             probes: vec!["duplicates".to_string()],
             files,

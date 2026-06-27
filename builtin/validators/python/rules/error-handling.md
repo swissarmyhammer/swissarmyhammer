@@ -1,7 +1,6 @@
 ---
 name: error-handling
 description: Never retry on bare Exception, match retry to error semantics, custom hierarchies
-severity: error
 ---
 
 # Python Error Handling

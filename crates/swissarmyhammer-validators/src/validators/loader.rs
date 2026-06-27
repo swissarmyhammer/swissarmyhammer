@@ -620,9 +620,7 @@ mod tests {
         fs::create_dir_all(dir.join("rules")).unwrap();
         fs::write(
             dir.join("VALIDATOR.md"),
-            format!(
-                "---\nname: {name}\ndescription: {description}\nseverity: error\n---\n\n# {name}\n"
-            ),
+            format!("---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n"),
         )
         .unwrap();
         fs::write(
@@ -706,11 +704,7 @@ mod tests {
         let dir = base.join(name);
         fs::create_dir_all(&dir).unwrap();
         // Missing the closing `---` and a name field → frontmatter parse failure.
-        fs::write(
-            dir.join("VALIDATOR.md"),
-            "---\nseverity: not-a-real-severity\nmatch: [unterminated\n",
-        )
-        .unwrap();
+        fs::write(dir.join("VALIDATOR.md"), "---\nmatch: [unterminated\n").unwrap();
     }
 
     #[test]
@@ -771,7 +765,6 @@ mod tests {
         let content = r#"---
 name: test-builtin
 description: A test builtin validator
-severity: error
 ---
 
 Check for issues.
@@ -794,7 +787,6 @@ Check for issues.
         let validator_content = r#"---
 name: test-file-validator
 description: Test validator from file
-severity: warn
 ---
 
 Validation instructions.
@@ -822,7 +814,6 @@ Validation instructions.
             r#"---
 name: always
 description: Always-on validator
-severity: error
 ---
 Check everything.
 "#,
@@ -834,7 +825,6 @@ Check everything.
             r#"---
 name: write-only
 description: Only for Write tool
-severity: error
 match:
   tools: [Write]
 ---
@@ -866,7 +856,6 @@ Check Write tool.
             r#"---
 name: override-test
 description: Builtin version
-severity: info
 ---
 Builtin body.
 "#,
@@ -886,7 +875,6 @@ Builtin body.
             r#"---
 name: override-test
 description: User version
-severity: error
 ---
 User body.
 "#,
@@ -917,7 +905,6 @@ User body.
             r#"---
 name: test-validator
 description: Test validator
-severity: error
 ---
 Check for issues in the code.
 "#,
@@ -947,7 +934,6 @@ Check for issues in the code.
             r#"---
 name: regular-validator
 description: Regular validator
-severity: error
 ---
 Check for issues.
 "#,
@@ -982,7 +968,6 @@ Check for issues.
             r#"---
 name: test-validator
 description: Test validator
-severity: error
 ---
 Check issues.
 "#,
@@ -1067,7 +1052,6 @@ Check issues.
             r#"---
 name: user-validator
 description: User validator
-severity: warn
 ---
 Body.
 "#,
@@ -1082,7 +1066,6 @@ Body.
             r#"---
 name: builtin-test
 description: Builtin
-severity: error
 ---
 Body.
 "#,

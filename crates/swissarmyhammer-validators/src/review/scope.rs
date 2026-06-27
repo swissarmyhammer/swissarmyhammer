@@ -45,7 +45,7 @@ use swissarmyhammer_sem::parser::plugins::create_default_registry;
 
 use crate::error::AvpError;
 use crate::review::probes::{run_probes, ChangeEntry, FileChange as ProbeChange, ProbeResult};
-use crate::validators::{MatchContext, RuleSet, Severity, ValidatorLoader};
+use crate::validators::{MatchContext, RuleSet, ValidatorLoader};
 
 /// How many lines of context to keep on each side of a changed hunk in the
 /// bounded [`source_slice`](FileWork::source_slice).
@@ -176,8 +176,6 @@ impl WorkList {
 pub struct ValidatorWork {
     /// The validator (RuleSet) name.
     pub validator_name: String,
-    /// The validator's severity.
-    pub severity: Severity,
     /// The rule names inside the validator.
     pub rules: Vec<String>,
     /// The probe names the validator declared.
@@ -321,7 +319,7 @@ fn group_entities_by_file(changes: Vec<SemanticChange>) -> GroupedEntities {
 struct MatchedValidators {
     /// Files that at least one validator matched (the per-file-facts key set).
     matched_files: BTreeSet<String>,
-    /// Validator name → its accumulated match (severity, rules, probes, files).
+    /// Validator name → its accumulated match (rules, probes, files).
     validators: BTreeMap<String, MatchedValidator>,
 }
 
@@ -410,7 +408,6 @@ fn assemble_validator_work(
             files.sort_by(|a, b| a.path.cmp(&b.path));
             ValidatorWork {
                 validator_name: mv.name,
-                severity: mv.severity,
                 rules: mv.rules,
                 probes: mv.probes,
                 files,
@@ -456,7 +453,6 @@ fn log_scope_selection(validators: &[ValidatorWork]) {
 /// A validator matched to one or more files, accumulated during matching.
 struct MatchedValidator {
     name: String,
-    severity: Severity,
     rules: Vec<String>,
     probes: Vec<String>,
     files: BTreeSet<String>,
@@ -466,7 +462,6 @@ impl MatchedValidator {
     fn from_ruleset(rs: &RuleSet) -> Self {
         Self {
             name: rs.name().to_string(),
-            severity: rs.manifest.severity,
             rules: rs.rules.iter().map(|r| r.name.clone()).collect(),
             probes: rs.manifest.probes.clone(),
             files: BTreeSet::new(),
@@ -976,7 +971,7 @@ mod tests {
         seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
         seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &emb);
 
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
@@ -1047,7 +1042,7 @@ mod tests {
         repo.write("src/new.rs", &format!("{}\n", body("brand_new")));
 
         let conn = index_conn();
-        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
+        let loader = loader_with("rust", "*.rs", &[]);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
@@ -1082,7 +1077,7 @@ mod tests {
         repo.write("logs/run.log", "lots of noise\n");
 
         let conn = index_conn();
-        let loader = loader_with("everything", "*", &[], Severity::Warn);
+        let loader = loader_with("everything", "*", &[]);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
@@ -1110,7 +1105,7 @@ mod tests {
         repo.write("notes.txt", "original\nedited\n");
 
         let conn = index_conn();
-        let loader = loader_with("everything", "*", &[], Severity::Warn);
+        let loader = loader_with("everything", "*", &[]);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
@@ -1151,7 +1146,6 @@ mod tests {
     fn validator_over(name: &str, paths: &[&str]) -> ValidatorWork {
         ValidatorWork {
             validator_name: name.to_string(),
-            severity: Severity::Warn,
             rules: vec![],
             probes: vec![],
             files: paths.iter().map(|p| file_at(p)).collect(),
@@ -1193,7 +1187,7 @@ mod tests {
         let emb = dup_emb();
         seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
 
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
         let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
@@ -1219,7 +1213,7 @@ mod tests {
         repo.write("Cargo.lock", "# lockfile\nupdated = true\n");
 
         let conn = index_conn();
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
         let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
@@ -1251,7 +1245,7 @@ mod tests {
         // the probe runner's observable execution count — a re-run repeats the
         // changed-set embedding work.
         let baseline_embedder = MockEmbedder::new(DIM);
-        let single = loader_with("dedupe-a", "*.rs", &["duplicates"], Severity::Warn);
+        let single = loader_with("dedupe-a", "*.rs", &["duplicates"]);
         scope_review(
             Scope::Working,
             repo.path(),
@@ -1266,8 +1260,8 @@ mod tests {
 
         // Two validators, both declaring `duplicates`, both matching *.rs.
         let mut loader = ValidatorLoader::new();
-        loader.add_builtin_ruleset(ruleset("dedupe-a", "*.rs", &["duplicates"], Severity::Warn));
-        loader.add_builtin_ruleset(ruleset("dedupe-b", "*.rs", &["duplicates"], Severity::Warn));
+        loader.add_builtin_ruleset(ruleset("dedupe-a", "*.rs", &["duplicates"]));
+        loader.add_builtin_ruleset(ruleset("dedupe-b", "*.rs", &["duplicates"]));
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
@@ -1325,7 +1319,7 @@ mod tests {
         seed_chunk(&conn, "src/util.rs", "existing_util", &added, &query_vec);
 
         // One validator declaring BOTH symbol-targeted probes on the .rs file.
-        let loader = loader_with("reuse", "*.rs", &["callers", "similar"], Severity::Warn);
+        let loader = loader_with("reuse", "*.rs", &["callers", "similar"]);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
@@ -1388,7 +1382,7 @@ mod tests {
         repo.commit("Add the added function for review");
 
         let conn = index_conn();
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(
@@ -1418,7 +1412,7 @@ mod tests {
         repo.commit("initial");
 
         let conn = index_conn();
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(
@@ -1465,7 +1459,7 @@ mod tests {
 
         let conn = index_conn();
         // The only validator matches *.rs, never a .lock file.
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)

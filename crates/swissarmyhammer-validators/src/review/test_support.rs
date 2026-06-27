@@ -27,7 +27,7 @@ use swissarmyhammer_code_context::db::{configure_connection, create_schema};
 use swissarmyhammer_code_context::serialize_embedding;
 
 use crate::validators::types::{RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch};
-use crate::validators::{Rule, Severity, ValidatorLoader, ValidatorSource};
+use crate::validators::{Rule, ValidatorLoader, ValidatorSource};
 
 /// Embedding dimension shared by the seeded index and the mock embedder.
 pub const DIM: usize = 4;
@@ -202,22 +202,16 @@ pub fn seed_call_edge(
 // ---- validator loader fixture ----------------------------------------
 
 /// A loader carrying one RuleSet named `name` that matches `file_glob` and
-/// declares `probes` at `severity`. `add_builtin_ruleset` is the deterministic
-/// injection seam (no on-disk validators, so tests don't depend on the
-/// machine).
-pub fn loader_with(
-    name: &str,
-    file_glob: &str,
-    probes: &[&str],
-    severity: Severity,
-) -> ValidatorLoader {
+/// declares `probes`. `add_builtin_ruleset` is the deterministic injection seam
+/// (no on-disk validators, so tests don't depend on the machine).
+pub fn loader_with(name: &str, file_glob: &str, probes: &[&str]) -> ValidatorLoader {
     let mut loader = ValidatorLoader::new();
-    loader.add_builtin_ruleset(ruleset(name, file_glob, probes, severity));
+    loader.add_builtin_ruleset(ruleset(name, file_glob, probes));
     loader
 }
 
 /// A single-rule RuleSet matching `file_glob` and declaring `probes`.
-pub fn ruleset(name: &str, file_glob: &str, probes: &[&str], severity: Severity) -> RuleSet {
+pub fn ruleset(name: &str, file_glob: &str, probes: &[&str]) -> RuleSet {
     RuleSet {
         manifest: RuleSetManifest {
             name: name.to_string(),
@@ -232,7 +226,6 @@ pub fn ruleset(name: &str, file_glob: &str, probes: &[&str], severity: Severity)
             trigger_matcher: None,
             tags: vec![],
             probes: probes.iter().map(|p| p.to_string()).collect(),
-            severity,
             timeout: 30,
             once: false,
         },
@@ -240,7 +233,6 @@ pub fn ruleset(name: &str, file_glob: &str, probes: &[&str], severity: Severity)
             name: format!("{name}-rule"),
             description: "rule".to_string(),
             body: "body".to_string(),
-            severity: None,
             timeout: None,
         }],
         source: ValidatorSource::Builtin,

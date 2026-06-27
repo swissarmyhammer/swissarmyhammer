@@ -10,7 +10,6 @@ metadata:
 match:
   files:
     - "@file_groups/source_code"
-severity: warn
 ---
 
 # Data-Driven Validator

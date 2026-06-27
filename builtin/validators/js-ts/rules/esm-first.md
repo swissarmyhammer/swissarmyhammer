@@ -1,7 +1,6 @@
 ---
 name: esm-first
 description: ESM modules, exports field, explicit .js extensions, no require/module.exports
-severity: error
 ---
 
 # JavaScript/TypeScript ESM-First

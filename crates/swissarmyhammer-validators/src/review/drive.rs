@@ -430,7 +430,6 @@ mod tests {
         findings_json as shared_findings_json, loader_with, prompt_text, ruleset, seeded_dup_repo,
         verdict_json, ScriptedAdapter, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
     };
-    use crate::validators::Severity;
 
     /// How long a wedged pipeline may run before a test fails instead of
     /// hanging CI — the one tuning knob shared by every end-to-end test here.
@@ -526,7 +525,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn review_working_drives_the_pipeline_over_a_scripted_agent() {
         let (repo, conn, embedder) = seeded_dup_repo();
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Error);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
 
         // The fan-out prompt names the validator + file; the verify prompt names
         // the claim. Both substrings map to the right scripted response.
@@ -604,7 +603,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn review_does_not_deadlock_when_agent_demands_permission_mid_prompt() {
         let (repo, conn, embedder) = seeded_dup_repo();
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Error);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
 
         let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
         // Every prompt this agent serves blocks on a `session/request_permission`
@@ -660,7 +659,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn review_serves_fs_read_text_file_from_disk_under_repo_path() {
         let (repo, conn, embedder) = seeded_dup_repo();
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Error);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
 
         let read_path = repo.path().join("src/lib.rs");
         let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
@@ -1054,13 +1053,8 @@ mod tests {
         // Two validators over disjoint files → two concurrent fan-out turns on
         // the pool's two workers: `staller` wedges and is abandoned,
         // `deduplicate` stays live and must complete after the late response.
-        let mut loader = loader_with(
-            "deduplicate",
-            "src/lib.rs",
-            &["duplicates"],
-            Severity::Error,
-        );
-        loader.add_builtin_ruleset(ruleset("staller", "src/other.rs", &[], Severity::Error));
+        let mut loader = loader_with("deduplicate", "src/lib.rs", &["duplicates"]);
+        loader.add_builtin_ruleset(ruleset("staller", "src/other.rs", &[]));
 
         let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
         let agent = Arc::new(LateAnsweringAgent {

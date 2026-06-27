@@ -157,7 +157,7 @@ fn write_ruleset(base: &Path, name: &str, glob: &str, probes: &[&str]) {
     std::fs::write(
         dir.join("VALIDATOR.md"),
         format!(
-            "---\nname: {name}\ndescription: {name} ruleset\nseverity: error\nmatch:\n  files:\n    - \"{glob}\"\n{probes_yaml}---\n\n# {name}\n"
+            "---\nname: {name}\ndescription: {name} ruleset\nmatch:\n  files:\n    - \"{glob}\"\n{probes_yaml}---\n\n# {name}\n"
         ),
     )
     .unwrap();
@@ -173,11 +173,7 @@ fn write_ruleset(base: &Path, name: &str, glob: &str, probes: &[&str]) {
 fn write_malformed_ruleset(base: &Path, name: &str) {
     let dir = base.join(name);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("VALIDATOR.md"),
-        "---\nseverity: error\nmatch: [unterminated\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join("VALIDATOR.md"), "---\nmatch: [unterminated\n").unwrap();
 }
 
 /// Extract the JSON text body of a tool result.

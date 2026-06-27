@@ -1,7 +1,6 @@
 ---
 name: small-focused-modules
 description: One thing per module, composition over configuration
-severity: warn
 ---
 
 # JavaScript/TypeScript Small Focused Modules

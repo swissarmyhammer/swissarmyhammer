@@ -74,7 +74,6 @@ fn render_frontmatter(frontmatter: &str) -> String {
 /// ---
 /// name: no-secrets
 /// description: Detect hardcoded secrets in code
-/// severity: error
 /// match:
 ///   tools: [Write, Edit]
 ///   files: ["*.ts", "*.js"]
@@ -247,7 +246,6 @@ fn extract_frontmatter<'a>(content: &'a str, _path: &Path) -> Result<(&'a str, &
 /// match:
 ///   tools: [Write, Edit]
 ///   files: ["@file_groups/source_code"]
-/// severity: error
 /// ---
 ///
 /// # Security Rules RuleSet
@@ -363,7 +361,6 @@ pub fn check_manifest_frontmatter(content: &str, dir_path: &Path) -> Vec<String>
 /// ---
 /// name: no-secrets
 /// description: Detect hardcoded secrets, API keys, and credentials
-/// severity: error
 /// timeout: 60
 /// ---
 ///
@@ -408,7 +405,6 @@ pub fn parse_rule(content: &str, path: &Path) -> Result<Rule, AvpError> {
         name: frontmatter.name,
         description: frontmatter.description,
         body: body.to_string(),
-        severity: frontmatter.severity,
         timeout: frontmatter.timeout,
     })
 }
@@ -555,14 +551,13 @@ pub fn parse_ruleset_directory<C: DirectoryConfig>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::validators::types::{Severity, DEFAULT_VALIDATOR_TIMEOUT_SECONDS};
+    use crate::validators::types::DEFAULT_VALIDATOR_TIMEOUT_SECONDS;
 
     #[test]
     fn test_parse_validator_basic() {
         let content = r#"---
 name: test-validator
 description: A test validator
-severity: error
 trigger: PreToolUse
 ---
 
@@ -576,7 +571,6 @@ This is the body of the validator.
 
         assert_eq!(validator.name(), "test-validator");
         assert_eq!(validator.description(), "A test validator");
-        assert_eq!(validator.severity(), Severity::Error);
         assert!(validator.body.contains("This is the body"));
     }
 
@@ -585,7 +579,6 @@ This is the body of the validator.
         let content = r#"---
 name: file-validator
 description: Validates specific files
-severity: warn
 trigger: PostToolUse
 match:
   tools:
@@ -612,7 +605,6 @@ Body content.
         let content = r#"---
 name: tagged-validator
 description: Has tags
-severity: info
 trigger: SessionStart
 tags:
   - blocking
@@ -647,8 +639,6 @@ Body.
         assert_eq!(validator.name(), "code-quality");
         // Description defaults based on name
         assert_eq!(validator.description(), "Validator: code-quality");
-        // Severity defaults to warn
-        assert_eq!(validator.severity(), Severity::Warn);
         // Body is the entire content
         assert!(validator.body.contains("My Validation Rule"));
         assert!(validator
@@ -709,8 +699,6 @@ Body.
         let validator =
             parse_validator(content, PathBuf::from("test.md"), ValidatorSource::Builtin).unwrap();
 
-        // Default severity is warn
-        assert_eq!(validator.severity(), Severity::Warn);
         // Default timeout
         assert_eq!(
             validator.frontmatter.timeout,
@@ -773,7 +761,6 @@ Check that the code is correct.
 
         assert_eq!(validator.name(), "code-review");
         assert_eq!(validator.description(), "Validator: code-review");
-        assert_eq!(validator.severity(), Severity::Warn);
         assert!(validator.body.contains("Check that the code is correct"));
     }
 
@@ -966,7 +953,6 @@ Body.
 name: security-rules
 description: Critical security validations
 trigger: PostToolUse
-severity: error
 ---
 
 # Security Rules
@@ -979,7 +965,6 @@ severity: error
         .unwrap();
         assert_eq!(manifest.name, "security-rules");
         assert_eq!(manifest.description, "Critical security validations");
-        assert_eq!(manifest.severity, Severity::Error);
     }
 
     #[test]
@@ -1003,8 +988,6 @@ Minimal manifest.
         assert_eq!(manifest.description, "RuleSet: my-rules");
         // Version defaults to 1.0.0
         assert_eq!(manifest.metadata.version, "1.0.0");
-        // Severity defaults to Warn
-        assert_eq!(manifest.severity, Severity::Warn);
     }
 
     #[test]
@@ -1012,7 +995,6 @@ Minimal manifest.
         let content = r#"---
 name: no-secrets
 description: Detect hardcoded secrets
-severity: error
 timeout: 60
 ---
 
@@ -1021,7 +1003,6 @@ Check for API keys, passwords, and tokens.
         let rule = parse_rule(content, std::path::Path::new("no-secrets.md")).unwrap();
         assert_eq!(rule.name, "no-secrets");
         assert_eq!(rule.description, "Detect hardcoded secrets");
-        assert_eq!(rule.severity, Some(Severity::Error));
         assert_eq!(rule.timeout, Some(60));
         assert!(rule.body.contains("Check for API keys"));
     }
@@ -1038,7 +1019,6 @@ Check the code.
         let rule = parse_rule(content, std::path::Path::new("check-code.md")).unwrap();
         assert_eq!(rule.name, "check-code");
         assert_eq!(rule.description, "Rule: check-code");
-        assert!(rule.severity.is_none());
         assert!(rule.timeout.is_none());
     }
 
@@ -1047,7 +1027,6 @@ Check the code.
         let content = r#"---
 name: my-rule
 description: My custom rule
-severity: info
 timeout: 120
 ---
 
@@ -1056,7 +1035,6 @@ Body content here.
         let rule = parse_rule(content, std::path::Path::new("my-rule.md")).unwrap();
         assert_eq!(rule.name, "my-rule");
         assert_eq!(rule.description, "My custom rule");
-        assert_eq!(rule.severity, Some(Severity::Info));
         assert_eq!(rule.timeout, Some(120));
     }
 
@@ -1075,7 +1053,6 @@ Body content here.
 name: test-ruleset
 description: Test RuleSet
 trigger: PreToolUse
-severity: error
 ---
 
 # Test RuleSet
@@ -1101,7 +1078,6 @@ Check first thing.
             r#"---
 name: rule-b
 description: Second rule
-severity: warn
 ---
 
 Check second thing.
@@ -1370,7 +1346,6 @@ Body.
 name: security-rules
 description: Critical security validations
 trigger: PostToolUse
-severity: error
 ---
 
 # Security Rules
@@ -1390,7 +1365,6 @@ name: dead-code
 description: Flags symbols with no inbound callers
 probes:
   - callers
-severity: error
 ---
 
 # Dead Code
@@ -1409,7 +1383,6 @@ name: dead-code
 description: Flags symbols with no inbound callers
 probes:
   - callers
-severity: error
 ---
 
 # Dead Code
@@ -1428,7 +1401,6 @@ severity: error
         let content = r#"---
 name: data-driven
 description: Flags hardcoded literals
-severity: warn
 ---
 
 # Data Driven
@@ -1451,7 +1423,6 @@ description: Critical security validations
 trigger: PostToolUse
 probes:
   - duplicates
-severity: error
 ---
 
 # Security Rules

@@ -1,7 +1,6 @@
 ---
 name: naming-consistency
 description: Check that naming conventions match existing codebase patterns
-severity: warn
 ---
 
 # Naming Consistency Validator

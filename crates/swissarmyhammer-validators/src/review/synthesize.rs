@@ -787,7 +787,6 @@ mod tests {
     fn validator_work(name: &str, files: Vec<FileWork>) -> ValidatorWork {
         ValidatorWork {
             validator_name: name.to_string(),
-            severity: crate::validators::Severity::Warn,
             rules: vec![],
             probes: vec![],
             files,

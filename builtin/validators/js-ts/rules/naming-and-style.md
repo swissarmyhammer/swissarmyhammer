@@ -1,7 +1,6 @@
 ---
 name: naming-and-style
 description: No abbreviations, kebab-case filenames, for...of over forEach, no reduce
-severity: warn
 ---
 
 # JavaScript/TypeScript Naming and Style

@@ -11,7 +11,6 @@
 //! ---
 //! name: no-secrets
 //! description: Detect hardcoded secrets in code
-//! severity: error
 //! match:
 //!   tools: [Write, Edit]
 //!   files: ["*.ts", "*.js"]
@@ -52,7 +51,7 @@
 //! let matching = loader.matching(&ctx);
 //!
 //! for validator in matching {
-//!     println!("{}: {} ({})", validator.name(), validator.description(), validator.severity());
+//!     println!("{}: {}", validator.name(), validator.description());
 //! }
 //! ```
 
@@ -76,9 +75,8 @@ pub use pool::{
 };
 pub use types::{
     compile_glob_patterns, matches_any_pattern, ExecutedRuleSet, ExecutedValidator, MatchContext,
-    Rule, RuleFrontmatter, RuleResult, RuleSet, RuleSetManifest, RuleSetMetadata, Severity,
-    Validator, ValidatorFrontmatter, ValidatorMatch, ValidatorResult, ValidatorSource,
-    GLOB_MATCH_OPTIONS,
+    Rule, RuleFrontmatter, RuleResult, RuleSet, RuleSetManifest, RuleSetMetadata, Validator,
+    ValidatorFrontmatter, ValidatorMatch, ValidatorResult, ValidatorSource, GLOB_MATCH_OPTIONS,
 };
 
 /// Adapter that allows validators to be used as Liquid template partials.

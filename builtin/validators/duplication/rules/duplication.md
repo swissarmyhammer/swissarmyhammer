@@ -1,7 +1,6 @@
 ---
 name: duplication
 description: Detect verbatim and near-verbatim copied blocks
-severity: error
 ---
 
 # Duplication Validator

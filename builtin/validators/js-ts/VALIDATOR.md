@@ -12,7 +12,6 @@ match:
     - "**/*.jsx"
     - "**/*.ts"
     - "**/*.tsx"
-severity: warn
 ---
 
 # JavaScript/TypeScript Review Validator

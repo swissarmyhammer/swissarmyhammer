@@ -1,7 +1,6 @@
 ---
 name: riverpod-providers
 description: Top-level final providers, ref.watch in build, ref.read in callbacks
-severity: warn
 ---
 
 # Dart/Flutter Riverpod Providers

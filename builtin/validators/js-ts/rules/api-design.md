@@ -1,7 +1,6 @@
 ---
 name: api-design
 description: Default export for primary function, options objects, undefined over null
-severity: warn
 ---
 
 # JavaScript/TypeScript API Design

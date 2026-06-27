@@ -9,7 +9,6 @@ metadata:
 match:
   files:
     - "**/*.py"
-severity: warn
 ---
 
 # Python Review Validator

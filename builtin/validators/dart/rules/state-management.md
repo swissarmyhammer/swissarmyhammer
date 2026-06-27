@@ -1,7 +1,6 @@
 ---
 name: state-management
 description: Notifier/AsyncNotifier, AsyncValue.guard, valueOrNull, autoDispose default
-severity: warn
 ---
 
 # Dart/Flutter State Management

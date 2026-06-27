@@ -1,7 +1,6 @@
 ---
 name: documentation
 description: Doc comments on public items, examples use ?, document panics and safety
-severity: warn
 ---
 
 # Rust Documentation

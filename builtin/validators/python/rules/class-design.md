@@ -1,7 +1,6 @@
 ---
 name: class-design
 description: attrs/dataclasses over boilerplate, illegal states unrepresentable, composition
-severity: warn
 ---
 
 # Python Class Design

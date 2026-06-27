@@ -1,7 +1,6 @@
 ---
 name: logging
 description: Structured logging only, log to stdout, JSON in production
-severity: warn
 ---
 
 # Python Logging

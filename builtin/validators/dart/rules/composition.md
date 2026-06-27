@@ -1,7 +1,6 @@
 ---
 name: composition
 description: HookWidget over StatefulWidget, extract custom hooks, unconditional hook calls
-severity: warn
 ---
 
 # Dart/Flutter Composition
