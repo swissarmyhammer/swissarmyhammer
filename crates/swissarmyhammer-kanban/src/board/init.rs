@@ -529,7 +529,7 @@ mod tests {
         assert!(result["columns"].is_array());
         let columns = result["columns"].as_array().unwrap();
         assert_eq!(columns.len(), 4); // To Do, Doing, Review, Done
-        // Verify column IDs are present
+                                      // Verify column IDs are present
         for col in columns {
             assert!(col["id"].is_string(), "Column should have id field");
         }

@@ -1470,9 +1470,7 @@ async fn undo_column_reorder_restores_original_order() {
     // Snapshot every column's `order` field, keyed by id and sorted by id, so
     // the assertions track undo *grouping* rather than the exact default
     // column set.
-    async fn orders_by_id(
-        ectx: &Arc<swissarmyhammer_entity::EntityContext>,
-    ) -> Vec<(String, u64)> {
+    async fn orders_by_id(ectx: &Arc<swissarmyhammer_entity::EntityContext>) -> Vec<(String, u64)> {
         let mut orders: Vec<(String, u64)> = ectx
             .list("column")
             .await
