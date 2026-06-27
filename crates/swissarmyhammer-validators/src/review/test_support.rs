@@ -969,16 +969,13 @@ where
 }
 
 /// A findings array as an agent would emit it, fenced in prose.
-pub(crate) fn findings_json(
-    file: &str,
-    line: u32,
-    rule: &str,
-    severity: &str,
-    claim: &str,
-) -> String {
+///
+/// Binary pass/fail: a finding carries no severity field, matching the fan-out
+/// output contract.
+pub(crate) fn findings_json(file: &str, line: u32, rule: &str, claim: &str) -> String {
     format!(
         "Here are my findings:\n\n```json\n[{{\"file\":\"{file}\",\"line\":{line},\
-         \"validator\":\"ignored-by-agent\",\"rule\":\"{rule}\",\"severity\":\"{severity}\",\
+         \"validator\":\"ignored-by-agent\",\"rule\":\"{rule}\",\
          \"claim\":\"{claim}\",\"evidence\":\"per `duplicates`: 0.94\",\
          \"suggestion\":\"extract a helper\"}}]\n```\n"
     )

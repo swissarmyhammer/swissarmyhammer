@@ -74,7 +74,7 @@ use crate::review::scope::{FileWork, ValidatorWork, WorkList};
 use crate::review::types::{parse_findings, Finding};
 use crate::validators::{
     AgentPool, ForkAttachment, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult,
-    Severity, ValidatorLoader,
+    ValidatorLoader,
 };
 use agent_client_protocol_extras::SessionStateStatusResponse;
 
@@ -787,7 +787,7 @@ pub fn render_run_prime(work: &WorkList) -> String {
 
 /// Render the per-validator suffix a forked session is prompted with: the
 /// validator header, mandate, the files this validator must focus on, every one
-/// of the validator's rule bodies, the severity default, and the output contract.
+/// of the validator's rule bodies, and the output contract.
 /// The files' contents are already in the fork's inherited prime; only their
 /// paths are named here so the validator stays scoped to its matched files (not
 /// every file in the prime), without re-sending any diff.
@@ -809,12 +809,6 @@ pub fn render_validator_suffix(validator: &ValidatorWork, ruleset: &RuleSet) -> 
         out.push_str(rule.body.trim());
         out.push_str("\n\n");
     }
-
-    let _ = writeln!(
-        out,
-        "## Default severity\n\nUnless a rule states otherwise, findings default to severity `{}`.\n",
-        severity_default(validator.severity)
-    );
 
     out.push_str(OUTPUT_CONTRACT);
     out.push('\n');
@@ -846,17 +840,6 @@ pub fn render_file_payload(files: &[FileWork]) -> String {
         render_file_block(&mut out, file);
     }
     out
-}
-
-/// The validator's default severity as the `blocker`/`warning`/`nit` word the
-/// [`Finding`] severity field uses, so the contract speaks the agent's output
-/// vocabulary rather than the loader's internal `info`/`warn`/`error`.
-fn severity_default(severity: Severity) -> &'static str {
-    match severity {
-        Severity::Error => "blocker",
-        Severity::Warn => "warning",
-        Severity::Info => "nit",
-    }
 }
 
 /// The finding output contract, shared verbatim by every fan-out prompt.
@@ -895,7 +878,6 @@ Each finding is one object with these fields:
 - `file`: the path of the file the finding is about.
 - `line`: the 1-based line number the finding points at.
 - `rule`: which rule of this validator fired.
-- `severity`: one of `blocker`, `warning`, `nit`.
 - `claim`: what is wrong AND why it matters — one concern per finding.
 - `evidence`: the proof the issue is real — cite the injected probe result \
 (e.g. \"per `duplicates`: 0.94 at `bar.rs:88`\") or a `file:line` citation.
@@ -976,7 +958,7 @@ mod tests {
     use crate::validators::types::{
         Rule, RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch,
     };
-    use crate::validators::{PoolConfig, ValidatorLoader, ValidatorSource};
+    use crate::validators::{PoolConfig, Severity, ValidatorLoader, ValidatorSource};
     use claude_agent::protocol_translator::CacheUsage;
 
     // ---- fixtures --------------------------------------------------------
@@ -1173,8 +1155,8 @@ mod tests {
         assert!(prompt.contains("`claim`"), "{prompt}");
         assert!(prompt.contains("`evidence`"), "{prompt}");
         assert!(prompt.contains("`suggestion`"), "{prompt}");
-        // Severity default rendered from the validator severity (warn → warning).
-        assert!(prompt.contains("severity `warning`"), "{prompt}");
+        // Binary pass/fail: the contract carries no severity field at all.
+        assert!(!prompt.contains("`severity`"), "{prompt}");
     }
 
     #[test]
@@ -1400,13 +1382,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         );
     }
 
-    #[test]
-    fn severity_default_maps_to_finding_vocabulary() {
-        assert_eq!(severity_default(Severity::Error), "blocker");
-        assert_eq!(severity_default(Severity::Warn), "warning");
-        assert_eq!(severity_default(Severity::Info), "nit");
-    }
-
     // ---- orchestrator tests (scripted mock agent) ------------------------
 
     #[tokio::test]
@@ -1449,7 +1424,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "ra",
-                    "warning",
                     "dup in a",
                 )),
             ),
@@ -1459,7 +1433,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/b.rs",
                     TEST_FINDING_LINE,
                     "rb",
-                    "warning",
                     "dup in b",
                 )),
             ),
@@ -1649,7 +1622,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                 "src/f0.rs",
                 TEST_FINDING_LINE,
                 "r1",
-                "warning",
                 "warm finding",
             )),
         )]);
@@ -1798,7 +1770,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "r",
-                    "warning",
                     "found despite fork failure",
                 )),
             )],
@@ -1861,7 +1832,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/b.rs",
                     TEST_FINDING_LINE,
                     "r",
-                    "warning",
                     "found without forks",
                 )),
             )],
@@ -1919,7 +1889,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "r",
-                    "warning",
                     "cold but correct",
                 )),
             )],
@@ -1967,7 +1936,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "r",
-                    "warning",
                     "warm on claude",
                 )),
             )],
@@ -2137,7 +2105,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "good-rule",
-                    "warning",
                     "real issue",
                 )),
             ),

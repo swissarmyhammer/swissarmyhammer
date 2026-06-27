@@ -1,17 +1,17 @@
-//! Engine stage 4 — synthesize: dedup, severity-rank, render the dated checklist.
+//! Engine stage 4 — synthesize: dedup, order, render the dated checklist.
 //!
 //! This is the final, deterministic, LLM-free stage and the pipeline's single
 //! barrier. [`run_review`] drives stages 1–3 to completion — fan-out and verify
 //! both drain the shared [`AgentPool`](crate::validators::AgentPool) by awaiting
 //! every task they submit — then hands the resulting `Vec<`[`VerifiedFinding`]`>`
-//! to [`synthesize`], which turns it into the deduped, severity-ranked
-//! [`ReviewReport`].
+//! to [`synthesize`], which turns it into the deduped, ordered [`ReviewReport`].
 //!
 //! # What synthesis does
 //!
-//! [`synthesize`] is pure and clock-free: the timestamp is an **input**, never
-//! read inside the engine, so the same findings always render the same report.
-//! It:
+//! Review is a **binary pass/fail** model: a confirmed finding is a failure,
+//! full stop — there is no graded severity. [`synthesize`] is pure and
+//! clock-free: the timestamp is an **input**, never read inside the engine, so
+//! the same findings always render the same report. It:
 //!
 //! 1. **Counts** confirmed vs refuted across every input finding.
 //! 2. **Drops refuted** findings ([`VerifiedFinding::confirmed`] is `false`).
@@ -19,9 +19,9 @@
 //!    (same `file`, `line`, `validator`, `rule`, and byte-identical `claim`).
 //!    There is no fuzzy/similarity matching, and findings from *different*
 //!    validators on the same `file:line` are distinct lenses, never merged.
-//! 4. **Groups by severity** into Blockers / Warnings / Nits, ordering each
-//!    section by `file:line` so co-located concerns render together (grouping is
-//!    not merging — every surviving concern is its own checklist item).
+//! 4. **Orders** the surviving findings by `file:line` into ONE flat checklist
+//!    so co-located concerns render together (ordering is not merging — every
+//!    surviving concern is its own checklist item).
 //! 5. **Renders** the dated GFM section in the exact shape the review skill
 //!    already writes onto kanban tasks (`builtin/skills/review/SKILL.md` step 8),
 //!    so the existing task-history parsing keeps working.
@@ -36,7 +36,7 @@ use rusqlite::Connection;
 use crate::error::AvpError;
 use crate::review::fleet::{run_fleet, FleetConfig, FleetOutcome};
 use crate::review::scope::{scope_review, Scope, WorkList};
-use crate::review::types::{Finding, Severity, VerifiedFinding};
+use crate::review::types::{Finding, VerifiedFinding};
 use crate::review::verify::{verify_findings, Candidate};
 use crate::validators::{AgentPool, ValidatorLoader};
 
@@ -71,15 +71,14 @@ impl From<&FleetOutcome> for FleetTally {
     }
 }
 
-/// The per-severity and per-verdict tallies a [`ReviewReport`] carries.
+/// The per-verdict tallies a [`ReviewReport`] carries.
+///
+/// Review is binary pass/fail — there is no graded severity — so the rendered
+/// failures are a single `findings` count, not a per-tier breakdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ReviewCounts {
-    /// Confirmed blocker findings rendered under `### Blockers`.
-    pub blockers: usize,
-    /// Confirmed warning findings rendered under `### Warnings`.
-    pub warnings: usize,
-    /// Confirmed nit findings rendered under `### Nits`.
-    pub nits: usize,
+    /// Confirmed findings rendered into the checklist (post-dedup).
+    pub findings: usize,
     /// Findings the verifier confirmed (across every input, pre-dedup).
     pub confirmed: usize,
     /// Findings the verifier refuted (across every input).
@@ -97,16 +96,16 @@ pub struct ReviewReport {
     /// The dated GFM `## Review Findings (...)` section, ready to append to a
     /// kanban task's description verbatim.
     pub markdown: String,
-    /// The per-severity / per-verdict counts for the tool/skill summary.
+    /// The per-verdict counts for the tool/skill summary.
     pub counts: ReviewCounts,
 }
 
-/// Synthesize verified findings into the dated, deduped, severity-ranked report.
+/// Synthesize verified findings into the dated, deduped, ordered report.
 ///
 /// Pure and deterministic: `now` is the already-formatted local timestamp the
 /// caller read from the clock (`YYYY-MM-DD HH:MM`), rendered verbatim into the
 /// section header so the engine itself never reads time. See the module docs for
-/// the full drop/dedup/group/render contract.
+/// the full drop/dedup/order/render contract.
 ///
 /// `tally` is the fan-out task outcome from [`run_fleet`]. When any task failed,
 /// a clearly visible warning line is rendered directly under the dated header so
@@ -149,37 +148,24 @@ pub fn synthesize(verified: Vec<VerifiedFinding>, tally: &FleetTally, now: &str)
         let _ = writeln!(markdown, "\nNothing in scope to review.");
     }
 
-    for (severity, heading) in SECTIONS {
-        let mut section: Vec<&VerifiedFinding> = kept
-            .iter()
-            .filter(|v| v.finding.severity == *severity)
-            .collect();
-        if section.is_empty() {
-            continue;
-        }
-        // Group by `file:line` so co-located findings render together; stable so
-        // exact-input order is otherwise preserved.
-        section.sort_by(|a, b| {
-            (a.finding.file.as_str(), a.finding.line)
-                .cmp(&(b.finding.file.as_str(), b.finding.line))
-        });
+    // Order the surviving findings into ONE flat checklist by `file:line` so
+    // co-located concerns render together; the sort is stable so exact-input
+    // order is otherwise preserved.
+    let mut ordered: Vec<&VerifiedFinding> = kept.iter().collect();
+    ordered.sort_by(|a, b| {
+        (a.finding.file.as_str(), a.finding.line).cmp(&(b.finding.file.as_str(), b.finding.line))
+    });
+    counts.findings = ordered.len();
 
-        match severity {
-            Severity::Blocker => counts.blockers = section.len(),
-            Severity::Warning => counts.warnings = section.len(),
-            Severity::Nit => counts.nits = section.len(),
-        }
-
-        let _ = write!(markdown, "\n### {heading}\n");
-        for verified in section {
+    if !ordered.is_empty() {
+        markdown.push('\n');
+        for verified in ordered {
             let _ = writeln!(markdown, "{}", render_item(&verified.finding));
         }
     }
 
     tracing::info!(
-        blockers = counts.blockers,
-        warnings = counts.warnings,
-        nits = counts.nits,
+        findings = counts.findings,
         confirmed = counts.confirmed,
         refuted = counts.refuted,
         tasks_attempted = counts.tasks_attempted,
@@ -189,13 +175,6 @@ pub fn synthesize(verified: Vec<VerifiedFinding>, tally: &FleetTally, now: &str)
 
     ReviewReport { markdown, counts }
 }
-
-/// The severity sections in render order, each paired with its GFM heading.
-const SECTIONS: &[(Severity, &str)] = &[
-    (Severity::Blocker, "Blockers"),
-    (Severity::Warning, "Warnings"),
-    (Severity::Nit, "Nits"),
-];
 
 /// Collapse only *exact* repeats, preserving first-seen order.
 ///
@@ -265,7 +244,7 @@ fn sentence(text: &str) -> String {
 ///    context ([`build_candidates`]) and submit it to the **same** `pool` for the
 ///    adversarial refute pass. Awaiting it drains every verify task.
 /// 4. [`synthesize`] — turn the surviving [`VerifiedFinding`]s into the dated,
-///    deduped, severity-ranked [`ReviewReport`].
+///    deduped, ordered [`ReviewReport`].
 ///
 /// Because steps 2 and 3 each await all the tasks they submit before returning,
 /// the moment [`verify_findings`] resolves the shared pool has fully drained —
@@ -338,7 +317,7 @@ pub async fn run_review(
         crate::review::fleet::unpin_prefix_session(guard).await;
     }
 
-    // Stage 4: synthesize the deduped, severity-ranked, dated report. The tally
+    // Stage 4: synthesize the deduped, ordered, dated report. The tally
     // rides into the report so the tool boundary can flag/fail an incomplete run;
     // the engine itself stays a pure data barrier and never errors on it.
     let report = synthesize(outcome.verified, &tally, now);
@@ -412,7 +391,6 @@ mod tests {
         line: u32,
         validator: &str,
         rule: Option<&str>,
-        severity: Severity,
         claim: &str,
         suggestion: Option<&str>,
     ) -> VerifiedFinding {
@@ -422,7 +400,6 @@ mod tests {
                 line,
                 validator: validator.to_string(),
                 rule: rule.map(String::from),
-                severity,
                 claim: claim.to_string(),
                 evidence: "cited evidence".to_string(),
                 suggestion: suggestion.map(String::from),
@@ -441,7 +418,6 @@ mod tests {
                 line,
                 validator: validator.to_string(),
                 rule: None,
-                severity: Severity::Blocker,
                 claim: claim.to_string(),
                 evidence: "cited evidence".to_string(),
                 suggestion: None,
@@ -531,14 +507,13 @@ mod tests {
 
     #[test]
     #[tracing_test::traced_test]
-    fn synthesize_logs_the_final_severity_and_verdict_counts() {
+    fn synthesize_logs_the_final_finding_and_verdict_counts() {
         let verified = vec![
             confirmed(
                 "src/a.rs",
                 42,
                 "dead-code",
                 Some("no-unused"),
-                Severity::Blocker,
                 "`foo` is never called",
                 Some("Delete it"),
             ),
@@ -547,9 +522,9 @@ mod tests {
 
         let _report = synthesize(verified, &FleetTally::default(), NOW);
 
-        // The synthesis summary reports the per-severity + per-verdict tallies.
+        // The synthesis summary reports the rendered-finding + per-verdict tallies.
         assert!(logs_contain("review synthesis complete"));
-        assert!(logs_contain("blockers=1"));
+        assert!(logs_contain("findings=1"));
         assert!(logs_contain("confirmed=1"));
         assert!(logs_contain("refuted=1"));
     }
@@ -562,7 +537,6 @@ mod tests {
                 42,
                 "dead-code",
                 Some("no-unused"),
-                Severity::Blocker,
                 "`foo` is never called",
                 Some("Delete it"),
             ),
@@ -584,10 +558,10 @@ mod tests {
             "{}",
             report.markdown
         );
-        // Counts reflect both verdicts; only the confirmed blocker is rendered.
+        // Counts reflect both verdicts; only the confirmed finding is rendered.
         assert_eq!(report.counts.confirmed, 1);
         assert_eq!(report.counts.refuted, 1);
-        assert_eq!(report.counts.blockers, 1);
+        assert_eq!(report.counts.findings, 1);
     }
 
     #[test]
@@ -598,7 +572,6 @@ mod tests {
             42,
             "dead-code",
             Some("no-unused"),
-            Severity::Blocker,
             "`foo` is never called",
             Some("Delete it"),
         );
@@ -611,13 +584,13 @@ mod tests {
             "exact repeats collapse: {}",
             report.markdown
         );
-        assert_eq!(report.counts.blockers, 1);
+        assert_eq!(report.counts.findings, 1);
         // Both were confirmed, so the confirmed count is the pre-dedup total.
         assert_eq!(report.counts.confirmed, 2);
     }
 
     #[test]
-    fn keeps_two_validators_on_the_same_file_line_and_groups_them() {
+    fn keeps_two_validators_on_the_same_file_line_and_orders_them() {
         // duplication and dead-code both flag src/a.rs:42 — distinct lenses, both
         // kept, and rendered adjacently because they share a file:line.
         let dup = confirmed(
@@ -625,7 +598,6 @@ mod tests {
             42,
             "duplication",
             Some("no-copy-paste"),
-            Severity::Blocker,
             "Duplicated block also lives in b.rs",
             Some("Extract a shared helper"),
         );
@@ -634,7 +606,6 @@ mod tests {
             42,
             "dead-code",
             Some("no-unused"),
-            Severity::Blocker,
             "`foo` is never called",
             Some("Delete it"),
         );
@@ -651,9 +622,9 @@ mod tests {
             "{}",
             report.markdown
         );
-        assert_eq!(report.counts.blockers, 2);
+        assert_eq!(report.counts.findings, 2);
 
-        // They render adjacently under the same severity (grouped by file:line).
+        // They render adjacently because they share a file:line.
         let both = report.markdown.matches("`src/a.rs:42`").count();
         assert_eq!(
             both, 2,
@@ -663,57 +634,46 @@ mod tests {
     }
 
     #[test]
-    fn groups_by_severity_and_omits_empty_sections() {
+    fn renders_one_flat_findings_section_with_no_severity_grouping() {
+        // Review is binary pass/fail: every confirmed finding renders as one flat
+        // checklist item ordered by file:line — there are NO severity subsections.
         let verified = vec![
-            confirmed(
-                "src/a.rs",
-                10,
-                "dead-code",
-                None,
-                Severity::Blocker,
-                "Blocker concern",
-                None,
-            ),
-            confirmed(
-                "src/b.rs",
-                20,
-                "style",
-                None,
-                Severity::Nit,
-                "Nit concern",
-                None,
-            ),
+            confirmed("src/a.rs", 10, "dead-code", None, "First concern", None),
+            confirmed("src/b.rs", 20, "style", None, "Second concern", None),
         ];
         let report = synthesize(verified, &FleetTally::default(), NOW);
 
         assert!(
-            report.markdown.contains("### Blockers"),
+            !report.markdown.contains("### Blockers")
+                && !report.markdown.contains("### Warnings")
+                && !report.markdown.contains("### Nits"),
+            "no severity sections may render: {}",
+            report.markdown
+        );
+        assert!(
+            report.markdown.contains("- [ ] `src/a.rs:10`"),
             "{}",
             report.markdown
         );
-        assert!(report.markdown.contains("### Nits"), "{}", report.markdown);
-        // No warnings → the section is omitted entirely.
         assert!(
-            !report.markdown.contains("### Warnings"),
-            "empty severity sections are omitted: {}",
+            report.markdown.contains("- [ ] `src/b.rs:20`"),
+            "{}",
             report.markdown
         );
-        assert_eq!(report.counts.blockers, 1);
-        assert_eq!(report.counts.warnings, 0);
-        assert_eq!(report.counts.nits, 1);
+        assert_eq!(report.counts.findings, 2);
     }
 
     #[test]
     fn renders_the_exact_skill_section_format() {
         // A full snapshot against the documented `builtin/skills/review/SKILL.md`
-        // step-8 layout: header, severity subsections, one `- [ ]` item each.
+        // step-8 layout: the dated header then ONE flat checklist ordered by
+        // `file:line` — no severity subsections.
         let verified = vec![
             confirmed(
                 "path/to/file.rs",
                 42,
                 "dead-code",
                 Some("no-unused"),
-                Severity::Blocker,
                 "What's wrong. Why it matters",
                 Some("Suggested fix"),
             ),
@@ -722,68 +682,30 @@ mod tests {
                 10,
                 "perf",
                 None,
-                Severity::Warning,
                 "What's wrong and suggested fix",
                 None,
             ),
-            confirmed(
-                "path/to/file.rs",
-                88,
-                "style",
-                None,
-                Severity::Nit,
-                "Minor issue",
-                None,
-            ),
+            confirmed("path/to/file.rs", 88, "style", None, "Minor issue", None),
         ];
         let report = synthesize(verified, &FleetTally::default(), NOW);
 
         let expected = "\
 ## Review Findings (2026-04-11 13:08)
 
-### Blockers
-- [ ] `path/to/file.rs:42` — What's wrong. Why it matters. Suggested fix.
-
-### Warnings
 - [ ] `path/to/file.rs:10` — What's wrong and suggested fix.
-
-### Nits
+- [ ] `path/to/file.rs:42` — What's wrong. Why it matters. Suggested fix.
 - [ ] `path/to/file.rs:88` — Minor issue.
 ";
         assert_eq!(report.markdown, expected);
     }
 
     #[test]
-    fn orders_findings_by_file_line_within_a_severity() {
-        // Submitted out of order; rendered grouped/ordered by file:line.
+    fn orders_findings_by_file_line() {
+        // Submitted out of order; rendered ordered by file:line.
         let verified = vec![
-            confirmed(
-                "src/z.rs",
-                5,
-                "v",
-                None,
-                Severity::Warning,
-                "z concern",
-                None,
-            ),
-            confirmed(
-                "src/a.rs",
-                90,
-                "v",
-                None,
-                Severity::Warning,
-                "a90 concern",
-                None,
-            ),
-            confirmed(
-                "src/a.rs",
-                9,
-                "v",
-                None,
-                Severity::Warning,
-                "a9 concern",
-                None,
-            ),
+            confirmed("src/z.rs", 5, "v", None, "z concern", None),
+            confirmed("src/a.rs", 90, "v", None, "a90 concern", None),
+            confirmed("src/a.rs", 9, "v", None, "a9 concern", None),
         ];
         let report = synthesize(verified, &FleetTally::default(), NOW);
 
@@ -804,7 +726,6 @@ mod tests {
             line,
             validator: validator.to_string(),
             rule: None,
-            severity: Severity::Warning,
             claim: claim.to_string(),
             evidence: "e".to_string(),
             suggestion: None,

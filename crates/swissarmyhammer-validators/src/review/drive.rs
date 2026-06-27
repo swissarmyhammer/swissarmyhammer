@@ -508,7 +508,6 @@ mod tests {
                 "# Validator: deduplicate".to_string(),
                 ScriptedReply::Text(findings_json(
                     "src/lib.rs",
-                    "blocker",
                     "compute duplicates old_compute",
                 )),
             ),
@@ -521,8 +520,8 @@ mod tests {
 
     /// A findings array keyed the way drive's scenarios need it: rule `r`,
     /// line 1 (the report assertions check `src/lib.rs:1`).
-    fn findings_json(file: &str, severity: &str, claim: &str) -> String {
-        shared_findings_json(file, 1, "r", severity, claim)
+    fn findings_json(file: &str, claim: &str) -> String {
+        shared_findings_json(file, 1, "r", claim)
     }
 
     /// A confirming verify verdict (the verify stage asks the agent to confirm
@@ -577,7 +576,7 @@ mod tests {
             report.markdown
         );
         assert!(
-            report.markdown.contains("### Blockers"),
+            report.markdown.contains("- [ ] `src/lib.rs:1`"),
             "the confirmed blocker finding must be rendered: {}",
             report.markdown
         );
@@ -586,7 +585,7 @@ mod tests {
             "the finding's file:line must appear: {}",
             report.markdown
         );
-        assert_eq!(report.counts.blockers, 1);
+        assert_eq!(report.counts.findings, 1);
         assert_eq!(report.counts.confirmed, 1);
     }
 
@@ -636,7 +635,7 @@ mod tests {
 
         // ---- pass 1: review, record the baseline, write the gitignore --------
         let first = run_once(&repo, &loader, &conn, &embedder).await;
-        assert_eq!(first.counts.blockers, 1, "the first pass finds the dup");
+        assert_eq!(first.counts.findings, 1, "the first pass finds the dup");
 
         // The baseline was recorded: an entry exists for the reviewed file, and the
         // hash dir's gitignore was lazily written.
@@ -652,7 +651,7 @@ mod tests {
         // ---- pass 2: no edits → zero survivors → clean short-circuit --------
         let second = run_once(&repo, &loader, &conn, &embedder).await;
         assert_eq!(
-            second.counts.blockers, 0,
+            second.counts.findings, 0,
             "an unchanged second pass finds nothing (the file was subtracted)"
         );
         assert_eq!(
@@ -743,11 +742,11 @@ mod tests {
 
         let report = report.expect("pipeline should produce a report");
         assert!(
-            report.markdown.contains("### Blockers"),
+            report.markdown.contains("- [ ] `src/lib.rs:1`"),
             "the confirmed blocker finding must be rendered after the permission round-trips: {}",
             report.markdown
         );
-        assert_eq!(report.counts.blockers, 1);
+        assert_eq!(report.counts.findings, 1);
         assert_eq!(report.counts.confirmed, 1);
     }
 
@@ -876,7 +875,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn notification_rx_is_the_pools_single_collected_stream() {
         let session = agent_client_protocol::schema::SessionId::new("sess-single".to_string());
-        let reply = findings_json("src/lib.rs", "blocker", "compute duplicates old_compute");
+        let reply = findings_json("src/lib.rs", "compute duplicates old_compute");
         let stream = chunked_notifications(&session, &reply, 6);
 
         // --- (1) the driver's actual single-feed path collects the reply once ---
@@ -1028,7 +1027,7 @@ mod tests {
 
                 let reply = if text.contains("# Validator: deduplicate") {
                     self.keep_alive_until_late_answer(&request.session_id).await;
-                    findings_json("src/lib.rs", "blocker", "compute duplicates old_compute")
+                    findings_json("src/lib.rs", "compute duplicates old_compute")
                 } else if text.contains("compute duplicates old_compute") {
                     confirm_json()
                 } else {
@@ -1199,11 +1198,11 @@ mod tests {
              not the whole review connection",
         );
         assert!(
-            report.markdown.contains("### Blockers"),
+            report.markdown.contains("- [ ] `src/lib.rs:1`"),
             "the live validator's confirmed blocker must still be rendered: {}",
             report.markdown
         );
-        assert_eq!(report.counts.blockers, 1);
+        assert_eq!(report.counts.findings, 1);
         assert_eq!(report.counts.confirmed, 1);
     }
 }

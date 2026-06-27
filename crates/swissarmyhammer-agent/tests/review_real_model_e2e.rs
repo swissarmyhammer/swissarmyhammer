@@ -214,16 +214,16 @@ async fn review_runs_over_acp_against_a_real_local_model() {
         report.markdown
     );
 
-    // The counts must be internally consistent: the per-severity confirmed
-    // tallies sum to no more than the total confirmed count. `counts.confirmed`
-    // is the pre-dedup confirmed count, while the per-severity tallies are taken
-    // over the set returned by `dedup_exact`, which collapses exact-duplicate
-    // confirmed findings. A nondeterministic 0.6B model can emit identical
-    // confirmed findings on a tiny diff, so the kept (deduped) findings never
-    // exceed the confirmed count — they may be strictly fewer.
+    // The counts must be internally consistent: the rendered-findings count is
+    // no more than the total confirmed count. `counts.confirmed` is the pre-dedup
+    // confirmed count, while `counts.findings` is taken over the set returned by
+    // `dedup_exact`, which collapses exact-duplicate confirmed findings. A
+    // nondeterministic 0.6B model can emit identical confirmed findings on a tiny
+    // diff, so the kept (deduped) findings never exceed the confirmed count —
+    // they may be strictly fewer.
     let counts = &report.counts;
     assert!(
-        counts.blockers + counts.warnings + counts.nits <= counts.confirmed,
-        "the per-severity tallies must not exceed the confirmed findings: {counts:?}"
+        counts.findings <= counts.confirmed,
+        "the rendered findings count must not exceed the confirmed findings: {counts:?}"
     );
 }

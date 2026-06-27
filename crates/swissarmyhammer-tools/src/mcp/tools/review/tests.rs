@@ -534,10 +534,10 @@ async fn review_working_through_the_registered_tool_flags_a_planted_duplicate() 
 
     let markdown = parsed["markdown"].as_str().unwrap();
     assert!(
-        markdown.contains("### Blockers") && markdown.contains("src/lib.rs:1"),
+        markdown.contains("- [ ] `src/lib.rs:1`"),
         "the confirmed blocker must be rendered, got: {markdown}"
     );
-    assert_eq!(parsed["counts"]["blockers"], json!(1));
+    assert_eq!(parsed["counts"]["findings"], json!(1));
     assert_eq!(parsed["counts"]["confirmed"], json!(1));
 }
 
@@ -580,7 +580,6 @@ fn planted_duplicate_fixture(repo: &TestRepo) -> AgentFactory {
             "# Validator: deduplicate".to_string(),
             ScriptedReply::Text(findings_json(
                 "src/lib.rs",
-                "blocker",
                 "compute duplicates old_compute",
             )),
         ),
@@ -625,10 +624,10 @@ async fn mcp_server_set_review_factories_runs_review_working_end_to_end() {
 
     let markdown = parsed["markdown"].as_str().unwrap();
     assert!(
-        markdown.contains("### Blockers") && markdown.contains("src/lib.rs:1"),
+        markdown.contains("- [ ] `src/lib.rs:1`"),
         "the confirmed blocker must be rendered through the server, got: {markdown}"
     );
-    assert_eq!(parsed["counts"]["blockers"], json!(1));
+    assert_eq!(parsed["counts"]["findings"], json!(1));
     assert_eq!(parsed["counts"]["confirmed"], json!(1));
 }
 
@@ -668,7 +667,7 @@ async fn review_tool_with_concurrency_pins_the_pool_worker_count() {
         .await
         .expect("review working dispatch with pinned concurrency");
     let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
-    assert_eq!(parsed["counts"]["blockers"], json!(1));
+    assert_eq!(parsed["counts"]["findings"], json!(1));
     assert_eq!(parsed["counts"]["confirmed"], json!(1));
 }
 
@@ -974,10 +973,10 @@ fn seed_on_disk_index(root: &Path, dup: &str) {
 
 /// A findings array as a fleet agent emits it (the `validator` field is tagged by
 /// the engine, but must be present for the finding to deserialize).
-fn findings_json(file: &str, severity: &str, claim: &str) -> String {
+fn findings_json(file: &str, claim: &str) -> String {
     format!(
         "```json\n[{{\"file\":\"{file}\",\"line\":1,\"validator\":\"agent-tagged\",\
-         \"rule\":\"r\",\"severity\":\"{severity}\",\"claim\":\"{claim}\",\
+         \"rule\":\"r\",\"claim\":\"{claim}\",\
          \"evidence\":\"per `duplicates`: 0.99\",\"suggestion\":\"extract a helper\"}}]\n```"
     )
 }

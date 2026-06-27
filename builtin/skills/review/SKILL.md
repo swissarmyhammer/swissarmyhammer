@@ -28,8 +28,8 @@ $ARGUMENTS
 
 The engine is op-dispatched (verb + noun). Each `review` op returns a `ReviewReport`:
 
-- `markdown` — a dated `## Review Findings (YYYY-MM-DD HH:MM)` section, organized by severity, already formatted as a GFM checklist. Write it onto the task verbatim.
-- `counts` — `{ blockers, warnings, nits, confirmed, refuted }`. Use it for the summary.
+- `markdown` — a dated `## Review Findings (YYYY-MM-DD HH:MM)` section: one flat GFM checklist ordered by `file:line`. Review is binary pass/fail — there is no graded severity. Write it onto the task verbatim.
+- `counts` — `{ findings, confirmed, refuted }`. Use it for the summary.
 
 | Op | Scope | When |
 |----|-------|------|
@@ -171,7 +171,7 @@ Never create one kanban task per finding. Findings = checklist items on a host t
 
 - **Mode**: task-mode (with id) or range-mode (with scope)
 - **Scope reviewed**: the op and its target (`review working`, `review sha HEAD~4..HEAD`, `review file src/auth.rs`)
-- **Counts**: from `counts` — by severity ("1 blocker, 3 warnings, 5 nits" or "clean")
+- **Counts**: from `counts` — the findings tally ("3 findings" or "clean")
 - **Outcome**: one of
   - task advanced to terminal column
   - findings appended to task `<id>`; remains in `review`
@@ -196,7 +196,7 @@ The column move is the verdict — no findings appended, history preserved.
 
 1. Ensure review column.
 2. `review` empty → range-mode. `{"op": "review sha", "sha": "HEAD~4..HEAD"}`.
-3. Engine returns `markdown` with 1 blocker + 2 nits and the matching `counts`.
+3. Engine returns `markdown` with 3 findings and the matching `counts`.
 4. Ensure `#review` tag.
 5. Create tracking task in `review` with `Scope: HEAD~4..HEAD` + the report's `markdown`.
 6. Tag it `review`.

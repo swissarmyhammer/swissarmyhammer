@@ -342,24 +342,23 @@ fn open_index_connection(repo_path: &Path) -> Result<Connection, String> {
 }
 
 /// The JSON shape returned for a `review file/working/sha` op: the rendered
-/// markdown plus the per-severity / per-verdict counts.
+/// markdown plus the per-verdict counts.
 #[derive(Debug, Serialize)]
 pub struct ReviewResponse {
     /// The dated GFM `## Review Findings (...)` section.
     pub markdown: String,
-    /// The per-severity / per-verdict tallies.
+    /// The per-verdict tallies.
     pub counts: ReviewCountsView,
 }
 
 /// The serializable view of the engine's review counts.
+///
+/// Review is binary pass/fail — there is no graded severity — so the rendered
+/// failures are a single `findings` count, not a per-tier breakdown.
 #[derive(Debug, Serialize)]
 pub struct ReviewCountsView {
-    /// Confirmed blocker findings.
-    pub blockers: usize,
-    /// Confirmed warning findings.
-    pub warnings: usize,
-    /// Confirmed nit findings.
-    pub nits: usize,
+    /// Confirmed findings rendered into the checklist (post-dedup).
+    pub findings: usize,
     /// Findings the verifier confirmed.
     pub confirmed: usize,
     /// Findings the verifier refuted.
@@ -376,9 +375,7 @@ impl From<ReviewReport> for ReviewResponse {
         ReviewResponse {
             markdown: report.markdown,
             counts: ReviewCountsView {
-                blockers: report.counts.blockers,
-                warnings: report.counts.warnings,
-                nits: report.counts.nits,
+                findings: report.counts.findings,
                 confirmed: report.counts.confirmed,
                 refuted: report.counts.refuted,
                 attempted: report.counts.tasks_attempted,
