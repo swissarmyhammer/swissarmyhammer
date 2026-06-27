@@ -252,20 +252,85 @@ pub async fn scope_review(
 
     // Group the diff's entities by file, and derive the probe change-set (every
     // changed entity across the whole diff) so probes run over the real diff.
+    let grouped = group_entities_by_file(diff.changes);
+
+    // Match validators per file via the shared `matching_rulesets` code path.
+    let matched = match_validators_and_files(&resolved.files, loader);
+
+    // Run probes ONCE over the whole change set with the union of every declared
+    // probe name. This is the N+M guarantee: each distinct `(file, probe)` is
+    // computed exactly once and the shared result fans out to every validator
+    // that declared it (the distribution below is a pure filter, never a re-run).
+    let probe_cache = run_probe_cache(
+        &matched.validators,
+        &grouped.change_entities,
+        conn,
+        embedder,
+    )
+    .await?;
+
+    // Pre-compute the bounded slice + changed symbols per file once (shared by
+    // every validator that reviews the same file).
+    let per_file = compute_per_file_facts(
+        &matched.matched_files,
+        &grouped.entities_by_file,
+        &resolved.after_content,
+    );
+
+    // Assemble the work-list: name-sorted validators, each carrying their matched
+    // files (path-sorted) with the shared facts + their probe subset.
+    let validator_work = assemble_validator_work(matched.validators, &per_file, &probe_cache);
+
+    log_scope_selection(&validator_work);
+
+    Ok(WorkList {
+        change_purpose: resolved.change_purpose,
+        validators: validator_work,
+    })
+}
+
+/// The semantic diff's entities, grouped by file, plus the flattened probe
+/// change-set — the two views [`scope_review`] needs from one pass over the diff.
+struct GroupedEntities {
+    /// One file path → its changed entities, the input to the per-file facts.
+    entities_by_file: BTreeMap<String, Vec<SemanticChange>>,
+    /// Every changed entity across the whole diff, as probe-runner inputs.
+    change_entities: Vec<ChangeEntry>,
+}
+
+/// Group the semantic diff's changes by file path, while flattening every changed
+/// entity into the probe runner's change-set so probes run over the real diff.
+fn group_entities_by_file(changes: Vec<SemanticChange>) -> GroupedEntities {
     let mut entities_by_file: BTreeMap<String, Vec<SemanticChange>> = BTreeMap::new();
     let mut change_entities: Vec<ChangeEntry> = Vec::new();
-    for change in diff.changes {
+    for change in changes {
         change_entities.push(to_probe_entry(&change));
         entities_by_file
             .entry(change.file_path.clone())
             .or_default()
             .push(change);
     }
+    GroupedEntities {
+        entities_by_file,
+        change_entities,
+    }
+}
 
-    // Match validators per file via the shared `matching_rulesets` code path.
+/// The validators matched against the scope's files, plus the set of files at
+/// least one validator matched.
+struct MatchedValidators {
+    /// Files that at least one validator matched (the per-file-facts key set).
+    matched_files: BTreeSet<String>,
+    /// Validator name → its accumulated match (severity, rules, probes, files).
+    validators: BTreeMap<String, MatchedValidator>,
+}
+
+/// Match every resolved file against the loader's validators via the shared
+/// `matching_rulesets` code path, accumulating each validator's matched files.
+fn match_validators_and_files(files: &[String], loader: &ValidatorLoader) -> MatchedValidators {
     let mut matched_files: BTreeSet<String> = BTreeSet::new();
     let mut validators: BTreeMap<String, MatchedValidator> = BTreeMap::new();
-    for file in &resolved.files {
+    for file in files {
         let ctx = MatchContext::new().with_file(file.clone());
         let rulesets = loader.matching_rulesets(&ctx);
         if rulesets.is_empty() {
@@ -280,19 +345,23 @@ pub async fn scope_review(
                 .insert(file.clone());
         }
     }
+    MatchedValidators {
+        matched_files,
+        validators,
+    }
+}
 
-    // Run probes ONCE over the whole change set with the union of every declared
-    // probe name. This is the N+M guarantee: each distinct `(file, probe)` is
-    // computed exactly once and the shared result fans out to every validator
-    // that declared it (the distribution below is a pure filter, never a re-run).
-    let probe_cache = run_probe_cache(&validators, &change_entities, conn, embedder).await?;
-
-    // Pre-compute the bounded slice + changed symbols per file once (shared by
-    // every validator that reviews the same file).
+/// Pre-compute the [`FileFacts`] (bounded slice, changed symbols, semantic diff)
+/// once per matched file — shared by every validator that reviews that file.
+fn compute_per_file_facts(
+    matched_files: &BTreeSet<String>,
+    entities_by_file: &BTreeMap<String, Vec<SemanticChange>>,
+    after_content: &BTreeMap<String, String>,
+) -> BTreeMap<String, FileFacts> {
     let mut per_file: BTreeMap<String, FileFacts> = BTreeMap::new();
-    for file in &matched_files {
+    for file in matched_files {
         let entities = entities_by_file.get(file).cloned().unwrap_or_default();
-        let after = resolved.after_content.get(file).map(String::as_str);
+        let after = after_content.get(file).map(String::as_str);
         let (source_slice, inlined_full) = inline_or_slice(after, &entities);
         per_file.insert(
             file.clone(),
@@ -304,9 +373,17 @@ pub async fn scope_review(
             },
         );
     }
+    per_file
+}
 
-    // Assemble the work-list: name-sorted validators, each carrying their matched
-    // files (path-sorted) with the shared facts + their probe subset.
+/// Assemble the final work-list: name-sorted validators, each carrying their
+/// matched files (path-sorted) with the shared per-file facts and the validator's
+/// probe subset selected from the shared `probe_cache`.
+fn assemble_validator_work(
+    validators: BTreeMap<String, MatchedValidator>,
+    per_file: &BTreeMap<String, FileFacts>,
+    probe_cache: &[ProbeResult],
+) -> Vec<ValidatorWork> {
     let mut validator_work: Vec<ValidatorWork> = validators
         .into_values()
         .map(|mv| {
@@ -322,7 +399,7 @@ pub async fn scope_review(
                         source_slice: facts.source_slice.clone(),
                         inlined_full: facts.inlined_full,
                         probe_results: select_probe_results(
-                            &probe_cache,
+                            probe_cache,
                             file,
                             &facts.changed_symbols,
                             &mv.probes,
@@ -341,13 +418,7 @@ pub async fn scope_review(
         })
         .collect();
     validator_work.sort_by(|a, b| a.validator_name.cmp(&b.validator_name));
-
-    log_scope_selection(&validator_work);
-
-    Ok(WorkList {
-        change_purpose: resolved.change_purpose,
-        validators: validator_work,
-    })
+    validator_work
 }
 
 /// Log the resolved review scope: an INFO summary naming the matched validators

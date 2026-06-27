@@ -87,18 +87,26 @@ fn resolve_qwen_test_config() -> ModelConfig {
         .unwrap_or_else(|e| panic!("test model `{MODEL_ID}` must parse to a ModelConfig: {e}"))
 }
 
+/// Lowercased substrings that mark an agent-build failure as a model
+/// *availability* problem — an HF rate-limit or an offline first-run download —
+/// rather than a wiring bug. Matched case-insensitively in
+/// [`is_model_unavailable`].
+const MODEL_UNAVAILABLE_PATTERNS: &[&str] = &[
+    "429",
+    "too many requests",
+    "rate limited",
+    "loadingfailed",
+    "failed to load",
+    "model loading failed",
+];
+
 /// Skip (return true) when the agent could not be built because the model was
 /// unavailable — an HF rate-limit or an offline first-run download. Mirrors the
 /// `is_model_unavailable` skip idiom across the real-model tests; on the
 /// model-cached GPU runner the model loads and the assertions always run.
 fn is_model_unavailable(message: &str) -> bool {
     let m = message.to_lowercase();
-    m.contains("429")
-        || m.contains("too many requests")
-        || m.contains("rate limited")
-        || m.contains("loadingfailed")
-        || m.contains("failed to load")
-        || m.contains("model loading failed")
+    MODEL_UNAVAILABLE_PATTERNS.iter().any(|p| m.contains(p))
 }
 
 /// The production review pipeline, driven over a real local model end-to-end:

@@ -456,9 +456,7 @@ impl McpTool for ReviewTool {
         args.remove("op");
 
         match op_str {
-            "review working" => {
-                self.execute_review(Scope::Working, &args, context).await
-            }
+            "review working" => self.execute_review(Scope::Working, &args, context).await,
             "review file" => {
                 let target = string_arg(&args, "path").ok_or_else(|| {
                     rmcp::ErrorData::invalid_params(
@@ -499,13 +497,20 @@ impl McpTool for ReviewTool {
                     .map_err(|e| rmcp::ErrorData::internal_error(e, None))?;
                 json_result(&response)
             }
-            other => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "Unknown operation '{other}'. Valid operations: 'review file', 'review working', \
-                     'review sha', 'list validators', 'get validator', 'check validators'"
-                ),
-                None,
-            )),
+            other => {
+                // The valid-op list is derived from `REVIEW_OPERATIONS` (the single
+                // source of truth) so a new op can never silently diverge from this
+                // message.
+                let valid_ops = REVIEW_OPERATIONS
+                    .iter()
+                    .map(|op| format!("'{}'", op.op_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(rmcp::ErrorData::invalid_params(
+                    format!("Unknown operation '{other}'. Valid operations: {valid_ops}"),
+                    None,
+                ))
+            }
         }
     }
 }
