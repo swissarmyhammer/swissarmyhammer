@@ -26,7 +26,6 @@ SLUG=$(echo "$REPO" | sed 's#[/. ]#-#g')
 TRANSCRIPTS="$HOME/.claude/projects/$SLUG"
 # Fallback if the slug doesn't resolve: list and match by basename
 [ -d "$TRANSCRIPTS" ] || TRANSCRIPTS="$HOME/.claude/projects/$(ls "$HOME/.claude/projects/" | grep -i "$(basename "$REPO")" | head -1)"
-HASHES="$REPO/.validators/.hashes"   # review-engine hash store
 ```
 
 Pin `REPO` and `TRANSCRIPTS` for the whole run and pass them forward in every scheduled wake-up.
@@ -36,7 +35,7 @@ Pin `REPO` and `TRANSCRIPTS` for the whole run and pass them forward in every sc
 - `$TRANSCRIPTS/<uuid>.jsonl` — a session (the orchestrator for `/finish`, `/plan`, etc.).
 - `$TRANSCRIPTS/<uuid>/subagents/agent-*.jsonl` — that session's delegated subagents (implementer/tester/reviewer/committer/double-check).
 - `$TRANSCRIPTS/019*-*.jsonl` (top-level) — the **review engine** fans out into *separate* top-level sessions (content contains `Files under review` / `current contents`). These are NOT under the finish session's `subagents/` dir and are easy to miss when summing tokens.
-- `$HASHES/<dir>/<file>.yaml` — review skip-hashes, keyed by **relative** path (`content_hash`, `rules_hash`, `reviewed_at`).
+- Each `/finish` review is scoped to that checkpoint's commit delta (`sha HEAD~1..HEAD`) and content-batched by `batch_size` (default 32 KB). There is **no per-file hash store / skip-hash cache** to inspect — the old `.validators/.hashes/` incremental-tracking subsystem was removed, so there is nothing on disk that records what was reviewed.
 - The project repo is typically reset between runs; per-task `/finish` commits are **local, never pushed**.
 
 ## Locate the active finish session
@@ -77,7 +76,7 @@ Sum **scoped to this run** (mtime-filter the review sessions — a naive `019*` 
 - **Orchestrator**: the finish session file itself (surprisingly large — re-reads its growing transcript each turn).
 - **GRAND** = review + subagents + orch. Report per-task.
 
-**Calibration** (reference, from an 8–9 task greenfield build — adjust per project): healthy ≈ **9–10.5M tokens/task**; a broken-hash run ≈ **15M/task**. Three "big rocks" ≈ 80% of spend: **review engine** (~35–39%), **implementer** (~22–28%), **orchestrator** (often ~11–18M, roughly fixed regardless of task count). Treat the first run you observe as the baseline; flag later runs that deviate.
+**Calibration** (reference, from an 8–9 task greenfield build — adjust per project): healthy ≈ **9–10.5M tokens/task**; flag a run drifting toward **15M+/task** as a regression to investigate. Three "big rocks" ≈ 80% of spend: **review engine** (~35–39%), **implementer** (~22–28%), **orchestrator** (often ~11–18M, roughly fixed regardless of task count). Treat the first run you observe as the baseline; flag later runs that deviate.
 
 ## sah tool errors & behavior
 
@@ -136,7 +135,7 @@ STOP (do not reschedule) when the board is fully clear (all tasks `done`) **or**
 - All commits (`git -C "$REPO" log --oneline`).
 - Full error list (classified), review-fix loops, committer slowness, scope adherence.
 - **Review-rule health**: every force-closed/declined finding (the close + the open findings it skipped, quoted), candidate validator bugs (invalid-code / contract-fighting findings, naming the rule to fix in `builtin/validators/…`), true contradictions, churn/non-convergence, and stuck tasks correctly parked for a human rule-fix — classified as agent-disobedience vs validator-bug vs engine-instability.
-- **Standing token-saving recs**: (1) review-engine — cut per-round fan-out, don't full-sweep on re-review, share a cached file prefix, stop `force:true`; (2) orchestrator slimming (large fixed overhead); (3) committer — stop re-running clippy/nextest/fmt on an already-verified tree (commit inline); (4) test skill — empty suite ≠ failure, never author tests to force green; (5) `get-lines` — shell `execute` should inline small output instead of a mandatory 2nd call (median output ~13 lines; ~46% of shell calls were paging); (6) fix the security-guard false-positive (see below) and the `code_context` "invalid regex pattern" mislabel.
+- **Standing token-saving recs**: (1) review-engine — cut per-round fan-out and tune `batch_size` so each per-commit `HEAD~1..HEAD` review packs files efficiently (the review is already commit-delta-scoped — there is no hash cache left to skip unchanged files, so the levers are fan-out width and batch packing, not re-review suppression); (2) orchestrator slimming (large fixed overhead); (3) committer — stop re-running clippy/nextest/fmt on an already-verified tree (commit inline); (4) test skill — empty suite ≠ failure, never author tests to force green; (5) `get-lines` — shell `execute` should inline small output instead of a mandatory 2nd call (median output ~13 lines; ~46% of shell calls were paging); (6) fix the security-guard false-positive (see below) and the `code_context` "invalid regex pattern" mislabel.
 
 ## Benign / known error patterns
 
@@ -150,5 +149,5 @@ Self-pace with `ScheduleWakeup` at **600s** (10 min), passing this skill's monit
 
 - **Never** put the literal `Dynamic code eval`+`uation` phrase in a command — the shell security guard false-positive-blocks any command containing it (it will block your own analysis command). Use `grep 'security check failed'` to count blocks.
 - Keep commands **< 4096 chars**; split long analyses; avoid escaped `\"` inside `python3 -c`.
-- Transcript/hash timestamps are **UTC** (= local + 5h).
+- Transcript timestamps are **UTC** (= local + 5h).
 - The board often resets to empty (`todo→doing→done`) between runs; the `review` column gets appended later and can momentarily land terminal — finish fixes the column order autonomously (benign).
