@@ -34,6 +34,12 @@ thiserror = { workspace = true }
 # Locator dialect: regex stream-capture and number extraction for the assertion compiler
 regex = { workspace = true }
 
+# The http surface adapter's in-process Rust client: issue the request, read
+# status/headers/body. `blocking` is added on top of the workspace features so the
+# adapter stays synchronous like the `SurfaceAdapter` trait (it runs under
+# `spawn_blocking` in production), with no Node/Python harness.
+reqwest = { workspace = true, features = ["blocking"] }
+
 # Stable content hashing for the golden's stale-detection spec hash (mirrors the
 # review tracker's sha256 content fingerprint).
 sha2 = { workspace = true }
@@ -67,3 +73,7 @@ tempfile = { workspace = true }
 # so `#[tokio::test]` and `tokio::time::timeout` are available here too.)
 acp-conformance = { workspace = true, features = ["test-support"] }
 futures = { workspace = true }
+
+# A tiny in-process axum fixture HTTP server for the http surface adapter's
+# integration tests (bound to 127.0.0.1:0). `tokio` (above) drives it.
+axum = { workspace = true }

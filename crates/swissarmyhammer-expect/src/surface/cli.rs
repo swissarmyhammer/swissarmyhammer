@@ -168,7 +168,7 @@ impl CliAdapter {
 /// [`CliAdapter::run`]), so signalling the group reaps grandchildren that
 /// inherited the captured pipes; on other platforms only the direct child is
 /// killed.
-fn abort_child(child: &mut std::process::Child) {
+pub(crate) fn abort_child(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
         let group = nix::unistd::Pid::from_raw(child.id() as i32);
@@ -277,7 +277,10 @@ fn argv_owned(argv: &[&str]) -> Argv {
 ///
 /// Returns [`ExpectError::Surface`] when `setup` declares no runnable command,
 /// or when no project type can be detected and `setup` is absent.
-fn resolve_commands(setup: Option<&Setup>, repo_root: &Path) -> Result<CliCommands, ExpectError> {
+pub(crate) fn resolve_commands(
+    setup: Option<&Setup>,
+    repo_root: &Path,
+) -> Result<CliCommands, ExpectError> {
     match setup {
         Some(setup) => commands_from_setup(setup),
         None => Ok(detected_commands(detect_project_type(repo_root)?)),

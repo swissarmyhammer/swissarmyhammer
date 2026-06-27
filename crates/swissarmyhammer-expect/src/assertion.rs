@@ -26,7 +26,7 @@
 //! [`AssertionOutcome::Drifted`] outcome — never a silent mis-read.
 
 use crate::spec::Criterion;
-use crate::types::{Observation, SurfaceState, VerdictTier};
+use crate::types::{HttpState, Observation, SurfaceState, VerdictTier};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -48,6 +48,18 @@ const NON_DIGIT_GAP: &str = r"\D*";
 
 /// The substring marking an exit-code reference in a criterion.
 const EXIT_CUE: &str = "exit";
+
+/// The substring marking an HTTP status-code reference in a criterion.
+const STATUS_CUE: &str = "status";
+
+/// The word marking an HTTP header reference in a criterion; the header name is
+/// the word immediately before it (`content-type header is …`).
+const HEADER_CUE: &str = "header";
+
+/// Grammatical punctuation trimmed from the edges of a whitespace token when
+/// extracting an http header name or value, leaving interior `-`, `/`, and `.`
+/// (so `content-type` and `application/json` survive intact).
+const TOKEN_TRIM: &[char] = &['`', '\'', '"', '.', ',', ';', ':', '(', ')', '!', '?'];
 
 /// Floating-point tolerance for numeric equality (exact integers compare clean).
 const EPSILON: f64 = 1e-9;
@@ -103,6 +115,14 @@ pub enum Locator {
     },
     /// The process exit code (the most durable cli locator).
     Exit,
+    /// The HTTP response status code (the most durable http locator).
+    Status,
+    /// An HTTP response header value, addressed by case-insensitive name (the
+    /// http `header:<name>` dialect).
+    Header {
+        /// The header name; resolution matches it case-insensitively.
+        name: String,
+    },
 }
 
 /// A captured cli output stream.
@@ -382,6 +402,10 @@ impl Locator {
                 Some(parse_bound(captured))
             }
             Locator::Exit => checkpoint_exit(state).map(|code| BoundValue::Number(code as f64)),
+            Locator::Status => http_state(state).map(|http| BoundValue::Number(http.status as f64)),
+            Locator::Header { name } => http_state(state)
+                .and_then(|http| http.headers.get(&name.to_ascii_lowercase()))
+                .map(|value| parse_bound(value)),
         }
     }
 }
@@ -393,6 +417,8 @@ impl fmt::Display for Locator {
             Locator::JsonPathCount { path } => write!(f, "count({path})"),
             Locator::StreamRegex { stream, pattern } => write!(f, "{stream}:/{pattern}/"),
             Locator::Exit => write!(f, "exit"),
+            Locator::Status => write!(f, "status"),
+            Locator::Header { name } => write!(f, "header:{name}"),
         }
     }
 }
@@ -424,6 +450,18 @@ enum Intent {
     Exit {
         /// The expected exit code.
         expected: f64,
+    },
+    /// An HTTP status-code comparison against a literal code.
+    Status {
+        /// The expected status code.
+        expected: f64,
+    },
+    /// An HTTP header comparison against a literal value.
+    Header {
+        /// The header name (lowercased), addressing the `header:<name>` locator.
+        name: String,
+        /// The expected header value (numeric or textual).
+        expected: BoundValue,
     },
     /// An invariant relating a scalar to the count of a collection.
     Invariant {
@@ -469,6 +507,12 @@ fn candidate_intents(text: &str) -> Vec<Intent> {
     if let Some(expected) = exit_intent(text) {
         intents.push(Intent::Exit { expected });
     }
+    if let Some(expected) = status_intent(text) {
+        intents.push(Intent::Status { expected });
+    }
+    if let Some((name, expected)) = header_intent(text) {
+        intents.push(Intent::Header { name, expected });
+    }
     if let Some((left, right)) = split_count_invariant(text) {
         intents.push(Intent::Invariant { left, right });
     }
@@ -484,11 +528,61 @@ fn candidate_intents(text: &str) -> Vec<Intent> {
 /// The exit-code intent's expected value when the criterion references the exit
 /// code and names a number, else `None`.
 fn exit_intent(text: &str) -> Option<f64> {
-    if mentions_exit(text) {
+    if mentions(text, EXIT_CUE) {
         parse_number(text)
     } else {
         None
     }
+}
+
+/// The status-code intent's expected value when the criterion references the
+/// HTTP response status and names a number, else `None`.
+///
+/// The cue is matched as a whole word (via [`word_present`]) rather than a bare
+/// substring, so an unrelated token such as `statuses` does not trigger a status
+/// binding. When it does fire and a body field also matches, `status` wins by the
+/// dialect's robustness ranking (`ideas/expect.md`: status is the most durable
+/// http locator); [`build_candidate`]'s self-verify still rejects it unless it
+/// holds against the source observation.
+fn status_intent(text: &str) -> Option<f64> {
+    if word_present(&text.to_ascii_lowercase(), STATUS_CUE) {
+        parse_number(text)
+    } else {
+        None
+    }
+}
+
+/// The header intent when the criterion references a response header by name and
+/// states the value it should hold, else `None`.
+///
+/// Recognizes the shape `… <name> header … <value>` (e.g. "the content-type
+/// header is application/json"): the header name is the word immediately before
+/// `header`, and the expected value is the criterion's final word. Header names
+/// keep their `-`/`/`/`.` characters, so tokenization is on whitespace rather
+/// than the alphanumeric split [`tokens`] uses. A mis-read name simply fails to
+/// bind in [`build_candidate`] and the compiler falls through, so this stays a
+/// cheap recognizer rather than a strict grammar.
+fn header_intent(text: &str) -> Option<(String, BoundValue)> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let header_pos = words
+        .iter()
+        .position(|word| trim_token(word).eq_ignore_ascii_case(HEADER_CUE))?;
+    if header_pos == 0 || header_pos + 1 >= words.len() {
+        return None;
+    }
+    let name = trim_token(words[header_pos - 1]);
+    let value = trim_token(words[words.len() - 1]);
+    if name.is_empty() || value.is_empty() {
+        return None;
+    }
+    Some((name.to_ascii_lowercase(), parse_bound(value)))
+}
+
+/// Trim grammatical punctuation ([`TOKEN_TRIM`]) from a whitespace token's
+/// edges, leaving header-name and value interiors (`content-type`,
+/// `application/json`) intact.
+fn trim_token(word: &str) -> &str {
+    word.trim_matches(|c: char| TOKEN_TRIM.contains(&c))
 }
 
 /// Derive the most durable locator that binds for `intent` against `state`,
@@ -508,6 +602,28 @@ fn build_candidate(
                 Expected::Literal {
                     value: BoundValue::Number(expected),
                 },
+                text,
+            ))
+        }
+        Intent::Status { expected } => {
+            // Only an http observation carries a status code to bind against.
+            http_state(state)?;
+            Some(deterministic(
+                checkpoint,
+                Locator::Status,
+                Expected::Literal {
+                    value: BoundValue::Number(expected),
+                },
+                text,
+            ))
+        }
+        Intent::Header { name, expected } => {
+            // The named header must be present in the http observation to bind.
+            http_state(state)?.headers.get(&name)?;
+            Some(deterministic(
+                checkpoint,
+                Locator::Header { name },
+                Expected::Literal { value: expected },
                 text,
             ))
         }
@@ -580,6 +696,15 @@ fn checkpoint_json(state: &SurfaceState) -> Option<Value> {
     match state {
         SurfaceState::Json { body } => Some(body.clone()),
         SurfaceState::Cli(cli) => serde_json::from_str(cli.stdout.trim()).ok(),
+        SurfaceState::Http(http) => serde_json::from_str(http.body.trim()).ok(),
+    }
+}
+
+/// The http view of a checkpoint state, or `None` when it is not an http read.
+fn http_state(state: &SurfaceState) -> Option<&HttpState> {
+    match state {
+        SurfaceState::Http(http) => Some(http),
+        SurfaceState::Cli(_) | SurfaceState::Json { .. } => None,
     }
 }
 
@@ -592,7 +717,7 @@ fn checkpoint_streams(state: &SurfaceState) -> Vec<(Stream, &str)> {
                 (Stream::Stderr, cli.stderr.as_str()),
             ]
         }
-        SurfaceState::Json { .. } => Vec::new(),
+        SurfaceState::Http { .. } | SurfaceState::Json { .. } => Vec::new(),
     }
 }
 
@@ -603,7 +728,7 @@ fn stream_content(state: &SurfaceState, stream: Stream) -> Option<&str> {
             Stream::Stdout => cli.stdout.as_str(),
             Stream::Stderr => cli.stderr.as_str(),
         }),
-        SurfaceState::Json { .. } => None,
+        SurfaceState::Http { .. } | SurfaceState::Json { .. } => None,
     }
 }
 
@@ -611,13 +736,14 @@ fn stream_content(state: &SurfaceState, stream: Stream) -> Option<&str> {
 fn checkpoint_exit(state: &SurfaceState) -> Option<i32> {
     match state {
         SurfaceState::Cli(cli) => cli.exit_code,
-        SurfaceState::Json { .. } => None,
+        SurfaceState::Http { .. } | SurfaceState::Json { .. } => None,
     }
 }
 
-/// Whether the criterion references the process exit code.
-fn mentions_exit(text: &str) -> bool {
-    text.to_ascii_lowercase().contains(EXIT_CUE)
+/// Whether `text` mentions `cue` as a case-insensitive substring (the exit cue
+/// test; the status cue uses a stricter whole-word match, see [`status_intent`]).
+fn mentions(text: &str, cue: &str) -> bool {
+    text.to_ascii_lowercase().contains(cue)
 }
 
 /// Parse the last numeric literal in `text` (the expected value usually trails).
@@ -915,6 +1041,27 @@ mod tests {
                 stderr: String::new(),
                 exit_code: Some(exit),
                 files: BTreeMap::new(),
+            }),
+            duration: Duration::from_millis(1),
+        }
+    }
+
+    /// An http checkpoint at `after` with `status`, `headers`, and a raw `body`.
+    fn http_checkpoint(
+        after: &str,
+        status: u16,
+        headers: &[(&str, &str)],
+        body: &str,
+    ) -> Checkpoint {
+        Checkpoint {
+            after: after.to_string(),
+            state: SurfaceState::Http(HttpState {
+                status,
+                headers: headers
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.to_string()))
+                    .collect(),
+                body: body.to_string(),
             }),
             duration: Duration::from_millis(1),
         }
@@ -1243,6 +1390,176 @@ mod tests {
                 criterion: criterion.text.clone(),
                 index: 3,
                 available: 2,
+            }
+        );
+    }
+
+    /// One http observation shared by the locator-dialect tests, so each locator
+    /// is asserted against the same source of truth.
+    fn http_observation() -> Observation {
+        observation(vec![http_checkpoint(
+            "final",
+            200,
+            &[("content-type", "application/json")],
+            "{\"total\": 40}",
+        )])
+    }
+
+    #[test]
+    fn http_status_header_and_json_path_locators_bind_and_evaluate_at_tier_one() {
+        let observation = http_observation();
+        let state = &observation.checkpoints[0].state;
+
+        // The three http-dialect locators, each with the value it should resolve.
+        let cases: [(Locator, BoundValue); 3] = [
+            (Locator::Status, BoundValue::Number(200.0)),
+            (
+                Locator::Header {
+                    name: "content-type".to_string(),
+                },
+                BoundValue::Text("application/json".to_string()),
+            ),
+            (
+                Locator::JsonPath {
+                    path: "$.total".to_string(),
+                },
+                BoundValue::Number(40.0),
+            ),
+        ];
+
+        for (locator, expected) in cases {
+            // It binds against the observed http state.
+            assert_eq!(
+                locator.resolve(state).as_ref(),
+                Some(&expected),
+                "locator `{locator}` should bind"
+            );
+            // And a deterministic literal assertion over it holds at Tier 1.
+            let assertion = deterministic(
+                0,
+                locator.clone(),
+                Expected::Literal {
+                    value: expected.clone(),
+                },
+                "criterion",
+            );
+            assert_eq!(assertion.tier, VerdictTier::Deterministic);
+            assert_eq!(
+                assertion.evaluate(&observation),
+                AssertionOutcome::Holds,
+                "locator `{locator}` should evaluate Holds"
+            );
+        }
+    }
+
+    #[test]
+    fn http_header_locator_resolves_case_insensitively() {
+        let state = SurfaceState::Http(HttpState {
+            status: 204,
+            headers: BTreeMap::from([("x-cache".to_string(), "HIT".to_string())]),
+            body: String::new(),
+        });
+        let locator = Locator::Header {
+            name: "X-Cache".to_string(),
+        };
+        assert_eq!(
+            locator.resolve(&state),
+            Some(BoundValue::Text("HIT".to_string()))
+        );
+    }
+
+    #[test]
+    fn compiles_an_http_status_criterion_to_the_status_locator() {
+        let observation = http_observation();
+        let assertion =
+            compile(&criterion("the response status is 200"), &observation).expect("compiles");
+
+        assert_eq!(assertion.locator, Locator::Status);
+        assert_eq!(assertion.tier, VerdictTier::Deterministic);
+        assert_eq!(
+            assertion.expected,
+            Expected::Literal {
+                value: BoundValue::Number(200.0)
+            }
+        );
+    }
+
+    #[test]
+    fn compiles_an_http_header_criterion_to_the_header_locator() {
+        let observation = http_observation();
+        let assertion = compile(
+            &criterion("the content-type header is application/json"),
+            &observation,
+        )
+        .expect("compiles");
+
+        assert_eq!(
+            assertion.locator,
+            Locator::Header {
+                name: "content-type".to_string()
+            }
+        );
+        assert_eq!(assertion.tier, VerdictTier::Deterministic);
+        assert_eq!(
+            assertion.expected,
+            Expected::Literal {
+                value: BoundValue::Text("application/json".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn compiles_an_http_body_literal_to_a_json_path() {
+        let observation = http_observation();
+        let assertion = compile(&criterion("the total is 40"), &observation).expect("compiles");
+
+        assert_eq!(
+            assertion.locator,
+            Locator::JsonPath {
+                path: "$.total".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn a_status_criterion_binds_the_status_locator_over_a_same_named_body_field() {
+        // The HTTP status is 200 and the body also carries a `status` field;
+        // `status` is the most durable http locator, so the criterion binds the
+        // response status rather than `$.status`. This pins the deliberate
+        // precedence rather than leaving it incidental.
+        let observation = observation(vec![http_checkpoint(
+            "final",
+            200,
+            &[],
+            "{\"status\": 500}",
+        )]);
+        let assertion =
+            compile(&criterion("the response status is 200"), &observation).expect("compiles");
+
+        assert_eq!(assertion.locator, Locator::Status);
+        assert_eq!(
+            assertion.expected,
+            Expected::Literal {
+                value: BoundValue::Number(200.0)
+            }
+        );
+    }
+
+    #[test]
+    fn a_status_locator_reports_drift_against_a_non_http_state() {
+        // A status assertion compiled against http no longer binds when replayed
+        // over a cli observation — structural drift, not a value mismatch.
+        let assertion = compile(
+            &criterion("the response status is 200"),
+            &http_observation(),
+        )
+        .expect("compiles");
+        let cli = observation(vec![cli_checkpoint("final", "done\n", 0)]);
+
+        assert_eq!(
+            assertion.evaluate(&cli),
+            AssertionOutcome::Drifted {
+                locator: "status".to_string()
             }
         );
     }

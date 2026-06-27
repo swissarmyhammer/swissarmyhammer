@@ -42,7 +42,8 @@ use crate::evaluate::evaluate;
 use crate::observe::{golden_path, received_path, spec_path};
 use crate::spec::{Criterion, Expectation};
 use crate::types::{
-    CliState, CriterionVerdict, LedgerState, Observation, SurfaceState, Trajectory, VerdictTier,
+    CliState, CriterionVerdict, HttpState, LedgerState, Observation, SurfaceState, Trajectory,
+    VerdictTier,
 };
 
 // ---------------------------------------------------------------------------
@@ -228,6 +229,15 @@ impl ScrubberSet {
                     .iter()
                     .map(|(path, contents)| (self.scrub_text(path), self.scrub_text(contents)))
                     .collect(),
+            }),
+            SurfaceState::Http(http) => SurfaceState::Http(HttpState {
+                status: http.status,
+                headers: http
+                    .headers
+                    .iter()
+                    .map(|(name, value)| (name.clone(), self.scrub_text(value)))
+                    .collect(),
+                body: self.scrub_text(&http.body),
             }),
             SurfaceState::Json { body } => SurfaceState::Json {
                 body: self.scrub_json(body),

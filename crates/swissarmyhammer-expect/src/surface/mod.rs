@@ -20,6 +20,7 @@
 //! no-agent path: build the binary, run argv, read stdout/stderr/exit/files.
 
 pub mod cli;
+pub mod http;
 
 use std::path::Path;
 

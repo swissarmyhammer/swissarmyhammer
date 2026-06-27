@@ -27,8 +27,8 @@ comments:
 depends_on:
 - 01KW26600YD3PM22S8F4VJJTE5
 - 01KW26A5EV162ZV58HNFFJPKBB
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffd80
 project: expect
 title: Resolved-action cache for deterministic replay (Stagehand model)
 ---

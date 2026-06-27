@@ -90,10 +90,11 @@ pub enum LedgerState {
 
 /// An adapter's authoritative read of the system under test at one checkpoint.
 ///
-/// Each surface reads ground truth differently (stdout/exit/files for cli; a
-/// JSON body for http; rows for db; an a11y tree for browser/gui). The model
-/// starts with a concrete [`CliState`] variant plus a generic [`Json`] variant
-/// that holds any structured body until the remaining adapters land.
+/// Each surface reads ground truth differently (stdout/exit/files for cli;
+/// status/headers/body for http; rows for db; an a11y tree for browser/gui). The
+/// model carries a concrete [`Cli`](SurfaceState::Cli) variant, a concrete
+/// [`Http`](SurfaceState::Http) variant, plus a generic [`Json`] variant that
+/// holds any structured body until the remaining adapters land.
 ///
 /// [`Json`]: SurfaceState::Json
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -101,7 +102,9 @@ pub enum LedgerState {
 pub enum SurfaceState {
     /// The authoritative read of a CLI run.
     Cli(CliState),
-    /// A generic structured body — the room left for the json/db/a11y adapters.
+    /// The authoritative read of an HTTP response.
+    Http(HttpState),
+    /// A generic structured body — the room left for the db/a11y adapters.
     Json {
         /// The structured state, as an arbitrary JSON value.
         body: serde_json::Value,
@@ -120,6 +123,26 @@ pub struct CliState {
     pub exit_code: Option<i32>,
     /// Captured file state, keyed by path (sorted for stable serialization).
     pub files: BTreeMap<String, String>,
+}
+
+/// The authoritative read of an HTTP response: its status code, response
+/// headers, and raw body.
+///
+/// The `http` locator dialect (`ideas/expect.md` §"Locators are a per-surface
+/// dialect") reads exactly these three things: `status`, `header:<name>`, and a
+/// json-path into the parsed body. Header names are lowercased so the
+/// case-insensitive `header:` locator resolves regardless of the casing the
+/// server sent. The body is kept as the raw response text (a json-path parses it
+/// on demand), mirroring how [`CliState`] keeps raw `stdout`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HttpState {
+    /// The HTTP response status code (e.g. `200`).
+    pub status: u16,
+    /// Response headers, keyed by lowercased name (sorted for stable
+    /// serialization).
+    pub headers: BTreeMap<String, String>,
+    /// The raw response body text; a json-path locator parses it on demand.
+    pub body: String,
 }
 
 /// One authoritative snapshot in an observation's timeline.
@@ -338,6 +361,19 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&checkpoint).unwrap()).unwrap();
         assert_eq!(json["duration_ms"], serde_json::json!(1500));
         assert_eq!(round_trip(&checkpoint), checkpoint);
+    }
+
+    #[test]
+    fn surface_state_http_variant_round_trips() {
+        let state = SurfaceState::Http(HttpState {
+            status: 200,
+            headers: std::collections::BTreeMap::from([(
+                "content-type".to_string(),
+                "application/json".to_string(),
+            )]),
+            body: "{\"total\":40}".to_string(),
+        });
+        assert_eq!(round_trip(&state), state);
     }
 
     #[test]
