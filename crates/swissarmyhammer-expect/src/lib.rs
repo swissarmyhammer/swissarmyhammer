@@ -67,7 +67,7 @@ pub use config::{
 pub use doctor::{diagnose, render, DiagnosticStatus, DoctorFacts, FieldDiagnostic};
 pub use drive::{run_expect_over_agent, DrivenObservation, ExpectScope};
 pub use error::ExpectError;
-pub use loader::ExpectationLoader;
+pub use loader::{ExpectationLoader, RawSpec};
 pub use observe::{observe, received_path, write_received, ObserveConfig, FINAL_CHECKPOINT};
 pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};
 pub use surface::cli::{CliAdapter, CliCommands, CliSut};

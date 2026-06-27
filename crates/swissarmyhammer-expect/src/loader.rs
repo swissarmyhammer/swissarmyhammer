@@ -57,6 +57,22 @@ pub struct ExpectationLoader {
     repo_root: PathBuf,
 }
 
+/// A discovered spec file's identity and its raw, **unparsed** markdown content —
+/// the input the static [`crate::doctor::diagnose`] reads.
+///
+/// Produced by [`ExpectationLoader::discover_raw`]. Unlike a parsed
+/// [`Expectation`], a `RawSpec` makes no validity claim: a malformed spec is a
+/// perfectly good `RawSpec` (that is the whole point — `doctor` must read the
+/// files the strict parser would reject).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawSpec {
+    /// The repo-relative identity (the path with `.expect.md` stripped), the same
+    /// identity a parsed [`Expectation`] carries.
+    pub path: String,
+    /// The file's raw markdown content, verbatim.
+    pub content: String,
+}
+
 impl ExpectationLoader {
     /// Create a loader bound to `repo_root`.
     pub fn new(repo_root: impl Into<PathBuf>) -> Self {
@@ -108,19 +124,59 @@ impl ExpectationLoader {
         Ok(specs)
     }
 
-    /// Resolve a non-empty scope string through the three ordered forms.
+    /// Discover the raw, **unparsed** content of every spec for a `<scope>`.
+    ///
+    /// The counterpart to [`resolve_scope`](Self::resolve_scope) for `doctor`:
+    /// it resolves the same scope forms (a specific spec, a folder, a glob, or —
+    /// with no scope — every spec in the repo) but reads each file as raw text
+    /// without running [`Expectation::parse`]. A malformed spec — exactly what
+    /// `doctor` exists to flag — is therefore **surfaced** (with its raw content,
+    /// for [`crate::doctor::diagnose`]) rather than aborting the walk, which the
+    /// parsing entry points do under `deny_unknown_fields`. Results are sorted and
+    /// deduplicated by repo-relative identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExpectError`] if a selected file cannot be read, if its path is
+    /// not under the repo root, or if `scope` is a malformed glob pattern.
+    pub fn discover_raw(&self, scope: Option<&str>) -> Result<Vec<RawSpec>, ExpectError> {
+        let files = match scope.filter(|s| !s.is_empty()) {
+            Some(scope) => self.resolve_scope_files(scope)?,
+            None => discover_expect_files(&self.repo_root),
+        };
+        let mut specs = Vec::with_capacity(files.len());
+        for file in files {
+            let path = crate::spec::derive_path(&file, &self.repo_root)?;
+            let content = std::fs::read_to_string(&file)?;
+            specs.push(RawSpec { path, content });
+        }
+        specs.sort_by(|a, b| a.path.cmp(&b.path));
+        specs.dedup_by(|a, b| a.path == b.path);
+        Ok(specs)
+    }
+
+    /// Resolve a non-empty scope string through the three ordered forms, then
+    /// read and parse each matched file.
     fn resolve_scope_str(&self, scope: &str) -> Result<Vec<Expectation>, ExpectError> {
+        self.parse_files(self.resolve_scope_files(scope)?)
+    }
+
+    /// Resolve a non-empty scope string to the set of spec **files** it matches,
+    /// through the three ordered forms — the shared path-resolution that backs
+    /// both the parsing [`resolve_scope_str`](Self::resolve_scope_str) and the raw
+    /// [`discover_raw`](Self::discover_raw).
+    fn resolve_scope_files(&self, scope: &str) -> Result<Vec<PathBuf>, ExpectError> {
         // Form 1: a specific expectation, by file path or extension-dropped path.
         if let Some(file) = self.specific_spec_file(scope) {
-            return Ok(vec![self.parse_file(&file)?]);
+            return Ok(vec![file]);
         }
         // Form 2: a folder — every spec under it, recursively.
         let candidate = self.resolve_relative(scope);
         if candidate.is_dir() {
-            return self.parse_files(discover_expect_files(&candidate));
+            return Ok(discover_expect_files(&candidate));
         }
         // Form 3: a shell-style glob.
-        self.parse_files(self.glob_files(scope)?)
+        self.glob_files(scope)
     }
 
     /// Locate the single spec file a "specific expectation" scope addresses, by
@@ -392,5 +448,58 @@ mod tests {
             .resolve_scope(Some("src/checkout/"), Some("checkout"))
             .unwrap();
         assert_eq!(identities(&specs), vec!["src/checkout/coupon"]);
+    }
+
+    /// A spec whose frontmatter `Expectation::parse` rejects (an unknown key under
+    /// `deny_unknown_fields`) — exactly what `doctor` must be able to read.
+    const MALFORMED_SPEC: &str =
+        "---\ndescription: a malformed spec\nsurfce: cli\n---\n\nIntent.\n\n- [ ] holds\n";
+
+    /// The raw-content identities of a [`RawSpec`] result set, sorted.
+    fn raw_identities(specs: &[RawSpec]) -> Vec<String> {
+        let mut ids: Vec<String> = specs.iter().map(|s| s.path.clone()).collect();
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn discover_raw_surfaces_a_malformed_spec_that_parse_would_reject() {
+        let repo = fixture();
+        // A spec the strict parser rejects — `load_all` aborts on it, but raw
+        // discovery must surface it (with its raw content) so doctor can diagnose.
+        let malformed = repo.path().join(format!("src/bad{EXPECT_EXTENSION}"));
+        fs::write(&malformed, MALFORMED_SPEC).unwrap();
+
+        let loader = ExpectationLoader::new(repo.path());
+        assert!(
+            loader.load_all().is_err(),
+            "load_all must abort on a malformed spec (deny_unknown_fields)"
+        );
+
+        let raw = loader.discover_raw(None).unwrap();
+        assert_eq!(
+            raw_identities(&raw),
+            vec![
+                ".expect/expectations/global",
+                "src/a",
+                "src/bad",
+                "src/checkout/coupon",
+            ]
+        );
+        let bad = raw.iter().find(|s| s.path == "src/bad").expect("bad spec");
+        assert_eq!(bad.content, MALFORMED_SPEC);
+    }
+
+    #[test]
+    fn discover_raw_resolves_a_scope_without_parsing() {
+        let repo = fixture();
+        let malformed = repo.path().join(format!("src/bad{EXPECT_EXTENSION}"));
+        fs::write(&malformed, MALFORMED_SPEC).unwrap();
+
+        let loader = ExpectationLoader::new(repo.path());
+        // A specific-spec scope addresses exactly the malformed file, raw.
+        let raw = loader.discover_raw(Some("src/bad")).unwrap();
+        assert_eq!(raw_identities(&raw), vec!["src/bad"]);
+        assert_eq!(raw[0].content, MALFORMED_SPEC);
     }
 }

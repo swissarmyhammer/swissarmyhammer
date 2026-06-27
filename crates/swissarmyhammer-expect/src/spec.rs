@@ -264,7 +264,7 @@ impl Expectation {
 ///
 /// Path components are joined with `/` so identities are stable across
 /// platforms, matching the forward-slash form used by [`crate::Observation`].
-fn derive_path(file_path: &Path, repo_root: &Path) -> Result<String, ExpectError> {
+pub(crate) fn derive_path(file_path: &Path, repo_root: &Path) -> Result<String, ExpectError> {
     let relative = file_path
         .strip_prefix(repo_root)
         .map_err(|_| ExpectError::Expectation {

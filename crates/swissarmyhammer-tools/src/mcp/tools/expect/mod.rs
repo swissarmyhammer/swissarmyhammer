@@ -532,7 +532,27 @@ fn observe_op(
     }))
 }
 
-crate::impl_default_doctorable!(ExpectTool);
+impl swissarmyhammer_common::health::Doctorable for ExpectTool {
+    fn name(&self) -> &str {
+        <Self as McpTool>::name(self)
+    }
+
+    fn category(&self) -> &str {
+        doctor::EXPECT_CATEGORY
+    }
+
+    /// Surface every expectation spec's static diagnostics in `sah doctor`.
+    ///
+    /// Delegates to [`doctor::health_checks`] (the same static [`diagnose`] the
+    /// scoped `expect doctor` trait verb runs): it discovers every `*.expect.md`
+    /// under the session repo root, validates each against the live model
+    /// registry, and maps each per-field finding to one [`HealthCheck`] under the
+    /// `expect` category — no system driven, no model consulted. A pinned
+    /// `model:` that has gone missing is a warning, not an error.
+    fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
+        doctor::health_checks()
+    }
+}
 
 // The ACP delegation seam — the `AgentHandle`/`AgentFactory`, the pipeline gate,
 // the spawn-blocking driver, and the use-case agent resolution — lives in
@@ -542,6 +562,10 @@ pub mod expect_op;
 
 // The real `Initializable` impl (the `expect init` scaffold) lives in `init`.
 mod init;
+
+// The static health check (`expect doctor` + the `sah doctor` provider) lives in
+// `doctor`; the `Doctorable` impl below delegates to it.
+pub mod doctor;
 
 #[async_trait]
 impl McpTool for ExpectTool {

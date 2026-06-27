@@ -422,6 +422,62 @@ mod tests {
         );
     }
 
+    /// The `expect` tool's `Doctorable` impl must surface its static spec
+    /// diagnostics in `sah doctor`: with a malformed `*.expect.md` present in the
+    /// working repo, `collect_all_health_checks()` includes an `expect`-category
+    /// **error** naming that spec. Mirrors
+    /// [`test_review_validators_health_check_included`].
+    ///
+    /// `collect_all_health_checks` resolves the expect repo root from process
+    /// CWD, so this pins CWD to an isolated temp repo (no git root above it) and
+    /// joins the crate-wide `cwd` serialization group. The unknown-key fault is
+    /// purely static — no system is driven and no model is consulted.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_expect_spec_health_check_included() {
+        use swissarmyhammer_common::health::HealthStatus;
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
+        let tmp = TempDir::new().unwrap();
+        // A spec the strict parser rejects (an unknown frontmatter key) — doctor
+        // must still read and flag it.
+        fs::write(
+            tmp.path().join("bad.expect.md"),
+            "---\ndescription: a malformed spec\nsurfce: cli\n---\n\nIntent prose.\n\n- [ ] the total is $40\n",
+        )
+        .unwrap();
+
+        // Skip if the temp dir somehow resolves inside a git repo, which would
+        // change the discovery root out from under the premise.
+        if swissarmyhammer_common::utils::find_git_repository_root_from(tmp.path()).is_some() {
+            return;
+        }
+
+        let checks = {
+            let _cwd = CurrentDirGuard::new(tmp.path()).expect("pin cwd to temp repo");
+            collect_all_health_checks().await
+        };
+
+        let expect_checks: Vec<_> = checks.iter().filter(|c| c.category == "expect").collect();
+        assert!(
+            !expect_checks.is_empty(),
+            "the expect tool's spec diagnostics must surface in `sah doctor`, got: {:?}",
+            checks
+                .iter()
+                .map(|c| format!("{}/{}", c.category, c.name))
+                .collect::<Vec<_>>()
+        );
+        let error = expect_checks
+            .iter()
+            .find(|c| c.status == HealthStatus::Error)
+            .expect("a malformed spec must surface an expect-category error");
+        assert!(
+            error.name.contains("bad"),
+            "the error should name the offending spec, got: {}",
+            error.name
+        );
+    }
+
     #[tokio::test]
     async fn test_prompt_health_checks_included() {
         let checks = collect_all_health_checks().await;
