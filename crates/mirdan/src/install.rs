@@ -3330,30 +3330,7 @@ mod applier_tests {
     use serial_test::serial;
     use swissarmyhammer_common::reporter::NullReporter;
 
-    use crate::test_support::MirdanConfigGuard;
-
-    /// Write a synthetic single-agent (generic) config whose detect dir is the
-    /// project dir (so detection always fires) and whose MCP config is a
-    /// relative `.mcp.json`.
-    fn write_generic_agents_config(project_dir: &Path) -> PathBuf {
-        let agents_yaml = format!(
-            r#"agents:
-  - id: fake-agent
-    name: Fake Agent
-    project_path: .fake/skills
-    global_path: "~/.fake/skills"
-    detect:
-      - dir: "{detect}"
-    mcp_config:
-      project_path: .mcp.json
-      servers_key: mcpServers
-"#,
-            detect = project_dir.display(),
-        );
-        let config_path = project_dir.join("agents.yaml");
-        std::fs::write(&config_path, agents_yaml).unwrap();
-        config_path
-    }
+    use crate::test_support::{write_fake_agents_config, MirdanConfigGuard};
 
     fn entry() -> McpServerEntry {
         McpServerEntry {
@@ -3454,21 +3431,21 @@ mod applier_tests {
         let claude: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(root.join(".mcp.json")).unwrap())
                 .unwrap();
-        assert_eq!(claude["mcpServers"]["sah"]["command"], "/usr/local/bin/sah");
-        assert_eq!(claude["mcpServers"]["sah"]["args"][0], "serve");
+        assert_eq!(claude["mcpServers"]["sah"]["command"], entry.command);
+        assert_eq!(claude["mcpServers"]["sah"]["args"][0], entry.args[0]);
 
         // Cursor shape: nested `.cursor/mcp.json`, `mcpServers` key.
         let cursor: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(root.join(".cursor/mcp.json")).unwrap())
                 .unwrap();
-        assert_eq!(cursor["mcpServers"]["sah"]["command"], "/usr/local/bin/sah");
+        assert_eq!(cursor["mcpServers"]["sah"]["command"], entry.command);
 
         // Codex shape: `.codex/config.toml`, TOML, `mcp_servers` key.
         let codex_toml = std::fs::read_to_string(root.join(".codex/config.toml")).unwrap();
         let codex: toml::Value = toml::from_str(&codex_toml).unwrap();
         assert_eq!(
             codex["mcp_servers"]["sah"]["command"].as_str(),
-            Some("/usr/local/bin/sah"),
+            Some(entry.command.as_str()),
             "codex config must be TOML with mcp_servers key: {codex_toml}"
         );
 
@@ -3478,10 +3455,7 @@ mod applier_tests {
             &std::fs::read_to_string(root.join(".zed/settings.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(
-            zed["context_servers"]["sah"]["command"],
-            "/usr/local/bin/sah"
-        );
+        assert_eq!(zed["context_servers"]["sah"]["command"], entry.command);
         assert_eq!(zed["context_servers"]["sah"]["source"], "custom");
 
         // Nothing was written relative to the process CWD.
@@ -3556,7 +3530,7 @@ mod applier_tests {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().canonicalize().unwrap();
         let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(&project).unwrap();
-        let config_path = write_generic_agents_config(&project);
+        let config_path = write_fake_agents_config(&project);
         let _mirdan = MirdanConfigGuard::set(&config_path);
 
         let reporter = NullReporter;
@@ -3586,7 +3560,7 @@ mod applier_tests {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().canonicalize().unwrap();
         let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(&project).unwrap();
-        let config_path = write_generic_agents_config(&project);
+        let config_path = write_fake_agents_config(&project);
         let _mirdan = MirdanConfigGuard::set(&config_path);
 
         let reporter = NullReporter;
@@ -3607,7 +3581,7 @@ mod applier_tests {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().canonicalize().unwrap();
         let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(&project).unwrap();
-        let config_path = write_generic_agents_config(&project);
+        let config_path = write_fake_agents_config(&project);
         let _mirdan = MirdanConfigGuard::set(&config_path);
 
         let profile = Profile {

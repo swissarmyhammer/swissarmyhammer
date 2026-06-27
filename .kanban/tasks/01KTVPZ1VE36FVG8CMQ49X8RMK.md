@@ -28,6 +28,21 @@ comments:
 
     Files changed: crates/mirdan/src/install.rs (pub + docs + 2 tests + helper); crates/mirdan/tests/register_mcp_server_at.rs (new). Cargo.toml ends up unchanged.
   timestamp: 2026-06-27T00:09:00.431347+00:00
+- actor: claude-code
+  id: 01kw3e5gpcw3y4j9a1bqmbn98k
+  text: |-
+    Resolved all three review findings on the new test helpers (test-only refactor, no production change):
+
+    1. (blocker) De-duplicated the fake-agent config writer. Extracted ONE shared `pub fn write_fake_agents_config(config_dir: &Path) -> PathBuf` into `crates/mirdan/src/test_support.rs` (the module that already holds MirdanConfigGuard). Deleted both byte-identical local copies — `write_generic_agents_config` from install.rs applier_tests and `write_single_agent_config` from tests/register_mcp_server_at.rs. Both the in-crate applier_tests and the external integration test now call the shared helper (external imports it via the public `mirdan::test_support` module). Named it distinctly to avoid colliding with the pre-existing richer `test_support::write_single_agent_config(root, home)`, which is untouched. Removed the now-unused `use std::path::Path;` from the external test.
+
+    2. (warning) install.rs applier_tests `register_mcp_server_at_writes_four_agent_shapes_under_root`: replaced the 4 hardcoded "/usr/local/bin/sah" literals with `entry.command` (and the codex `as_str()` one with `Some(entry.command.as_str())`), and the hardcoded "serve" with `entry.args[0]`. The `entry` local definition remains the single source of truth.
+
+    3. (warning) tests/register_mcp_server_at.rs: replaced hardcoded "/opt/sah/bin/sah" with `entry.command` and "serve" with `entry.args[0]`.
+
+    Verification: `cargo nextest run -p mirdan` = 413 passed, 0 skipped; `cargo fmt --check -p mirdan` clean; `cargo clippy -p mirdan --all-targets -- -D warnings` clean. Adversarial double-check returned PASS. Left in doing for review.
+
+    Files changed: crates/mirdan/src/test_support.rs (new shared helper), crates/mirdan/src/install.rs (helper deleted, call sites + assertions updated), crates/mirdan/tests/register_mcp_server_at.rs (helper deleted, import + call site + assertions updated).
+  timestamp: 2026-06-27T02:22:32.140638+00:00
 depends_on:
 - 01KTVPYFR4JCHF6AZ651X41NFS
 position_column: doing
