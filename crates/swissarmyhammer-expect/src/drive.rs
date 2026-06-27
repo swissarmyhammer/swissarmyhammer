@@ -47,7 +47,7 @@ use std::sync::{Arc, Mutex};
 use agent_client_protocol::schema::{
     AgentRequest, ClientCapabilities, FileSystemCapabilities, InitializeRequest,
     PermissionOptionId, ReadTextFileResponse, RequestPermissionOutcome, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionNotification, WriteTextFileResponse,
+    SelectedPermissionOutcome, SessionNotification, StopReason, WriteTextFileResponse,
 };
 use agent_client_protocol::{Client, ConnectionTo, DynConnectTo, Responder};
 use agent_client_protocol_extras::TolerantResponseRouter;
@@ -58,10 +58,11 @@ use swissarmyhammer_validators::{AgentPool, PoolConfig};
 
 use crate::config::EXPECT_DIR;
 use crate::error::ExpectError;
+use crate::evaluate::evaluate_spec;
 use crate::observe::{observe, ObserveConfig};
 use crate::spec::{parse_criterion, Expectation, Section};
 use crate::surface::SurfaceAdapter;
-use crate::types::Observation;
+use crate::types::{ExpectationVerdict, Observation};
 
 /// The set of goals to drive, one scoped subagent per goal.
 ///
@@ -89,6 +90,14 @@ pub struct DrivenObservation {
     pub goal: String,
     /// The tolerant-extracted structured JSON the subagent produced.
     pub structured: serde_json::Value,
+    /// Whether the subagent declared the goal reached this turn — ACP's
+    /// `stopReason: end_turn`, the **soft stop** (`ideas/expect.md`
+    /// §"Stop conditions"). It is the agent's self-declaration that it is done,
+    /// re-validated and never trusted as the verdict (hardening rule 2): a turn
+    /// cut short by a hard cap (`max_turn_requests` / `max_tokens`) reports
+    /// `false`, so the driver loop can tell a converged turn from a truncated
+    /// one.
+    pub goal_reached: bool,
 }
 
 /// The preamble that frames a withheld-criteria goal for the driving subagent.
@@ -121,6 +130,22 @@ single JSON object and nothing else, for example {\"summary\": \"<what you did>\
 /// hardening rule 2).
 const CLAIM_STEP_PREFIX: &str = "claim: ";
 
+/// The harness-imposed budget on agentic turns for one driven expectation — the
+/// **max-prompt-turns hard cap** of `ideas/expect.md` §"Stop conditions".
+///
+/// Anchored on the surveyed agentic-loop defaults (Claude computer-use 10,
+/// LangChain 15, LangGraph 25, Skyvern 10/25/50): a budget an honest goal
+/// reaches well within, but a runaway agent should not exceed. `expect` owns
+/// this cap because the model APIs document none, and imposes it on the driver
+/// by stating it in the goal prompt ([`build_driver_goal`]) — the channel the
+/// pool transport carries. The deterministic guarantee `expect` enforces is the
+/// terminal one ([`drive_for_goal`]): a scoped session that ends WITHOUT the
+/// agent declaring the goal reached (`stopReason` other than `end_turn` — the
+/// agent hit its turn/token budget or stopped early) is a clear error, never
+/// mistaken for success, so a non-converging turn ends the drive rather than
+/// hanging it.
+const MAX_PROMPT_TURNS: usize = 15;
+
 /// Assemble the goal prompt that drives one expectation's subagent, **withholding
 /// the acceptance criteria**.
 ///
@@ -140,7 +165,13 @@ const CLAIM_STEP_PREFIX: &str = "claim: ";
 /// [`DRIVER_STRUCTURED_OUTPUT_INSTRUCTION`].
 pub fn build_driver_goal(expectation: &Expectation) -> String {
     let body = withhold_criteria(&expectation.intent);
-    format!("{DRIVER_GOAL_PREAMBLE}\n\n{body}\n\n{DRIVER_STRUCTURED_OUTPUT_INSTRUCTION}")
+    // The imposed turn budget is the only way the pool transport carries the
+    // max-prompt-turns cap to the agent (see [`MAX_PROMPT_TURNS`]); `expect`
+    // still enforces the terminal check deterministically in [`drive_for_goal`].
+    format!(
+        "{DRIVER_GOAL_PREAMBLE}\n\n{body}\n\nYou have at most {MAX_PROMPT_TURNS} prompt turns to \
+         reach the goal; finish within them.\n\n{DRIVER_STRUCTURED_OUTPUT_INSTRUCTION}"
+    )
 }
 
 /// Return the expectation body with the `Then` checklist and `Notes` section
@@ -272,17 +303,35 @@ pub async fn run_expect_over_agent(
 /// trait carries no implicit `Send` bound on the returned future — the ACP driver
 /// future is `!Send` and runs on a current-thread runtime (the same reason the
 /// tool layer drives the pipeline under `spawn_blocking`).
+/// One prompt turn's outcome from a [`GoalDriver`]: the subagent's structured
+/// claim and whether it declared the goal reached.
+///
+/// `expect` owns both stops of the driver loop (`ideas/expect.md`
+/// §"Stop conditions"): the **soft stop** is the agent declaring it reached the
+/// goal, which ACP surfaces as `stopReason: end_turn` and this struct carries as
+/// [`goal_reached`](DriverTurn::goal_reached). The claim is the agent's own
+/// account — recorded for triage, re-validated, never trusted as the verdict.
+#[derive(Debug, Clone)]
+pub struct DriverTurn {
+    /// The tolerant-extracted structured JSON the subagent produced (a *claim*).
+    pub claim: serde_json::Value,
+    /// Whether the subagent declared the goal reached this turn (the soft stop,
+    /// ACP `stopReason: end_turn`). A turn cut short by a hard cap reports
+    /// `false`, so the bounded driver loop can re-prompt rather than mistake a
+    /// truncated turn for a converged one.
+    pub goal_reached: bool,
+}
+
 pub trait GoalDriver {
-    /// Drive `goal` through one scoped subagent and return its structured claim.
+    /// Drive `goal` through one scoped subagent and return its [`DriverTurn`] —
+    /// the structured claim plus whether the agent declared the goal reached.
     ///
     /// # Errors
     ///
     /// Returns [`ExpectError::Agent`] when the subagent cannot be driven or its
-    /// reply is not recoverable JSON.
-    fn drive_goal(
-        &self,
-        goal: &str,
-    ) -> impl Future<Output = Result<serde_json::Value, ExpectError>>;
+    /// reply is not recoverable JSON, or [`ExpectError::Pool`] when the pool's
+    /// liveness supervisor abandoned the turn.
+    fn drive_goal(&self, goal: &str) -> impl Future<Output = Result<DriverTurn, ExpectError>>;
 }
 
 /// The two halves of a ready ACP agent handle the [`AcpGoalDriver`] consumes: the
@@ -336,10 +385,7 @@ impl AcpGoalDriver {
 }
 
 impl GoalDriver for AcpGoalDriver {
-    fn drive_goal(
-        &self,
-        goal: &str,
-    ) -> impl Future<Output = Result<serde_json::Value, ExpectError>> {
+    fn drive_goal(&self, goal: &str) -> impl Future<Output = Result<DriverTurn, ExpectError>> {
         // Take the handle synchronously so the std `Mutex` guard is never held
         // across the `await` below (the connection is single-use per driver).
         let taken = self
@@ -368,7 +414,10 @@ impl GoalDriver for AcpGoalDriver {
             .await?;
             observations
                 .pop()
-                .map(|observation| observation.structured)
+                .map(|observation| DriverTurn {
+                    claim: observation.structured,
+                    goal_reached: observation.goal_reached,
+                })
                 .ok_or_else(|| {
                     ExpectError::Agent(
                         "the driving subagent produced no structured capture".to_string(),
@@ -418,10 +467,11 @@ where
         .any(|step| !adapter.resolves_mechanically(step));
 
     // The subagent supplies the action the adapter could not resolve; capture its
-    // claim first, then let the adapter read the authoritative checkpoints.
+    // claim first, then let the adapter read the authoritative checkpoints. The
+    // drive is bounded by the soft stop (the agent declaring the goal reached)
+    // and the [`MAX_PROMPT_TURNS`] hard cap — see [`drive_for_goal`].
     let claim = if needs_agent {
-        let goal = build_driver_goal(expectation);
-        Some(driver.drive_goal(&goal).await?)
+        Some(drive_for_goal(expectation, driver).await?)
     } else {
         None
     };
@@ -435,6 +485,96 @@ where
             .push(format_claim_step(&claim)?);
     }
     Ok(observation)
+}
+
+/// Drive `expectation`'s withheld-criteria goal through one scoped session and
+/// return the agent's structured claim once it declares the goal reached (the
+/// **soft stop**, ACP `stopReason: end_turn`).
+///
+/// The driver's own bounded agentic loop runs *inside* this single ACP prompt
+/// turn — the [`AcpGoalDriver`] mints exactly one scoped session per expectation
+/// by contract, so `expect` does not re-prompt a spent connection. `expect` owns
+/// the **max-prompt-turns hard cap** ([`MAX_PROMPT_TURNS`]) and imposes it on the
+/// driver through [`build_driver_goal`]; the deterministic guarantee enforced
+/// here is the terminal one: a turn that ends WITHOUT the soft stop (the agent
+/// hit its turn/token budget or stopped early, `stopReason` other than
+/// `end_turn`) is a clear error, never mistaken for success.
+///
+/// The stall/idle floor is the pool's, not re-derived here — a wedged turn
+/// surfaces as [`ExpectError::Pool`] from `drive_goal` and propagates out
+/// immediately.
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Agent`] when the turn ends without the agent declaring
+/// the goal reached (the max-turns cap), or propagates the driver's own error
+/// (including [`ExpectError::Pool`] for a turn the pool abandoned).
+async fn drive_for_goal<D: GoalDriver>(
+    expectation: &Expectation,
+    driver: &D,
+) -> Result<serde_json::Value, ExpectError> {
+    let goal = build_driver_goal(expectation);
+    let turn = driver.drive_goal(&goal).await?;
+    if turn.goal_reached {
+        Ok(turn.claim)
+    } else {
+        Err(ExpectError::Agent(format!(
+            "the driving subagent ended its turn without declaring the goal reached \
+             (it exhausted its {MAX_PROMPT_TURNS}-turn budget or stopped early); a \
+             re-validated completion is required to proceed"
+        )))
+    }
+}
+
+/// Drive `expectation` toward its goal under both hard caps and render the
+/// **independent** deterministic verdict over the adapter-observed state.
+///
+/// The full stop-conditioned engine entry of `ideas/expect.md`
+/// §"Stop conditions" plus hardening rule 2: it bounds the driver loop with two
+/// independent stops and never trusts the agent's self-declared completion.
+///
+/// - **Soft stop + max-turns** — [`observe_with_driver`] drives over
+///   [`drive_for_goal`], which ends on the agent's `end_turn` and rejects a turn
+///   that exhausts the [`MAX_PROMPT_TURNS`] budget without converging.
+/// - **Spec timeout** — the whole drive-and-observe is bounded by the spec's
+///   [`timeout`](crate::Frontmatter::timeout) wall clock; exceeding it yields
+///   [`ExpectError::Timeout`] rather than a hang.
+/// - **Stall/idle** — delegated to the pool inside `drive_goal`, surfaced as
+///   [`ExpectError::Pool`].
+///
+/// The agent's self-declared "done" is then **re-validated**, never trusted: the
+/// returned [`ExpectationVerdict`] is [`evaluate_spec`] replayed over the
+/// adapter's authoritative [`Observation`]. A self-declared done whose observed
+/// state fails the criteria yields a failing verdict — the agent's COMPLETE is
+/// rejected, because the verdict lives in `expect`, never in the agent.
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Timeout`] when the spec budget elapses,
+/// [`ExpectError::Pool`] when the pool abandons a wedged turn,
+/// [`ExpectError::Agent`] when the max-turns cap is hit or the agent cannot be
+/// driven, or any [`ExpectError`] the adapter raises while observing.
+pub async fn drive_and_revalidate<A, D>(
+    expectation: &Expectation,
+    adapter: &A,
+    config: &ObserveConfig,
+    driver: &D,
+) -> Result<ExpectationVerdict, ExpectError>
+where
+    A: SurfaceAdapter,
+    D: GoalDriver,
+{
+    let timeout = expectation.frontmatter.timeout;
+    let bounded = async {
+        let observation = observe_with_driver(expectation, adapter, config, driver).await?;
+        Ok::<_, ExpectError>(evaluate_spec(expectation, &observation))
+    };
+    match tokio::time::timeout(timeout, bounded).await {
+        Ok(result) => result,
+        Err(_) => Err(ExpectError::Timeout {
+            timeout_ms: timeout.as_millis() as u64,
+        }),
+    }
 }
 
 /// Render the subagent's structured claim as a [`CLAIM_STEP_PREFIX`]-tagged
@@ -774,20 +914,29 @@ async fn drive_scope(
 
     let mut observations = Vec::with_capacity(pending.len());
     for (goal, rx) in pending {
-        let collected = rx
-            .await
-            .map_err(|e| {
-                ExpectError::Agent(format!("the agent pool dropped the turn for `{goal}`: {e}"))
-            })?
-            .map_err(|e| ExpectError::Agent(format!("driving `{goal}` failed: {e}")))?;
+        // The inner pool error is preserved typed (via `From<PoolError>`) rather
+        // than stringified, so a liveness abandonment surfaces as
+        // `ExpectError::Pool(PoolError::TurnIdle | TurnCeiling)` — the
+        // deterministic stall floor `expect` reuses — distinguishable from a
+        // genuine agent failure without parsing message text.
+        let collected = rx.await.map_err(|e| {
+            ExpectError::Agent(format!("the agent pool dropped the turn for `{goal}`: {e}"))
+        })??;
 
+        // The soft stop: the agent declared the goal reached only when its turn
+        // ended with `end_turn`. A turn cut short by a hard cap reports `false`.
+        let goal_reached = matches!(collected.stop_reason, StopReason::EndTurn);
         let json = extract_json_value(&collected.content, '{', '}');
         let structured: serde_json::Value = serde_json::from_str(json).map_err(|e| {
             ExpectError::Agent(format!(
                 "the subagent's reply for `{goal}` was not structured JSON: {e}"
             ))
         })?;
-        observations.push(DrivenObservation { goal, structured });
+        observations.push(DrivenObservation {
+            goal,
+            structured,
+            goal_reached,
+        });
     }
     Ok(observations)
 }
@@ -1136,6 +1285,10 @@ mod tests {
             "the subagent's structured reply is captured: {:?}",
             observations[0].structured
         );
+        assert!(
+            observations[0].goal_reached,
+            "the stub agent ended its turn with `end_turn` — the soft stop is captured"
+        );
         // Exactly one `session/new` was minted for the one driven expectation —
         // the scoped-session-per-expectation contract — and the turn ran to its
         // `stopReason` (the pipeline returned, so the session was drained and the
@@ -1204,6 +1357,10 @@ NOTES_RIGHT_REASON the right-reason text routed to the grader.
                 "the driver goal must withhold `{withheld}` (Then criterion / Notes): {goal}"
             );
         }
+        assert!(
+            goal.contains(&MAX_PROMPT_TURNS.to_string()),
+            "the driver goal must impose the {MAX_PROMPT_TURNS}-turn budget on the agent: {goal}"
+        );
     }
 
     // ---- observe-with-driver integration --------------------------------
@@ -1248,12 +1405,14 @@ NOTES_RIGHT_REASON the right-reason text routed to the grader.
     }
 
     impl GoalDriver for RecordingDriver {
-        fn drive_goal(
-            &self,
-            _goal: &str,
-        ) -> impl Future<Output = Result<serde_json::Value, ExpectError>> {
+        fn drive_goal(&self, _goal: &str) -> impl Future<Output = Result<DriverTurn, ExpectError>> {
             self.invoked.store(true, Ordering::SeqCst);
-            async move { Ok(serde_json::json!({})) }
+            async move {
+                Ok(DriverTurn {
+                    claim: serde_json::json!({}),
+                    goal_reached: true,
+                })
+            }
         }
     }
 
@@ -1408,5 +1567,287 @@ NOTES_RIGHT_REASON the right-reason text routed to the grader.
             }
             other => panic!("expected cli state, got {other:?}"),
         }
+    }
+
+    // ---- stop conditions + independent re-validation ---------------------
+    //
+    // The two independent stops the driver loop owns (`ideas/expect.md`
+    // §"Stop conditions") plus hardening rule 2 — the agent's self-declared
+    // done is re-validated, never trusted — each pinned with a stub agent or
+    // stub driver, no real model.
+
+    use agent_client_protocol::schema::CancelNotification;
+    use swissarmyhammer_validators::PoolError;
+
+    /// A short idle window for the stall test: long enough to arm after the
+    /// stub's first chunk, short enough to trip well inside [`PIPELINE_TIMEOUT`].
+    const STALL_IDLE_WINDOW: Duration = Duration::from_millis(300);
+
+    /// An absolute ceiling far above [`STALL_IDLE_WINDOW`] so the wedged turn
+    /// trips the idle window, not the ceiling.
+    const STALL_TURN_CEILING: Duration = Duration::from_secs(30);
+
+    /// A spec carrying one `When` step and one deterministic `Then` criterion, so
+    /// a [`StubAdapter`] with `resolves = false` forces the agent-fallback drive
+    /// and the criterion can be graded against the adapter's observed state.
+    const STOP_SPEC: &str = r#"---
+description: a stop-conditions spec
+surface: cli
+---
+
+Drive the system to a known total.
+
+## When
+- perform the action
+
+## Then
+- [ ] the total is $40
+"#;
+
+    /// Parse [`STOP_SPEC`] into an [`Expectation`] addressed under `/repo`.
+    fn stop_expectation() -> Expectation {
+        Expectation::parse(
+            STOP_SPEC,
+            Path::new("/repo/feature.expect.md"),
+            Path::new("/repo"),
+        )
+        .expect("parse stop spec")
+    }
+
+    /// A [`StubAdapter`] over `body` whose `When` steps are NOT mechanical, so the
+    /// agent-fallback drive is exercised and the criterion is graded against the
+    /// authoritative `body`.
+    fn json_stub_adapter(body: serde_json::Value) -> StubAdapter {
+        StubAdapter {
+            resolves: false,
+            state: SurfaceState::Json { body },
+        }
+    }
+
+    /// A stub ACP agent that streams one chunk to arm the pool's idle window,
+    /// then goes silent far past it — modelling a turn that started decoding then
+    /// wedged (e.g. an unanswered nested request). It records the sessions it is
+    /// asked to cancel so the test can prove the abandonment sent `session/cancel`.
+    struct StallingAgent {
+        next_session: AtomicUsize,
+        notify_tx: broadcast::Sender<SessionNotification>,
+        cancelled: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl MockAgent for StallingAgent {
+        fn new_session<'a>(
+            &'a self,
+            _request: NewSessionRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+            numbered_session_response(&self.next_session, "sess")
+        }
+
+        fn prompt<'a>(
+            &'a self,
+            request: PromptRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
+            Box::pin(async move {
+                // One chunk arms the idle window; then stay silent far longer than
+                // it so the pool abandons the turn as idle (not at the ceiling).
+                let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                    ContentBlock::Text(TextContent::new("working...".to_string())),
+                ));
+                let _ = self
+                    .notify_tx
+                    .send(SessionNotification::new(request.session_id.clone(), update));
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok(PromptResponse::new(StopReason::EndTurn))
+            })
+        }
+
+        fn cancel<'a>(
+            &'a self,
+            notification: CancelNotification,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<()>> {
+            self.cancelled
+                .lock()
+                .expect("cancel recorder mutex")
+                .push(notification.session_id.to_string());
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    /// A stub [`GoalDriver`] that returns a scripted [`DriverTurn`], optionally
+    /// after a delay, without standing up a real agent — so the bounded-loop,
+    /// timeout, and re-validation stops can be driven deterministically.
+    struct ScriptedDriver {
+        /// Whether each turn declares the goal reached (the soft stop).
+        goal_reached: bool,
+        /// Delay before each turn responds — used to outrun the spec timeout.
+        delay: Duration,
+    }
+
+    impl GoalDriver for ScriptedDriver {
+        fn drive_goal(&self, _goal: &str) -> impl Future<Output = Result<DriverTurn, ExpectError>> {
+            let goal_reached = self.goal_reached;
+            let delay = self.delay;
+            async move {
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
+                }
+                Ok(DriverTurn {
+                    claim: serde_json::json!({ "summary": "drove the SUT" }),
+                    goal_reached,
+                })
+            }
+        }
+    }
+
+    /// Stall: a driven turn that arms the idle window then goes silent is
+    /// abandoned via `session/cancel` and surfaces as [`ExpectError::Pool`]
+    /// wrapping [`PoolError::TurnIdle`] — the deterministic stall floor reused
+    /// from the pool, not re-derived — rather than hanging the run.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stop_conditions_idle_turn_is_abandoned_as_turn_idle() {
+        let repo = temp_repo();
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let cancelled = Arc::new(Mutex::new(Vec::new()));
+        let agent = Arc::new(StallingAgent {
+            next_session: AtomicUsize::new(0),
+            notify_tx,
+            cancelled: Arc::clone(&cancelled),
+        });
+        let driver = AcpGoalDriver::new(
+            DriverHandle {
+                agent: DynConnectTo::new(MockAgentAdapter(agent)),
+                notification_rx,
+            },
+            repo.path(),
+            PoolConfig::local()
+                .with_idle_timeout(STALL_IDLE_WINDOW)
+                .with_turn_ceiling(STALL_TURN_CEILING),
+        );
+
+        let err = tokio::time::timeout(PIPELINE_TIMEOUT, driver.drive_goal("observe the SUT"))
+            .await
+            .expect("the abandoned turn must not hang")
+            .expect_err("a wedged turn must surface as an error, not a success");
+
+        assert!(
+            matches!(err, ExpectError::Pool(PoolError::TurnIdle { .. })),
+            "a stalled turn must surface as the typed idle-abandonment outcome, got: {err:?}"
+        );
+
+        // The abandonment actively cancelled the in-flight session; the cancel is
+        // a one-way notification, so allow it a moment to land.
+        for _ in 0..200 {
+            if !cancelled.lock().expect("cancel recorder mutex").is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            !cancelled.lock().expect("cancel recorder mutex").is_empty(),
+            "abandonment must send session/cancel for the wedged turn"
+        );
+    }
+
+    /// Max-turns hard cap: a turn that ends without the agent declaring the goal
+    /// reached (it exhausted its [`MAX_PROMPT_TURNS`] budget or stopped early)
+    /// terminates the drive with a clear error naming the cap — not a hang, and
+    /// not mistaken for success.
+    #[tokio::test]
+    async fn stop_conditions_max_turns_cap_terminates_with_a_clear_error() {
+        let adapter = json_stub_adapter(serde_json::json!({ "total": 40 }));
+        let driver = ScriptedDriver {
+            goal_reached: false,
+            delay: Duration::ZERO,
+        };
+        let expectation = stop_expectation();
+        let config = ObserveConfig::new("/repo");
+
+        let err = tokio::time::timeout(
+            PIPELINE_TIMEOUT,
+            drive_and_revalidate(&expectation, &adapter, &config, &driver),
+        )
+        .await
+        .expect("the bounded loop must not hang")
+        .expect_err("an agent that never declares done must hit the max-turns cap");
+
+        match err {
+            ExpectError::Agent(message) => assert!(
+                message.contains(&MAX_PROMPT_TURNS.to_string()),
+                "the error must name the {MAX_PROMPT_TURNS}-turn cap, got: {message}"
+            ),
+            other => panic!("max-turns must terminate with a clear agent error, got: {other:?}"),
+        }
+    }
+
+    /// Spec-timeout hard cap: a drive that outruns the spec's wall-clock budget
+    /// is aborted with [`ExpectError::Timeout`] carrying that budget, not left to
+    /// hang.
+    #[tokio::test]
+    async fn stop_conditions_spec_timeout_terminates_with_a_clear_error() {
+        let adapter = json_stub_adapter(serde_json::json!({ "total": 40 }));
+        // The driver sleeps far longer than the spec budget, so the wall clock —
+        // not the agent — ends the run.
+        let driver = ScriptedDriver {
+            goal_reached: true,
+            delay: Duration::from_secs(30),
+        };
+        let mut expectation = stop_expectation();
+        expectation.frontmatter.timeout = Duration::from_millis(100);
+        let config = ObserveConfig::new("/repo");
+
+        let err = tokio::time::timeout(
+            PIPELINE_TIMEOUT,
+            drive_and_revalidate(&expectation, &adapter, &config, &driver),
+        )
+        .await
+        .expect("the timeout cap must fire well inside the test budget")
+        .expect_err("a drive that outruns the spec budget must time out");
+
+        match err {
+            ExpectError::Timeout { timeout_ms } => assert_eq!(
+                timeout_ms,
+                expectation.frontmatter.timeout.as_millis() as u64,
+                "the timeout error must carry the spec's wall-clock budget"
+            ),
+            other => panic!("the timeout cap must surface as ExpectError::Timeout, got: {other:?}"),
+        }
+    }
+
+    /// Independent re-validation: an agent that declares the goal reached (the
+    /// soft stop) but whose adapter-observed state fails the criteria yields a
+    /// FAILING verdict — the self-declared done is REJECTED, because the verdict
+    /// lives in `expect`, never in the agent (hardening rule 2).
+    #[tokio::test]
+    async fn stop_conditions_self_declared_done_is_rejected_when_criteria_fail() {
+        // The agent declares success, but the authoritative state has total 50,
+        // not the criterion's 40.
+        let adapter = json_stub_adapter(serde_json::json!({ "total": 50 }));
+        let driver = ScriptedDriver {
+            goal_reached: true,
+            delay: Duration::ZERO,
+        };
+        let expectation = stop_expectation();
+        let config = ObserveConfig::new("/repo");
+
+        let verdict = tokio::time::timeout(
+            PIPELINE_TIMEOUT,
+            drive_and_revalidate(&expectation, &adapter, &config, &driver),
+        )
+        .await
+        .expect("re-validation must not hang")
+        .expect("re-validation produces a verdict even when the agent's claim fails");
+
+        assert!(
+            !verdict.reliability.satisfied(),
+            "the self-declared done must be rejected: the verdict must not be satisfied"
+        );
+        assert_eq!(
+            verdict.criteria.len(),
+            1,
+            "the one Then criterion was graded"
+        );
+        assert!(
+            !verdict.criteria[0].pass,
+            "the criterion fails against the authoritative state (total 50, not 40)"
+        );
     }
 }

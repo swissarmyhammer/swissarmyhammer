@@ -19,8 +19,8 @@ comments:
   timestamp: 2026-06-27T03:51:50.538721+00:00
 depends_on:
 - 01KW265D8SHMBFYBCZ5QEMBVQ0
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff280
 project: expect
 title: evaluate (pure) Tier 1 + observation/golden evaluate ops
 ---

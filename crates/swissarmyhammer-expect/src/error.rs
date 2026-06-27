@@ -45,6 +45,15 @@ pub enum ExpectError {
     /// driving pipeline failed over it (see [`crate::drive`]).
     #[error("agent connection error: {0}")]
     Agent(String),
+
+    /// The agent pool abandoned a driven prompt turn: its liveness supervisor
+    /// tripped the idle window or the absolute ceiling and cancelled the
+    /// session, rather than letting the turn hang. Kept typed (rather than
+    /// folded into [`ExpectError::Agent`]) so a wedged-then-abandoned turn is
+    /// distinguishable from a genuine agent failure without parsing message
+    /// text — the deterministic stall floor `expect` reuses from the pool.
+    #[error(transparent)]
+    Pool(#[from] swissarmyhammer_validators::PoolError),
 }
 
 #[cfg(test)]

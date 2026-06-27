@@ -72,8 +72,8 @@ pub use config::{
 };
 pub use doctor::{diagnose, render, DiagnosticStatus, DoctorFacts, FieldDiagnostic};
 pub use drive::{
-    build_driver_goal, observe_with_driver, run_expect_over_agent, AcpGoalDriver,
-    DrivenObservation, DriverHandle, ExpectScope, GoalDriver,
+    build_driver_goal, drive_and_revalidate, observe_with_driver, run_expect_over_agent,
+    AcpGoalDriver, DrivenObservation, DriverHandle, DriverTurn, ExpectScope, GoalDriver,
 };
 pub use error::ExpectError;
 pub use evaluate::{evaluate, evaluate_assertion, evaluate_spec, STRUCTURAL_DRIFT_REASON};
