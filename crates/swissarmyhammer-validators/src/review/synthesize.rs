@@ -634,6 +634,67 @@ mod tests {
     }
 
     #[test]
+    fn one_rule_matching_multiple_lines_renders_every_instance() {
+        // The no-bail-fast contract: a single rule firing on N lines of one file
+        // yields N findings, all rendered — never collapsed to the first match.
+        // Same file, validator, rule, and claim; only the line differs, so the
+        // conservative dedup key (which includes the line) keeps each occurrence.
+        let rule = Some("no-unused");
+        let verified = vec![
+            confirmed(
+                "src/a.rs",
+                12,
+                "dead-code",
+                rule,
+                "`foo` is never called",
+                None,
+            ),
+            confirmed(
+                "src/a.rs",
+                34,
+                "dead-code",
+                rule,
+                "`foo` is never called",
+                None,
+            ),
+            confirmed(
+                "src/a.rs",
+                56,
+                "dead-code",
+                rule,
+                "`foo` is never called",
+                None,
+            ),
+        ];
+        let report = synthesize(verified, &FleetTally::default(), NOW);
+
+        // Every occurrence survives as its own checklist item, one per file:line.
+        assert!(
+            report.markdown.contains("- [ ] `src/a.rs:12`"),
+            "{}",
+            report.markdown
+        );
+        assert!(
+            report.markdown.contains("- [ ] `src/a.rs:34`"),
+            "{}",
+            report.markdown
+        );
+        assert!(
+            report.markdown.contains("- [ ] `src/a.rs:56`"),
+            "{}",
+            report.markdown
+        );
+        // Not collapsed to one: all three render and are counted.
+        assert_eq!(
+            report.markdown.matches("- [ ] `src/a.rs:").count(),
+            3,
+            "every instance of the rule must render: {}",
+            report.markdown
+        );
+        assert_eq!(report.counts.findings, 3);
+    }
+
+    #[test]
     fn renders_one_flat_findings_section_with_no_severity_grouping() {
         // Review is binary pass/fail: every confirmed finding renders as one flat
         // checklist item ordered by file:line — there are NO severity subsections.

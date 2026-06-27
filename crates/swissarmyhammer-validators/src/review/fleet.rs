@@ -883,6 +883,12 @@ Each finding is one object with these fields:
 (e.g. \"per `duplicates`: 0.94 at `bar.rs:88`\") or a `file:line` citation.
 - `suggestion`: the fix.
 
+Report every occurrence of every rule that fires, in this single pass: when a \
+rule matches on several lines, emit a separate finding for each match — one \
+finding per `file:line`. Do not stop at the first match and do not collapse \
+repeated matches into one finding; list them all so the whole file can be fixed \
+in one go rather than re-reviewed match by match.
+
 Report only real issues. If you find none, emit an empty array `[]`.
 ";
 
@@ -1379,6 +1385,27 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
             OUTPUT_CONTRACT.to_lowercase().contains("already provided")
                 || OUTPUT_CONTRACT.to_lowercase().contains("provided in full"),
             "the contract must state the changed files are provided in full: {OUTPUT_CONTRACT}"
+        );
+    }
+
+    /// The contract must demand reporting EVERY occurrence of every rule that
+    /// fires in a single pass — one finding per `file:line`, never stopping at the
+    /// first match. Bail-fast (find-one → fix → re-review) is the re-review token
+    /// storm this contract exists to prevent.
+    #[test]
+    fn output_contract_demands_every_occurrence_with_no_bail_fast() {
+        let lower = OUTPUT_CONTRACT.to_lowercase();
+        assert!(
+            lower.contains("every occurrence of every rule"),
+            "the contract must demand every occurrence of every rule: {OUTPUT_CONTRACT}"
+        );
+        assert!(
+            lower.contains("do not stop at the first"),
+            "the contract must forbid stopping at the first match: {OUTPUT_CONTRACT}"
+        );
+        assert!(
+            OUTPUT_CONTRACT.contains("one finding per `file:line`"),
+            "the contract must require one finding per file:line: {OUTPUT_CONTRACT}"
         );
     }
 
