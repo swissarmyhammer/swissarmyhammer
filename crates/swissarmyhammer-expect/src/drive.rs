@@ -52,6 +52,7 @@ use agent_client_protocol::schema::{
 use agent_client_protocol::{Client, ConnectionTo, DynConnectTo, Responder};
 use agent_client_protocol_extras::TolerantResponseRouter;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 use swissarmyhammer_validators::review::extract_json_value;
 use swissarmyhammer_validators::{AgentPool, PoolConfig};
@@ -240,6 +241,35 @@ pub async fn run_expect_over_agent(
     repo_root: &Path,
     pool_config: PoolConfig,
 ) -> Result<Vec<DrivenObservation>, ExpectError> {
+    // No external cancel handle: a token nobody cancels never fires, so the pool's
+    // turns are bounded only by their idle/ceiling deadlines. The cancellable
+    // path is reached through [`AcpGoalDriver`] (see [`drive_and_revalidate`]).
+    run_expect_over_agent_with_cancel(
+        agent,
+        notification_rx,
+        scope,
+        repo_root,
+        pool_config,
+        CancellationToken::new(),
+    )
+    .await
+}
+
+/// Like [`run_expect_over_agent`], but the pool's in-flight session can be
+/// actively cancelled out of band by firing `cancel`.
+///
+/// This is the seam [`AcpGoalDriver`] drives so [`drive_and_revalidate`] can send
+/// ACP `session/cancel` when the spec wall-clock timeout elapses, reusing the
+/// pool's idle/ceiling cancel path rather than orphaning the agent behind a
+/// dropped future. `cancel` is threaded straight to [`AgentPool::new_cancellable`].
+async fn run_expect_over_agent_with_cancel(
+    agent: DynConnectTo<Client>,
+    notification_rx: broadcast::Receiver<SessionNotification>,
+    scope: ExpectScope,
+    repo_root: &Path,
+    pool_config: PoolConfig,
+    cancel: CancellationToken,
+) -> Result<Vec<DrivenObservation>, ExpectError> {
     // A fresh notifier whose broadcast the pool's workers subscribe to, fed by a
     // single forwarding task draining the agent's `notification_rx`. This is the
     // ONLY feed into the notifier (see the module docs on double-feeding).
@@ -275,7 +305,7 @@ pub async fn run_expect_over_agent(
         .connect_with(agent, {
             let notifier = Arc::clone(&notifier);
             move |cx: ConnectionTo<agent_client_protocol::Agent>| {
-                run_pipeline_in_connection(cx, notifier, pool_config, scope)
+                run_pipeline_in_connection(cx, notifier, pool_config, scope, cancel)
             }
         })
         .await;
@@ -333,6 +363,16 @@ pub trait GoalDriver {
     /// reply is not recoverable JSON, or [`ExpectError::Pool`] when the pool's
     /// liveness supervisor abandoned the turn.
     fn drive_goal(&self, goal: &str) -> impl Future<Output = Result<DriverTurn, ExpectError>>;
+
+    /// Actively cancel the driver's in-flight scoped session (ACP
+    /// `session/cancel`).
+    ///
+    /// [`drive_and_revalidate`] calls this on the spec wall-clock timeout branch
+    /// so the driving agent stops working rather than being orphaned by the
+    /// dropped drive future — mirroring the pool's idle/ceiling cancel path. The
+    /// default is a no-op for drivers with no live session (the stub drivers);
+    /// [`AcpGoalDriver`] overrides it to fire its pool cancel handle.
+    fn cancel(&self) {}
 }
 
 /// The two halves of a ready ACP agent handle the [`AcpGoalDriver`] consumes: the
@@ -367,6 +407,10 @@ pub struct AcpGoalDriver {
     repo_root: PathBuf,
     /// The pool sizing for the single scoped session.
     pool_config: PoolConfig,
+    /// The pool cancel handle: firing it actively cancels the in-flight scoped
+    /// session (ACP `session/cancel`) via the pool's abandonment path. Fired by
+    /// [`GoalDriver::cancel`] on the spec-timeout teardown.
+    cancel: CancellationToken,
 }
 
 impl AcpGoalDriver {
@@ -381,6 +425,7 @@ impl AcpGoalDriver {
             handle: Mutex::new(Some(handle)),
             repo_root: repo_root.into(),
             pool_config,
+            cancel: CancellationToken::new(),
         }
     }
 }
@@ -399,18 +444,20 @@ impl GoalDriver for AcpGoalDriver {
         };
         let repo_root = self.repo_root.clone();
         let pool_config = self.pool_config;
+        let cancel = self.cancel.clone();
         async move {
             let handle = taken.ok_or_else(|| {
                 ExpectError::Agent(
                     "AcpGoalDriver drives a single scoped session and was already used".to_string(),
                 )
             })?;
-            let mut observations = run_expect_over_agent(
+            let mut observations = run_expect_over_agent_with_cancel(
                 handle.agent,
                 handle.notification_rx,
                 scope,
                 &repo_root,
                 pool_config,
+                cancel,
             )
             .await?;
             observations
@@ -425,6 +472,13 @@ impl GoalDriver for AcpGoalDriver {
                     )
                 })
         }
+    }
+
+    fn cancel(&self) {
+        // Fire the pool cancel handle wired into the in-flight session. The
+        // pool's turn supervisor races this and sends ACP `session/cancel`
+        // (the same teardown its idle/ceiling deadlines use).
+        self.cancel.cancel();
     }
 }
 
@@ -616,6 +670,16 @@ async fn drive_for_goal<D: GoalDriver>(
     }
 }
 
+/// The grace window [`drive_and_revalidate`] keeps polling the drive after firing
+/// the spec-timeout cancel, so the pool's worker actually transmits
+/// `session/cancel` over the still-live connection before teardown.
+///
+/// On the live path the drive resolves well within this window (the cancelled
+/// turn returns [`ExpectError::Pool`] promptly), so the wait ends early; it only
+/// elapses in full for a driver that ignores the cancel (the stub drivers). It is
+/// short relative to the spec budget yet ample for an in-process notification.
+const SPEC_TIMEOUT_CANCEL_DRAIN: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Drive `expectation` toward its goal under both hard caps and render the
 /// **independent** deterministic verdict over the adapter-observed state.
 ///
@@ -628,7 +692,10 @@ async fn drive_for_goal<D: GoalDriver>(
 ///   that exhausts the [`MAX_PROMPT_TURNS`] budget without converging.
 /// - **Spec timeout** — the whole drive-and-observe is bounded by the spec's
 ///   [`timeout`](crate::Frontmatter::timeout) wall clock; exceeding it yields
-///   [`ExpectError::Timeout`] rather than a hang.
+///   [`ExpectError::Timeout`] rather than a hang, and **actively cancels the
+///   in-flight ACP session** ([`GoalDriver::cancel`] → the pool's `session/cancel`
+///   path) so the driving agent stops working rather than being orphaned behind
+///   the dropped drive future.
 /// - **Stall/idle** — delegated to the pool inside `drive_goal`, surfaced as
 ///   [`ExpectError::Pool`].
 ///
@@ -659,11 +726,27 @@ where
         let observation = observe_with_driver(expectation, adapter, config, driver).await?;
         Ok::<_, ExpectError>(evaluate_spec(expectation, &observation))
     };
-    match tokio::time::timeout(timeout, bounded).await {
+    tokio::pin!(bounded);
+    match tokio::time::timeout(timeout, &mut bounded).await {
         Ok(result) => result,
-        Err(_) => Err(ExpectError::Timeout {
-            timeout_ms: timeout.as_millis() as u64,
-        }),
+        Err(_) => {
+            // The spec wall-clock budget elapsed. Actively cancel the in-flight
+            // ACP session (mirroring the pool's idle/ceiling `session/cancel`)
+            // so the driving agent stops working, rather than orphaning it by
+            // dropping the drive future — the gap a bare `tokio::time::timeout`
+            // leaves (`AgentPool`'s synchronous `Drop` aborts workers but cannot
+            // await a cancel over the connection it is dropping). Then keep
+            // polling the drive for a brief grace so the pool's worker actually
+            // sends `session/cancel` over the still-live connection before
+            // teardown; that drained result is discarded because the
+            // deterministic outcome of a spec timeout is `Timeout`, not the
+            // pool's [`ExpectError::Pool`] abandonment.
+            driver.cancel();
+            let _ = tokio::time::timeout(SPEC_TIMEOUT_CANCEL_DRAIN, &mut bounded).await;
+            Err(ExpectError::Timeout {
+                timeout_ms: timeout.as_millis() as u64,
+            })
+        }
     }
 }
 
@@ -958,6 +1041,7 @@ async fn run_pipeline_in_connection(
     notifier: Arc<claude_agent::NotificationSender>,
     pool_config: PoolConfig,
     scope: ExpectScope,
+    cancel: CancellationToken,
 ) -> agent_client_protocol::Result<Result<Vec<DrivenObservation>, ExpectError>> {
     // ACP `initialize` is a ONCE-per-connection handshake. Do it here, before the
     // pool's workers issue any prompts, rather than per prompt: the pool shares
@@ -978,7 +1062,7 @@ async fn run_pipeline_in_connection(
     .block_task()
     .await?;
 
-    let pool = AgentPool::new(cx, notifier, pool_config);
+    let pool = AgentPool::new_cancellable(cx, notifier, pool_config, cancel);
     Ok(drive_scope(&pool, scope).await)
 }
 
@@ -1788,6 +1872,30 @@ NOTES_RIGHT_REASON the right-reason text routed to the grader.
     /// trips the idle window, not the ceiling.
     const STALL_TURN_CEILING: Duration = Duration::from_secs(30);
 
+    /// How many times [`await_recorded_cancel`] polls for a recorded
+    /// `session/cancel` before failing, and the wait between polls. Their product
+    /// (2s) comfortably outlasts the one-way notification's in-process delivery.
+    const CANCEL_DELIVERY_POLLS: usize = 200;
+    const CANCEL_DELIVERY_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+    /// Assert the in-flight session was actively cancelled: poll `cancelled`
+    /// (the [`StallingAgent`]'s record of every `session/cancel` it received)
+    /// until it is non-empty, or fail.
+    ///
+    /// The cancel is a one-way ACP notification, so it can land slightly after
+    /// the abandonment/timeout error returns; this gives delivery a bounded
+    /// window rather than racing a single check. Shared by the idle-abandonment
+    /// and spec-timeout tests, which both prove `session/cancel` is sent.
+    async fn await_recorded_cancel(cancelled: &Arc<Mutex<Vec<String>>>) {
+        for _ in 0..CANCEL_DELIVERY_POLLS {
+            if !cancelled.lock().expect("cancel recorder mutex").is_empty() {
+                return;
+            }
+            tokio::time::sleep(CANCEL_DELIVERY_POLL_INTERVAL).await;
+        }
+        panic!("a session/cancel must be sent for the abandoned in-flight session");
+    }
+
     /// A spec carrying one `When` step and one deterministic `Then` criterion, so
     /// a [`StubAdapter`] with `resolves = false` forces the agent-fallback drive
     /// and the criterion can be graded against the adapter's observed state.
@@ -1946,17 +2054,8 @@ Drive the system to a known total.
         );
 
         // The abandonment actively cancelled the in-flight session; the cancel is
-        // a one-way notification, so allow it a moment to land.
-        for _ in 0..200 {
-            if !cancelled.lock().expect("cancel recorder mutex").is_empty() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(
-            !cancelled.lock().expect("cancel recorder mutex").is_empty(),
-            "abandonment must send session/cancel for the wedged turn"
-        );
+        // a one-way notification, so allow it a bounded window to land.
+        await_recorded_cancel(&cancelled).await;
     }
 
     /// Max-turns hard cap: a turn that ends without the agent declaring the goal
@@ -2120,31 +2219,41 @@ Drive the system to a known total.
     /// in-flight drive.
     const SPEC_TIMEOUT_ABORT_WINDOW: Duration = Duration::from_secs(5);
 
+    /// The spec budget for the spec-timeout-over-ACP test: small enough that the
+    /// wall clock ends the drive well before the wedged agent's 60s sleep or the
+    /// pool's [`STALL_TURN_CEILING`], yet large enough that the scoped session is
+    /// reliably established (so there is an in-flight session to cancel) before
+    /// the budget elapses.
+    const SPEC_TIMEOUT_BUDGET: Duration = Duration::from_millis(500);
+
     /// Spec-timeout over a **real mock-ACP session**: a drive whose agent wedges
     /// (one chunk, then silent far past the spec budget) is aborted with
     /// [`ExpectError::Timeout`] carrying the spec's wall-clock budget — promptly,
-    /// not left to hang on the agent's sleep or the pool's stall floor. Unlike
+    /// not left to hang on the agent's sleep or the pool's stall floor — AND the
+    /// in-flight ACP session is actively cancelled (`session/cancel` sent) so the
+    /// agent stops working rather than being orphaned. Unlike
     /// [`stop_conditions_spec_timeout_terminates_with_a_clear_error`], which uses a
     /// stub [`ScriptedDriver`], this drives a real [`AcpGoalDriver`] over the
     /// [`StallingAgent`], so the [`AgentPool`] teardown path is exercised end to
     /// end.
     ///
-    /// `^gg00rxf` review Finding 3: the spec-timeout stop drops the drive future,
-    /// which tears the pool's workers down but does NOT actively send
-    /// `session/cancel` for the in-flight session ([`AgentPool`]'s `Drop` is
-    /// synchronous and cannot await the cancel over the connection it is dropping).
-    /// Active session cancellation on this teardown — distinct from the pool's
-    /// idle/ceiling cancel path, which this test deliberately does not arm — is a
-    /// tracked follow-up; this test pins the guaranteed behavior (prompt typed
-    /// timeout, no hang).
+    /// `^gg00rxf` review Finding 3: a bare `tokio::time::timeout` on the spec
+    /// budget only DROPS the drive future, which tears the pool's workers down
+    /// but does NOT send `session/cancel` ([`AgentPool`]'s `Drop` is synchronous
+    /// and cannot await the cancel over the connection it is dropping). The fix
+    /// has [`drive_and_revalidate`] fire the driver's pool cancel handle on the
+    /// timeout branch, reusing the pool's existing idle/ceiling cancel path; this
+    /// test pins that the cancel is actually sent, in addition to the typed
+    /// timeout.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn spec_timeout_over_an_acp_session_aborts_the_in_flight_drive() {
+    async fn spec_timeout_over_an_acp_session_cancels_the_in_flight_session() {
         let repo = temp_repo();
         let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let cancelled = Arc::new(Mutex::new(Vec::new()));
         let agent = Arc::new(StallingAgent {
             next_session: AtomicUsize::new(0),
             notify_tx,
-            cancelled: Arc::new(Mutex::new(Vec::new())),
+            cancelled: Arc::clone(&cancelled),
         });
         let driver = AcpGoalDriver::new(
             DriverHandle {
@@ -2164,7 +2273,7 @@ Drive the system to a known total.
         // agent's 60s sleep or the pool's stall floor.
         let adapter = json_stub_adapter(serde_json::json!({ "total": 40 }));
         let mut expectation = stop_expectation_under(repo.path());
-        expectation.frontmatter.timeout = Duration::from_millis(100);
+        expectation.frontmatter.timeout = SPEC_TIMEOUT_BUDGET;
         let config = ObserveConfig::new(repo.path());
 
         let started = std::time::Instant::now();
@@ -2192,5 +2301,9 @@ Drive the system to a known total.
             "the spec timeout must abort the in-flight drive promptly ({elapsed:?}), not wait \
              on the wedged agent or the pool's stall floor"
         );
+
+        // The spec timeout must ACTIVELY cancel the in-flight session, not merely
+        // drop the drive future — mirroring the pool's idle/ceiling cancel path.
+        await_recorded_cancel(&cancelled).await;
     }
 }

@@ -34,8 +34,8 @@ comments:
 
     Discovered work (follow-up created 01KW4ZD3JCRD8RR4HCG3B18DH1 / ^3b18dh1): there is NO prose->Tier2/3 compiler, so approve freezes empty tier2/3 today and production callers still use the Tier-1 `compare`. That task covers building the compiler AND re-routing ledger_state/approval_status/ledger_entry/check.rs through compare_tiered with a real embedder/grader (the `debug_assert!` guard makes the current footgun loud meanwhile). Adversarial double-check returned REVISE on exactly that future-footgun; addressed via the guard + expanded follow-up scope.
   timestamp: 2026-06-27T16:51:28.579502+00:00
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8680
 project: expect
 title: Wire real Tier 2/3 ledger compare (drop tolerance/judgment stubs)
 ---

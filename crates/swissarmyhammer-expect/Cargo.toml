@@ -60,6 +60,11 @@ agent-client-protocol = { workspace = true }
 agent-client-protocol-extras = { workspace = true }
 claude-agent = { workspace = true }
 tokio = { workspace = true }
+# `CancellationToken` is the pool cancel handle `AcpGoalDriver` fires when the
+# spec wall-clock timeout elapses, so `drive_and_revalidate` actively cancels the
+# in-flight ACP session (reusing the pool's idle/ceiling cancel) instead of
+# orphaning the agent by dropping the drive future.
+tokio-util = { workspace = true }
 
 # Structured logging for the drive seam (stderr is swallowed under MCP).
 tracing = { workspace = true }

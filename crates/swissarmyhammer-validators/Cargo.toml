@@ -67,6 +67,10 @@ rusqlite = { workspace = true }
 
 # Async runtime backing the agent pool's worker tasks
 tokio = { workspace = true }
+# `CancellationToken` is the awaitable, latching cancel handle the pool's turn
+# supervisor selects on so a caller (the `expect` spec-timeout teardown) can
+# actively cancel an in-flight session, alongside the idle/ceiling deadlines.
+tokio-util = { workspace = true }
 # `join_all` drives the per-validator prime→fork fan-out runs concurrently
 # (the pool still owns the only real concurrency control)
 futures = { workspace = true }

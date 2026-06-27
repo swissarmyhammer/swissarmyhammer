@@ -35,6 +35,7 @@ use agent_client_protocol_extras::{
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 /// Minimum worker count. A pool always has at least one worker so it can make
 /// forward progress.
@@ -184,6 +185,14 @@ pub enum PoolError {
         /// The absolute wall-clock cap the turn exceeded.
         turn_ceiling: std::time::Duration,
     },
+    /// The caller fired the pool's external cancel handle (e.g. the `expect`
+    /// spec wall-clock timeout elapsed), so the in-flight turn was abandoned and
+    /// its session actively cancelled (ACP `session/cancel`) rather than being
+    /// orphaned by a dropped future. Typed — like [`PoolError::TurnIdle`] /
+    /// [`PoolError::TurnCeiling`] — so a caller-cancelled turn is distinguishable
+    /// from a liveness abandonment or a genuine agent failure.
+    #[error("prompt turn was cancelled by the caller and its session was cancelled")]
+    TurnCancelled,
     /// The `session/fork` extension call failed, so the turn's prompt never
     /// ran. The submitter still holds the payload and can fall back to a
     /// fresh-session monolithic prompt — a fork failure must never lose a task.
@@ -332,10 +341,35 @@ impl AgentPool {
     /// Create a pool of `config.workers` workers draining a shared queue, each
     /// issuing prompts over a clone of `agent` and subscribing to `notifier`
     /// for streaming response content.
+    ///
+    /// The pool has no external cancel handle: turns are bounded only by the
+    /// liveness supervisor's idle/ceiling deadlines. Use [`AgentPool::new_cancellable`]
+    /// when a caller needs to actively abandon in-flight turns out of band.
     pub fn new(
         agent: ConnectionTo<Agent>,
         notifier: Arc<claude_agent::NotificationSender>,
         config: PoolConfig,
+    ) -> Self {
+        // A token nobody holds the cancel end of never fires, so the pool's turns
+        // are bounded purely by their idle/ceiling deadlines — identical to the
+        // pre-cancel-handle behavior.
+        Self::new_cancellable(agent, notifier, config, CancellationToken::new())
+    }
+
+    /// Create a pool whose in-flight turns can be abandoned out of band by
+    /// cancelling `cancel`.
+    ///
+    /// Identical to [`AgentPool::new`], except every worker's turn supervisor
+    /// also races `cancel`: when it fires, the in-flight session is actively
+    /// cancelled (ACP `session/cancel`, the same teardown the idle/ceiling
+    /// deadlines use) and the turn resolves to [`PoolError::TurnCancelled`]. This
+    /// is the seam the `expect` spec-timeout teardown drives so a wall-clock
+    /// timeout stops the agent rather than orphaning it behind a dropped future.
+    pub fn new_cancellable(
+        agent: ConnectionTo<Agent>,
+        notifier: Arc<claude_agent::NotificationSender>,
+        config: PoolConfig,
+        cancel: CancellationToken,
     ) -> Self {
         let worker_count = config.workers.max(MIN_WORKERS);
         let (tx, rx) = mpsc::unbounded_channel::<Job>();
@@ -346,8 +380,9 @@ impl AgentPool {
             let rx = Arc::clone(&rx);
             let agent = agent.clone();
             let notifier = Arc::clone(&notifier);
+            let cancel = cancel.clone();
             workers.push(tokio::spawn(async move {
-                worker_loop(rx, agent, notifier, config).await;
+                worker_loop(rx, agent, notifier, config, cancel).await;
             }));
         }
 
@@ -596,6 +631,7 @@ async fn worker_loop(
     agent: ConnectionTo<Agent>,
     notifier: Arc<claude_agent::NotificationSender>,
     config: PoolConfig,
+    cancel: CancellationToken,
 ) {
     loop {
         let job = {
@@ -614,6 +650,7 @@ async fn worker_loop(
             job.prompt,
             job.pin_on_save,
             config,
+            &cancel,
         )
         .await;
         // The submitter may have dropped its receiver; that is fine.
@@ -644,6 +681,11 @@ async fn worker_loop(
 /// keep generating into a dropped receiver. The session id is learned from
 /// `run_prompt` through a shared slot once `new_session` completes; if the turn
 /// wedged before that there is no session to cancel.
+///
+/// A third abandonment trigger races alongside idle and ceiling: the external
+/// `cancel` handle. When the caller fires it (the `expect` spec wall-clock
+/// timeout), the in-flight session is cancelled the same way and the turn
+/// resolves to [`PoolError::TurnCancelled`].
 async fn run_turn_with_liveness(
     agent: &ConnectionTo<Agent>,
     notifier: &claude_agent::NotificationSender,
@@ -651,6 +693,7 @@ async fn run_turn_with_liveness(
     prompt: String,
     pin_on_save: bool,
     config: PoolConfig,
+    cancel: &CancellationToken,
 ) -> SessionTurnResult {
     let session_slot: Arc<std::sync::Mutex<Option<SessionId>>> = Arc::default();
     // Two independent subscriptions: one consumed by `run_prompt`'s content
@@ -686,6 +729,10 @@ async fn run_turn_with_liveness(
             result = &mut turn => return result,
             received = liveness.recv(), if liveness_open => {
                 note_progress(received, &session_slot, &mut last_progress, &mut liveness_open);
+            }
+            _ = cancel.cancelled() => {
+                cancel_in_flight_session(agent, &session_slot);
+                return Err(PoolError::TurnCancelled);
             }
             _ = tokio::time::sleep_until(abandon_at) => {
                 return Err(abandon_turn(agent, &session_slot, ceiling_deadline, config));
@@ -745,15 +792,7 @@ fn abandon_turn(
     ceiling_deadline: tokio::time::Instant,
     config: PoolConfig,
 ) -> PoolError {
-    let session = session_slot
-        .lock()
-        .expect("session slot lock poisoned")
-        .clone();
-    if let Some(session_id) = session {
-        if let Err(e) = agent.send_notification(CancelNotification::new(session_id)) {
-            tracing::warn!("failed to cancel abandoned session: {}", e);
-        }
-    }
+    cancel_in_flight_session(agent, session_slot);
     if tokio::time::Instant::now() >= ceiling_deadline {
         PoolError::TurnCeiling {
             turn_ceiling: config.turn_ceiling,
@@ -761,6 +800,30 @@ fn abandon_turn(
     } else {
         PoolError::TurnIdle {
             idle_timeout: config.idle_timeout,
+        }
+    }
+}
+
+/// Actively cancel the in-flight turn's session (ACP `session/cancel`) so the
+/// agent stops decoding instead of being detached to generate into a dropped
+/// receiver.
+///
+/// The single place every abandonment trigger — idle, ceiling, and the external
+/// [`CancellationToken`] — sends the cancel, so they share one definition of
+/// "stop the agent." The session id is learned through `session_slot` once
+/// `new_session` completes; if the turn wedged before that there is no session
+/// to cancel, so this is a no-op.
+fn cancel_in_flight_session(
+    agent: &ConnectionTo<Agent>,
+    session_slot: &std::sync::Mutex<Option<SessionId>>,
+) {
+    let session = session_slot
+        .lock()
+        .expect("session slot lock poisoned")
+        .clone();
+    if let Some(session_id) = session {
+        if let Err(e) = agent.send_notification(CancelNotification::new(session_id)) {
+            tracing::warn!("failed to cancel abandoned session: {}", e);
         }
     }
 }
