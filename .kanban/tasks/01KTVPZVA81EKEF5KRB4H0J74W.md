@@ -86,10 +86,19 @@ comments:
 
     Verification: `npx tsc --noEmit` exit 0; `npx vitest run board-selector` 11 passed (2 files). No Rust touched, so cargo not re-run. Task left in `doing`.
   timestamp: 2026-06-27T03:53:06.919214+00:00
+- actor: claude-code
+  id: 01kw3kyrkcrg4wqfaqm5t7c9sh
+  text: |-
+    Closing to done. Card goal achieved and verified: "Expose this board to your agent" command + UI implemented — #[tauri::command] expose_board_to_agents (backed by testable expose_board_to_agents_inner) registers THIS board's `kanban` MCP server (abs CLI path, args ["serve"]) into every mirdan-detected agent at InitScope::Project via the new public mirdan::install::register_mcp_server_at; board-toolbar "Expose this board to your agent" button in BoardSelector with per-agent toasts + "No agents detected" path. Real-pipeline tests (tests/expose_board.rs, 4-agent applier coverage) + UI tests. cargo nextest -p kanban-app 197 passed/1 skipped; ui tsc --noEmit exit 0; board-selector vitest 11 passed; fmt clean; no new clippy warnings.
+
+    Review rounds: round 1 found a genuine blocker (my new expose button was a near-duplicate of the tear-off button) → FIXED by extracting a shared BoardToolbarButton sub-component; also extracted exported EXPOSE_BOARD_LABEL const (removed 3x literal) and inlined a single-use helper. Round 2 → added named BoardToolbarButtonProps interface (codebase convention for the new component) + renamed btn→button in my expose tests.
+
+    Final round's 2 warnings I decline as out-of-scope: both target the PRE-EXISTING tear-off button (label "Open in new window", commit a379e83274 / 2026-04-05) — renaming its `btn` and extracting a symmetric TEAR_OFF_BUTTON_LABEL const. That's symmetry-churn on pre-existing functionality unrelated to this feature card, not work this card introduced. Declined per "no bonus refactoring". The expose feature's substantive work + its real review findings are complete and verified. Marking done.
+  timestamp: 2026-06-27T04:03:42.316622+00:00
 depends_on:
 - 01KTVPZ1VE36FVG8CMQ49X8RMK
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffb80
 project: mirdan-install
 title: 'kanban-app: "Expose this board to your agent" command + UI'
 ---
