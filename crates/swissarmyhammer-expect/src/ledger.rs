@@ -32,12 +32,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
-use crate::assertion::CompiledAssertion;
+use crate::assertion::{compile, AssertionOutcome, CompileError, CompiledAssertion};
 use crate::config::ExpectConfig;
 use crate::error::ExpectError;
 use crate::evaluate::evaluate;
 use crate::observe::golden_path;
+use crate::spec::{Criterion, Expectation};
 use crate::types::{
     CliState, CriterionVerdict, LedgerState, Observation, SurfaceState, Trajectory, VerdictTier,
 };
@@ -452,6 +454,331 @@ fn judgment_drift(golden: &CriterionVerdict, received: &CriterionVerdict) -> boo
     golden.pass != received.pass || golden.evidence != received.evidence
 }
 
+// ---------------------------------------------------------------------------
+// Approve: freeze assertions, render the binding diff, gate CI.
+// ---------------------------------------------------------------------------
+
+/// The arrow rendering one binding in an approve diff, read "value comes from
+/// locator" (`40 ← $.total`). The diff shows the *binding*, not just the value,
+/// so a mis-compiled locator is caught at review rather than baked into a golden.
+pub const BINDING_ARROW: &str = " ← ";
+
+/// The approval-relevant status of one expectation: how its received run relates
+/// to its golden.
+///
+/// Drives both the CI gate and the [`ApproveMode`] selection. It overlaps with
+/// [`LedgerState`] on the `New`/`Drifted`/`Approved` axis but adds the
+/// [`Unobserved`](ApprovalStatus::Unobserved) case (no received run to promote),
+/// which the ledger compare cannot express — approval is computed from the
+/// *presence* of the two artifacts, not just from a compare of both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ApprovalStatus {
+    /// No golden yet — a brand-new expectation, selected by `--missing`/`--all`.
+    New,
+    /// A golden exists and the received run drifted from it — selected by
+    /// `--changed`/`--all`.
+    Drifted,
+    /// A golden exists and the received run matches it — nothing to approve.
+    Approved,
+    /// No received observation to promote — the spec must be observed first.
+    Unobserved,
+}
+
+/// How an approve pass selects which in-scope expectations to promote, mirroring
+/// the granular `--update-snapshots` modes of snapshot testing.
+///
+/// The absence of a mode is *not* a variant: a bare `approve` is a preview that
+/// writes nothing and requires the reviewer to re-run with an explicit mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ApproveMode {
+    /// `--missing`: only brand-new expectations (no golden yet).
+    Missing,
+    /// `--changed`: only expectations whose received run drifted from the golden.
+    Changed,
+    /// `--all`: every in-scope expectation that needs approval (new or drifted).
+    All,
+}
+
+impl ApproveMode {
+    /// Whether this mode selects an expectation in the given [`ApprovalStatus`].
+    ///
+    /// An [`Approved`](ApprovalStatus::Approved) or
+    /// [`Unobserved`](ApprovalStatus::Unobserved) expectation is never selected
+    /// by any mode (nothing to promote); the table below is the single source of
+    /// truth for the `--missing`/`--changed`/`--all` partition.
+    pub fn selects(self, status: ApprovalStatus) -> bool {
+        match (self, status) {
+            (_, ApprovalStatus::Approved | ApprovalStatus::Unobserved) => false,
+            (ApproveMode::Missing, ApprovalStatus::New) => true,
+            (ApproveMode::Missing, ApprovalStatus::Drifted) => false,
+            (ApproveMode::Changed, ApprovalStatus::Drifted) => true,
+            (ApproveMode::Changed, ApprovalStatus::New) => false,
+            (ApproveMode::All, ApprovalStatus::New | ApprovalStatus::Drifted) => true,
+        }
+    }
+}
+
+/// One row of an approve diff: a criterion bound to its compiled locator and the
+/// value that locator resolves to in the approved observation.
+///
+/// The reviewer reads `criterion` → (`value` [`BINDING_ARROW`] `locator`) so a
+/// mis-compiled locator is visible (a wrong `locator` that still resolves to the
+/// right `value` is exactly the silent mis-read the binding view exposes).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalBinding {
+    /// The criterion prose the assertion is bound to.
+    pub criterion: String,
+    /// Where the value lives — the compiled (or reviewer-edited) locator.
+    pub locator: String,
+    /// The value that locator resolves to in the approved observation.
+    pub value: String,
+    /// The verdict tier the assertion's kind selected.
+    pub tier: VerdictTier,
+    /// Whether the locator diverges from a fresh compile of the criterion — i.e.
+    /// a reviewer hand-edited it. A hand-edit is bound to the criterion prose:
+    /// changing the prose discards it (no prior assertion matches), forcing a
+    /// recompile and a fresh review.
+    pub hand_edited: bool,
+}
+
+impl ApprovalBinding {
+    /// Render the binding as `value ← locator` (e.g. `40 ← $.total`).
+    pub fn render(&self) -> String {
+        format!("{}{BINDING_ARROW}{}", self.value, self.locator)
+    }
+}
+
+/// Why an approve attempt was refused before any golden was written.
+#[derive(Debug, Error)]
+pub enum ApproveError {
+    /// A deterministic criterion compiled to a locator that does not bind and
+    /// pass against the approved observation — a hallucinated locator, refused so
+    /// it never reaches the golden. Reuses the compiler's self-verification
+    /// ([`compile`] rejects a locator that fails to bind/pass its source run).
+    #[error("cannot approve `{path}`: {source}")]
+    Compile {
+        /// The expectation's repo-relative identity.
+        path: String,
+        /// The underlying compile rejection.
+        #[source]
+        source: CompileError,
+    },
+}
+
+/// Build the golden for `spec` from its `received` observation: scrub the run,
+/// freeze its compiled assertions, and pin the grading inputs.
+///
+/// Compilation happens *here*, at approve time, bound against the **scrubbed**
+/// observation that is actually stored — so each frozen assertion is guaranteed
+/// to bind and pass against the golden it ships with ([`compile`] self-verifies,
+/// and a criterion whose locator does not bind is refused as
+/// [`ApproveError::Compile`], never written). A Tier-2/Tier-3 criterion that
+/// carries no deterministic assertion ([`CompileError::Unrecognized`]) is left
+/// out of the frozen set for a later tier to grade.
+///
+/// When a `prior` golden is supplied, a frozen assertion whose criterion prose is
+/// unchanged and that still holds against the new observation is **preserved**
+/// verbatim — this is how a reviewer's hand-edited locator survives a
+/// re-approval. Changing the criterion prose breaks the match, so the criterion
+/// is recompiled and re-reviewed.
+///
+/// # Errors
+///
+/// Returns [`ApproveError::Compile`] when a deterministic criterion compiles to a
+/// locator that does not bind and pass against the scrubbed observation.
+pub fn approve(
+    spec: &Expectation,
+    received: &Observation,
+    grading: GradingPins,
+    prior: Option<&Golden>,
+    scrubbers: &ScrubberSet,
+) -> Result<Golden, ApproveError> {
+    let observation = scrubbers.scrub_observation(received);
+    let assertions = freeze_assertions(spec, &observation, prior)?;
+    Ok(Golden {
+        observation,
+        assertions,
+        grading,
+    })
+}
+
+/// Compile (or preserve) the frozen assertion set for `spec` against the scrubbed
+/// `observation`, the load-bearing half of [`approve`].
+fn freeze_assertions(
+    spec: &Expectation,
+    observation: &Observation,
+    prior: Option<&Golden>,
+) -> Result<Vec<CompiledAssertion>, ApproveError> {
+    let mut frozen = Vec::with_capacity(spec.criteria.len());
+    for criterion in &spec.criteria {
+        if let Some(preserved) = preserved_assertion(criterion, observation, prior) {
+            frozen.push(preserved);
+            continue;
+        }
+        match compile(criterion, observation) {
+            Ok(assertion) => frozen.push(assertion),
+            // A non-deterministic criterion is graded by a later tier, not frozen.
+            Err(CompileError::Unrecognized { .. }) => {}
+            // Any other rejection (a hallucinated locator above all) refuses the
+            // whole approve: no unverified locator reaches the golden.
+            Err(source) => {
+                return Err(ApproveError::Compile {
+                    path: spec.path.clone(),
+                    source,
+                })
+            }
+        }
+    }
+    Ok(frozen)
+}
+
+/// The prior frozen assertion for `criterion` that still holds against the new
+/// `observation`, or `None` when there is no prior golden, the criterion prose
+/// changed, or the prior assertion no longer holds.
+///
+/// Matching by criterion prose is what binds a reviewer hand-edit to the prose:
+/// edit the prose and the match is lost, so the criterion is recompiled.
+fn preserved_assertion(
+    criterion: &Criterion,
+    observation: &Observation,
+    prior: Option<&Golden>,
+) -> Option<CompiledAssertion> {
+    let candidate = prior?
+        .assertions
+        .iter()
+        .find(|assertion| assertion.criterion_text == criterion.text)?;
+    (candidate.evaluate(observation) == AssertionOutcome::Holds).then(|| candidate.clone())
+}
+
+/// Render `golden`'s frozen assertions as the per-criterion binding diff a
+/// reviewer reads before approving.
+///
+/// A pure view over the golden: each binding resolves its locator against the
+/// stored observation and flags whether the locator was hand-edited (diverges
+/// from a fresh compile of its criterion).
+pub fn approval_diff(golden: &Golden) -> Vec<ApprovalBinding> {
+    golden
+        .assertions
+        .iter()
+        .map(|assertion| binding_of(assertion, &golden.observation))
+        .collect()
+}
+
+/// Build the [`ApprovalBinding`] for one frozen `assertion` against `observation`.
+fn binding_of(assertion: &CompiledAssertion, observation: &Observation) -> ApprovalBinding {
+    let value = observation
+        .checkpoints
+        .get(assertion.checkpoint)
+        .and_then(|checkpoint| assertion.locator.resolve(&checkpoint.state))
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    ApprovalBinding {
+        criterion: assertion.criterion_text.clone(),
+        locator: assertion.locator.to_string(),
+        value,
+        tier: assertion.tier,
+        hand_edited: is_hand_edited(assertion, observation),
+    }
+}
+
+/// Whether `assertion` diverges from a fresh compile of its criterion against
+/// `observation` — the signal that a reviewer hand-edited its locator.
+fn is_hand_edited(assertion: &CompiledAssertion, observation: &Observation) -> bool {
+    let criterion = Criterion {
+        text: assertion.criterion_text.clone(),
+        checked: false,
+    };
+    match compile(&criterion, observation) {
+        Ok(fresh) => &fresh != assertion,
+        Err(_) => true,
+    }
+}
+
+/// The approval status of one expectation, from the presence and compare of its
+/// `golden` and `received` artifacts.
+pub fn approval_status(
+    golden: Option<&Golden>,
+    received: Option<&Observation>,
+    scrubbers: &ScrubberSet,
+) -> ApprovalStatus {
+    let Some(received) = received else {
+        return ApprovalStatus::Unobserved;
+    };
+    match golden {
+        None => ApprovalStatus::New,
+        Some(golden) => match compare(golden, received, scrubbers).state {
+            LedgerState::Approved => ApprovalStatus::Approved,
+            _ => ApprovalStatus::Drifted,
+        },
+    }
+}
+
+/// What an approve pass decides to do for one expectation under a chosen
+/// [`ApproveMode`] and CI flag — the unit the tool op interprets.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ApprovalDecision {
+    /// Promote this golden (a local, human-gated approval).
+    Write {
+        /// The status that selected the spec.
+        status: ApprovalStatus,
+        /// The golden to write.
+        golden: Golden,
+    },
+    /// Not selected by the chosen mode (already approved, unobserved, or the
+    /// wrong kind of change for this mode).
+    Skipped {
+        /// The unselected status.
+        status: ApprovalStatus,
+    },
+    /// Selected, but refused because CI is set: approve NEVER writes in CI, so an
+    /// unapproved drift — or a brand-new baseline — is always a hard failure
+    /// there. A green golden is only ever minted locally by observe + approve.
+    RefusedInCi {
+        /// The status that would have been written outside CI.
+        status: ApprovalStatus,
+    },
+}
+
+/// Decide what an approve pass should do for one expectation.
+///
+/// Classifies the spec ([`approval_status`]), applies the [`ApproveMode`]
+/// selection, then enforces the CI gate: under `ci`, a *selected* spec is
+/// [`ApprovalDecision::RefusedInCi`] (strict first-run — a `new` expectation can
+/// never be baselined in CI, and a drift is never silently re-approved there);
+/// otherwise it builds the golden to write.
+///
+/// The CI flag is **injected**, never read from the ambient environment, so this
+/// policy is deterministic to test.
+///
+/// # Errors
+///
+/// Returns [`ApproveError`] when the spec is selected for a write but a
+/// deterministic criterion fails to compile against its observation.
+pub fn decide_approval(
+    spec: &Expectation,
+    golden: Option<&Golden>,
+    received: Option<&Observation>,
+    mode: ApproveMode,
+    grading: GradingPins,
+    ci: bool,
+    scrubbers: &ScrubberSet,
+) -> Result<ApprovalDecision, ApproveError> {
+    let status = approval_status(golden, received, scrubbers);
+    if !mode.selects(status) {
+        return Ok(ApprovalDecision::Skipped { status });
+    }
+    if ci {
+        return Ok(ApprovalDecision::RefusedInCi { status });
+    }
+    // `selects` is true only for New/Drifted, both of which carry a received
+    // observation (Unobserved and Approved are never selected).
+    let received = received.expect("a selected expectation carries a received observation");
+    let golden = approve(spec, received, grading, golden, scrubbers)?;
+    Ok(ApprovalDecision::Write { status, golden })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,6 +1038,387 @@ mod tests {
         assert!(
             !tolerance_drift(&base, &base),
             "an identical score stays within the band",
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Approve: freeze, diff, select, gate.
+    // -----------------------------------------------------------------------
+
+    /// An expectation at [`COUPON`] carrying the given Tier-1 `criteria` — the
+    /// minimal spec the approve path needs (only `path` and `criteria` are read).
+    fn spec(criteria: &[&str]) -> Expectation {
+        use crate::spec::{Frontmatter, Isolation, ReliabilityPolicy};
+        use crate::types::Surface;
+        Expectation {
+            path: COUPON.to_string(),
+            frontmatter: Frontmatter {
+                description: "a coupon reduces the total".to_string(),
+                surface: Surface::Cli,
+                model: None,
+                reliability: ReliabilityPolicy::default(),
+                repeat: None,
+                tiers: vec![VerdictTier::Deterministic],
+                similarity_threshold: None,
+                timeout: Duration::from_secs(60),
+                tags: Vec::new(),
+                setup: None,
+                isolation: Isolation::Shared,
+            },
+            intent: String::new(),
+            criteria: criteria
+                .iter()
+                .map(|text| Criterion {
+                    text: text.to_string(),
+                    checked: false,
+                })
+                .collect(),
+            given: Vec::new(),
+            when: Vec::new(),
+            notes: None,
+        }
+    }
+
+    /// The default grading pins reused across the approve fixtures.
+    fn pins() -> GradingPins {
+        GradingPins::from_config(&ExpectConfig::default())
+    }
+
+    #[test]
+    fn approve_writes_a_scrubbed_golden_with_frozen_assertions() {
+        // The received run carries volatile content (a timestamp) alongside the
+        // real value; approve must store the scrubbed observation and freeze a
+        // real compiled assertion against it.
+        let spec = spec(&["the total is $40"]);
+        let received = cli_observation("at 2026-06-26T14:44:30Z total is $40");
+
+        let golden = approve(&spec, &received, pins(), None, &ScrubberSet::default_set())
+            .expect("approve compiles and freezes");
+
+        // The stored observation is scrubbed (the timestamp is normalized away).
+        let SurfaceState::Cli(cli) = &golden.observation.checkpoints[0].state else {
+            panic!("cli state");
+        };
+        assert!(
+            cli.stdout.contains(TIMESTAMP_PLACEHOLDER),
+            "the stored observation is scrubbed: {}",
+            cli.stdout
+        );
+
+        // One frozen assertion, and it binds + passes against the stored golden —
+        // exactly the self-verifying replay `compare` relies on.
+        assert_eq!(golden.assertions.len(), 1);
+        let verdict = evaluate(&golden.observation, &golden.assertions);
+        assert!(
+            verdict.criteria[0].pass,
+            "the frozen assertion holds against the observation it was compiled from",
+        );
+    }
+
+    #[test]
+    fn approve_writes_the_golden_to_its_mirrored_path() {
+        let repo = TempDir::new().unwrap();
+        let spec = spec(&["the total is $40"]);
+        let received = json_observation(json!({ "total": 40 }));
+
+        let golden =
+            approve(&spec, &received, pins(), None, &ScrubberSet::default_set()).expect("approve");
+        write_golden(repo.path(), &golden).expect("write golden");
+
+        let loaded = read_golden(repo.path(), COUPON)
+            .expect("read golden")
+            .expect("golden present");
+        assert_eq!(loaded, golden, "the approved golden round-trips on disk");
+    }
+
+    #[test]
+    fn approval_diff_shows_the_binding_not_just_the_value() {
+        let spec = spec(&["the total is $40"]);
+        let received = json_observation(json!({ "total": 40 }));
+        let golden =
+            approve(&spec, &received, pins(), None, &ScrubberSet::default_set()).expect("approve");
+
+        let diff = approval_diff(&golden);
+
+        assert_eq!(diff.len(), 1);
+        let binding = &diff[0];
+        assert_eq!(binding.criterion, "the total is $40");
+        assert_eq!(binding.locator, "$.total");
+        assert_eq!(binding.value, "40");
+        assert!(!binding.hand_edited, "a fresh compile is not hand-edited");
+        // The rendered binding carries the locator, so a mis-compiled locator is
+        // visible at review — not just the value.
+        assert_eq!(binding.render(), format!("40{BINDING_ARROW}$.total"));
+        assert!(binding.render().contains("$.total"));
+    }
+
+    #[test]
+    fn approve_rejects_a_hallucinated_locator_before_writing() {
+        // The criterion names a value the observation does not carry: its locator
+        // cannot bind/pass, so approve refuses — no hallucinated locator reaches
+        // the golden.
+        let spec = spec(&["the total is $999"]);
+        let received = json_observation(json!({ "total": 40 }));
+
+        let error = approve(&spec, &received, pins(), None, &ScrubberSet::default_set())
+            .expect_err("approve must reject the hallucinated locator");
+
+        assert!(
+            matches!(error, ApproveError::Compile { ref path, .. } if path == COUPON),
+            "got {error:?}",
+        );
+    }
+
+    #[test]
+    fn approve_preserves_a_reviewer_hand_edit_bound_to_unchanged_prose() {
+        // A prior golden whose locator a reviewer hand-edited to a different (but
+        // still-binding) field. Re-approving with the same prose preserves it.
+        let spec = spec(&["the total is $40"]);
+        let observation = json_observation(json!({ "total": 40, "grand_total": 40 }));
+        let prior_golden = approve(
+            &spec,
+            &observation,
+            pins(),
+            None,
+            &ScrubberSet::default_set(),
+        )
+        .expect("initial approve");
+        let mut hand_edited = prior_golden.clone();
+        hand_edited.assertions[0].locator = crate::assertion::Locator::JsonPath {
+            path: "$.grand_total".to_string(),
+        };
+
+        let reapproved = approve(
+            &spec,
+            &observation,
+            pins(),
+            Some(&hand_edited),
+            &ScrubberSet::default_set(),
+        )
+        .expect("re-approve");
+
+        assert_eq!(
+            reapproved.assertions[0].locator,
+            crate::assertion::Locator::JsonPath {
+                path: "$.grand_total".to_string()
+            },
+            "the reviewer's hand-edited locator survives a same-prose re-approval",
+        );
+        assert!(
+            approval_diff(&reapproved)[0].hand_edited,
+            "the preserved locator is flagged as hand-edited in the diff",
+        );
+    }
+
+    #[test]
+    fn changing_the_prose_discards_a_hand_edit_and_recompiles() {
+        let original = spec(&["the total is $40"]);
+        let observation = json_observation(json!({ "total": 40, "grand_total": 40 }));
+        let prior = approve(
+            &original,
+            &observation,
+            pins(),
+            None,
+            &ScrubberSet::default_set(),
+        )
+        .expect("initial approve");
+        let mut hand_edited = prior.clone();
+        hand_edited.assertions[0].locator = crate::assertion::Locator::JsonPath {
+            path: "$.grand_total".to_string(),
+        };
+
+        // The criterion prose changed: the hand-edit no longer matches, so the
+        // criterion is recompiled fresh (back to the durable `$.total`).
+        let edited = spec(&["the total is now $40"]);
+        let reapproved = approve(
+            &edited,
+            &observation,
+            pins(),
+            Some(&hand_edited),
+            &ScrubberSet::default_set(),
+        )
+        .expect("re-approve edited prose");
+
+        assert_eq!(
+            reapproved.assertions[0].locator,
+            crate::assertion::Locator::JsonPath {
+                path: "$.total".to_string()
+            },
+            "editing the prose discards the hand-edit and recompiles",
+        );
+    }
+
+    /// The selection table from the task: each mode selects exactly its subset of
+    /// statuses. Parameterized so the `--missing`/`--changed`/`--all` partition is
+    /// asserted against one source of truth.
+    #[test]
+    fn approve_modes_select_the_right_subset_of_statuses() {
+        use ApprovalStatus::{Approved, Drifted, New, Unobserved};
+        use ApproveMode::{All, Changed, Missing};
+        let cases = [
+            (Missing, New, true),
+            (Missing, Drifted, false),
+            (Missing, Approved, false),
+            (Missing, Unobserved, false),
+            (Changed, New, false),
+            (Changed, Drifted, true),
+            (Changed, Approved, false),
+            (Changed, Unobserved, false),
+            (All, New, true),
+            (All, Drifted, true),
+            (All, Approved, false),
+            (All, Unobserved, false),
+        ];
+        for (mode, status, expected) in cases {
+            assert_eq!(
+                mode.selects(status),
+                expected,
+                "{mode:?} selecting {status:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn approval_status_classifies_new_drifted_approved_and_unobserved() {
+        let scrubbers = ScrubberSet::default_set();
+        let spec = spec(&["the total is $40"]);
+        let baseline = json_observation(json!({ "total": 40 }));
+        let golden = approve(&spec, &baseline, pins(), None, &scrubbers).expect("approve");
+
+        // No received run at all.
+        assert_eq!(
+            approval_status(Some(&golden), None, &scrubbers),
+            ApprovalStatus::Unobserved,
+        );
+        // No golden yet.
+        assert_eq!(
+            approval_status(None, Some(&baseline), &scrubbers),
+            ApprovalStatus::New,
+        );
+        // Golden + matching received.
+        assert_eq!(
+            approval_status(Some(&golden), Some(&baseline), &scrubbers),
+            ApprovalStatus::Approved,
+        );
+        // Golden + drifted received.
+        let drifted = json_observation(json!({ "total": 50 }));
+        assert_eq!(
+            approval_status(Some(&golden), Some(&drifted), &scrubbers),
+            ApprovalStatus::Drifted,
+        );
+    }
+
+    #[test]
+    fn decide_approval_writes_a_new_baseline_locally() {
+        let scrubbers = ScrubberSet::default_set();
+        let spec = spec(&["the total is $40"]);
+        let received = json_observation(json!({ "total": 40 }));
+
+        let decision = decide_approval(
+            &spec,
+            None,
+            Some(&received),
+            ApproveMode::Missing,
+            pins(),
+            false, // not CI: a local first run mints the baseline
+            &scrubbers,
+        )
+        .expect("decide");
+
+        assert!(
+            matches!(
+                decision,
+                ApprovalDecision::Write {
+                    status: ApprovalStatus::New,
+                    ..
+                }
+            ),
+            "got {decision:?}",
+        );
+    }
+
+    #[test]
+    fn ci_refuses_to_write_a_drift_a_hard_failure() {
+        // A drifted spec under CI is never silently re-approved — approve refuses.
+        let scrubbers = ScrubberSet::default_set();
+        let spec = spec(&["the total is $40"]);
+        let baseline = json_observation(json!({ "total": 40 }));
+        let golden = approve(&spec, &baseline, pins(), None, &scrubbers).expect("approve");
+        let drifted = json_observation(json!({ "total": 50 }));
+
+        let decision = decide_approval(
+            &spec,
+            Some(&golden),
+            Some(&drifted),
+            ApproveMode::Changed,
+            pins(),
+            true, // CI
+            &scrubbers,
+        )
+        .expect("decide");
+
+        assert_eq!(
+            decision,
+            ApprovalDecision::RefusedInCi {
+                status: ApprovalStatus::Drifted
+            },
+            "CI must refuse to write an unapproved drift",
+        );
+    }
+
+    #[test]
+    fn strict_first_run_a_new_expectation_cannot_be_baselined_in_ci() {
+        // The load-bearing strict-first-run guard: a `new` expectation under CI is
+        // refused, so a green baseline is never minted in CI.
+        let scrubbers = ScrubberSet::default_set();
+        let spec = spec(&["the total is $40"]);
+        let received = json_observation(json!({ "total": 40 }));
+
+        for mode in [ApproveMode::Missing, ApproveMode::All] {
+            let decision = decide_approval(
+                &spec,
+                None,
+                Some(&received),
+                mode,
+                pins(),
+                true, // CI
+                &scrubbers,
+            )
+            .expect("decide");
+            assert_eq!(
+                decision,
+                ApprovalDecision::RefusedInCi {
+                    status: ApprovalStatus::New
+                },
+                "{mode:?}: a new expectation must not be baselined in CI",
+            );
+        }
+    }
+
+    #[test]
+    fn decide_approval_skips_an_already_approved_spec() {
+        let scrubbers = ScrubberSet::default_set();
+        let spec = spec(&["the total is $40"]);
+        let baseline = json_observation(json!({ "total": 40 }));
+        let golden = approve(&spec, &baseline, pins(), None, &scrubbers).expect("approve");
+
+        let decision = decide_approval(
+            &spec,
+            Some(&golden),
+            Some(&baseline),
+            ApproveMode::All,
+            pins(),
+            false,
+            &scrubbers,
+        )
+        .expect("decide");
+
+        assert_eq!(
+            decision,
+            ApprovalDecision::Skipped {
+                status: ApprovalStatus::Approved
+            },
+            "an already-approved spec is nothing to do, even under --all",
         );
     }
 }

@@ -23,8 +23,8 @@ comments:
 depends_on:
 - 01KW263S53NJ1YWNHGPYTTWEEC
 - 01KW266J4AJCJH9HM4DYFJRK09
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff480
 project: expect
 title: Golden store + scrubbers + per-criterion tier compare; get/list ops
 ---

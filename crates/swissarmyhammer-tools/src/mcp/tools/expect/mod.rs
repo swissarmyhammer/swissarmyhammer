@@ -42,11 +42,13 @@ use swissarmyhammer_operations::{
 };
 
 use swissarmyhammer_expect::{
-    evaluate_spec, golden_path, observe, read_golden, received_path, surfaces, write_received,
-    CliAdapter, Expectation, ExpectationLoader, Observation, ObserveConfig, Surface,
+    approval_diff, approval_status, approve, decide_approval, evaluate_spec, find_expect_dir,
+    golden_path, observe, read_golden, received_path, surfaces, write_golden, write_received,
+    ApprovalDecision, ApprovalStatus, ApproveMode, CliAdapter, ExpectConfig, Expectation,
+    ExpectationLoader, Golden, GradingPins, Observation, ObserveConfig, ScrubberSet, Surface,
 };
 
-use crate::mcp::op_tool_helpers::{json_result, string_arg};
+use crate::mcp::op_tool_helpers::{bool_arg, json_result, string_arg};
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 
 /// The tool's registered name and its `cli_category` (the top-level `sah`
@@ -244,14 +246,49 @@ impl Operation for ObservationEvaluate {
     }
 }
 
+/// The `scope`/`tag` scope inputs plus the `--missing`/`--changed`/`--all` mode
+/// flags shared by `approve observation` and `approve observations`.
+///
+/// Built from [`SCOPE_PARAMS`] (so the scope grammar stays single-sourced) with
+/// the three boolean mode flags appended — the granular selection mirroring
+/// snapshot testing's `--update-snapshots`.
+static APPROVE_PARAMS: Lazy<Vec<ParamMeta>> = Lazy::new(|| {
+    let mut params = SCOPE_PARAMS.to_vec();
+    params.extend([
+        ParamMeta::new("missing")
+            .description("Approve only brand-new expectations that have no golden yet.")
+            .param_type(ParamType::Boolean),
+        ParamMeta::new("changed")
+            .description("Approve only expectations whose received run drifted from the golden.")
+            .param_type(ParamType::Boolean),
+        ParamMeta::new("all")
+            .description("Approve every in-scope expectation that needs approval (new or drifted).")
+            .param_type(ParamType::Boolean),
+    ]);
+    params
+});
+
 /// `approve observation` — promote a stored observation to its golden baseline.
-#[operation(
-    verb = "approve",
-    noun = "observation",
-    description = "Promote a stored observation to its golden baseline"
-)]
+///
+/// A manual [`Operation`] impl (rather than the `#[operation]` macro) so it can
+/// declare the [`APPROVE_PARAMS`] scope inputs and mode flags.
 #[derive(Debug, Default)]
 pub struct ObservationApprove;
+
+impl Operation for ObservationApprove {
+    fn verb(&self) -> &'static str {
+        "approve"
+    }
+    fn noun(&self) -> &'static str {
+        "observation"
+    }
+    fn description(&self) -> &'static str {
+        "Promote a stored observation to its golden baseline, freezing its compiled assertions"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        APPROVE_PARAMS.as_slice()
+    }
+}
 
 /// `list observations` — survey stored observations.
 ///
@@ -298,13 +335,26 @@ impl Operation for ObservationsEvaluate {
 }
 
 /// `approve observations` — promote a batch of observations to their goldens.
-#[operation(
-    verb = "approve",
-    noun = "observations",
-    description = "Promote a batch of observations to their golden baselines"
-)]
+///
+/// Shares [`APPROVE_PARAMS`] with [`ObservationApprove`]; differs only in how many
+/// specs the scope is expected to match.
 #[derive(Debug, Default)]
 pub struct ObservationsApprove;
+
+impl Operation for ObservationsApprove {
+    fn verb(&self) -> &'static str {
+        "approve"
+    }
+    fn noun(&self) -> &'static str {
+        "observations"
+    }
+    fn description(&self) -> &'static str {
+        "Promote a batch of stored observations to their golden baselines"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        APPROVE_PARAMS.as_slice()
+    }
+}
 
 /// `get golden` — read one approved golden baseline.
 ///
@@ -917,6 +967,253 @@ fn goldens_list(
     }))
 }
 
+// ---------------------------------------------------------------------------
+// Approve: the human gate that freezes a golden, with CI refusal and granular
+// modes mirroring `--update-snapshots`.
+// ---------------------------------------------------------------------------
+
+/// The `approve observation` op id (verb + noun), matched in `execute`'s dispatch.
+const OBSERVATION_APPROVE_OP: &str = "approve observation";
+
+/// The `approve observations` op id (verb + noun), matched in `execute`'s dispatch.
+const OBSERVATIONS_APPROVE_OP: &str = "approve observations";
+
+/// The environment variable that signals a CI run. Approve NEVER writes when it
+/// is set to [`CI_ENABLED_VALUE`].
+const CI_ENV_KEY: &str = "CI";
+
+/// The value of [`CI_ENV_KEY`] that enables the CI gate (`CI=true`).
+const CI_ENABLED_VALUE: &str = "true";
+
+/// The message a bare `approve` (no mode flag) returns: it previews the diff and
+/// requires the reviewer to re-run with an explicit mode to actually write.
+const APPROVE_PREVIEW_MESSAGE: &str =
+    "Preview only — re-run with --missing, --changed, or --all to write goldens.";
+
+/// The boolean mode flags, paired with the [`ApproveMode`] each selects, in
+/// precedence-free order (at most one may be set).
+const APPROVE_MODE_FLAGS: &[(&str, ApproveMode)] = &[
+    ("missing", ApproveMode::Missing),
+    ("changed", ApproveMode::Changed),
+    ("all", ApproveMode::All),
+];
+
+/// Whether this process is running under CI (`CI=true`).
+///
+/// Read once at the op edge and injected into the pure [`decide_approval`] policy,
+/// so the policy itself never touches the ambient environment.
+fn ci_enabled() -> bool {
+    std::env::var(CI_ENV_KEY)
+        .map(|value| value == CI_ENABLED_VALUE)
+        .unwrap_or(false)
+}
+
+/// Resolve the selected [`ApproveMode`] from the `--missing`/`--changed`/`--all`
+/// flags: `None` (a preview) when none is set, the matching mode when exactly one
+/// is, and an `invalid_params` error when more than one is.
+fn parse_approve_mode(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Option<ApproveMode>, rmcp::ErrorData> {
+    let selected: Vec<ApproveMode> = APPROVE_MODE_FLAGS
+        .iter()
+        .filter(|(flag, _)| bool_arg(arguments, flag))
+        .map(|(_, mode)| *mode)
+        .collect();
+    match selected.as_slice() {
+        [] => Ok(None),
+        [mode] => Ok(Some(*mode)),
+        _ => Err(rmcp::ErrorData::invalid_params(
+            "choose at most one of --missing, --changed, --all".to_string(),
+            None,
+        )),
+    }
+}
+
+/// The grading pins an approve pass freezes into each golden, from the repo's
+/// `.expect/config.toml` (the documented defaults when there is none).
+fn approve_grading(repo_root: &Path) -> GradingPins {
+    let config = find_expect_dir(repo_root)
+        .and_then(|dir| ExpectConfig::load(&dir).ok())
+        .unwrap_or_default();
+    GradingPins::from_config(&config)
+}
+
+/// Load both ledger artifacts for spec `identity`: its approved golden (if any)
+/// and its last received observation (if any).
+fn load_golden_and_received(
+    repo_root: &Path,
+    identity: &str,
+) -> Result<(Option<Golden>, Option<Observation>), rmcp::ErrorData> {
+    let golden = read_golden(repo_root, identity)
+        .map_err(|err| rmcp::ErrorData::invalid_params(err.to_string(), None))?;
+    let path = received_path(repo_root, identity)
+        .map_err(|err| rmcp::ErrorData::invalid_params(err.to_string(), None))?;
+    let received = load_observation(&path)?;
+    Ok((golden, received))
+}
+
+/// Render a golden's frozen assertions as the per-criterion binding diff the
+/// reviewer reads — each row shows the criterion, the rendered `value ← locator`
+/// binding, and whether the locator was hand-edited.
+fn render_bindings(golden: &Golden) -> Vec<serde_json::Value> {
+    approval_diff(golden)
+        .into_iter()
+        .map(|binding| {
+            serde_json::json!({
+                "criterion": binding.criterion,
+                "binding": binding.render(),
+                "locator": binding.locator,
+                "value": binding.value,
+                "tier": binding.tier,
+                "hand_edited": binding.hand_edited,
+            })
+        })
+        .collect()
+}
+
+/// Shared handler for `approve observation` and `approve observations`: resolve
+/// the `<scope>` (and optional `--tag`), then either preview the would-be diff (no
+/// mode flag) or write the selected goldens.
+fn approve_op(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let mode = parse_approve_mode(arguments)?;
+    let (repo_root, specs) = resolve_scope_specs(arguments, context)?;
+    let grading = approve_grading(&repo_root);
+    let scrubbers = ScrubberSet::default_set();
+    match mode {
+        None => approve_preview(&specs, &repo_root, &grading, &scrubbers),
+        Some(mode) => approve_write(&specs, &repo_root, mode, &grading, &scrubbers, ci_enabled()),
+    }
+}
+
+/// Preview the approve pass: for each spec show its [`ApprovalStatus`] and, when
+/// it would be approved, the would-be binding diff — but write nothing. A bare
+/// `approve` is the explicit-confirmation gate.
+fn approve_preview(
+    specs: &[Expectation],
+    repo_root: &Path,
+    grading: &GradingPins,
+    scrubbers: &ScrubberSet,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let mut preview = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let (golden, received) = load_golden_and_received(repo_root, &spec.path)?;
+        let status = approval_status(golden.as_ref(), received.as_ref(), scrubbers);
+        let entry = match received.as_ref() {
+            Some(received) if matches!(status, ApprovalStatus::New | ApprovalStatus::Drifted) => {
+                match approve(spec, received, grading.clone(), golden.as_ref(), scrubbers) {
+                    Ok(would_be) => serde_json::json!({
+                        "path": spec.path,
+                        "status": status,
+                        "diff": render_bindings(&would_be),
+                    }),
+                    Err(err) => serde_json::json!({
+                        "path": spec.path,
+                        "status": status,
+                        "error": err.to_string(),
+                    }),
+                }
+            }
+            _ => serde_json::json!({ "path": spec.path, "status": status }),
+        };
+        preview.push(entry);
+    }
+    json_result(&serde_json::json!({
+        "requires_confirmation": true,
+        "message": APPROVE_PREVIEW_MESSAGE,
+        "count": preview.len(),
+        "preview": preview,
+    }))
+}
+
+/// Write the selected goldens for an approve pass.
+///
+/// Two-pass: every decision is built first, and the pass writes nothing if any
+/// selected spec is refused by the CI gate ([`ApprovalDecision::RefusedInCi`]) or
+/// rejected at compile (a hallucinated locator). So a CI refusal or a hallucinated
+/// locator — the two reviewable failures — fails the whole pass before a single
+/// golden is written; a CI refusal is a hard `invalid_params` failure. (A raw IO
+/// error mid-write is not pre-screened and surfaces per spec; the decision-pass
+/// guard is about reviewable refusals, not disk faults.)
+fn approve_write(
+    specs: &[Expectation],
+    repo_root: &Path,
+    mode: ApproveMode,
+    grading: &GradingPins,
+    scrubbers: &ScrubberSet,
+    ci: bool,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let mut decisions = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let (golden, received) = load_golden_and_received(repo_root, &spec.path)?;
+        let decision = decide_approval(
+            spec,
+            golden.as_ref(),
+            received.as_ref(),
+            mode,
+            grading.clone(),
+            ci,
+            scrubbers,
+        )
+        .map_err(|err| rmcp::ErrorData::invalid_params(err.to_string(), None))?;
+        decisions.push((spec, decision));
+    }
+
+    let refused: Vec<&str> = decisions
+        .iter()
+        .filter_map(|(spec, decision)| {
+            matches!(decision, ApprovalDecision::RefusedInCi { .. }).then_some(spec.path.as_str())
+        })
+        .collect();
+    if !refused.is_empty() {
+        return Err(rmcp::ErrorData::invalid_params(
+            format!(
+                "{CI_ENV_KEY}={CI_ENABLED_VALUE}: approve refuses to write {} expectation(s) ({}). A golden is minted locally by observe + approve, never in CI.",
+                refused.len(),
+                refused.join(", ")
+            ),
+            None,
+        ));
+    }
+
+    let mut written = Vec::new();
+    let mut skipped = Vec::new();
+    for (spec, decision) in decisions {
+        match decision {
+            ApprovalDecision::Write { status, golden } => {
+                let path = write_golden(repo_root, &golden).map_err(|err| {
+                    rmcp::ErrorData::internal_error(
+                        format!("writing golden for `{}` failed: {err}", spec.path),
+                        None,
+                    )
+                })?;
+                written.push(serde_json::json!({
+                    "path": spec.path,
+                    "status": status,
+                    "golden": path.display().to_string(),
+                    "diff": render_bindings(&golden),
+                }));
+            }
+            ApprovalDecision::Skipped { status } => skipped.push(serde_json::json!({
+                "path": spec.path,
+                "status": status,
+            })),
+            // CI refusals failed the pass above, before any write.
+            ApprovalDecision::RefusedInCi { .. } => {
+                unreachable!("CI refusals fail the pass before any write")
+            }
+        }
+    }
+
+    json_result(&serde_json::json!({
+        "count": written.len(),
+        "written": written,
+        "skipped": skipped,
+    }))
+}
+
 impl swissarmyhammer_common::health::Doctorable for ExpectTool {
     fn name(&self) -> &str {
         <Self as McpTool>::name(self)
@@ -1009,6 +1306,7 @@ impl McpTool for ExpectTool {
             OBSERVATIONS_LIST_OP => observations_list(&arguments, context),
             GOLDENS_LIST_OP => goldens_list(&arguments, context),
             EXPECTATION_OBSERVE_OP | EXPECTATIONS_OBSERVE_OP => observe_op(&arguments, context),
+            OBSERVATION_APPROVE_OP | OBSERVATIONS_APPROVE_OP => approve_op(&arguments, context),
             OBSERVATION_EVALUATE_OP | OBSERVATIONS_EVALUATE_OP => {
                 evaluate_op(&arguments, context, EvaluateSource::Received)
             }
@@ -1102,6 +1400,8 @@ mod tests {
         GOLDENS_LIST_OP,
         EXPECTATION_OBSERVE_OP,
         EXPECTATIONS_OBSERVE_OP,
+        OBSERVATION_APPROVE_OP,
+        OBSERVATIONS_APPROVE_OP,
         OBSERVATION_EVALUATE_OP,
         OBSERVATIONS_EVALUATE_OP,
         GOLDEN_EVALUATE_OP,
@@ -1756,5 +2056,332 @@ mod tests {
 
         assert_eq!(payload["count"], 1, "the scope narrows the survey");
         assert_eq!(payload["goldens"][0], "coupon");
+    }
+
+    // -----------------------------------------------------------------------
+    // approve observation / observations.
+    //
+    // The CI gate is exercised by injecting the flag straight into the private
+    // handlers (`approve_write`) rather than through the ambient `CI` env var, so
+    // these tests are deterministic even when the suite itself runs under CI. One
+    // small `#[serial]` test covers the `ci_enabled()` env read in isolation.
+    // -----------------------------------------------------------------------
+
+    /// The default grading pins an approve pass freezes when there is no config.
+    fn default_grading() -> GradingPins {
+        GradingPins::from_config(&ExpectConfig::default())
+    }
+
+    /// Resolve the specs in `repo` for `scope` (every spec when `None`).
+    fn specs_in(repo: &Path, scope: Option<&str>) -> Vec<Expectation> {
+        ExpectationLoader::new(repo)
+            .resolve_scope(scope, None)
+            .expect("resolve scope")
+    }
+
+    /// Stand up a repo with a brand-new spec (`coupon`) that has a received run
+    /// but no golden yet.
+    fn new_spec_repo() -> tempfile::TempDir {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "coupon", &["the total is $40"]);
+        write_observation(
+            &repo.path().join(".expect/received/coupon.received.json"),
+            "coupon",
+            serde_json::json!({ "total": 40 }),
+        );
+        repo
+    }
+
+    /// `approve observation --all` writes the scrubbed golden with its frozen
+    /// assertions, and the returned diff shows the criterion→binding (the locator,
+    /// not just the value), so a mis-compiled locator is caught at review.
+    #[test]
+    fn approve_writes_golden_and_the_diff_shows_the_binding() {
+        let repo = new_spec_repo();
+        let specs = specs_in(repo.path(), Some("coupon"));
+
+        let result = approve_write(
+            &specs,
+            repo.path(),
+            ApproveMode::All,
+            &default_grading(),
+            &ScrubberSet::default_set(),
+            false, // not CI
+        )
+        .expect("approve writes");
+        let payload = payload_of(&result);
+
+        assert_eq!(payload["count"], 1);
+        let written = &payload["written"][0];
+        assert_eq!(written["path"], "coupon");
+        assert_eq!(written["status"], "new");
+        let binding = &written["diff"][0];
+        assert_eq!(binding["criterion"], "the total is $40");
+        assert_eq!(binding["locator"], "$.total");
+        assert_eq!(binding["value"], "40");
+        // The binding string carries the locator, not just the value.
+        assert!(binding["binding"]
+            .as_str()
+            .expect("binding string")
+            .contains("$.total"));
+
+        // The golden is persisted, scrubbed, with one frozen assertion.
+        let golden = read_golden(repo.path(), "coupon")
+            .expect("read golden")
+            .expect("golden present");
+        assert_eq!(golden.assertions.len(), 1);
+    }
+
+    /// A bare `approve` (no mode flag) previews the would-be diff and writes
+    /// nothing — the explicit-confirmation gate — exercised through the full
+    /// dispatch (`execute`), which is env-independent for a preview.
+    #[tokio::test]
+    async fn approve_without_a_mode_previews_and_writes_nothing() {
+        let repo = new_spec_repo();
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let result = tool()
+            .execute(
+                args(serde_json::json!({ "op": OBSERVATION_APPROVE_OP, "scope": "coupon" })),
+                &ctx,
+            )
+            .await
+            .expect("approve preview should dispatch");
+        assert!(!result.is_error.unwrap_or(false));
+        let payload = payload_of(&result);
+
+        assert_eq!(payload["requires_confirmation"], true);
+        assert_eq!(payload["count"], 1);
+        let entry = &payload["preview"][0];
+        assert_eq!(entry["status"], "new");
+        assert_eq!(entry["diff"][0]["locator"], "$.total");
+        // No golden was written — the preview is purely advisory.
+        assert!(
+            read_golden(repo.path(), "coupon")
+                .expect("read golden")
+                .is_none(),
+            "a preview writes no golden",
+        );
+    }
+
+    /// Seed an approved golden for `identity` by freezing its criteria against an
+    /// observation carrying `body` — the real approve path, not a hand-built
+    /// golden, so the frozen assertions are genuine.
+    fn seed_golden(repo: &Path, identity: &str, body: serde_json::Value) {
+        let spec = specs_in(repo, Some(identity))
+            .into_iter()
+            .next()
+            .expect("spec to seed");
+        let observation: Observation = serde_json::from_value(serde_json::json!({
+            "path": identity,
+            "checkpoints": [{
+                "after": "final",
+                "state": { "kind": "json", "body": body },
+                "duration_ms": 1
+            }],
+            "trajectory": { "steps": [] }
+        }))
+        .unwrap();
+        let golden = approve(
+            &spec,
+            &observation,
+            default_grading(),
+            None,
+            &ScrubberSet::default_set(),
+        )
+        .expect("seed approve");
+        write_golden(repo, &golden).expect("write seed golden");
+    }
+
+    /// Stand up a repo with one new spec (`fresh`) and one drifted spec
+    /// (`drifted`).
+    ///
+    /// The drifted spec carries an **invariant** criterion: its golden was frozen
+    /// against three items, and the received run grew to five — the relationship
+    /// still holds (so it is genuinely approvable), but the evidence moved, so the
+    /// compare flags it as drift. A *literal* drift (a value that simply changed)
+    /// would instead violate its own criterion and be refused at approve, which is
+    /// correct but not what the selection test is exercising.
+    fn mixed_status_repo() -> tempfile::TempDir {
+        let repo = tempfile::TempDir::new().unwrap();
+        write_spec(repo.path(), "fresh", &["the total is $40"]);
+        write_observation(
+            &repo.path().join(".expect/received/fresh.received.json"),
+            "fresh",
+            serde_json::json!({ "total": 40 }),
+        );
+        write_spec(
+            repo.path(),
+            "drifted",
+            &["the item count equals the number of items"],
+        );
+        seed_golden(
+            repo.path(),
+            "drifted",
+            serde_json::json!({ "item_count": 3, "items": [{}, {}, {}] }),
+        );
+        write_observation(
+            &repo.path().join(".expect/received/drifted.received.json"),
+            "drifted",
+            serde_json::json!({ "item_count": 5, "items": [{}, {}, {}, {}, {}] }),
+        );
+        repo
+    }
+
+    /// The written/skipped path partition of an approve-write payload.
+    fn partition(payload: &serde_json::Value) -> (Vec<String>, Vec<String>) {
+        let paths = |key: &str| {
+            payload[key]
+                .as_array()
+                .expect("array")
+                .iter()
+                .map(|entry| entry["path"].as_str().expect("path").to_string())
+                .collect::<Vec<_>>()
+        };
+        (paths("written"), paths("skipped"))
+    }
+
+    /// `--missing` selects only the brand-new spec; the drifted spec is skipped.
+    #[test]
+    fn approve_missing_selects_only_new_expectations() {
+        let repo = mixed_status_repo();
+        let specs = specs_in(repo.path(), None);
+
+        let result = approve_write(
+            &specs,
+            repo.path(),
+            ApproveMode::Missing,
+            &default_grading(),
+            &ScrubberSet::default_set(),
+            false,
+        )
+        .expect("approve writes");
+        let (written, skipped) = partition(&payload_of(&result));
+
+        assert_eq!(written, vec!["fresh"], "only the new spec is approved");
+        assert!(
+            skipped.contains(&"drifted".to_string()),
+            "the drifted spec is skipped by --missing",
+        );
+    }
+
+    /// `--changed` selects only the drifted spec; the brand-new spec is skipped.
+    #[test]
+    fn approve_changed_selects_only_drifted_expectations() {
+        let repo = mixed_status_repo();
+        let specs = specs_in(repo.path(), None);
+
+        let result = approve_write(
+            &specs,
+            repo.path(),
+            ApproveMode::Changed,
+            &default_grading(),
+            &ScrubberSet::default_set(),
+            false,
+        )
+        .expect("approve writes");
+        let (written, skipped) = partition(&payload_of(&result));
+
+        assert_eq!(
+            written,
+            vec!["drifted"],
+            "only the drifted spec is approved"
+        );
+        assert!(
+            skipped.contains(&"fresh".to_string()),
+            "the new spec is skipped by --changed",
+        );
+    }
+
+    /// Under CI, approve refuses to write an unapproved drift — a hard failure,
+    /// never a silent re-approval.
+    #[test]
+    fn ci_refuses_to_approve_a_drift() {
+        let repo = mixed_status_repo();
+        let specs = specs_in(repo.path(), Some("drifted"));
+
+        let err = approve_write(
+            &specs,
+            repo.path(),
+            ApproveMode::Changed,
+            &default_grading(),
+            &ScrubberSet::default_set(),
+            true, // CI
+        )
+        .expect_err("CI must refuse to write a drift");
+
+        assert!(
+            err.message.contains("refuses"),
+            "the refusal names the CI gate: {}",
+            err.message
+        );
+    }
+
+    /// Strict first-run: under CI a brand-new expectation cannot be baselined —
+    /// approve refuses rather than minting a green baseline.
+    #[test]
+    fn ci_refuses_to_baseline_a_new_expectation() {
+        let repo = new_spec_repo();
+        let specs = specs_in(repo.path(), Some("coupon"));
+
+        let err = approve_write(
+            &specs,
+            repo.path(),
+            ApproveMode::All,
+            &default_grading(),
+            &ScrubberSet::default_set(),
+            true, // CI
+        )
+        .expect_err("CI must refuse to baseline a new expectation");
+
+        assert!(err.message.contains("refuses"), "{}", err.message);
+        // Strict first-run: no golden was minted in CI.
+        assert!(
+            read_golden(repo.path(), "coupon")
+                .expect("read golden")
+                .is_none(),
+            "a new baseline is never minted in CI",
+        );
+    }
+
+    /// Passing more than one mode flag is rejected up front.
+    #[tokio::test]
+    async fn approve_rejects_more_than_one_mode_flag() {
+        let repo = new_spec_repo();
+        let ctx = context().with_working_dir(repo.path().to_path_buf());
+
+        let err = tool()
+            .execute(
+                args(serde_json::json!({
+                    "op": OBSERVATION_APPROVE_OP,
+                    "scope": "coupon",
+                    "missing": true,
+                    "all": true,
+                })),
+                &ctx,
+            )
+            .await
+            .expect_err("two mode flags must be rejected");
+        assert!(err.message.contains("at most one"));
+    }
+
+    /// `ci_enabled()` reads `CI=true` from the environment (the one env-touching
+    /// test, serialized and self-restoring).
+    #[test]
+    #[serial_test::serial(env)]
+    fn ci_enabled_reads_the_environment() {
+        let restore = std::env::var(CI_ENV_KEY).ok();
+
+        std::env::set_var(CI_ENV_KEY, CI_ENABLED_VALUE);
+        assert!(ci_enabled(), "CI=true enables the gate");
+        std::env::set_var(CI_ENV_KEY, "false");
+        assert!(!ci_enabled(), "CI=false leaves the gate open");
+        std::env::remove_var(CI_ENV_KEY);
+        assert!(!ci_enabled(), "an unset CI leaves the gate open");
+
+        match restore {
+            Some(value) => std::env::set_var(CI_ENV_KEY, value),
+            None => std::env::remove_var(CI_ENV_KEY),
+        }
     }
 }

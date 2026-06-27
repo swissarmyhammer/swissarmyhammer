@@ -79,8 +79,10 @@ pub use drive::{
 pub use error::ExpectError;
 pub use evaluate::{evaluate, evaluate_assertion, evaluate_spec, STRUCTURAL_DRIFT_REASON};
 pub use ledger::{
-    compare, read_golden, write_golden, CriterionComparison, Golden, GradingPins, LedgerComparison,
-    Scrubber, ScrubberSet,
+    approval_diff, approval_status, approve, compare, decide_approval, read_golden, write_golden,
+    ApprovalBinding, ApprovalDecision, ApprovalStatus, ApproveError, ApproveMode,
+    CriterionComparison, Golden, GradingPins, LedgerComparison, Scrubber, ScrubberSet,
+    BINDING_ARROW,
 };
 pub use loader::{ExpectationLoader, RawSpec};
 pub use observe::{
