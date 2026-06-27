@@ -11,8 +11,8 @@ comments:
 
     Verification: `cargo nextest run -p kanban-app plugins::` -> 12 passed (the 1 "leaky" flag on all_builtin_command_plugins_load_with_full_baseline is a pre-existing nextest process-leak note, unrelated). `cargo fmt` clean. clippy: plugins.rs produces ZERO warnings (verified via --no-deps). Two PRE-EXISTING rust-1.95.0 clippy lints block a strict `-D warnings` run but are in files I did not touch — `apps/kanban-app/src/menu.rs` (empty_line_after_doc_comments) and `crates/swissarmyhammer-window-service/src/shell.rs` (manual_contains). Left out of scope per "do ONLY these two items".
   timestamp: 2026-06-26T23:48:58.832546+00:00
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff980
 title: Consolidate duplicated write_user/project_command_plugin + extract poll-timeout constants in kanban-app plugins.rs
 ---
 ## What

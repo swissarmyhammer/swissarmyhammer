@@ -1860,12 +1860,24 @@ fn resolve_agent_mcp_config<'a>(
     Some((mcp_cfg, config_path))
 }
 
-/// Root-explicit MCP registration: write the server entry into each detected
-/// agent's project MCP config resolved against `root`.
+/// Register `server_name` → `entry` as an MCP server into each detected agent's
+/// MCP config resolved against an explicit `root`.
 ///
-/// Only project/local scope is rooted; user scope uses the agent's absolute
-/// global MCP config. Agents without an MCP config for the scope are skipped.
-fn register_mcp_server_at(
+/// This is the root-aware sibling of the strategy-dispatched, CWD-implicit
+/// [`register_mcp_server`]: instead of resolving each agent's project config
+/// relative to the process working directory, every project/local-scope config
+/// path is joined onto the caller-supplied `root`. User scope is not rooted — it
+/// uses each agent's absolute global MCP config path. The agent's `servers_key`
+/// and `entry_extras` are honored (so e.g. Zed's `context_servers` entries get
+/// the required `{"source": "custom"}`), and the JSON/TOML writer is selected by
+/// the config file's extension (so Codex's `.codex/config.toml` is written as
+/// TOML). Agents that declare no MCP config for the scope are skipped.
+///
+/// This function never reads `current_dir()`. It is the API for callers whose
+/// working directory is not the registration target — most notably a bundled
+/// GUI launched with a read-only CWD of `/` that wants to register a server
+/// into a board/project directory it knows by absolute path.
+pub fn register_mcp_server_at(
     root: &Path,
     server_name: &str,
     entry: &McpServerEntry,
@@ -1900,8 +1912,15 @@ fn register_mcp_server_at(
     )
 }
 
-/// Root-explicit MCP unregistration mirroring [`register_mcp_server_at`].
-fn unregister_mcp_server_at(
+/// Remove `server_name` from each detected agent's MCP config resolved against
+/// an explicit `root`, mirroring [`register_mcp_server_at`].
+///
+/// Like its registration counterpart, project/local-scope config paths are
+/// joined onto `root`, user scope uses each agent's absolute global config, and
+/// the function never reads `current_dir()`. Agents without an MCP config for
+/// the scope, or whose config does not contain `server_name`, are left
+/// unchanged.
+pub fn unregister_mcp_server_at(
     root: &Path,
     server_name: &str,
     scope: InitScope,
@@ -3342,6 +3361,193 @@ mod applier_tests {
             args: vec!["serve".to_string()],
             env: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Write a four-agent config mirroring the `mcp_config` shapes of
+    /// claude-code / cursor / codex / zed from `agents_default.yaml`: a JSON
+    /// `mcpServers` file, a nested JSON `mcpServers` file, a TOML `mcp_servers`
+    /// file, and a `context_servers` JSON file carrying `entry_extras`. Every
+    /// agent's detect dir is `detect_dir`, so all four fire.
+    fn write_four_agents_config(config_dir: &Path, detect_dir: &Path) -> PathBuf {
+        let agents_yaml = format!(
+            r#"agents:
+  - id: fake-claude
+    name: Fake Claude
+    project_path: .claude/skills
+    global_path: "~/.claude/skills"
+    detect:
+      - dir: "{detect}"
+    mcp_config:
+      project_path: .mcp.json
+      servers_key: mcpServers
+  - id: fake-cursor
+    name: Fake Cursor
+    project_path: .cursor/skills
+    global_path: "~/.cursor/skills"
+    detect:
+      - dir: "{detect}"
+    mcp_config:
+      project_path: .cursor/mcp.json
+      servers_key: mcpServers
+  - id: fake-codex
+    name: Fake Codex
+    project_path: .codex/skills
+    global_path: "~/.codex/skills"
+    detect:
+      - dir: "{detect}"
+    mcp_config:
+      project_path: .codex/config.toml
+      servers_key: mcp_servers
+  - id: fake-zed
+    name: Fake Zed
+    project_path: .zed/skills
+    global_path: "~/.config/zed/skills"
+    detect:
+      - dir: "{detect}"
+    mcp_config:
+      project_path: .zed/settings.json
+      servers_key: context_servers
+      entry_extras:
+        source: custom
+"#,
+            detect = detect_dir.display(),
+        );
+        let config_path = config_dir.join("agents.yaml");
+        std::fs::write(&config_path, agents_yaml).unwrap();
+        config_path
+    }
+
+    /// `register_mcp_server_at` writes each agent's MCP config under the
+    /// explicit `root` — never relative to the process CWD — preserving the
+    /// exact absolute `command`/`args`, honoring per-agent `servers_key`, the
+    /// JSON-vs-TOML writer (selected by extension), and `entry_extras`.
+    #[test]
+    #[serial]
+    fn register_mcp_server_at_writes_four_agent_shapes_under_root() {
+        // The process CWD and the registration root are deliberately distinct
+        // temp dirs, so any read of `current_dir()` would write to the wrong
+        // place and the no-CWD assertions below would fail.
+        let cwd = tempfile::tempdir().unwrap();
+        let cwd = cwd.path().canonicalize().unwrap();
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(&cwd).unwrap();
+        let config_path = write_four_agents_config(&cwd, &cwd);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+        let entry = McpServerEntry {
+            command: "/usr/local/bin/sah".to_string(),
+            args: vec!["serve".to_string()],
+            env: std::collections::BTreeMap::new(),
+        };
+
+        let reporter = NullReporter;
+        let results = register_mcp_server_at(&root, "sah", &entry, InitScope::Project, &reporter);
+        assert!(
+            results
+                .iter()
+                .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+            "register_mcp_server_at must not error: {results:?}"
+        );
+
+        // Claude Code shape: top-level `.mcp.json`, `mcpServers` key.
+        let claude: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join(".mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(claude["mcpServers"]["sah"]["command"], "/usr/local/bin/sah");
+        assert_eq!(claude["mcpServers"]["sah"]["args"][0], "serve");
+
+        // Cursor shape: nested `.cursor/mcp.json`, `mcpServers` key.
+        let cursor: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join(".cursor/mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(cursor["mcpServers"]["sah"]["command"], "/usr/local/bin/sah");
+
+        // Codex shape: `.codex/config.toml`, TOML, `mcp_servers` key.
+        let codex_toml = std::fs::read_to_string(root.join(".codex/config.toml")).unwrap();
+        let codex: toml::Value = toml::from_str(&codex_toml).unwrap();
+        assert_eq!(
+            codex["mcp_servers"]["sah"]["command"].as_str(),
+            Some("/usr/local/bin/sah"),
+            "codex config must be TOML with mcp_servers key: {codex_toml}"
+        );
+
+        // Zed shape: `.zed/settings.json`, `context_servers` key, with the
+        // `source: custom` merged from `entry_extras`.
+        let zed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".zed/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            zed["context_servers"]["sah"]["command"],
+            "/usr/local/bin/sah"
+        );
+        assert_eq!(zed["context_servers"]["sah"]["source"], "custom");
+
+        // Nothing was written relative to the process CWD.
+        for relative in [
+            ".mcp.json",
+            ".cursor/mcp.json",
+            ".codex/config.toml",
+            ".zed/settings.json",
+        ] {
+            assert!(
+                !cwd.join(relative).exists(),
+                "register_mcp_server_at must not write under the CWD: {relative}"
+            );
+        }
+    }
+
+    /// `unregister_mcp_server_at` removes the entries `register_mcp_server_at`
+    /// wrote, across all four agent shapes, under the explicit root.
+    #[test]
+    #[serial]
+    fn unregister_mcp_server_at_removes_four_agent_entries() {
+        let cwd = tempfile::tempdir().unwrap();
+        let cwd = cwd.path().canonicalize().unwrap();
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(&cwd).unwrap();
+        let config_path = write_four_agents_config(&cwd, &cwd);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+        let reporter = NullReporter;
+
+        register_mcp_server_at(&root, "sah", &entry(), InitScope::Project, &reporter);
+        let results = unregister_mcp_server_at(&root, "sah", InitScope::Project, &reporter);
+        assert!(
+            results
+                .iter()
+                .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+            "unregister_mcp_server_at must not error: {results:?}"
+        );
+
+        let claude: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join(".mcp.json")).unwrap())
+                .unwrap();
+        assert!(claude["mcpServers"]["sah"].is_null());
+
+        let cursor: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join(".cursor/mcp.json")).unwrap())
+                .unwrap();
+        assert!(cursor["mcpServers"]["sah"].is_null());
+
+        let codex: toml::Value =
+            toml::from_str(&std::fs::read_to_string(root.join(".codex/config.toml")).unwrap())
+                .unwrap();
+        assert!(
+            codex
+                .get("mcp_servers")
+                .and_then(|s| s.get("sah"))
+                .is_none(),
+            "codex entry must be removed: {codex:?}"
+        );
+
+        let zed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".zed/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(zed["context_servers"]["sah"].is_null());
     }
 
     #[test]

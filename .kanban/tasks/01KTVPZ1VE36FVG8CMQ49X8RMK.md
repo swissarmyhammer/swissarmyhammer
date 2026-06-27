@@ -1,10 +1,37 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kw365rv3vxmqmgg8z9v47a2d
+  text: |-
+    Picked up. Research done. Current state: `register_mcp_server_at` / `unregister_mcp_server_at` / `resolve_agent_mcp_config` already exist and work (install.rs), private, reachable only via `install_profile_mcp`. They call `mcp_config::register_mcp_server`, which already dispatches JSON vs TOML by file extension via `settings::read/write_mcp_config` (the now-done TOML dep) — so codex `.codex/config.toml` composes for free. Public API convention: consumers call `mirdan::install::register_mcp_server` (pub fn in `pub mod install`), no lib.rs re-export — so promotion = make the two fns `pub` + docs.
+
+    TDD plan: the genuine RED for a visibility change is an EXTERNAL test (in-crate `super::*` tests can call private fns, so they can't prove "callable from outside the crate"). Adding `crates/mirdan/tests/register_mcp_server_at.rs` that calls `mirdan::install::register_mcp_server_at` — compile-fails (private) until pub. Plus the card-prescribed comprehensive four-agent applier_tests (claude/cursor/codex/zed shapes at a temp root != CWD, assert no CWD writes, + unregister). nextest is the gate (skips doctests), so external test lives in tests/. Adding swissarmyhammer-common as a dev-dep for NullReporter/InitScope.
+  timestamp: 2026-06-27T00:02:51.875305+00:00
+- actor: claude-code
+  id: 01kw36h0rf59st3mstt0vajrxx
+  text: |-
+    DONE (green, left in doing for review).
+
+    Public API added:
+    - `pub fn mirdan::install::register_mcp_server_at(root: &Path, server_name: &str, entry: &McpServerEntry, scope: InitScope, reporter: &dyn InitReporter) -> Vec<InitResult>`
+    - `pub fn mirdan::install::unregister_mcp_server_at(root: &Path, server_name: &str, scope: InitScope, reporter: &dyn InitReporter) -> Vec<InitResult>`
+
+    Both promoted from private `fn` (logic unchanged). Doc comments document: project/local config paths joined onto `root`; user scope uses each agent's absolute global config; JSON-vs-TOML writer selected by extension; per-agent `servers_key`/`entry_extras` honored; never reads `current_dir()`. No lib.rs re-export needed — `pub mod install` already makes `mirdan::install::*` reachable (matches `register_mcp_server`). The strategy-dispatched CWD-implicit `register_mcp_server` is untouched.
+
+    TDD: RED = external integration test `crates/mirdan/tests/register_mcp_server_at.rs` failed to compile with E0603 (private function) → made pub → PASS. Plus card-prescribed in-crate `applier_tests` four-agent test (claude `.mcp.json` / cursor `.cursor/mcp.json` / codex `.codex/config.toml` TOML / zed `.zed/settings.json` `context_servers` with `source:custom`) registering at a temp root != a guarded CWD, asserting exact absolute command/args preserved and NOTHING written under CWD; + unregister-removes-all-four test.
+
+    double-check (advisory) flagged a redundant dev-dep: I had added `swissarmyhammer-common` to `[dev-dependencies]`, but it is already a normal `[dependencies]` entry and normal deps ARE reachable from integration tests — verified empirically (integration test compiles/passes without it). Reverted that line; Cargo.toml now unchanged from main.
+
+    Verification: `cargo nextest run -p mirdan` 413 passed 0 skipped; `cargo clippy -p mirdan --all-targets -- -D warnings` clean; `cargo fmt --check -p mirdan` clean.
+
+    Files changed: crates/mirdan/src/install.rs (pub + docs + 2 tests + helper); crates/mirdan/tests/register_mcp_server_at.rs (new). Cargo.toml ends up unchanged.
+  timestamp: 2026-06-27T00:09:00.431347+00:00
 depends_on:
 - 01KTVPYFR4JCHF6AZ651X41NFS
-position_column: todo
-position_ordinal: '9e80'
+position_column: doing
+position_ordinal: '8180'
 project: mirdan-install
 title: 'mirdan: public root-aware MCP registration API (promote register_mcp_server_at)'
 ---
