@@ -37,8 +37,8 @@ comments:
 
     Final state: task green in `doing`, ready for /review. Verification: nextest selection 214 passed (incl. GPU e2e that actually ran + 5 guard/regression tests); clippy -D warnings clean; cargo check --workspace clean; cargo fmt applied.
   timestamp: 2026-06-27T19:46:53.013134+00:00
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffff8980
 project: expect
 title: Wire a real pinned TextEmbedder + Grader panel into the expect tool layer
 ---
