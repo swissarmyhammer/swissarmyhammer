@@ -19,6 +19,7 @@
 //! The first adapter is [`cli`](crate::surface::cli) — the deterministic,
 //! no-agent path: build the binary, run argv, read stdout/stderr/exit/files.
 
+pub mod browser;
 pub mod cli;
 pub mod db;
 pub mod file;

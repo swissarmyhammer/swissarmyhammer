@@ -68,6 +68,15 @@ tracing = { workspace = true }
 # `extract_json_value` extractor rather than re-deriving the ACP wiring.
 swissarmyhammer-validators = { workspace = true }
 
+# The browser surface adapter's in-process CDP client: launch/attach Chromium and
+# drive (CDP `Input`) / observe (CDP `Accessibility`) it through the DevTools
+# Protocol — pure Rust, no Node/Playwright. Runs on the existing tokio runtime.
+chromiumoxide = { workspace = true }
+
+# Drives the chromiumoxide CDP event `Handler` stream (a `futures::Stream`) while
+# commands are issued on the browser surface.
+futures = { workspace = true }
+
 # Unix process-group signalling so a timed-out cli run kills its descendants too
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true }
@@ -82,7 +91,8 @@ serde_json = { workspace = true }
 # (`tokio` is already a non-dev dependency with the workspace `full` feature set,
 # so `#[tokio::test]` and `tokio::time::timeout` are available here too.)
 acp-conformance = { workspace = true, features = ["test-support"] }
-futures = { workspace = true }
+# (`futures` is a normal dependency — the browser adapter drives the CDP handler
+# stream at runtime — so it is available to tests without re-declaring it here.)
 
 # A tiny in-process axum fixture HTTP server for the http surface adapter's
 # integration tests (bound to 127.0.0.1:0). `tokio` (above) drives it.

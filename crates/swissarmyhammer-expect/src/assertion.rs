@@ -26,11 +26,14 @@
 //! [`AssertionOutcome::Drifted`] outcome — never a silent mis-read.
 
 use crate::spec::Criterion;
-use crate::types::{DbState, FileState, HttpState, Observation, SurfaceState, VerdictTier};
+use crate::types::{
+    A11yNode, DbState, FileState, HttpState, Observation, SurfaceState, VerdictTier,
+};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
+use std::sync::OnceLock;
 use thiserror::Error;
 
 /// The json-path root segment every compiled json-path locator starts from.
@@ -67,6 +70,29 @@ const EPSILON: f64 = 1e-9;
 /// Relation keywords that introduce an invariant, longest-first so a longer
 /// phrase is matched before a substring of it.
 const RELATION_KEYWORDS: &[&str] = &["is equal to", "equal to", "equals", "matches", "=="];
+
+/// The keywords introducing a tree-relationship constraint in the a11y locator
+/// dialect (`ideas/expect.md` §"Locators are a per-surface dialect"): the node
+/// before the keyword must descend from the node after it. `within` and
+/// `ancestor` are accepted synonyms.
+const A11Y_RELATIONSHIP_KEYWORDS: &[&str] = &["within", "ancestor"];
+
+/// The comparison keywords recognized between an a11y locator and its expected
+/// value, longest-first so a longer phrase matches before a substring of it.
+const A11Y_RELATION_KEYWORDS: &[&str] = &[
+    "is equal to",
+    "equal to",
+    "equals",
+    "matches",
+    "shows",
+    "==",
+    "is",
+];
+
+/// The regex matching one `role[name=…]` selector of the a11y dialect: a role
+/// identifier followed by a bracketed, optionally quoted accessible name. The
+/// required brackets keep the selector unambiguous against surrounding prose.
+const A11Y_SELECTOR_PATTERN: &str = r#"(?P<role>[A-Za-z][A-Za-z0-9_-]*)\s*\[\s*name\s*=\s*(?:"(?P<dq>[^"]*)"|'(?P<sq>[^']*)'|(?P<bare>[^\]]*?))\s*\]"#;
 
 /// Cues whose suffix names the collection an invariant's right side counts.
 const COUNT_CUES: &[&str] = &["number of", "count of", "cardinality of"];
@@ -147,6 +173,37 @@ pub enum Locator {
         /// The `$.a.b` json-path resolved against that file's parsed JSON.
         pointer: String,
     },
+    /// An accessibility-tree node addressed by `role[name=…]` plus tree
+    /// relationship — the browser/gui dialect (`ideas/expect.md` §"Locators are a
+    /// per-surface dialect"), a11y-stable rather than pixel-based.
+    ///
+    /// Resolution walks the captured a11y tree for the first node matching
+    /// [`target`](Locator::A11y::target) whose ancestor chain satisfies
+    /// [`ancestors`](Locator::A11y::ancestors) (nearest first), and returns that
+    /// node's value (or its accessible name when it has no distinct value). A
+    /// renamed control no longer binds and surfaces as structural drift — the
+    /// honest signal a screenshot diff cannot give.
+    A11y {
+        /// The selector for the node whose value is read.
+        target: A11ySelector,
+        /// Ancestor selectors the target must descend from, nearest first; empty
+        /// for an unconstrained `role[name=…]` lookup.
+        ancestors: Vec<A11ySelector>,
+    },
+}
+
+/// One `role[name=…]` selector in the browser/gui accessibility locator dialect.
+///
+/// Matches an [`A11yNode`](crate::types::A11yNode) by its accessible `role` and,
+/// when [`name`](A11ySelector::name) is set, its accessible name — never by
+/// pixels or DOM position, so a control rename surfaces as structural drift.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct A11ySelector {
+    /// The accessible role the node must have (e.g. `button`, `textbox`).
+    pub role: String,
+    /// The accessible name the node must have, or `None` to match any name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// A captured cli output stream.
@@ -443,6 +500,10 @@ impl Locator {
                 let json: Value = serde_json::from_str(content).ok()?;
                 bound_from_value(resolve_json_path(&json, pointer)?)
             }
+            Locator::A11y { target, ancestors } => {
+                let tree = a11y_state(state)?;
+                resolve_a11y(tree, target, ancestors)
+            }
         }
     }
 }
@@ -459,7 +520,59 @@ impl fmt::Display for Locator {
             Locator::Sql { query } => write!(f, "sql:{query}"),
             Locator::FileContent { path } => write!(f, "file:{path}"),
             Locator::FileJsonPath { path, pointer } => write!(f, "file:{path}#{pointer}"),
+            Locator::A11y { target, ancestors } => {
+                write!(f, "{target}")?;
+                for ancestor in ancestors {
+                    write!(f, " within {ancestor}")?;
+                }
+                Ok(())
+            }
         }
+    }
+}
+
+impl fmt::Display for A11ySelector {
+    /// Render a selector in the dialect's `role[name="…"]` form (or bare `role`
+    /// when it matches any name).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.name {
+            Some(name) => write!(f, "{}[name=\"{name}\"]", self.role),
+            None => write!(f, "{}", self.role),
+        }
+    }
+}
+
+impl A11ySelector {
+    /// Parse a single `role[name="…"]` selector from the start of `input`,
+    /// ignoring any trailing text, or `None` when `input` does not begin with a
+    /// selector. Shared with the browser surface adapter's drive dialect so the
+    /// `role[name=…]` grammar has one parser.
+    pub fn parse(input: &str) -> Option<Self> {
+        parse_selector_prefix(input.trim_start()).map(|(selector, _)| selector)
+    }
+
+    /// Parse `input` as exactly one `role[name="…"]` selector and nothing else
+    /// (trailing whitespace aside), or `None`.
+    ///
+    /// Unlike [`parse`](A11ySelector::parse), trailing text is rejected rather
+    /// than ignored — the browser drive dialect uses this so a mistakenly-scoped
+    /// step (`press button[name="Go"] within form[name="…"]`) does not silently
+    /// drop the scope and press the wrong control; it fails to bind and routes to
+    /// the agent fallback instead.
+    pub fn parse_exact(input: &str) -> Option<Self> {
+        let trimmed = input.trim_start();
+        let (selector, consumed) = parse_selector_prefix(trimmed)?;
+        if trimmed[consumed..].trim().is_empty() {
+            Some(selector)
+        } else {
+            None
+        }
+    }
+
+    /// Whether `node`'s role matches and, when [`name`](A11ySelector::name) is
+    /// set, its accessible name matches too.
+    fn matches(&self, node: &A11yNode) -> bool {
+        node.role == self.role && self.name.as_ref().is_none_or(|name| &node.name == name)
     }
 }
 
@@ -517,6 +630,17 @@ enum Intent {
         /// Key hints used to prefer a matching json key / stream label.
         key_tokens: Vec<String>,
     },
+    /// An accessibility-node comparison: the criterion names an explicit
+    /// `role[name=…]` locator (the browser/gui dialect) and the value it should
+    /// hold.
+    A11y {
+        /// The selector for the node whose value is read.
+        target: A11ySelector,
+        /// Ancestor selectors the target must descend from, nearest first.
+        ancestors: Vec<A11ySelector>,
+        /// The expected value (numeric or textual).
+        expected: BoundValue,
+    },
 }
 
 /// Resolve which checkpoint a criterion binds to: the ordinal it names, else the
@@ -544,6 +668,13 @@ fn resolve_checkpoint(text: &str, observation: &Observation) -> Result<usize, Co
 /// 1 kind is recognized at all. The caller binds and self-verifies each in turn.
 fn candidate_intents(text: &str) -> Vec<Intent> {
     let mut intents = Vec::new();
+    // The a11y dialect is keyed by an explicit `role[name=…]` token that does not
+    // occur in the other surfaces' prose, so it is recognized first (most
+    // specific). It only binds against an a11y observation; against any other
+    // state it falls through to the dialect that does.
+    if let Some(intent) = a11y_intent(text) {
+        intents.push(intent);
+    }
     if let Some(expected) = exit_intent(text) {
         intents.push(Intent::Exit { expected });
     }
@@ -623,6 +754,119 @@ fn header_intent(text: &str) -> Option<(String, BoundValue)> {
 /// `application/json`) intact.
 fn trim_token(word: &str) -> &str {
     word.trim_matches(|c: char| TOKEN_TRIM.contains(&c))
+}
+
+/// The compiled a11y selector regex, built once.
+fn a11y_selector_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(A11Y_SELECTOR_PATTERN).expect("valid a11y selector regex"))
+}
+
+/// Parse one `role[name=…]` selector anchored at the start of `slice`, returning
+/// it and the number of bytes consumed, or `None` when `slice` does not begin
+/// with a selector.
+fn parse_selector_prefix(slice: &str) -> Option<(A11ySelector, usize)> {
+    let captures = a11y_selector_regex().captures(slice)?;
+    let whole = captures.get(0)?;
+    if whole.start() != 0 {
+        return None;
+    }
+    let role = captures.name("role")?.as_str().to_string();
+    let name = captures
+        .name("dq")
+        .or_else(|| captures.name("sq"))
+        .or_else(|| captures.name("bare"))
+        .map(|matched| matched.as_str().trim().to_string())
+        .filter(|name| !name.is_empty());
+    Some((A11ySelector { role, name }, whole.end()))
+}
+
+/// Recognize an a11y-dialect criterion: an explicit `role[name=…]` locator
+/// (optionally with `within`/`ancestor` ancestor links) followed by a comparison
+/// keyword and the expected value. `None` when the prose carries no such locator.
+///
+/// The locator's bracket syntax does not appear in the other surfaces' prose, so
+/// this recognizer keys on it alone — leading filler ("the …") is ignored, and a
+/// trailing value may be quoted (for a multi-word value) or a bare token.
+///
+/// Because the a11y intent is recognized first and keys purely on the bracket
+/// token, count phrasing over an a11y locator (`the number of button[name="X"]
+/// …`) is read as a value comparison, *not* a `count(...)` invariant — the
+/// invariant dialect is not honored for a11y selectors.
+fn a11y_intent(text: &str) -> Option<Intent> {
+    let first = a11y_selector_regex().find(text)?;
+    let (target, consumed) = parse_selector_prefix(&text[first.start()..])?;
+    let mut cursor = &text[first.start() + consumed..];
+
+    let mut ancestors = Vec::new();
+    loop {
+        let trimmed = cursor.trim_start();
+        let Some(keyword_len) = leading_keyword(trimmed, A11Y_RELATIONSHIP_KEYWORDS) else {
+            break;
+        };
+        let after_keyword = trimmed[keyword_len..].trim_start();
+        let Some((selector, selector_len)) = parse_selector_prefix(after_keyword) else {
+            break;
+        };
+        ancestors.push(selector);
+        cursor = &after_keyword[selector_len..];
+    }
+
+    let trimmed = cursor.trim_start();
+    let keyword_len = leading_keyword(trimmed, A11Y_RELATION_KEYWORDS)?;
+    let expected_token = first_value_token(&trimmed[keyword_len..])?;
+    let expected = parse_bound(&dequote(expected_token));
+
+    Some(Intent::A11y {
+        target,
+        ancestors,
+        expected,
+    })
+}
+
+/// The byte length of the leading keyword from `keywords` that `text` begins with
+/// (case-insensitively, as a whole word), or `None`. Keywords are tested in the
+/// given order, so a caller listing them longest-first matches the longest.
+fn leading_keyword(text: &str, keywords: &[&str]) -> Option<usize> {
+    let lower = text.to_ascii_lowercase();
+    keywords.iter().find_map(|keyword| {
+        let rest = lower.strip_prefix(keyword)?;
+        if rest.is_empty() || rest.starts_with(char::is_whitespace) {
+            Some(keyword.len())
+        } else {
+            None
+        }
+    })
+}
+
+/// The first value token of `text`: a quoted string (through its closing quote)
+/// or the first whitespace-delimited word. `None` when `text` is blank.
+fn first_value_token(text: &str) -> Option<&str> {
+    let text = text.trim_start();
+    let quote = text.chars().next()?;
+    if quote == '"' || quote == '\'' {
+        let close = text[1..].find(quote)? + 1;
+        Some(&text[..=close])
+    } else {
+        let end = text.find(char::is_whitespace).unwrap_or(text.len());
+        Some(&text[..end])
+    }
+}
+
+/// Strip a matching pair of surrounding quotes from `token`, else trim the
+/// grammatical punctuation [`TOKEN_TRIM`] from its edges.
+fn dequote(token: &str) -> String {
+    let first = token.chars().next();
+    let last = token.chars().next_back();
+    if token.len() >= 2
+        && matches!(
+            (first, last),
+            (Some('"'), Some('"')) | (Some('\''), Some('\''))
+        )
+    {
+        return token[1..token.len() - 1].to_string();
+    }
+    trim_token(token).to_string()
 }
 
 /// Derive the most durable locator that binds for `intent` against `state`,
@@ -710,6 +954,22 @@ fn build_candidate(
             }
             None
         }
+        Intent::A11y {
+            target,
+            ancestors,
+            expected,
+        } => {
+            let locator = Locator::A11y { target, ancestors };
+            // The locator must bind against this (a11y) observation; against any
+            // other surface it resolves to nothing and the candidate is dropped.
+            locator.resolve(state)?;
+            Some(deterministic(
+                checkpoint,
+                locator,
+                Expected::Literal { value: expected },
+                text,
+            ))
+        }
     }
 }
 
@@ -741,7 +1001,86 @@ fn checkpoint_json(state: &SurfaceState) -> Option<Value> {
         SurfaceState::Json { body } => Some(body.clone()),
         SurfaceState::Cli(cli) => serde_json::from_str(cli.stdout.trim()).ok(),
         SurfaceState::Http(http) => serde_json::from_str(http.body.trim()).ok(),
-        SurfaceState::Db(_) | SurfaceState::File(_) => None,
+        SurfaceState::Db(_) | SurfaceState::File(_) | SurfaceState::A11y { .. } => None,
+    }
+}
+
+/// The a11y view of a checkpoint state, or `None` when it is not a browser/gui
+/// accessibility read.
+fn a11y_state(state: &SurfaceState) -> Option<&A11yNode> {
+    match state {
+        SurfaceState::A11y { tree } => Some(tree),
+        SurfaceState::Cli(_)
+        | SurfaceState::Http(_)
+        | SurfaceState::Db(_)
+        | SurfaceState::File(_)
+        | SurfaceState::Json { .. } => None,
+    }
+}
+
+/// Resolve an a11y locator against a captured tree: the value of the first node
+/// matching `target` whose ancestor chain satisfies `ancestors` (nearest first),
+/// or `None` (structural drift) when no such node exists.
+fn resolve_a11y(
+    tree: &A11yNode,
+    target: &A11ySelector,
+    ancestors: &[A11ySelector],
+) -> Option<BoundValue> {
+    let mut path: Vec<&A11yNode> = Vec::new();
+    find_a11y_value(tree, target, ancestors, &mut path)
+}
+
+/// Depth-first search for the first node matching `target` (with its ancestor
+/// chain satisfied), carrying the root-to-node `path` so ancestor constraints can
+/// be checked. Returns that node's resolved value.
+fn find_a11y_value<'a>(
+    node: &'a A11yNode,
+    target: &A11ySelector,
+    ancestors: &[A11ySelector],
+    path: &mut Vec<&'a A11yNode>,
+) -> Option<BoundValue> {
+    if target.matches(node) && ancestors_satisfied(ancestors, path) {
+        return Some(a11y_node_value(node));
+    }
+    path.push(node);
+    let mut found = None;
+    for child in &node.children {
+        if let Some(value) = find_a11y_value(child, target, ancestors, path) {
+            found = Some(value);
+            break;
+        }
+    }
+    path.pop();
+    found
+}
+
+/// Whether the `ancestors` chain holds along `path` (root first): each selector
+/// is matched, in order, by a strictly-higher ancestor than the previous one
+/// matched — so `a within b` reads "an `a` somewhere below a `b`".
+fn ancestors_satisfied(ancestors: &[A11ySelector], path: &[&A11yNode]) -> bool {
+    let mut idx = path.len();
+    for selector in ancestors {
+        let mut matched = false;
+        while idx > 0 {
+            idx -= 1;
+            if selector.matches(path[idx]) {
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            return false;
+        }
+    }
+    true
+}
+
+/// The value an a11y locator resolves a node to: its computed value when it has
+/// one, else its accessible name — parsed as a number when it looks numeric.
+fn a11y_node_value(node: &A11yNode) -> BoundValue {
+    match &node.value {
+        Some(value) => parse_bound(value),
+        None => parse_bound(&node.name),
     }
 }
 
@@ -752,6 +1091,7 @@ fn http_state(state: &SurfaceState) -> Option<&HttpState> {
         SurfaceState::Cli(_)
         | SurfaceState::Db(_)
         | SurfaceState::File(_)
+        | SurfaceState::A11y { .. }
         | SurfaceState::Json { .. } => None,
     }
 }
@@ -763,6 +1103,7 @@ fn db_state(state: &SurfaceState) -> Option<&DbState> {
         SurfaceState::Cli(_)
         | SurfaceState::Http(_)
         | SurfaceState::File(_)
+        | SurfaceState::A11y { .. }
         | SurfaceState::Json { .. } => None,
     }
 }
@@ -774,6 +1115,7 @@ fn file_state(state: &SurfaceState) -> Option<&FileState> {
         SurfaceState::Cli(_)
         | SurfaceState::Http(_)
         | SurfaceState::Db(_)
+        | SurfaceState::A11y { .. }
         | SurfaceState::Json { .. } => None,
     }
 }
@@ -790,6 +1132,7 @@ fn checkpoint_streams(state: &SurfaceState) -> Vec<(Stream, &str)> {
         SurfaceState::Http { .. }
         | SurfaceState::Db(_)
         | SurfaceState::File(_)
+        | SurfaceState::A11y { .. }
         | SurfaceState::Json { .. } => Vec::new(),
     }
 }
@@ -804,6 +1147,7 @@ fn stream_content(state: &SurfaceState, stream: Stream) -> Option<&str> {
         SurfaceState::Http { .. }
         | SurfaceState::Db(_)
         | SurfaceState::File(_)
+        | SurfaceState::A11y { .. }
         | SurfaceState::Json { .. } => None,
     }
 }
@@ -815,6 +1159,7 @@ fn checkpoint_exit(state: &SurfaceState) -> Option<i32> {
         SurfaceState::Http { .. }
         | SurfaceState::Db(_)
         | SurfaceState::File(_)
+        | SurfaceState::A11y { .. }
         | SurfaceState::Json { .. } => None,
     }
 }
@@ -1801,5 +2146,273 @@ mod tests {
             assertion.evaluate(&observation),
             AssertionOutcome::Drifted { .. }
         ));
+    }
+
+    // --- a11y (browser/gui) locator dialect ---------------------------------
+
+    /// The single source of truth for the fixture a11y tree's node values, so the
+    /// tests assert against the same constants the tree is built from.
+    const EMAIL_IN_LOGIN: &str = "user@example.test";
+    const EMAIL_IN_SEARCH: &str = "query@example.test";
+    const RESULT_VALUE: &str = "clicked";
+    const COUNT_VALUE: &str = "3";
+
+    /// A fixture a11y tree whose `status` node is named `status_name`, so a
+    /// "renamed control" can be modeled by passing a different name.
+    ///
+    /// Two `textbox[name="Email"]` nodes live under differently-named `form`s, so
+    /// the `within` constraint has something to disambiguate beyond DFS order.
+    fn fixture_tree(status_name: &str) -> A11yNode {
+        A11yNode {
+            role: "RootWebArea".to_string(),
+            name: "Fixture".to_string(),
+            value: None,
+            children: vec![
+                form_with_email("Login", EMAIL_IN_LOGIN),
+                form_with_email("Search", EMAIL_IN_SEARCH),
+                node("status", status_name, Some(RESULT_VALUE)),
+                node("spinbutton", "count", Some(COUNT_VALUE)),
+            ],
+        }
+    }
+
+    /// A `form` named `form_name` containing a `textbox[name="Email"]` whose value
+    /// is `email`, plus a bare `button`.
+    fn form_with_email(form_name: &str, email: &str) -> A11yNode {
+        A11yNode {
+            role: "form".to_string(),
+            name: form_name.to_string(),
+            value: None,
+            children: vec![
+                node("textbox", "Email", Some(email)),
+                node("button", "Submit", None),
+            ],
+        }
+    }
+
+    /// A childless a11y node.
+    fn node(role: &str, name: &str, value: Option<&str>) -> A11yNode {
+        A11yNode {
+            role: role.to_string(),
+            name: name.to_string(),
+            value: value.map(str::to_string),
+            children: Vec::new(),
+        }
+    }
+
+    /// A single-checkpoint a11y observation over `tree`.
+    fn a11y_observation(tree: A11yNode) -> Observation {
+        observation(vec![Checkpoint {
+            after: "final".to_string(),
+            state: SurfaceState::A11y { tree },
+            duration: Duration::from_millis(1),
+        }])
+    }
+
+    fn selector(role: &str, name: Option<&str>) -> A11ySelector {
+        A11ySelector {
+            role: role.to_string(),
+            name: name.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a11y_intent_parses_target_ancestors_and_expected() {
+        let Some(Intent::A11y {
+            target,
+            ancestors,
+            expected,
+        }) = a11y_intent("the textbox[name=\"Email\"] within form[name=\"Login\"] equals user@x")
+        else {
+            panic!("expected an a11y intent");
+        };
+        assert_eq!(target, selector("textbox", Some("Email")));
+        assert_eq!(ancestors, vec![selector("form", Some("Login"))]);
+        assert_eq!(expected, BoundValue::Text("user@x".to_string()));
+    }
+
+    #[test]
+    fn a11y_relationship_keywords_are_synonyms() {
+        // `within` and `ancestor` parse to the same ancestor constraint.
+        for keyword in A11Y_RELATIONSHIP_KEYWORDS {
+            let text = format!("textbox[name=\"Email\"] {keyword} form[name=\"Login\"] is x");
+            let Some(Intent::A11y { ancestors, .. }) = a11y_intent(&text) else {
+                panic!("`{keyword}` should parse as a relationship");
+            };
+            assert_eq!(
+                ancestors,
+                vec![selector("form", Some("Login"))],
+                "{keyword}"
+            );
+        }
+    }
+
+    #[test]
+    fn a11y_locator_resolves_a_node_value_over_a_snapshot_tree() {
+        let state = SurfaceState::A11y {
+            tree: fixture_tree("result"),
+        };
+        // A textual value resolves as text; a numeric value resolves as a number.
+        let result = Locator::A11y {
+            target: selector("status", Some("result")),
+            ancestors: Vec::new(),
+        };
+        assert_eq!(
+            result.resolve(&state),
+            Some(BoundValue::Text(RESULT_VALUE.to_string()))
+        );
+        let count = Locator::A11y {
+            target: selector("spinbutton", Some("count")),
+            ancestors: Vec::new(),
+        };
+        assert_eq!(count.resolve(&state), Some(BoundValue::Number(3.0)));
+    }
+
+    #[test]
+    fn a11y_locator_falls_back_to_the_accessible_name_without_a_value() {
+        // A value-less node (a button) resolves to its accessible name.
+        let state = SurfaceState::A11y {
+            tree: fixture_tree("result"),
+        };
+        let locator = Locator::A11y {
+            target: selector("button", Some("Submit")),
+            ancestors: Vec::new(),
+        };
+        assert_eq!(
+            locator.resolve(&state),
+            Some(BoundValue::Text("Submit".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_within_constraint_selects_the_node_under_the_named_container() {
+        // Both forms hold a `textbox[name="Email"]`; the ancestor constraint picks
+        // the one under the named form, not merely the first in DFS order.
+        let state = SurfaceState::A11y {
+            tree: fixture_tree("result"),
+        };
+        for (form_name, expected) in [("Login", EMAIL_IN_LOGIN), ("Search", EMAIL_IN_SEARCH)] {
+            let locator = Locator::A11y {
+                target: selector("textbox", Some("Email")),
+                ancestors: vec![selector("form", Some(form_name))],
+            };
+            assert_eq!(
+                locator.resolve(&state),
+                Some(BoundValue::Text(expected.to_string())),
+                "Email within form[{form_name}]"
+            );
+        }
+    }
+
+    #[test]
+    fn a_role_only_selector_matches_any_name() {
+        let status = node("status", "result", Some(RESULT_VALUE));
+        assert!(selector("status", None).matches(&status));
+        assert!(!selector("button", None).matches(&status));
+        let locator = Locator::A11y {
+            target: selector("status", None),
+            ancestors: Vec::new(),
+        };
+        assert_eq!(
+            locator.resolve(&SurfaceState::A11y {
+                tree: fixture_tree("result"),
+            }),
+            Some(BoundValue::Text(RESULT_VALUE.to_string()))
+        );
+    }
+
+    #[test]
+    fn an_unsatisfied_ancestor_constraint_does_not_bind() {
+        let state = SurfaceState::A11y {
+            tree: fixture_tree("result"),
+        };
+        let locator = Locator::A11y {
+            target: selector("textbox", Some("Email")),
+            ancestors: vec![selector("form", Some("Nonexistent"))],
+        };
+        assert_eq!(locator.resolve(&state), None);
+    }
+
+    #[test]
+    fn compiles_an_a11y_criterion_to_tier_one_and_holds() {
+        let obs = a11y_observation(fixture_tree("result"));
+        let assertion = compile(&criterion("status[name=\"result\"] equals clicked"), &obs)
+            .expect("a11y criterion compiles");
+        assert_eq!(assertion.tier, VerdictTier::Deterministic);
+        assert_eq!(
+            assertion.locator,
+            Locator::A11y {
+                target: selector("status", Some("result")),
+                ancestors: Vec::new(),
+            }
+        );
+        assert_eq!(assertion.evaluate(&obs), AssertionOutcome::Holds);
+    }
+
+    #[test]
+    fn compiles_an_a11y_within_criterion_against_the_observed_tree() {
+        let obs = a11y_observation(fixture_tree("result"));
+        let text = format!(
+            "textbox[name=\"Email\"] within form[name=\"Search\"] equals {EMAIL_IN_SEARCH}"
+        );
+        let assertion = compile(&criterion(&text), &obs).expect("within criterion compiles");
+        assert_eq!(
+            assertion.locator,
+            Locator::A11y {
+                target: selector("textbox", Some("Email")),
+                ancestors: vec![selector("form", Some("Search"))],
+            }
+        );
+        assert_eq!(assertion.evaluate(&obs), AssertionOutcome::Holds);
+    }
+
+    #[test]
+    fn a_renamed_a11y_control_surfaces_as_structural_drift() {
+        // Compile against a tree whose status node is named "result"...
+        let compiled_against = a11y_observation(fixture_tree("result"));
+        let assertion = compile(
+            &criterion("status[name=\"result\"] equals clicked"),
+            &compiled_against,
+        )
+        .expect("compiles");
+        // ...then replay against a tree where that control was renamed: the
+        // locator no longer binds, surfacing as honest structural drift.
+        let renamed = a11y_observation(fixture_tree("outcome"));
+        assert!(matches!(
+            assertion.evaluate(&renamed),
+            AssertionOutcome::Drifted { .. }
+        ));
+    }
+
+    #[test]
+    fn an_a11y_locator_reports_drift_against_a_non_a11y_state() {
+        let cli = observation(vec![cli_checkpoint("final", "done\n", 0)]);
+        let assertion = deterministic(
+            0,
+            Locator::A11y {
+                target: selector("status", Some("result")),
+                ancestors: Vec::new(),
+            },
+            Expected::Literal {
+                value: BoundValue::Text(RESULT_VALUE.to_string()),
+            },
+            "status[name=\"result\"] equals clicked",
+        );
+        assert!(matches!(
+            assertion.evaluate(&cli),
+            AssertionOutcome::Drifted { .. }
+        ));
+    }
+
+    #[test]
+    fn an_a11y_locator_displays_in_the_role_name_within_dialect() {
+        let locator = Locator::A11y {
+            target: selector("textbox", Some("Email")),
+            ancestors: vec![selector("form", Some("Login"))],
+        };
+        assert_eq!(
+            locator.to_string(),
+            "textbox[name=\"Email\"] within form[name=\"Login\"]"
+        );
     }
 }

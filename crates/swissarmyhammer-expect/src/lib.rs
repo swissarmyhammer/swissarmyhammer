@@ -68,8 +68,8 @@ pub mod surfaces;
 pub mod types;
 
 pub use assertion::{
-    compile, AssertOp, AssertionOutcome, BoundValue, CompileError, CompiledAssertion, Expected,
-    Locator, Stream,
+    compile, A11ySelector, AssertOp, AssertionOutcome, BoundValue, CompileError, CompiledAssertion,
+    Expected, Locator, Stream,
 };
 pub use check::{
     check, CheckEntry, CheckOptions, CheckReport, CheckStatus, CHECK_EXIT_FAILED,
@@ -114,6 +114,7 @@ pub use replay::{
     CachedAction, ReplayCache, ReplayKey, ReplaySource, ResolvedAction, MAX_REPLAY_DRIFT,
 };
 pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};
+pub use surface::browser::{BrowserAction, BrowserAdapter, BrowserSut};
 pub use surface::cli::{CliAdapter, CliCommands, CliSut};
 pub use surface::db::{DbAdapter, DbSut};
 pub use surface::file::{FileAdapter, FileSut};
@@ -121,7 +122,7 @@ pub use surface::http::{HttpAdapter, HttpSut};
 pub use surface::SurfaceAdapter;
 pub use surfaces::SurfaceInfo;
 pub use types::{
-    Checkpoint, CliState, CriterionStatus, CriterionVerdict, DbState, Evidence, ExpectationVerdict,
-    FileState, HttpState, LedgerState, Observation, Reliability, Surface, SurfaceState, Trajectory,
-    VerdictTier,
+    A11yNode, Checkpoint, CliState, CriterionStatus, CriterionVerdict, DbState, Evidence,
+    ExpectationVerdict, FileState, HttpState, LedgerState, Observation, Reliability, Surface,
+    SurfaceState, Trajectory, VerdictTier,
 };

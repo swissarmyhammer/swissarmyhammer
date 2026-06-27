@@ -109,11 +109,44 @@ pub enum SurfaceState {
     Db(DbState),
     /// The authoritative read of filesystem state — captured files and dirs.
     File(FileState),
+    /// The authoritative read of a browser/gui surface — a snapshot of the
+    /// accessibility tree.
+    A11y {
+        /// The root of the captured accessibility tree.
+        tree: A11yNode,
+    },
     /// A generic structured body — the room left for the a11y adapters.
     Json {
         /// The structured state, as an arbitrary JSON value.
         body: serde_json::Value,
     },
+}
+
+/// One node of a captured accessibility tree — the authoritative read of a
+/// browser/gui surface.
+///
+/// The browser/gui locator dialect (`ideas/expect.md` §"Locators are a
+/// per-surface dialect") is `role[name=…]` + tree relationship (`within` /
+/// `ancestor`): a node is addressed by its accessible **role** and **name** and
+/// its position in the tree, never by pixels. This makes a control rename surface
+/// as honest structural drift rather than the everything-screams noise of a
+/// screenshot diff. Each node keeps its `role`, accessible `name`, optional
+/// computed `value` (for inputs, status regions, …), and `children`, mirroring
+/// the CDP `Accessibility` / native a11y trees the adapters snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct A11yNode {
+    /// The node's accessible role (e.g. `button`, `textbox`, `status`).
+    pub role: String,
+    /// The node's accessible name (e.g. a button's label, an input's
+    /// `aria-label`); empty when the node has none.
+    pub name: String,
+    /// The node's computed value, when it has one distinct from its name (an
+    /// input's text, a slider's position). Absent for nodes with no value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// The node's child nodes, in tree order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<A11yNode>,
 }
 
 /// The authoritative read of a CLI run: its streams, exit code, and any files
@@ -448,6 +481,38 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
         assert_eq!(json["kind"], serde_json::json!("file"));
+        assert_eq!(round_trip(&state), state);
+    }
+
+    #[test]
+    fn surface_state_a11y_variant_round_trips() {
+        let state = SurfaceState::A11y {
+            tree: A11yNode {
+                role: "RootWebArea".to_string(),
+                name: "Fixture".to_string(),
+                value: None,
+                children: vec![
+                    A11yNode {
+                        role: "button".to_string(),
+                        name: "Go".to_string(),
+                        value: None,
+                        children: Vec::new(),
+                    },
+                    A11yNode {
+                        role: "textbox".to_string(),
+                        name: "result".to_string(),
+                        value: Some("clicked".to_string()),
+                        children: Vec::new(),
+                    },
+                ],
+            },
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        assert_eq!(json["kind"], serde_json::json!("a11y"));
+        // A value-less, child-less node serializes compactly (skipped fields).
+        assert_eq!(json["tree"]["children"][0].get("value"), None);
+        assert_eq!(json["tree"]["children"][0].get("children"), None);
         assert_eq!(round_trip(&state), state);
     }
 

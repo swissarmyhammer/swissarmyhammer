@@ -42,7 +42,7 @@ use crate::evaluate::evaluate;
 use crate::observe::{golden_path, received_path, spec_path};
 use crate::spec::{Criterion, Expectation};
 use crate::types::{
-    CliState, CriterionVerdict, DbState, FileState, HttpState, LedgerState, Observation,
+    A11yNode, CliState, CriterionVerdict, DbState, FileState, HttpState, LedgerState, Observation,
     SurfaceState, Trajectory, VerdictTier,
 };
 
@@ -250,9 +250,28 @@ impl ScrubberSet {
                     .collect(),
                 dirs: file.dirs.iter().map(|dir| self.scrub_text(dir)).collect(),
             }),
+            SurfaceState::A11y { tree } => SurfaceState::A11y {
+                tree: self.scrub_a11y_node(tree),
+            },
             SurfaceState::Json { body } => SurfaceState::Json {
                 body: self.scrub_json(body),
             },
+        }
+    }
+
+    /// Recursively scrub a captured accessibility node's name, value, and
+    /// children, leaving its structural `role` untouched (the role is part of the
+    /// locator, never volatile content).
+    fn scrub_a11y_node(&self, node: &A11yNode) -> A11yNode {
+        A11yNode {
+            role: node.role.clone(),
+            name: self.scrub_text(&node.name),
+            value: node.value.as_ref().map(|value| self.scrub_text(value)),
+            children: node
+                .children
+                .iter()
+                .map(|child| self.scrub_a11y_node(child))
+                .collect(),
         }
     }
 
