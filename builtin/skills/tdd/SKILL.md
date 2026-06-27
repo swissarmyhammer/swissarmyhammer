@@ -138,6 +138,15 @@ All of these = delete the code, start over with TDD.
 
 Write a failing test that reproduces the bug, then follow the cycle. The test proves the fix and prevents regression. **Never fix bugs without a test.**
 
+## Cover the Inverse and the Siblings
+
+A fix that passes *your* test can still be incomplete. Before GREEN, ask two questions:
+
+- **Did I change one side of a pair?** write/read, serialize/deserialize, encode/decode, classify/parse, set/get. If so, test the **inverse direction** — round-trip it. A test you *name* "round-trip" must actually read back what it wrote; a write-only test that asserts an output string is not a round-trip, whatever its docstring says.
+- **Did I change how one token/flag/case/format is handled?** Then grep for every other site that consumes the same value and cover those too. Making a classifier case-insensitive while a value-parser still compares case-sensitively is the classic miss.
+
+The hidden/real test almost always probes the symmetric or sibling path you didn't think of — not the example from the issue. Tests written only from your own mental model pass by construction and prove nothing about the part you forgot.
+
 ## Verification Checklist
 
 Before marking complete:
@@ -149,6 +158,8 @@ Before marking complete:
 - [ ] Output pristine (no errors, no warnings)
 - [ ] Real code (mocks only if unavoidable)
 - [ ] Edge cases and errors covered
+- [ ] Inverse direction / round-trip covered when one side of a pair changed (write↔read, encode↔decode, classify↔parse)
+- [ ] Ran the **existing** test module for the code you touched, not only your new tests
 
 Can't check all? You skipped TDD. Start over.
 
