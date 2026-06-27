@@ -115,11 +115,13 @@ pub use replay::{
 };
 pub use spec::{Criterion, Expectation, Frontmatter, Isolation, ReliabilityPolicy, Setup};
 pub use surface::cli::{CliAdapter, CliCommands, CliSut};
+pub use surface::db::{DbAdapter, DbSut};
+pub use surface::file::{FileAdapter, FileSut};
 pub use surface::http::{HttpAdapter, HttpSut};
 pub use surface::SurfaceAdapter;
 pub use surfaces::SurfaceInfo;
 pub use types::{
-    Checkpoint, CliState, CriterionStatus, CriterionVerdict, Evidence, ExpectationVerdict,
-    HttpState, LedgerState, Observation, Reliability, Surface, SurfaceState, Trajectory,
+    Checkpoint, CliState, CriterionStatus, CriterionVerdict, DbState, Evidence, ExpectationVerdict,
+    FileState, HttpState, LedgerState, Observation, Reliability, Surface, SurfaceState, Trajectory,
     VerdictTier,
 };

@@ -329,30 +329,16 @@ fn detect_project_type(repo_root: &Path) -> Result<ProjectType, ExpectError> {
 ///
 /// Output-file names come from the spec and are otherwise joined onto the SUT's
 /// work dir verbatim, so an absolute path or a `..` component would let a spec
-/// read files outside the sandbox (e.g. `../../etc/passwd`). A name is accepted
-/// only when it is relative and contains no parent-directory component, which
-/// guarantees the join cannot resolve above `work_dir`.
+/// read files outside the sandbox (e.g. `../../etc/passwd`). Delegates to the
+/// shared [`safe_join`](crate::surface::safe_join) traversal guard so every
+/// path-bearing adapter enforces the same rule.
 ///
 /// # Errors
 ///
 /// Returns [`ExpectError::Surface`] when `name` is absolute or contains a `..`
 /// component.
 fn safe_output_path(work_dir: &Path, name: &str) -> Result<PathBuf, ExpectError> {
-    let candidate = Path::new(name);
-    if candidate.is_absolute() {
-        return Err(ExpectError::Surface(format!(
-            "output file `{name}` must be a relative path within the work dir"
-        )));
-    }
-    if candidate
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err(ExpectError::Surface(format!(
-            "output file `{name}` must not escape the work dir with `..`"
-        )));
-    }
-    Ok(work_dir.join(candidate))
+    crate::surface::safe_join(work_dir, name)
 }
 
 /// Spawn a thread that drains a child pipe to a [`String`].

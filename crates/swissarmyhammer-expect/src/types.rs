@@ -91,10 +91,11 @@ pub enum LedgerState {
 /// An adapter's authoritative read of the system under test at one checkpoint.
 ///
 /// Each surface reads ground truth differently (stdout/exit/files for cli;
-/// status/headers/body for http; rows for db; an a11y tree for browser/gui). The
-/// model carries a concrete [`Cli`](SurfaceState::Cli) variant, a concrete
-/// [`Http`](SurfaceState::Http) variant, plus a generic [`Json`] variant that
-/// holds any structured body until the remaining adapters land.
+/// status/headers/body for http; a SQL snapshot for db; files/dirs/content for
+/// file; an a11y tree for browser/gui). The model carries a concrete variant per
+/// landed adapter — [`Cli`](SurfaceState::Cli), [`Http`](SurfaceState::Http),
+/// [`Db`](SurfaceState::Db), [`File`](SurfaceState::File) — plus a generic
+/// [`Json`] variant that holds any structured body until the a11y adapters land.
 ///
 /// [`Json`]: SurfaceState::Json
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -104,7 +105,11 @@ pub enum SurfaceState {
     Cli(CliState),
     /// The authoritative read of an HTTP response.
     Http(HttpState),
-    /// A generic structured body — the room left for the db/a11y adapters.
+    /// The authoritative read of database state — a SQL snapshot of the database.
+    Db(DbState),
+    /// The authoritative read of filesystem state — captured files and dirs.
+    File(FileState),
+    /// A generic structured body — the room left for the a11y adapters.
     Json {
         /// The structured state, as an arbitrary JSON value.
         body: serde_json::Value,
@@ -143,6 +148,38 @@ pub struct HttpState {
     pub headers: BTreeMap<String, String>,
     /// The raw response body text; a json-path locator parses it on demand.
     pub body: String,
+}
+
+/// The authoritative read of database state: a SQL snapshot of the database.
+///
+/// The `db` locator dialect (`ideas/expect.md` §"Locators are a per-surface
+/// dialect") is *itself* SQL — "very stable (the locator *is* SQL)". To keep the
+/// observation a self-contained, re-evaluable capture (a golden must be queryable
+/// without the live database), the snapshot is the database serialized as a SQL
+/// script of `CREATE`/`INSERT` statements. The SQL-projection locator loads it
+/// into an ephemeral in-memory database and runs its query, so the locator stays
+/// pure SQL while `evaluate` touches no external system.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbState {
+    /// The database serialized as a SQL script (schema + data), re-loadable into
+    /// an in-memory database for the SQL-projection locator to query.
+    pub snapshot: String,
+}
+
+/// The authoritative read of filesystem state: captured files and directories.
+///
+/// The `file` locator dialect (`ideas/expect.md` §"Locators are a per-surface
+/// dialect") is `path + content (+ sub-locator if structured)`: a path resolves a
+/// file's content, and a json-path sub-locator reaches into a structured file.
+/// Contents are captured as text (mirroring how [`CliState`] keeps raw `stdout`);
+/// a json-path locator parses one on demand.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileState {
+    /// Captured file contents, keyed by path relative to the scratch root
+    /// (sorted for stable serialization).
+    pub files: BTreeMap<String, String>,
+    /// Captured directory paths relative to the scratch root (sorted).
+    pub dirs: Vec<String>,
 }
 
 /// One authoritative snapshot in an observation's timeline.
@@ -384,6 +421,33 @@ mod tests {
             exit_code: Some(0),
             files: std::collections::BTreeMap::from([("out.txt".to_string(), "ok".to_string())]),
         });
+        assert_eq!(round_trip(&state), state);
+    }
+
+    #[test]
+    fn surface_state_db_variant_round_trips() {
+        let state = SurfaceState::Db(DbState {
+            snapshot: "CREATE TABLE orders (id INTEGER, total INTEGER);\nINSERT INTO orders VALUES (1, 40);\n".to_string(),
+        });
+        // The serde tag is the lowercase surface name.
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        assert_eq!(json["kind"], serde_json::json!("db"));
+        assert_eq!(round_trip(&state), state);
+    }
+
+    #[test]
+    fn surface_state_file_variant_round_trips() {
+        let state = SurfaceState::File(FileState {
+            files: std::collections::BTreeMap::from([(
+                "config/app.json".to_string(),
+                "{\"total\":40}".to_string(),
+            )]),
+            dirs: vec!["config".to_string()],
+        });
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        assert_eq!(json["kind"], serde_json::json!("file"));
         assert_eq!(round_trip(&state), state);
     }
 

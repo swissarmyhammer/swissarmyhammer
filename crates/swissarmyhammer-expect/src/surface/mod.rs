@@ -20,13 +20,59 @@
 //! no-agent path: build the binary, run argv, read stdout/stderr/exit/files.
 
 pub mod cli;
+pub mod db;
+pub mod file;
 pub mod http;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::ExpectError;
 use crate::spec::Setup;
 use crate::types::SurfaceState;
+
+/// Safe-join a relative `name` under `base`, rejecting any name that could escape
+/// `base` via an absolute path or a `..` component.
+///
+/// Surface adapters join spec-supplied names (cli output files, file-surface
+/// write targets) onto a sandbox root; an absolute path or a parent-directory
+/// component would let a spec read or write outside it (e.g. `../../etc/passwd`).
+/// A name is accepted only when it is relative and contains no parent-directory
+/// component, which guarantees the join stays under `base`. This is the single
+/// source of truth for the traversal guard shared by every path-bearing adapter.
+///
+/// # Errors
+///
+/// Returns [`ExpectError::Surface`] when `name` is absolute or contains a `..`
+/// component.
+pub(crate) fn safe_join(base: &Path, name: &str) -> Result<PathBuf, ExpectError> {
+    let candidate = Path::new(name);
+    if candidate.is_absolute() {
+        return Err(ExpectError::Surface(format!(
+            "path `{name}` must be relative to the sandbox root"
+        )));
+    }
+    if candidate
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(ExpectError::Surface(format!(
+            "path `{name}` must not escape the sandbox root with `..`"
+        )));
+    }
+    Ok(base.join(candidate))
+}
+
+/// The ordered provisioning commands of a [`Setup`] declaration as a slice — a
+/// single command becomes a one-element slice, a list passes through.
+///
+/// Shared by the db (fixture SQL) and file (fixture writes) adapters so a spec's
+/// `setup:` is read uniformly across surfaces.
+pub(crate) fn setup_commands(setup: &Setup) -> &[String] {
+    match setup {
+        Setup::Command(command) => std::slice::from_ref(command),
+        Setup::Commands(commands) => commands.as_slice(),
+    }
+}
 
 /// The contract a surface adapter implements to run the `expect` lifecycle
 /// against one surface (cli, http, db, …).
@@ -108,5 +154,44 @@ pub trait SurfaceAdapter {
     /// (`ideas/expect.md` §"The Check Loop").
     fn resolves_mechanically(&self, _when_step: &str) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_join_accepts_relative_names_and_rejects_traversal() {
+        let base = Path::new("/sandbox");
+        assert_eq!(safe_join(base, "a.txt").unwrap(), base.join("a.txt"));
+        assert_eq!(
+            safe_join(base, "nested/dir/a.txt").unwrap(),
+            base.join("nested/dir/a.txt")
+        );
+        assert!(matches!(
+            safe_join(base, "../escape.txt"),
+            Err(ExpectError::Surface(_))
+        ));
+        assert!(matches!(
+            safe_join(base, "nested/../../escape.txt"),
+            Err(ExpectError::Surface(_))
+        ));
+        assert!(matches!(
+            safe_join(base, "/etc/passwd"),
+            Err(ExpectError::Surface(_))
+        ));
+    }
+
+    #[test]
+    fn setup_commands_flattens_single_and_list_forms() {
+        assert_eq!(
+            setup_commands(&Setup::Command("one".to_string())),
+            &["one".to_string()]
+        );
+        assert_eq!(
+            setup_commands(&Setup::Commands(vec!["a".to_string(), "b".to_string()])),
+            &["a".to_string(), "b".to_string()]
+        );
     }
 }

@@ -26,7 +26,7 @@
 //! [`AssertionOutcome::Drifted`] outcome — never a silent mis-read.
 
 use crate::spec::Criterion;
-use crate::types::{HttpState, Observation, SurfaceState, VerdictTier};
+use crate::types::{DbState, FileState, HttpState, Observation, SurfaceState, VerdictTier};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -122,6 +122,30 @@ pub enum Locator {
     Header {
         /// The header name; resolution matches it case-insensitively.
         name: String,
+    },
+    /// A SQL query projecting one scalar from a captured database snapshot — the
+    /// db dialect, where the locator *is* SQL (the most durable surface locator).
+    ///
+    /// Resolution reloads the snapshot into an ephemeral in-memory database and
+    /// returns the first column of the query's first row; a query that no longer
+    /// binds (a dropped table, a renamed column) reports structural drift.
+    Sql {
+        /// The `SELECT` projecting one value (first column of the first row).
+        query: String,
+    },
+    /// The textual content of a captured file at `path` — the file dialect's
+    /// `path + content` locator.
+    FileContent {
+        /// The captured file's path, relative to the scratch root.
+        path: String,
+    },
+    /// A json-path into the JSON parsed from a captured file — the file dialect's
+    /// structured **sub-locator** (`path + content (+ sub-locator if structured)`).
+    FileJsonPath {
+        /// The captured file's path, relative to the scratch root.
+        path: String,
+        /// The `$.a.b` json-path resolved against that file's parsed JSON.
+        pointer: String,
     },
 }
 
@@ -406,6 +430,19 @@ impl Locator {
             Locator::Header { name } => http_state(state)
                 .and_then(|http| http.headers.get(&name.to_ascii_lowercase()))
                 .map(|value| parse_bound(value)),
+            Locator::Sql { query } => {
+                let db = db_state(state)?;
+                query_snapshot(&db.snapshot, query)
+            }
+            Locator::FileContent { path } => file_state(state)
+                .and_then(|file| file.files.get(path))
+                .map(|content| parse_bound(content)),
+            Locator::FileJsonPath { path, pointer } => {
+                let file = file_state(state)?;
+                let content = file.files.get(path)?;
+                let json: Value = serde_json::from_str(content).ok()?;
+                bound_from_value(resolve_json_path(&json, pointer)?)
+            }
         }
     }
 }
@@ -419,6 +456,9 @@ impl fmt::Display for Locator {
             Locator::Exit => write!(f, "exit"),
             Locator::Status => write!(f, "status"),
             Locator::Header { name } => write!(f, "header:{name}"),
+            Locator::Sql { query } => write!(f, "sql:{query}"),
+            Locator::FileContent { path } => write!(f, "file:{path}"),
+            Locator::FileJsonPath { path, pointer } => write!(f, "file:{path}#{pointer}"),
         }
     }
 }
@@ -690,13 +730,18 @@ fn deterministic(
     }
 }
 
-/// The structured JSON view of a checkpoint state: its body, or its stdout when
-/// that parses as JSON (so a json-path is preferred over a stream regex).
+/// The structured JSON view of a checkpoint state: its body, or its stdout/body
+/// when that parses as JSON (so a json-path is preferred over a stream regex).
+///
+/// db and file states have no single canonical JSON body — db is queried by SQL
+/// ([`Locator::Sql`]) and a structured file is reached by its own
+/// [`Locator::FileJsonPath`] sub-locator — so they yield `None` here.
 fn checkpoint_json(state: &SurfaceState) -> Option<Value> {
     match state {
         SurfaceState::Json { body } => Some(body.clone()),
         SurfaceState::Cli(cli) => serde_json::from_str(cli.stdout.trim()).ok(),
         SurfaceState::Http(http) => serde_json::from_str(http.body.trim()).ok(),
+        SurfaceState::Db(_) | SurfaceState::File(_) => None,
     }
 }
 
@@ -704,7 +749,32 @@ fn checkpoint_json(state: &SurfaceState) -> Option<Value> {
 fn http_state(state: &SurfaceState) -> Option<&HttpState> {
     match state {
         SurfaceState::Http(http) => Some(http),
-        SurfaceState::Cli(_) | SurfaceState::Json { .. } => None,
+        SurfaceState::Cli(_)
+        | SurfaceState::Db(_)
+        | SurfaceState::File(_)
+        | SurfaceState::Json { .. } => None,
+    }
+}
+
+/// The db view of a checkpoint state, or `None` when it is not a db read.
+fn db_state(state: &SurfaceState) -> Option<&DbState> {
+    match state {
+        SurfaceState::Db(db) => Some(db),
+        SurfaceState::Cli(_)
+        | SurfaceState::Http(_)
+        | SurfaceState::File(_)
+        | SurfaceState::Json { .. } => None,
+    }
+}
+
+/// The file view of a checkpoint state, or `None` when it is not a file read.
+fn file_state(state: &SurfaceState) -> Option<&FileState> {
+    match state {
+        SurfaceState::File(file) => Some(file),
+        SurfaceState::Cli(_)
+        | SurfaceState::Http(_)
+        | SurfaceState::Db(_)
+        | SurfaceState::Json { .. } => None,
     }
 }
 
@@ -717,7 +787,10 @@ fn checkpoint_streams(state: &SurfaceState) -> Vec<(Stream, &str)> {
                 (Stream::Stderr, cli.stderr.as_str()),
             ]
         }
-        SurfaceState::Http { .. } | SurfaceState::Json { .. } => Vec::new(),
+        SurfaceState::Http { .. }
+        | SurfaceState::Db(_)
+        | SurfaceState::File(_)
+        | SurfaceState::Json { .. } => Vec::new(),
     }
 }
 
@@ -728,7 +801,10 @@ fn stream_content(state: &SurfaceState, stream: Stream) -> Option<&str> {
             Stream::Stdout => cli.stdout.as_str(),
             Stream::Stderr => cli.stderr.as_str(),
         }),
-        SurfaceState::Http { .. } | SurfaceState::Json { .. } => None,
+        SurfaceState::Http { .. }
+        | SurfaceState::Db(_)
+        | SurfaceState::File(_)
+        | SurfaceState::Json { .. } => None,
     }
 }
 
@@ -736,7 +812,39 @@ fn stream_content(state: &SurfaceState, stream: Stream) -> Option<&str> {
 fn checkpoint_exit(state: &SurfaceState) -> Option<i32> {
     match state {
         SurfaceState::Cli(cli) => cli.exit_code,
-        SurfaceState::Http { .. } | SurfaceState::Json { .. } => None,
+        SurfaceState::Http { .. }
+        | SurfaceState::Db(_)
+        | SurfaceState::File(_)
+        | SurfaceState::Json { .. } => None,
+    }
+}
+
+/// Resolve a SQL-projection locator against a captured database `snapshot`.
+///
+/// Reloads the snapshot (a SQL script of `CREATE`/`INSERT` statements) into a
+/// fresh in-memory database and returns the first column of `query`'s first row as
+/// a [`BoundValue`]. Any failure — a malformed/no-longer-binding query, an empty
+/// result, or a non-scalar/NULL cell — yields `None`, which the caller surfaces as
+/// structural drift rather than a silent mis-read. This keeps the db locator pure
+/// SQL while `evaluate` touches no external system (only an ephemeral in-process
+/// database built from the captured bytes).
+fn query_snapshot(snapshot: &str, query: &str) -> Option<BoundValue> {
+    let connection = rusqlite::Connection::open_in_memory().ok()?;
+    connection.execute_batch(snapshot).ok()?;
+    let value = connection
+        .query_row(query, [], |row| row.get::<_, rusqlite::types::Value>(0))
+        .ok()?;
+    bound_from_sql_value(value)
+}
+
+/// Convert a SQLite cell into a [`BoundValue`], or `None` for NULL / blob cells
+/// (which carry no comparable scalar).
+fn bound_from_sql_value(value: rusqlite::types::Value) -> Option<BoundValue> {
+    match value {
+        rusqlite::types::Value::Integer(integer) => Some(BoundValue::Number(integer as f64)),
+        rusqlite::types::Value::Real(real) => Some(BoundValue::Number(real)),
+        rusqlite::types::Value::Text(text) => Some(BoundValue::Text(text)),
+        rusqlite::types::Value::Null | rusqlite::types::Value::Blob(_) => None,
     }
 }
 
@@ -1562,5 +1670,136 @@ mod tests {
                 locator: "status".to_string()
             }
         );
+    }
+
+    /// A db checkpoint whose snapshot is a one-table fixture with a single row.
+    fn db_checkpoint() -> Checkpoint {
+        Checkpoint {
+            after: "final".to_string(),
+            state: SurfaceState::Db(crate::types::DbState {
+                snapshot: "CREATE TABLE orders (id INTEGER, total INTEGER, label TEXT);\n\
+                           INSERT INTO orders VALUES (1, 40, 'SAVE10');\n"
+                    .to_string(),
+            }),
+            duration: Duration::from_millis(1),
+        }
+    }
+
+    #[test]
+    fn sql_locator_projects_numbers_and_text_from_a_db_snapshot() {
+        let observation = observation(vec![db_checkpoint()]);
+        let state = &observation.checkpoints[0].state;
+
+        let total = Locator::Sql {
+            query: "SELECT total FROM orders WHERE id = 1".to_string(),
+        };
+        assert_eq!(total.resolve(state), Some(BoundValue::Number(40.0)));
+
+        let label = Locator::Sql {
+            query: "SELECT label FROM orders WHERE id = 1".to_string(),
+        };
+        assert_eq!(
+            label.resolve(state),
+            Some(BoundValue::Text("SAVE10".to_string()))
+        );
+
+        // A Tier-1 literal assertion over the SQL projection holds.
+        let assertion = deterministic(
+            0,
+            total,
+            Expected::Literal {
+                value: BoundValue::Number(40.0),
+            },
+            "the order total is 40",
+        );
+        assert_eq!(assertion.evaluate(&observation), AssertionOutcome::Holds);
+    }
+
+    #[test]
+    fn a_sql_locator_reports_drift_when_the_query_no_longer_binds() {
+        let observation = observation(vec![db_checkpoint()]);
+        let assertion = deterministic(
+            0,
+            Locator::Sql {
+                query: "SELECT total FROM gone".to_string(),
+            },
+            Expected::Literal {
+                value: BoundValue::Number(40.0),
+            },
+            "the order total is 40",
+        );
+        assert!(matches!(
+            assertion.evaluate(&observation),
+            AssertionOutcome::Drifted { .. }
+        ));
+    }
+
+    /// A file checkpoint with a json file and a plain-text file.
+    fn file_checkpoint() -> Checkpoint {
+        Checkpoint {
+            after: "final".to_string(),
+            state: SurfaceState::File(crate::types::FileState {
+                files: BTreeMap::from([
+                    (
+                        "config/app.json".to_string(),
+                        "{\"total\": 40, \"items\": [\"a\"]}".to_string(),
+                    ),
+                    ("notes.txt".to_string(), "hello".to_string()),
+                ]),
+                dirs: vec!["config".to_string()],
+            }),
+            duration: Duration::from_millis(1),
+        }
+    }
+
+    #[test]
+    fn file_content_and_json_sublocators_resolve_against_a_file_state() {
+        let observation = observation(vec![file_checkpoint()]);
+        let state = &observation.checkpoints[0].state;
+
+        // path + content.
+        assert_eq!(
+            Locator::FileContent {
+                path: "notes.txt".to_string()
+            }
+            .resolve(state),
+            Some(BoundValue::Text("hello".to_string()))
+        );
+        // json-path sub-locator into a structured file (scalar and array index).
+        assert_eq!(
+            Locator::FileJsonPath {
+                path: "config/app.json".to_string(),
+                pointer: "$.total".to_string()
+            }
+            .resolve(state),
+            Some(BoundValue::Number(40.0))
+        );
+        assert_eq!(
+            Locator::FileJsonPath {
+                path: "config/app.json".to_string(),
+                pointer: "$.items[0]".to_string()
+            }
+            .resolve(state),
+            Some(BoundValue::Text("a".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_file_locator_reports_drift_when_the_path_is_absent() {
+        let observation = observation(vec![file_checkpoint()]);
+        let assertion = deterministic(
+            0,
+            Locator::FileContent {
+                path: "missing.txt".to_string(),
+            },
+            Expected::Literal {
+                value: BoundValue::Text("hello".to_string()),
+            },
+            "the notes file says hello",
+        );
+        assert!(matches!(
+            assertion.evaluate(&observation),
+            AssertionOutcome::Drifted { .. }
+        ));
     }
 }

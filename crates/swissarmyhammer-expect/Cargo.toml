@@ -34,6 +34,16 @@ thiserror = { workspace = true }
 # Locator dialect: regex stream-capture and number extraction for the assertion compiler
 regex = { workspace = true }
 
+# The db surface adapter's in-process Rust client: provision a fresh SQLite
+# database, run statements, snapshot it. `bundled` ships SQLite itself so there
+# is no external server (matching the no-Node/no-Python stack). The SQL-projection
+# locator also reloads a captured snapshot into an in-memory database to resolve.
+rusqlite = { workspace = true }
+
+# Scratch directories owned by the db (temp-file backing) and file (scratch root)
+# surface adapters: provision creates one, teardown drops it.
+tempfile = { workspace = true }
+
 # The http surface adapter's in-process Rust client: issue the request, read
 # status/headers/body. `blocking` is added on top of the workspace features so the
 # adapter stays synchronous like the `SurfaceAdapter` trait (it runs under
@@ -65,8 +75,8 @@ nix = { workspace = true }
 [dev-dependencies]
 serde_json = { workspace = true }
 
-# Temp dirs for config load / repo-root discovery tests
-tempfile = { workspace = true }
+# (`tempfile` is a normal dependency — the db/file adapters own scratch dirs at
+# runtime — so it is available to tests without re-declaring it here.)
 
 # A stub ACP agent for the drive seam's end-to-end test, mirroring review's tests.
 # (`tokio` is already a non-dev dependency with the workspace `full` feature set,
