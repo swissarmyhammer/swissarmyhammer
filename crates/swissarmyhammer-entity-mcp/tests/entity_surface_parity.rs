@@ -73,6 +73,7 @@ const FROZEN_KANBAN_OPS: &[&str] = &[
     "tag task",
     "untag task",
     "list tasks",
+    "search tasks",
     "archive task",
     "unarchive task",
     "list archived",
@@ -82,6 +83,12 @@ const FROZEN_KANBAN_OPS: &[&str] = &[
     "update tag",
     "delete tag",
     "list tags",
+    // Comment
+    "add comment",
+    "get comment",
+    "update comment",
+    "delete comment",
+    "list comments",
     // Attachment
     "add attachment",
     "get attachment",
