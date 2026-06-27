@@ -47,31 +47,6 @@ use crate::error::AvpError;
 use crate::review::probes::{run_probes, ChangeEntry, FileChange as ProbeChange, ProbeResult};
 use crate::validators::{MatchContext, RuleSet, ValidatorLoader};
 
-/// How many lines of context to keep on each side of a changed hunk in the
-/// bounded [`source_slice`](FileWork::source_slice).
-const HUNK_WINDOW_LINES: usize = 40;
-
-/// How many leading lines of a file count as its "header" (imports / module
-/// declaration) for the bounded slice.
-const HEADER_LINES: usize = 20;
-
-/// Maximum byte length of a changed file's source to inline **in full** in the
-/// review payload.
-///
-/// The binding constraint is the review model's **context window**, not the
-/// per-call generation cap ([`crate::validators::DEFAULT_MAX_TOKENS`] = 16 Ki,
-/// which bounds the *reply*, never the input). The fan-out's primed prefix is
-/// only ~5k tokens, so a context window of 32k+ tokens has ample headroom to
-/// carry a typical source file whole alongside its prefix and the reply budget.
-///
-/// This is the inline budget expressed in **bytes** (~1 byte ≈ ¼ token for code,
-/// so this corresponds to roughly the per-file slice of an ~8k-token inline
-/// budget — well inside a 32k context window after the prefix and reply). Only a
-/// pathologically large file relative to the window exceeds it; such a file
-/// falls back to the bounded [`bounded_slice`] plus an explicit note directing
-/// the model to `read_file` for the remainder. Typical source files inline whole.
-const MAX_INLINE_SOURCE_BYTES: usize = 32 * 1024;
-
 /// The synthetic validator name carried on scope-stage [`AvpError::Validator`]s.
 ///
 /// The scope stage is not a real loaded validator, so its failures are attributed
@@ -193,18 +168,16 @@ pub struct FileWork {
     pub semantic_diff: Vec<SemanticChange>,
     /// The names of the changed symbols.
     pub changed_symbols: Vec<String>,
-    /// The file's source for the review payload.
+    /// The file's **complete** current source, inlined in full into the review
+    /// payload so the model never needs to `read_file` the changed file.
     ///
-    /// When [`inlined_full`](FileWork::inlined_full) is `true` this is the file's
-    /// **complete** current contents, so the model never needs to `read_file` the
-    /// changed file. When `false` (a file too large for the inline budget,
-    /// [`MAX_INLINE_SOURCE_BYTES`]) it is the bounded [`bounded_slice`] plus a note
-    /// directing the model to `read_file` for the remainder.
+    /// A changed file is always inlined whole: it is the file's complete current
+    /// contents (empty only for a deletion, which has no current content — the
+    /// removal is carried by [`semantic_diff`](FileWork::semantic_diff)). A file
+    /// whose source would exceed the review `batch_size` is never trimmed to a
+    /// slice; [`batch_work_list`] rejects it with a hard error instead, so this is
+    /// never a partial view.
     pub source_slice: String,
-    /// Whether [`source_slice`](FileWork::source_slice) is the file's complete
-    /// contents (`true`) or the bounded-slice fallback for an oversized file
-    /// (`false`).
-    pub inlined_full: bool,
     /// The shared `(file, probe)` results.
     pub probe_results: Vec<ProbeResult>,
 }
@@ -349,8 +322,8 @@ fn match_validators_and_files(files: &[String], loader: &ValidatorLoader) -> Mat
     }
 }
 
-/// Pre-compute the [`FileFacts`] (bounded slice, changed symbols, semantic diff)
-/// once per matched file — shared by every validator that reviews that file.
+/// Pre-compute the [`FileFacts`] (full inlined source, changed symbols, semantic
+/// diff) once per matched file — shared by every validator that reviews that file.
 fn compute_per_file_facts(
     matched_files: &BTreeSet<String>,
     entities_by_file: &BTreeMap<String, Vec<SemanticChange>>,
@@ -359,14 +332,17 @@ fn compute_per_file_facts(
     let mut per_file: BTreeMap<String, FileFacts> = BTreeMap::new();
     for file in matched_files {
         let entities = entities_by_file.get(file).cloned().unwrap_or_default();
-        let after = after_content.get(file).map(String::as_str);
-        let (source_slice, inlined_full) = inline_or_slice(after, &entities);
+        // The changed file is always inlined in FULL: the model re-reads any file
+        // it is not given whole, and those round-trips dominate review wall-clock.
+        // A deletion has no current content, so its source is empty (the removal
+        // is carried by the semantic diff). A file too large for the review
+        // `batch_size` is never trimmed here — [`batch_work_list`] rejects it.
+        let source_slice = after_content.get(file).cloned().unwrap_or_default();
         per_file.insert(
             file.clone(),
             FileFacts {
                 changed_symbols: changed_symbols(&entities),
                 source_slice,
-                inlined_full,
                 semantic_diff: entities,
             },
         );
@@ -395,7 +371,6 @@ fn assemble_validator_work(
                         semantic_diff: facts.semantic_diff.clone(),
                         changed_symbols: facts.changed_symbols.clone(),
                         source_slice: facts.source_slice.clone(),
-                        inlined_full: facts.inlined_full,
                         probe_results: select_probe_results(
                             probe_cache,
                             file,
@@ -474,7 +449,6 @@ struct FileFacts {
     semantic_diff: Vec<SemanticChange>,
     changed_symbols: Vec<String>,
     source_slice: String,
-    inlined_full: bool,
 }
 
 /// The resolved scope: the changed-file set, the sem-diff inputs, the per-file
@@ -796,98 +770,98 @@ fn changed_symbols(entities: &[SemanticChange]) -> Vec<String> {
     names.into_iter().collect()
 }
 
-/// The note appended to the bounded-slice fallback, directing the model to read
-/// the rest of an oversized changed file rather than reasoning from the slice
-/// alone. Names `read_file` explicitly so the model knows which tool to reach for.
-const OVERSIZED_FILE_READ_NOTE: &str =
-    "\n\n// NOTE: this file is too large to inline in full; the slice above is bounded. \
-Use `read_file` on this path to see the remainder before reasoning about it.";
-
-/// Resolve a changed file's review source, returning the source text and whether
-/// it is the file's **complete** contents.
+/// Split a [`WorkList`] into content-budgeted batches at **whole-file**
+/// granularity, so every batch's primed prefix stays inside `batch_size` bytes.
 ///
-/// The model re-reads any file it is not given in full, and those tool
-/// round-trips dominate review wall-clock — so the changed file is inlined whole
-/// whenever it fits the inline budget ([`MAX_INLINE_SOURCE_BYTES`], keyed off the
-/// model's context window, NOT the generation cap). Returns `(full_source, true)`
-/// in that common case.
+/// Cramming every changed file's full source into one shared prime overflows the
+/// review model's context on a large diff — every fan-out validator then fails
+/// uniformly. So the run is split into batches and each batch fans out
+/// independently. The files are packed greedily, in [`WorkList::distinct_files`]
+/// order (the same order the prime renders them): each file is added to the
+/// current batch until adding the next file's inlined source would push the batch
+/// past `batch_size`, at which point a new batch starts. A file is **atomic** — it
+/// is never split across batches.
 ///
-/// Only a pathologically large file relative to the window exceeds the budget; it
-/// falls back to the bounded [`bounded_slice`] plus [`OVERSIZED_FILE_READ_NOTE`]
-/// and returns `(slice_with_note, false)` so the caller frames it as a partial
-/// view the model should `read_file` to complete.
-fn inline_or_slice(after: Option<&str>, entities: &[SemanticChange]) -> (String, bool) {
-    match after {
-        Some(content) if content.len() <= MAX_INLINE_SOURCE_BYTES => (content.to_string(), true),
-        _ => {
-            let mut slice = bounded_slice(after, entities);
-            slice.push_str(OVERSIZED_FILE_READ_NOTE);
-            (slice, false)
+/// Each returned [`WorkList`] carries every validator that has at least one file
+/// in that batch, with the validator's files filtered to the batch (validators
+/// left with no files in a batch are dropped). The change purpose is carried
+/// verbatim so every batch's prime frames the same overall change. A work-list
+/// with no files (no validator matched) yields no batches.
+///
+/// # Errors
+///
+/// Returns [`AvpError::Validator`] when a single file's inlined source alone
+/// exceeds `batch_size`: it cannot be packed without either splitting it
+/// (forbidden) or blowing the budget. The error names the file, its byte size, and
+/// the limit, and directs the caller to raise `batch_size` or narrow the scope.
+/// This is the loud replacement for the old silent slice-degrade of an oversized
+/// file.
+pub fn batch_work_list(work: &WorkList, batch_size: usize) -> Result<Vec<WorkList>, AvpError> {
+    // Pack the distinct files (first-seen order, matching the prime's file set)
+    // into byte-budgeted batches; a file is never split across a batch boundary.
+    let mut batches: Vec<Vec<String>> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    let mut current_bytes = 0usize;
+    for file in work.distinct_files() {
+        let size = file.source_slice.len();
+        if size > batch_size {
+            return Err(AvpError::Validator {
+                validator: SCOPE_VALIDATOR.to_string(),
+                message: format!(
+                    "file `{}` inlines {size} bytes, over the {batch_size}-byte review batch_size; \
+                     a file is never split across review batches — raise `batch_size` or narrow the review scope",
+                    file.path
+                ),
+            });
         }
+        if !current.is_empty() && current_bytes + size > batch_size {
+            batches.push(std::mem::take(&mut current));
+            current_bytes = 0;
+        }
+        current.push(file.path.clone());
+        current_bytes += size;
     }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+
+    Ok(batches
+        .into_iter()
+        .map(|paths| project_onto_files(work, &paths))
+        .collect())
 }
 
-/// Build the bounded source slice for a file: its header, each changed entity's
-/// `after_content`, and a window around each changed entity's location in the
-/// after-content — never the whole file.
-fn bounded_slice(after: Option<&str>, entities: &[SemanticChange]) -> String {
-    let mut sections: Vec<String> = Vec::new();
-
-    // Header: the file's leading lines (imports / module decl).
-    if let Some(content) = after {
-        let header: Vec<&str> = content.lines().take(HEADER_LINES).collect();
-        if !header.is_empty() {
-            sections.push(header.join("\n"));
-        }
-    }
-
-    // Each changed entity's full source, plus a window around its location.
-    for entity in entities {
-        if let Some(body) = &entity.after_content {
-            sections.push(body.clone());
-            if let Some(content) = after {
-                if let Some(window) = hunk_window(content, body) {
-                    sections.push(window);
-                }
+/// Project a [`WorkList`] onto a subset of file paths: keep every validator that
+/// has at least one file in `paths`, with its files filtered to `paths` (order
+/// preserved). Validators left with no files are dropped. The change purpose is
+/// carried verbatim so the batch's prime still frames the whole change.
+fn project_onto_files(work: &WorkList, paths: &[String]) -> WorkList {
+    let keep: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+    let validators = work
+        .validators
+        .iter()
+        .filter_map(|validator| {
+            let files: Vec<FileWork> = validator
+                .files
+                .iter()
+                .filter(|file| keep.contains(file.path.as_str()))
+                .cloned()
+                .collect();
+            if files.is_empty() {
+                return None;
             }
-        }
+            Some(ValidatorWork {
+                validator_name: validator.validator_name.clone(),
+                rules: validator.rules.clone(),
+                probes: validator.probes.clone(),
+                files,
+            })
+        })
+        .collect();
+    WorkList {
+        change_purpose: work.change_purpose.clone(),
+        validators,
     }
-
-    dedup_sections(sections).join("\n")
-}
-
-/// A ~`HUNK_WINDOW_LINES`-line window of `content` centered on where `body`
-/// first appears, `None` when `body` is not found verbatim.
-fn hunk_window(content: &str, body: &str) -> Option<String> {
-    let first_body_line = body.lines().next()?.trim();
-    if first_body_line.is_empty() {
-        return None;
-    }
-    let lines: Vec<&str> = content.lines().collect();
-    let idx = lines.iter().position(|l| l.trim() == first_body_line)?;
-    let start = idx.saturating_sub(HUNK_WINDOW_LINES / 2);
-    let end = (idx + HUNK_WINDOW_LINES / 2).min(lines.len());
-    Some(lines[start..end].join("\n"))
-}
-
-/// Drop duplicate / fully-contained sections so the slice stays bounded and
-/// doesn't repeat the same entity body via overlapping windows.
-fn dedup_sections(sections: Vec<String>) -> Vec<String> {
-    let mut kept: Vec<String> = Vec::new();
-    for section in sections {
-        let trimmed = section.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if kept
-            .iter()
-            .any(|k| k.contains(trimmed) || trimmed.contains(k.as_str()))
-        {
-            continue;
-        }
-        kept.push(section);
-    }
-    kept
 }
 
 #[cfg(test)]
@@ -998,10 +972,9 @@ mod tests {
             file.changed_symbols
         );
 
-        // Full source: a small changed file is inlined whole, so the model never
-        // re-reads it. The changed function, the header, AND the distant unrelated
-        // marker (which the old bounded slice trimmed) are all present.
-        assert!(file.inlined_full, "a small changed file inlines in full");
+        // Full source: a changed file is always inlined whole, so the model never
+        // re-reads it. The changed function, the header, AND a distant unrelated
+        // marker are all present (nothing is trimmed to a slice).
         assert!(
             file.source_slice.contains("pub fn compute"),
             "full source must include the changed function"
@@ -1133,12 +1106,17 @@ mod tests {
     /// A minimal `FileWork` carrying only a path — enough to assert the
     /// dedup/order semantics of [`WorkList::distinct_files`].
     fn file_at(path: &str) -> FileWork {
+        file_sized(path, 0)
+    }
+
+    /// A `FileWork` whose inlined `source_slice` is exactly `bytes` bytes — the
+    /// knob [`batch_work_list`] packs against.
+    fn file_sized(path: &str, bytes: usize) -> FileWork {
         FileWork {
             path: path.to_string(),
             semantic_diff: vec![],
             changed_symbols: vec![],
-            source_slice: String::new(),
-            inlined_full: true,
+            source_slice: "x".repeat(bytes),
             probe_results: vec![],
         }
     }
@@ -1146,10 +1124,148 @@ mod tests {
     fn validator_over(name: &str, paths: &[&str]) -> ValidatorWork {
         ValidatorWork {
             validator_name: name.to_string(),
-            rules: vec![],
+            rules: vec![format!("{name}-rule")],
             probes: vec![],
             files: paths.iter().map(|p| file_at(p)).collect(),
         }
+    }
+
+    /// A validator over `(path, byte-size)` files, for [`batch_work_list`] packing
+    /// assertions.
+    fn validator_sized(name: &str, files: &[(&str, usize)]) -> ValidatorWork {
+        ValidatorWork {
+            validator_name: name.to_string(),
+            rules: vec![format!("{name}-rule")],
+            probes: vec![],
+            files: files.iter().map(|(p, n)| file_sized(p, *n)).collect(),
+        }
+    }
+
+    /// The validator names a batch carries, in order.
+    fn batch_validators(batch: &WorkList) -> Vec<String> {
+        batch
+            .validators
+            .iter()
+            .map(|v| v.validator_name.clone())
+            .collect()
+    }
+
+    /// The file paths a batch carries (distinct, prime order).
+    fn batch_paths(batch: &WorkList) -> Vec<String> {
+        batch.distinct_files().map(|f| f.path.clone()).collect()
+    }
+
+    #[test]
+    fn batch_work_list_packs_whole_files_within_the_byte_budget() {
+        // Three 10-byte files, budget 25 → greedy packing gives [a,b],[c]; the
+        // running total never exceeds the budget and no file is split.
+        let work = WorkList {
+            change_purpose: "p".to_string(),
+            validators: vec![validator_sized(
+                "v",
+                &[("a.rs", 10), ("b.rs", 10), ("c.rs", 10)],
+            )],
+        };
+
+        let batches = batch_work_list(&work, 25).expect("packs within budget");
+
+        assert_eq!(
+            batches.iter().map(batch_paths).collect::<Vec<_>>(),
+            vec![vec!["a.rs", "b.rs"], vec!["c.rs"]],
+            "files pack greedily into whole-file batches under the budget"
+        );
+        for batch in &batches {
+            let total: usize = batch.distinct_files().map(|f| f.source_slice.len()).sum();
+            assert!(total <= 25, "every batch stays within the byte budget");
+        }
+    }
+
+    #[test]
+    fn batch_work_list_errors_on_a_single_file_over_the_budget() {
+        // One file larger than the budget cannot be packed without splitting it
+        // (forbidden) — it is a hard error, not a slice, not a spill.
+        let work = WorkList {
+            change_purpose: "p".to_string(),
+            validators: vec![validator_sized("v", &[("big.rs", 100)])],
+        };
+
+        let err = batch_work_list(&work, 32).expect_err("an oversized file errors");
+        let msg = err.to_string();
+        assert!(msg.contains("big.rs"), "names the offending file: {msg}");
+        assert!(msg.contains("100"), "names the file's size: {msg}");
+        assert!(msg.contains("32"), "names the limit: {msg}");
+        assert!(
+            msg.contains("batch_size") && msg.contains("narrow"),
+            "directs the caller to raise batch_size or narrow scope: {msg}"
+        );
+    }
+
+    #[test]
+    fn batch_work_list_small_diff_is_exactly_one_batch() {
+        // Today's fast path: a small diff fits one batch, unchanged.
+        let work = WorkList {
+            change_purpose: "p".to_string(),
+            validators: vec![validator_sized("v", &[("a.rs", 10), ("b.rs", 10)])],
+        };
+
+        let batches = batch_work_list(&work, 32 * 1024).expect("small diff packs");
+
+        assert_eq!(batches.len(), 1, "a small diff is a single batch");
+        assert_eq!(batch_paths(&batches[0]), vec!["a.rs", "b.rs"]);
+    }
+
+    #[test]
+    fn batch_work_list_projects_each_validator_onto_its_batch_files() {
+        // v1 owns a.rs,b.rs; v2 owns c.rs. Budget 25 splits into [a,b],[c], so v1
+        // lands wholly in batch 1 and v2 wholly in batch 2 — a validator with no
+        // files in a batch is dropped from it.
+        let work = WorkList {
+            change_purpose: "p".to_string(),
+            validators: vec![
+                validator_sized("v1", &[("a.rs", 10), ("b.rs", 10)]),
+                validator_sized("v2", &[("c.rs", 10)]),
+            ],
+        };
+
+        let batches = batch_work_list(&work, 25).expect("packs within budget");
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batch_validators(&batches[0]), vec!["v1"]);
+        assert_eq!(batch_paths(&batches[0]), vec!["a.rs", "b.rs"]);
+        assert_eq!(batch_validators(&batches[1]), vec!["v2"]);
+        assert_eq!(batch_paths(&batches[1]), vec!["c.rs"]);
+    }
+
+    #[test]
+    fn batch_work_list_keeps_a_shared_file_atomic_in_one_batch() {
+        // `shared.rs` is matched by two validators but is ONE distinct file: it is
+        // packed once, into a single batch, never duplicated or split.
+        let work = WorkList {
+            change_purpose: "p".to_string(),
+            validators: vec![
+                validator_sized("v1", &[("shared.rs", 10)]),
+                validator_sized("v2", &[("shared.rs", 10)]),
+            ],
+        };
+
+        let batches = batch_work_list(&work, 25).expect("packs within budget");
+
+        assert_eq!(batches.len(), 1, "the one distinct file is one batch");
+        assert_eq!(batch_paths(&batches[0]), vec!["shared.rs"]);
+        assert_eq!(
+            batch_validators(&batches[0]),
+            vec!["v1", "v2"],
+            "both validators that matched the shared file ride the same batch"
+        );
+    }
+
+    #[test]
+    fn batch_work_list_empty_work_yields_no_batches() {
+        let work = WorkList {
+            change_purpose: "p".to_string(),
+            validators: vec![],
+        };
+        assert!(batch_work_list(&work, 32 * 1024).unwrap().is_empty());
     }
 
     #[test]
@@ -1473,79 +1589,6 @@ mod tests {
         );
     }
 
-    // ---- inline_or_slice: full source under the cap, bounded fallback over ----
-
-    /// A small changed file inlines its COMPLETE source (every line, including
-    /// ones the bounded slice would have trimmed) and reports `inlined_full`.
-    #[test]
-    fn small_file_inlines_full_source_and_reports_inlined_full() {
-        // A distant marker far from the header and the changed hunk — exactly
-        // what `bounded_slice` trims away, so its presence proves the FULL file
-        // is inlined, not the slice.
-        let mid_padding: String = (0..30).map(|i| format!("// mid {i}\n")).collect();
-        let after = format!(
-            "use std::fmt;\n{mid_padding}fn distant_unrelated_marker() {{}}\npub fn compute() {{}}\n"
-        );
-        let entities = vec![added_entity("compute", "pub fn compute() {}")];
-
-        let (source, inlined_full) = inline_or_slice(Some(&after), &entities);
-
-        assert!(inlined_full, "a small file must inline in full");
-        assert!(
-            source.contains("distant_unrelated_marker"),
-            "the full inline must carry the distant line the bounded slice trims, got:\n{source}"
-        );
-        assert!(
-            source.contains("pub fn compute"),
-            "the full inline must carry the changed function, got:\n{source}"
-        );
-    }
-
-    /// A changed file whose full content exceeds [`MAX_INLINE_SOURCE_BYTES`]
-    /// falls back to the bounded slice plus an explicit read-the-rest note, and
-    /// reports `inlined_full == false`.
-    #[test]
-    fn oversized_file_falls_back_to_bounded_slice_with_read_note() {
-        // A short header (imports), then a marker placed in the MIDDLE of a huge
-        // body — outside both the header window (`HEADER_LINES`) and the changed
-        // hunk — so the bounded slice trims it. Its absence proves the fallback
-        // is the slice, not the whole file.
-        let header = "use std::fmt;\n";
-        // Many newline-separated lines so the marker sits far past the header
-        // window (line > HEADER_LINES) and far from the changed hunk, and the
-        // whole file still blows past the inline byte cap.
-        let lead: String = (0..MAX_INLINE_SOURCE_BYTES)
-            .map(|i| format!("// lead {i}\n"))
-            .collect();
-        let trail: String = (0..MAX_INLINE_SOURCE_BYTES)
-            .map(|i| format!("// trail {i}\n"))
-            .collect();
-        let after = format!(
-            "{header}{lead}fn distant_unrelated_marker() {{}}\n{trail}pub fn compute() {{}}\n"
-        );
-        assert!(
-            after.len() > MAX_INLINE_SOURCE_BYTES,
-            "fixture must exceed the inline cap"
-        );
-        let entities = vec![added_entity("compute", "pub fn compute() {}")];
-
-        let (source, inlined_full) = inline_or_slice(Some(&after), &entities);
-
-        assert!(!inlined_full, "an oversized file must NOT inline in full");
-        assert!(
-            source.contains("pub fn compute"),
-            "the fallback slice must still carry the changed function, got:\n{source}"
-        );
-        assert!(
-            !source.contains("distant_unrelated_marker"),
-            "the fallback must be the bounded slice, not the whole file, got:\n{source}"
-        );
-        assert!(
-            source.contains("read_file"),
-            "the fallback must direct the model to read_file for the remainder, got:\n{source}"
-        );
-    }
-
     // ---- read_working / read_at_ref error discipline --------------------
 
     /// A non-UTF8 byte sequence: a lone continuation byte that is invalid as
@@ -1637,27 +1680,6 @@ mod tests {
                 );
             }
             other => panic!("expected AvpError::Context, got: {other:?}"),
-        }
-    }
-
-    /// A small `SemanticChange` carrying just an added entity's body, enough to
-    /// drive the bounded-slice path in the helper tests.
-    fn added_entity(name: &str, body: &str) -> SemanticChange {
-        use swissarmyhammer_sem::model::change::ChangeType;
-        SemanticChange {
-            id: format!("test:{name}"),
-            entity_id: name.to_string(),
-            change_type: ChangeType::Added,
-            entity_type: "function".to_string(),
-            entity_name: name.to_string(),
-            file_path: "src/lib.rs".to_string(),
-            old_file_path: None,
-            before_content: None,
-            after_content: Some(body.to_string()),
-            commit_sha: None,
-            author: None,
-            timestamp: None,
-            structural_change: None,
         }
     }
 }

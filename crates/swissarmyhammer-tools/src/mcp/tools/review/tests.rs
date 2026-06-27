@@ -703,6 +703,7 @@ async fn review_pipelines_run_one_at_a_time_process_wide() {
         backend: Some("local".to_string()),
         validators: Vec::new(),
         concurrency: None,
+        batch_size: None,
     };
     let run = |path: std::path::PathBuf| {
         run_review_request(
