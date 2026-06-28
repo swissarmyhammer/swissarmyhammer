@@ -1167,6 +1167,14 @@ mod tests {
     /// keeps the hidden fixture constant out of the probe row and its assertions.
     const TEST_PROBE_LINE: u32 = 88;
 
+    /// The similarity score the shared `file_work` fixture's `duplicates` probe
+    /// row reports. Like [`TEST_PROBE_LINE`] the exact value is immaterial; naming
+    /// it keeps the score out of the fixture, the agent-output helper, and the
+    /// rendered-prompt assertion so all three stay locked to one number. Rendered
+    /// with `{:.2}` (matching the production probe formatting) wherever it appears
+    /// as text.
+    const TEST_SIMILARITY: f32 = 0.94;
+
     /// A RuleSet whose mandate (description) and rule bodies are distinctive so
     /// the rendered prompt can be asserted against them verbatim.
     fn ruleset(name: &str, mandate: &str, rules: &[(&str, &str)]) -> RuleSet {
@@ -1240,7 +1248,7 @@ mod tests {
                     file_path: dup_at.to_string(),
                     symbol: Some(symbol.to_string()),
                     line: Some(TEST_PROBE_LINE),
-                    similarity: Some(0.94),
+                    similarity: Some(TEST_SIMILARITY),
                     detail: None,
                 }],
             }],
@@ -1315,7 +1323,7 @@ mod tests {
                 format!(
                     "{{\"file\":\"{file}\",\"line\":{line},\
                      \"validator\":\"ignored-by-agent\",\"rule\":\"{rule}\",\
-                     \"claim\":\"{claim}\",\"evidence\":\"per `duplicates`: 0.94\",\
+                     \"claim\":\"{claim}\",\"evidence\":\"per `duplicates`: {TEST_SIMILARITY:.2}\",\
                      \"suggestion\":\"extract a helper\"}}"
                 )
             })
@@ -1441,7 +1449,10 @@ mod tests {
             prompt.contains(&format!("src/dup_of_a.rs:{TEST_PROBE_LINE}")),
             "{prompt}"
         );
-        assert!(prompt.contains("@ 0.94"), "{prompt}");
+        assert!(
+            prompt.contains(&format!("@ {TEST_SIMILARITY:.2}")),
+            "{prompt}"
+        );
     }
 
     /// The run prime carries the change + every diff and NOT any validator text;

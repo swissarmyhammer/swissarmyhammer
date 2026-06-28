@@ -84,6 +84,34 @@ comments:
 
     Green: cargo fmt clean; cargo nextest -p swissarmyhammer-validators 290/290 pass; cargo clippy -p swissarmyhammer-validators -p swissarmyhammer-tools --all-targets -- -D warnings exit 0, no warnings. Left in doing.
   timestamp: 2026-06-28T01:06:20.518932+00:00
+- actor: claude-code
+  id: 01kw5whafzg1szhk2fskg7jedv
+  text: Iter 3 implement+test green (validators 290/290, clippy+fmt clean, double-check PASS). Named TEST_PROBE_LINE(88) + TEST_FINDING_LINE in fleet.rs tests, ATTEMPTED_TASKS(8) in synthesize.rs tests, and swept both whole test modules for sibling literals (60/60 all-failed fixture etc.). Flipped all 3 prior + 2 new findings to [x]. Checkpoint eb1d1762. Re-reviewing HEAD~1..HEAD — this verifies the whole-file sweep prevented a round-4 magic-number dribble.
+  timestamp: 2026-06-28T01:12:07.935723+00:00
+- actor: claude-code
+  id: 01kw5wzypes3120yh8xwt6drgj
+  text: 'Iter 3 review (review sha HEAD~1..HEAD on eb1d1762): all 5 prior items checked, but 2 NEW confirmed findings — both the 0.94 test similarity literal in fleet.rs (sites ~549, 720, 938, 1023) left un-named when iter 3 named the line-number literals. 2 confirmed / 0 refuted, 32 attempted 0 failed. META: this is the dribble pattern reproduced inside our own loop — iter 3''s claimed whole-module sweep missed 0.94, and the engine only surfaced it now because eb1d1762 touched those lines (HEAD~1..HEAD scoping). Iter 4: extract 0.94 to ONE named const used at all sites, and grep the ENTIRE fleet.rs + synthesize.rs test modules for any other fixture literal (thresholds/scores/counts/line nums) and name them all, verifying by grep that none remain — so round 5 is clean. Worth noting in the card''s own findings as live evidence.'
+  timestamp: 2026-06-28T01:20:07.374209+00:00
+- actor: claude-code
+  id: 01kw5xf5wb325kjfdtmwsjy9ne
+  text: |-
+    Iter 4 /implement: killed the 0.94 same-class dribble in fleet.rs test module.
+
+    EXTRACTED `const TEST_SIMILARITY: f32 = 0.94;` (type matches the `similarity: Option<f32>` probe-row field) near TEST_PROBE_LINE/TEST_FINDING_LINE, doc'd as the immaterial-but-locked similarity score rendered with {:.2} (matching production probe formatting). Updated all 3 test sites:
+    - file_work fixture: `similarity: Some(0.94)` -> `similarity: Some(TEST_SIMILARITY)`
+    - findings_array_json helper evidence string: `0.94` -> `{TEST_SIMILARITY:.2}`
+    - render assertion: `prompt.contains("@ 0.94")` -> `prompt.contains(&format!("@ {TEST_SIMILARITY:.2}"))`
+    The only 0.94 left in fleet.rs is the PRODUCTION OUTPUT_CONTRACT illustration (`per `duplicates`: 0.94 at `bar.rs:88``) — prompt text shown to the model, not test code, intentionally untouched.
+
+    WHOLE-MODULE SWEEP (both test modules) — grep-verified, ZERO same-class literal remains:
+    - fleet test module (1138-2746): only `0.94` is the const def itself; NO other float literal besides the named const and "1.0.0" version strings.
+    - synthesize test module (387-890): ZERO float literals at all; ATTEMPTED_TASKS already named (iter 3).
+    Calibration (left intentionally, not magic constants): cache_reuse CacheUsage token counts (distinct per-test illustrative passthrough data, field-name documented, fixture+assert in same small test), `timeout: 30` (single-site self-documenting fixture field, never asserted), PoolConfig::remote(N) pool sizes (mirror visible validator count), attempted/failed asserts (mirror constructed validator count), synthesize confirmed()/refuted()/finding() positional `line` args (role-clear by helper signature, distinct per scenario). None are a single repeated magic constant (rule-of-three fails), and the validator left all of them across 3 prior rounds. Did NOT touch whole-file framing or completeness re-scan; no severity reintroduced.
+
+    Flipped the 2 newest findings (20:12 section, the 0.94 ones) [ ] -> [x]; all other description text verbatim.
+
+    GREEN: cargo fmt clean; cargo nextest -p swissarmyhammer-validators 290/290 pass; cargo clippy -p swissarmyhammer-validators -p swissarmyhammer-tools --all-targets -- -D warnings exit 0, no warnings. Left in doing.
+  timestamp: 2026-06-28T01:28:26.251815+00:00
 position_column: doing
 position_ordinal: '8280'
 project: local-review
@@ -141,3 +169,8 @@ Make the find stage review the **entire inlined file** for every rule, explicitl
 
 - [x] `crates/swissarmyhammer-validators/src/review/fleet.rs:492` — Hardcoded probe row line number 88 should be a named constant — it configures test fixture behavior and appears without explanation. Extract as a named test constant (e.g., `const TEST_PROBE_LINE: u32 = 88;`) and use it consistently across test fixtures.
 - [x] `crates/swissarmyhammer-validators/src/review/synthesize.rs:448` — Hardcoded numeric literal `8` configures the number of attempted tasks in a test without explanation. It is a test configuration value that should be a named constant. Extract as a named constant (e.g., `const TASK_COUNT: usize = 8;`) and use it in the constructor.
+
+## Review Findings (2026-06-27 20:12)
+
+- [x] `crates/swissarmyhammer-validators/src/review/fleet.rs:549` — The numeric ratio 0.94 is a hardcoded test similarity threshold that should be extracted as a named constant, following the pattern of TEST_FINDING_LINE and TEST_PROBE_LINE already extracted in this change. Extract as a named constant like `const TEST_SIMILARITY: f32 = 0.94;` (similar to the TEST_PROBE_LINE and TEST_FINDING_LINE pattern) and use it on line 549.
+- [x] `crates/swissarmyhammer-validators/src/review/fleet.rs:1023` — The hardcoded similarity score `0.94` appears in multiple places across the test fixtures and assertions but was not extracted to a named constant like `TEST_PROBE_LINE` and `TEST_FINDING_LINE`. The same value is used in the `file_work` fixture (line 720: `similarity: Some(0.94)`), the `findings_array_json` helper (line 1023: evidence string with `0.94`), and in test assertions (line 938: `assert!(prompt.contains("@ 0.94"))`). These should all reference the same named constant for consistency and maintainability. Extract the similarity score to a named constant like `const MOCK_SIMILARITY_SCORE: f64 = 0.94;` near the other test constants (around line 732), and update all three usages (line 720, line 938, and line 1023) to reference this constant instead of hardcoding `0.94`.
