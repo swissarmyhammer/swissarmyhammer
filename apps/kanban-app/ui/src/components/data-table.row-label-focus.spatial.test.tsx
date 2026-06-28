@@ -98,6 +98,7 @@ vi.mock("@/components/perspective-container", () => ({
 import { GridView } from "./grid-view";
 import { DataTable, type DataTableColumn } from "./data-table";
 import { SchemaProvider } from "@/lib/schema-context";
+import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
@@ -255,7 +256,7 @@ function emitFocusChanged(nextFq: string | null, nextSegment: string | null) {
   const prev = currentFocusKey.key;
   currentFocusKey.key = nextFq;
   queueMicrotask(() => {
-    const handler = listenHandlers["focus-changed"];
+    const handler = listenHandlers["notifications/focus/changed"];
     if (handler) {
       handler({
         payload: {
@@ -325,7 +326,12 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     for (const key of Object.keys(listenHandlers)) {
       delete listenHandlers[key];
     }
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
   });
 
   afterEach(() => {
@@ -497,7 +503,7 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     // Regression pin for kanban task 01KQPVHMJC4F79YXGWGSFZ4FJK.
     //
     // Bug history: clicking a row label leaf logged
-    // `cmd=ui.setFocus` success but the leaf's `data-focused`
+    // `cmd=app.setFocus` success but the leaf's `data-focused`
     // attribute did not flip. Root cause was that the row's outer
     // `<FocusScope renderContainer={false}>` did not publish a
     // distinct FQM into `FullyQualifiedMonikerContext`, so the

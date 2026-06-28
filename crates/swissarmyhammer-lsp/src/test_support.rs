@@ -14,6 +14,37 @@ use serde_json::Value;
 
 use crate::client::LspTransport;
 use crate::error::LspError;
+use crate::types::OwnedLspServerSpec;
+
+/// Default startup timeout (seconds) for the shared [`test_spec`] builder.
+///
+/// Distinct from `supervisor.rs`'s `TEST_STARTUP_TIMEOUT_SECS`, which is a
+/// faster value tuned for its inline real-process ("true" binary) spec.
+const TEST_SPEC_STARTUP_TIMEOUT_SECS: u64 = 5;
+
+/// Default health-check interval (seconds) for the shared [`test_spec`] builder.
+///
+/// Distinct from `supervisor.rs`'s `TEST_HEALTH_CHECK_INTERVAL_SECS`, which is a
+/// faster value tuned for its inline real-process ("true" binary) spec.
+const TEST_SPEC_HEALTH_CHECK_INTERVAL_SECS: u64 = 60;
+
+/// Build a minimal `OwnedLspServerSpec` for testing.
+///
+/// Shared by the daemon and supervisor unit-test modules so neither
+/// re-implements the spec-builder boilerplate.
+pub(crate) fn test_spec(command: &str) -> OwnedLspServerSpec {
+    OwnedLspServerSpec {
+        project_types: vec![],
+        command: command.to_string(),
+        args: vec![],
+        language_ids: vec!["test".to_string()],
+        file_extensions: vec!["txt".to_string()],
+        startup_timeout_secs: TEST_SPEC_STARTUP_TIMEOUT_SECS,
+        health_check_interval_secs: TEST_SPEC_HEALTH_CHECK_INTERVAL_SECS,
+        install_hint: format!("install {command}"),
+        icon: None,
+    }
+}
 
 /// An in-memory [`LspTransport`] for unit tests.
 ///

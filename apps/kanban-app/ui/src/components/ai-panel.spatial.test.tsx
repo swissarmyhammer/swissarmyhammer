@@ -80,6 +80,38 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 }));
 
 // ---------------------------------------------------------------------------
+// `AiPanelContainer` backend-seam mocks — used only by the collapsed-rail
+// cases below, which mount the REAL container so its rail-expand control is
+// exercised inside the spatial-nav stack. The container reads the selected
+// model from the active board entity (`useBoardData`) and writes user picks
+// through `useDispatchCommand("update.board")`. Both are stubbed so the panel
+// body mounts with a model (and the collapsed rail renders) without standing
+// up `WindowContainer` / the Rust engine. The `update.board` dispatcher is a
+// no-op; every OTHER command — crucially the spatial `nav.focus` the
+// `<Pressable>` / `<FocusScope>` leaves dispatch — falls through to the real
+// hook so the spatial harness keeps working.
+// ---------------------------------------------------------------------------
+
+const mockBoardData = vi.hoisted(() => ({
+  current: null as unknown,
+}));
+
+vi.mock("@/components/window-container", () => ({
+  useBoardData: () => mockBoardData.current,
+}));
+
+vi.mock("@/lib/command-scope", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/command-scope")>();
+  return {
+    ...actual,
+    useDispatchCommand: ((cmd?: string) => {
+      if (cmd === "update.board") return async () => undefined;
+      return actual.useDispatchCommand(cmd as string);
+    }) as typeof actual.useDispatchCommand,
+  };
+});
+
+// ---------------------------------------------------------------------------
 // Imports — after mocks
 // ---------------------------------------------------------------------------
 
@@ -95,6 +127,7 @@ import type {
 } from "@/ai/acp-client";
 import type { ConversationConnect } from "@/ai/conversation";
 import { AiPanel, type AiModel, type AiPanelConnectFactory } from "./ai-panel";
+import { AiPanelContainer, aiPanelStateStorageKey } from "./ai-panel-container";
 import { AppShell } from "./app-shell";
 import { FocusLayer } from "./focus-layer";
 import { FocusScope } from "./focus-scope";
@@ -103,11 +136,16 @@ import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoProvider } from "@/lib/undo-context";
+import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import {
   setupSpatialHarness,
   type DefaultInvokeImpl,
   type SpatialHarness,
 } from "@/test/spatial-shadow-registry";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
 import {
   asSegment,
   composeFq,
@@ -202,10 +240,21 @@ function ensureTestLayoutCss(): void {
   document.head.appendChild(style);
 }
 
+/**
+ * Test-container geometry shared by every harness below. The panel and its
+ * sibling view-area placeholder lay out inside a box of this size so cardinal
+ * beam search has stable horizontal/vertical geometry to score against.
+ */
+const TEST_VIEWPORT_WIDTH = 1200;
+const TEST_VIEWPORT_HEIGHT = 700;
+
+/** Delay (ms) given to register effects scheduled in `useEffect` to flush. */
+const SETUP_FLUSH_TIMEOUT_MS = 80;
+
 /** Wait for register effects scheduled in `useEffect` to flush. */
 async function flushSetup() {
   await act(async () => {
-    await new Promise((r) => setTimeout(r, 80));
+    await new Promise((r) => setTimeout(r, SETUP_FLUSH_TIMEOUT_MS));
   });
 }
 
@@ -217,13 +266,16 @@ async function flushSetup() {
  * The view-area leaf and the `ui:ai-panel` zone are both children of the
  * single `<FocusLayer name="window">` — exactly the production topology.
  */
-async function renderPanel(script: SessionScript = {}) {
+async function renderPanel(
+  script: SessionScript = {},
+  onCollapse: () => void = () => {},
+) {
   ensureTestLayoutCss();
   return await renderInAct(
     <div
       style={{
-        width: "1200px",
-        height: "700px",
+        width: `${TEST_VIEWPORT_WIDTH}px`,
+        height: `${TEST_VIEWPORT_HEIGHT}px`,
         display: "flex",
         flexDirection: "row",
       }}
@@ -232,10 +284,15 @@ async function renderPanel(script: SessionScript = {}) {
         <FocusLayer name={asSegment("window")}>
           <EntityFocusProvider>
             {/* Sibling stand-in for the view area — a peer of the panel
-                zone under the same window layer. */}
+                zone under the same window layer. Focusable, because it
+                stands in for the focusable board content (a card) that a
+                cross-zone cardinal move lands on: under the geometric
+                kernel a move never stops on a `showFocus={false}` zone, so
+                the placeholder must be a real target to represent the
+                landing. */}
             <FocusScope
               moniker={asSegment("ui:view-area")}
-              showFocus={false}
+              showFocus
               style={{ flex: "1 1 0%", height: "100%" }}
             >
               <div style={{ height: "100%" }}>view area</div>
@@ -245,7 +302,7 @@ async function renderPanel(script: SessionScript = {}) {
               models={MODELS}
               modelId="claude-code"
               onSelectModel={() => {}}
-              onCollapse={() => {}}
+              onCollapse={onCollapse}
               createConnect={mockConnect(script)}
             />
           </EntityFocusProvider>
@@ -272,8 +329,20 @@ function findRegisterRecord(segment: string): Record<string, unknown> | null {
  * stack hits on mount — `get_ui_state` (drives the keymap mode the
  * `KeybindingHandler` resolves against) and `get_undo_state`. Every
  * spatial command is handled by the shadow navigator before this runs.
+ *
+ * Also answers `list command` with the shared mock registry: the panel's
+ * `<Pressable>` leaves activate through the plugin-defined
+ * `pressable.activate` / `pressable.activateSpace` commands (scope
+ * `["ui:pressable"]`), whose keys reach the keymap layer only through the
+ * `useCommandList` seam.
  */
-const appShellInvokeImpl: DefaultInvokeImpl = (cmd) => {
+const appShellInvokeImpl: DefaultInvokeImpl = (cmd, args) => {
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "get_ui_state") {
     return {
       palette_open: false,
@@ -297,17 +366,20 @@ const appShellInvokeImpl: DefaultInvokeImpl = (cmd) => {
  * keystroke into a command dispatch — that is `<AppShell>`'s
  * `<KeybindingHandler>`, which attaches a `keydown` listener on
  * `document` and resolves the focused scope's `commands` via
- * `extractScopeBindings`. Mounting it here lets the test drive a real
+ * `extractChainBindings`. Mounting it here lets the test drive a real
  * Enter keystroke and observe the composer scope's `drillIn` command
  * run — the path the user reported as broken.
  */
-async function renderPanelWithShell(script: SessionScript = {}) {
+async function renderPanelWithShell(
+  script: SessionScript = {},
+  onCollapse: () => void = () => {},
+) {
   ensureTestLayoutCss();
   return await renderInAct(
     <div
       style={{
-        width: "1200px",
-        height: "700px",
+        width: `${TEST_VIEWPORT_WIDTH}px`,
+        height: `${TEST_VIEWPORT_HEIGHT}px`,
         display: "flex",
         flexDirection: "row",
       }}
@@ -324,9 +396,101 @@ async function renderPanelWithShell(script: SessionScript = {}) {
                       models={MODELS}
                       modelId="claude-code"
                       onSelectModel={() => {}}
-                      onCollapse={() => {}}
+                      onCollapse={onCollapse}
                       createConnect={mockConnect(script)}
                     />
+                  </AppShell>
+                </UndoProvider>
+              </AppModeProvider>
+            </UIStateProvider>
+          </EntityFocusProvider>
+        </FocusLayer>
+      </SpatialFocusProvider>
+    </div>,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Collapsed-rail harness — mounts the REAL `AiPanelContainer` collapsed so the
+// rail's expand control is exercised inside the spatial-nav stack.
+// ---------------------------------------------------------------------------
+
+/** Board path the collapsed-rail cases persist/read their geometry under. */
+const RAIL_BOARD = "/tmp/rail-board";
+
+/**
+ * Default-invoke impl for the collapsed-rail cases: the `AppShell` keybinding
+ * seams plus the container's `ai_list_models` (returns one available model so
+ * the hosted body mounts cleanly behind the rail) and the `ai_set_streaming`
+ * / `ai_start_agent` no-ops. Every spatial command is still handled by the
+ * shadow navigator before this runs.
+ */
+const railInvokeImpl: DefaultInvokeImpl = (cmd, args) => {
+  if (cmd === "ai_list_models") return MODELS;
+  if (cmd === "ai_set_streaming") return undefined;
+  if (cmd === "ai_start_agent")
+    return { wsUrl: "ws://127.0.0.1:0", mcpUrl: null };
+  return appShellInvokeImpl(cmd, args);
+};
+
+/**
+ * Render the AI panel in its collapsed-rail state to exercise the rail's
+ * expand affordance under the spatial-nav stack.
+ *
+ * Mounts the REAL `AiPanelContainer` collapsed inside the production
+ * spatial-nav stack wrapped by `<AppShell>`.
+ *
+ * The container shell hosts both the collapsed rail and the (hidden) body.
+ * The board geometry is pre-seeded as `{ open: false }` so the rail — the
+ * single AI-star expand control — is the visible toggle. The mocked
+ * `useBoardData` carries a chosen model so the hidden body mounts without
+ * stranding in the no-model state. `createConnect` is a fake so the hosted
+ * conversation never reaches the real backend.
+ */
+async function renderCollapsedRail() {
+  ensureTestLayoutCss();
+  localStorage.setItem(
+    aiPanelStateStorageKey(RAIL_BOARD),
+    JSON.stringify({ open: false }),
+  );
+  mockBoardData.current = {
+    board: {
+      entity_type: "board",
+      id: "rail-board",
+      moniker: "board:rail-board",
+      fields: { model: "claude-code" },
+    },
+    columns: [],
+    tags: [],
+    virtualTagMeta: [],
+    summary: {
+      total_tasks: 0,
+      total_actors: 0,
+      ready_tasks: 0,
+      blocked_tasks: 0,
+      done_tasks: 0,
+      percent_complete: 0,
+    },
+  };
+  return await renderInAct(
+    <div
+      style={{
+        width: `${TEST_VIEWPORT_WIDTH}px`,
+        height: `${TEST_VIEWPORT_HEIGHT}px`,
+        display: "flex",
+        flexDirection: "row",
+      }}
+    >
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")}>
+          <EntityFocusProvider>
+            <UIStateProvider>
+              <AppModeProvider>
+                <UndoProvider>
+                  <AppShell>
+                    <ActiveBoardPathProvider value={RAIL_BOARD}>
+                      <AiPanelContainer createConnect={mockConnect()} />
+                    </ActiveBoardPathProvider>
                   </AppShell>
                 </UndoProvider>
               </AppModeProvider>
@@ -499,7 +663,7 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     // the same "land on the scope, drill into the CM6 editor" flow the
     // filter formula bar uses.
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: composerFq });
+      await harness.commitFocus(composerFq);
     });
     await flushSetup();
 
@@ -543,13 +707,17 @@ describe("AiPanel — spatial-nav focus scopes", () => {
   // spatial focus, pressing Enter must move DOM focus into the CM6 prompt.
   //
   // A bare `<FocusScope>` only *registers* the composer as a nav target —
-  // landing on it and pressing Enter does NOT focus the editor. The fix
-  // gives the composer scope a per-scope `ui.ai-panel.composer.drillIn`
-  // `CommandDef` (keyed to Enter) whose `execute` calls the shared
-  // `TextEditorHandle.focus()`. This test drives a real Enter keystroke
-  // through `<AppShell>`'s `<KeybindingHandler>` and asserts the CM6
-  // prompt — NOT the model picker — receives DOM focus, mirroring the
-  // filter formula bar's `filter_editor.drillIn` contract.
+  // landing on it and pressing Enter does NOT focus the editor. The
+  // `app.ai-panel.composer.drillIn` command DEFINITION (keyed to Enter,
+  // scope-gated to the composer scope's own `ui:ai-panel.composer`
+  // moniker) lives in the `app-shell-commands` builtin plugin (Card E); the
+  // composer registers the live behavior — the shared
+  // `TextEditorHandle.focus()` — on the webview command bus while the
+  // scope is focused. This test drives a real Enter keystroke through
+  // `<AppShell>`'s `<KeybindingHandler>` and asserts the CM6 prompt — NOT
+  // the model picker — receives DOM focus, mirroring the filter formula
+  // bar's `filter_editor.drillIn` contract, and that the dispatch is
+  // bus-handled (it never reaches the Command service backend).
   // -------------------------------------------------------------------------
 
   it("Enter on the focused composer leaf drives DOM focus into the CM6 prompt", async () => {
@@ -570,7 +738,10 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     const prompt = composerNode!.querySelector(
       "[role='textbox'][aria-label='Message the AI agent']",
     ) as HTMLElement | null;
-    expect(prompt, "the CM6 prompt must be inside the composer leaf").not.toBeNull();
+    expect(
+      prompt,
+      "the CM6 prompt must be inside the composer leaf",
+    ).not.toBeNull();
 
     // Move the cursor OFF the CM6 prompt first so the drill-in has a
     // visible effect to assert — focus the document body.
@@ -585,15 +756,16 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     // Seed the spatial focus onto the composer leaf. The shadow
     // navigator echoes a `focus-changed` event whose `next_segment` the
     // entity-focus bridge mirrors into the store — that is the chain
-    // `extractScopeBindings` walks on the next keydown.
+    // `extractChainBindings` walks on the next keydown.
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: composerFq });
+      await harness.commitFocus(composerFq);
     });
     await flushSetup();
 
-    // Press Enter. `<KeybindingHandler>` resolves it against the focused
-    // composer scope's `commands` — the `ui.ai-panel.composer.drillIn`
-    // `CommandDef` shadows the global `nav.drillIn` and calls
+    // Press Enter. `<KeybindingHandler>` resolves it via the registry chain
+    // walk — the plugin-defined `app.ai-panel.composer.drillIn` (scope
+    // `["ui:ai-panel.composer"]`) shadows the global `nav.drillIn` — and
+    // the dispatch runs the composer's webview-bus handler, which calls
     // `editorRef.current?.focus()`.
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
@@ -605,6 +777,23 @@ describe("AiPanel — spatial-nav focus scopes", () => {
       document.activeElement,
       "Enter on the focused composer leaf must land DOM focus on the CM6 prompt",
     ).toBe(prompt);
+
+    // Bus-handled, not backend-dispatched: the drill-in is pure
+    // presentation, so the id must never reach the Command service's
+    // `execute command` verb (lowered onto the `dispatch_command` Tauri
+    // command). A regression that drops the bus registration would fall
+    // through to the plugin's inert host execute via this backend channel
+    // and leave the editor unfocused.
+    const backendExecutes = mockInvoke.mock.calls.filter(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as { cmd?: string } | undefined)?.cmd ===
+          "app.ai-panel.composer.drillIn",
+    );
+    expect(
+      backendExecutes,
+      "app.ai-panel.composer.drillIn must be handled on the webview bus, never dispatched to the backend",
+    ).toHaveLength(0);
 
     unmount();
   });
@@ -656,9 +845,10 @@ describe("AiPanel — spatial-nav focus scopes", () => {
   // Jump-to: jumping into the panel lands directly on the composer.
   //
   // The jump-to overlay enumerates every focusable scope and dispatches
-  // `spatial_focus(fq)` for the chosen one. This case proves the composer
-  // leaf is a jump target: dispatching `spatial_focus` against its FQM
-  // moves focus there and the React tree flips `data-focused`.
+  // `nav.focus({ args: { fq } })` for the chosen one, whose execute calls
+  // `actions.focus(fq)` — a `set focus` commit against the kernel. This
+  // case proves the composer leaf is a jump target: committing focus to
+  // its FQM moves focus there and the React tree flips `data-focused`.
   // -------------------------------------------------------------------------
 
   it("jump-to lands directly on the composer leaf", async () => {
@@ -669,9 +859,10 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     expect(composer).toBeTruthy();
     const composerFq = composer!.fq as FullyQualifiedMoniker;
 
-    // The jump-to overlay's terminal action is `spatial_focus(targetFq)`.
+    // The jump-to overlay's terminal action is a `set focus` commit
+    // against the chosen FQM (via `nav.focus` → `actions.focus`).
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: composerFq });
+      await harness.commitFocus(composerFq);
     });
     await flushSetup();
 
@@ -700,7 +891,7 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     const selectorFq = selector!.fq as FullyQualifiedMoniker;
 
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: selectorFq });
+      await harness.commitFocus(selectorFq);
     });
     await flushSetup();
 
@@ -712,6 +903,112 @@ describe("AiPanel — spatial-nav focus scopes", () => {
       selectorNode!.getAttribute("data-focused"),
       "jumping to the model-selector FQM must flip data-focused on its leaf",
     ).not.toBeNull();
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // The header collapse toggle is a first-class spatial leaf.
+  //
+  // The single AI-star button in the panel header (`aria-label="Collapse AI
+  // panel"`) must be an `AiPanelPressable`, NOT a bare `<Button>`. A bare
+  // `<Button>` mounts no `<FocusScope>` leaf, so spatial-nav and the jump-to
+  // overlay never see it and Enter/Space cannot activate it. This pins the
+  // leaf at `/window/ui:ai-panel/ui:ai-panel.collapse`, parented at the panel
+  // zone — exactly mirroring the model-selector assertion above.
+  // -------------------------------------------------------------------------
+
+  it("registers the header collapse control as a leaf under the panel zone", async () => {
+    const { unmount } = await renderPanel();
+    await flushSetup();
+
+    const zone = findRegisterRecord("ui:ai-panel");
+    expect(zone, "the panel zone must register").toBeTruthy();
+    const zoneFq = zone!.fq as FullyQualifiedMoniker;
+
+    const collapse = findRegisterRecord("ui:ai-panel.collapse");
+    expect(
+      collapse,
+      "the header collapse control must register a FocusScope leaf — a bare <Button> would not",
+    ).toBeTruthy();
+    // The leaf's FQM is the path /window/ui:ai-panel/ui:ai-panel.collapse.
+    expect(
+      collapse!.fq,
+      "the collapse leaf FQM must be composed directly under the panel zone",
+    ).toBe(composeFq(zoneFq, asSegment("ui:ai-panel.collapse")));
+    expect(
+      collapse!.parentZone,
+      "the collapse leaf must be parented at the ui:ai-panel zone",
+    ).toBe(zoneFq);
+    expect(
+      collapse!.layerFq,
+      "the collapse leaf must live in the window layer",
+    ).toBe(zone!.layerFq);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Jump-to lands on the header collapse leaf.
+  // -------------------------------------------------------------------------
+
+  it("jump-to lands directly on the header collapse leaf", async () => {
+    const { container, unmount } = await renderPanel();
+    await flushSetup();
+
+    const collapse = findRegisterRecord("ui:ai-panel.collapse");
+    expect(collapse).toBeTruthy();
+    const collapseFq = collapse!.fq as FullyQualifiedMoniker;
+
+    await act(async () => {
+      await harness.commitFocus(collapseFq);
+    });
+    await flushSetup();
+
+    const collapseNode = container.querySelector(
+      "[data-segment='ui:ai-panel.collapse']",
+    ) as HTMLElement | null;
+    expect(collapseNode, "the collapse leaf must be in the DOM").not.toBeNull();
+    expect(
+      collapseNode!.getAttribute("data-focused"),
+      "jumping to the collapse FQM must flip data-focused on its leaf",
+    ).not.toBeNull();
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Enter on the focused header collapse leaf folds the panel — it invokes
+  // `onCollapse`. A bare `<Button>` registers no `pressable.activate`
+  // CommandDef, so this fails until the control is an `AiPanelPressable`.
+  // Mirrors the elicitation Submit-leaf keyboard-activation assertion.
+  // -------------------------------------------------------------------------
+
+  it("Enter on the focused header collapse leaf invokes onCollapse", async () => {
+    harness = setupSpatialHarness({ defaultInvokeImpl: appShellInvokeImpl });
+    const onCollapse = vi.fn();
+    const { unmount } = await renderPanelWithShell({}, onCollapse);
+    await flushSetup();
+
+    const collapse = findRegisterRecord("ui:ai-panel.collapse");
+    expect(collapse, "the collapse leaf must register").toBeTruthy();
+    const collapseFq = collapse!.fq as FullyQualifiedMoniker;
+
+    await act(async () => {
+      await harness.commitFocus(collapseFq);
+    });
+    await flushSetup();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+      await Promise.resolve();
+    });
+    await flushSetup();
+
+    expect(
+      onCollapse,
+      "Enter on the focused collapse leaf must invoke onCollapse",
+    ).toHaveBeenCalledTimes(1);
 
     unmount();
   });
@@ -745,7 +1042,10 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     const selectorNode = container.querySelector(
       "[data-segment='ui:ai-panel.model-selector']",
     ) as HTMLElement | null;
-    expect(selectorNode, "model-selector leaf must be in the DOM").not.toBeNull();
+    expect(
+      selectorNode,
+      "model-selector leaf must be in the DOM",
+    ).not.toBeNull();
     const trigger = selectorNode!.querySelector(
       "button[role='combobox']",
     ) as HTMLElement | null;
@@ -766,7 +1066,7 @@ describe("AiPanel — spatial-nav focus scopes", () => {
 
     // Seed spatial focus onto the model-selector leaf.
     await act(async () => {
-      await mockInvoke("spatial_focus", { fq: selectorFq });
+      await harness.commitFocus(selectorFq);
     });
     await flushSetup();
 
@@ -818,7 +1118,10 @@ describe("AiPanel — spatial-nav focus scopes", () => {
     const prompt = composerNode!.querySelector(
       "[role='textbox'][aria-label='Message the AI agent']",
     ) as HTMLElement | null;
-    expect(prompt, "the CM6 prompt must be inside the composer leaf").not.toBeNull();
+    expect(
+      prompt,
+      "the CM6 prompt must be inside the composer leaf",
+    ).not.toBeNull();
 
     // Drill DOM focus into the CM6 prompt — the trapped state Escape escapes.
     await act(async () => {
@@ -1044,9 +1347,7 @@ describe("AiPanel — spatial-nav focus scopes", () => {
 
     // Jump-to lands on it.
     await act(async () => {
-      await mockInvoke("spatial_focus", {
-        fq: copyRecord!.fq as FullyQualifiedMoniker,
-      });
+      await harness.commitFocus(copyRecord!.fq as FullyQualifiedMoniker);
     });
     await flushSetup();
 
@@ -1058,6 +1359,128 @@ describe("AiPanel — spatial-nav focus scopes", () => {
       copyNode!.getAttribute("data-focused"),
       "jumping to the copy action FQM must flip data-focused on its leaf",
     ).not.toBeNull();
+
+    unmount();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The collapsed rail's expand control is a first-class spatial leaf.
+//
+// The rail lives in the container SHELL (`AiPanelContainer`), not the panel
+// body, so it has no `ui:ai-panel` zone ancestor — its leaf composes its FQM
+// directly under the window layer (`/window/ui:ai-panel.expand`). It must
+// still register a `<FocusScope>` leaf (so spatial-nav and jump-to see it) and
+// have Enter/Space activation (so the panel can be re-opened by keyboard). A
+// bare `<Button>` does neither.
+// ---------------------------------------------------------------------------
+
+describe("AiPanel — collapsed rail expand control", () => {
+  let harness: SpatialHarness;
+
+  beforeEach(() => {
+    localStorage.clear();
+    mockBoardData.current = null;
+    harness = setupSpatialHarness({ defaultInvokeImpl: railInvokeImpl });
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+    mockBoardData.current = null;
+    vi.clearAllMocks();
+  });
+
+  it("registers the rail expand control as a FocusScope leaf in the window layer", async () => {
+    const { container, unmount } = await renderCollapsedRail();
+    await flushSetup();
+
+    // Precondition: the panel is actually collapsed, so the rail is showing.
+    const shell = container.querySelector(
+      "[data-testid='ai-panel-container']",
+    ) as HTMLElement | null;
+    expect(shell, "the panel shell must mount").not.toBeNull();
+    expect(
+      shell!.getAttribute("data-ai-panel-collapsed"),
+      "the panel must be collapsed so the rail expand control is visible",
+    ).toBe("true");
+
+    const expandLeaf = findRegisterRecord("ui:ai-panel.expand");
+    expect(
+      expandLeaf,
+      "the rail expand control must register a FocusScope leaf — a bare <Button> would not",
+    ).toBeTruthy();
+    // The leaf lives in the window layer (it has no ui:ai-panel zone ancestor).
+    const windowLayerFq = fqRoot(asSegment("window"));
+    expect(
+      expandLeaf!.layerFq,
+      "the rail expand leaf must live in the window layer",
+    ).toBe(windowLayerFq);
+
+    unmount();
+  });
+
+  it("jump-to lands directly on the rail expand leaf", async () => {
+    const { container, unmount } = await renderCollapsedRail();
+    await flushSetup();
+
+    const expandLeaf = findRegisterRecord("ui:ai-panel.expand");
+    expect(expandLeaf, "the rail expand leaf must register").toBeTruthy();
+    const expandFq = expandLeaf!.fq as FullyQualifiedMoniker;
+
+    await act(async () => {
+      await harness.commitFocus(expandFq);
+    });
+    await flushSetup();
+
+    const expandNode = container.querySelector(
+      "[data-segment='ui:ai-panel.expand']",
+    ) as HTMLElement | null;
+    expect(
+      expandNode,
+      "the rail expand leaf must be in the DOM",
+    ).not.toBeNull();
+    expect(
+      expandNode!.getAttribute("data-focused"),
+      "jumping to the rail expand FQM must flip data-focused on its leaf",
+    ).not.toBeNull();
+
+    unmount();
+  });
+
+  it("Enter on the focused rail expand leaf toggles the panel open", async () => {
+    const { container, unmount } = await renderCollapsedRail();
+    await flushSetup();
+
+    const shell = container.querySelector(
+      "[data-testid='ai-panel-container']",
+    ) as HTMLElement | null;
+    expect(shell, "the panel shell must mount").not.toBeNull();
+    expect(
+      shell!.getAttribute("data-ai-panel-collapsed"),
+      "precondition: the panel must start collapsed",
+    ).toBe("true");
+
+    const expandLeaf = findRegisterRecord("ui:ai-panel.expand");
+    expect(expandLeaf, "the rail expand leaf must register").toBeTruthy();
+    const expandFq = expandLeaf!.fq as FullyQualifiedMoniker;
+
+    await act(async () => {
+      await harness.commitFocus(expandFq);
+    });
+    await flushSetup();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+      await Promise.resolve();
+    });
+    await flushSetup();
+
+    // Activating the rail expand control fires the container's `onToggle`,
+    // which flips the panel open — the shell is no longer collapsed.
+    expect(
+      shell!.getAttribute("data-ai-panel-collapsed"),
+      "Enter on the focused rail expand leaf must toggle the panel open",
+    ).toBe("false");
 
     unmount();
   });

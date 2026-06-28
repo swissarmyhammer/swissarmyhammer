@@ -1,0 +1,1639 @@
+//! The JavaScript runtime that hosts plugin code.
+//!
+//! Each plugin runs in its own [`PluginRuntime`] — a dedicated V8 isolate
+//! wrapped in a `deno_core::JsRuntime`. One isolate per plugin gives the
+//! platform two properties it needs:
+//!
+//! - **Fault isolation** — a plugin that exhausts memory, throws, or wedges
+//!   its event loop cannot corrupt another plugin's state, because globals,
+//!   the heap, and the module graph are all isolate-local.
+//! - **Clean teardown** — dropping a [`PluginRuntime`] tears the whole isolate
+//!   down, reclaiming everything the plugin allocated.
+//!
+//! # Threading model
+//!
+//! `deno_core::JsRuntime` wraps a V8 isolate, which is single-threaded and
+//! `!Send`. The runtime is therefore owned by exactly one dedicated OS thread
+//! — the *worker* — and every other thread talks to it by sending [`Command`]
+//! values down an [`mpsc`](std::sync::mpsc) channel. Each command carries a
+//! [`oneshot`](tokio::sync::oneshot) reply sender, so callers (which are
+//! `async`) await the worker's response without blocking. This mirrors the
+//! worker model in the `swissarmyhammer-js` crate.
+//!
+//! # TypeScript
+//!
+//! Plugin modules are TypeScript. They are transpiled to JavaScript at
+//! load time by [`transpile`] — a purely syntactic transform with no
+//! type-checking — and the transpiled code carries an inline source map so V8
+//! stack traces and any attached inspector report original TypeScript
+//! positions.
+//!
+//! # Module loading
+//!
+//! Plugins are multi-file: an entry module imports helper modules and the host
+//! SDK. The [`module_loader`] submodule supplies a real
+//! [`deno_core::ModuleLoader`] — [`PluginModuleLoader`] — that resolves relative
+//! imports against the plugin's bundle directory (sandboxed to that directory),
+//! serves `@swissarmyhammer/*` host built-ins from in-memory virtual modules,
+//! and rejects bare npm specifiers.
+//!
+//! # The host bridge
+//!
+//! Plugin code calls back into the host through a single op installed by the
+//! [`bridge`] module. This crate provides only that seam; the SDK and
+//! `PluginHost` tasks wire a real dispatcher into it.
+
+mod bridge;
+mod module_loader;
+mod transpile;
+
+pub use bridge::{HostDispatcher, UnboundHostDispatcher};
+pub use module_loader::PluginModuleLoader;
+pub use transpile::{transpile_typescript, TranspiledModule};
+
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::time::Duration;
+
+use deno_core::v8;
+use deno_core::{JsRuntime, ModuleSpecifier, PollEventLoopOptions, RuntimeOptions};
+use tokio::sync::oneshot;
+
+use crate::error::{Error, Result};
+
+/// Initial V8 heap size for a plugin isolate (1 MiB).
+const HEAP_INITIAL_BYTES: usize = 1024 * 1024;
+
+/// Maximum V8 heap size for a plugin isolate (64 MiB).
+///
+/// This is the cap passed to [`v8::CreateParams::heap_limits`]. On its own
+/// that cap makes V8 treat an exhausted heap as a *fatal, process-level* OOM —
+/// it would abort the whole host. The near-heap-limit callback the worker
+/// registers (see [`worker_loop`]) is what makes the cap an isolate-local
+/// failure: when a plugin nears this limit its script is terminated instead of
+/// the host being aborted. The limit is larger than the `swissarmyhammer-js`
+/// expression engine's because a plugin module is a full program rather than a
+/// one-line expression.
+const HEAP_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// How long a caller waits for the worker thread to answer one command.
+///
+/// A bounded wait turns a wedged isolate (an infinite loop, a never-settling
+/// promise) into a prompt [`Error::RuntimeTimeout`] instead of a hang.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Configuration for a [`PluginRuntime`].
+#[derive(Clone, Default)]
+pub struct RuntimeConfig {
+    /// TCP port for the V8 Inspector, or `None` to disable it.
+    ///
+    /// When `Some`, the isolate is created with inspector support so a
+    /// DevTools-protocol client can attach. This is the runtime side of a
+    /// `--inspect[=PORT]` flag and is expected to be set only in dev mode;
+    /// production plugin hosts leave it `None`.
+    ///
+    /// The runtime initializes the in-isolate inspector; standing up the TCP
+    /// server that DevTools connects to on this port is the embedder's
+    /// responsibility and is wired by a later task.
+    pub inspect_port: Option<u16>,
+
+    /// The host-side handler bound to the isolate's SDK-to-host bridge op.
+    ///
+    /// When `None`, the bridge installs [`UnboundHostDispatcher`], which
+    /// rejects every call — the default for a runtime with no host wired in.
+    /// When `Some`, the given dispatcher answers the calls the plugin SDK
+    /// makes (`tools/list`, `tools/call`, `register`, …). The full
+    /// `PluginHost` dispatcher is a later task; this seam lets tests — and
+    /// eventually the host — bind a real handler.
+    pub dispatcher: Option<Arc<dyn HostDispatcher>>,
+
+    /// The working directory this isolate reports to plugin code as
+    /// `Deno.cwd()`.
+    ///
+    /// `deno_core` has no per-isolate cwd of its own and the process CWD is
+    /// global, so a per-board plugin host sets this to its board directory and
+    /// the isolate's `op_cwd` returns it — letting two boards' plugins in one
+    /// process each resolve cwd-relative paths against their own board. When
+    /// left at the [`Default`] (an empty path), `Deno.cwd()` returns the empty
+    /// string; the boardless global host sets it to the process cwd or a temp
+    /// dir.
+    pub cwd: PathBuf,
+}
+
+/// `RuntimeConfig` holds an `Arc<dyn HostDispatcher>`, which is not `Debug`;
+/// a hand-written impl keeps the type printable without that bound.
+impl std::fmt::Debug for RuntimeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeConfig")
+            .field("inspect_port", &self.inspect_port)
+            .field("dispatcher", &self.dispatcher.as_ref().map(|_| "<bound>"))
+            .field("cwd", &self.cwd)
+            .finish()
+    }
+}
+
+/// A handle to one plugin's JavaScript runtime.
+///
+/// The handle is cheap to hold and `Send`; the V8 isolate it controls lives on
+/// a dedicated worker thread. All methods are `async` because each one round-
+/// trips a [`Command`] to that worker. Dropping the handle shuts the worker —
+/// and the isolate — down.
+pub struct PluginRuntime {
+    /// Channel to the worker thread that owns the isolate.
+    sender: mpsc::Sender<Command>,
+
+    /// Thread-safe handle to the worker's V8 isolate.
+    ///
+    /// Held so teardown can call [`v8::IsolateHandle::terminate_execution`]
+    /// from the dropping thread, forcing a wedged isolate (one stuck in a
+    /// non-terminating plugin script) to unwind so the worker thread can exit.
+    /// `None` only if the worker failed to build its isolate during startup.
+    isolate: Option<v8::IsolateHandle>,
+
+    /// Join handle for the worker, taken during [`PluginRuntime::shutdown`].
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Compile-time proof that [`PluginRuntime`] is `Send`.
+///
+/// The handle's documented contract is that it can be moved across threads
+/// while the isolate stays pinned to its worker. This assertion fails the
+/// build if an accidentally `!Send` field is ever added.
+const _: fn() = || {
+    fn assert_send<T: Send>() {}
+    assert_send::<PluginRuntime>();
+};
+
+/// Outcome the worker reports once it has finished (or failed) startup.
+///
+/// On success it carries the isolate's [`v8::IsolateHandle`], which the
+/// [`PluginRuntime`] holds so teardown can terminate a wedged isolate from
+/// another thread. On failure it carries a human-readable reason.
+type StartupResult = std::result::Result<v8::IsolateHandle, String>;
+
+/// Which lifecycle hook of a default-exported plugin class the host is driving.
+///
+/// A plugin bundle is authored Obsidian-style — `export default class X extends
+/// Plugin { … }` — with no module-level lifecycle functions. The host reads the
+/// bundle's `default` export and drives one of these two transitions; the SDK's
+/// `__sahLoadDefaultPlugin` / `__sahUnloadDefaultPlugin` globals do the JS-land
+/// `new` + `makePluginThis` wrap and run the matching instance method. See
+/// [`call_default_plugin_lifecycle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginLifecycle {
+    /// Instantiate the default-exported class, wrap it, and run its `load()`.
+    Load,
+    /// Run the stored instance's `unload()` and clear it.
+    Unload,
+}
+
+impl PluginLifecycle {
+    /// The SDK `globalThis` function that drives this lifecycle transition.
+    fn sdk_global(self) -> &'static str {
+        match self {
+            PluginLifecycle::Load => LOAD_DEFAULT_PLUGIN_GLOBAL,
+            PluginLifecycle::Unload => UNLOAD_DEFAULT_PLUGIN_GLOBAL,
+        }
+    }
+}
+
+/// The SDK global that instantiates a bundle's default class and runs `load()`.
+const LOAD_DEFAULT_PLUGIN_GLOBAL: &str = "__sahLoadDefaultPlugin";
+
+/// The SDK global that runs the stored default-class instance's `unload()`.
+const UNLOAD_DEFAULT_PLUGIN_GLOBAL: &str = "__sahUnloadDefaultPlugin";
+
+/// The export name a plugin bundle's entry class is the `default` of.
+const DEFAULT_EXPORT: &str = "default";
+
+/// A unit of work sent to the worker thread.
+///
+/// Every variant carries a [`oneshot`] sender so the worker can hand a result
+/// back to the awaiting caller.
+enum Command {
+    /// Evaluate a JavaScript snippet and return its value as JSON.
+    EvalScript {
+        /// The JavaScript source to evaluate.
+        code: String,
+        /// Where the result (or an error) is delivered.
+        reply: oneshot::Sender<Result<serde_json::Value>>,
+    },
+
+    /// Transpile a TypeScript module, evaluate it, and optionally call one of
+    /// its exported lifecycle functions.
+    ///
+    /// The entry source is supplied directly; this variant does not use the
+    /// module loader, so the entry cannot import sibling modules.
+    LoadModule {
+        /// Module URL used in stack traces and the source map.
+        specifier: String,
+        /// TypeScript source of the plugin entry module.
+        source: String,
+        /// Name of an exported function to call after evaluation, if any.
+        lifecycle_export: Option<String>,
+        /// Where the lifecycle return value (or an error) is delivered.
+        reply: oneshot::Sender<Result<serde_json::Value>>,
+    },
+
+    /// Load a multi-file plugin from a bundle directory through the module
+    /// loader, then optionally drive one of its default class's lifecycle hooks.
+    ///
+    /// Unlike [`Command::LoadModule`], the entry module is loaded from disk via
+    /// [`PluginModuleLoader`], so it — and any module it imports — is resolved,
+    /// sandboxed, and transpiled by the loader. The bundle is authored as
+    /// `export default class X extends Plugin { … }`; when `lifecycle` is
+    /// `Some`, the host reads that `default` export and drives the named
+    /// transition through the SDK (see [`PluginLifecycle`]).
+    LoadPlugin {
+        /// The plugin's bundle directory; relative imports are sandboxed here.
+        bundle_dir: PathBuf,
+        /// The entry module's filename, relative to `bundle_dir`.
+        entry_file: String,
+        /// The default-class lifecycle transition to drive after evaluation, if
+        /// any. `None` only evaluates the module.
+        lifecycle: Option<PluginLifecycle>,
+        /// Where the lifecycle return value (or an error) is delivered.
+        reply: oneshot::Sender<Result<serde_json::Value>>,
+    },
+
+    /// Invoke a callback the plugin earlier handed the host by reference.
+    ///
+    /// This is the host→isolate direction of the callback primitive. Functions
+    /// cannot cross the boundary, so a function in a callback-bearing dispatch
+    /// payload is stored in an isolate-local table by the SDK and replaced with
+    /// a `{ "$callback": id }` marker. This command delivers a
+    /// `notifications/callbacks/invoke` into the isolate: the SDK looks the
+    /// stored function up by `id`, runs it, and the result is delivered back.
+    InvokeCallback {
+        /// The callback id the SDK minted for the stored function.
+        id: String,
+        /// The positional arguments to pass the stored function.
+        args: serde_json::Value,
+        /// Where the callback's (settled) return value or error is delivered.
+        reply: oneshot::Sender<Result<serde_json::Value>>,
+    },
+
+    /// Dispose a callback the plugin earlier handed the host by reference.
+    ///
+    /// Drops the stored function from the isolate-local callback table so it
+    /// can be garbage-collected and a stale id no longer resolves. This is how
+    /// a [`RegistrationHandle::Callback`](crate::ledger::RegistrationHandle)
+    /// drained from a plugin's ledger is disposed.
+    DisposeCallback {
+        /// The callback id to dispose.
+        id: String,
+        /// Where the disposal outcome (whether a function was removed) lands.
+        reply: oneshot::Sender<Result<serde_json::Value>>,
+    },
+}
+
+impl PluginRuntime {
+    /// Spawn a new plugin runtime: a fresh V8 isolate on its own worker thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Isolate configuration, including optional inspector support.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStartup`] if the worker thread cannot be
+    /// spawned, or if the worker fails to build its V8 isolate or Tokio
+    /// runtime during startup.
+    pub fn new(config: RuntimeConfig) -> Result<Self> {
+        let (sender, receiver) = mpsc::channel::<Command>();
+        // The worker reports startup success — and hands back its isolate
+        // handle — through this one-shot channel before it serves commands.
+        let (ready_tx, ready_rx) = mpsc::channel::<StartupResult>();
+
+        let worker = std::thread::Builder::new()
+            .name("plugin-runtime".to_string())
+            .spawn(move || worker_loop(config, receiver, ready_tx))
+            .map_err(|e| Error::RuntimeStartup(format!("failed to spawn worker thread: {e}")))?;
+
+        // Wait for the worker to finish building its isolate. A dropped
+        // channel means the worker panicked before reporting; an `Err`
+        // payload means it failed to build the runtime.
+        let isolate = match ready_rx.recv() {
+            Ok(Ok(handle)) => handle,
+            Ok(Err(message)) => {
+                let _ = worker.join();
+                return Err(Error::RuntimeStartup(message));
+            }
+            Err(_) => {
+                let _ = worker.join();
+                return Err(Error::RuntimeStartup(
+                    "worker thread exited before reporting startup".to_string(),
+                ));
+            }
+        };
+
+        Ok(Self {
+            sender,
+            isolate: Some(isolate),
+            worker: Some(worker),
+        })
+    }
+
+    /// Evaluate a JavaScript snippet in the isolate and return its value.
+    ///
+    /// The snippet runs as a classic script (not a module), so it shares the
+    /// isolate's global object: a global it assigns is observable by later
+    /// calls. The result value is converted to JSON.
+    ///
+    /// # Arguments
+    ///
+    /// * `code` - JavaScript source to evaluate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Runtime`] if the script throws or has a syntax error,
+    /// or [`Error::RuntimeTimeout`] / [`Error::RuntimeStopped`] if the worker
+    /// does not answer.
+    pub async fn eval(&self, code: impl Into<String>) -> Result<serde_json::Value> {
+        let (reply, response) = oneshot::channel();
+        self.send(Command::EvalScript {
+            code: code.into(),
+            reply,
+        })?;
+        await_reply(response).await
+    }
+
+    /// Transpile and evaluate a TypeScript plugin module.
+    ///
+    /// The `source` is transpiled to JavaScript (syntactically — no type
+    /// checking) and evaluated as the isolate's main module. The returned
+    /// value is JSON `null`: the module's exports are reached via
+    /// [`PluginRuntime::call_lifecycle`].
+    ///
+    /// # Arguments
+    ///
+    /// * `specifier` - Module URL for stack traces and the source map.
+    /// * `source` - TypeScript source of the plugin entry module.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Transpile`] for a TypeScript syntax error,
+    /// [`Error::Runtime`] if the module throws while evaluating, or a
+    /// worker-communication error.
+    pub async fn load_module(
+        &self,
+        specifier: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Result<()> {
+        let (reply, response) = oneshot::channel();
+        self.send(Command::LoadModule {
+            specifier: specifier.into(),
+            source: source.into(),
+            lifecycle_export: None,
+            reply,
+        })?;
+        await_reply(response).await.map(|_| ())
+    }
+
+    /// Transpile and evaluate a TypeScript plugin module, then call one of its
+    /// exported functions.
+    ///
+    /// This is the entry point for plugin lifecycle hooks: load the entry
+    /// module and immediately invoke an exported function such as `activate`.
+    /// If the function returns a promise, the isolate's event loop is run
+    /// until it settles.
+    ///
+    /// # Arguments
+    ///
+    /// * `specifier` - Module URL for stack traces and the source map.
+    /// * `source` - TypeScript source of the plugin entry module.
+    /// * `export` - Name of the exported function to call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Transpile`] for a syntax error, [`Error::Runtime`] if
+    /// the module or the lifecycle function throws or the export is missing or
+    /// not a function, or a worker-communication error.
+    pub async fn call_lifecycle(
+        &self,
+        specifier: impl Into<String>,
+        source: impl Into<String>,
+        export: impl Into<String>,
+    ) -> Result<serde_json::Value> {
+        let (reply, response) = oneshot::channel();
+        self.send(Command::LoadModule {
+            specifier: specifier.into(),
+            source: source.into(),
+            lifecycle_export: Some(export.into()),
+            reply,
+        })?;
+        await_reply(response).await
+    }
+
+    /// Load a multi-file plugin's entry module from a bundle directory.
+    ///
+    /// The entry module is loaded through [`PluginModuleLoader`], so it may
+    /// import sibling `.ts` modules with relative specifiers and the host SDK
+    /// with `@swissarmyhammer/*` specifiers. Relative imports are sandboxed to
+    /// `bundle_dir`: a module that resolves outside it is rejected. Each loaded
+    /// module — the entry and every relative import — is transpiled the same
+    /// way. The plugin's exports are reached via
+    /// [`PluginRuntime::call_plugin_lifecycle`].
+    ///
+    /// # Arguments
+    ///
+    /// * `bundle_dir` - The plugin's bundle directory.
+    /// * `entry_file` - The entry module's filename, relative to `bundle_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Transpile`] for a TypeScript syntax error in any loaded
+    /// module, [`Error::Runtime`] if a module throws while evaluating, if an
+    /// import cannot be resolved, or if it escapes the bundle directory, or a
+    /// worker-communication error.
+    pub async fn load_plugin(
+        &self,
+        bundle_dir: impl AsRef<Path>,
+        entry_file: impl Into<String>,
+    ) -> Result<()> {
+        let (reply, response) = oneshot::channel();
+        self.send(Command::LoadPlugin {
+            bundle_dir: bundle_dir.as_ref().to_path_buf(),
+            entry_file: entry_file.into(),
+            lifecycle: None,
+            reply,
+        })?;
+        await_reply(response).await.map(|_| ())
+    }
+
+    /// Load a multi-file plugin's entry module, then drive its default class's
+    /// lifecycle.
+    ///
+    /// This is the multi-file counterpart of [`PluginRuntime::call_lifecycle`],
+    /// adapted to the default-class entry contract: the entry module is loaded
+    /// from `bundle_dir` through [`PluginModuleLoader`] — with relative and
+    /// `@swissarmyhammer/*` imports resolved — and then, rather than calling a
+    /// named function export, the host reads the bundle's `default` export (a
+    /// `Plugin` subclass) and drives `lifecycle` against it through the SDK: for
+    /// [`PluginLifecycle::Load`] the SDK instantiates the class, wraps it with
+    /// `makePluginThis`, and runs its `load()`; for [`PluginLifecycle::Unload`]
+    /// it runs the stored instance's `unload()`. If the hook returns a promise,
+    /// the event loop runs until it settles.
+    ///
+    /// # Arguments
+    ///
+    /// * `bundle_dir` - The plugin's bundle directory.
+    /// * `entry_file` - The entry module's filename, relative to `bundle_dir`.
+    /// * `lifecycle` - Which default-class lifecycle hook to drive.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Transpile`] for a syntax error, [`Error::Runtime`] if a
+    /// module or the lifecycle hook throws, if the bundle has no `default`
+    /// export or it is not a class, if an import cannot be resolved or escapes
+    /// the bundle directory, or a worker-communication error.
+    pub async fn call_plugin_lifecycle(
+        &self,
+        bundle_dir: impl AsRef<Path>,
+        entry_file: impl Into<String>,
+        lifecycle: PluginLifecycle,
+    ) -> Result<serde_json::Value> {
+        let (reply, response) = oneshot::channel();
+        self.send(Command::LoadPlugin {
+            bundle_dir: bundle_dir.as_ref().to_path_buf(),
+            entry_file: entry_file.into(),
+            lifecycle: Some(lifecycle),
+            reply,
+        })?;
+        await_reply(response).await
+    }
+
+    /// Invoke a callback the plugin earlier handed the host by reference.
+    ///
+    /// This is the host→isolate direction of the callback primitive. A function
+    /// a plugin passed in a callback-bearing dispatch payload was stored in the
+    /// isolate's callback table under `id`; this delivers a
+    /// `notifications/callbacks/invoke` into the isolate so the SDK runs that
+    /// stored function. If the function returns a promise, the isolate's event
+    /// loop runs until it settles, so the returned value is always settled.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - the callback id the SDK minted when it marshalled the function.
+    /// * `args` - the positional arguments, a JSON array, passed to the
+    ///   function.
+    ///
+    /// # Returns
+    ///
+    /// The callback's return value as JSON, or JSON `null` when it returned
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Runtime`] when no callback is registered under `id` or
+    /// the stored function throws, or [`Error::RuntimeTimeout`] /
+    /// [`Error::RuntimeStopped`] if the worker does not answer.
+    pub async fn invoke_callback(
+        &self,
+        id: impl Into<String>,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let (reply, response) = oneshot::channel();
+        self.send(Command::InvokeCallback {
+            id: id.into(),
+            args,
+            reply,
+        })?;
+        await_reply(response).await
+    }
+
+    /// Dispose a callback the plugin earlier handed the host by reference.
+    ///
+    /// Drops the stored function from the isolate's callback table so it can be
+    /// garbage-collected and the `id` no longer resolves. This is the seam the
+    /// host uses to dispose a `Callback` registration handle drained from a
+    /// plugin's ledger.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - the callback id to dispose.
+    ///
+    /// # Returns
+    ///
+    /// JSON `true` when a function was removed, JSON `false` when `id` was not
+    /// registered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeTimeout`] / [`Error::RuntimeStopped`] if the
+    /// worker does not answer, or [`Error::Runtime`] if the isolate cannot run
+    /// the disposal.
+    pub async fn dispose_callback(&self, id: impl Into<String>) -> Result<serde_json::Value> {
+        let (reply, response) = oneshot::channel();
+        self.send(Command::DisposeCallback {
+            id: id.into(),
+            reply,
+        })?;
+        await_reply(response).await
+    }
+
+    /// Clone the worker channel so callers can invoke callbacks without
+    /// holding a borrow of the runtime across an `.await`.
+    ///
+    /// Returns a [`CallbackInvoker`] that owns its own clone of the command
+    /// channel sender; sending into the cloned channel reaches the same
+    /// worker thread. This is the seam the plugin host uses so that a
+    /// callback dispatcher can invoke a callback in a plugin's isolate
+    /// without holding the host's state mutex across the awaited reply.
+    pub fn callback_invoker(&self) -> CallbackInvoker {
+        CallbackInvoker {
+            sender: self.sender.clone(),
+        }
+    }
+
+    /// Shut the runtime down: stop the worker thread and tear down the isolate.
+    ///
+    /// Dropping the worker's command sender ends its receive loop and the
+    /// isolate is dropped as that thread unwinds. Any plugin script still
+    /// running — including a non-terminating one — is first forcibly
+    /// terminated via the retained [`v8::IsolateHandle`], so this cannot hang.
+    /// This is also what [`Drop`] does, so calling `shutdown` explicitly is
+    /// only needed to *wait* for teardown to finish and observe its result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStopped`] if the worker thread panicked.
+    pub fn shutdown(mut self) -> Result<()> {
+        self.join_worker()
+    }
+
+    /// Send a command to the worker, mapping a dead channel to an error.
+    fn send(&self, command: Command) -> Result<()> {
+        self.sender.send(command).map_err(|_| Error::RuntimeStopped)
+    }
+
+    /// Drop the command channel, unwedge the isolate, and join the worker.
+    ///
+    /// Closing the command channel ends the worker's `recv` loop *once it is
+    /// back at `recv`* — but a worker still executing a non-terminating plugin
+    /// script never returns there. So before joining, this terminates V8
+    /// execution on the isolate from this thread via the retained
+    /// [`v8::IsolateHandle`]: a wedged script unwinds with an uncatchable
+    /// "execution terminated" exception, the worker falls back to `recv`, sees
+    /// the closed channel, and exits. This guarantees `join` cannot deadlock.
+    fn join_worker(&mut self) -> Result<()> {
+        // Replace the live sender with a fresh, unconnected one so the worker's
+        // `recv` sees the channel close and exits its loop.
+        let (dead, _) = mpsc::channel();
+        self.sender = dead;
+
+        // Force any in-flight (possibly non-terminating) plugin script to
+        // unwind so the worker can reach `recv` and observe the closed channel.
+        // `IsolateHandle` is thread-safe by design and may be called here even
+        // though the isolate itself lives on the worker thread.
+        if let Some(isolate) = self.isolate.take() {
+            isolate.terminate_execution();
+        }
+
+        match self.worker.take() {
+            Some(handle) => handle.join().map_err(|_| Error::RuntimeStopped),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for PluginRuntime {
+    /// Tear the isolate down when the handle goes away.
+    fn drop(&mut self) {
+        let _ = self.join_worker();
+    }
+}
+
+/// A detached handle that invokes callbacks against a plugin runtime worker.
+///
+/// `CallbackInvoker` owns a clone of the worker's command channel sender, so
+/// the caller does not need to keep a borrow of the originating
+/// [`PluginRuntime`] alive across the awaited reply. The plugin host hands
+/// one of these to a callback dispatcher: the dispatcher resolves the right
+/// plugin under the host's state lock, clones an invoker out, releases the
+/// lock, and then awaits the callback's reply without blocking other host
+/// operations.
+///
+/// The handle is `Send` but not `Sync` (it carries an [`mpsc::Sender`]); it
+/// is meant to be moved into the awaiting task rather than shared between
+/// threads.
+#[derive(Debug, Clone)]
+pub struct CallbackInvoker {
+    /// A clone of the originating worker thread's command channel.
+    sender: mpsc::Sender<Command>,
+}
+
+impl CallbackInvoker {
+    /// Invoke a callback the plugin earlier handed the host by reference.
+    ///
+    /// Mirrors [`PluginRuntime::invoke_callback`]: dispatches an
+    /// [`Command::InvokeCallback`] to the worker thread, awaits the worker's
+    /// reply (bounded by the same command timeout), and returns the
+    /// callback's settled return value.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` — the callback id the SDK minted when it marshalled the function.
+    /// * `args` — the positional arguments, a JSON array, passed to the function.
+    ///
+    /// # Returns
+    ///
+    /// The callback's return value as JSON, or JSON `null` when it returned
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Runtime`] when no callback is registered under `id` or
+    /// the stored function throws, [`Error::RuntimeTimeout`] when the worker
+    /// does not answer within the command timeout, or [`Error::RuntimeStopped`]
+    /// when the worker channel is closed.
+    pub async fn invoke(
+        &self,
+        id: impl Into<String>,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let (reply, response) = oneshot::channel();
+        self.sender
+            .send(Command::InvokeCallback {
+                id: id.into(),
+                args,
+                reply,
+            })
+            .map_err(|_| Error::RuntimeStopped)?;
+        await_reply(response).await
+    }
+}
+
+/// Await a worker reply, bounding the wait so a wedged isolate fails fast.
+///
+/// A closed reply channel means the worker thread is gone; a timeout means the
+/// isolate is busy (an infinite loop, an unsettled promise) past
+/// [`COMMAND_TIMEOUT`].
+async fn await_reply(
+    response: oneshot::Receiver<Result<serde_json::Value>>,
+) -> Result<serde_json::Value> {
+    match tokio::time::timeout(COMMAND_TIMEOUT, response).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err(Error::RuntimeStopped),
+        Err(_) => Err(Error::RuntimeTimeout),
+    }
+}
+
+/// The worker thread's main loop: own the isolate, serve commands until close.
+///
+/// V8 is single-threaded and `JsRuntime` is `!Send`, so the isolate is built
+/// and used entirely on this thread. A current-thread Tokio runtime drives the
+/// V8 event loop (promise jobs, dynamic imports) when a command needs it.
+///
+/// Once the isolate is built, the worker reports success through `ready` and
+/// hands back the isolate's [`v8::IsolateHandle`] so the owning
+/// [`PluginRuntime`] can terminate a wedged isolate during teardown. A startup
+/// failure is reported through the same channel instead.
+fn worker_loop(
+    config: RuntimeConfig,
+    receiver: mpsc::Receiver<Command>,
+    ready: mpsc::Sender<StartupResult>,
+) {
+    // A current-thread Tokio runtime: `block_on` here is what advances the V8
+    // event loop and resolves the futures `deno_core` hands back.
+    let tokio_rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            tracing::error!("plugin runtime worker failed to build Tokio runtime: {e}");
+            // Report the failure so `PluginRuntime::new` returns a clear
+            // startup error. The command receiver is dropped on return.
+            let _ = ready.send(Err(format!("worker Tokio runtime unavailable: {e}")));
+            return;
+        }
+    };
+
+    // Cap the V8 heap. `heap_limits` alone makes V8 raise a *fatal* OOM that
+    // aborts the whole host process when the cap is hit; the near-heap-limit
+    // callback registered below turns that into a per-isolate failure instead.
+    let create_params = v8::CreateParams::default().heap_limits(HEAP_INITIAL_BYTES, HEAP_MAX_BYTES);
+
+    // The module loader resolves a plugin's relative imports, `@swissarmyhammer/*`
+    // host built-ins, and rejects bare npm specifiers. `deno_core` fixes the
+    // loader at construction time, so it is shared with the worker via `Rc`:
+    // each `LoadPlugin` command points it at that plugin's bundle directory.
+    let module_loader = Rc::new(PluginModuleLoader::new());
+
+    // The SDK-to-host bridge op is installed for every plugin isolate. A
+    // runtime configured with a dispatcher binds it here; otherwise the
+    // bridge installs `UnboundHostDispatcher`, which rejects every call until
+    // a host wires one in.
+    let dispatcher: Arc<dyn HostDispatcher> = config
+        .dispatcher
+        .clone()
+        .unwrap_or_else(|| Arc::new(UnboundHostDispatcher));
+
+    // The isolate's `op_cwd` reports this directory as `Deno.cwd()`. Each
+    // per-board host configures its board dir here, so isolates sharing the
+    // process still report per-board working directories.
+    let cwd = config.cwd.clone();
+
+    let mut runtime = JsRuntime::new(RuntimeOptions {
+        module_loader: Some(module_loader.clone()),
+        create_params: Some(create_params),
+        extensions: vec![bridge::host_bridge::init(dispatcher, cwd)],
+        // Inspector support is gated to dev mode via `inspect_port`.
+        inspector: config.inspect_port.is_some(),
+        ..Default::default()
+    });
+
+    // Keep the heap cap from aborting the host process. `heap_limits` on its
+    // own makes V8 treat an exhausted heap as a fatal, process-level OOM. This
+    // callback fires just before that point: it terminates JavaScript
+    // execution on this isolate (the offending plugin's script unwinds with an
+    // uncatchable "execution terminated" exception) and hands V8 a larger
+    // limit so it has the headroom to propagate that termination cleanly
+    // instead of aborting. The bumped limit is transient — execution is
+    // already being torn down — so it does not defeat the cap.
+    let heap_limit_handle = runtime.v8_isolate().thread_safe_handle();
+    runtime.add_near_heap_limit_callback(move |current_limit, _initial_limit| {
+        tracing::warn!(
+            "plugin isolate approached its {HEAP_MAX_BYTES}-byte heap cap; \
+             terminating the offending script"
+        );
+        heap_limit_handle.terminate_execution();
+        // Give V8 room to unwind the termination without a fatal OOM.
+        current_limit * 2
+    });
+
+    // When the inspector is enabled, log it. deno_core already constructs the
+    // in-isolate inspector inside `JsRuntime::new` because `inspector: true`
+    // was set above, so no explicit init call is needed here. Standing up the
+    // TCP listener on `inspect_port` is the embedder's job (a later task).
+    if let Some(port) = config.inspect_port {
+        tracing::info!("plugin runtime inspector enabled (intended port {port})");
+    }
+
+    // Report a successful startup, handing the owner a thread-safe handle to
+    // this isolate so teardown can interrupt a wedged script. If the owner is
+    // already gone, there is nothing left to serve.
+    if ready
+        .send(Ok(runtime.v8_isolate().thread_safe_handle()))
+        .is_err()
+    {
+        return;
+    }
+
+    // Serve commands until every sender is dropped.
+    while let Ok(command) = receiver.recv() {
+        match command {
+            Command::EvalScript { code, reply } => {
+                let result = eval_script(&mut runtime, &tokio_rt, &code);
+                let _ = reply.send(result);
+            }
+            Command::LoadModule {
+                specifier,
+                source,
+                lifecycle_export,
+                reply,
+            } => {
+                let result = load_and_run_module(
+                    &mut runtime,
+                    &tokio_rt,
+                    &specifier,
+                    &source,
+                    lifecycle_export.as_deref(),
+                );
+                let _ = reply.send(result);
+            }
+            Command::LoadPlugin {
+                bundle_dir,
+                entry_file,
+                lifecycle,
+                reply,
+            } => {
+                let result = load_and_run_plugin(
+                    &mut runtime,
+                    &tokio_rt,
+                    &module_loader,
+                    &bundle_dir,
+                    &entry_file,
+                    lifecycle,
+                );
+                let _ = reply.send(result);
+            }
+            Command::InvokeCallback { id, args, reply } => {
+                let result = invoke_callback(&mut runtime, &tokio_rt, &id, &args);
+                let _ = reply.send(result);
+            }
+            Command::DisposeCallback { id, reply } => {
+                let result = dispose_callback(&mut runtime, &tokio_rt, &id);
+                let _ = reply.send(result);
+            }
+        }
+
+        // If the just-finished command tripped the heap-limit callback (or any
+        // other terminate), clear the isolate's termination flag so the next
+        // command starts from a clean state. A heap-OOM kill is thus contained
+        // to the one offending plugin call rather than poisoning the isolate.
+        runtime.v8_isolate().cancel_terminate_execution();
+    }
+
+    tracing::debug!("plugin runtime worker shutting down");
+}
+
+/// Evaluate a JavaScript snippet as a classic script and return its JSON value.
+fn eval_script(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    code: &str,
+) -> Result<serde_json::Value> {
+    let global = runtime
+        .execute_script("<plugin-eval>", code.to_string())
+        .map_err(|e| Error::Runtime(e.exception_message.clone()))?;
+
+    let json = global_to_json(runtime, &global)?;
+
+    // Settle any promise jobs the snippet scheduled before returning.
+    drain_event_loop(runtime, tokio_rt);
+
+    Ok(json)
+}
+
+/// Transpile a TypeScript module, evaluate it, and optionally call an export.
+///
+/// The module is loaded as the isolate's main module from transpiled source.
+/// The entry source is supplied directly, so it cannot import sibling modules;
+/// [`load_and_run_plugin`] is the multi-file counterpart. When
+/// `lifecycle_export` is `Some`, the named export is fetched from the module
+/// namespace and called; its return value (awaited if it is a promise) is
+/// converted to JSON. When it is `None`, the function returns JSON `null`.
+fn load_and_run_module(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    specifier: &str,
+    source: &str,
+    lifecycle_export: Option<&str>,
+) -> Result<serde_json::Value> {
+    let module_specifier = ModuleSpecifier::parse(specifier)
+        .map_err(|e| Error::Runtime(format!("invalid module specifier '{specifier}': {e}")))?;
+
+    // Transpile TypeScript to JavaScript. This is syntactic only — a type
+    // error in `source` does not fail here.
+    let transpiled = transpile::transpile_typescript(&module_specifier, source)?;
+
+    // Load the module as the isolate's main module from transpiled source.
+    let module_id = tokio_rt
+        .block_on(runtime.load_main_es_module_from_code(&module_specifier, transpiled.code))
+        .map_err(|e| Error::Runtime(format!("failed to load module: {e}")))?;
+
+    evaluate_and_call(runtime, tokio_rt, module_id, lifecycle_export)
+}
+
+/// Load a multi-file plugin through the module loader and optionally drive its
+/// default class's lifecycle.
+///
+/// The loader is pointed at `bundle_dir` so the plugin's relative imports are
+/// resolved against — and sandboxed to — that directory. The entry module is
+/// loaded as the isolate's main module *from disk through the loader*, which
+/// means the entry and every module it imports (relative or `@swissarmyhammer/*`)
+/// are resolved and transpiled uniformly. When `lifecycle` is `Some`, the
+/// bundle's `default` export is then driven through the SDK — see
+/// [`call_default_plugin_lifecycle`].
+fn load_and_run_plugin(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    module_loader: &module_loader::PluginModuleLoader,
+    bundle_dir: &Path,
+    entry_file: &str,
+    lifecycle: Option<PluginLifecycle>,
+) -> Result<serde_json::Value> {
+    // Point the loader at this plugin's bundle directory before any import is
+    // resolved; relative imports are sandboxed to it.
+    module_loader
+        .set_bundle_root(bundle_dir)
+        .map_err(Error::Runtime)?;
+
+    // The entry module's `file://` URL. It must resolve inside the bundle root
+    // so its own relative imports resolve correctly against it.
+    let entry_path = bundle_dir.join(entry_file);
+    let entry_specifier = ModuleSpecifier::from_file_path(&entry_path).map_err(|()| {
+        Error::Runtime(format!(
+            "cannot build a module URL for plugin entry '{}'",
+            entry_path.display()
+        ))
+    })?;
+
+    // Load the entry as the isolate's main module. `deno_core` fetches it — and
+    // every module it imports — through the configured `PluginModuleLoader`.
+    let module_id = tokio_rt
+        .block_on(runtime.load_main_es_module(&entry_specifier))
+        .map_err(|e| Error::Runtime(format!("failed to load plugin: {e}")))?;
+
+    // Evaluate the module so its `default` export — the `Plugin` subclass — is
+    // available, then drive the requested lifecycle transition against it.
+    evaluate_module(runtime, tokio_rt, module_id)?;
+
+    match lifecycle {
+        None => Ok(serde_json::Value::Null),
+        Some(lifecycle) => call_default_plugin_lifecycle(runtime, tokio_rt, module_id, lifecycle),
+    }
+}
+
+/// Evaluate an already-loaded module and optionally call one of its exports.
+///
+/// Runs the isolate's event loop so module-level promise jobs settle, awaits
+/// the module evaluation, and — when `lifecycle_export` is `Some` — invokes the
+/// named function export. Used by [`load_and_run_module`], the single-file path
+/// the runtime's own tests drive; multi-file plugins go through
+/// [`load_and_run_plugin`], which drives the default-class lifecycle instead.
+fn evaluate_and_call(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    module_id: deno_core::ModuleId,
+    lifecycle_export: Option<&str>,
+) -> Result<serde_json::Value> {
+    evaluate_module(runtime, tokio_rt, module_id)?;
+
+    let Some(export) = lifecycle_export else {
+        return Ok(serde_json::Value::Null);
+    };
+
+    call_module_export(runtime, tokio_rt, module_id, export)
+}
+
+/// Evaluate an already-loaded module: settle its top-level promise jobs.
+///
+/// Runs the isolate's event loop so module-level promise jobs settle and awaits
+/// the module evaluation, leaving the module's exports reachable through its
+/// namespace. Shared by [`evaluate_and_call`] and [`load_and_run_plugin`].
+fn evaluate_module(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    module_id: deno_core::ModuleId,
+) -> Result<()> {
+    let evaluation = runtime.mod_evaluate(module_id);
+    tokio_rt
+        .block_on(runtime.run_event_loop(PollEventLoopOptions::default()))
+        .map_err(|e| Error::Runtime(format!("module event loop error: {e}")))?;
+    tokio_rt
+        .block_on(evaluation)
+        .map_err(|e| Error::Runtime(format!("module evaluation failed: {e}")))
+}
+
+/// Fetch an exported function from an evaluated module and call it.
+fn call_module_export(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    module_id: deno_core::ModuleId,
+    export: &str,
+) -> Result<serde_json::Value> {
+    let namespace = runtime
+        .get_module_namespace(module_id)
+        .map_err(|e| Error::Runtime(format!("cannot read module exports: {e}")))?;
+
+    // Pull the named export out of the namespace object as a global function
+    // handle. The scope is dropped before the async call below.
+    let function = {
+        deno_core::scope!(scope, runtime);
+        let namespace = v8::Local::new(scope, &namespace);
+        let key = v8::String::new(scope, export)
+            .ok_or_else(|| Error::Runtime(format!("cannot allocate export name '{export}'")))?;
+        let value = namespace
+            .get(scope, key.into())
+            .ok_or_else(|| Error::Runtime(format!("module has no export named '{export}'")))?;
+        let function = v8::Local::<v8::Function>::try_from(value)
+            .map_err(|_| Error::Runtime(format!("export '{export}' is not a function")))?;
+        v8::Global::new(scope, function)
+    };
+
+    // Call the function, running the event loop so a returned promise settles.
+    let call = runtime.call_with_args(&function, &[]);
+    let result = tokio_rt
+        .block_on(runtime.with_event_loop_promise(call, PollEventLoopOptions::default()))
+        .map_err(|e| Error::Runtime(format!("lifecycle function '{export}' failed: {e}")))?;
+
+    global_to_json(runtime, &result)
+}
+
+/// Drive a default-exported plugin class's lifecycle through the SDK.
+///
+/// This is the host side of the default-class entry contract. Rather than each
+/// bundle exporting `load`/`unload` *functions* that hand-roll `new` +
+/// `makePluginThis`, a bundle is authored as `export default class X extends
+/// Plugin { … }`. On [`PluginLifecycle::Load`] this reads the module's `default`
+/// export — the class — and hands it to the SDK's `__sahLoadDefaultPlugin`
+/// global, which instantiates it, wraps it with `makePluginThis`, stores it on
+/// the isolate, and runs its `load()`. On [`PluginLifecycle::Unload`] it calls
+/// the SDK's `__sahUnloadDefaultPlugin` global with no class argument; the SDK
+/// reaches the stored instance and runs its `unload()`.
+///
+/// The `new` + Proxy wrap is JS-land work the SDK owns; this function only
+/// resolves the constructor (on load) and drives the SDK global, running the
+/// event loop so the hook's returned promise settles.
+///
+/// # Errors
+///
+/// Returns [`Error::Runtime`] if the SDK lifecycle global is missing or not a
+/// function, if the bundle has no `default` export when loading, or if the
+/// plugin's `load()`/`unload()` hook throws.
+fn call_default_plugin_lifecycle(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    module_id: deno_core::ModuleId,
+    lifecycle: PluginLifecycle,
+) -> Result<serde_json::Value> {
+    let global_name = lifecycle.sdk_global();
+
+    // On load, the SDK needs the bundle's `default` export — the Plugin
+    // subclass constructor. Fetch the module namespace before opening a scope so
+    // the runtime is not borrowed twice.
+    let namespace = match lifecycle {
+        PluginLifecycle::Unload => None,
+        PluginLifecycle::Load => Some(
+            runtime
+                .get_module_namespace(module_id)
+                .map_err(|e| Error::Runtime(format!("cannot read module exports: {e}")))?,
+        ),
+    };
+
+    // Resolve the SDK lifecycle global and, on load, the constructor argument.
+    // Both are detached into `Global` handles so the scope is dropped before the
+    // async call below. Unload takes no class argument — the SDK reaches the
+    // instance `load` stored.
+    let (function, args) = {
+        deno_core::scope!(scope, runtime);
+        let context = scope.get_current_context();
+        let global = context.global(scope);
+        let key = v8::String::new(scope, global_name).ok_or_else(|| {
+            Error::Runtime(format!("cannot allocate global name '{global_name}'"))
+        })?;
+        let value = global.get(scope, key.into()).ok_or_else(|| {
+            Error::Runtime(format!("the isolate has no '{global_name}' SDK global"))
+        })?;
+        let function = v8::Local::<v8::Function>::try_from(value)
+            .map_err(|_| Error::Runtime(format!("SDK global '{global_name}' is not a function")))?;
+        let function = v8::Global::new(scope, function);
+
+        // On load, fetch the bundle's `default` export — the Plugin subclass —
+        // and pass it as the SDK global's one argument. A class is a function in
+        // V8; a non-callable `default` (or none) is a malformed bundle.
+        let args = match &namespace {
+            None => Vec::new(),
+            Some(namespace) => {
+                let namespace = v8::Local::new(scope, namespace);
+                let key = v8::String::new(scope, DEFAULT_EXPORT).ok_or_else(|| {
+                    Error::Runtime("cannot allocate 'default' export name".to_string())
+                })?;
+                let ctor = namespace.get(scope, key.into()).ok_or_else(|| {
+                    Error::Runtime(
+                        "plugin bundle has no `default` export — a bundle must \
+                         `export default class X extends Plugin { … }`"
+                            .to_string(),
+                    )
+                })?;
+                if !ctor.is_function() {
+                    return Err(Error::Runtime(
+                        "plugin bundle's `default` export is not a class — a bundle must \
+                         `export default class X extends Plugin { … }`"
+                            .to_string(),
+                    ));
+                }
+                vec![v8::Global::new(scope, ctor)]
+            }
+        };
+        (function, args)
+    };
+
+    let call = runtime.call_with_args(&function, &args);
+    let result = tokio_rt
+        .block_on(runtime.with_event_loop_promise(call, PollEventLoopOptions::default()))
+        .map_err(|e| Error::Runtime(format!("plugin {lifecycle:?} lifecycle failed: {e}")))?;
+
+    global_to_json(runtime, &result)
+}
+
+/// The SDK global the host calls to invoke a stored callback by id.
+const INVOKE_CALLBACK_GLOBAL: &str = "__sahInvokeCallback";
+
+/// The SDK global the host calls to dispose a stored callback by id.
+const DISPOSE_CALLBACK_GLOBAL: &str = "__sahDisposeCallback";
+
+/// Invoke a stored callback by id and return its (settled) JSON result.
+///
+/// This is the worker-side handler for [`Command::InvokeCallback`]: the
+/// host→isolate direction of the callback primitive. It calls the SDK's
+/// `__sahInvokeCallback` global with a JSON-encoded `{ id, args }` request,
+/// runs the event loop so the (async) call settles, and decodes the SDK's
+/// `{ ok, result?, error? }` JSON response — surfacing an SDK-side `ok: false`
+/// (an unknown id, or a callback that threw) as [`Error::Runtime`].
+fn invoke_callback(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    id: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let request = serde_json::json!({ "id": id, "args": args }).to_string();
+    let response = call_string_global(runtime, tokio_rt, INVOKE_CALLBACK_GLOBAL, &request)?;
+    decode_callback_response(&response)
+}
+
+/// Dispose a stored callback by id, returning whether a function was removed.
+///
+/// The worker-side handler for [`Command::DisposeCallback`]: it calls the SDK's
+/// `__sahDisposeCallback` global with the bare id and returns the JSON boolean
+/// it reports.
+fn dispose_callback(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    id: &str,
+) -> Result<serde_json::Value> {
+    let response = call_string_global(runtime, tokio_rt, DISPOSE_CALLBACK_GLOBAL, id)?;
+    serde_json::from_str(&response)
+        .map_err(|e| Error::Runtime(format!("callback disposal returned invalid JSON: {e}")))
+}
+
+/// Decode the SDK's `{ ok, result?, error? }` callback-invoke response.
+///
+/// A response with `ok: true` yields its `result` (JSON `null` when the
+/// callback returned nothing); `ok: false` carries the SDK-side error message,
+/// surfaced as [`Error::Runtime`].
+fn decode_callback_response(response: &str) -> Result<serde_json::Value> {
+    let parsed: serde_json::Value = serde_json::from_str(response)
+        .map_err(|e| Error::Runtime(format!("callback invocation returned invalid JSON: {e}")))?;
+    if parsed.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+        return Ok(parsed
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null));
+    }
+    let message = parsed
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("callback invocation failed");
+    Err(Error::Runtime(message.to_string()))
+}
+
+/// Call a `globalThis` function that takes one string and returns a string.
+///
+/// The two host→isolate callback entry points the SDK installs —
+/// `__sahInvokeCallback` and `__sahDisposeCallback` — both have this shape: one
+/// JSON string crosses in, one JSON string crosses back. This helper fetches
+/// the named global, calls it with `argument`, runs the event loop so an
+/// `async` global's returned promise settles, and reads the result back as a
+/// Rust string.
+fn call_string_global(
+    runtime: &mut JsRuntime,
+    tokio_rt: &tokio::runtime::Runtime,
+    global_name: &str,
+    argument: &str,
+) -> Result<String> {
+    // Fetch the global function and build the single string argument, both as
+    // detached `Global` handles so the scope can be dropped before the call.
+    let (function, arg) = {
+        deno_core::scope!(scope, runtime);
+        let context = scope.get_current_context();
+        let global = context.global(scope);
+        let key = v8::String::new(scope, global_name).ok_or_else(|| {
+            Error::Runtime(format!("cannot allocate global name '{global_name}'"))
+        })?;
+        let value = global
+            .get(scope, key.into())
+            .ok_or_else(|| Error::Runtime(format!("the isolate has no '{global_name}' global")))?;
+        let function = v8::Local::<v8::Function>::try_from(value).map_err(|_| {
+            Error::Runtime(format!("isolate global '{global_name}' is not a function"))
+        })?;
+        let arg = v8::String::new(scope, argument)
+            .ok_or_else(|| Error::Runtime("cannot allocate callback argument".to_string()))?;
+        (
+            v8::Global::new(scope, function),
+            v8::Global::new(scope, v8::Local::<v8::Value>::from(arg)),
+        )
+    };
+
+    // Call the function, running the event loop so an async global's promise
+    // settles before the result is read.
+    let call = runtime.call_with_args(&function, &[arg]);
+    let result = tokio_rt
+        .block_on(runtime.with_event_loop_promise(call, PollEventLoopOptions::default()))
+        .map_err(|e| Error::Runtime(format!("callback global '{global_name}' failed: {e}")))?;
+
+    // The global returns a JSON string; read it back as a Rust string.
+    deno_core::scope!(scope, runtime);
+    let local = v8::Local::new(scope, &result);
+    let string = v8::Local::<v8::String>::try_from(local).map_err(|_| {
+        Error::Runtime(format!(
+            "callback global '{global_name}' did not return a string"
+        ))
+    })?;
+    Ok(string.to_rust_string_lossy(scope))
+}
+
+/// Convert a V8 value handle to a `serde_json::Value`.
+///
+/// `undefined`, `null`, and functions map to JSON `null`; every other value
+/// round-trips through the engine's own `JSON.stringify`. A `JSON.stringify`
+/// that throws (a symbol, a circular structure) also collapses to `null`
+/// rather than poisoning the isolate.
+fn global_to_json(
+    runtime: &mut JsRuntime,
+    value: &v8::Global<v8::Value>,
+) -> Result<serde_json::Value> {
+    deno_core::scope!(scope, runtime);
+    let local = v8::Local::new(scope, value);
+
+    if local.is_undefined() || local.is_null() || local.is_function() {
+        return Ok(serde_json::Value::Null);
+    }
+
+    let rust_string = {
+        v8::tc_scope!(let tc, scope);
+        match v8::json::stringify(tc, local) {
+            Some(s) => s.to_rust_string_lossy(tc),
+            None => return Ok(serde_json::Value::Null),
+        }
+    };
+
+    if rust_string.is_empty() || rust_string == "undefined" {
+        return Ok(serde_json::Value::Null);
+    }
+
+    serde_json::from_str(&rust_string)
+        .map_err(|e| Error::Runtime(format!("cannot convert result to JSON: {e}")))
+}
+
+/// Drain pending promise jobs, microtasks, and dynamic imports.
+///
+/// `deno_core` advances promise resolution only while the event loop is
+/// polled. Running it to completion lets a script's promise side effects
+/// settle before the result is returned.
+fn drain_event_loop(runtime: &mut JsRuntime, tokio_rt: &tokio::runtime::Runtime) {
+    if let Err(e) = tokio_rt.block_on(runtime.run_event_loop(PollEventLoopOptions::default())) {
+        tracing::warn!("error draining plugin event loop: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `.ts` snippet with a type annotation and an exported function. The
+    /// function, when called, returns a value the test asserts on.
+    #[tokio::test]
+    async fn transpiles_and_runs_typescript_module() {
+        let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
+
+        // `count: number` is TypeScript-only syntax; the export returns a
+        // value so the test can observe that the module actually ran.
+        let ts =
+            "export function activate(): number { const count: number = 7; return count * 6; }";
+        let result = runtime
+            .call_lifecycle("file:///plugin/a.ts", ts, "activate")
+            .await
+            .expect("lifecycle call should succeed");
+
+        assert_eq!(result, serde_json::json!(42));
+    }
+
+    /// Two isolates are independent: a global set in one is invisible in the
+    /// other.
+    #[tokio::test]
+    async fn isolates_are_independent() {
+        let first = PluginRuntime::new(RuntimeConfig::default()).expect("first runtime");
+        let second = PluginRuntime::new(RuntimeConfig::default()).expect("second runtime");
+
+        // Set a global only in the first isolate.
+        first
+            .eval("globalThis.shared_marker = 'first-only'; globalThis.shared_marker")
+            .await
+            .expect("first eval should succeed");
+
+        // The first isolate sees its own global.
+        let in_first = first
+            .eval("typeof globalThis.shared_marker")
+            .await
+            .expect("first readback should succeed");
+        assert_eq!(in_first, serde_json::json!("string"));
+
+        // The second isolate must NOT see it — separate V8 isolate, separate
+        // global object.
+        let in_second = second
+            .eval("typeof globalThis.shared_marker")
+            .await
+            .expect("second readback should succeed");
+        assert_eq!(in_second, serde_json::json!("undefined"));
+    }
+
+    /// A type-incorrect but syntactically valid `.ts` still transpiles and
+    /// runs: transpilation does not type-check.
+    #[tokio::test]
+    async fn type_incorrect_typescript_still_runs() {
+        let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
+
+        // `const n: number = "not a number"` is a type ERROR but is
+        // syntactically valid TypeScript. After type erasure it is just
+        // `const n = "not a number"`, which runs fine. The function returns
+        // the string's length to prove the module executed.
+        let ts =
+            "export function activate(): number { const n: number = \"hello\"; return n.length; }";
+        let result = runtime
+            .call_lifecycle("file:///plugin/bad-types.ts", ts, "activate")
+            .await
+            .expect("type-incorrect TS should still transpile and run");
+
+        assert_eq!(result, serde_json::json!(5));
+    }
+
+    /// The runtime can evaluate a plain module without a lifecycle export.
+    #[tokio::test]
+    async fn loads_module_without_lifecycle_export() {
+        let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
+
+        let ts = "const greeting: string = 'hi'; globalThis.loaded_marker = greeting;";
+        runtime
+            .load_module("file:///plugin/side-effect.ts", ts)
+            .await
+            .expect("module should load");
+
+        let marker = runtime
+            .eval("globalThis.loaded_marker")
+            .await
+            .expect("readback should succeed");
+        assert_eq!(marker, serde_json::json!("hi"));
+    }
+
+    /// A TypeScript syntax error fails the load with a transpile error.
+    #[tokio::test]
+    async fn syntax_error_fails_to_load() {
+        let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
+
+        let result = runtime
+            .load_module("file:///plugin/broken.ts", "export function broken( {")
+            .await;
+        assert!(
+            matches!(result, Err(Error::Transpile(_))),
+            "a syntax error should surface as Error::Transpile, got: {result:?}"
+        );
+    }
+
+    /// A runtime exception thrown by a lifecycle function is surfaced.
+    #[tokio::test]
+    async fn lifecycle_exception_is_reported() {
+        let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
+
+        let ts = "export function activate(): void { throw new Error('boom'); }";
+        let result = runtime
+            .call_lifecycle("file:///plugin/throws.ts", ts, "activate")
+            .await;
+        assert!(
+            matches!(result, Err(Error::Runtime(_))),
+            "a thrown exception should surface as Error::Runtime, got: {result:?}"
+        );
+    }
+
+    /// Asking for an export that does not exist is an error.
+    #[tokio::test]
+    async fn missing_lifecycle_export_is_reported() {
+        let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
+
+        let ts = "export function activate(): number { return 1; }";
+        let result = runtime
+            .call_lifecycle("file:///plugin/c.ts", ts, "deactivate")
+            .await;
+        assert!(
+            matches!(result, Err(Error::Runtime(_))),
+            "a missing export should surface as Error::Runtime, got: {result:?}"
+        );
+    }
+
+    /// An explicit shutdown joins the worker thread cleanly.
+    #[tokio::test]
+    async fn explicit_shutdown_is_clean() {
+        let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
+        runtime
+            .eval("1 + 1")
+            .await
+            .expect("eval before shutdown should succeed");
+        runtime.shutdown().expect("shutdown should be clean");
+    }
+
+    /// A runtime created with an inspector port still loads and runs modules.
+    #[tokio::test]
+    async fn inspector_enabled_runtime_runs_modules() {
+        let config = RuntimeConfig {
+            inspect_port: Some(9229),
+            ..Default::default()
+        };
+        let runtime = PluginRuntime::new(config).expect("inspector runtime should start");
+
+        let ts = "export function activate(): number { return 99; }";
+        let result = runtime
+            .call_lifecycle("file:///plugin/inspect.ts", ts, "activate")
+            .await
+            .expect("module should run with inspector enabled");
+        assert_eq!(result, serde_json::json!(99));
+    }
+
+    /// Tearing down a runtime whose isolate is wedged in a non-terminating
+    /// script must not hang.
+    ///
+    /// The worker is handed a `while (true) {}` script and left running. With
+    /// no way to interrupt the isolate, `Drop`'s `join` would block forever
+    /// (the worker never returns to `recv`). Because `PluginRuntime` retains
+    /// the isolate's `v8::IsolateHandle` and `terminate_execution`s it before
+    /// joining, the wedged script unwinds and the worker exits promptly — so
+    /// this test completes well within its bounded timeout.
+    #[tokio::test]
+    async fn teardown_does_not_hang_on_wedged_isolate() {
+        // Spawning the runtime on a blocking thread keeps the test's async
+        // executor free; the runtime itself owns its own worker thread.
+        let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
+
+        // Fire a non-terminating script at the worker. `eval` will never
+        // answer (the worker is stuck in the loop), so the reply is dropped on
+        // the floor — the point is only to wedge the isolate.
+        let runtime = std::sync::Arc::new(runtime);
+        let wedge = {
+            let runtime = std::sync::Arc::clone(&runtime);
+            tokio::spawn(async move {
+                let _ = runtime.eval("while (true) {}").await;
+            })
+        };
+
+        // Give the worker time to actually enter the infinite loop.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        // Drop the background task's handle on the runtime so the only
+        // remaining owner is this test, then tear the runtime down on a
+        // blocking thread and assert the teardown finishes quickly.
+        wedge.abort();
+        let _ = wedge.await;
+
+        let teardown = tokio::task::spawn_blocking(move || {
+            // Dropping the last `Arc` runs `PluginRuntime::drop`, which
+            // terminates the wedged isolate and joins the worker.
+            drop(runtime);
+        });
+
+        tokio::time::timeout(Duration::from_secs(10), teardown)
+            .await
+            .expect("teardown must not hang on a wedged isolate")
+            .expect("teardown task should not panic");
+    }
+
+    /// A plugin that allocates past the heap cap has its script terminated
+    /// rather than aborting the host process.
+    ///
+    /// The near-heap-limit callback registered on the isolate fires as the
+    /// plugin nears [`HEAP_MAX_BYTES`], terminates execution, and bumps the
+    /// limit so V8 can unwind cleanly. The runaway allocation therefore
+    /// surfaces as an [`Error::Runtime`] (or a timeout) — and crucially the
+    /// test process survives to make this assertion at all.
+    #[tokio::test]
+    async fn heap_exhaustion_terminates_script_not_host() {
+        let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
+
+        // Grow an array without bound. This blows past the 64 MiB cap; the
+        // heap-limit callback must terminate it instead of letting V8 abort
+        // the whole process.
+        let result = runtime
+            .eval("const sink = []; while (true) { sink.push(new Array(100000).fill(7)); }")
+            .await;
+
+        assert!(
+            matches!(result, Err(Error::Runtime(_)) | Err(Error::RuntimeTimeout)),
+            "a runaway allocation should surface as a runtime error, got: {result:?}"
+        );
+
+        // The isolate's termination flag is cleared between commands, so the
+        // runtime is still usable for a subsequent, well-behaved script.
+        let after = runtime
+            .eval("1 + 1")
+            .await
+            .expect("runtime should still serve commands after a contained OOM");
+        assert_eq!(after, serde_json::json!(2));
+    }
+
+    /// Write a single-file plugin bundle's `index.ts` and return its directory.
+    ///
+    /// The bundle is authored in the default-class entry shape the host drives:
+    /// it default-exports a `Plugin` subclass with the given `body` as its
+    /// methods, with no module-level lifecycle functions.
+    fn write_default_class_bundle(source: &str) -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().expect("temp bundle dir");
+        std::fs::write(dir.path().join("index.ts"), source).expect("index.ts written");
+        dir
+    }
+
+    /// A default-exported `Plugin` subclass loads and unloads through a real
+    /// isolate, with its `load()` return value flowing back to the host.
+    ///
+    /// This is the default-class entry contract end to end: the host reads the
+    /// bundle's `default` export, instantiates it, wraps it with the SDK's
+    /// dispatch Proxy, and runs `load()` — then later runs the same stored
+    /// instance's `unload()`. No module-level `load`/`unload` functions and no
+    /// hand-rolled `makePluginThis` appear in the bundle.
+    #[tokio::test]
+    async fn default_class_plugin_loads_and_unloads() {
+        let bundle = write_default_class_bundle(
+            "import { Plugin } from '@swissarmyhammer/plugin';\n\
+             export default class P extends Plugin {\n\
+               async load(): Promise<unknown> {\n\
+                 (globalThis as Record<string, unknown>).__loaded = true;\n\
+                 return 'loaded';\n\
+               }\n\
+               async unload(): Promise<void> {\n\
+                 (globalThis as Record<string, unknown>).__unloaded = true;\n\
+                 await super.unload();\n\
+               }\n\
+             }\n",
+        );
+        let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
+
+        // Load instantiates the default class and runs its `load()`, whose
+        // return value flows back as the lifecycle result.
+        let loaded = runtime
+            .call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load)
+            .await
+            .expect("default-class load should succeed");
+        assert_eq!(loaded, serde_json::json!("loaded"));
+
+        // Unload reaches the *same* stored instance — its `unload()` runs and
+        // sets the global, proving the instance persisted between the two
+        // separate host calls on the one isolate.
+        runtime
+            .call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Unload)
+            .await
+            .expect("default-class unload should succeed");
+        let unloaded = runtime
+            .eval("globalThis.__unloaded === true")
+            .await
+            .expect("the isolate should answer after unload");
+        assert_eq!(unloaded, serde_json::json!(true));
+    }
+
+    /// A bundle with no `default` export fails the load with a clear error.
+    ///
+    /// The default-class entry contract requires a `default` export; a bundle
+    /// that only exports a named function no longer loads, and the error names
+    /// the missing `default` export so the author can fix it.
+    #[tokio::test]
+    async fn default_class_missing_default_export_is_reported() {
+        // The bundle imports and subclasses the SDK `Plugin` (so the SDK
+        // lifecycle globals are installed) but exports the class as a *named*
+        // export — the realistic "forgot to `export default`" mistake.
+        let bundle = write_default_class_bundle(
+            "import { Plugin } from '@swissarmyhammer/plugin';\n\
+             export class P extends Plugin {}\n",
+        );
+        let runtime = PluginRuntime::new(RuntimeConfig::default()).expect("runtime should start");
+
+        let error = runtime
+            .call_plugin_lifecycle(bundle.path(), "index.ts", PluginLifecycle::Load)
+            .await
+            .expect_err("a bundle without a default export must not load");
+        assert!(
+            matches!(&error, Error::Runtime(message) if message.contains("default")),
+            "the error should name the missing `default` export, got: {error:?}"
+        );
+    }
+}

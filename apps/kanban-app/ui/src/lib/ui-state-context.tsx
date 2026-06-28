@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { subscribeUiStateChanged } from "./mcp-notifications";
 
 /** Shape of per-window state inside UIState. */
 export interface WindowStateSnapshot {
@@ -84,16 +84,17 @@ const DEFAULT_STATE: UIStateSnapshot = {
 };
 
 /**
- * Discriminator values on the `ui-state-changed` wire event.
+ * Discriminator values on the `notifications/ui_state/changed` bridge event.
  *
- * One per `UIStateChange` variant plus the two board-side-effect result
- * shapes (`board_switch`, `board_close`). The backend tags every emit with
- * `kind` so the frontend can skip `setState` for slices it owns — notably
- * `scope_chain`, which echoes back from every `ui.setFocus` call and would
- * otherwise cascade re-renders through every `useUIState()` consumer.
+ * One per backend `UiStateChange` variant plus the two board-side-effect
+ * result shapes (`board_switch`, `board_close`). The backend tags every
+ * publish with `kind` so the frontend can skip `setState` for slices it owns —
+ * notably `scope_chain`, which echoes back from every `app.setFocus` call and
+ * would otherwise cascade re-renders through every `useUIState()` consumer.
  *
- * Kept in sync with `emit_ui_state_change_if_needed` in
- * `kanban-app/src/commands.rs`.
+ * Kept in sync with `UiStateChange::kind()` in
+ * `crates/swissarmyhammer-ui-state/src/state.rs` (the single source of truth
+ * the publish path classifies against).
  */
 export type UIStateChangeKind =
   | "scope_chain"
@@ -108,7 +109,13 @@ export type UIStateChangeKind =
   | "board_switch"
   | "board_close";
 
-/** Shape of the `ui-state-changed` event payload from the Rust backend. */
+/**
+ * Shape of the `notifications/ui_state/changed` bridge notification's params.
+ *
+ * The declared `UiStateChanged` payload from `swissarmyhammer-ui-state`:
+ * a `kind` discriminator plus the full UI-state `state` snapshot after the
+ * change.
+ */
 export interface UIStateChangedEvent {
   kind: UIStateChangeKind;
   state: UIStateSnapshot;
@@ -156,18 +163,19 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
         setLoading(false);
       });
 
-    // Subscribe to changes. The backend wraps every emit as
-    // `{ kind, state }` so we can early-return on kinds the frontend owns —
-    // skipping `setState` here is what keeps `useUIState()` reference-stable
-    // across arrow-key focus moves and prevents the fan-out re-render
-    // cascade through every `useUIState()` consumer.
-    const unlisten = listen<UIStateChangedEvent>(
-      "ui-state-changed",
-      (event) => {
-        if (FRONTEND_AUTHORITATIVE_KINDS.has(event.payload.kind)) return;
-        setState(event.payload.state);
-      },
-    );
+    // Subscribe to UI-state changes over the MCP notification bridge — the
+    // webview is a pure MCP client, reading `notifications/ui_state/changed`
+    // (the host re-broadcasts each bridge notification as a Tauri event named
+    // by the notification method) rather than a bespoke direct Tauri event.
+    // The declared `UiStateChanged` payload is `{ kind, state }`, so we can
+    // early-return on kinds the frontend owns — skipping `setState` here keeps
+    // `useUIState()` reference-stable across arrow-key focus moves and prevents
+    // the fan-out re-render cascade through every `useUIState()` consumer.
+    const unlisten = subscribeUiStateChanged((change) => {
+      const payload = change as unknown as UIStateChangedEvent;
+      if (FRONTEND_AUTHORITATIVE_KINDS.has(payload.kind)) return;
+      setState(payload.state);
+    });
 
     return () => {
       unlisten.then((fn) => fn());

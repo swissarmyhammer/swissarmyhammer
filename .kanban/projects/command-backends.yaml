@@ -1,0 +1,3 @@
+color: 2da44e
+description: 'Tier 1. The domain MCP servers that command callbacks invoke at execute time: `views` (perspective + view state), `ui_state` (inspector/palette/mode/focus/drag/keymap — relocates UIState out of swissarmyhammer-commands), `window` (window ops + board-file lifecycle + OS open/reveal), `app` (quit/about/help), and the `kanban` tool extension (clipboard cut/copy/paste + archive/unarchive). Sit above store-service (views + kanban-ext write through the shared StoreContext); below the builtin commands.'
+name: Command Backends (domain servers)

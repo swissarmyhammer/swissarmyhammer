@@ -8,21 +8,20 @@ import { renderInAct, rerenderInAct } from "@/test/act-render";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockInvoke = vi.fn((..._args: any[]) => Promise.resolve("ok"));
-vi.mock("@tauri-apps/api/core", () => ({
+// Spread the real module and override only the parts the test controls.
+// @tauri-apps/api >=2.11 pulls submodules that import named exports from core
+// (SERIALIZE_TO_IPC_FN, Resource, Channel, …); a hand-listed stub drops them
+// and breaks module loading.
+vi.mock("@tauri-apps/api/core", async (importActual) => ({
+  ...(await importActual<typeof import("@tauri-apps/api/core")>()),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   invoke: (...args: any[]) => mockInvoke(...args),
 }));
-vi.mock("@tauri-apps/api/event", () => ({
+vi.mock("@tauri-apps/api/event", async (importActual) => ({
+  ...(await importActual<typeof import("@tauri-apps/api/event")>()),
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
-vi.mock("@tauri-apps/plugin-log", () => ({
-  error: vi.fn(),
-  warn: vi.fn(),
-  info: vi.fn(),
-  debug: vi.fn(),
-  trace: vi.fn(),
-  attachConsole: vi.fn(() => Promise.resolve()),
-}));
+// `@tauri-apps/plugin-log` is mocked globally in `src/test/setup.ts`.
 
 import { CommentLogEditor } from "./comment-log-editor";
 import { SchemaProvider } from "@/lib/schema-context";

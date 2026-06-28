@@ -1,0 +1,3 @@
+color: 9900cc
+description: 'Build the swissarmyhammer plugin platform: one new crate (swissarmyhammer-plugin) owning the Plugin base class/SDK, ServerRegistry, Dispatcher, the McpServer trait + three transports, deno_core runtime, per-plugin ledger, TypesEmitter codegen, and hot reload. Plus changes to five existing crates: swissarmyhammer-operations (_meta-tree generator), swissarmyhammer-operations-macros (operation-tool macro), swissarmyhammer-tools (expose_rust_module wiring), swissarmyhammer-directory (stack-aware Watcher), swissarmyhammer-js (rquickjs -> deno_core). Source: ideas/plugins/plugin-architecture.md. Override-stack / Command-service work is out of scope (separate command-service.md).'
+name: Plugin Architecture

@@ -1,6 +1,6 @@
 /**
  * Spatial-nav test: Enter on the focused `card.inspect:{id}` leaf
- * dispatches `ui.inspect` exactly once with the card's moniker as
+ * dispatches `app.inspect` exactly once with the card's moniker as
  * target — and clicking the (i) button does the same thing without
  * also triggering the parent card's click handler.
  *
@@ -11,9 +11,9 @@
  * landed on the leaf but Enter did NOTHING (the kernel's drillIn echoes
  * the focused FQM for a leaf, `setFocus` is idempotent, the visible
  * effect is a no-op). The Pressable migration adds the missing
- * scope-level CommandDef so Enter / Space dispatches `ui.inspect`.
+ * scope-level CommandDef so Enter / Space dispatches `app.inspect`.
  *
- * Two parallel paths must both fire `ui.inspect` exactly once and
+ * Two parallel paths must both fire `app.inspect` exactly once and
  * neither must propagate to the parent card's click handler:
  *
  *   1. Keyboard: focus the leaf, press Enter.
@@ -25,6 +25,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
+import {
+  UNHANDLED,
+  emitToCallbackRecord,
+  makeSpatialKernelMock,
+} from "@/test/mock-spatial-kernel";
 import { render, fireEvent, act } from "@testing-library/react";
 import type { Entity, EntitySchema } from "@/types/kanban";
 
@@ -35,9 +44,12 @@ import type { Entity, EntitySchema } from "@/types/kanban";
 // scope.
 // ---------------------------------------------------------------------------
 
-const monikerToKey = new Map<string, string>();
-const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
+
+const { monikerToKey, currentFocusKey, handleSpatialCommand, reset } =
+  makeSpatialKernelMock({
+    emit: emitToCallbackRecord(listenCallbacks),
+  });
 
 const TASK_SCHEMA = {
   entity: {
@@ -76,6 +88,18 @@ const TASK_SCHEMA = {
 } as unknown as EntitySchema;
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
+  // The pressable activation commands are DEFINED by the `app-shell-commands`
+  // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
+  // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
+  // layer only through the `useCommandList` seam, so answer `list command`
+  // with the shared mock registry. Non-list `command_tool_call` ops fall
+  // through to the branches below.
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "list_entity_types") return Promise.resolve(["task"]);
   if (cmd === "get_entity_schema") return Promise.resolve(TASK_SCHEMA);
   if (cmd === "get_undo_state")
@@ -91,56 +115,8 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
-    const a = (args ?? {}) as { fq?: string; segment?: string };
-    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { fq?: string };
-    if (a.fq) {
-      for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.fq) {
-          monikerToKey.delete(m);
-          break;
-        }
-      }
-    }
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
-    const a = (args ?? {}) as { focusedFq?: string };
-    return Promise.resolve(a.focusedFq ?? null);
-  }
-  if (cmd === "spatial_focus") {
-    const a = (args ?? {}) as { fq?: string };
-    const fq = a.fq ?? null;
-    let moniker: string | null = null;
-    for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) {
-        moniker = s;
-        break;
-      }
-    }
-    if (fq) {
-      const prev = currentFocusKey.key;
-      currentFocusKey.key = fq;
-      queueMicrotask(() => {
-        const cb = listenCallbacks["focus-changed"];
-        if (cb) {
-          cb({
-            payload: {
-              window_label: "main",
-              prev_fq: prev,
-              next_fq: fq,
-              next_segment: moniker,
-            },
-          });
-        }
-      });
-    }
-    return Promise.resolve(null);
-  }
+  const spatial = handleSpatialCommand(cmd, args);
+  if (spatial !== UNHANDLED) return Promise.resolve(spatial);
   return Promise.resolve(null);
 }
 
@@ -261,17 +237,16 @@ function dispatchCommandCalls(): Array<Record<string, unknown>> {
     .map((c: unknown[]) => c[1] as Record<string, unknown>);
 }
 
-describe("EntityCard inspect button — Enter activates ui.inspect via Pressable", () => {
+describe("EntityCard inspect button — Enter activates app.inspect via Pressable", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    monikerToKey.clear();
-    currentFocusKey.key = null;
+    reset();
     for (const key of Object.keys(listenCallbacks)) {
       delete listenCallbacks[key];
     }
   });
 
-  it("seeds focus on card.inspect:{id} → Enter dispatches ui.inspect once with card moniker", async () => {
+  it("seeds focus on card.inspect:{id} → Enter dispatches app.inspect once with card moniker", async () => {
     await renderCard();
     await flushSetup();
 
@@ -285,7 +260,7 @@ describe("EntityCard inspect button — Enter activates ui.inspect via Pressable
 
     // Drive a focus-changed event for the inspect leaf so the
     // entity-focus bridge populates the focused-scope chain.
-    const cb = listenCallbacks["focus-changed"];
+    const cb = listenCallbacks["notifications/focus/changed"];
     expect(cb).toBeTruthy();
     await act(async () => {
       cb({
@@ -310,19 +285,19 @@ describe("EntityCard inspect button — Enter activates ui.inspect via Pressable
     });
 
     const inspectCalls = dispatchCommandCalls().filter(
-      (c) => c.cmd === "ui.inspect",
+      (c) => c.cmd === "app.inspect",
     );
     expect(
       inspectCalls.length,
-      "Enter on the focused inspect leaf must dispatch ui.inspect exactly once",
+      "Enter on the focused inspect leaf must dispatch app.inspect exactly once",
     ).toBe(1);
     expect(
       inspectCalls[0].target,
-      "ui.inspect must carry the card's moniker as target",
+      "app.inspect must carry the card's moniker as target",
     ).toBe("task:task-1");
   });
 
-  it("clicking the (i) button dispatches ui.inspect once and does NOT bubble to the card zone's spatial_focus", async () => {
+  it("clicking the (i) button dispatches app.inspect once and does NOT bubble to the card zone's spatial_focus", async () => {
     // The card body is wrapped in a `<FocusScope>` whose onClick handler
     // calls `focus(cardFq)` to make the card the spatial focus. If a
     // click on the (i) button bubbled up, the card zone's onClick would
@@ -359,11 +334,11 @@ describe("EntityCard inspect button — Enter activates ui.inspect via Pressable
     });
 
     const inspectCalls = dispatchCommandCalls().filter(
-      (c) => c.cmd === "ui.inspect",
+      (c) => c.cmd === "app.inspect",
     );
     expect(
       inspectCalls.length,
-      "Clicking (i) must dispatch ui.inspect exactly once",
+      "Clicking (i) must dispatch app.inspect exactly once",
     ).toBe(1);
     expect(inspectCalls[0].target).toBe("task:task-1");
 
@@ -372,7 +347,10 @@ describe("EntityCard inspect button — Enter activates ui.inspect via Pressable
     // preserved on the inner button, it must not.
     const focusToCardCalls = mockInvoke.mock.calls.filter(
       (c: unknown[]) =>
-        c[0] === "spatial_focus" &&
+        (c[0] === "spatial_focus" ||
+          (c[0] === "command_tool_call" &&
+            (c[1] as Record<string, unknown>)?.tool === "focus" &&
+            (c[1] as Record<string, unknown>)?.op === "set focus")) &&
         (c[1] as { fq?: string })?.fq === cardZoneFq,
     );
     expect(

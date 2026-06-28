@@ -24,11 +24,18 @@ const mockInvoke = vi.fn((...args: any[]) => {
   return Promise.resolve(null);
 });
 
-vi.mock("@tauri-apps/api/core", () => ({
+// Spread the real module and override only `invoke`. @tauri-apps/api ≥2.11
+// pulls in submodules (e.g. `dpi`) that import named exports from core
+// (`SERIALIZE_TO_IPC_FN`, `Resource`, `Channel`, …); a hand-listed stub drops
+// them and the whole graph fails to load. Preserving the real exports keeps
+// the mock robust against dep bumps.
+vi.mock("@tauri-apps/api/core", async (importActual) => ({
+  ...(await importActual<typeof import("@tauri-apps/api/core")>()),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   invoke: (...args: any[]) => mockInvoke(...args),
 }));
-vi.mock("@tauri-apps/api/event", () => ({
+vi.mock("@tauri-apps/api/event", async (importActual) => ({
+  ...(await importActual<typeof import("@tauri-apps/api/event")>()),
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 vi.mock("@tauri-apps/plugin-log", () => ({
@@ -307,6 +314,37 @@ describe("MultiSelectEditor", () => {
       });
 
       expect(onCommit).toHaveBeenCalledWith(["alice-id"]);
+      vi.useRealTimers();
+    });
+
+    it("blur after unmount does NOT commit an empty value (no clobber on ESC+navigate)", async () => {
+      // Regression: editing a tag, then ESC to pop out and navigate away,
+      // blanked the field. The blur handler commits on a 100ms timeout; if the
+      // editor unmounts first, the doc reads empty and commit() would clobber
+      // the field with `[]`. The commit must bail when the view is gone.
+      vi.useFakeTimers();
+      const onCommit = vi.fn();
+      const onCancel = vi.fn();
+      const { container, unmount } = renderMultiSelect(
+        { field: ASSIGNEES_FIELD, value: ["alice-id"], onCommit, onCancel },
+        { actor: ACTOR_ENTITIES },
+      );
+      vi.useRealTimers();
+      await settle();
+      vi.useFakeTimers();
+
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      await act(async () => {
+        fireEvent.blur(cmContent);
+      });
+
+      // Editor unmounts before the 100ms blur-commit timer fires.
+      unmount();
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+      });
+
+      expect(onCommit).not.toHaveBeenCalled();
       vi.useRealTimers();
     });
 

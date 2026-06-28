@@ -1,7 +1,8 @@
 /**
- * Browser-mode test: Enter on the focused Add Perspective leaf opens
- * the registry-rendered `<CommandPopover>` (the new keyboard-activation
- * contract after card `01KRE21GJMPP289N1HSTMJG5HE`).
+ * Browser-mode test: Enter on the focused Add Perspective leaf
+ * dispatches `perspective.save` IMMEDIATELY with a generated unique
+ * name — no popup (the keyboard-activation contract after card
+ * `01KTYN8GB25ZFKSXWA0QA283PG`).
  *
  * # Migration history
  *
@@ -11,39 +12,50 @@
  * `perspective.save` directly with a frontend-computed name.
  *
  * Card `01KRE21GJMPP289N1HSTMJG5HE` (Add + Sort migration) deleted
- * `<AddPerspectiveButton>`. The `+` affordance is now a
- * registry-rendered `<CommandButton>` for `perspective.save` rendered
- * by `<BarRegistryTabButtons>` at the bar level. The CommandButton's
- * `handlePress` opens a `<CommandPopover>` (because the command has a
- * pickable `name` param) instead of dispatching directly — the user
- * fills in the form and submits to actually save the perspective.
+ * `<AddPerspectiveButton>` in favour of a registry-rendered
+ * `<CommandButton>` whose press opened a `<CommandPopover>` (because
+ * the command has a text-shaped `name` param).
+ *
+ * Card `01KTYN8GB25ZFKSXWA0QA283PG` deleted that popup path: the `+`
+ * is now the `<AddPerspectiveCommandButton>` adapter whose press
+ * creates the perspective immediately with a generated name
+ * ("Untitled" / "Untitled N" — the first free slot by exact-name match
+ * against the visible list) and arms inline rename once the entity
+ * appears — full-circle back to the original immediate-dispatch UX,
+ * but registry-rendered and command-routed.
  *
  * # Spatial-nav moniker
  *
- * Changed from `ui:perspective-bar.add` (the legacy Pressable's
- * deliberately-chosen segment) to
- * `perspective_bar.perspective.save:<view-id>` (the moniker
- * `<CommandButton>` builds from `${surface}.${command.id}:${surfaceId}`).
- * Same migration pattern as the Filter / Group buttons before it.
+ * Unchanged from the CommandButton era:
+ * `perspective_bar.perspective.save:<view-id>` (the
+ * `${surface}.${command.id}:${surfaceId}` shape).
  *
- *   1. `<BarRegistryTabButtons>` queries the registry and renders one
- *      `<CommandButton>` per global tab-button command.
- *   2. `<CommandButton>` wraps the `<button>` in a `<Pressable>` with
+ *   1. `<BarRegistryTabButtons>` queries the registry and renders the
+ *      `<AddPerspectiveCommandButton>` adapter for `perspective.save`.
+ *   2. The adapter wraps the `<button>` in a `<Pressable>` with
  *      moniker `perspective_bar.perspective.save:<view-id>` and an
- *      `onPress` that opens the popover.
+ *      `onPress` that creates immediately.
  *   3. AppShell's `KeybindingHandler` resolves Enter on the focused
- *      leaf through `extractScopeBindings`, dispatches
- *      `pressable.activate` → opens the popover.
+ *      leaf through `extractChainBindings`, dispatches
+ *      `pressable.activate` → immediate `perspective.save` dispatch.
  *
- * Asserts: the focused leaf registers under the new moniker AND Enter
- * opens the popover (`<CommandPopover>` mounts under the
- * `data-testid="command-popover"` attribute). The submit → dispatch
- * chain is covered by `perspective-tab-bar.add-and-sort-migration.test.tsx`
- * — pinning it here too would couple this spatial-nav test to the
- * picker-pipeline render path it doesn't own.
+ * Asserts: the focused leaf registers under the moniker AND Enter
+ * dispatches `perspective.save` with the generated name without
+ * opening any popover. The dedupe / rename-arming contracts are
+ * covered by `perspective-tab-bar.add-create-rename.test.tsx`.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+  UI_SURFACE_PLUGIN_COMMANDS,
+} from "@/test/mock-command-list";
+import {
+  UNHANDLED,
+  emitToCallbackRecord,
+  makeSpatialKernelMock,
+} from "@/test/mock-spatial-kernel";
 import { render, fireEvent, act } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
@@ -53,11 +65,25 @@ import { render, fireEvent, act } from "@testing-library/react";
 // scope.
 // ---------------------------------------------------------------------------
 
-const monikerToKey = new Map<string, string>();
-const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
 
+const { currentFocusKey, handleSpatialCommand, reset } = makeSpatialKernelMock({
+  emit: emitToCallbackRecord(listenCallbacks),
+});
+
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
+  // The pressable activation commands are DEFINED by the `app-shell-commands`
+  // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
+  // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
+  // layer only through the `useCommandList` seam, so answer `list command`
+  // with the shared mock registry. Non-list `command_tool_call` ops fall
+  // through to the branches below.
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "list_commands_for_scope") {
     // After the Add migration, `<BarRegistryTabButtons>` queries the
     // registry for global tab-button commands. Return the
@@ -94,56 +120,8 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
-    const a = (args ?? {}) as { fq?: string; segment?: string };
-    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { fq?: string };
-    if (a.fq) {
-      for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.fq) {
-          monikerToKey.delete(m);
-          break;
-        }
-      }
-    }
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
-    const a = (args ?? {}) as { focusedFq?: string };
-    return Promise.resolve(a.focusedFq ?? null);
-  }
-  if (cmd === "spatial_focus") {
-    const a = (args ?? {}) as { fq?: string };
-    const fq = a.fq ?? null;
-    let moniker: string | null = null;
-    for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) {
-        moniker = s;
-        break;
-      }
-    }
-    if (fq) {
-      const prev = currentFocusKey.key;
-      currentFocusKey.key = fq;
-      queueMicrotask(() => {
-        const cb = listenCallbacks["focus-changed"];
-        if (cb) {
-          cb({
-            payload: {
-              window_label: "main",
-              prev_fq: prev,
-              next_fq: fq,
-              next_segment: moniker,
-            },
-          });
-        }
-      });
-    }
-    return Promise.resolve(null);
-  }
+  const spatial = handleSpatialCommand(cmd, args);
+  if (spatial !== UNHANDLED) return Promise.resolve(spatial);
   return Promise.resolve(null);
 }
 
@@ -198,6 +176,34 @@ vi.mock("@/lib/views-context", () => ({
 
 vi.mock("@/lib/context-menu", () => ({
   useContextMenu: () => vi.fn(),
+}));
+
+// `<BarRegistryTabButtons>` sources global (unscoped) tab-button commands from
+// the Command registry via `useCommandList`. Return the `perspective.save`
+// payload (empty `scope` = global) so its `<CommandButton>` mounts at the bar
+// level and registers its spatial-nav leaf. The `UI_SURFACE_PLUGIN_COMMANDS`
+// mirror rides along so the keymap layer (which reads the same registry)
+// binds Enter → `pressable.activate` on the focused `<CommandButton>` leaf —
+// the entries carry no `tab_button`, so the bar renders no extra buttons.
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: [
+      {
+        id: "perspective.save",
+        name: "Save Perspective",
+        scope: [],
+        tab_button: { icon: "plus" },
+        params: [
+          { name: "name", from: "args", shape: "text" },
+          { name: "view_id", from: "scope_chain", entity_type: "view" },
+        ],
+        keys: {},
+      },
+      ...UI_SURFACE_PLUGIN_COMMANDS,
+    ],
+    loading: false,
+    refresh: vi.fn(),
+  }),
 }));
 
 vi.mock("@/lib/entity-store-context", () => ({
@@ -294,14 +300,13 @@ function dispatchCommandCalls(): Array<Record<string, unknown>> {
 describe("PerspectiveTabBar add button — Enter activates the registry-rendered <CommandButton>", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    monikerToKey.clear();
-    currentFocusKey.key = null;
+    reset();
     for (const key of Object.keys(listenCallbacks)) {
       delete listenCallbacks[key];
     }
   });
 
-  it("seeds focus on perspective_bar.perspective.save:<view-id> → Enter opens the popover", async () => {
+  it("seeds focus on perspective_bar.perspective.save:<view-id> → Enter creates immediately", async () => {
     const result = await renderTabBar();
     await flushSetup();
     // Two extra microtask flushes cover the registry's async resolve →
@@ -316,9 +321,7 @@ describe("PerspectiveTabBar add button — Enter activates the registry-rendered
     // where `<BarRegistryTabButtons>` uses surface `perspective_bar` and
     // the active view id as the suffix.
     const expectedSegment = "perspective_bar.perspective.save:board-1";
-    const leaf = registerScopeArgs().find(
-      (a) => a.segment === expectedSegment,
-    );
+    const leaf = registerScopeArgs().find((a) => a.segment === expectedSegment);
     expect(
       leaf,
       `${expectedSegment} must register as a FocusScope leaf via Pressable`,
@@ -326,7 +329,7 @@ describe("PerspectiveTabBar add button — Enter activates the registry-rendered
 
     // Drive a focus-changed event for the add leaf so the entity-focus
     // bridge populates the focused-scope chain.
-    const cb = listenCallbacks["focus-changed"];
+    const cb = listenCallbacks["notifications/focus/changed"];
     expect(cb).toBeTruthy();
     await act(async () => {
       cb({
@@ -349,35 +352,30 @@ describe("PerspectiveTabBar add button — Enter activates the registry-rendered
       await Promise.resolve();
     });
 
-    // Enter on the focused leaf must open the popover — the new
-    // contract for the registry-rendered tab button is "click /
-    // keyboard-activate opens the popover", NOT immediate dispatch.
-    // The popover-submit → `perspective.save` dispatch chain is
-    // covered by `perspective-tab-bar.add-and-sort-migration.test.tsx`.
+    // Enter on the focused leaf must dispatch `perspective.save`
+    // IMMEDIATELY with a generated unique name — the popup path for `+`
+    // was deleted by card 01KTYN8GB25ZFKSXWA0QA283PG.
     //
-    // Note: Radix Popover portals its content into `document.body`, NOT
-    // inside `result.container` — query at the document level so the
-    // portalled popover surface is visible to the assertion. Voiding
-    // the unused `result` so the harness's render is still required for
-    // its side-effects (mounting the bar + the popover root).
+    // Note: Radix Popover would portal its content into `document.body`,
+    // NOT inside `result.container` — query at the document level so a
+    // regression re-introducing the popover is visible to the assertion.
+    // Voiding the unused `result` so the harness's render is still
+    // required for its side-effects (mounting the bar).
     void result;
-    const popover = document.querySelector(
-      '[data-testid="command-popover"]',
-    );
     expect(
-      popover,
-      "Enter on the focused add leaf must open <CommandPopover>",
-    ).toBeTruthy();
+      document.querySelector('[data-testid="command-popover"]'),
+      "Enter on the focused add leaf must NOT open a popover — the + popup path is deleted",
+    ).toBeNull();
 
-    // No `perspective.save` dispatch fires until the user submits the
-    // popover — guards against a regression that wires Enter to both
-    // the popover open AND a direct dispatch.
     const saveCalls = dispatchCommandCalls().filter(
       (c) => c.cmd === "perspective.save",
     );
     expect(
       saveCalls.length,
-      "Enter on the focused add leaf must NOT dispatch perspective.save directly — it opens the popover first",
-    ).toBe(0);
+      "Enter on the focused add leaf must dispatch perspective.save immediately",
+    ).toBe(1);
+    expect(saveCalls[0]).toMatchObject({
+      args: { name: "Untitled", view: "board", view_id: "board-1" },
+    });
   });
 });

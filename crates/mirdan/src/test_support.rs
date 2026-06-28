@@ -77,6 +77,34 @@ pub fn write_single_agent_config(root: &Path, home: &Path) -> PathBuf {
     config_path
 }
 
+/// Write a synthetic single-agent (generic) config into `config_dir` whose
+/// detect dir is `config_dir` itself (so detection always fires) and whose
+/// project MCP config is a relative `.mcp.json` (Claude Code shape). Returns the
+/// path to the written `agents.yaml`.
+///
+/// Unlike [`write_single_agent_config`], this writes the minimal `mcp_config`
+/// shape only — no skill/agent/settings/instructions paths and no global MCP
+/// path — for tests that exercise MCP registration alone.
+pub fn write_fake_agents_config(config_dir: &Path) -> PathBuf {
+    let agents_yaml = format!(
+        r#"agents:
+  - id: fake-agent
+    name: Fake Agent
+    project_path: .fake/skills
+    global_path: "~/.fake/skills"
+    detect:
+      - dir: "{detect}"
+    mcp_config:
+      project_path: .mcp.json
+      servers_key: mcpServers
+"#,
+        detect = config_dir.display(),
+    );
+    let config_path = config_dir.join("agents.yaml");
+    std::fs::write(&config_path, agents_yaml).unwrap();
+    config_path
+}
+
 /// Assert no [`InitResult`] in `results` has `Error` status, labelling failures
 /// with `phase`.
 pub fn assert_no_init_error(phase: &str, results: &[InitResult]) {

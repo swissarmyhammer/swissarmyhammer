@@ -1,20 +1,20 @@
 /**
  * `<Inspectable>` — entity-aware wrapper that opens the inspector on
- * double-click and on the `Space` key (vim / cua / emacs).
+ * double-click.
  *
  * # Why this is its own component
  *
  * The spatial-nav primitives `<FocusScope>` and `<FocusZone>` are pure
  * spatial-nav infrastructure: they register rects with the Rust-side
  * spatial graph, subscribe to focus claims, and own click / right-click
- * for spatial focus and context menus. Inspect-on-double-click and
- * inspect-on-Space are **kanban-domain** concerns — only entities
+ * for spatial focus and context menus. Inspect-on-double-click is a
+ * **kanban-domain** concern — only entities
  * (`task:`, `tag:`, `column:`, `board:`, `field:`, `attachment:`) are
  * inspectable. UI chrome (`ui:*`, `perspective_tab:`, `cell:*`,
  * `grid_cell:*`) is not.
  *
  * Earlier revisions threaded a boolean `inspectOnDoubleClick` prop into
- * the primitives and registered `useDispatchCommand("ui.inspect")` from
+ * the primitives and registered `useDispatchCommand("app.inspect")` from
  * inside their bodies. Space lived even further afield, on a `board.inspect`
  * command at the BoardView's `<CommandScopeProvider>`. Both arrangements
  * shared three smells:
@@ -31,11 +31,24 @@
  *      scope, so Space did nothing on a focused field.
  *
  * `<Inspectable>` *names* the architectural concept ("this DOM subtree
- * is an inspectable entity") and is the **single source** of both the
- * double-click → `ui.inspect` dispatch AND the Space → `ui.inspect`
- * dispatch. The primitives are smaller and pure-spatial; the inspect
- * plumbing lives in exactly one place that can be reasoned about,
- * audited, and replaced as a unit.
+ * is an inspectable entity") and is the **single source** of the
+ * double-click → `app.inspect` dispatch. The primitives are smaller and
+ * pure-spatial; the dblclick inspect plumbing lives in exactly one place
+ * that can be reasoned about, audited, and replaced as a unit.
+ *
+ * # Where Space went (Card G)
+ *
+ * The Space → inspect gesture is no longer wired here. Earlier revisions
+ * mounted a scope-level `entity.inspect` `CommandDef` per `<Inspectable>`
+ * (plus a root-scope fallback in `app-shell.tsx`); Card G consolidated
+ * those into the SINGLE plugin-owned `entity.inspect`
+ * (`builtin/plugins/app-shell-commands/commands/ui.ts`): a global Space command whose
+ * execute resolves the focused entity SERVER-SIDE from the dispatched
+ * scope chain (innermost inspectable moniker wins — the same
+ * closest-`<Inspectable>` semantics the per-scope defs provided, because
+ * the chain is leaf-first). The plugin-owned guard
+ * (`inspect-and-focus-commands.plugin-owned.node.test.ts`) keeps any
+ * client-side `entity.inspect` `CommandDef` from reappearing.
  *
  * # Usage — wrapper component
  *
@@ -71,7 +84,7 @@
  *   ```
  *
  * Both `<Inspectable>` and the hook resolve the same
- * `useDispatchCommand("ui.inspect")` call from this single file, so
+ * `useDispatchCommand("app.inspect")` call from this single file, so
  * Guard A continues to hold (one non-test file owns the inspect
  * dispatch). The two paths share a private `useInspectDoubleClickHandler`
  * helper to keep the editable-surface skip logic identical.
@@ -79,21 +92,10 @@
  * # Behavior
  *
  *   - On double-click within the wrapper / on the host element,
- *     dispatches `ui.inspect` against the wrapper's `moniker`.
- *   - On the `Space` key (vim / cua / emacs) when any descendant is the
- *     focused scope, dispatches `ui.inspect` against the wrapper's
- *     `moniker`. The binding is contributed via a scope-level
- *     `entity.inspect` `CommandDef` so `extractScopeBindings` finds it
- *     by walking the focused scope's `parent` chain — the closest
- *     enclosing `<Inspectable>` wins on nested wrappers (e.g. a focused
- *     inspector field zone resolves to its `field:…` moniker, not the
- *     enclosing card's `task:…` moniker).
+ *     dispatches `app.inspect` against the wrapper's `moniker`.
  *   - Skips the dispatch when the gesture lands on an editable surface
  *     (`<input>`, `<textarea>`, `<select>`, or any `[contenteditable]`
- *     ancestor) — the editor owns the gesture. The dblclick path
- *     handles the check itself; the Space path is gated by the global
- *     keybinding handler's `isEditableTarget` filter (see
- *     `keybindings.ts`).
+ *     ancestor) — the editor owns the gesture.
  *   - Calls `e.stopPropagation()` after a successful dispatch so
  *     ancestors do not also see the gesture.
  *
@@ -117,26 +119,22 @@
  * parent.
  */
 
-import { useCallback, useMemo, type ReactNode } from "react";
-import {
-  CommandScopeProvider,
-  useDispatchCommand,
-  type CommandDef,
-} from "@/lib/command-scope";
+import { useCallback, type ReactNode } from "react";
+import { useDispatchCommand } from "@/lib/command-scope";
 import type { SegmentMoniker } from "@/types/spatial";
 
-/** Reference type for `useDispatchCommand("ui.inspect")` — preset dispatcher. */
+/** Reference type for `useDispatchCommand("app.inspect")` — preset dispatcher. */
 type InspectDispatcher = ReturnType<typeof useDispatchCommand>;
 
 /**
  * Memoize a `<div>` / `<tr>`-grade `onDoubleClick` handler that
- * dispatches `ui.inspect` against `moniker` unless the gesture lands
+ * dispatches `app.inspect` against `moniker` unless the gesture lands
  * on an editable surface.
  *
  * Both `<Inspectable>` and {@link useInspectOnDoubleClick} go through
  * this hook so the handler shape stays identical between the wrapper
  * and the table-row escape hatch — and so callers that already paid
- * for one `useDispatchCommand("ui.inspect")` registration can pass
+ * for one `useDispatchCommand("app.inspect")` registration can pass
  * that dispatcher through instead of registering a second one.
  *
  * The handler:
@@ -165,7 +163,7 @@ function useInspectDoubleClickHandler(
 
 /**
  * Hook that returns a memoized `onDoubleClick` handler dispatching
- * `ui.inspect` against `moniker`.
+ * `app.inspect` against `moniker`.
  *
  * Public dispatch site for inspect-on-double-click on hosts that cannot
  * accept the standard `<Inspectable>` wrapper — most notably `<tr>`
@@ -190,7 +188,7 @@ function useInspectDoubleClickHandler(
 export function useInspectOnDoubleClick(
   moniker: SegmentMoniker,
 ): (e: React.MouseEvent) => void {
-  const dispatch = useDispatchCommand("ui.inspect");
+  const dispatch = useDispatchCommand("app.inspect");
   return useInspectDoubleClickHandler(dispatch, moniker);
 }
 
@@ -209,30 +207,22 @@ export interface InspectableProps {
 }
 
 /**
- * Wrap an entity subtree so a double-click OR the `Space` key
- * (vim / cua / emacs) dispatches `ui.inspect` against the entity's
- * moniker.
+ * Wrap an entity subtree so a double-click dispatches `app.inspect`
+ * against the entity's moniker.
  *
  * The dispatcher is registered exactly once per mounted `<Inspectable>`
  * via the shared {@link useInspectOnDoubleClick} hook — the per-render
  * registry walk that `useDispatchCommand` performs is paid once per
  * inspectable entity, not once per focusable scope/zone in the tree.
  *
- * The Space binding lives on a scope-level `entity.inspect`
- * `CommandDef` mounted via `<CommandScopeProvider>` between the
- * consumer's outer ancestor and the inner spatial primitive
- * (`<FocusScope>` / `<FocusZone>`). The descendant primitive's own
- * `CommandScope` reads `parent = useContext(CommandScopeContext)` →
- * gets the Inspectable's scope → so `extractScopeBindings` finds the
- * Space binding when any focusable descendant is focused. Inner scopes
- * win on key collisions (closest `<Inspectable>` wins on nested
- * wrappers); editable surfaces (`<input>`, `<textarea>`, `<select>`,
- * `[contenteditable]`) are filtered by the global keybinding handler's
- * `isEditableTarget` check before any binding fires.
- *
- * Both gestures share the same `useDispatchCommand("ui.inspect")`
- * reference — one register call per Inspectable, one dispatcher closed
- * over once.
+ * The `Space` key gesture is NOT wired here (Card G): the plugin-owned
+ * global `entity.inspect` command resolves the focused entity from the
+ * dispatched scope chain server-side, so a focused descendant of this
+ * wrapper inspects via its own focused moniker — the same
+ * closest-`<Inspectable>`-wins outcome the retired scope-level
+ * `CommandDef` produced. Editable surfaces (`<input>`, `<textarea>`,
+ * `<select>`, `[contenteditable]`) are filtered by the global keybinding
+ * handler's `isEditableTarget` check before any binding fires.
  *
  * For non-`<div>` hosts (e.g. table rows), use the hook directly
  * instead of this wrapper — see {@link useInspectOnDoubleClick}.
@@ -240,41 +230,9 @@ export interface InspectableProps {
  * @see {@link InspectableProps}
  */
 export function Inspectable({ moniker, children }: InspectableProps) {
-  // One dispatcher backs both gestures so the per-render registry walk
-  // that `useDispatchCommand` performs runs exactly once per Inspectable.
-  const dispatch = useDispatchCommand("ui.inspect");
+  const dispatch = useDispatchCommand("app.inspect");
 
   const onDoubleClick = useInspectDoubleClickHandler(dispatch, moniker);
-
-  // The scope-level Space command. All three keymaps (vim / cua /
-  // emacs) claim Space — there is no current vim leader-key
-  // registered in `SEQUENCE_TABLES.vim` (only `g`, `d`, `z`), so vim
-  // can safely claim Space the same way cua and emacs do. If a
-  // future vim leader is wired up, this binding will need to move
-  // (along with the matching root-scope command in `app-shell.tsx`
-  // and the global `BINDING_TABLES.vim` entry in `keybindings.ts`).
-  // The id `entity.inspect` mirrors the wrapper's architectural role
-  // ("this scope is an inspectable entity"); the execute closure
-  // shares the same `dispatch` reference, so both the keyboard and
-  // dblclick paths converge on the same backend round-trip per
-  // gesture. The execute path needs no editable-surface guard of its
-  // own — the global keybinding handler's `isEditableTarget` filter
-  // (see `keybindings.ts`) short-circuits before any binding
-  // resolution when the keydown originates from `<input>`,
-  // `<textarea>`, `<select>`, or any `[contenteditable]` host.
-  const inspectCommand = useMemo<CommandDef[]>(
-    () => [
-      {
-        id: "entity.inspect",
-        name: "Inspect",
-        keys: { vim: "Space", cua: "Space", emacs: "Space" },
-        execute: () => {
-          dispatch({ target: moniker }).catch(console.error);
-        },
-      },
-    ],
-    [dispatch, moniker],
-  );
 
   // `className="contents"` makes the wrapper layout-transparent: the
   // browser treats the children as if they were direct children of the
@@ -283,18 +241,9 @@ export function Inspectable({ moniker, children }: InspectableProps) {
   // primitive that the consumer was already rendering. The wrapper still
   // exists in the DOM (so `onDoubleClick` is reachable), but it does
   // not introduce a new layout box.
-  //
-  // The inner `<CommandScopeProvider>` carries no `moniker` of its own:
-  // the scope chain's moniker for this entity is contributed by the
-  // descendant `<FocusScope>` / `<FocusZone>` (which always uses the
-  // same `moniker` as the wrapper). Tagging both scopes would
-  // duplicate the moniker in `scopeChainFromScope`'s walk for no
-  // semantic gain.
   return (
     <div onDoubleClick={onDoubleClick} className="contents">
-      <CommandScopeProvider commands={inspectCommand}>
-        {children}
-      </CommandScopeProvider>
+      {children}
     </div>
   );
 }

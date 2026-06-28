@@ -2,6 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
+use crate::perspective::ensure_default;
 use crate::perspective::{Perspective, PerspectiveFieldEntry, SortEntry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -42,6 +43,19 @@ pub struct AddPerspective {
     /// Sort entries, applied in order
     #[serde(default)]
     pub sort: Vec<SortEntry>,
+    /// Idempotent "ensure" mode.
+    ///
+    /// When `true`, the op first looks for an existing perspective matching
+    /// the target view scope (`view_id` when set — after legacy pinning —
+    /// else view kind) and returns it WITHOUT writing. When nothing matches,
+    /// the perspective is created under the deterministic scope-derived id
+    /// ([`crate::perspective::ensure_default::default_perspective_id`])
+    /// instead of a fresh ULID, so concurrent windows and sibling processes
+    /// with stale caches converge on ONE file instead of accumulating
+    /// duplicates (the "perspectives gone missing" live bug, task
+    /// 01KTY6T1GPY94VYWANE9X41SKJ).
+    #[serde(default)]
+    pub ensure: bool,
 }
 
 impl AddPerspective {
@@ -55,7 +69,14 @@ impl AddPerspective {
             filter: None,
             group: None,
             sort: Vec::new(),
+            ensure: false,
         }
+    }
+
+    /// Switch on idempotent ensure mode (see the `ensure` field docs).
+    pub fn with_ensure(mut self) -> Self {
+        self.ensure = true;
+        self
     }
 
     /// Pin the new perspective to a specific view instance.
@@ -111,6 +132,52 @@ impl Execute<KanbanContext, KanbanError> for AddPerspective {
             if let Some(views_lock) = ctx.views() {
                 let views = views_lock.read().await;
                 crate::perspective::migrate::maybe_pin_view_id_on_save(&mut perspective, &views);
+            }
+
+            if self.ensure {
+                // The ensure-created default's id embeds the scope (the
+                // view_id when pinned) in the on-disk filename
+                // (`default-<scope>.yaml`), so a caller-supplied view_id
+                // must be validated before it can reach the filesystem.
+                // A view id missing from the views registry falls back to
+                // the view-kind scope — otherwise an ensure against a dead
+                // view re-mints a default the next board open prunes
+                // (create/prune churn). When no registry is wired (bare
+                // contexts), the filename-safety check is the backstop
+                // against path separators and overlong components.
+                if let Some(vid) = perspective.view_id.clone() {
+                    let valid = match ctx.views() {
+                        Some(views_lock) => views_lock.read().await.get_by_id(&vid).is_some(),
+                        None => ensure_default::is_safe_scope_component(&vid),
+                    };
+                    if !valid {
+                        tracing::warn!(
+                            view_id = %vid,
+                            "ensure: view_id is unknown or unsafe — falling back to view-kind scope"
+                        );
+                        perspective.view_id = None;
+                    }
+                }
+
+                // Idempotent ensure: an existing perspective for this view
+                // scope short-circuits the create (no write, no
+                // store-changed notification). The check runs under the
+                // perspective write lock taken above, so it is atomic with
+                // the create within this process; ACROSS processes the
+                // deterministic id below makes a racing create converge on
+                // the same file instead of duplicating.
+                if let Some(existing) = pctx.all().iter().find(|p| {
+                    ensure_default::matches_scope(
+                        p,
+                        perspective.view_id.as_deref(),
+                        &perspective.view,
+                    )
+                }) {
+                    return Ok(perspective_to_json(existing));
+                }
+                perspective.id = ensure_default::default_perspective_id(
+                    ensure_default::perspective_scope(&perspective),
+                );
             }
 
             pctx.write(&perspective).await?;

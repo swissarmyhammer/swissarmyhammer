@@ -1,0 +1,3290 @@
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, RwLock};
+
+use serde::{Deserialize, Serialize};
+
+/// Maximum number of entries to keep in the MRU recent boards list.
+const MAX_RECENT_BOARDS: usize = 20;
+
+/// Where a drag originates from.
+///
+/// A drag's source is either an entity in the app's focus chain (the
+/// typical drag-from-card case) or an external file dragged in from the
+/// host operating system.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DragSource {
+    /// Source is an entity from the app's focus chain.
+    FocusChain {
+        /// The entity type being dragged (e.g. `"task"`, `"tag"`).
+        entity_type: String,
+        /// The entity ID (ULID).
+        entity_id: String,
+        /// Serialized entity field snapshot for ghost preview in target
+        /// windows.
+        fields: serde_json::Value,
+        /// Filesystem path of the board the source entity belongs to.
+        source_board_path: String,
+        /// Tauri window label of the source window.
+        source_window_label: String,
+    },
+    /// Source is an external file dragged in from the OS.
+    ///
+    /// Emitted by the frontend's `startFileSession` hook when the user
+    /// drops a file from the desktop onto the app. `DragCompleteCmd`
+    /// dispatches this variant through the `PasteMatrix` keyed on
+    /// `(attachment, <target_type>)` — typically `attachment_onto_task`
+    /// for file-onto-task drops — treating the external file as if it
+    /// were on the clipboard.
+    File {
+        /// Absolute path of the dragged file on the host filesystem.
+        path: String,
+    },
+}
+
+/// Where a drag is dropped.
+///
+/// A drag's destination is either an entity in the app's focus chain
+/// (drop-on-target) or an external file path (drag-out-to-desktop). The
+/// destination is not stored on the [`DragSession`] — it is computed
+/// from the drop-time arguments passed to `drag.complete`. The enum
+/// exists so the dispatcher can reason about the same set of targets a
+/// paste would handle.
+///
+/// Reserved for the broader from/to drag model; only `FocusChain` is
+/// produced today.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DragDestination {
+    /// Drop target is an entity in the focus chain.
+    FocusChain {
+        /// The destination entity type (e.g. `"column"`, `"task"`).
+        entity_type: String,
+        /// The destination entity ID.
+        entity_id: String,
+        /// Filesystem path of the destination board.
+        target_board_path: String,
+    },
+    /// Drop target is an external file path on the OS.
+    File {
+        /// Absolute destination path on the host filesystem.
+        path: String,
+    },
+}
+
+/// Active drag session for cross-window drag coordination.
+///
+/// Transient — carried in UiState but never persisted to the YAML config.
+///
+/// The session captures only the drag's *source*: the destination is
+/// computed at drop time from the args passed to `drag.complete`. This
+/// mirrors the way the OS drag-and-drop primitives work (the source is
+/// committed when the drag starts; the target is whatever the cursor is
+/// over when the user releases the mouse).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DragSession {
+    /// Unique session ID (ULID).
+    pub session_id: String,
+    /// Where the drag originated from.
+    pub from: DragSource,
+    /// Whether Alt/Option was held (copy mode).
+    pub copy_mode: bool,
+    /// When the session was started (epoch millis).
+    #[serde(default)]
+    pub started_at_ms: u64,
+}
+
+impl DragSession {
+    /// Convenience accessor for the source board path when the drag is
+    /// from a focus-chain entity. Returns `None` for `File` sources.
+    pub fn source_board_path(&self) -> Option<&str> {
+        match &self.from {
+            DragSource::FocusChain {
+                source_board_path, ..
+            } => Some(source_board_path.as_str()),
+            DragSource::File { .. } => None,
+        }
+    }
+
+    /// Convenience accessor for the source window label when the drag is
+    /// from a focus-chain entity. Returns `None` for `File` sources.
+    pub fn source_window_label(&self) -> Option<&str> {
+        match &self.from {
+            DragSource::FocusChain {
+                source_window_label,
+                ..
+            } => Some(source_window_label.as_str()),
+            DragSource::File { .. } => None,
+        }
+    }
+
+    /// Convenience accessor for the source entity id when the drag is
+    /// from a focus-chain entity. Returns `None` for `File` sources.
+    pub fn entity_id(&self) -> Option<&str> {
+        match &self.from {
+            DragSource::FocusChain { entity_id, .. } => Some(entity_id.as_str()),
+            DragSource::File { .. } => None,
+        }
+    }
+
+    /// Convenience accessor for the source entity type when the drag is
+    /// from a focus-chain entity. Returns `None` for `File` sources.
+    pub fn entity_type(&self) -> Option<&str> {
+        match &self.from {
+            DragSource::FocusChain { entity_type, .. } => Some(entity_type.as_str()),
+            DragSource::File { .. } => None,
+        }
+    }
+
+    /// Convenience accessor for the source entity field snapshot when
+    /// the drag is from a focus-chain entity. Returns `None` for `File`
+    /// sources.
+    pub fn fields(&self) -> Option<&serde_json::Value> {
+        match &self.from {
+            DragSource::FocusChain { fields, .. } => Some(fields),
+            DragSource::File { .. } => None,
+        }
+    }
+}
+
+/// Persisted per-window state: board path, inspector stack, active view, and window geometry.
+///
+/// `board_path` is the canonical path to the `.kanban` directory this window shows.
+/// An empty string means no board is assigned to this window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowState {
+    /// The board path assigned to this window (canonical `.kanban` dir path).
+    /// Empty string means no board assigned.
+    pub board_path: String,
+    /// Per-window inspector stack (list of `type:id` monikers).
+    pub inspector_stack: Vec<String>,
+    /// The active view ID for this window (e.g. "board-view", "grid-view").
+    pub active_view_id: String,
+    /// The active perspective ID for this window. Empty string means no perspective selected.
+    pub active_perspective_id: String,
+    /// IDs of tasks visible under the active perspective's filter.
+    ///
+    /// `None` means no `perspective.switch` has occurred for this window yet
+    /// ("never switched"); `Some(vec)` means a switch has happened and the
+    /// vec is the resolved id list (which may be empty if the filter matched
+    /// nothing). The frontend treats an absent key as `undefined` → "show all
+    /// tasks", and `[]` as "switched, matched zero" → empty board; emitting
+    /// `[]` for a never-switched window would conflate the two and leave the
+    /// board empty on launch.
+    ///
+    /// Written atomically with `active_perspective_id` by
+    /// [`UiState::switch_perspective`] so the frontend sees both fields land
+    /// in a single `ui-state-changed` event. Transient — not persisted: a
+    /// fresh window restart will repopulate this on the next perspective
+    /// switch.
+    #[serde(skip)]
+    pub filtered_task_ids: Option<Vec<String>>,
+    /// Whether the command palette is open in this window. Transient — not persisted.
+    #[serde(skip)]
+    pub palette_open: bool,
+    /// Palette mode for this window: "command" or "search". Transient — not persisted.
+    #[serde(skip)]
+    pub palette_mode: String,
+    /// Application interaction mode: "normal", "command", or "search". Transient — not persisted.
+    #[serde(skip)]
+    pub app_mode: String,
+    /// Window x position (physical pixels).
+    pub x: Option<i32>,
+    /// Window y position (physical pixels).
+    pub y: Option<i32>,
+    /// Window width (physical pixels).
+    pub width: Option<u32>,
+    /// Window height (physical pixels).
+    pub height: Option<u32>,
+    /// Whether the window is maximized.
+    pub maximized: bool,
+    /// User-chosen width of inspector panels in this window (CSS pixels).
+    ///
+    /// `None` falls back to the React default (420 px). Persisted so the
+    /// chosen width survives window restarts. A single value applies to
+    /// every panel in the stack — adjacent inspectors share the same
+    /// width so the right-edge tile offsets stay aligned.
+    pub inspector_width: Option<u32>,
+}
+
+impl Default for WindowState {
+    fn default() -> Self {
+        Self {
+            board_path: String::new(),
+            inspector_stack: Vec::new(),
+            active_view_id: String::new(),
+            active_perspective_id: String::new(),
+            filtered_task_ids: None,
+            palette_open: false,
+            palette_mode: "command".to_string(),
+            app_mode: "normal".to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            maximized: false,
+            inspector_width: None,
+        }
+    }
+}
+
+/// A recently opened board entry for MRU persistence.
+///
+/// Uses an ISO 8601 string for `last_opened` to avoid adding a chrono
+/// dependency to this crate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentBoard {
+    /// Canonical path to the board directory.
+    pub path: String,
+    /// Human-readable board name.
+    pub name: String,
+    /// ISO 8601 timestamp of when the board was last opened.
+    pub last_opened: String,
+}
+
+/// Payload returned by UiState mutation methods.
+///
+/// The caller (Tauri layer) uses this to decide which events to emit.
+/// Each variant carries the new value after the mutation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum UiStateChange {
+    /// The inspector stack changed; carries the full new stack.
+    InspectorStack(Vec<String>),
+    /// The active view changed; carries the new view ID.
+    ActiveView(String),
+    /// The active perspective changed; carries the new perspective ID.
+    ActivePerspective(String),
+    /// The palette open/closed state changed.
+    PaletteOpen(bool),
+    /// The keymap mode changed (e.g. "cua", "vim", "emacs").
+    KeymapMode(String),
+    /// The focus scope chain changed.
+    ScopeChain(Vec<String>),
+    /// The application interaction mode changed (e.g. "normal", "command", "search").
+    AppMode(String),
+    /// The user-chosen inspector panel width changed for a specific window.
+    ///
+    /// Carries the window label so the React side can ignore echoes for
+    /// other windows, and the new width in CSS pixels.
+    InspectorWidth {
+        /// The window whose inspector_width changed.
+        window_label: String,
+        /// The new width in CSS pixels.
+        width: u32,
+    },
+    /// The active perspective and its filtered task id list changed in one
+    /// atomic update.
+    ///
+    /// Emitted by [`UiState::switch_perspective`] so the frontend sees both
+    /// fields land in a single `ui-state-changed` event. Replaces the
+    /// previous pair of (`ActivePerspective` + frontend-side filter fetch)
+    /// roundtrips — backend now owns the filter evaluation and pushes the
+    /// resulting id list to the window's `filtered_task_ids`.
+    PerspectiveSwitch {
+        /// The new active perspective id for the window.
+        perspective_id: String,
+        /// IDs of tasks that match the new perspective's filter.
+        ///
+        /// Empty when the perspective has no filter or no tasks match.
+        filtered_task_ids: Vec<String>,
+    },
+}
+
+impl UiStateChange {
+    /// The wire discriminator string for this change — the single source of
+    /// truth for the `kind` field carried by the `notifications/ui_state/changed`
+    /// notification (and the legacy `ui-state-changed` Tauri event before it).
+    ///
+    /// One string per variant; kept in lockstep with the frontend
+    /// `UIStateChangeKind` union and the declared `UiStateChanged` notification's
+    /// `kind` value-space. Living on the enum keeps the classification beside the
+    /// data it classifies, so the app's UI-state side-effect and the notification
+    /// builder cannot disagree.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            UiStateChange::ScopeChain(_) => "scope_chain",
+            UiStateChange::ActiveView(_) => "active_view",
+            UiStateChange::ActivePerspective(_) => "active_perspective",
+            UiStateChange::PaletteOpen(_) => "palette_open",
+            UiStateChange::KeymapMode(_) => "keymap_mode",
+            UiStateChange::InspectorStack(_) => "inspector_stack",
+            UiStateChange::AppMode(_) => "app_mode",
+            UiStateChange::InspectorWidth { .. } => "inspector_width",
+            UiStateChange::PerspectiveSwitch { .. } => "perspective_switch",
+        }
+    }
+}
+
+/// Pure state machine for UI state: inspector stack, active view, palette, keymap.
+///
+/// Thread-safe via internal `RwLock`. All mutation methods return a
+/// `UiStateChange` describing what changed, so the caller can emit events.
+/// Methods return `None` when the mutation would be a no-op.
+///
+/// When constructed via `UiState::load(path)`, mutations are automatically
+/// persisted to the YAML config file. When constructed via `UiState::new()`,
+/// no persistence occurs (suitable for tests).
+pub struct UiState {
+    inner: RwLock<UiStateInner>,
+    /// Path to the YAML config file, if persistence is enabled.
+    config_path: Option<PathBuf>,
+    /// When true, auto-save is disabled for the lifetime of this instance:
+    /// the on-disk config could not be read (or a corrupt config could not
+    /// be backed up), so writing would clobber user data we never saw.
+    persist_blocked: bool,
+    /// The serialized form of the state as last loaded from / written to
+    /// disk. [`Self::save`] skips the write entirely when the current state
+    /// serializes to the same string, so a change-free session never touches
+    /// the file. Also serializes concurrent saves (the lock is held across
+    /// write + rename).
+    last_persisted_yaml: Mutex<Option<String>>,
+}
+
+/// Interior mutable state behind the RwLock.
+///
+/// Fields marked `#[serde(skip)]` are transient — they reset on restart
+/// and are not written to the config file.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+struct UiStateInner {
+    /// Current keymap mode: "cua", "vim", or "emacs".
+    keymap_mode: String,
+    /// Current focus scope chain (innermost first). Transient — not persisted.
+    #[serde(skip)]
+    scope_chain: Vec<String>,
+    /// Active cross-window drag session. Transient — not persisted.
+    #[serde(skip)]
+    drag_session: Option<DragSession>,
+    /// Whether the clipboard contains a copied/cut entity. Transient — not persisted.
+    #[serde(skip)]
+    has_clipboard: bool,
+    /// The entity type on the clipboard (e.g. "task", "tag"). Transient — not persisted.
+    #[serde(skip)]
+    clipboard_entity_type: Option<String>,
+    /// Whether the undo stack has entries that can be undone. Transient — not persisted.
+    #[serde(skip)]
+    can_undo: bool,
+    /// Whether the undo stack has entries that can be redone. Transient — not persisted.
+    #[serde(skip)]
+    can_redo: bool,
+    /// Canonical paths of boards that are open.
+    open_boards: Vec<String>,
+    /// Per-window state: inspector stack, board assignment, and geometry.
+    #[serde(default)]
+    windows: HashMap<String, WindowState>,
+    /// Most-recently-used board list, most recent first.
+    #[serde(default)]
+    recent_boards: Vec<RecentBoard>,
+    /// Path of the most recently focused board window. Persisted — survives restarts.
+    ///
+    /// Updated when a window gains focus (WindowEvent::Focused) or when
+    /// `file.switchBoard` runs. Used by quick capture and as the default
+    /// board for commands that don't specify an explicit board_path.
+    #[serde(default)]
+    most_recent_board_path: Option<String>,
+}
+
+impl Default for UiStateInner {
+    /// Returns the default UI state values.
+    fn default() -> Self {
+        Self {
+            keymap_mode: "cua".to_string(),
+            scope_chain: Vec::new(),
+            drag_session: None,
+            has_clipboard: false,
+            clipboard_entity_type: None,
+            can_undo: false,
+            can_redo: false,
+            open_boards: Vec::new(),
+            windows: HashMap::new(),
+            recent_boards: Vec::new(),
+            most_recent_board_path: None,
+        }
+    }
+}
+
+/// Wraps a YAML serialization failure for transport inside `std::io::Error`
+/// while keeping the underlying `serde_yaml_ng::Error` reachable through
+/// `Error::source()`, so callers can distinguish serialization failures from
+/// real I/O failures.
+#[derive(Debug)]
+struct YamlSerializeError(serde_yaml_ng::Error);
+
+impl std::fmt::Display for YamlSerializeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "YAML serialization failed: {}", self.0)
+    }
+}
+
+impl std::error::Error for YamlSerializeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+/// Outcome of reading the config file at load time.
+///
+/// Carries the loaded (or default) state plus the persistence policy the
+/// load determined: whether saving is blocked, and the serialized baseline
+/// used to skip change-free saves.
+struct LoadedConfig {
+    /// The deserialized state, or defaults when the file was missing/bad.
+    inner: UiStateInner,
+    /// True when saving must be disabled to protect the on-disk file.
+    persist_blocked: bool,
+    /// Serialized form of `inner` when it came from a successful parse;
+    /// `None` for defaults (so a first save always writes).
+    baseline: Option<String>,
+}
+
+impl UiState {
+    /// Create a new UiState with default values and no persistence.
+    ///
+    /// Defaults: empty inspector stack, empty active_view_id, palette closed,
+    /// keymap mode "cua", empty scope chain. Suitable for tests.
+    pub fn new() -> Self {
+        Self {
+            inner: RwLock::new(UiStateInner::default()),
+            config_path: None,
+            persist_blocked: false,
+            last_persisted_yaml: Mutex::new(None),
+        }
+    }
+
+    /// Load UiState from a YAML config file, or return defaults if the file is
+    /// missing or malformed.
+    ///
+    /// Once loaded, all subsequent mutations will auto-save to the same path.
+    /// Parent directories are created on first save if they don't exist.
+    ///
+    /// Parse-or-preserve: a failed load never lets defaults clobber the
+    /// user's file. An unparseable config is backed up to a sibling
+    /// `<name>.corrupt-<unix-secs>` file before this instance is allowed to
+    /// overwrite it; an unreadable config (or a failed backup) disables
+    /// persistence for this instance entirely.
+    pub fn load(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        let loaded = Self::read_from_file(&path);
+        Self {
+            inner: RwLock::new(loaded.inner),
+            config_path: Some(path),
+            persist_blocked: loaded.persist_blocked,
+            last_persisted_yaml: Mutex::new(loaded.baseline),
+        }
+    }
+
+    /// Read state from a YAML file, returning defaults on any error.
+    ///
+    /// Loading never writes to the config file itself. On a parse failure the
+    /// original bytes are copied to a `.corrupt-<ts>` sibling so a later save
+    /// cannot destroy them; on a read failure (other than NotFound) or a
+    /// failed backup, persistence is blocked for the returned instance.
+    fn read_from_file(path: &Path) -> LoadedConfig {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => match serde_yaml_ng::from_str::<UiStateInner>(&contents) {
+                Ok(inner) => {
+                    let baseline = serde_yaml_ng::to_string(&inner).ok();
+                    LoadedConfig {
+                        inner,
+                        persist_blocked: false,
+                        baseline,
+                    }
+                }
+                Err(err) => {
+                    tracing::error!(
+                        path = %path.display(),
+                        error = %err,
+                        "UiState: failed to parse YAML config; preserving the \
+                         file and running with in-memory defaults"
+                    );
+                    let backed_up = Self::backup_corrupt_file(path);
+                    LoadedConfig {
+                        inner: UiStateInner::default(),
+                        persist_blocked: !backed_up,
+                        baseline: None,
+                    }
+                }
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => LoadedConfig {
+                inner: UiStateInner::default(),
+                persist_blocked: false,
+                baseline: None,
+            },
+            Err(err) => {
+                tracing::error!(
+                    path = %path.display(),
+                    error = %err,
+                    "UiState: failed to read config file; persistence disabled \
+                     so the unreadable file is never overwritten with defaults"
+                );
+                LoadedConfig {
+                    inner: UiStateInner::default(),
+                    persist_blocked: true,
+                    baseline: None,
+                }
+            }
+        }
+    }
+
+    /// Copy a corrupt config file to a `<name>.corrupt-<unix-secs>` sibling.
+    ///
+    /// Returns `true` once the original bytes are safely preserved. Copies
+    /// rather than renames so the original stays in place for inspection; a
+    /// later save may overwrite it only because this backup exists.
+    fn backup_corrupt_file(path: &Path) -> bool {
+        let file_name = path
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "ui-state.yaml".to_string());
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let backup = path.with_file_name(format!("{file_name}.corrupt-{secs}"));
+        match std::fs::copy(path, &backup) {
+            Ok(_) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    backup = %backup.display(),
+                    "UiState: backed up corrupt config before continuing with defaults"
+                );
+                true
+            }
+            Err(err) => {
+                tracing::error!(
+                    path = %path.display(),
+                    error = %err,
+                    "UiState: could not back up corrupt config; persistence \
+                     disabled so the file is never overwritten with defaults"
+                );
+                false
+            }
+        }
+    }
+
+    /// Save current state to the configured YAML path.
+    ///
+    /// Creates parent directories if needed. Returns an error if writing fails.
+    /// No-op if no config path was set (i.e. constructed via `UiState::new()`),
+    /// if persistence was blocked by a failed load, or if the state is
+    /// unchanged since it was last loaded/saved (so a change-free session
+    /// never touches the file).
+    ///
+    /// The write is atomic: the YAML goes to a temp sibling which is then
+    /// renamed over the target, so a mid-write kill leaves either the old or
+    /// the new file — never a torn one.
+    pub fn save(&self) -> std::io::Result<()> {
+        let Some(ref path) = self.config_path else {
+            return Ok(());
+        };
+        if self.persist_blocked {
+            tracing::warn!(
+                path = %path.display(),
+                "UiState: skipping save — persistence is disabled because the \
+                 config file could not be safely read or backed up at load"
+            );
+            return Ok(());
+        }
+        // Hold the baseline lock across serialize + write + rename so
+        // concurrent saves are serialized (no temp-file races) and the
+        // baseline always matches the bytes on disk.
+        let mut baseline = self
+            .last_persisted_yaml
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let yaml = {
+            let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+            serde_yaml_ng::to_string(&*inner)
+                .map_err(|e| std::io::Error::other(YamlSerializeError(e)))?
+        };
+        if baseline.as_deref() == Some(yaml.as_str()) {
+            return Ok(());
+        }
+        swissarmyhammer_common::fs_utils::write_atomic(path, &yaml)?;
+        *baseline = Some(yaml);
+        Ok(())
+    }
+
+    /// Try to save; log errors but never panic or propagate.
+    ///
+    /// Called internally after every persisted mutation.
+    fn try_save(&self) {
+        if let Err(err) = self.save() {
+            tracing::warn!(error = %err, "UiState: failed to auto-save config");
+        }
+    }
+
+    /// Open the inspector for the given moniker in the specified window.
+    ///
+    /// True stack: always pushes. If the moniker is already on top, no-op.
+    /// If the moniker exists deeper in the stack, removes it and pushes to top.
+    /// Auto-saves if a config path is configured.
+    pub fn inspect(&self, window_label: &str, moniker: &str) -> UiStateChange {
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let stack = &mut inner
+                .windows
+                .entry(window_label.to_string())
+                .or_default()
+                .inspector_stack;
+
+            // Already on top — no-op
+            if stack.last().map(|s| s.as_str()) == Some(moniker) {
+                return UiStateChange::InspectorStack(stack.clone());
+            }
+
+            // Remove if already in stack (moves to top)
+            stack.retain(|m| m != moniker);
+            stack.push(moniker.to_string());
+
+            UiStateChange::InspectorStack(stack.clone())
+        };
+        self.try_save();
+        change
+    }
+
+    /// Close the topmost inspector entry for the given window.
+    ///
+    /// Returns `None` if the stack was already empty.
+    /// Auto-saves if a config path is configured.
+    pub fn inspector_close(&self, window_label: &str) -> Option<UiStateChange> {
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let stack = &mut inner
+                .windows
+                .entry(window_label.to_string())
+                .or_default()
+                .inspector_stack;
+            if stack.is_empty() {
+                return None;
+            }
+            stack.pop();
+            Some(UiStateChange::InspectorStack(stack.clone()))
+        };
+        self.try_save();
+        change
+    }
+
+    /// Close all inspector entries for the given window.
+    ///
+    /// Returns `None` if the stack was already empty.
+    /// Auto-saves if a config path is configured.
+    pub fn inspector_close_all(&self, window_label: &str) -> Option<UiStateChange> {
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let stack = &mut inner
+                .windows
+                .entry(window_label.to_string())
+                .or_default()
+                .inspector_stack;
+            if stack.is_empty() {
+                return None;
+            }
+            stack.clear();
+            Some(UiStateChange::InspectorStack(stack.clone()))
+        };
+        self.try_save();
+        change
+    }
+
+    /// Set the active view ID for a specific window.
+    ///
+    /// Returns `None` if the view ID is unchanged.
+    /// Auto-saves if a config path is configured.
+    pub fn set_active_view(&self, window_label: &str, id: &str) -> Option<UiStateChange> {
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let ws = inner.windows.entry(window_label.to_string()).or_default();
+            if ws.active_view_id == id {
+                return None;
+            }
+            ws.active_view_id = id.to_string();
+            Some(UiStateChange::ActiveView(id.to_string()))
+        };
+        self.try_save();
+        change
+    }
+
+    /// Set the active perspective ID for a specific window.
+    ///
+    /// Returns `None` if the perspective ID is unchanged.
+    /// Auto-saves if a config path is configured.
+    pub fn set_active_perspective(&self, window_label: &str, id: &str) -> Option<UiStateChange> {
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let ws = inner.windows.entry(window_label.to_string()).or_default();
+            if ws.active_perspective_id == id {
+                return None;
+            }
+            ws.active_perspective_id = id.to_string();
+            Some(UiStateChange::ActivePerspective(id.to_string()))
+        };
+        self.try_save();
+        change
+    }
+
+    /// Atomically set both the active perspective id and the filtered task
+    /// id list for a specific window.
+    ///
+    /// Emits a single [`UiStateChange::PerspectiveSwitch`] event so the
+    /// frontend sees both fields land in one `ui-state-changed` payload —
+    /// no transitional render shows the new perspective with the old
+    /// filtered list (or vice versa). When neither field is actually
+    /// changing, returns `None` and skips the save / event.
+    ///
+    /// `filtered_task_ids` is transient (`#[serde(skip)]`) so this method
+    /// does not auto-save when only the id list changes. The perspective
+    /// id mutation is still persisted via [`Self::try_save`].
+    pub fn switch_perspective(
+        &self,
+        window_label: &str,
+        perspective_id: &str,
+        filtered_task_ids: Vec<String>,
+    ) -> Option<UiStateChange> {
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let ws = inner.windows.entry(window_label.to_string()).or_default();
+            let id_changed = ws.active_perspective_id != perspective_id;
+            // A never-switched window holds `None`, which is never equal to
+            // `Some(...)`, so the first switch always counts as changed.
+            let ids_changed = ws.filtered_task_ids.as_deref() != Some(filtered_task_ids.as_slice());
+            if !id_changed && !ids_changed {
+                return None;
+            }
+            ws.active_perspective_id = perspective_id.to_string();
+            ws.filtered_task_ids = Some(filtered_task_ids.clone());
+            Some(UiStateChange::PerspectiveSwitch {
+                perspective_id: perspective_id.to_string(),
+                filtered_task_ids,
+            })
+        };
+        self.try_save();
+        change
+    }
+
+    /// Set whether the command palette is open for a specific window.
+    ///
+    /// Returns `None` if the value is unchanged. Palette state is transient
+    /// and is NOT persisted to the config file.
+    pub fn set_palette_open(&self, window_label: &str, open: bool) -> Option<UiStateChange> {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let ws = inner.windows.entry(window_label.to_string()).or_default();
+        if ws.palette_open == open {
+            return None;
+        }
+        ws.palette_open = open;
+        Some(UiStateChange::PaletteOpen(ws.palette_open))
+        // No try_save — palette_open is transient (#[serde(skip)])
+    }
+
+    /// Set the palette open state and mode in one call for a specific window.
+    ///
+    /// Mode is "command" or "search". Returns a UiStateChange even if only the
+    /// mode changed (so the frontend can react to mode switches).
+    pub fn set_palette_open_with_mode(
+        &self,
+        window_label: &str,
+        open: bool,
+        mode: &str,
+    ) -> Option<UiStateChange> {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let ws = inner.windows.entry(window_label.to_string()).or_default();
+        let changed = ws.palette_open != open || ws.palette_mode != mode;
+        if !changed {
+            return None;
+        }
+        ws.palette_open = open;
+        ws.palette_mode = mode.to_string();
+        Some(UiStateChange::PaletteOpen(ws.palette_open))
+    }
+
+    /// Set the keymap mode (e.g. "cua", "vim", "emacs").
+    ///
+    /// Returns `None` if the mode is unchanged.
+    /// Auto-saves if a config path is configured.
+    pub fn set_keymap_mode(&self, mode: &str) -> Option<UiStateChange> {
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            if inner.keymap_mode == mode {
+                return None;
+            }
+            inner.keymap_mode = mode.to_string();
+            Some(UiStateChange::KeymapMode(inner.keymap_mode.clone()))
+        };
+        self.try_save();
+        change
+    }
+
+    /// Set the focus scope chain. Always returns the new scope chain.
+    ///
+    /// Scope chain is transient and is NOT persisted to the config file.
+    pub fn set_scope_chain(&self, chain: Vec<String>) -> UiStateChange {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.scope_chain = chain;
+        UiStateChange::ScopeChain(inner.scope_chain.clone())
+        // No try_save — scope_chain is transient (#[serde(skip)])
+    }
+
+    /// Start a drag session, replacing any existing one.
+    ///
+    /// Transient — not persisted to the config file.
+    pub fn start_drag(&self, session: DragSession) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.drag_session = Some(session);
+        // No try_save() — transient state
+    }
+
+    /// Take the current drag session (returns and clears it).
+    ///
+    /// Returns `None` if no session is active.
+    pub fn take_drag(&self) -> Option<DragSession> {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.drag_session.take()
+        // No try_save() — transient state
+    }
+
+    /// Cancel the current drag session (clears it without returning).
+    ///
+    /// Transient — not persisted to the config file.
+    pub fn cancel_drag(&self) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.drag_session = None;
+        // No try_save() — transient state
+    }
+
+    /// Get a clone of the current drag session, if any.
+    pub fn drag_session(&self) -> Option<DragSession> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .drag_session
+            .clone()
+    }
+
+    /// Add a board path to the open boards list.
+    ///
+    /// If the path is already in the list, this is a no-op.
+    /// Auto-saves if a config path is configured.
+    pub fn add_open_board(&self, path: &str) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            if !inner.open_boards.contains(&path.to_string()) {
+                inner.open_boards.push(path.to_string());
+            }
+        }
+        self.try_save();
+    }
+
+    /// Remove a board path from the open boards list.
+    ///
+    /// Also clears the `board_path` field from any windows that were showing
+    /// this board. Auto-saves if a config path is configured.
+    pub fn remove_open_board(&self, path: &str) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            inner.open_boards.retain(|p| p != path);
+            // Clear board_path from any windows pointing to this board
+            for ws in inner.windows.values_mut() {
+                if ws.board_path == path {
+                    ws.board_path = String::new();
+                }
+            }
+        }
+        self.try_save();
+    }
+
+    /// Get the list of open board paths.
+    pub fn open_boards(&self) -> Vec<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_boards
+            .clone()
+    }
+
+    /// Set the per-window board assignment.
+    ///
+    /// Writes to `windows[label].board_path`. When the new `path` differs
+    /// from the window's previous `board_path`, also clears the window's
+    /// `active_perspective_id` and `filtered_task_ids` slots in the same
+    /// write lock — perspective IDs and their resolved task ID lists are
+    /// bound to a specific board's id space, so carrying them across a
+    /// board switch would render the new board against a stale filter
+    /// (none of its task IDs match the stale list) and leave every column
+    /// empty until the user toggles a perspective tab. The frontend's
+    /// `useAutoSelectActivePerspective` then re-picks the new board's
+    /// default perspective and dispatches `perspective.switch` to
+    /// repopulate `filtered_task_ids`.
+    ///
+    /// Same-path calls are a no-op for perspective state: redundant writes
+    /// (e.g. the Tauri adapter re-issuing the canonical path after the
+    /// command already wrote it) must not race with the auto-select
+    /// repair path.
+    ///
+    /// Auto-saves if a config path is configured.
+    pub fn set_window_board(&self, label: &str, path: &str) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let ws = inner.windows.entry(label.to_string()).or_default();
+            if ws.board_path != path {
+                ws.board_path = path.to_string();
+                ws.active_perspective_id = String::new();
+                ws.filtered_task_ids = None;
+            }
+        }
+        self.try_save();
+    }
+
+    /// Get the board path assigned to a specific window.
+    ///
+    /// Returns `None` if the window has no board assigned or if the board_path is empty.
+    pub fn window_board(&self, label: &str) -> Option<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(label)
+            .map(|ws| ws.board_path.clone())
+            .filter(|p| !p.is_empty())
+    }
+
+    /// Get all window-to-board assignments by iterating over windows.
+    ///
+    /// Returns only windows that have a non-empty board_path.
+    pub fn all_window_boards(&self) -> HashMap<String, String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .iter()
+            .filter(|(_, ws)| !ws.board_path.is_empty())
+            .map(|(label, ws)| (label.clone(), ws.board_path.clone()))
+            .collect()
+    }
+
+    /// Add or update a board in the MRU list. Most recent first.
+    ///
+    /// Removes any existing entry for `path`, inserts a new entry at the
+    /// front with the current UTC timestamp, truncates to 20 entries, and
+    /// auto-saves.
+    pub fn touch_recent(&self, path: &str, name: &str) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            // Remove any existing entry for this path
+            inner.recent_boards.retain(|r| r.path != path);
+            // Insert at front with current timestamp (RFC 3339 / ISO 8601)
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            // Format as a simple ISO 8601 UTC string: YYYY-MM-DDTHH:MM:SSZ
+            let secs = now;
+            let s = secs % 60;
+            let m = (secs / 60) % 60;
+            let h = (secs / 3600) % 24;
+            let days = secs / 86400;
+            // Use a simple epoch-based date (good enough for ordering)
+            let last_opened = format!("1970-01-01T{:02}:{:02}:{:02}Z+{}days", h, m, s, days);
+            inner.recent_boards.insert(
+                0,
+                RecentBoard {
+                    path: path.to_string(),
+                    name: name.to_string(),
+                    last_opened,
+                },
+            );
+            // Truncate to maximum
+            inner.recent_boards.truncate(MAX_RECENT_BOARDS);
+        }
+        self.try_save();
+    }
+
+    /// Get the recent boards list (most recent first).
+    pub fn recent_boards(&self) -> Vec<RecentBoard> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .recent_boards
+            .clone()
+    }
+
+    /// Set the most recently focused board path.
+    ///
+    /// Persisted to the YAML config file so the last focused board
+    /// survives restarts. Called on window focus change and on board switch.
+    pub fn set_most_recent_board(&self, path: &str) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            inner.most_recent_board_path = Some(path.to_string());
+        }
+        self.try_save();
+    }
+
+    /// Get the most recently focused board path.
+    ///
+    /// Returns `None` if no board has been focused yet.
+    pub fn most_recent_board(&self) -> Option<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .most_recent_board_path
+            .clone()
+    }
+
+    /// Clear all per-window state (geometry and inspector stacks).
+    ///
+    /// Used by reset_windows to wipe geometry before restarting.
+    /// Auto-saves if a config path is configured.
+    pub fn clear_windows(&self) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            inner.windows.clear();
+        }
+        self.try_save();
+    }
+
+    /// Remove a window's state and board assignment.
+    ///
+    /// Called when a secondary window is closed mid-session so it doesn't
+    /// resurrect on restart. Auto-saves if a config path is configured.
+    pub fn remove_window(&self, label: &str) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            inner.windows.remove(label);
+        }
+        self.try_save();
+    }
+
+    /// Restore the open boards list from persisted data.
+    ///
+    /// Used at startup to populate UiState from legacy AppConfig data when
+    /// UiState has no boards yet (first migration).
+    pub fn restore_boards(&self, open_boards: Vec<String>) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            if inner.open_boards.is_empty() {
+                inner.open_boards = open_boards;
+            }
+        }
+        // No try_save here — this is called at startup with already-persisted data.
+    }
+
+    /// Set the inspector stack for a specific window (used for startup restoration).
+    ///
+    /// Auto-saves if a config path is configured.
+    pub fn set_inspector_stack(&self, window_label: &str, stack: Vec<String>) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            inner
+                .windows
+                .entry(window_label.to_string())
+                .or_default()
+                .inspector_stack = stack;
+        }
+        self.try_save();
+    }
+
+    /// Get a clone of the current inspector stack for the given window.
+    pub fn inspector_stack(&self, window_label: &str) -> Vec<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .map(|ws| ws.inspector_stack.clone())
+            .unwrap_or_default()
+    }
+
+    /// Set the user-chosen inspector panel width for a specific window.
+    ///
+    /// Returns `Some(InspectorWidth)` describing the change, or `None`
+    /// when the new width matches the existing value (so the bridge can
+    /// skip a redundant `ui-state-changed` emit). Auto-saves if a config
+    /// path is configured.
+    pub fn set_inspector_width(&self, window_label: &str, width: u32) -> Option<UiStateChange> {
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let ws = inner.windows.entry(window_label.to_string()).or_default();
+            if ws.inspector_width == Some(width) {
+                return None;
+            }
+            ws.inspector_width = Some(width);
+            UiStateChange::InspectorWidth {
+                window_label: window_label.to_string(),
+                width,
+            }
+        };
+        self.try_save();
+        Some(change)
+    }
+
+    /// Get the user-chosen inspector panel width for a specific window.
+    ///
+    /// Returns `None` when no width has been set for the window — the
+    /// React side falls back to a default (currently 420 px).
+    pub fn inspector_width(&self, window_label: &str) -> Option<u32> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .and_then(|ws| ws.inspector_width)
+    }
+
+    /// Save window geometry for a specific window.
+    ///
+    /// Auto-saves if a config path is configured. Use this for deliberate
+    /// save points (window creation, mid-session close). For high-frequency
+    /// updates during move/resize, use `update_window_geometry` instead.
+    pub fn save_window_geometry(
+        &self,
+        label: &str,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        maximized: bool,
+    ) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let ws = inner.windows.entry(label.to_string()).or_default();
+            ws.x = Some(x);
+            ws.y = Some(y);
+            ws.width = Some(width);
+            ws.height = Some(height);
+            ws.maximized = maximized;
+        }
+        self.try_save();
+    }
+
+    /// Update window geometry in memory only — no disk write.
+    ///
+    /// Called from move/resize event handlers where high-frequency disk writes
+    /// are wasteful. The final geometry is persisted when the app quits via
+    /// `save()` in the `ExitRequested` handler, or when explicit save points
+    /// like `save_window_geometry` or `remove_window` trigger `try_save`.
+    ///
+    /// Only updates an existing window entry — does NOT create new entries.
+    /// This prevents zombie entries (empty board_path) from appearing when
+    /// the OS fires move/resize events during window teardown after the entry
+    /// has already been removed.
+    pub fn update_window_geometry(
+        &self,
+        label: &str,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        maximized: bool,
+    ) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(ws) = inner.windows.get_mut(label) {
+            ws.x = Some(x);
+            ws.y = Some(y);
+            ws.width = Some(width);
+            ws.height = Some(height);
+            ws.maximized = maximized;
+        }
+    }
+
+    /// Get the window state for a specific window label.
+    pub fn get_window_state(&self, label: &str) -> Option<WindowState> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(label)
+            .cloned()
+    }
+
+    /// Get all window states (for restore_windows).
+    pub fn all_windows(&self) -> HashMap<String, WindowState> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .clone()
+    }
+
+    /// Get the active view ID for a specific window.
+    ///
+    /// Returns an empty string if the window has no active view set.
+    pub fn active_view_id(&self, window_label: &str) -> String {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .map(|ws| ws.active_view_id.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get the active perspective ID for a specific window.
+    ///
+    /// Returns an empty string if the window has no active perspective set.
+    pub fn active_perspective_id(&self, window_label: &str) -> String {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .map(|ws| ws.active_perspective_id.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get the filtered task id list for a specific window.
+    ///
+    /// Populated by [`Self::switch_perspective`]. Returns an empty vec when
+    /// the window has not switched perspective yet (or after a restart —
+    /// the field is transient).
+    pub fn filtered_task_ids(&self, window_label: &str) -> Vec<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .and_then(|ws| ws.filtered_task_ids.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get whether the palette is open for a specific window.
+    pub fn palette_open(&self, window_label: &str) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .map(|ws| ws.palette_open)
+            .unwrap_or(false)
+    }
+
+    /// Get the palette mode ("command" or "search") for a specific window.
+    pub fn palette_mode(&self, window_label: &str) -> String {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .map(|ws| ws.palette_mode.clone())
+            .unwrap_or_else(|| "command".to_string())
+    }
+
+    /// Get the application interaction mode for a specific window.
+    ///
+    /// Returns "normal" for unknown windows.
+    pub fn app_mode(&self, window_label: &str) -> String {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .map(|ws| ws.app_mode.clone())
+            .unwrap_or_else(|| "normal".to_string())
+    }
+
+    /// Set the application interaction mode for a specific window.
+    ///
+    /// Valid modes: "normal", "command", "search". Returns `None` if unchanged.
+    /// Transient — not persisted to the config file.
+    pub fn set_app_mode(&self, window_label: &str, mode: &str) -> Option<UiStateChange> {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let ws = inner.windows.entry(window_label.to_string()).or_default();
+        if ws.app_mode == mode {
+            return None;
+        }
+        ws.app_mode = mode.to_string();
+        Some(UiStateChange::AppMode(ws.app_mode.clone()))
+        // No try_save — app_mode is transient (#[serde(skip)])
+    }
+
+    /// Get whether the clipboard contains a copied/cut entity.
+    pub fn has_clipboard(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .has_clipboard
+    }
+
+    /// Set the clipboard flag and entity type. Called after copy/cut operations.
+    pub fn set_has_clipboard(&self, has: bool) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.has_clipboard = has;
+        if !has {
+            inner.clipboard_entity_type = None;
+        }
+    }
+
+    /// Set clipboard flag with the entity type that was copied/cut.
+    pub fn set_clipboard_entity_type(&self, entity_type: impl Into<String>) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.has_clipboard = true;
+        inner.clipboard_entity_type = Some(entity_type.into());
+    }
+
+    /// Get the entity type on the clipboard (e.g. "task", "tag").
+    pub fn clipboard_entity_type(&self) -> Option<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clipboard_entity_type
+            .clone()
+    }
+
+    /// Whether the undo stack has entries that can be undone.
+    pub fn can_undo(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .can_undo
+    }
+
+    /// Whether the undo stack has entries that can be redone.
+    pub fn can_redo(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .can_redo
+    }
+
+    /// Update the cached undo/redo availability flags.
+    ///
+    /// Called after any operation that modifies the undo stack (write, delete,
+    /// undo, redo) so that synchronous `Command::available()` checks reflect
+    /// current state.
+    pub fn set_undo_redo_state(&self, can_undo: bool, can_redo: bool) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.can_undo = can_undo;
+        inner.can_redo = can_redo;
+    }
+
+    /// Get the current keymap mode.
+    pub fn keymap_mode(&self) -> String {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .keymap_mode
+            .clone()
+    }
+
+    /// Get a clone of the current scope chain.
+    pub fn scope_chain(&self) -> Vec<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .scope_chain
+            .clone()
+    }
+
+    /// Serialize the current state to a JSON Value for the frontend.
+    ///
+    /// Includes ALL fields (both persisted and transient) so the frontend has
+    /// a complete snapshot. Transient fields like `palette_open`, `palette_mode`,
+    /// and `scope_chain` are `#[serde(skip)]` on the inner structs to avoid
+    /// persisting them to YAML, so we build the JSON manually to include them.
+    /// `palette_open` and `palette_mode` are per-window and included in each
+    /// window's JSON object.
+    pub fn to_json(&self) -> serde_json::Value {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        // Build the windows map with transient palette fields included
+        let windows_json: serde_json::Map<String, serde_json::Value> = inner
+            .windows
+            .iter()
+            .map(|(label, ws)| {
+                let mut obj = serde_json::to_value(ws).unwrap_or(serde_json::json!({}));
+                // Inject transient fields that serde(skip) omits
+                if let Some(map) = obj.as_object_mut() {
+                    map.insert(
+                        "palette_open".to_string(),
+                        serde_json::json!(ws.palette_open),
+                    );
+                    map.insert(
+                        "palette_mode".to_string(),
+                        serde_json::json!(ws.palette_mode),
+                    );
+                    map.insert("app_mode".to_string(), serde_json::json!(ws.app_mode));
+                    // Only emit `filtered_task_ids` once a perspective switch
+                    // has occurred. A never-switched window omits the key so
+                    // the frontend reads it as `undefined` ("show all tasks")
+                    // rather than `[]` ("switched, matched zero").
+                    if let Some(ids) = &ws.filtered_task_ids {
+                        map.insert("filtered_task_ids".to_string(), serde_json::json!(ids));
+                    }
+                }
+                (label.clone(), obj)
+            })
+            .collect();
+        serde_json::json!({
+            "keymap_mode": inner.keymap_mode,
+            "scope_chain": inner.scope_chain,
+            "open_boards": inner.open_boards,
+            "has_clipboard": inner.has_clipboard,
+            "clipboard_entity_type": inner.clipboard_entity_type,
+            "windows": windows_json,
+            "recent_boards": inner.recent_boards,
+            "most_recent_board_path": inner.most_recent_board_path,
+        })
+    }
+}
+
+impl std::fmt::Debug for UiState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        f.debug_struct("UiState")
+            .field("keymap_mode", &inner.keymap_mode)
+            .field("scope_chain", &inner.scope_chain)
+            .field("windows", &inner.windows)
+            .field("config_path", &self.config_path)
+            .finish()
+    }
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::fs;
+
+    /// `UiStateChange::kind()` returns the wire discriminator string for every
+    /// variant — the single source of truth the `ui_state/changed`
+    /// notification's `kind` field carries. Pins every variant so a new variant
+    /// cannot be added without a discriminator.
+    #[test]
+    fn ui_state_change_kind_maps_every_variant() {
+        assert_eq!(UiStateChange::ScopeChain(vec![]).kind(), "scope_chain");
+        assert_eq!(UiStateChange::PaletteOpen(true).kind(), "palette_open");
+        assert_eq!(
+            UiStateChange::KeymapMode("vim".into()).kind(),
+            "keymap_mode"
+        );
+        assert_eq!(
+            UiStateChange::InspectorStack(vec![]).kind(),
+            "inspector_stack"
+        );
+        assert_eq!(UiStateChange::ActiveView("v".into()).kind(), "active_view");
+        assert_eq!(
+            UiStateChange::ActivePerspective("p".into()).kind(),
+            "active_perspective"
+        );
+        assert_eq!(UiStateChange::AppMode("normal".into()).kind(), "app_mode");
+        assert_eq!(
+            UiStateChange::InspectorWidth {
+                window_label: "main".into(),
+                width: 420
+            }
+            .kind(),
+            "inspector_width"
+        );
+        assert_eq!(
+            UiStateChange::PerspectiveSwitch {
+                perspective_id: "p".into(),
+                filtered_task_ids: vec![]
+            }
+            .kind(),
+            "perspective_switch"
+        );
+    }
+
+    #[test]
+    fn inspect_pushes_onto_stack() {
+        let state = UiState::new();
+        state.inspect("main", "task:01XYZ");
+        assert_eq!(state.inspector_stack("main"), vec!["task:01XYZ"]);
+    }
+
+    #[test]
+    fn inspect_pushes_per_window() {
+        let state = UiState::new();
+        state.inspect("main", "task:01XYZ");
+        state.inspect("board-2", "task:01ABC");
+        // Each window has its own stack
+        assert_eq!(state.inspector_stack("main"), vec!["task:01XYZ"]);
+        assert_eq!(state.inspector_stack("board-2"), vec!["task:01ABC"]);
+    }
+
+    #[test]
+    fn inspect_stacks_any_types() {
+        let state = UiState::new();
+        state.inspect("main", "task:01XYZ");
+        state.inspect("main", "tag:01TAG");
+        assert_eq!(
+            state.inspector_stack("main"),
+            vec!["task:01XYZ", "tag:01TAG"]
+        );
+    }
+
+    #[test]
+    fn inspect_stacks_same_type() {
+        let state = UiState::new();
+        state.inspect("main", "task:01XYZ");
+        state.inspect("main", "tag:01TAG");
+        state.inspect("main", "task:01ABC");
+        assert_eq!(
+            state.inspector_stack("main"),
+            vec!["task:01XYZ", "tag:01TAG", "task:01ABC"]
+        );
+    }
+
+    #[test]
+    fn inspect_same_moniker_on_top_is_noop() {
+        let state = UiState::new();
+        state.inspect("main", "task:01XYZ");
+        state.inspect("main", "task:01XYZ");
+        assert_eq!(state.inspector_stack("main"), vec!["task:01XYZ"]);
+    }
+
+    #[test]
+    fn inspect_existing_moniker_moves_to_top() {
+        let state = UiState::new();
+        state.inspect("main", "task:01XYZ");
+        state.inspect("main", "tag:01A");
+        state.inspect("main", "task:01XYZ");
+        assert_eq!(state.inspector_stack("main"), vec!["tag:01A", "task:01XYZ"]);
+    }
+
+    #[test]
+    fn inspector_close_pops() {
+        let state = UiState::new();
+        state.inspect("main", "task:01XYZ");
+        state.inspect("main", "tag:01TAG");
+        let change = state.inspector_close("main");
+        assert!(change.is_some());
+        assert_eq!(state.inspector_stack("main"), vec!["task:01XYZ"]);
+    }
+
+    #[test]
+    fn inspector_close_empty_returns_none() {
+        let state = UiState::new();
+        assert!(state.inspector_close("main").is_none());
+    }
+
+    #[test]
+    fn inspector_close_all_clears() {
+        let state = UiState::new();
+        state.inspect("main", "task:01XYZ");
+        state.inspect("main", "tag:01TAG");
+        let change = state.inspector_close_all("main");
+        assert!(change.is_some());
+        assert!(state.inspector_stack("main").is_empty());
+    }
+
+    #[test]
+    fn inspector_close_all_empty_returns_none() {
+        let state = UiState::new();
+        assert!(state.inspector_close_all("main").is_none());
+    }
+
+    #[test]
+    fn set_active_view_changes() {
+        let state = UiState::new();
+        let change = state.set_active_view("main", "board-view");
+        assert!(change.is_some());
+        assert_eq!(state.active_view_id("main"), "board-view");
+    }
+
+    #[test]
+    fn set_active_view_same_returns_none() {
+        let state = UiState::new();
+        state.set_active_view("main", "board-view");
+        let change = state.set_active_view("main", "board-view");
+        assert!(change.is_none());
+    }
+
+    #[test]
+    fn set_active_view_per_window() {
+        let state = UiState::new();
+        state.set_active_view("main", "board-view");
+        state.set_active_view("board-2", "grid-view");
+        assert_eq!(state.active_view_id("main"), "board-view");
+        assert_eq!(state.active_view_id("board-2"), "grid-view");
+    }
+
+    #[test]
+    fn active_view_id_empty_for_unknown_window() {
+        let state = UiState::new();
+        assert_eq!(state.active_view_id("unknown-window"), "");
+    }
+
+    #[test]
+    fn set_palette_open_toggles() {
+        let state = UiState::new();
+        assert!(!state.palette_open("main"));
+
+        let change = state.set_palette_open("main", true);
+        assert!(change.is_some());
+        assert!(state.palette_open("main"));
+
+        let change = state.set_palette_open("main", false);
+        assert!(change.is_some());
+        assert!(!state.palette_open("main"));
+    }
+
+    #[test]
+    fn set_palette_open_per_window() {
+        let state = UiState::new();
+        // Open palette on secondary only
+        state.set_palette_open("secondary", true);
+        // Main should still be closed
+        assert!(!state.palette_open("main"));
+        assert!(state.palette_open("secondary"));
+    }
+
+    #[test]
+    fn palette_mode_per_window() {
+        let state = UiState::new();
+        state.set_palette_open_with_mode("main", true, "command");
+        state.set_palette_open_with_mode("secondary", true, "search");
+        assert_eq!(state.palette_mode("main"), "command");
+        assert_eq!(state.palette_mode("secondary"), "search");
+    }
+
+    #[test]
+    fn set_app_mode_changes() {
+        let state = UiState::new();
+        assert_eq!(state.app_mode("main"), "normal");
+
+        let change = state.set_app_mode("main", "command");
+        assert!(change.is_some());
+        assert_eq!(state.app_mode("main"), "command");
+
+        // Same value is a no-op
+        let change = state.set_app_mode("main", "command");
+        assert!(change.is_none());
+
+        let change = state.set_app_mode("main", "search");
+        assert!(change.is_some());
+        assert_eq!(state.app_mode("main"), "search");
+    }
+
+    #[test]
+    fn app_mode_per_window() {
+        let state = UiState::new();
+        state.set_app_mode("main", "command");
+        state.set_app_mode("secondary", "search");
+        assert_eq!(state.app_mode("main"), "command");
+        assert_eq!(state.app_mode("secondary"), "search");
+    }
+
+    #[test]
+    fn app_mode_defaults_normal_for_unknown_window() {
+        let state = UiState::new();
+        assert_eq!(state.app_mode("nonexistent"), "normal");
+    }
+
+    #[test]
+    fn set_keymap_mode_changes() {
+        let state = UiState::new();
+        assert_eq!(state.keymap_mode(), "cua");
+
+        let change = state.set_keymap_mode("vim");
+        assert!(change.is_some());
+        assert_eq!(state.keymap_mode(), "vim");
+
+        let change = state.set_keymap_mode("vim");
+        assert!(change.is_none());
+    }
+
+    #[test]
+    fn set_scope_chain_stores() {
+        let state = UiState::new();
+        state.set_scope_chain(vec!["task:01XYZ".into(), "column:todo".into()]);
+        assert_eq!(state.scope_chain(), vec!["task:01XYZ", "column:todo"]);
+    }
+
+    #[test]
+    fn set_inspector_stack_restores() {
+        let state = UiState::new();
+        state.set_inspector_stack("main", vec!["task:01XYZ".into(), "tag:01TAG".into()]);
+        assert_eq!(
+            state.inspector_stack("main"),
+            vec!["task:01XYZ", "tag:01TAG"]
+        );
+    }
+
+    #[test]
+    fn inspector_stack_empty_for_unknown_window() {
+        let state = UiState::new();
+        // A window with no entries returns an empty stack
+        assert!(state.inspector_stack("unknown-window").is_empty());
+    }
+
+    #[test]
+    fn inspector_width_defaults_to_none() {
+        let state = UiState::new();
+        // Unknown windows return None — the React side falls back to 420 px.
+        assert!(state.inspector_width("unknown-window").is_none());
+        // A window with no inspector_width set also returns None.
+        state.inspect("main", "task:01XYZ");
+        assert!(state.inspector_width("main").is_none());
+    }
+
+    #[test]
+    fn set_inspector_width_round_trip() {
+        let state = UiState::new();
+        let change = state.set_inspector_width("main", 540);
+        // Mutation returns a payload describing the change.
+        match change {
+            Some(UiStateChange::InspectorWidth {
+                window_label,
+                width,
+            }) => {
+                assert_eq!(window_label, "main");
+                assert_eq!(width, 540);
+            }
+            other => panic!("Expected Some(InspectorWidth), got {other:?}"),
+        }
+        assert_eq!(state.inspector_width("main"), Some(540));
+    }
+
+    #[test]
+    fn set_inspector_width_noop_returns_none() {
+        let state = UiState::new();
+        assert!(state.set_inspector_width("main", 540).is_some());
+        // Setting the same width is a no-op — returns None so the bridge
+        // does not emit a redundant ui-state-changed event.
+        assert!(state.set_inspector_width("main", 540).is_none());
+        assert_eq!(state.inspector_width("main"), Some(540));
+    }
+
+    #[test]
+    fn set_inspector_width_persists_through_save_load() {
+        let path = temp_yaml_path("inspector_width_roundtrip");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UiState::load(&path);
+            state.set_inspector_width("main", 540);
+            state.save().unwrap();
+        }
+        {
+            let state = UiState::load(&path);
+            assert_eq!(state.inspector_width("main"), Some(540));
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    // --- Persistence tests ---
+
+    /// Returns a unique temp file path for each test run, avoiding collisions.
+    fn temp_yaml_path(suffix: &str) -> PathBuf {
+        let mut dir = env::temp_dir();
+        dir.push(format!(
+            "ui_state_test_{suffix}_{}.yaml",
+            std::process::id()
+        ));
+        dir
+    }
+
+    #[test]
+    fn load_missing_file_returns_defaults() {
+        let path = temp_yaml_path("missing");
+        // Ensure the file does not exist
+        let _ = fs::remove_file(&path);
+        let state = UiState::load(&path);
+        assert_eq!(state.keymap_mode(), "cua");
+        assert!(state.inspector_stack("main").is_empty());
+        assert_eq!(state.active_view_id("main"), "");
+    }
+
+    #[test]
+    fn load_malformed_yaml_returns_defaults() {
+        // Tempdir so the .corrupt-<ts> backup the load creates is cleaned up.
+        // Note: the content must genuinely fail the YAML parse — a mapping
+        // with unknown keys (e.g. ":::garbage:::") parses fine and is just
+        // ignored by serde.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        fs::write(&path, b"keymap_mode: [unterminated").unwrap();
+        let state = UiState::load(&path);
+        assert_eq!(state.keymap_mode(), "cua");
+        assert!(state.inspector_stack("main").is_empty());
+    }
+
+    #[test]
+    fn round_trip_persists_state() {
+        let path = temp_yaml_path("roundtrip");
+        {
+            let state = UiState::load(&path);
+            state.set_keymap_mode("vim");
+            state.inspect("main", "task:01XYZ");
+            state.set_active_view("main", "board-view");
+            state.save().unwrap();
+        }
+        // Load again and verify
+        let state2 = UiState::load(&path);
+        assert_eq!(state2.keymap_mode(), "vim");
+        assert_eq!(state2.inspector_stack("main"), vec!["task:01XYZ"]);
+        assert_eq!(state2.active_view_id("main"), "board-view");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn transient_fields_not_persisted() {
+        let path = temp_yaml_path("transient");
+        {
+            let state = UiState::load(&path);
+            state.set_palette_open("main", true);
+            state.set_scope_chain(vec!["scope:x".to_string()]);
+            state.set_keymap_mode("emacs"); // persisted — forces a file to exist
+            state.save().unwrap();
+        }
+        let state2 = UiState::load(&path);
+        // Transient fields reset to defaults
+        assert!(!state2.palette_open("main"));
+        assert!(state2.scope_chain().is_empty());
+        // Persisted field is intact
+        assert_eq!(state2.keymap_mode(), "emacs");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn auto_save_on_mutation() {
+        let path = temp_yaml_path("autosave");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UiState::load(&path);
+            // Mutate — should auto-save without explicit save() call
+            state.set_keymap_mode("vim");
+        }
+        // Load from same path; mutation should have been persisted automatically
+        let state2 = UiState::load(&path);
+        assert_eq!(state2.keymap_mode(), "vim");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn new_without_path_no_persistence() {
+        // UiState::new() has no config_path — save() is a no-op
+        let state = UiState::new();
+        state.set_keymap_mode("vim");
+        // save() should return Ok without writing any file
+        state.save().expect("save on new() should be a no-op Ok");
+    }
+
+    #[test]
+    fn mutation_returns_correct_payload() {
+        let state = UiState::new();
+
+        // inspect returns InspectorStack
+        let change = state.inspect("main", "task:01XYZ");
+        match change {
+            UiStateChange::InspectorStack(stack) => assert_eq!(stack, vec!["task:01XYZ"]),
+            other => panic!("Expected InspectorStack, got {:?}", other),
+        }
+
+        // set_active_view returns ActiveView
+        let change = state.set_active_view("main", "my-view").unwrap();
+        match change {
+            UiStateChange::ActiveView(id) => assert_eq!(id, "my-view"),
+            other => panic!("Expected ActiveView, got {:?}", other),
+        }
+
+        // set_palette_open returns PaletteOpen
+        let change = state.set_palette_open("main", true).unwrap();
+        match change {
+            UiStateChange::PaletteOpen(open) => assert!(open),
+            other => panic!("Expected PaletteOpen, got {:?}", other),
+        }
+
+        // set_keymap_mode returns KeymapMode
+        let change = state.set_keymap_mode("emacs").unwrap();
+        match change {
+            UiStateChange::KeymapMode(mode) => assert_eq!(mode, "emacs"),
+            other => panic!("Expected KeymapMode, got {:?}", other),
+        }
+
+        // set_scope_chain returns ScopeChain
+        let chain = vec!["board:main".to_string()];
+        let change = state.set_scope_chain(chain.clone());
+        match change {
+            UiStateChange::ScopeChain(sc) => assert_eq!(sc, chain),
+            other => panic!("Expected ScopeChain, got {:?}", other),
+        }
+    }
+
+    // --- most_recent_board_path tests ---
+
+    #[test]
+    fn most_recent_board_defaults_to_none() {
+        let state = UiState::new();
+        assert!(state.most_recent_board().is_none());
+    }
+
+    #[test]
+    fn set_most_recent_board_stores_path() {
+        let state = UiState::new();
+        state.set_most_recent_board("/boards/my-project/.kanban");
+        assert_eq!(
+            state.most_recent_board(),
+            Some("/boards/my-project/.kanban".to_string())
+        );
+    }
+
+    #[test]
+    fn set_most_recent_board_overwrites() {
+        let state = UiState::new();
+        state.set_most_recent_board("/boards/first/.kanban");
+        state.set_most_recent_board("/boards/second/.kanban");
+        assert_eq!(
+            state.most_recent_board(),
+            Some("/boards/second/.kanban".to_string())
+        );
+    }
+
+    #[test]
+    fn most_recent_board_persists_round_trip() {
+        let path = temp_yaml_path("most_recent_board");
+        {
+            let state = UiState::load(&path);
+            state.set_most_recent_board("/boards/project/.kanban");
+            state.save().unwrap();
+        }
+        let state2 = UiState::load(&path);
+        assert_eq!(
+            state2.most_recent_board(),
+            Some("/boards/project/.kanban".to_string())
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn most_recent_board_in_to_json() {
+        let state = UiState::new();
+        state.set_most_recent_board("/boards/foo/.kanban");
+        let json = state.to_json();
+        assert_eq!(
+            json["most_recent_board_path"].as_str(),
+            Some("/boards/foo/.kanban")
+        );
+    }
+
+    #[test]
+    fn most_recent_board_null_in_to_json_when_unset() {
+        let state = UiState::new();
+        let json = state.to_json();
+        assert!(json["most_recent_board_path"].is_null());
+    }
+
+    // --- drag session tests ---
+
+    fn make_drag_session(task_id: &str, board_path: &str) -> DragSession {
+        DragSession {
+            session_id: format!("sess-{task_id}"),
+            from: DragSource::FocusChain {
+                entity_type: "task".to_string(),
+                entity_id: task_id.to_string(),
+                fields: serde_json::json!({}),
+                source_board_path: board_path.to_string(),
+                source_window_label: "main".to_string(),
+            },
+            copy_mode: false,
+            started_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn start_drag_then_drag_session_returns_session() {
+        let state = UiState::new();
+        state.start_drag(make_drag_session("task-1", "/board/a"));
+        let current = state.drag_session();
+        assert!(current.is_some());
+        assert_eq!(current.unwrap().entity_id(), Some("task-1"));
+    }
+
+    #[test]
+    fn take_drag_returns_session_and_clears() {
+        let state = UiState::new();
+        state.start_drag(make_drag_session("task-1", "/board/a"));
+
+        let taken = state.take_drag();
+        assert!(taken.is_some());
+        assert_eq!(taken.unwrap().entity_id(), Some("task-1"));
+
+        assert!(state.take_drag().is_none());
+    }
+
+    #[test]
+    fn cancel_drag_clears_session() {
+        let state = UiState::new();
+        state.start_drag(make_drag_session("task-1", "/board/a"));
+        state.cancel_drag();
+        assert!(state.drag_session().is_none());
+    }
+
+    #[test]
+    fn start_drag_replaces_existing_session() {
+        let state = UiState::new();
+        state.start_drag(make_drag_session("task-1", "/board/a"));
+        state.start_drag(make_drag_session("task-2", "/board/b"));
+
+        let current = state.drag_session().unwrap();
+        assert_eq!(current.entity_id(), Some("task-2"));
+        assert_eq!(current.source_board_path(), Some("/board/b"));
+    }
+
+    #[test]
+    fn take_drag_on_empty_returns_none() {
+        let state = UiState::new();
+        assert!(state.take_drag().is_none());
+    }
+
+    // --- open boards and window board management tests ---
+
+    #[test]
+    fn add_open_board_adds_and_deduplicates() {
+        let state = UiState::new();
+        state.add_open_board("/boards/a");
+        state.add_open_board("/boards/b");
+        state.add_open_board("/boards/a"); // duplicate
+        assert_eq!(state.open_boards(), vec!["/boards/a", "/boards/b"]);
+    }
+
+    #[test]
+    fn remove_open_board_removes_from_list() {
+        let state = UiState::new();
+        state.add_open_board("/boards/a");
+        state.add_open_board("/boards/b");
+        state.remove_open_board("/boards/a");
+        assert_eq!(state.open_boards(), vec!["/boards/b"]);
+    }
+
+    #[test]
+    fn remove_open_board_clears_window_board_path() {
+        let state = UiState::new();
+        state.add_open_board("/boards/a");
+        state.set_window_board("main", "/boards/a");
+        state.remove_open_board("/boards/a");
+        assert!(state.window_board("main").is_none());
+    }
+
+    #[test]
+    fn set_window_board_and_window_board_round_trip() {
+        let state = UiState::new();
+        state.set_window_board("main", "/boards/foo");
+        assert_eq!(state.window_board("main").as_deref(), Some("/boards/foo"));
+    }
+
+    /// Switching the window's board to a different path must clear the
+    /// per-window perspective slot (`active_perspective_id` +
+    /// `filtered_task_ids`).
+    ///
+    /// Both fields are bound to the *previous* board's id space; carrying
+    /// them across a board switch causes the new board to render against a
+    /// stale filter (none of its task IDs match the stale list), so every
+    /// column looks empty until the user toggles a perspective tab. The
+    /// reset lives inside `set_window_board` so the frontend never observes
+    /// a (new board, old perspective id, old filtered ids) tuple.
+    #[test]
+    fn set_window_board_clears_perspective_state_when_path_changes() {
+        let state = UiState::new();
+        state.set_window_board("main", "/boards/old");
+        state.switch_perspective("main", "p-old", vec!["t1".to_string(), "t2".to_string()]);
+        assert_eq!(state.active_perspective_id("main"), "p-old");
+        assert_eq!(state.filtered_task_ids("main"), vec!["t1", "t2"]);
+
+        state.set_window_board("main", "/boards/new");
+
+        assert_eq!(state.window_board("main").as_deref(), Some("/boards/new"));
+        assert_eq!(
+            state.active_perspective_id("main"),
+            "",
+            "active_perspective_id must be cleared when switching to a new board",
+        );
+        // `filtered_task_ids()` returns Vec — we need to look at the raw
+        // window state to distinguish None from Some(empty).
+        let inner = state.inner.read().unwrap();
+        let ws = inner.windows.get("main").expect("main window present");
+        assert!(
+            ws.filtered_task_ids.is_none(),
+            "filtered_task_ids must be reset to None (not Some(empty)) when \
+             switching to a new board so the frontend reads it as 'never \
+             switched → show all tasks' until the auto-select repair path \
+             fires switch_perspective for the new board"
+        );
+    }
+
+    /// Calling `set_window_board` with the *same* path the window already
+    /// has must NOT clobber the window's perspective slot.
+    ///
+    /// This is the idempotency guarantee: redundant writes (e.g. when the
+    /// adapter re-runs `set_window_board` with the canonical path after the
+    /// command already wrote it) must be a no-op for perspective state, or
+    /// they would race with the auto-select repair path.
+    #[test]
+    fn set_window_board_with_same_path_preserves_perspective_state() {
+        let state = UiState::new();
+        state.set_window_board("main", "/boards/foo");
+        state.switch_perspective("main", "p-keep", vec!["t1".to_string(), "t2".to_string()]);
+        assert_eq!(state.active_perspective_id("main"), "p-keep");
+
+        state.set_window_board("main", "/boards/foo");
+
+        assert_eq!(
+            state.active_perspective_id("main"),
+            "p-keep",
+            "same-path set_window_board must leave active_perspective_id intact",
+        );
+        assert_eq!(
+            state.filtered_task_ids("main"),
+            vec!["t1", "t2"],
+            "same-path set_window_board must leave filtered_task_ids intact",
+        );
+    }
+
+    /// First assignment of a board to a window (no previous `board_path`)
+    /// counts as a board transition (empty path → real path), so any
+    /// stale perspective state seeded before the board landed must be
+    /// reset. Perspective IDs belong to a specific board's id space; a
+    /// perspective set against "no board" is by definition stale once a
+    /// real board path is assigned.
+    #[test]
+    fn set_window_board_first_assignment_clears_pre_seeded_perspective_state() {
+        let state = UiState::new();
+        // Seed perspective state on a window that has no board_path yet.
+        state.switch_perspective("main", "p-pre", vec!["t1".to_string()]);
+        assert!(state.window_board("main").is_none());
+
+        state.set_window_board("main", "/boards/first");
+
+        // Previous board_path was "" (default), new path is "/boards/first";
+        // the two differ so the reset fires.
+        assert_eq!(state.active_perspective_id("main"), "");
+        let inner = state.inner.read().unwrap();
+        assert!(inner
+            .windows
+            .get("main")
+            .map(|ws| ws.filtered_task_ids.is_none())
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn window_board_returns_none_for_unassigned() {
+        let state = UiState::new();
+        assert!(state.window_board("unknown").is_none());
+    }
+
+    #[test]
+    fn all_window_boards_filters_empty() {
+        let state = UiState::new();
+        state.set_window_board("main", "/boards/a");
+        state.set_window_board("secondary", "/boards/b");
+        // Create a window with empty board_path by removing its board
+        state.add_open_board("/boards/b");
+        state.remove_open_board("/boards/b");
+        let boards = state.all_window_boards();
+        assert_eq!(boards.len(), 1);
+        assert_eq!(boards.get("main").unwrap(), "/boards/a");
+    }
+
+    // --- touch_recent and recent_boards tests ---
+
+    #[test]
+    fn touch_recent_adds_entry() {
+        let state = UiState::new();
+        state.touch_recent("/boards/a", "Board A");
+        let recent = state.recent_boards();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].path, "/boards/a");
+        assert_eq!(recent[0].name, "Board A");
+    }
+
+    #[test]
+    fn touch_recent_moves_to_front() {
+        let state = UiState::new();
+        state.touch_recent("/boards/a", "A");
+        state.touch_recent("/boards/b", "B");
+        state.touch_recent("/boards/a", "A Updated");
+        let recent = state.recent_boards();
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].path, "/boards/a");
+        assert_eq!(recent[0].name, "A Updated");
+        assert_eq!(recent[1].path, "/boards/b");
+    }
+
+    #[test]
+    fn touch_recent_caps_at_max() {
+        let state = UiState::new();
+        for i in 0..25 {
+            state.touch_recent(&format!("/boards/{i}"), &format!("Board {i}"));
+        }
+        assert_eq!(state.recent_boards().len(), 20);
+    }
+
+    #[test]
+    fn touch_recent_populates_last_opened() {
+        let state = UiState::new();
+        state.touch_recent("/boards/a", "A");
+        let recent = state.recent_boards();
+        assert!(!recent[0].last_opened.is_empty());
+    }
+
+    // --- window management tests ---
+
+    #[test]
+    fn save_window_geometry_and_get_window_state_round_trip() {
+        let state = UiState::new();
+        state.save_window_geometry("main", 100, 200, 800, 600, true);
+        let ws = state.get_window_state("main").expect("window state exists");
+        assert_eq!(ws.x, Some(100));
+        assert_eq!(ws.y, Some(200));
+        assert_eq!(ws.width, Some(800));
+        assert_eq!(ws.height, Some(600));
+        assert!(ws.maximized);
+    }
+
+    #[test]
+    fn remove_window_removes_entry() {
+        let state = UiState::new();
+        state.save_window_geometry("main", 0, 0, 800, 600, false);
+        state.remove_window("main");
+        assert!(state.get_window_state("main").is_none());
+    }
+
+    #[test]
+    fn clear_windows_removes_all() {
+        let state = UiState::new();
+        state.save_window_geometry("main", 0, 0, 800, 600, false);
+        state.save_window_geometry("secondary", 100, 100, 400, 300, false);
+        state.clear_windows();
+        assert!(state.all_windows().is_empty());
+    }
+
+    #[test]
+    fn restore_boards_populates_when_empty() {
+        let state = UiState::new();
+        state.restore_boards(vec!["/a".into(), "/b".into()]);
+        assert_eq!(state.open_boards(), vec!["/a", "/b"]);
+    }
+
+    #[test]
+    fn restore_boards_no_ops_when_not_empty() {
+        let state = UiState::new();
+        state.add_open_board("/existing");
+        state.restore_boards(vec!["/a".into(), "/b".into()]);
+        assert_eq!(state.open_boards(), vec!["/existing"]);
+    }
+
+    #[test]
+    fn all_windows_returns_all_entries() {
+        let state = UiState::new();
+        state.save_window_geometry("main", 0, 0, 800, 600, false);
+        state.save_window_geometry("secondary", 100, 100, 400, 300, false);
+        let all = state.all_windows();
+        assert_eq!(all.len(), 2);
+        assert!(all.contains_key("main"));
+        assert!(all.contains_key("secondary"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Window save/restore round-trip tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn window_state_persists_through_save_load() {
+        let path = temp_yaml_path("window_roundtrip");
+        {
+            let state = UiState::load(&path);
+            state.save_window_geometry("main", 10, 20, 1200, 800, false);
+            state.save_window_geometry("board-abc", 100, 200, 900, 600, true);
+            state.set_window_board("main", "/boards/alpha/.kanban");
+            state.set_window_board("board-abc", "/boards/beta/.kanban");
+            state.save().unwrap();
+        }
+        {
+            let state = UiState::load(&path);
+            let all = state.all_windows();
+            assert_eq!(all.len(), 2, "both windows should survive save/load");
+
+            let main = all.get("main").expect("main window exists after load");
+            assert_eq!(main.x, Some(10));
+            assert_eq!(main.y, Some(20));
+            assert_eq!(main.width, Some(1200));
+            assert_eq!(main.height, Some(800));
+            assert!(!main.maximized);
+            assert_eq!(main.board_path, "/boards/alpha/.kanban");
+
+            let sec = all
+                .get("board-abc")
+                .expect("secondary window exists after load");
+            assert_eq!(sec.x, Some(100));
+            assert_eq!(sec.y, Some(200));
+            assert_eq!(sec.width, Some(900));
+            assert_eq!(sec.height, Some(600));
+            assert!(sec.maximized);
+            assert_eq!(sec.board_path, "/boards/beta/.kanban");
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn window_board_survives_save_load() {
+        let path = temp_yaml_path("window_board_roundtrip");
+        {
+            let state = UiState::load(&path);
+            state.set_window_board("secondary", "/boards/test/.kanban");
+            state.save().unwrap();
+        }
+        {
+            let state = UiState::load(&path);
+            assert_eq!(
+                state.window_board("secondary").as_deref(),
+                Some("/boards/test/.kanban"),
+                "window_board mapping must survive save/load"
+            );
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn palette_state_is_transient_not_persisted() {
+        let path = temp_yaml_path("palette_transient");
+        {
+            let state = UiState::load(&path);
+            state.save_window_geometry("main", 0, 0, 800, 600, false);
+            state.set_palette_open_with_mode("main", true, "search");
+            assert!(state.palette_open("main"));
+            assert_eq!(state.palette_mode("main"), "search");
+            state.save().unwrap();
+        }
+        {
+            let state = UiState::load(&path);
+            // palette_open and palette_mode are #[serde(skip)] — should reset to defaults
+            assert!(!state.palette_open("main"), "palette_open must not persist");
+            assert_eq!(
+                state.palette_mode("main"),
+                "command",
+                "palette_mode must reset to default on load"
+            );
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn remove_window_persists_through_save_load() {
+        let path = temp_yaml_path("remove_window_roundtrip");
+        {
+            let state = UiState::load(&path);
+            state.save_window_geometry("main", 0, 0, 800, 600, false);
+            state.save_window_geometry("board-xyz", 100, 100, 400, 300, false);
+            state.set_window_board("board-xyz", "/boards/old/.kanban");
+            state.remove_window("board-xyz");
+            state.save().unwrap();
+        }
+        {
+            let state = UiState::load(&path);
+            let all = state.all_windows();
+            assert_eq!(all.len(), 1, "removed window should not reappear");
+            assert!(all.contains_key("main"));
+            assert!(!all.contains_key("board-xyz"));
+            assert!(state.window_board("board-xyz").is_none());
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    // --- update_window_geometry (memory-only) tests ---
+
+    #[test]
+    fn update_window_geometry_updates_existing_entry() {
+        let state = UiState::new();
+        state.set_window_board("board-1", "/boards/a");
+        state.save_window_geometry("board-1", 100, 200, 800, 600, false);
+
+        // Move the window — memory only
+        state.update_window_geometry("board-1", 300, 400, 900, 700, true);
+
+        let ws = state.get_window_state("board-1").unwrap();
+        assert_eq!(ws.x, Some(300));
+        assert_eq!(ws.y, Some(400));
+        assert_eq!(ws.width, Some(900));
+        assert_eq!(ws.height, Some(700));
+        assert!(ws.maximized);
+        // board_path untouched
+        assert_eq!(ws.board_path, "/boards/a");
+    }
+
+    #[test]
+    fn update_window_geometry_ignores_unknown_label() {
+        let state = UiState::new();
+        // No window entry exists for "ghost-window"
+        state.update_window_geometry("ghost-window", 0, 0, 100, 100, false);
+        // Should not create a new entry
+        assert!(state.get_window_state("ghost-window").is_none());
+        assert!(state.all_windows().is_empty());
+    }
+
+    #[test]
+    fn update_window_geometry_does_not_resurrect_removed_window() {
+        let state = UiState::new();
+        state.set_window_board("board-1", "/boards/a");
+        state.save_window_geometry("board-1", 100, 200, 800, 600, false);
+
+        // Mid-session close removes the window
+        state.remove_window("board-1");
+        assert!(state.get_window_state("board-1").is_none());
+
+        // OS fires a stale move event during teardown
+        state.update_window_geometry("board-1", 0, 0, 0, 0, false);
+
+        // Window must NOT reappear — no zombie entry
+        assert!(state.get_window_state("board-1").is_none());
+        assert!(state.all_windows().is_empty());
+    }
+
+    #[test]
+    fn update_window_geometry_does_not_write_to_disk() {
+        let path = temp_yaml_path("update_no_disk");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UiState::load(&path);
+            state.set_window_board("board-1", "/boards/a");
+            state.save_window_geometry("board-1", 100, 200, 800, 600, false);
+            // save_window_geometry writes to disk (via try_save)
+        }
+        // Load to get baseline on-disk state
+        {
+            let state = UiState::load(&path);
+            // Now update geometry in memory only
+            state.update_window_geometry("board-1", 999, 999, 1, 1, true);
+            // Do NOT call save() — drop the state
+        }
+        // Reload from disk — should still have the original geometry
+        {
+            let state = UiState::load(&path);
+            let ws = state.get_window_state("board-1").unwrap();
+            assert_eq!(ws.x, Some(100), "memory-only update must not reach disk");
+            assert_eq!(ws.y, Some(200));
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    // --- clipboard tests ---
+
+    #[test]
+    fn has_clipboard_defaults_to_false() {
+        let state = UiState::new();
+        assert!(!state.has_clipboard());
+    }
+
+    #[test]
+    fn set_has_clipboard_true_and_false() {
+        let state = UiState::new();
+        state.set_has_clipboard(true);
+        assert!(state.has_clipboard());
+
+        state.set_has_clipboard(false);
+        assert!(!state.has_clipboard());
+    }
+
+    #[test]
+    fn set_has_clipboard_false_clears_entity_type() {
+        let state = UiState::new();
+        state.set_clipboard_entity_type("task");
+        assert!(state.has_clipboard());
+        assert_eq!(state.clipboard_entity_type(), Some("task".to_string()));
+
+        state.set_has_clipboard(false);
+        assert!(!state.has_clipboard());
+        assert!(state.clipboard_entity_type().is_none());
+    }
+
+    #[test]
+    fn set_clipboard_entity_type_sets_both_fields() {
+        let state = UiState::new();
+        state.set_clipboard_entity_type("tag");
+        assert!(state.has_clipboard());
+        assert_eq!(state.clipboard_entity_type(), Some("tag".to_string()));
+    }
+
+    #[test]
+    fn clipboard_entity_type_defaults_to_none() {
+        let state = UiState::new();
+        assert!(state.clipboard_entity_type().is_none());
+    }
+
+    // --- undo/redo state tests ---
+
+    #[test]
+    fn can_undo_defaults_to_false() {
+        let state = UiState::new();
+        assert!(!state.can_undo());
+    }
+
+    #[test]
+    fn can_redo_defaults_to_false() {
+        let state = UiState::new();
+        assert!(!state.can_redo());
+    }
+
+    #[test]
+    fn set_undo_redo_state_updates_both() {
+        let state = UiState::new();
+        state.set_undo_redo_state(true, false);
+        assert!(state.can_undo());
+        assert!(!state.can_redo());
+
+        state.set_undo_redo_state(false, true);
+        assert!(!state.can_undo());
+        assert!(state.can_redo());
+
+        state.set_undo_redo_state(true, true);
+        assert!(state.can_undo());
+        assert!(state.can_redo());
+    }
+
+    // --- Debug impl tests ---
+
+    #[test]
+    fn ui_state_debug_impl_includes_key_fields() {
+        let state = UiState::new();
+        state.set_keymap_mode("vim");
+        state.set_scope_chain(vec!["task:01ABC".into()]);
+        let debug_str = format!("{:?}", state);
+        assert!(debug_str.contains("UiState"));
+        assert!(debug_str.contains("vim"));
+        assert!(debug_str.contains("task:01ABC"));
+    }
+
+    // --- to_json with windows tests ---
+
+    #[test]
+    fn to_json_includes_window_palette_fields() {
+        let state = UiState::new();
+        state.set_palette_open_with_mode("main", true, "search");
+        state.set_window_board("main", "/boards/a");
+        let json = state.to_json();
+        let windows = json["windows"]
+            .as_object()
+            .expect("windows should be an object");
+        let main_win = windows.get("main").expect("main window should be in JSON");
+        assert_eq!(main_win["palette_open"], true);
+        assert_eq!(main_win["palette_mode"], "search");
+    }
+
+    #[test]
+    fn palette_open_returns_false_for_unknown_window() {
+        let state = UiState::new();
+        assert!(!state.palette_open("unknown-window"));
+    }
+
+    #[test]
+    fn palette_mode_returns_command_for_unknown_window() {
+        let state = UiState::new();
+        assert_eq!(state.palette_mode("unknown-window"), "command");
+    }
+
+    #[test]
+    fn set_palette_open_same_value_returns_none() {
+        let state = UiState::new();
+        // palette_open defaults to false, so setting to false should be no-op
+        let change = state.set_palette_open("main", false);
+        assert!(change.is_none());
+    }
+
+    #[test]
+    fn set_palette_open_with_mode_same_value_returns_none() {
+        let state = UiState::new();
+        // Default: palette_open=false, palette_mode="command"
+        // Setting the same values should return None
+        state.set_palette_open_with_mode("main", false, "command");
+        // Now set it again with the same values (window already exists)
+        let change = state.set_palette_open_with_mode("main", false, "command");
+        assert!(change.is_none());
+    }
+
+    #[test]
+    fn to_json_includes_clipboard_and_scope() {
+        let state = UiState::new();
+        state.set_clipboard_entity_type("task");
+        state.set_scope_chain(vec!["board:main".into()]);
+        let json = state.to_json();
+        assert_eq!(json["has_clipboard"], true);
+        assert_eq!(json["clipboard_entity_type"], "task");
+        assert_eq!(json["scope_chain"], serde_json::json!(["board:main"]));
+    }
+
+    #[test]
+    fn update_window_geometry_persisted_by_explicit_save() {
+        let path = temp_yaml_path("update_then_save");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UiState::load(&path);
+            state.set_window_board("board-1", "/boards/a");
+            state.save_window_geometry("board-1", 100, 200, 800, 600, false);
+            // Simulate move events
+            state.update_window_geometry("board-1", 500, 600, 1024, 768, false);
+            // Simulate quit — explicit save
+            state.save().unwrap();
+        }
+        {
+            let state = UiState::load(&path);
+            let ws = state.get_window_state("board-1").unwrap();
+            assert_eq!(
+                ws.x,
+                Some(500),
+                "geometry should be saved after explicit save"
+            );
+            assert_eq!(ws.y, Some(600));
+            assert_eq!(ws.width, Some(1024));
+            assert_eq!(ws.height, Some(768));
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    // -----------------------------------------------------------------------
+    // Persistence round-trip tests for open_boards, recent_boards, inspector
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn open_boards_persist_through_save_load() {
+        let path = temp_yaml_path("open_boards_roundtrip");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UiState::load(&path);
+            state.add_open_board("/boards/alpha");
+            state.add_open_board("/boards/beta");
+            state.save().unwrap();
+        }
+        {
+            let state = UiState::load(&path);
+            assert_eq!(state.open_boards(), vec!["/boards/alpha", "/boards/beta"]);
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn recent_boards_persist_through_save_load() {
+        let path = temp_yaml_path("recent_boards_roundtrip");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UiState::load(&path);
+            state.touch_recent("/boards/x", "X");
+            state.touch_recent("/boards/y", "Y");
+            state.save().unwrap();
+        }
+        {
+            let state = UiState::load(&path);
+            let recent = state.recent_boards();
+            assert_eq!(recent.len(), 2);
+            // Most recent first
+            assert_eq!(recent[0].path, "/boards/y");
+            assert_eq!(recent[1].path, "/boards/x");
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn inspector_stack_persists_through_save_load() {
+        let path = temp_yaml_path("inspector_stack_roundtrip");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UiState::load(&path);
+            state.inspect("main", "task:01A");
+            state.inspect("main", "tag:01B");
+            state.save().unwrap();
+        }
+        {
+            let state = UiState::load(&path);
+            assert_eq!(state.inspector_stack("main"), vec!["task:01A", "tag:01B"]);
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn set_inspector_stack_auto_saves() {
+        let path = temp_yaml_path("set_inspector_autosave");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UiState::load(&path);
+            state.set_inspector_stack("main", vec!["task:01X".into(), "tag:01Y".into()]);
+            // No explicit save() — should auto-save
+        }
+        {
+            let state = UiState::load(&path);
+            assert_eq!(state.inspector_stack("main"), vec!["task:01X", "tag:01Y"]);
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    // -----------------------------------------------------------------------
+    // to_json comprehensive tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn to_json_includes_all_persisted_fields() {
+        let state = UiState::new();
+        state.set_keymap_mode("vim");
+        state.add_open_board("/boards/a");
+        state.touch_recent("/boards/a", "Board A");
+        state.set_most_recent_board("/boards/a");
+
+        let json = state.to_json();
+        assert_eq!(json["keymap_mode"].as_str(), Some("vim"));
+        assert_eq!(json["open_boards"][0].as_str(), Some("/boards/a"));
+        assert_eq!(json["recent_boards"][0]["path"].as_str(), Some("/boards/a"));
+        assert_eq!(json["most_recent_board_path"].as_str(), Some("/boards/a"));
+    }
+
+    #[test]
+    fn to_json_includes_transient_fields() {
+        let state = UiState::new();
+        state.set_scope_chain(vec!["board:main".into(), "column:todo".into()]);
+        state.set_has_clipboard(true);
+        state.set_clipboard_entity_type("task");
+
+        let json = state.to_json();
+        let chain = json["scope_chain"].as_array().unwrap();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].as_str(), Some("board:main"));
+        assert!(json["has_clipboard"].as_bool().unwrap());
+        assert_eq!(json["clipboard_entity_type"].as_str(), Some("task"));
+    }
+
+    #[test]
+    fn to_json_includes_window_transient_palette_fields() {
+        let state = UiState::new();
+        state.save_window_geometry("main", 0, 0, 800, 600, false);
+        state.set_window_board("main", "/boards/test");
+        state.set_palette_open_with_mode("main", true, "search");
+        state.inspect("main", "task:01Z");
+
+        let json = state.to_json();
+        let win = &json["windows"]["main"];
+        assert!(win["palette_open"].as_bool().unwrap());
+        assert_eq!(win["palette_mode"].as_str(), Some("search"));
+        assert_eq!(win["board_path"].as_str(), Some("/boards/test"));
+        // Geometry is included
+        assert_eq!(win["x"].as_i64(), Some(0));
+        assert_eq!(win["width"].as_u64(), Some(800));
+        // Inspector stack is included
+        let stack = win["inspector_stack"].as_array().unwrap();
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0].as_str(), Some("task:01Z"));
+    }
+
+    #[test]
+    fn to_json_empty_state_has_expected_shape() {
+        let state = UiState::new();
+        let json = state.to_json();
+        assert_eq!(json["keymap_mode"].as_str(), Some("cua"));
+        assert!(json["scope_chain"].as_array().unwrap().is_empty());
+        assert!(json["open_boards"].as_array().unwrap().is_empty());
+        assert!(!json["has_clipboard"].as_bool().unwrap());
+        assert!(json["clipboard_entity_type"].is_null());
+        assert!(json["windows"].as_object().unwrap().is_empty());
+        assert!(json["recent_boards"].as_array().unwrap().is_empty());
+        assert!(json["most_recent_board_path"].is_null());
+    }
+
+    // -----------------------------------------------------------------------
+    // Clipboard state tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn clipboard_defaults_to_empty() {
+        let state = UiState::new();
+        assert!(!state.has_clipboard());
+        assert!(state.clipboard_entity_type().is_none());
+    }
+
+    #[test]
+    fn set_has_clipboard_toggles_flag() {
+        let state = UiState::new();
+        state.set_has_clipboard(true);
+        assert!(state.has_clipboard());
+        state.set_has_clipboard(false);
+        assert!(!state.has_clipboard());
+        // Clearing clipboard also clears entity type
+        assert!(state.clipboard_entity_type().is_none());
+    }
+
+    #[test]
+    fn set_clipboard_entity_type_sets_both() {
+        let state = UiState::new();
+        state.set_clipboard_entity_type("tag");
+        assert!(state.has_clipboard());
+        assert_eq!(state.clipboard_entity_type().as_deref(), Some("tag"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Undo/redo state tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn undo_redo_defaults_to_false() {
+        let state = UiState::new();
+        assert!(!state.can_undo());
+        assert!(!state.can_redo());
+    }
+
+    #[test]
+    fn set_undo_redo_state_updates_flags() {
+        let state = UiState::new();
+        state.set_undo_redo_state(true, false);
+        assert!(state.can_undo());
+        assert!(!state.can_redo());
+
+        state.set_undo_redo_state(false, true);
+        assert!(!state.can_undo());
+        assert!(state.can_redo());
+
+        state.set_undo_redo_state(true, true);
+        assert!(state.can_undo());
+        assert!(state.can_redo());
+    }
+
+    // -----------------------------------------------------------------------
+    // save() creates parent directories
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn save_creates_parent_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("deep").join("ui_state.yaml");
+        let state = UiState::load(&path);
+        state.set_keymap_mode("emacs");
+        state.save().unwrap();
+
+        // File should exist at nested path
+        assert!(path.exists());
+        let state2 = UiState::load(&path);
+        assert_eq!(state2.keymap_mode(), "emacs");
+    }
+
+    // -----------------------------------------------------------------------
+    // Full persistence round-trip: combined state
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn full_state_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("full_roundtrip.yaml");
+        {
+            let state = UiState::load(&path);
+            state.set_keymap_mode("vim");
+            state.add_open_board("/boards/proj");
+            state.set_window_board("main", "/boards/proj");
+            state.save_window_geometry("main", 50, 75, 1024, 768, true);
+            state.inspect("main", "task:01A");
+            state.inspect("main", "tag:02B");
+            state.set_active_view("main", "grid-view");
+            state.touch_recent("/boards/proj", "My Project");
+            state.set_most_recent_board("/boards/proj");
+            state.save().unwrap();
+        }
+        {
+            let state = UiState::load(&path);
+            assert_eq!(state.keymap_mode(), "vim");
+            assert_eq!(state.open_boards(), vec!["/boards/proj"]);
+            assert_eq!(state.window_board("main").as_deref(), Some("/boards/proj"));
+            let ws = state.get_window_state("main").unwrap();
+            assert_eq!(ws.x, Some(50));
+            assert_eq!(ws.y, Some(75));
+            assert_eq!(ws.width, Some(1024));
+            assert_eq!(ws.height, Some(768));
+            assert!(ws.maximized);
+            assert_eq!(ws.board_path, "/boards/proj");
+            assert_eq!(state.inspector_stack("main"), vec!["task:01A", "tag:02B"]);
+            assert_eq!(state.active_view_id("main"), "grid-view");
+            assert_eq!(state.recent_boards().len(), 1);
+            assert_eq!(state.recent_boards()[0].name, "My Project");
+            assert_eq!(state.most_recent_board(), Some("/boards/proj".to_string()));
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // to_json with multiple windows
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn to_json_multiple_windows() {
+        let state = UiState::new();
+        state.save_window_geometry("win-a", 0, 0, 800, 600, false);
+        state.save_window_geometry("win-b", 100, 100, 400, 300, true);
+        state.set_window_board("win-a", "/boards/alpha");
+        state.set_window_board("win-b", "/boards/beta");
+        state.set_palette_open("win-a", true);
+        state.inspect("win-b", "task:01Z");
+
+        let json = state.to_json();
+        let windows = json["windows"].as_object().unwrap();
+        assert_eq!(windows.len(), 2);
+
+        let win_a = &windows["win-a"];
+        assert!(win_a["palette_open"].as_bool().unwrap());
+        assert_eq!(win_a["board_path"].as_str(), Some("/boards/alpha"));
+
+        let win_b = &windows["win-b"];
+        assert!(!win_b["palette_open"].as_bool().unwrap());
+        assert_eq!(win_b["board_path"].as_str(), Some("/boards/beta"));
+        assert!(win_b["maximized"].as_bool().unwrap());
+        let stack = win_b["inspector_stack"].as_array().unwrap();
+        assert_eq!(stack[0].as_str(), Some("task:01Z"));
+    }
+
+    // -----------------------------------------------------------------------
+    // switch_perspective tests — atomic id + filtered_task_ids update
+    // -----------------------------------------------------------------------
+
+    /// Switching to a new perspective with a fresh filtered list must:
+    /// - update `active_perspective_id`
+    /// - update `filtered_task_ids`
+    /// - return exactly one `UiStateChange::PerspectiveSwitch` carrying both
+    #[test]
+    fn switch_perspective_sets_both_fields_atomically() {
+        let state = UiState::new();
+        let change =
+            state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
+        assert!(change.is_some(), "first switch should produce a change");
+        match change.unwrap() {
+            UiStateChange::PerspectiveSwitch {
+                perspective_id,
+                filtered_task_ids,
+            } => {
+                assert_eq!(perspective_id, "p1");
+                assert_eq!(filtered_task_ids, vec!["t1", "t2"]);
+            }
+            other => panic!("expected PerspectiveSwitch, got: {other:?}"),
+        }
+        assert_eq!(state.active_perspective_id("main"), "p1");
+        assert_eq!(state.filtered_task_ids("main"), vec!["t1", "t2"]);
+    }
+
+    /// A no-op switch (same id, same filtered list) returns `None` so the
+    /// caller does not emit a redundant `ui-state-changed` event.
+    #[test]
+    fn switch_perspective_noop_returns_none() {
+        let state = UiState::new();
+        state.switch_perspective("main", "p1", vec!["t1".to_string()]);
+        let change = state.switch_perspective("main", "p1", vec!["t1".to_string()]);
+        assert!(change.is_none(), "identical switch must not emit a change",);
+    }
+
+    /// Changing only the filtered_task_ids (perspective id unchanged) still
+    /// produces a change — e.g. tasks were added under the same active
+    /// perspective and the caller is re-evaluating the filter.
+    #[test]
+    fn switch_perspective_emits_change_when_only_ids_change() {
+        let state = UiState::new();
+        state.switch_perspective("main", "p1", vec!["t1".to_string()]);
+        let change =
+            state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
+        assert!(change.is_some());
+        assert_eq!(state.filtered_task_ids("main"), vec!["t1", "t2"]);
+    }
+
+    /// switch_perspective is per-window: a switch on `main` must not touch
+    /// `secondary`'s slot.
+    #[test]
+    fn switch_perspective_isolates_windows() {
+        let state = UiState::new();
+        state.switch_perspective("main", "p1", vec!["t1".to_string()]);
+        state.switch_perspective("secondary", "p2", vec!["t9".to_string()]);
+        assert_eq!(state.active_perspective_id("main"), "p1");
+        assert_eq!(state.filtered_task_ids("main"), vec!["t1"]);
+        assert_eq!(state.active_perspective_id("secondary"), "p2");
+        assert_eq!(state.filtered_task_ids("secondary"), vec!["t9"]);
+    }
+
+    /// `to_json` exposes `filtered_task_ids` on each window so the frontend
+    /// can read it without a separate fetch. The field is `#[serde(skip)]`
+    /// for YAML persistence but must be injected on the wire.
+    #[test]
+    fn switch_perspective_appears_in_to_json() {
+        let state = UiState::new();
+        state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
+        let json = state.to_json();
+        let main_win = &json["windows"]["main"];
+        assert_eq!(main_win["active_perspective_id"], "p1");
+        assert_eq!(
+            main_win["filtered_task_ids"],
+            serde_json::json!(["t1", "t2"])
+        );
+    }
+
+    /// A window that has never had `switch_perspective` called must serialize
+    /// through `to_json()` with NO `filtered_task_ids` key — the frontend
+    /// reads the absent key as `undefined` ("never switched → show all tasks").
+    /// Emitting `[]` here would be indistinguishable from "switched, matched
+    /// zero" and leaves the board empty on launch.
+    #[test]
+    fn never_switched_window_omits_filtered_task_ids_in_to_json() {
+        let state = UiState::new();
+        // Touch the window through a non-perspective mutation so it exists in
+        // the windows map without ever calling switch_perspective.
+        state.set_active_view("main", "board-view");
+        let json = state.to_json();
+        let main_win = &json["windows"]["main"];
+        assert!(
+            main_win.is_object(),
+            "main window should be present in to_json output",
+        );
+        assert!(
+            main_win.get("filtered_task_ids").is_none(),
+            "a never-switched window must omit filtered_task_ids so the \
+             frontend reads it as undefined; got: {main_win:?}",
+        );
+    }
+
+    /// `filtered_task_ids` must be `#[serde(skip)]` — round-tripping through
+    /// the YAML persistence layer must drop the field (next launch starts
+    /// fresh and recomputes on the first perspective switch).
+    #[test]
+    fn filtered_task_ids_not_persisted() {
+        let path = temp_yaml_path("filtered_task_ids_transient");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UiState::load(&path);
+            state.switch_perspective("main", "p1", vec!["t1".to_string(), "t2".to_string()]);
+            state.save().unwrap();
+        }
+        {
+            let state = UiState::load(&path);
+            assert_eq!(state.active_perspective_id("main"), "p1");
+            assert!(
+                state.filtered_task_ids("main").is_empty(),
+                "filtered_task_ids must be transient",
+            );
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    // --- Clobber-protection tests ---
+    //
+    // A load failure or restart churn must never overwrite user settings:
+    // parse-or-preserve (corrupt file backed up, never silently replaced by
+    // defaults), atomic writes (old-or-new, never torn), and no save-on-load
+    // (a clean start/exit with no changes leaves the file byte-identical).
+
+    /// Find the `.corrupt-<ts>` backup sibling for a config path, if any.
+    fn find_corrupt_backup(dir: &Path) -> Option<PathBuf> {
+        fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.contains(".corrupt-"))
+            })
+    }
+
+    #[test]
+    fn corrupt_config_file_preserved_and_backed_up_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        // An unterminated flow sequence — the shape a torn/truncated write
+        // leaves behind, and guaranteed to fail the YAML parse.
+        let garbage = b"keymap_mode: vim\nopen_boards: [/a/.kanban, /b";
+        fs::write(&path, garbage).unwrap();
+
+        let state = UiState::load(&path);
+        // App runs with in-memory defaults...
+        assert_eq!(state.keymap_mode(), "cua");
+        // ...but the original file is untouched on disk...
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            garbage,
+            "load must never modify a corrupt config file"
+        );
+        // ...and a .corrupt-<ts> backup preserves the original bytes.
+        let backup = find_corrupt_backup(dir.path())
+            .expect("a .corrupt-<ts> backup must be created for an unparseable config");
+        assert_eq!(fs::read(&backup).unwrap(), garbage);
+    }
+
+    #[test]
+    fn mutation_after_corrupt_load_keeps_backup_of_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        let garbage = b"keymap_mode: [unterminated";
+        fs::write(&path, garbage).unwrap();
+
+        let state = UiState::load(&path);
+        // A real user change after the failed load may overwrite the live
+        // file — but only because the original was backed up first.
+        state.set_keymap_mode("vim");
+
+        let reloaded = UiState::load(&path);
+        assert_eq!(reloaded.keymap_mode(), "vim");
+        let backup = find_corrupt_backup(dir.path())
+            .expect("backup must exist before the corrupt file is overwritten");
+        assert_eq!(fs::read(&backup).unwrap(), garbage);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_config_blocks_auto_save_clobber() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        let original = "keymap_mode: vim\nopen_boards:\n- /a/.kanban\n";
+        fs::write(&path, original).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let state = UiState::load(&path);
+        // Read failed → defaults in memory; a mutation must NOT save those
+        // defaults over a file whose contents we never saw (and couldn't
+        // back up).
+        state.set_keymap_mode("emacs");
+        state.save().unwrap();
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            original,
+            "an unreadable config must never be overwritten"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_after_load_with_no_changes_does_not_touch_file() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        {
+            let state = UiState::load(&path);
+            state.set_keymap_mode("vim");
+            state.add_open_board("/a/.kanban");
+            state.save().unwrap();
+        }
+        let before_bytes = fs::read(&path).unwrap();
+        let before_meta = fs::metadata(&path).unwrap();
+        // Ensure a rewrite would be observable via mtime even on coarse clocks.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        // Simulate a clean start + clean exit with no setting changes:
+        // load, then the exit-path save().
+        let state = UiState::load(&path);
+        state.save().unwrap();
+
+        let after_meta = fs::metadata(&path).unwrap();
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before_bytes,
+            "bytes must be identical"
+        );
+        assert_eq!(
+            after_meta.ino(),
+            before_meta.ino(),
+            "file must not be replaced"
+        );
+        assert_eq!(
+            after_meta.modified().unwrap(),
+            before_meta.modified().unwrap(),
+            "file must not be rewritten at all when nothing changed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_replaces_file_atomically_via_rename() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        {
+            let state = UiState::load(&path);
+            state.set_keymap_mode("vim");
+            state.save().unwrap();
+        }
+        let ino_before = fs::metadata(&path).unwrap().ino();
+
+        let state = UiState::load(&path);
+        state.set_keymap_mode("emacs"); // auto-saves
+
+        let ino_after = fs::metadata(&path).unwrap().ino();
+        assert_ne!(
+            ino_before, ino_after,
+            "save must write a temp file and rename it into place \
+             (in-place truncate can leave a torn file on mid-write kill)"
+        );
+        // No temp litter left behind.
+        let leftovers: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p != &path)
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
+        assert_eq!(UiState::load(&path).keymap_mode(), "emacs");
+    }
+
+    #[test]
+    fn settings_survive_rapid_restart_cycles() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+        let boards = vec![
+            "/a/.kanban".to_string(),
+            "/b/.kanban".to_string(),
+            "/c/.kanban".to_string(),
+            "/d/.kanban".to_string(),
+        ];
+        {
+            let state = UiState::load(&path);
+            state.set_keymap_mode("vim");
+            for b in &boards {
+                state.add_open_board(b);
+            }
+            state.save().unwrap();
+        }
+        // Simulate tauri-dev restart churn: each cycle is the app lifecycle
+        // (load at start, unconditional save() at exit) with no user changes.
+        for _ in 0..10 {
+            let state = UiState::load(&path);
+            state.save().unwrap();
+        }
+        let state = UiState::load(&path);
+        assert_eq!(state.keymap_mode(), "vim");
+        assert_eq!(state.open_boards(), boards);
+    }
+
+    #[test]
+    fn concurrent_load_during_save_never_sees_torn_state() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-state.yaml");
+
+        // One large state (keymap vim) so a torn read has a wide window to
+        // land in with a non-atomic truncate-then-write.
+        let writer_state = UiState::load(&path);
+        writer_state.set_keymap_mode("vim");
+        for i in 0..500 {
+            writer_state.add_open_board(&format!("/very/long/board/path/{i:04}/.kanban"));
+        }
+        writer_state.save().unwrap();
+
+        let done = Arc::new(AtomicBool::new(false));
+        let done_w = done.clone();
+        let writer = std::thread::spawn(move || {
+            // Each iteration is a real change, so every cycle truly rewrites
+            // the file (an unchanged save is allowed to skip the write).
+            for i in 0..300 {
+                writer_state.set_active_view("w", &format!("view-{i}"));
+            }
+            done_w.store(true, Ordering::SeqCst);
+        });
+
+        // Reader: every load must observe a complete file (old or new), never
+        // a torn/empty one that silently degrades to defaults.
+        while !done.load(Ordering::SeqCst) {
+            let snapshot = UiState::load(&path);
+            assert_eq!(
+                snapshot.keymap_mode(),
+                "vim",
+                "a load racing a save observed a torn config and fell back to defaults"
+            );
+        }
+        writer.join().unwrap();
+    }
+}

@@ -5,8 +5,9 @@
  * local `CommandScopeProvider` must NOT shadow the global `nav.up` /
  * `nav.down` / `nav.left` / `nav.right` commands with broadcast-no-op
  * `grid.move{Up,Down,Left,Right}` aliases. Arrow keys (and vim hjkl) inside
- * the grid must reach the global nav commands and dispatch
- * `spatial_navigate(focusedFq, direction)` against the Rust kernel.
+ * the grid must reach the global nav commands, which route the `nav.*`
+ * command id to the backend — the kernel navigate executes host-side in the
+ * `nav-commands` builtin plugin.
  *
  * Row-extreme keys (`Home`, `End`, `0`, `$`) and grid-extreme keys
  * (`Mod+Home`, `Mod+End`, `Shift+G`, `gg`) are tested too. The grid scope
@@ -27,28 +28,9 @@ import { render, fireEvent, act } from "@testing-library/react";
 // Tauri API mocks -- must come before component imports.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -89,6 +71,12 @@ vi.mock("@/components/perspective-container", () => ({
 
 import { GridView } from "./grid-view";
 import { AppShell } from "./app-shell";
+import { commandToolCall, navDispatchCmds } from "@/test/mock-command-list";
+import {
+  getWebviewCommandHandler,
+  hasWebviewCommandHandler,
+  resetWebviewCommandBusForTest,
+} from "@/lib/webview-command-bus";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -193,6 +181,12 @@ async function defaultInvokeImpl(
   cmd: string,
   _args?: unknown,
 ): Promise<unknown> {
+  // The global keybinding layer (arrow keys → `nav.up`/`nav.down`/…) is
+  // sourced from the metadata-driven Command registry via `useCommandList`,
+  // which fetches through the `command_tool_call` bridge's `list command`
+  // op. Synthesize that registry from `BINDING_TABLES` so the global nav
+  // bindings resolve.
+  if (cmd === "command_tool_call") return commandToolCall(_args);
   if (cmd === "list_entity_types") return ["task"];
   if (cmd === "get_entity_schema") return TASK_SCHEMA;
   if (cmd === "get_ui_state")
@@ -224,17 +218,38 @@ function spatialNavigateCalls(): Array<{
   direction: string;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_navigate")
-    .map(
-      (c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string },
-    );
+    .filter(
+      (c) =>
+        c[0] === "spatial_navigate" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "navigate focus"),
+    )
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as {
+        focusedFq: FullyQualifiedMoniker;
+        direction: string;
+      };
+      return args;
+    });
 }
 
 /** Collect every `spatial_focus` call payload, in order. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
+      return args;
+    });
 }
 
 /**
@@ -278,7 +293,7 @@ async function fireFocusChanged({
     next_fq,
     next_segment: next_segment === null ? null : asSegment(next_segment),
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get("notifications/focus/changed") ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();
@@ -295,6 +310,7 @@ describe("GridView keyboard navigation (spatial)", () => {
     mockListen.mockClear();
     listeners.clear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
+    resetWebviewCommandBusForTest();
   });
 
   afterEach(() => {
@@ -333,11 +349,15 @@ describe("GridView keyboard navigation (spatial)", () => {
 
   // -------------------------------------------------------------------------
   // Cardinal arrow keys — must reach the global nav.up/down/left/right
-  // commands which dispatch spatial_navigate against the focused cell.
+  // commands, which route the command id to the backend. The kernel
+  // navigate executes host-side in the `nav-commands` builtin plugin (it
+  // resolves the focused scope and pulls the live geometry from the
+  // webview itself), so the webview sends NO client-side `navigate focus`
+  // IPC and no focused fq.
   // -------------------------------------------------------------------------
 
-  it("ArrowDown dispatches spatial_navigate(cell, 'down') for the focused cell", async () => {
-    const { cellKey } = await mountAndSeedFocus("grid_cell:0:title");
+  it("ArrowDown dispatches nav.down to the backend for the focused cell", async () => {
+    await mountAndSeedFocus("grid_cell:0:title");
 
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
@@ -347,14 +367,13 @@ describe("GridView keyboard navigation (spatial)", () => {
       await Promise.resolve();
     });
 
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls).toHaveLength(1);
-    expect(navCalls[0].focusedFq).toBe(cellKey);
-    expect(navCalls[0].direction).toBe("down");
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.down"]);
+    // No legacy client-side navigate IPC — the kernel move is host-driven.
+    expect(spatialNavigateCalls()).toHaveLength(0);
   });
 
-  it("ArrowUp dispatches spatial_navigate(cell, 'up') for the focused cell", async () => {
-    const { cellKey } = await mountAndSeedFocus("grid_cell:1:title");
+  it("ArrowUp dispatches nav.up to the backend for the focused cell", async () => {
+    await mountAndSeedFocus("grid_cell:1:title");
 
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
@@ -364,14 +383,12 @@ describe("GridView keyboard navigation (spatial)", () => {
       await Promise.resolve();
     });
 
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls).toHaveLength(1);
-    expect(navCalls[0].focusedFq).toBe(cellKey);
-    expect(navCalls[0].direction).toBe("up");
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.up"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
   });
 
-  it("ArrowLeft dispatches spatial_navigate(cell, 'left') for the focused cell", async () => {
-    const { cellKey } = await mountAndSeedFocus("grid_cell:0:status");
+  it("ArrowLeft dispatches nav.left to the backend for the focused cell", async () => {
+    await mountAndSeedFocus("grid_cell:0:status");
 
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
@@ -381,14 +398,12 @@ describe("GridView keyboard navigation (spatial)", () => {
       await Promise.resolve();
     });
 
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls).toHaveLength(1);
-    expect(navCalls[0].focusedFq).toBe(cellKey);
-    expect(navCalls[0].direction).toBe("left");
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.left"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
   });
 
-  it("ArrowRight dispatches spatial_navigate(cell, 'right') for the focused cell", async () => {
-    const { cellKey } = await mountAndSeedFocus("grid_cell:0:title");
+  it("ArrowRight dispatches nav.right to the backend for the focused cell", async () => {
+    await mountAndSeedFocus("grid_cell:0:title");
 
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
@@ -398,10 +413,8 @@ describe("GridView keyboard navigation (spatial)", () => {
       await Promise.resolve();
     });
 
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls).toHaveLength(1);
-    expect(navCalls[0].focusedFq).toBe(cellKey);
-    expect(navCalls[0].direction).toBe("right");
+    expect(navDispatchCmds(mockInvoke)).toEqual(["nav.right"]);
+    expect(spatialNavigateCalls()).toHaveLength(0);
   });
 
   // -------------------------------------------------------------------------
@@ -544,11 +557,12 @@ describe("GridView keyboard navigation (spatial)", () => {
   // `nav.down` / `nav.left` / `nav.right` should win.
   //
   // The behavioural fingerprint of the broken path is: arrow key fires, no
-  // `spatial_navigate` IPC lands, no `spatial_focus` IPC lands, the cell
-  // cursor doesn't move. The cardinal-direction tests above already assert
-  // the positive (`spatial_navigate` does fire); this test additionally
-  // pins that the same key produces zero broadcast-call side effects in
-  // the IPC log (no `dispatch_command` with a `grid.move*` cmd shape).
+  // `nav.*` dispatch lands, no `spatial_focus` IPC lands, the cell cursor
+  // doesn't move. The cardinal-direction tests above already assert the
+  // positive (the global `nav.*` command id reaches the backend); this test
+  // additionally pins that the same key produces zero broadcast-call side
+  // effects in the IPC log (no `dispatch_command` with a `grid.move*` cmd
+  // shape).
   // -------------------------------------------------------------------------
 
   it("arrow keys do not dispatch any grid.move* command (no shadow registration)", async () => {
@@ -582,14 +596,165 @@ describe("GridView keyboard navigation (spatial)", () => {
       "grid.move{Up,Down,Left,Right} must not be dispatched on arrow keys",
     ).toEqual([]);
 
-    // And the global nav commands must have fired four times (one per arrow).
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls).toHaveLength(4);
-    expect(navCalls.map((c) => c.direction)).toEqual([
-      "down",
-      "right",
-      "up",
-      "left",
+    // And the global nav commands must have fired four times (one per
+    // arrow), each routed to the backend as its `nav.*` command id.
+    expect(navDispatchCmds(mockInvoke)).toEqual([
+      "nav.down",
+      "nav.right",
+      "nav.up",
+      "nav.left",
     ]);
+    // Host-driven nav: the webview sends no client-side navigate IPC.
+    expect(spatialNavigateCalls()).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Webview command bus — Card C. The eleven `grid.*` commands are DEFINED
+  // by the `grid-commands` builtin plugin (id / name / keys / scope:
+  // ["ui:grid"]); grid-view.tsx registers a live webview-bus handler per id
+  // on mount (`registerWebviewCommandHandler`). Dispatching an id —
+  // keybinding, palette, or programmatic — runs the bus handler, never a
+  // client-side `CommandDef` execute (none exists anymore) and never a
+  // backend `grid.*` dispatch.
+  // -------------------------------------------------------------------------
+
+  /** The eleven plugin-owned grid command ids (Card C). */
+  const GRID_COMMAND_IDS = [
+    "grid.moveToRowStart",
+    "grid.moveToRowEnd",
+    "grid.firstCell",
+    "grid.lastCell",
+    "grid.edit",
+    "grid.editEnter",
+    "grid.exitEdit",
+    "grid.toggleVisual",
+    "grid.deleteRow",
+    "grid.newBelow",
+    "grid.newAbove",
+  ];
+
+  /** Run a grid id's registered webview-bus handler inside act(). */
+  async function runBusHandler(id: string) {
+    const handler = getWebviewCommandHandler(id);
+    expect(
+      handler,
+      `webview-bus handler for ${id} must be registered`,
+    ).toBeTruthy();
+    await act(async () => {
+      await handler!({});
+      await Promise.resolve();
+    });
+  }
+
+  /** Collect every backend dispatch_command cmd, in call order. */
+  function dispatchedCmds(): string[] {
+    return mockInvoke.mock.calls
+      .filter((c) => c[0] === "dispatch_command")
+      .map((c) => (c[1] as { cmd?: string } | undefined)?.cmd ?? "");
+  }
+
+  describe("grid.* commands route through the webview command bus", () => {
+    it("registers a webview-bus handler for all 11 grid.* ids on mount", async () => {
+      await mountAndSeedFocus("grid_cell:0:title");
+      for (const id of GRID_COMMAND_IDS) {
+        expect(
+          hasWebviewCommandHandler(id),
+          `${id} must have a registered webview-bus handler`,
+        ).toBe(true);
+      }
+    });
+
+    it("Enter enters edit mode via the bus-handled grid.edit (no backend grid dispatch)", async () => {
+      const { result } = await mountAndSeedFocus("grid_cell:0:title");
+
+      mockInvoke.mockClear();
+      mockInvoke.mockImplementation(defaultInvokeImpl);
+
+      await act(async () => {
+        fireEvent.keyDown(document, { key: "Enter" });
+        await Promise.resolve();
+      });
+
+      // The live grid behavior ran: the status bar flips to EDIT.
+      expect(result.container.textContent).toContain("EDIT");
+      // The bus short-circuits the backend: no grid.* id reaches
+      // dispatch_command (and Enter did not fall through to nav.drillIn).
+      expect(dispatchedCmds()).toEqual([]);
+    });
+
+    it("grid.toggleVisual and grid.exitEdit drive the live grid mode via the bus", async () => {
+      const { result } = await mountAndSeedFocus("grid_cell:0:title");
+
+      await runBusHandler("grid.toggleVisual");
+      expect(result.container.textContent).toContain("VISUAL");
+
+      // grid.exitEdit exits visual mode too (the React def's contract).
+      await runBusHandler("grid.exitEdit");
+      expect(result.container.textContent).toContain("NORMAL");
+
+      // And the edit-mode pair: editEnter enters, exitEdit returns to normal.
+      await runBusHandler("grid.editEnter");
+      expect(result.container.textContent).toContain("EDIT");
+      await runBusHandler("grid.exitEdit");
+      expect(result.container.textContent).toContain("NORMAL");
+    });
+
+    it("grid.deleteRow re-dispatches entity.archive targeting the cursor row's moniker", async () => {
+      // Seed focus on row 1 — the cursor derives from the focused moniker,
+      // so deleteRow must archive the SECOND task (t2). The registered
+      // backend command is the cross-cutting `entity.archive` (resolving
+      // `from: target`); no per-type `{type}.archive` command exists, so
+      // dispatching one would silently fail in production.
+      await mountAndSeedFocus("grid_cell:1:title");
+
+      mockInvoke.mockClear();
+      mockInvoke.mockImplementation(defaultInvokeImpl);
+
+      await runBusHandler("grid.deleteRow");
+
+      const archiveCalls = mockInvoke.mock.calls.filter(
+        (c) =>
+          c[0] === "dispatch_command" &&
+          (c[1] as { cmd?: string } | undefined)?.cmd === "entity.archive",
+      );
+      expect(archiveCalls).toHaveLength(1);
+      expect(
+        (archiveCalls[0][1] as { target?: string }).target,
+        "entity.archive resolves its entity from the target moniker",
+      ).toBe("task:t2");
+    });
+
+    it("grid.newBelow and grid.newAbove re-dispatch entity.add:task through the backend", async () => {
+      await mountAndSeedFocus("grid_cell:0:title");
+
+      mockInvoke.mockClear();
+      mockInvoke.mockImplementation(defaultInvokeImpl);
+
+      await runBusHandler("grid.newBelow");
+      await runBusHandler("grid.newAbove");
+
+      expect(dispatchedCmds()).toEqual(["entity.add:task", "entity.add:task"]);
+    });
+
+    it("grid.moveToRowEnd jumps to the last cell of the cursor row via the bus", async () => {
+      const { result } = await mountAndSeedFocus("grid_cell:1:title");
+
+      const targetCell = registerScopeCalls().find(
+        (c) => c.segment === "grid_cell:1:status",
+      );
+      expect(targetCell).toBeTruthy();
+      const targetKey = targetCell!.fq as FullyQualifiedMoniker;
+
+      mockInvoke.mockClear();
+      mockInvoke.mockImplementation(defaultInvokeImpl);
+
+      await runBusHandler("grid.moveToRowEnd");
+
+      const focusCalls = spatialFocusCalls();
+      expect(focusCalls).toHaveLength(1);
+      expect(focusCalls[0].fq).toBe(targetKey);
+
+      result.unmount();
+    });
   });
 });

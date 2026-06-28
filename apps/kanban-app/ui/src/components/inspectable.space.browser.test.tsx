@@ -3,37 +3,41 @@
  * the `<Inspectable>` wrapper.
  *
  * Companion to `inspectable.spatial.test.tsx`, which pins the dblclick
- * dispatch path. After moving inspect ownership off the BoardView's
- * `board.inspect` and onto Inspectable itself (card 01KQ9XJ4XGKVW24EZSQCA6K3E2),
- * Space on a focused inspectable dispatches `ui.inspect` from the
- * Inspectable's scope-level command — independent of which layer the
- * entity lives in (board, inspector, palette result list, etc).
+ * dispatch path. After Card G consolidated `entity.inspect` into its single
+ * plugin definition (`builtin/plugins/app-shell-commands/commands/ui.ts`), Space routes
+ * the GLOBAL `entity.inspect` binding to the BACKEND — one
+ * `dispatch_command` carrying the focused scope chain — and the plugin
+ * resolves the target server-side (innermost inspectable moniker in the
+ * chain). No React `CommandDef` synthesizes a `app.inspect` dispatch
+ * anymore; the per-`<Inspectable>` wrapper owns only the dblclick gesture.
  *
  * The tests below pin:
  *
- *   1. Space on a focused descendant inside a single `<Inspectable>` fires
- *      `ui.inspect` against the wrapper's moniker.
- *   2. Nested `<Inspectable>`s — the closest enclosing one wins (its scope
- *      shadows the outer one because it is closer in the scope chain).
- *   3. Space on an `<input>` inside an `<Inspectable>` does NOT dispatch
- *      `ui.inspect` (the editable surface owns Space; it inserts a literal
- *      space character). Asserted via the global keybinding handler's
+ *   1. Space on a focused inspectable fires EXACTLY ONE backend
+ *      `entity.inspect` dispatch whose scope chain leads with the focused
+ *      entity's moniker — and ZERO webview-side `app.inspect` dispatches
+ *      (the single-plugin path; the backend owns the `ui_state` inspect).
+ *   2. Nested `<Inspectable>`s — the focused (closest) scope leads the
+ *      dispatched chain. The webview's job ends there: server-side, the
+ *      innermost inspectable-ENTITY moniker wins — a leading `field:…`
+ *      projection moniker is skipped and the CONTAINING `task:…` is
+ *      inspected (kanban card 01KTY6XTJQFCG9ENKTAMC6N3JV).
+ *   3. Space on an `<input>` inside an `<Inspectable>` dispatches NOTHING
+ *      (the editable surface owns Space; it inserts a literal space
+ *      character). Asserted via the global keybinding handler's
  *      `isEditableTarget` gate.
  *   4. Same exclusion for `[contenteditable]`.
  *   5. Regression guard — dblclick on an `<Inspectable>` still dispatches
- *      `ui.inspect` after the Space owner moves into the wrapper.
+ *      `app.inspect` against the wrapper's moniker (the wrapper's one
+ *      remaining job).
  *   6. Space at app open (no kernel focus) MUST `preventDefault` so the
- *      browser does not scroll the page, AND must NOT dispatch
- *      `ui.inspect`. Pinned by the root-scope `entity.inspect` command in
- *      `app-shell.tsx` — the per-Inspectable scope command does not fire
- *      because no Inspectable is in the empty scope chain.
+ *      browser does not scroll the page (the global `entity.inspect`
+ *      binding resolves), and must NOT produce any `app.inspect` — the
+ *      backend no-ops on a chain with no inspectable entity.
  *   7. Space with kernel focus on a non-Inspectable scope (e.g. a
- *      perspective tab, filter editor) MUST `preventDefault` and must
- *      NOT dispatch `ui.inspect` — the root command picks up Space
- *      because the focused scope chain has no `<Inspectable>` to shadow,
- *      but its execute closure filters by the inspectable-entity
- *      prefixes (`task:`, `tag:`, `column:`, `board:`, `field:`,
- *      `attachment:`).
+ *      perspective tab) MUST `preventDefault` and must NOT produce any
+ *      `app.inspect` — the plugin's server-side prefix filter (`task:`,
+ *      `tag:`, `column:`, `board:`, `attachment:`) no-ops on chrome.
  *   8. Space inside an editable surface (`<input>`, `<textarea>`,
  *      `[contenteditable]`) MUST NOT `preventDefault` — the global
  *      keybinding handler's `isEditableTarget` gate short-circuits before
@@ -57,28 +61,9 @@ import { render, fireEvent, act } from "@testing-library/react";
 // this default for `get_ui_state`.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -113,6 +98,12 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import { Inspectable } from "./inspectable";
 import { FocusScope } from "./focus-scope";
 import { AppShell } from "./app-shell";
+import { commandToolCall } from "@/test/mock-command-list";
+import {
+  UNHANDLED,
+  emitToListenerMap,
+  makeSpatialKernelMock,
+} from "@/test/mock-spatial-kernel";
 import { FocusLayer } from "./focus-layer";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
@@ -122,6 +113,7 @@ import {
   EntityFocusProvider,
   useEntityFocus,
 } from "@/lib/entity-focus-context";
+import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import { asFq, asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -139,15 +131,14 @@ async function flushSetup() {
 }
 
 /**
- * Tracks the moniker → FullyQualifiedMoniker mapping that the kernel would normally
- * maintain. Card `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus
- * store a pure projection of kernel events; tests that mock `invoke`
- * without a kernel simulator need this minimal stub so click-driven
- * `setFocus` still updates the React store via the spatial-focus
- * bridge.
+ * Shared spatial-kernel mock — maintains the moniker → fq projection the
+ * kernel would normally own and synthesizes the `focus-changed` emit so
+ * click-driven `setFocus` updates the React store via the spatial-focus
+ * bridge. Card `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus store a
+ * pure projection of kernel events.
  */
-const monikerToKey = new Map<string, string>();
-const currentFocusKey: { key: string | null } = { key: null };
+const { handleSpatialCommand, reset: resetSpatialKernel } =
+  makeSpatialKernelMock({ emit: emitToListenerMap(listeners) });
 
 /**
  * Build the default `invoke` implementation covering the IPCs the
@@ -160,10 +151,9 @@ const currentFocusKey: { key: string | null } = { key: null };
  * Space-key contract call this factory with `"vim"` so the same
  * scenarios run under each mode without duplicating fixture
  * machinery. The cua / emacs / vim binding-table parity for `Space`
- * lives in `lib/keybindings.ts`; per-`<Inspectable>` and root-scope
- * `CommandDef`s also carry all three modes — see the matching
- * `keys: { vim, cua, emacs }` blocks in `inspectable.tsx` and
- * `app-shell.tsx`.
+ * lives in `lib/keybindings.ts`; the plugin-owned `entity.inspect`
+ * carries the same three-mode `keys: { vim, cua, emacs }` block in
+ * `builtin/plugins/app-shell-commands/commands/ui.ts`.
  *
  * @param keymapMode - The keymap mode to advertise; defaults to `"cua"`.
  */
@@ -174,6 +164,29 @@ function makeDefaultInvokeImpl(
     cmd: string,
     args?: unknown,
   ): Promise<unknown> {
+    if (cmd === "command_tool_call") {
+      // The spatial focus ops now ride the generic MCP transport
+      // (`focus-mcp.ts::setFocus` → `command_tool_call { tool: "focus",
+      // op: "set focus", params }`). Translate them back onto the legacy
+      // kernel-sim branches below so the harness still emits the
+      // `focus-changed` echo a real kernel would — without this, a
+      // click-driven focus claim is silently swallowed and the
+      // entity-focus store never reflects the claim (the same
+      // translation `spatial-shadow-registry.ts` performs for the full
+      // e2e harness).
+      const bag = (args ?? {}) as {
+        tool?: string;
+        op?: string;
+        params?: Record<string, unknown>;
+      };
+      if (bag.tool === "focus" && bag.op === "set focus") {
+        return defaultInvokeImpl("spatial_focus", bag.params ?? {});
+      }
+      if (bag.tool === "focus" && bag.op === "clear focus") {
+        return defaultInvokeImpl("spatial_clear_focus", bag.params ?? {});
+      }
+      return commandToolCall(args);
+    }
     if (cmd === "get_ui_state") {
       return {
         palette_open: false,
@@ -185,90 +198,8 @@ function makeDefaultInvokeImpl(
         recent_boards: [],
       };
     }
-    if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
-      const a = (args ?? {}) as { fq?: string; segment?: string };
-      if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
-      return undefined;
-    }
-    if (cmd === "spatial_unregister_scope") {
-      const a = (args ?? {}) as { fq?: string };
-      if (a.fq) {
-        for (const [m, k] of monikerToKey.entries()) {
-          if (k === a.fq) {
-            monikerToKey.delete(m);
-            break;
-          }
-        }
-      }
-      return undefined;
-    }
-    if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
-      const a = (args ?? {}) as { focusedFq?: string };
-      return a.focusedFq ?? null;
-    }
-    if (cmd === "spatial_focus") {
-      // Synthesize the kernel's focus-changed emit so the entity-focus
-      // bridge writes the React store. Mirrors the real kernel behavior:
-      // resolve moniker → key, advance focus_by_window, emit
-      // focus-changed with both fields. See card
-      // `01KQD0WK54G0FRD7SZVZASA9ST` for the projection invariant.
-      //
-      // Queued via `queueMicrotask` to match the kernel simulator's
-      // timing contract — production events arrive asynchronously, so
-      // emitting synchronously would hide regressions that depend on
-      // the async write semantics.
-      const a = (args ?? {}) as { fq?: string };
-      const fq = a.fq ?? null;
-      let moniker: string | null = null;
-      for (const [s, k] of monikerToKey.entries()) {
-        if (k === fq) {
-          moniker = s;
-          break;
-        }
-      }
-
-      if (fq) {
-        const prev = currentFocusKey.key;
-        currentFocusKey.key = fq;
-        queueMicrotask(() => {
-          const handlers = listeners.get("focus-changed") ?? [];
-          for (const h of handlers) {
-            h({
-              payload: {
-                window_label: "main",
-                prev_fq: prev,
-                next_fq: fq,
-                next_segment: moniker,
-              },
-            });
-          }
-        });
-      }
-      return undefined;
-    }
-    if (cmd === "spatial_clear_focus") {
-      // Explicit-clear counterpart — kernel emits a
-      // `Some(prev) → None` `focus-changed` event so the React-side
-      // bridge flips the store back to `null`. Idempotent when the
-      // window had no prior focus.
-      const prev = currentFocusKey.key;
-      if (prev === null) return undefined;
-      currentFocusKey.key = null;
-      queueMicrotask(() => {
-        const handlers = listeners.get("focus-changed") ?? [];
-        for (const h of handlers) {
-          h({
-            payload: {
-              window_label: "main",
-              prev_fq: prev,
-              next_fq: null,
-              next_segment: null,
-            },
-          });
-        }
-      });
-      return undefined;
-    }
+    const spatial = handleSpatialCommand(cmd, args);
+    if (spatial !== UNHANDLED) return spatial;
     if (cmd === "list_entity_types") return [];
     if (cmd === "get_entity_schema") return null;
     if (cmd === "list_commands_for_scope") return [];
@@ -319,20 +250,44 @@ function dispatchCommandCalls(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/** Filter `dispatch_command` calls down to those for `ui.inspect`. */
+/** Filter `dispatch_command` calls down to those for `app.inspect`. */
 function inspectDispatches(): Array<Record<string, unknown>> {
-  return dispatchCommandCalls().filter((c) => c.cmd === "ui.inspect");
+  return dispatchCommandCalls().filter((c) => c.cmd === "app.inspect");
+}
+
+/**
+ * Filter `dispatch_command` calls down to those for the plugin-owned
+ * `entity.inspect` (Card G). The Space keybinding routes this id to the
+ * BACKEND; the dispatched `scopeChain` (leaf-first) is what the plugin's
+ * server-side resolution reads, so the assertions below pin its head.
+ */
+function entityInspectDispatches(): Array<{
+  cmd: string;
+  target?: string;
+  scopeChain?: string[];
+}> {
+  return dispatchCommandCalls().filter(
+    (c) => c.cmd === "entity.inspect",
+  ) as Array<{ cmd: string; target?: string; scopeChain?: string[] }>;
 }
 
 /**
  * Test helper: a focusable card that wires its inner button to a setFocus
  * call so Space can be tested with a moniker actually selected in the
  * entity-focus store.
+ *
+ * The click focuses the enclosing `<FocusScope>`'s COMPOSED FQM (read
+ * from `FullyQualifiedMonikerContext`) — the production shape. Focusing
+ * the bare segment instead would leave the entity-focus registry lookup
+ * (keyed by composed FQM) unresolved, so the focused scope chain the
+ * Space dispatch carries would come out empty and the backend could not
+ * resolve the entity. `moniker` is only the visible label.
  */
 function FocusButton({ moniker }: { moniker: FullyQualifiedMoniker }) {
   const { setFocus } = useEntityFocus();
+  const fq = useFullyQualifiedMoniker();
   return (
-    <button type="button" onClick={() => setFocus(moniker)}>
+    <button type="button" onClick={() => setFocus(fq)}>
       Focus {moniker}
     </button>
   );
@@ -366,8 +321,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
     mockInvoke.mockClear();
     mockListen.mockClear();
     listeners.clear();
-    monikerToKey.clear();
-    currentFocusKey.key = null;
+    resetSpatialKernel();
     mockInvoke.mockImplementation(defaultInvokeImpl);
   });
 
@@ -376,10 +330,11 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
   });
 
   // -------------------------------------------------------------------------
-  // #1: Space on a focused inspectable dispatches inspect with wrapper moniker
+  // #1: Space on a focused inspectable routes ONE backend entity.inspect
+  //     dispatch carrying the focused entity's scope chain.
   // -------------------------------------------------------------------------
 
-  it("space_on_focused_inspectable_dispatches_inspect_with_wrapper_moniker", async () => {
+  it("space_on_focused_inspectable_dispatches_single_backend_entity_inspect", async () => {
     const { getByText, unmount } = render(
       withAppShell(
         <Inspectable moniker={asSegment("task:T1")}>
@@ -400,33 +355,40 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
     mockInvoke.mockClear();
 
     // Fire Space at the document level — same path the global keymap
-    // handler in `<KeybindingHandler>` listens on. The Inspectable's
-    // scope-level command (`entity.inspect`) is keyed to Space and is in
-    // the focused scope chain, so it dispatches `ui.inspect` against
-    // the wrapper's moniker.
+    // handler in `<KeybindingHandler>` listens on. The GLOBAL
+    // `entity.inspect` binding (plugin-owned, Card G) resolves; no scope
+    // `CommandDef` and no webview-bus handler claim the id, so the
+    // dispatch goes to the BACKEND with the focused scope chain. The
+    // plugin resolves the target server-side from the chain's head.
     await act(async () => {
       fireEvent.keyDown(document, { key: " ", code: "Space" });
     });
     await flushSetup();
 
-    const dispatches = inspectDispatches();
+    const dispatches = entityInspectDispatches();
     expect(
       dispatches.length,
-      "Space on a focused inspectable must dispatch ui.inspect exactly once",
+      "Space on a focused inspectable must dispatch entity.inspect to the backend exactly once",
     ).toBe(1);
-    // `runBackendDispatch` carries `target` at the top level of the
-    // IPC payload, not inside `args` — same shape `inspectable.spatial.test.tsx`
-    // pins for the dblclick path.
-    expect(dispatches[0].target).toBe("task:T1");
+    // No explicit target — the plugin resolves from the chain, whose
+    // leaf-first head is the focused entity's moniker.
+    expect(dispatches[0].target).toBeUndefined();
+    expect(dispatches[0].scopeChain?.[0]).toBe("task:T1");
+    // The single-plugin path: the webview must NOT synthesize a
+    // `app.inspect` of its own (that was the retired React fast-path).
+    expect(
+      inspectDispatches().length,
+      "Space must not dispatch app.inspect from the webview — the backend owns the inspect",
+    ).toBe(0);
 
     unmount();
   });
 
   // -------------------------------------------------------------------------
-  // #2: Nested inspectables — closest one wins
+  // #2: Nested inspectables — the focused (closest) entity leads the chain
   // -------------------------------------------------------------------------
 
-  it("space_on_focused_descendant_dispatches_inspect_with_nearest_inspectable_moniker", async () => {
+  it("space_on_focused_descendant_dispatches_chain_led_by_nearest_inspectable_moniker", async () => {
     const { getByText, unmount } = render(
       withAppShell(
         <Inspectable moniker={asSegment("task:T1")}>
@@ -451,14 +413,17 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
     });
     await flushSetup();
 
-    const dispatches = inspectDispatches();
+    const dispatches = entityInspectDispatches();
     expect(
       dispatches.length,
-      "Space on a focused inner inspectable must dispatch exactly once",
+      "Space on a focused inner inspectable must dispatch entity.inspect exactly once",
     ).toBe(1);
-    // The closest enclosing `<Inspectable>` wins — its scope-level
-    // `entity.inspect` shadows the outer one in the scope chain.
-    expect(dispatches[0].target).toBe("field:task:T1.title");
+    // The dispatched chain is leaf-first, so its head is the CLOSEST
+    // scope — the field's projection moniker. Server-side the plugin skips
+    // `field:…` (not an entity) and inspects the CONTAINING `task:T1`; the
+    // webview contract pinned here is only the chain's leaf-first shape.
+    expect(dispatches[0].scopeChain?.[0]).toBe("field:task:T1.title");
+    expect(inspectDispatches().length).toBe(0);
 
     unmount();
   });
@@ -497,7 +462,11 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
 
     expect(
       inspectDispatches().length,
-      "Space inside an <input> must NOT dispatch ui.inspect",
+      "Space inside an <input> must NOT dispatch app.inspect",
+    ).toBe(0);
+    expect(
+      entityInspectDispatches().length,
+      "Space inside an <input> must NOT dispatch entity.inspect either",
     ).toBe(0);
 
     unmount();
@@ -539,7 +508,11 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
 
     expect(
       inspectDispatches().length,
-      "Space inside a [contenteditable] host must NOT dispatch ui.inspect",
+      "Space inside a [contenteditable] host must NOT dispatch app.inspect",
+    ).toBe(0);
+    expect(
+      entityInspectDispatches().length,
+      "Space inside a [contenteditable] host must NOT dispatch entity.inspect either",
     ).toBe(0);
 
     unmount();
@@ -580,13 +553,13 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
   //
   // The user opens the app, kernel focus is null (`<body>` carries DOM
   // focus). Pressing Space MUST NOT scroll the page; it MUST NOT
-  // dispatch `ui.inspect` either (the recommended (a) variant in the
-  // task plan: no-op + preventDefault is unambiguous).
+  // produce a `app.inspect` either.
   //
-  // The fix is a root-scope `entity.inspect` command in `app-shell.tsx`
-  // bound to Space — the binding lookup succeeds, the keybinding
-  // handler calls `preventDefault()`, and the command's execute
-  // closure no-ops because `focusedFq` is null.
+  // The global `entity.inspect` binding (plugin-owned, Card G) resolves,
+  // so the keybinding handler calls `preventDefault()`. The dispatch
+  // reaches the backend with a chain that carries no inspectable entity,
+  // where the plugin's server-side resolution no-ops — no `ui_state`
+  // inspect, and certainly no webview-side `app.inspect`.
 
   it("space_at_app_open_with_no_kernel_focus_preventDefaults_and_does_not_dispatch_inspect", async () => {
     const { unmount } = render(
@@ -618,7 +591,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
     ).toBe(true);
     expect(
       inspectDispatches().length,
-      "Space with no kernel focus must NOT dispatch ui.inspect",
+      "Space with no kernel focus must NOT dispatch app.inspect",
     ).toBe(0);
 
     unmount();
@@ -630,11 +603,11 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
   //
   // A focused perspective tab / filter editor / other UI chrome is not
   // an inspectable entity. Pressing Space MUST NOT scroll the page and
-  // MUST NOT dispatch `ui.inspect` — the root command's execute
-  // closure filters by the inspectable-entity prefix set
-  // (`task:`, `tag:`, `column:`, `board:`, `field:`, `attachment:`)
-  // and no-ops on anything else. The keybinding handler still claims
-  // the keystroke (preventDefault) because the binding resolved.
+  // MUST NOT produce `app.inspect` — the plugin's server-side resolution
+  // filters by the inspectable-entity prefix set (`task:`, `tag:`,
+  // `column:`, `board:`, `field:`, `attachment:`) and no-ops on chrome.
+  // The keybinding handler still claims the keystroke (preventDefault)
+  // because the global binding resolved.
 
   it("space_with_focus_on_non_inspectable_scope_preventDefaults_and_does_not_dispatch_inspect", async () => {
     // Use a `perspective_tab:` moniker — chrome, not an entity. The
@@ -670,7 +643,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
     ).toBe(true);
     expect(
       inspectDispatches().length,
-      "Space on a non-Inspectable focused scope must NOT dispatch ui.inspect",
+      "Space on a non-Inspectable focused scope must NOT dispatch app.inspect",
     ).toBe(0);
 
     unmount();
@@ -715,15 +688,15 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
     ).toBe(false);
     expect(
       inspectDispatches().length,
-      "Space inside an <input> must NOT dispatch ui.inspect",
+      "Space inside an <input> must NOT dispatch app.inspect",
     ).toBe(0);
 
     unmount();
   });
 
   // -------------------------------------------------------------------------
-  // #9: Space with kernel focus on a card still dispatches with the
-  //     wrapper moniker AND preventDefaults (positive scenario rolled
+  // #9: Space with kernel focus on a card still dispatches the backend
+  //     entity.inspect AND preventDefaults (positive scenario rolled
   //     into the new defaultPrevented assertion).
   // -------------------------------------------------------------------------
 
@@ -756,9 +729,10 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
       event.defaultPrevented,
       "Space with kernel focus on an Inspectable must preventDefault",
     ).toBe(true);
-    const dispatches = inspectDispatches();
+    const dispatches = entityInspectDispatches();
     expect(dispatches.length).toBe(1);
-    expect(dispatches[0].target).toBe("task:T1");
+    expect(dispatches[0].scopeChain?.[0]).toBe("task:T1");
+    expect(inspectDispatches().length).toBe(0);
 
     unmount();
   });
@@ -769,17 +743,17 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
   //
   // The first iteration of the Space-binding fix scoped the new binding
   // to cua + emacs only, on a judgment call about a hypothetical vim
-  // leader key. `SEQUENCE_TABLES.vim` has no `Space` prefix, so leaving
+  // leader key. No vim chord uses a `Space` prefix (the plugin-declared
+  // chord roots are `g` and `d`), so leaving
   // Space unbound there meant the binding-table lookup missed in vim
   // mode and the keydown handler did not call `preventDefault()` —
   // production users in vim mode still saw page-scroll on Space.
   //
   // The three scenarios below mirror #6, #7, and #9 above with the
   // `get_ui_state` mock advertising `keymap_mode: "vim"` instead of
-  // `"cua"`. Each was a hard failure before vim was added to the three
-  // `keys` maps (`BINDING_TABLES.vim`, the per-`<Inspectable>` scope
-  // command in `inspectable.tsx`, and the root command in
-  // `app-shell.tsx`).
+  // `"cua"`. Each was a hard failure before vim was added to the two
+  // `keys` maps (`BINDING_TABLES.vim` and the plugin-owned
+  // `entity.inspect` `keys` in `builtin/plugins/app-shell-commands/commands/ui.ts`).
 
   describe("Vim-mode parity — Space inspects in all three keymaps", () => {
     beforeEach(() => {
@@ -812,7 +786,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
       ).toBe(true);
       expect(
         inspectDispatches().length,
-        "Space with no kernel focus in vim mode must NOT dispatch ui.inspect",
+        "Space with no kernel focus in vim mode must NOT dispatch app.inspect",
       ).toBe(0);
 
       unmount();
@@ -847,7 +821,7 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
       ).toBe(true);
       expect(
         inspectDispatches().length,
-        "Space on a non-Inspectable focused scope in vim mode must NOT dispatch ui.inspect",
+        "Space on a non-Inspectable focused scope in vim mode must NOT dispatch app.inspect",
       ).toBe(0);
 
       unmount();
@@ -882,12 +856,13 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
         event.defaultPrevented,
         "Space with kernel focus on an Inspectable in vim mode must preventDefault",
       ).toBe(true);
-      const dispatches = inspectDispatches();
+      const dispatches = entityInspectDispatches();
       expect(
         dispatches.length,
-        "Space on a focused card in vim mode must dispatch ui.inspect exactly once",
+        "Space on a focused card in vim mode must dispatch entity.inspect exactly once",
       ).toBe(1);
-      expect(dispatches[0].target).toBe("task:T1");
+      expect(dispatches[0].scopeChain?.[0]).toBe("task:T1");
+      expect(inspectDispatches().length).toBe(0);
 
       unmount();
     });

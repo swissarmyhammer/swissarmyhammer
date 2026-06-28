@@ -11,8 +11,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EntityIcon } from "@/components/entity-icon";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { getBoardData, listOpenBoards } from "@/lib/window-mcp";
+import { subscribeStoreChanged } from "@/lib/mcp-notifications";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { useDispatchCommand } from "@/lib/command-scope";
 import { EditorView } from "@codemirror/view";
@@ -23,7 +23,7 @@ import { TextEditor } from "@/components/fields/text-editor";
 import { BoardSelector } from "@/components/board-selector";
 import { useUIState } from "@/lib/ui-state-context";
 import appIcon from "@/assets/app-icon-32.png";
-import type { OpenBoard, BoardDataResponse, Entity } from "@/types/kanban";
+import type { OpenBoard, Entity } from "@/types/kanban";
 import { entityFromBag, getNum } from "@/types/kanban";
 
 const STORAGE_KEY = "quick-capture-last-board";
@@ -34,13 +34,6 @@ const WINDOW_WIDTH_PX = 560;
 const MAX_CARD_HEIGHT_PX = 400;
 /** Vertical chrome around the card (matches the outer `p-2` padding = 8px × 2). */
 const WINDOW_VERTICAL_PADDING_PX = 16;
-
-/** Payload for entity-field-changed Tauri event. */
-interface EntityFieldChangedEvent {
-  entity_type: string;
-  id: string;
-  fields?: Record<string, unknown>;
-}
 
 /** Derives a minimal "board" entity for BoardSelector from the selected OpenBoard. */
 function deriveBoardEntity(
@@ -66,7 +59,7 @@ function useBoardList() {
 
   const loadBoards = useCallback(async () => {
     try {
-      const result = await invoke<OpenBoard[]>("list_open_boards");
+      const result = await listOpenBoards();
       if (!mountedRef.current) return;
       setBoards(result);
       const stored = localStorage.getItem(STORAGE_KEY);
@@ -89,22 +82,21 @@ function useBoardList() {
   return { boards, selectedPath, setSelectedPath, ready, loadBoards };
 }
 
-/** Subscribes to Tauri entity and board events to keep the board list fresh. */
+/** Subscribes to the MCP store-change plane to keep the board list fresh. */
 function useBoardEventListeners(loadBoards: () => Promise<void>) {
   useEffect(() => {
-    const unlisteners = [
-      // Only reload when a board entity changes, ignoring task/column changes.
-      listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
-        if (event.payload.entity_type === "board") loadBoards();
-      }),
-      listen("board-changed", () => {
+    let disposed = false;
+    // Only reload when a board/column store changes, ignoring task/tag changes.
+    const unsubPromise = subscribeStoreChanged((batch) => {
+      if (batch.some((n) => n.store === "board" || n.store === "column")) {
         loadBoards();
-      }),
-    ];
-    return () => {
-      for (const p of unlisteners) {
-        p.then((fn) => fn());
       }
+    });
+    return () => {
+      disposed = true;
+      unsubPromise.then((unsub) => {
+        if (disposed) unsub();
+      });
     };
   }, [loadBoards]);
 }
@@ -213,9 +205,7 @@ function useQuickCaptureSubmit(
       if (!selectedPath || !text.trim()) return;
       try {
         const active = boards.find((b) => b.is_active);
-        const boardData = await invoke<BoardDataResponse>("get_board_data", {
-          boardPath: selectedPath,
-        });
+        const boardData = await getBoardData(selectedPath);
         const columns = boardData.columns
           .map(entityFromBag)
           .sort((a, b) => getNum(a, "order") - getNum(b, "order"));

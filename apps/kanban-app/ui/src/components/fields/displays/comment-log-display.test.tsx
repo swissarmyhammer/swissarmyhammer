@@ -1,25 +1,25 @@
 import { describe, it, expect, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import { renderInAct } from "@/test/act-render";
+import { makeActor } from "@/test/entity-fixtures";
 
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before importing the component under test
 // ---------------------------------------------------------------------------
 
-vi.mock("@tauri-apps/api/core", () => ({
+// Spread the real module and override only the parts the test controls.
+// @tauri-apps/api >=2.11 pulls submodules that import named exports from core
+// (SERIALIZE_TO_IPC_FN, Resource, Channel, …); a hand-listed stub drops them
+// and breaks module loading.
+vi.mock("@tauri-apps/api/core", async (importActual) => ({
+  ...(await importActual<typeof import("@tauri-apps/api/core")>()),
   invoke: vi.fn(() => Promise.resolve("ok")),
 }));
-vi.mock("@tauri-apps/api/event", () => ({
+vi.mock("@tauri-apps/api/event", async (importActual) => ({
+  ...(await importActual<typeof import("@tauri-apps/api/event")>()),
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
-vi.mock("@tauri-apps/plugin-log", () => ({
-  error: vi.fn(),
-  warn: vi.fn(),
-  info: vi.fn(),
-  debug: vi.fn(),
-  trace: vi.fn(),
-  attachConsole: vi.fn(() => Promise.resolve()),
-}));
+// `@tauri-apps/plugin-log` is mocked globally in `src/test/setup.ts`.
 
 import { CommentLogDisplay } from "./comment-log-display";
 import { SchemaProvider } from "@/lib/schema-context";
@@ -29,7 +29,7 @@ import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { asSegment } from "@/types/spatial";
-import type { Entity, FieldDef } from "@/types/kanban";
+import type { FieldDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -61,17 +61,12 @@ const COMMENT_B = {
   timestamp: "2026-01-02T00:00:00+00:00",
 };
 
-function makeActor(id: string, name: string): Entity {
-  return {
-    entity_type: "actor",
-    id,
-    moniker: `actor:${id}`,
-    fields: { name },
-  };
-}
-
 const ACTORS = [makeActor("alice", "Alice Smith"), makeActor("bob", "Bob Jones")];
 
+/**
+ * Wrap CommentLogDisplay in required providers. Accepts the `value` to render
+ * and an `options` object overriding the `field` def and display `mode`.
+ */
 async function renderDisplay(
   value: unknown,
   options: { field?: FieldDef; mode?: "compact" | "full" } = {},

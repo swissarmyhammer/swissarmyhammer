@@ -37,10 +37,11 @@ impl crate::agent::ClaudeAgent {
         if Self::SUPPORTED_PROTOCOL_VERSIONS.contains(client_requested_version) {
             *client_requested_version
         } else {
-            *Self::SUPPORTED_PROTOCOL_VERSIONS
+            Self::SUPPORTED_PROTOCOL_VERSIONS
                 .iter()
                 .max()
-                .unwrap_or(&ProtocolVersion::V1)
+                .copied()
+                .unwrap_or(ProtocolVersion::V1)
         }
     }
 }

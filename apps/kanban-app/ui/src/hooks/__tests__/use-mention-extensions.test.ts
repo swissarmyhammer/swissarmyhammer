@@ -322,6 +322,36 @@ describe("useMentionExtensions", () => {
     expect(entry.color).toBe("4078c0");
   });
 
+  it("keys the metaMap by the top-level id when the slug field is \"id\"", () => {
+    // Projects declare `mention_slug_field: id`. `entityFromBag` lifts `id`
+    // OUT of the `fields` bag onto the top-level `Entity.id`, so reading the
+    // slug must consult the identity column, not `fields["id"]`. Before the
+    // fix this returned "" and `buildMentionMetaMap` skipped every project,
+    // leaving the map empty.
+    const projects = [
+      {
+        id: "task-card-fields",
+        entity_type: "project",
+        moniker: "project:task-card-fields",
+        fields: {
+          name: "Task Card Fields",
+          color: "6366f1",
+        },
+      },
+    ];
+
+    const metaMap = buildMentionMetaMap(projects, "name", "id");
+
+    // Keyed by the project's top-level id, not slugify(name).
+    expect(metaMap.has("task-card-fields")).toBe(true);
+
+    const entry = metaMap.get("task-card-fields")!;
+    // displayName = id slug (pill label); description = display value (tooltip).
+    expect(entry.displayName).toBe("task-card-fields");
+    expect(entry.description).toBe("Task Card Fields");
+    expect(entry.color).toBe("6366f1");
+  });
+
   it("falls back to slugify(displayName) when no slug field is given", () => {
     // Backwards-compat: tag/actor entities whose ids are slug-shaped pass
     // no slug field and keep the legacy slugify behavior.

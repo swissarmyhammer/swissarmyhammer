@@ -8,12 +8,26 @@
  * previously focused FQM's callback and `true` to the newly focused one's.
  *
  * Each Tauri window has its own React tree and therefore its own claim
- * registry, so a `focus-changed` event for another window's FQM is a
- * silent no-op here — the lookup misses and nothing fires. We do not
- * filter on `window_label` because Tauri's emit-to-all behavior is
- * symmetric: every window receives every event, but only the window that
- * actually mounted the matching `<FocusScope>` will have a callback to
- * dispatch to.
+ * registry. The kernel directs each `focus-changed` at a SINGLE window via
+ * `emit_to(event.window_label, ...)`, but `emit_to` is NOT reliably confined
+ * in a multi-window app — every window's global `listen` receives the event
+ * regardless of target (the same Tauri behavior the `ui/request` responder
+ * bus guards against). The provider's listener therefore filters by
+ * `payload.window_label === getCurrentWindow().label` and ignores other
+ * windows' events. Without that filter, another window's focus event
+ * overwrote `focusedFqRef` (the value the kernel's `focus.current` /
+ * `focus.geometry` pulls answer from) and a host-driven drill resolved the
+ * WRONG window's focus when two windows showed the same board.
+ *
+ * Each window also roots its focus layer at its UNIQUE label
+ * (`/<label>/window`, see `App.tsx`'s `WINDOW_ROOT_FQ`), so a card is
+ * `/<label>/.../task:Z` — window-unique by construction, and the kernel
+ * resolves the owning window from the window-rooted fq path rather than a
+ * side field. Historically every window rooted at the bare `/window`, so a
+ * card was `/window/.../task:Z` in *every* window showing that board and a
+ * broadcast would light up the same card everywhere ("jump highlights all
+ * windows"); the kernel clobber on the shared root then sent events to the
+ * wrong window.
  *
  * This file does **not** replace `entity-focus-context.tsx` — that
  * context still drives the entity scope registry and command-scope
@@ -36,12 +50,61 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   type ReactNode,
 } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  FOCUS_CHANGED_EVENT,
+  type FocusChanged,
+} from "@/lib/mcp-notifications";
+/**
+ * Read this window's Tauri label via the static `getCurrentWindow()` import.
+ *
+ * This is the SAME reliable accessor `App.tsx` (`WINDOW_ROOT_FQ`),
+ * `views-context.tsx`, and `perspective-context.tsx` use. The previous
+ * `require("@tauri-apps/api/window")` form THREW in the Vite ESM production
+ * bundle (`require` is undefined there) and silently fell back to `"main"`,
+ * which mislabeled every `set focus` / drill commit's window and broke
+ * cross-window focus routing. The kernel now derives the owning window from
+ * the window-rooted fq path (the root segment IS the label), so this value is
+ * no longer load-bearing for window resolution — but it must still be the real
+ * label, not a "main" fallback, so nothing downstream is misled by a wrong
+ * window arg. The static import is mocked in the spatial test harness exactly
+ * as the other window-aware contexts are.
+ */
+function currentWindowLabel(): string {
+  return getCurrentWindow().label;
+}
+
+/**
+ * Read this window's Tauri label, or `null` when it is unknowable.
+ *
+ * `getCurrentWindow()` throws outside a real Tauri webview (no
+ * `__TAURI_INTERNALS__`), which is the normal state for unit tests that do
+ * not mock `@tauri-apps/api/window`. The `focus-changed` window guard uses
+ * this safe form and — mirroring `handleUiRequest`'s own-window guard —
+ * falls through to ACCEPTING the event when the label cannot be resolved,
+ * so window-agnostic harnesses keep their pre-guard behavior.
+ */
+function currentWindowLabelOrNull(): string | null {
+  try {
+    return getCurrentWindow().label;
+  } catch {
+    return null;
+  }
+}
+import {
+  clearFocus as mcpClearFocus,
+  drillIn as mcpDrillIn,
+  drillOut as mcpDrillOut,
+  loseFocus as mcpLoseFocus,
+  navigateFocus as mcpNavigateFocus,
+  popLayer as mcpPopLayer,
+  pushLayer as mcpPushLayer,
+  setFocus as mcpSetFocus,
+} from "@/lib/focus-mcp";
 import type {
   Direction,
   FocusChangedPayload,
@@ -51,8 +114,8 @@ import type {
   SegmentMoniker,
 } from "@/types/spatial";
 import type { LayerScopeRegistry } from "@/lib/layer-scope-registry-context";
-import type { CommandDef } from "@/lib/command-scope";
-import { CommandScopeProvider } from "@/lib/command-scope";
+import { registerWebviewCommandHandler } from "@/lib/webview-command-bus";
+import { registerUiResponder } from "@/lib/ui-request-responder";
 
 // ---------------------------------------------------------------------------
 // Claim registry — per-FQM callbacks
@@ -81,7 +144,7 @@ export type FocusClaimListener = (focused: boolean) => void;
  *
  * Subscribers run synchronously on the same dispatch tick as per-FQM
  * claim listeners, so the work they do should be cheap. Calling back
- * into Tauri (e.g. dispatching `ui.setFocus` to forward the new scope
+ * into Tauri (e.g. dispatching `app.setFocus` to forward the new scope
  * chain) is acceptable — the bridge already does it.
  */
 export type FocusChangedSubscriber = (payload: FocusChangedPayload) => void;
@@ -218,9 +281,14 @@ export interface SpatialFocusActions {
    * none` / detached layout) ARE included — the Jump-To overlay
    * filters zero-area rects when laying out pills.
    */
-  enumerateScopesInLayer: (
-    layerFq: FullyQualifiedMoniker,
-  ) => Array<{ fq: FullyQualifiedMoniker; rect: DOMRect }>;
+  enumerateScopesInLayer: (layerFq: FullyQualifiedMoniker) => Array<{
+    fq: FullyQualifiedMoniker;
+    rect: DOMRect;
+    /** Enclosing scope FQM, for nearest-focusable-ancestor (tier) computation. */
+    parentZone: FullyQualifiedMoniker | null;
+    /** Whether this scope is a focus target (`showFocus`); zones are `false`. */
+    focusable: boolean;
+  }>;
   /**
    * Look up the layer FQM whose `LayerScopeRegistry` currently
    * contains `fq`. Returns `null` when no registry has the FQM (the
@@ -304,16 +372,49 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
   // kernel itself tolerates — don't corrupt the React-side view.
   const layerStackRef = useRef<FullyQualifiedMoniker[]>([]);
 
-  // Subscribe to the global `focus-changed` event exactly once for the
-  // provider's lifetime. The cleanup is critical: an unmounted provider
-  // that left its listener live would receive every focus-changed event
-  // for the rest of the process and call into the now-empty registry,
-  // leaking memory holding the closure references.
+  // Subscribe to focus changes over the MCP notification bridge exactly once
+  // for the provider's lifetime. The webview is a pure MCP client: it reads
+  // `notifications/focus/changed` (the host re-broadcasts each bridge
+  // notification as a Tauri event named by its method, scoped to the
+  // originating window) rather than a bespoke direct `focus-changed` event.
+  // The bridge notification's params ARE the kernel's `FocusChangedEvent`
+  // (the declared `FocusChanged` payload, structurally `FocusChangedPayload`).
+  //
+  // We `listen` directly (rather than through `subscribeFocusChanged`) so the
+  // handler registers SYNCHRONOUSLY on mount — the spatial test harness fires
+  // focus events immediately after render and a deferred (dynamic-import)
+  // registration would miss them. `subscribeFocusChanged` in
+  // `mcp-notifications.ts` remains the documented seam for plugins / other
+  // consumers; both target the same `FOCUS_CHANGED_EVENT`.
+  //
+  // The cleanup is critical: an unmounted provider that left its listener live
+  // would receive every focus event for the rest of the process and call into
+  // the now-empty registry, leaking memory holding the closure references.
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let cancelled = false;
 
-    listen<FocusChangedPayload>("focus-changed", ({ payload }) => {
+    listen<FocusChanged>(FOCUS_CHANGED_EVENT, ({ payload: change }) => {
+      // The declared `FocusChanged` payload is structurally the legacy
+      // `FocusChangedPayload` (the kernel's `FocusChangedEvent` fields); read
+      // it as such.
+      const payload = change as unknown as FocusChangedPayload;
+      // Window scoping: the host's per-window forwarder emits only to the
+      // originating window, but keep the own-window guard as defense in depth
+      // (a multi-window app's global listener historically received events for
+      // EVERY window). Without this filter, another window's focus event could
+      // overwrite `focusedFqRef` — the value the kernel's `focus.current` /
+      // `focus.geometry` pulls answer from — so a host-driven drill in THIS
+      // window resolved the OTHER window's focus (the two-windows-on-one-board
+      // "drill-in/Escape do nothing" bug). The event's `window_label` is
+      // derived by the kernel from the window-rooted fq chain, so it is the
+      // authoritative owner; only our own window's events apply here. When the
+      // label is unknowable (window-agnostic test harness) fall through and
+      // accept, matching `handleUiRequest`'s own-window guard.
+      const ownLabel = currentWindowLabelOrNull();
+      if (ownLabel !== null && payload.window_label !== ownLabel) {
+        return;
+      }
       const registry = registryRef.current;
       if (payload.prev_fq !== null) {
         registry.get(payload.prev_fq)?.(false);
@@ -346,6 +447,33 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Register the host→UI geometry responders (Card F2). The focus kernel
+  // PULLS live geometry and current focus from the webview on demand over
+  // the F1 host→UI channel; this provider is the natural source because it
+  // already owns the latest focused FQM (`focusedFqRef`) and the per-layer
+  // scope registries (`layerRegistriesRef`). Both responders build their
+  // answer ON DEMAND at request time — `focus.geometry` re-samples
+  // `getBoundingClientRect` via `buildSnapshotForFocused`; nothing is
+  // cached. (`focus.scopeChain` is registered by `EntityFocusProvider`,
+  // which owns the focused entity's scope chain.) Registered in an effect
+  // (not render) so the cleanup runs on unmount and a hot-reloaded provider
+  // does not leak a stale responder.
+  useEffect(() => {
+    const unregisterGeometry = registerUiResponder("focus.geometry", () => {
+      const focusedFq = focusedFqRef.current;
+      if (focusedFq === null) return null;
+      return buildSnapshotForFocused(layerRegistriesRef, focusedFq) ?? null;
+    });
+    const unregisterCurrent = registerUiResponder(
+      "focus.current",
+      () => focusedFqRef.current,
+    );
+    return () => {
+      unregisterGeometry();
+      unregisterCurrent();
+    };
+  }, []);
+
   // Stable actions bag. Built once via a lazy-init ref so consumers that
   // only need actions never re-render — every closure reads from the
   // registry ref, not React state.
@@ -360,63 +488,35 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
     );
   }
 
-  // Register `nav.focus` at this level so any descendant `<FocusScope>`'s
-  // click handler can dispatch it without requiring an
-  // `<EntityFocusProvider>` ancestor. The execute closure calls
-  // `actions.focus(fq)` directly — the kernel-facing primitive that
-  // dispatches `spatial_focus` IPC. When `<EntityFocusProvider>` is
-  // mounted as a descendant, it registers an inner `nav.focus` that
-  // shadows this one (commands are scope-chained, inner wins). That
-  // inner version routes through `setFocus`, which is identity-equal to
-  // calling `spatial.focus(fq)` in production but also covers the
-  // entity-focus test-harness fallback (direct store mutation when no
-  // spatial provider is mounted, which doesn't apply here since this
-  // closure only runs when `<SpatialFocusProvider>` is mounted).
+  // Register the `nav.focus` WEBVIEW-BUS handler — the single webview
+  // execution leg of the plugin-owned `nav.focus` command (Card G).
+  //
+  // The command is DEFINED once, in the `nav-commands` builtin plugin
+  // (`builtin/plugins/nav-commands/index.ts`); its host-side execute routes
+  // to the focus kernel's `set focus` op WITHOUT a snapshot, and the kernel
+  // silently drops a snapshot-less commit (its transient-unmount contract).
+  // The webview therefore intercepts the id on the command bus and runs
+  // `actions.focus(fq)` — which composes the live geometry snapshot from
+  // the per-layer registries and dispatches `spatial_focus` IPC. The kernel
+  // emits `focus-changed` back to React; the registered claim listeners for
+  // `prev_fq` / `next_fq` fire to update each scope's focus indicator.
+  //
+  // This is presentation wiring in the bus's sense: spatial focus is
+  // transient UI state, and the handler's only job is attaching the
+  // webview-owned geometry to the kernel commit — there is no durable
+  // domain mutation to route back through a backend op (the backend op IS
+  // `nav.focus`, whose host leg this handler completes).
   //
   // Per card `01KR7CDEFWWVF4WH0BCHE8Y21J`'s modal-layer model: every
   // non-null focus claim flows through `nav.focus`. Components do not
   // call `spatial.focus(fq)` or `setFocus(fq)` directly — they dispatch
   // `nav.focus({ args: { fq } })`. Cross-cutting concerns (telemetry,
-  // animations, scroll-on-focus) hang off this one closure.
-  const navFocusCommands = useMemo<readonly CommandDef[]>(
-    () => [buildSpatialNavFocusCommand(actionsRef.current!)],
-    [],
-  );
-
-  return (
-    <SpatialFocusContext.Provider value={actionsRef.current}>
-      <CommandScopeProvider commands={navFocusCommands}>
-        {children}
-      </CommandScopeProvider>
-    </SpatialFocusContext.Provider>
-  );
-}
-
-/**
- * Build the `nav.focus` command for the spatial-focus level — the
- * kernel-facing focus claim path.
- *
- * The execute closure reads `args.fq` from the dispatch options and
- * calls `actions.focus(fq)`, which composes a snapshot from the
- * per-layer registry and dispatches `spatial_focus` IPC. The kernel
- * emits `focus-changed` back to React; the registered claim listeners
- * for `prev_fq` and `next_fq` fire to update each scope's visible
- * focus indicator.
- *
- * When an `<EntityFocusProvider>` descendant registers its own
- * `nav.focus`, the inner registration shadows this one. The inner
- * version goes through `useFocusActions().setFocus(fq)`, which has the
- * same production behavior (calls `spatial.focus`) but also handles
- * the test-harness no-spatial-provider fallback. This dual
- * registration means every test setup that mounts at least one of the
- * two providers gets `nav.focus` resolution without modifying the test
- * harness.
- */
-function buildSpatialNavFocusCommand(actions: SpatialFocusActions): CommandDef {
-  return {
-    id: "nav.focus",
-    name: "Focus Scope",
-    execute: (opts) => {
+  // animations, scroll-on-focus) hang off this one closure. Registered in
+  // an effect so the ownership-guarded cleanup runs on unmount and a
+  // hot-reloaded provider never leaks a stale closure.
+  useEffect(() => {
+    const actions = actionsRef.current!;
+    return registerWebviewCommandHandler("nav.focus", (opts) => {
       const fq = opts?.args?.fq;
       if (typeof fq !== "string") {
         // Defensive: a dispatch without `args.fq` is a programming
@@ -429,8 +529,14 @@ function buildSpatialNavFocusCommand(actions: SpatialFocusActions): CommandDef {
       void actions.focus(fq as FullyQualifiedMoniker).catch((err) => {
         console.error("[nav.focus] spatial.focus failed", err);
       });
-    },
-  };
+    });
+  }, []);
+
+  return (
+    <SpatialFocusContext.Provider value={actionsRef.current}>
+      {children}
+    </SpatialFocusContext.Provider>
+  );
 }
 
 /**
@@ -472,11 +578,14 @@ function buildSpatialFocusActions(
 
   const focus: SpatialFocusActions["focus"] = async (fq) => {
     const snapshot = buildSnapshotForFocused(layerRegistriesRef, fq);
-    await invoke("spatial_focus", { fq, snapshot });
+    await mcpSetFocus(fq, snapshot, currentWindowLabel());
   };
 
   const clearFocus: SpatialFocusActions["clearFocus"] = async () => {
-    await invoke("spatial_clear_focus");
+    // MCP wire has no ambient `tauri::Window` — pass this window's
+    // label explicitly (the legacy `spatial_clear_focus` Tauri command
+    // derived it from the `Window` param on the host side).
+    await mcpClearFocus(currentWindowLabel());
   };
 
   const navigate: SpatialFocusActions["navigate"] = async (
@@ -484,7 +593,12 @@ function buildSpatialFocusActions(
     direction,
   ) => {
     const snapshot = buildSnapshotForFocused(layerRegistriesRef, focusedFq);
-    await invoke("spatial_navigate", { focusedFq, direction, snapshot });
+    await mcpNavigateFocus(
+      focusedFq,
+      direction,
+      snapshot,
+      currentWindowLabel(),
+    );
   };
 
   const registerLayerRegistry: SpatialFocusActions["registerLayerRegistry"] = (
@@ -516,7 +630,7 @@ function buildSpatialFocusActions(
       // until something else moves it.
       if (lostRect === null) return;
       const snapshot = registry.buildSnapshot(layerFq);
-      invoke("spatial_focus_lost", {
+      mcpLoseFocus({
         focusedFq: fq,
         lostParentZone: entry.parentZone,
         lostLayerFq: layerFq,
@@ -531,6 +645,31 @@ function buildSpatialFocusActions(
         layerRegistriesRef.current.delete(layerFq);
       }
     };
+  };
+
+  // Serialize the kernel layer ops (push / pop). Each op is dispatched
+  // only after the previous one has FULLY completed on the host, so the
+  // kernel registry observes layer mutations in React lifecycle order.
+  //
+  // Why this matters: the host handles each MCP call as an independent
+  // async task (contending on the per-board platform lock), so two calls
+  // issued back-to-back can complete out of order. React StrictMode's
+  // double-invoked effects make `<FocusLayer>` fire push(fq) → pop(fq) →
+  // push(fq) microseconds apart; when the cleanup pop was processed AFTER
+  // the remount push, the window-root layer was deleted permanently and
+  // every later focus commit in that window dropped with "focus snapshot
+  // names an unregistered layer" — the two-windows-on-one-board "no focus
+  // markers in the second window" bug. Window-unique layer FQs
+  // (`/<label>/window`) made the lost push fatal: under the old shared
+  // `/window` root the sibling window's surviving push masked it.
+  //
+  // The chain swallows rejections so one failed op never wedges the
+  // queue; each caller still observes its own op's rejection.
+  let layerOpChain: Promise<unknown> = Promise.resolve();
+  const enqueueLayerOp = <T,>(op: () => Promise<T>): Promise<T> => {
+    const run = layerOpChain.then(op, op);
+    layerOpChain = run.catch(() => undefined);
+    return run;
   };
 
   const pushLayer: SpatialFocusActions["pushLayer"] = async (
@@ -553,7 +692,18 @@ function buildSpatialFocusActions(
     const existing = stack.indexOf(fq);
     if (existing !== -1) stack.splice(existing, 1);
     stack.push(fq);
-    await invoke("spatial_push_layer", { fq, segment, name, parent });
+    // MCP wire has no ambient `tauri::Window` — pass this window's
+    // label explicitly (the legacy `spatial_push_layer` Tauri command
+    // derived it from the `Window` param on the host side).
+    await enqueueLayerOp(() =>
+      mcpPushLayer({
+        fq,
+        segment,
+        name,
+        parent,
+        window: currentWindowLabel(),
+      }),
+    );
   };
 
   const popLayer: SpatialFocusActions["popLayer"] = async (fq) => {
@@ -564,13 +714,10 @@ function buildSpatialFocusActions(
     const stack = layerStackRef.current;
     const idx = stack.indexOf(fq);
     if (idx !== -1) stack.splice(idx, 1);
-    const nextFq = await invoke<FullyQualifiedMoniker | null>(
-      "spatial_pop_layer",
-      { fq },
-    );
+    const nextFq = await enqueueLayerOp(() => mcpPopLayer(fq));
     if (nextFq !== null && nextFq !== undefined) {
       const snapshot = buildSnapshotForFocused(layerRegistriesRef, nextFq);
-      await invoke("spatial_focus", { fq: nextFq, snapshot });
+      await mcpSetFocus(nextFq, snapshot, currentWindowLabel());
     }
   };
 
@@ -581,20 +728,12 @@ function buildSpatialFocusActions(
 
   const drillIn: SpatialFocusActions["drillIn"] = async (fq, focusedFq) => {
     const snapshot = buildSnapshotForFocused(layerRegistriesRef, focusedFq);
-    return await invoke<FullyQualifiedMoniker>("spatial_drill_in", {
-      fq,
-      focusedFq,
-      snapshot,
-    });
+    return await mcpDrillIn(fq, focusedFq, snapshot, currentWindowLabel());
   };
 
   const drillOut: SpatialFocusActions["drillOut"] = async (fq, focusedFq) => {
     const snapshot = buildSnapshotForFocused(layerRegistriesRef, focusedFq);
-    return await invoke<FullyQualifiedMoniker>("spatial_drill_out", {
-      fq,
-      focusedFq,
-      snapshot,
-    });
+    return await mcpDrillOut(fq, focusedFq, snapshot, currentWindowLabel());
   };
 
   const focusedFq: SpatialFocusActions["focusedFq"] = () =>
@@ -613,11 +752,21 @@ function buildSpatialFocusActions(
     (layerFq) => {
       const registry = layerRegistriesRef.current.get(layerFq);
       if (registry === undefined) return [];
-      const out: Array<{ fq: FullyQualifiedMoniker; rect: DOMRect }> = [];
+      const out: Array<{
+        fq: FullyQualifiedMoniker;
+        rect: DOMRect;
+        parentZone: FullyQualifiedMoniker | null;
+        focusable: boolean;
+      }> = [];
       for (const [fq, entry] of registry.entries()) {
         const node = entry.ref.current;
         if (node === null) continue;
-        out.push({ fq, rect: node.getBoundingClientRect() });
+        out.push({
+          fq,
+          rect: node.getBoundingClientRect(),
+          parentZone: entry.parentZone,
+          focusable: entry.showFocus ?? true,
+        });
       }
       return out;
     };

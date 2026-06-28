@@ -31,46 +31,9 @@ import { render, fireEvent, act, waitFor } from "@testing-library/react";
 // Tauri API mocks — must come before component imports.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-/**
- * Per-test storage for `spatial_drill_in` responses keyed by
- * `FullyQualifiedMoniker`. Tests set entries here before pressing Enter so the
- * mock kernel returns the right child moniker for the focused field.
- */
-const drillInResponses = new Map<string, string | null>();
-
-/**
- * Tracks the moniker → FullyQualifiedMoniker mapping so `spatial_focus_by_moniker`
- * can synthesize the kernel's `focus-changed` emit. Card
- * `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus store a pure
- * projection of kernel events; tests that mock `invoke` without a
- * kernel simulator need this minimal stub so `setFocus(moniker)`
- * still flows through the spatial-focus bridge into the React store.
- */
-const monikerToKey = new Map<string, string>();
-const currentFocusKey: { key: string | null } = { key: null };
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -111,6 +74,17 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import "@/components/fields/registrations";
 import { EntityInspector } from "./entity-inspector";
 import { AppShell } from "./app-shell";
+import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+  navDispatchCmds,
+} from "@/test/mock-command-list";
+import {
+  UNHANDLED,
+  emitToListenerMap,
+  makeSpatialKernelMock,
+} from "@/test/mock-spatial-kernel";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -199,17 +173,28 @@ const TAG_SCHEMA = {
 
 const SCHEMAS: Record<string, unknown> = { task: TASK_SCHEMA, tag: TAG_SCHEMA };
 
-/** Default invoke responses for the mount-time IPCs the providers fire. */
-async function defaultInvokeImpl(
-  cmd: string,
-  args?: unknown,
-): Promise<unknown> {
-  if (cmd === "list_entity_types") return ["task", "tag"];
-  if (cmd === "get_entity_schema") {
-    const entityType = (args as { entityType?: string })?.entityType;
+/**
+ * Shared spatial-kernel mock: the `monikerToKey` projection, the
+ * `currentFocusKey` slot, the per-test `drillInResponses` override map, and
+ * the `handleSpatialCommand` dispatcher implementing the no-silent-dropout
+ * echo contract. Tests seed `drillInResponses` to steer drill-in answers.
+ */
+const { drillInResponses, handleSpatialCommand, reset: resetSpatialKernel } =
+  makeSpatialKernelMock({ emit: emitToListenerMap(listeners) });
+
+/**
+ * Answer the entity- and UI-shell IPCs the providers fire at mount
+ * (entity types, schema lookup, UI/undo state, command-scope listing,
+ * raw `dispatch_command`). Returns {@link UNHANDLED} when `command` is not
+ * one of these so the caller can fall through to other handlers.
+ */
+function handleEntityCommand(command: string, commandArgs?: unknown): unknown {
+  if (command === "list_entity_types") return ["task", "tag"];
+  if (command === "get_entity_schema") {
+    const entityType = (commandArgs as { entityType?: string })?.entityType;
     return SCHEMAS[entityType ?? ""] ?? TASK_SCHEMA;
   }
-  if (cmd === "get_ui_state")
+  if (command === "get_ui_state")
     return {
       palette_open: false,
       palette_mode: "command",
@@ -219,101 +204,35 @@ async function defaultInvokeImpl(
       windows: {},
       recent_boards: [],
     };
-  if (cmd === "get_undo_state") return { can_undo: false, can_redo: false };
-  if (cmd === "list_commands_for_scope") return [];
-  if (cmd === "dispatch_command") return undefined;
-  if (cmd === "spatial_drill_in") {
-    const key = (args as { fq?: string })?.fq ?? "";
-    const focusedMoniker = (args as { focusedFq?: string })?.focusedFq ?? "";
-    // Under the no-silent-dropout contract the kernel echoes the
-    // focused moniker when there's nothing to descend into. Test
-    // entries with non-null values mean "drill walked to a child" —
-    // return that string verbatim. Test entries with null mean
-    // "stay put" (no children, leaf, unknown) — echo the focused
-    // moniker so the React closure's compare-to-focused fall-through
-    // fires.
-    if (drillInResponses.has(key)) {
-      const v = drillInResponses.get(key);
-      return v === null ? focusedMoniker : v;
-    }
-    return focusedMoniker;
-  }
-  if (cmd === "spatial_drill_out") {
-    // Same echo contract for drill-out — the layer-root edge returns
-    // the focused moniker so the React side dispatches app.dismiss.
-    const focusedMoniker = (args as { focusedFq?: string })?.focusedFq ?? "";
-    return focusedMoniker;
-  }
-  if (cmd === "spatial_navigate") return null;
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
-    const a = (args ?? {}) as { fq?: string; segment?: string };
-    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
-    return undefined;
-  }
-  if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { fq?: string };
-    if (a.fq) {
-      for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.fq) {
-          monikerToKey.delete(m);
-          break;
-        }
-      }
-    }
-    return undefined;
-  }
-  if (cmd === "spatial_focus") {
-    // Queued via `queueMicrotask` to match the kernel simulator and
-    // real Tauri events — emitting synchronously would hide
-    // regressions where `setFocus` writes the store synchronously.
-    const a = (args ?? {}) as { fq?: string };
-    const fq = a.fq ?? null;
-    let moniker: string | null = null;
-    for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) {
-        moniker = s;
-        break;
-      }
-    }
+  if (command === "get_undo_state") return { can_undo: false, can_redo: false };
+  if (command === "list_commands_for_scope") return [];
+  if (command === "dispatch_command") return undefined;
+  return UNHANDLED;
+}
 
-    if (fq) {
-      const prev = currentFocusKey.key;
-      currentFocusKey.key = fq;
-      queueMicrotask(() => {
-        const handlers = listeners.get("focus-changed") ?? [];
-        for (const handler of handlers) {
-          handler({
-            payload: {
-              window_label: "main",
-              prev_fq: prev,
-              next_fq: fq,
-              next_segment: moniker,
-            },
-          });
-        }
-      });
-    }
-    return undefined;
-  }
-  if (cmd === "spatial_clear_focus") {
-    const prev = currentFocusKey.key;
-    if (prev === null) return undefined;
-    currentFocusKey.key = null;
-    queueMicrotask(() => {
-      const handlers = listeners.get("focus-changed") ?? [];
-      for (const handler of handlers) {
-        handler({
-          payload: {
-            window_label: "main",
-            prev_fq: prev,
-            next_fq: null,
-            next_segment: null,
-          },
-        });
-      }
-    });
-    return undefined;
-  }
+/** Default invoke responses for the mount-time IPCs the providers fire. */
+async function defaultInvokeImpl(
+  command: string,
+  commandArgs?: unknown,
+): Promise<unknown> {
+  // The field-edit commands are DEFINED by the `app-shell-commands` builtin plugin
+  // (`field.edit` / `field.editEnter`, scope ["ui:field"]) — their Enter /
+  // `i` keys reach the keymap layer only through the `useCommandList` seam,
+  // so answer `list command` with the shared mock registry. Non-list
+  // `command_tool_call` ops fall through to the branches below.
+  const listAnswer = answerListCommand(
+    command,
+    commandArgs,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
+
+  const entityAnswer = handleEntityCommand(command, commandArgs);
+  if (entityAnswer !== UNHANDLED) return entityAnswer;
+
+  const spatialAnswer = handleSpatialCommand(command, commandArgs);
+  if (spatialAnswer !== UNHANDLED) return spatialAnswer;
+
   return undefined;
 }
 
@@ -365,30 +284,56 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
  * Collect every `spatial_focus` invocation. Under the production
  * pathway (`SpatialFocusProvider` mounted), `FocusActions.setFocus(fq)`
  * routes through `spatial.focus(fq)` → `invoke("spatial_focus", { fq })`
- * rather than dispatching a `ui.setFocus` command. The kernel echoes
+ * rather than dispatching a `app.setFocus` command. The kernel echoes
  * a `focus-changed` event the bridge mirrors into the entity-focus
  * store. Tests that observe a drill / setFocus fanout assert on this
- * IPC, not on a `dispatch_command(ui.setFocus, ...)` call.
+ * IPC, not on a `dispatch_command(app.setFocus, ...)` call.
  */
 function spatialFocusCalls(): Array<{ fq?: string }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { fq?: string });
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq?: string };
+      return args;
+    });
 }
 
-/** Filter `dispatch_command` calls down to those for `ui.inspect`. */
+/** Filter `dispatch_command` calls down to those for `app.inspect`. */
 function inspectDispatches(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "dispatch_command")
     .map((c) => c[1] as Record<string, unknown>)
-    .filter((p) => p.cmd === "ui.inspect");
+    .filter((p) => p.cmd === "app.inspect");
+}
+
+/**
+ * Collect every IPC that would carry a host-driven nav effect for the
+ * given kernel command — either a direct client-side `cmd` invocation
+ * (e.g. `spatial_navigate`) or its wrapped `command_tool_call` form
+ * (`{ tool: "focus", op }`). Host-driven nav asserts this list is empty,
+ * proving the effect ran kernel-side rather than leaving the webview.
+ */
+function filterIpcCalls(cmd: string, op: string): unknown[][] {
+  return mockInvoke.mock.calls.filter(
+    (ipcCall) =>
+      ipcCall[0] === cmd ||
+      (ipcCall[0] === "command_tool_call" &&
+        (ipcCall[1] as { tool?: string; op?: string } | undefined)?.tool ===
+          "focus" &&
+        (ipcCall[1] as { tool?: string; op?: string } | undefined)?.op === op),
+  );
 }
 
 /** Filter `spatial_drill_in` calls. */
 function drillInCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_drill_in")
-    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
+      return args;
+    });
 }
 
 /**
@@ -410,7 +355,7 @@ async function fireFocusChanged({
     next_fq,
     next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get("notifications/focus/changed") ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();
@@ -461,13 +406,16 @@ function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
 
 describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)", () => {
   beforeEach(() => {
-    drillInResponses.clear();
+    resetSpatialKernel();
     mockInvoke.mockClear();
     mockListen.mockClear();
     listeners.clear();
-    monikerToKey.clear();
-    currentFocusKey.key = null;
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
   });
 
   afterEach(() => {
@@ -509,7 +457,12 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     await flushSetup();
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
@@ -565,9 +518,15 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
   // search).
   //
   // After drilling into the first pill, the user arrow-keys through
-  // siblings. The kernel resolves "right" via `spatial_navigate(pillKey,
-  // "right")`; we synthesize the kernel's response with a
-  // focus-changed event for the second pill's key.
+  // siblings. Cardinal nav is HOST-DRIVEN (commit f6a56d7c1): the global
+  // `nav.right` command resolves through the keymap and dispatches the
+  // command id to the backend (`dispatch_command nav.right`), where the
+  // `nav-commands` builtin plugin runs the kernel `navigate focus` op —
+  // it resolves the move's origin from its own focus slot, so NO
+  // client-side `spatial_navigate` IPC leaves the webview (the same
+  // contract `entity-inspector.field-vertical-nav.browser.test.tsx`
+  // pins for ArrowUp/ArrowDown). We then synthesize the kernel's
+  // response with a focus-changed event for the second pill's key.
   // -------------------------------------------------------------------------
 
   it("right_from_first_pill_lands_on_second_pill", async () => {
@@ -595,7 +554,12 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     await flushSetup();
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "ArrowRight", code: "ArrowRight" });
@@ -603,16 +567,24 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     });
     await flushSetup();
 
-    // The global `nav.right` command's closure dispatched
-    // `spatial_navigate(focusedKey, "right")` for the bug pill's key.
-    const navCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_navigate")
-      .map(
-        (c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string },
-      );
-    expect(navCalls.length).toBe(1);
-    expect(navCalls[0].focusedFq).toBe(bugPill!.fq);
-    expect(navCalls[0].direction).toBe("right");
+    // ArrowRight on the focused pill routes the global `nav.right`
+    // command id to the backend — the kernel `navigate focus` executes
+    // host-side in the `nav-commands` builtin plugin (it resolves the
+    // move's origin from its own focus slot), so the webview dispatches
+    // the command id and NO client-side `spatial_navigate` IPC leaves
+    // the webview.
+    expect(
+      navDispatchCmds(mockInvoke),
+      "ArrowRight on a focused pill must dispatch nav.right to the backend",
+    ).toEqual(["nav.right"]);
+    const navigateIpcCalls = filterIpcCalls(
+      "spatial_navigate",
+      "navigate focus",
+    );
+    expect(
+      navigateIpcCalls.length,
+      "host-driven nav must NOT emit a client-side spatial_navigate IPC",
+    ).toBe(0);
 
     // Synthesize the kernel's response: focus advances to the ui pill.
     await fireFocusChanged({
@@ -638,13 +610,22 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
   // -------------------------------------------------------------------------
   // #3: Escape from focused pill drills back to the field zone.
   //
-  // Escape resolves through the global `nav.drillOut` command, which
-  // dispatches `spatial_drill_out(pillKey)` and on a non-null moniker
-  // calls `setFocus(...)` against the entity-focus store.
+  // Drill-out is HOST-DRIVEN (commit f6a56d7c1): Escape resolves through
+  // the global `nav.drillOut` command, which dispatches the command id to
+  // the backend (`dispatch_command nav.drillOut`). The `nav-commands`
+  // builtin plugin runs the kernel `drill_out layer` op — it resolves the
+  // focused scope from its own slot, COMMITS focus to the parent zone, and
+  // emits `focus-changed` itself; on a layer-root edge it falls through to
+  // `ui_state dismiss`. So the webview dispatches the command id and emits
+  // NO client-side `spatial_drill_out` / `spatial_focus` IPC (symmetric
+  // with the host-driven cardinal-nav contract in
+  // `entity-inspector.field-vertical-nav.browser.test.tsx`). We then
+  // synthesize the kernel's response with a focus-changed event for the
+  // field zone.
   // -------------------------------------------------------------------------
 
   it("escape_from_pill_drills_back_to_field_zone", async () => {
-    const { unmount } = renderInspector(
+    const { container, unmount } = renderInspector(
       makeTask({ name: "Hello", tags: ["bug", "ui"], id: "T1" }),
       makeTags(),
     );
@@ -654,7 +635,11 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
       .filter((c) => c[0] === "spatial_register_scope")
       .map((c) => c[1] as Record<string, unknown>);
     const bugPill = registeredScopes.find((s) => s.segment === "tag:tag-bug");
+    const tagsZone = registeredScopes.find(
+      (s) => s.segment === "field:task:T1.tags",
+    );
     expect(bugPill).toBeTruthy();
+    expect(tagsZone, "tags field zone must register").toBeTruthy();
 
     // Seed the bug pill as the focused entity (mid-drill state).
     await fireFocusChanged({
@@ -663,13 +648,13 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     });
     await flushSetup();
 
-    // Stub the kernel: drill-out on the bug pill returns the field
-    // zone's moniker.
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
-      if (cmd === "spatial_drill_out") return "field:task:T1.tags";
-      return defaultInvokeImpl(cmd, args);
-    });
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
@@ -677,24 +662,47 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     });
     await flushSetup();
 
-    // The drill-out closure dispatched `spatial_drill_out` for the
-    // pill's key.
-    const drillOutCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_drill_out")
-      .map((c) => c[1] as { fq: FullyQualifiedMoniker });
-    expect(drillOutCalls.length).toBe(1);
-    expect(drillOutCalls[0].fq).toBe(bugPill!.fq);
-
-    // The success branch forwarded the kernel-returned field-zone
-    // moniker through `FocusActions.setFocus`, which under the
-    // production `SpatialFocusProvider` path invokes `spatial_focus`
-    // with `{ fq: "field:task:T1.tags" }`.
-    const focusCalls = spatialFocusCalls();
-    const target = focusCalls.find((c) => c.fq === "field:task:T1.tags");
+    // Escape on the focused pill routes the global `nav.drillOut` command
+    // id to the backend — the kernel `drill_out layer` executes host-side
+    // in the `nav-commands` builtin plugin (it resolves the focused scope
+    // and commits the move from its own slot), so the webview dispatches
+    // the command id and NO client-side `spatial_drill_out` IPC leaves the
+    // webview.
     expect(
-      target,
-      "Escape from a pill must invoke spatial_focus with the field zone moniker",
-    ).toBeTruthy();
+      navDispatchCmds(mockInvoke),
+      "Escape on a focused pill must dispatch nav.drillOut to the backend",
+    ).toEqual(["nav.drillOut"]);
+    const drillOutIpcCalls = filterIpcCalls(
+      "spatial_drill_out",
+      "drill_out layer",
+    );
+    expect(
+      drillOutIpcCalls.length,
+      "host-driven drill-out must NOT emit a client-side spatial_drill_out IPC",
+    ).toBe(0);
+    // No client-side focus commit either — the kernel emits focus-changed.
+    expect(
+      spatialFocusCalls().length,
+      "host-driven drill-out must NOT emit a client-side spatial_focus IPC",
+    ).toBe(0);
+
+    // Synthesize the kernel's response: focus returns to the tags field
+    // zone. The entity-focus bridge mirrors the moniker into the store and
+    // the zone's wrapper flips `data-focused="true"`.
+    await fireFocusChanged({
+      next_fq: tagsZone!.fq as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.tags"),
+    });
+    await flushSetup();
+
+    const tagsNode = container.querySelector(
+      '[data-segment="field:task:T1.tags"]',
+    ) as HTMLElement | null;
+    expect(tagsNode).not.toBeNull();
+    expect(
+      tagsNode!.getAttribute("data-focused"),
+      "after the kernel reports the tags zone as focused, its scope must mark data-focused=true",
+    ).toBe("true");
 
     unmount();
   });
@@ -774,7 +782,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
   // `onEdit`) and `display: "text"` (no pills).
   // `spatial_drill_in(idKey)` returns null. The field.edit closure
   // falls through to `onEdit?.()` which is undefined → silently
-  // returns. No editor mounts; no `ui.inspect` dispatch fires.
+  // returns. No editor mounts; no `app.inspect` dispatch fires.
   // -------------------------------------------------------------------------
 
   it("enter_on_non_editable_field_with_no_pills_is_noop", async () => {
@@ -796,7 +804,12 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     await flushSetup();
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    mockInvoke.mockImplementation(
+      wrapMcpDispatch(mockInvoke, defaultInvokeImpl) as (
+        cmd: string,
+        args?: unknown,
+      ) => Promise<unknown>,
+    );
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
@@ -812,7 +825,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // No inspect dispatch fires.
     expect(
       inspectDispatches().length,
-      "Enter on a non-editable field must NOT dispatch ui.inspect",
+      "Enter on a non-editable field must NOT dispatch app.inspect",
     ).toBe(0);
 
     unmount();
@@ -880,11 +893,11 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
       ).toBe("true");
     });
 
-    // `ui.inspect` must NOT fire — Enter is for drill-in/edit, not
+    // `app.inspect` must NOT fire — Enter is for drill-in/edit, not
     // for inspecting.
     expect(
       inspectDispatches().length,
-      "Enter on an empty pill field must NOT dispatch ui.inspect",
+      "Enter on an empty pill field must NOT dispatch app.inspect",
     ).toBe(0);
 
     unmount();

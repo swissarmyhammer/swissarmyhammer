@@ -14,7 +14,7 @@
 /// partial-merge-by-id semantics in `CommandsRegistry::merge_yaml_value`.
 ///
 /// Mirrors the contributor list used by the app layer's
-/// `swissarmyhammer_commands::compose_registry!` invocation
+/// `crate::commands_core::compose_registry!` invocation
 /// (`swissarmyhammer_commands` then this crate), so production and tests
 /// exercise the same composition path. The macro can't be used directly
 /// here because it expects a `::`-separated identifier path and this
@@ -22,7 +22,53 @@
 /// isn't an identifier).
 pub fn composed_builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
     let mut sources: Vec<(&'static str, &'static str)> = Vec::new();
-    sources.extend(swissarmyhammer_commands::builtin_yaml_sources());
+    sources.extend(crate::commands_core::builtin_yaml_sources());
     sources.extend(crate::builtin_yaml_sources());
     sources
+}
+
+/// Create a temporary, initialized board and return its `(TempDir, KanbanContext)`.
+///
+/// The `TempDir` is returned alongside the context so the caller keeps it alive
+/// for the duration of the test — dropping it deletes the backing `.kanban`
+/// directory. The board is initialized with `InitBoard::new("Test")`, which
+/// creates the default columns, so the returned context is ready for command
+/// execution.
+///
+/// This is the single source of truth for the `setup()` helper that the per-op
+/// test modules previously duplicated verbatim.
+pub async fn setup() -> (tempfile::TempDir, crate::KanbanContext) {
+    use crate::board::InitBoard;
+    use swissarmyhammer_operations::Execute;
+
+    let temp = tempfile::TempDir::new().unwrap();
+    let kanban_dir = temp.path().join(".kanban");
+    let ctx = crate::KanbanContext::new(kanban_dir);
+
+    InitBoard::new("Test")
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+
+    (temp, ctx)
+}
+
+/// Default window label used by the command test helpers.
+///
+/// Per-window ops (palette, inspector, view, app-mode, perspective, drag)
+/// require a `window:<label>` moniker in scope and no longer fall back to a
+/// silent `"main"`. The command test modules seed this label when a test
+/// supplies no explicit window, so they have a window to resolve.
+///
+/// This is the single definition: the command test modules
+/// (`commands/mod.rs`, `commands/drag_commands.rs`,
+/// `commands/perspective_commands.rs`) all reference it rather than each
+/// re-declaring the constant, so the default cannot drift between them.
+pub const DEFAULT_TEST_WINDOW: &str = "main";
+
+/// Build the `window:<DEFAULT_TEST_WINDOW>` scope moniker the command test
+/// helpers append when a test carries no explicit `window:` moniker.
+pub fn default_window_moniker() -> String {
+    format!("window:{DEFAULT_TEST_WINDOW}")
 }

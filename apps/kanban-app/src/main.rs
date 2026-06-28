@@ -4,11 +4,16 @@
 mod ai;
 mod cli;
 mod cli_install;
+mod command_services;
 mod commands;
+mod confine;
 mod deeplink;
+mod expose;
 mod menu;
+mod plugins;
 mod state;
 mod tauri_reporter;
+mod ui_request;
 mod watcher;
 
 pub use tauri_reporter::TauriReporter;
@@ -42,7 +47,11 @@ fn main() {
     // Tauri app exists. Session restore is driven from inside `setup_app`,
     // after the deep-link handler has had its chance to set
     // `AppState::deep_link_handled`.
-    let app_state = AppState::new();
+    //
+    // `AppState::new()` is async because it constructs the embedded plugin
+    // platform (the `PluginHost` with its builtin and user-layer plugins), so
+    // it is driven to completion on the runtime before the Tauri app is built.
+    let app_state = rt.block_on(AppState::new());
     run_app(app_state);
 }
 
@@ -55,35 +64,25 @@ fn run_app(app_state: AppState) {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
-            commands::log_command,
             commands::dispatch_command,
             commands::list_commands_for_scope,
-            commands::show_context_menu,
-            commands::list_open_boards,
             commands::get_ui_state,
             commands::get_entity_schema,
             commands::list_entity_types,
             commands::list_entities,
-            commands::get_entity,
             commands::search_mentions,
             commands::search_entities,
-            commands::get_board_data,
             commands::quit_app,
             commands::new_board_dialog,
             commands::open_board_dialog,
             commands::list_views,
             commands::get_undo_state,
             commands::create_window,
+            commands::expose_board_to_agents,
             commands::save_dropped_file,
-            commands::spatial_focus,
-            commands::spatial_focus_lost,
-            commands::spatial_clear_focus,
-            commands::spatial_navigate,
-            commands::spatial_push_layer,
-            commands::spatial_pop_layer,
-            commands::spatial_drill_in,
-            commands::spatial_drill_out,
-            commands::generate_jump_codes,
+            commands::command_tool_call,
+            commands::mcp_subscribe,
+            ui_request::ui_request_reply,
             ai::models::ai_list_models,
             ai::models::ai_start_agent,
             ai::models::ai_set_streaming,
@@ -111,6 +110,13 @@ fn init_gui_tracing() {
 }
 
 fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    // Hand the AppHandle to the focus MCP server's event sink so every
+    // produced `FocusChangedEvent` is mirrored onto the `focus-changed`
+    // Tauri event the React `SpatialFocusProvider` listens on — restores
+    // the side-effecting `emit` the legacy `spatial_*` Tauri commands
+    // did before Stage 3 of the kanban cut-over removed them.
+    command_services::install_focus_event_app_handle(app.handle().clone());
+
     build_initial_menu(app);
     // Must run before auto_open_board / restore_session_windows. Cold-start
     // URL delivery is synchronous — when this returns, the board is open and
@@ -119,10 +125,27 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     wire_deep_links(app);
 
     let state = app.state::<AppState>();
+
+    // Build the AppHandle-backed `window` / `app` shells (impossible before the
+    // AppHandle existed), store them on AppState, expose them on the global
+    // plugin host, and run the global host's DEFERRED plugin discovery. This is
+    // where the global fallback host finally loads all 8 builtin command
+    // plugins: four of them activate the `window` / `app` backends, which only
+    // exist now. Must run BEFORE `auto_open_board` so each per-board host built
+    // at board-open time reads the stored shells and loads the same baseline.
+    let (window_shell, app_shell) = build_apphandle_shells(app.handle());
+    tauri::async_runtime::block_on(state.install_apphandle_shells(window_shell, app_shell));
+
     tauri::async_runtime::block_on(state.auto_open_board());
 
     let app_handle = app.handle().clone();
     tauri::async_runtime::block_on(state.start_watchers(app_handle));
+
+    // Start the plugin hot-reload watcher now that the app is up — the same
+    // discover-early, watch-once-up pattern board watchers follow. The global
+    // plugin host was discovered just above (after the AppHandle shells were
+    // wired); per-board hosts discover at board-open time.
+    tauri::async_runtime::block_on(state.start_plugin_watcher());
 
     // Skip session window restore when the user deep-linked — otherwise the
     // previous session's windows pile up on top of the one the deep-link
@@ -139,6 +162,140 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // dialog never delay the GUI becoming interactive.
     cli_install::spawn();
     Ok(())
+}
+
+/// Construct the production `AppHandle`-backed shells the plugin hosts expose as
+/// the `window` and `app` MCP modules.
+///
+/// `TauriAppShell` is a direct wrapper over the `AppHandle`. `TauriWindowShell`
+/// additionally needs callbacks for the operations that thread through
+/// `AppState` (which the window-service crate cannot reach) or show a native
+/// dialog; each is wired to the app's existing, proven code paths here.
+fn build_apphandle_shells(
+    handle: &tauri::AppHandle,
+) -> (
+    std::sync::Arc<dyn swissarmyhammer_window_service::WindowShell>,
+    std::sync::Arc<dyn swissarmyhammer_app_service::AppShell>,
+) {
+    use std::sync::Arc;
+    use swissarmyhammer_kanban::board::InitBoard;
+    use swissarmyhammer_kanban::{KanbanContext, KanbanOperationProcessor, OperationProcessor};
+    use swissarmyhammer_window_service::{NewWindow, TauriWindowShell, WindowShell};
+    use tauri_plugin_dialog::DialogExt;
+
+    // open_new_window → the single window-creation path (`create_window_impl`),
+    // run to completion on the confinement runtime (off the Tokio worker pool)
+    // and mapped to the seam's result.
+    let open_window: swissarmyhammer_window_service::OpenWindowFn<tauri::Wry> =
+        Arc::new(|app: &tauri::AppHandle, board_path: Option<String>| {
+            let app = app.clone();
+            let value = crate::confine::run_future(async move {
+                let state = app.state::<AppState>();
+                commands::create_window_impl(&app, &state, board_path, None, None).await
+            })?;
+            Ok(NewWindow {
+                label: value
+                    .get("label")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                board_path: value
+                    .get("board_path")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            })
+        });
+
+    // pick_folder → the native folder picker, in blocking form (the seam shim
+    // is synchronous).
+    let pick_handle = handle.clone();
+    let pick_folder: swissarmyhammer_window_service::PickFolderFn = Arc::new(move || {
+        pick_handle
+            .dialog()
+            .file()
+            .blocking_pick_folder()
+            .and_then(|f| f.into_path().ok())
+    });
+
+    // init_board → run the in-process `InitBoard` op against a context rooted at
+    // the resolved `.kanban` path; a no-op when the board already exists.
+    let init_board: swissarmyhammer_window_service::InitBoardFn =
+        Arc::new(|path: &std::path::Path, name: &str| {
+            let path = path.to_path_buf();
+            let name = name.to_string();
+            crate::confine::run_future(async move {
+                let ctx = KanbanContext::new(&path);
+                if ctx.is_initialized() {
+                    return Ok(());
+                }
+                KanbanOperationProcessor::new()
+                    .process(&InitBoard::new(&name), &ctx)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| format!("failed to init board: {e}"))
+            })
+        });
+
+    // switch_board / close_board → thread through AppState's board lifecycle.
+    let switch_board: swissarmyhammer_window_service::SwitchBoardFn<tauri::Wry> =
+        Arc::new(|app: &tauri::AppHandle, path: &std::path::Path| {
+            let app = app.clone();
+            let path = path.to_path_buf();
+            crate::confine::run_future(async move {
+                let state = app.state::<AppState>();
+                state.open_board(&path, Some(app.clone())).await.map(|_| ())
+            })
+        });
+    let close_board: swissarmyhammer_window_service::CloseBoardFn<tauri::Wry> =
+        Arc::new(|app: &tauri::AppHandle, path: &std::path::Path| {
+            let app = app.clone();
+            let path = path.to_path_buf();
+            crate::confine::run_future(async move {
+                let state = app.state::<AppState>();
+                state.close_board(&path).await
+            })
+        });
+
+    // list_open_boards / get_board_data → the multi-board management reads,
+    // hosted on the `window` server alongside the board-lifecycle writes. Both
+    // thread through `AppState` (the open-board set / per-board entity contexts),
+    // which the window-service crate cannot reach, so — exactly like the
+    // switch_board / close_board callbacks above — they run the existing
+    // projection on the confinement runtime and hand the JSON back to the seam.
+    let list_handle = handle.clone();
+    let list_open_boards: swissarmyhammer_window_service::ListOpenBoardsFn = Arc::new(move || {
+        let app = list_handle.clone();
+        crate::confine::run_future(async move {
+            let state = app.state::<AppState>();
+            commands::list_open_boards_impl(&state).await
+        })
+    });
+    let data_handle = handle.clone();
+    let get_board_data: swissarmyhammer_window_service::GetBoardDataFn =
+        Arc::new(move |board_path: Option<String>| {
+            let app = data_handle.clone();
+            crate::confine::run_future(async move {
+                let state = app.state::<AppState>();
+                commands::get_board_data_impl(&state, board_path).await
+            })
+        });
+
+    let window_shell: Arc<dyn WindowShell> = Arc::new(TauriWindowShell::new(
+        handle.clone(),
+        open_window,
+        pick_folder,
+        init_board,
+        switch_board,
+        close_board,
+        list_open_boards,
+        get_board_data,
+    ));
+
+    // The `app` shell is now a plain AppHandle wrapper (quit / about / help).
+    let app_shell: Arc<dyn swissarmyhammer_app_service::AppShell> = Arc::new(
+        swissarmyhammer_app_service::TauriAppShell::new(handle.clone()),
+    );
+    (window_shell, app_shell)
 }
 
 fn build_initial_menu(app: &tauri::App) {
@@ -177,7 +334,7 @@ fn wire_deep_links(app: &tauri::App) {
     });
 }
 
-/// Restore ALL board windows from persisted UIState. Every board window is
+/// Restore ALL board windows from persisted UiState. Every board window is
 /// created dynamically via `create_window_impl` — no static "main" window,
 /// no primary/secondary distinction. Falls back to one window for the first
 /// open board when nothing was restored.
@@ -325,16 +482,49 @@ fn on_window_geometry_changed(window: &tauri::Window, label: &str) {
 
 /// When a board window gains focus, update `most_recent_board_path` so quick
 /// capture and commands without an explicit `board_path` target the right
-/// board. Menu rebuild is handled by the frontend re-dispatching `ui.setFocus`
+/// board. Menu rebuild is handled by the frontend re-dispatching `app.setFocus`
 /// on window focus.
+///
+/// Also raises the raw-window-lifecycle `notifications/window/focused` event on
+/// the window's bridge so plugins subscribed with
+/// `this.window.on("window.focused", …)` observe the focus change. The publish
+/// is async (it resolves the window's board bridge), so it is spawned off this
+/// synchronous OS event handler — see [`spawn_window_lifecycle_publish`].
 fn on_window_focused(window: &tauri::Window, label: &str) {
     let state = window.app_handle().state::<AppState>();
-    if let Some(board_path) = state.ui_state.window_board(label) {
-        state.ui_state.set_most_recent_board(&board_path);
+    let board_path = state.ui_state.window_board(label);
+    if let Some(ref bp) = board_path {
+        state.ui_state.set_most_recent_board(bp);
     }
+    spawn_window_lifecycle_publish(
+        window.app_handle(),
+        label,
+        swissarmyhammer_window_service::window_focused_notification(label, board_path),
+    );
 }
 
-/// Mid-session close: user clicked X on a secondary window. Remove the UIState
+/// Spawn the async publish of a window-lifecycle notification onto `label`'s
+/// effective bridge, off a synchronous OS window-event handler.
+///
+/// The OS `WindowEvent` callbacks run synchronously on the main event loop, but
+/// resolving the window's board bridge ([`resolve_window_bridge`]) is async
+/// (it takes the board/platform locks). Cloning the `AppHandle` (cheap, `Arc`-
+/// backed) and re-resolving `AppState` inside the spawned task keeps the event
+/// loop unblocked while still publishing the declared notification.
+fn spawn_window_lifecycle_publish(
+    app: &tauri::AppHandle,
+    label: &str,
+    notification: swissarmyhammer_plugin::McpNotification,
+) {
+    let app = app.clone();
+    let label = label.to_string();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        crate::commands::publish_window_lifecycle(&state, &label, notification).await;
+    });
+}
+
+/// Mid-session close: user clicked X on a secondary window. Remove the UiState
 /// entry synchronously BEFORE the window is destroyed so it won't resurrect
 /// on restart. During app quit, ExitRequested sets `shutting_down=true` before
 /// CloseRequested fires, so entries are preserved for restore.
@@ -343,12 +533,65 @@ fn on_window_close_requested(window: &tauri::Window, label: &str) {
     if state.shutting_down.load(Ordering::SeqCst) {
         return;
     }
+    // Read the board this window was showing BEFORE removing the window entry —
+    // `remove_window` clears the label→board mapping, so the lifecycle event
+    // (and the focus-layer reconcile below) would otherwise lose its board.
+    let board_path = state.ui_state.window_board(label);
+    // Remove the UiState entry synchronously so it won't resurrect on restart.
     state.ui_state.remove_window(label);
+
+    // Reconcile the closing window's stale focus-kernel layers. A closed window
+    // never runs its React effect cleanups, so any OVERLAY layers (inspector,
+    // palette, dialog) open at close time were never popped and would linger in
+    // the kernel forever. This MUST run here, not in `on_window_destroyed`: by
+    // the time `Destroyed` fires the window→board mapping is already cleared
+    // (above), so the per-board host the React side pushed into would no longer
+    // resolve. We capture the board path while it is still known and resolve the
+    // per-board host from it in the spawned task; the async host-lock work is
+    // kept off this synchronous OS event handler.
+    let reconcile_app = window.app_handle().clone();
+    let reconcile_label = label.to_string();
+    let reconcile_board_path = board_path.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = reconcile_app.state::<AppState>();
+        let board = match reconcile_board_path {
+            Some(ref bp) => state.board_handle_for_path(bp).await,
+            None => None,
+        };
+        crate::commands::reconcile_window_layers(&state, &reconcile_label, board).await;
+    });
+
+    // Publish the raw-window-lifecycle `closed` event on the window's bridge so
+    // plugins subscribed with `this.window.on("window.closed", …)` observe the
+    // close, then abort this window's forwarder. Both run on ONE spawned task in
+    // that order: the per-window forwarder re-broadcasts bridge notifications as
+    // the Tauri event a plugin listens for, so the forwarder MUST stay live
+    // until AFTER `bridge.publish(...)` actually runs. Spawning the publish then
+    // synchronously aborting the forwarder would race — the abort wins and the
+    // notification is dropped with no subscriber. Sequencing the abort after the
+    // awaited publish on the same task makes delivery-before-teardown
+    // deterministic.
+    let app = window.app_handle().clone();
+    let label_owned = label.to_string();
+    let notification =
+        swissarmyhammer_window_service::window_closed_notification(label, board_path);
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        crate::commands::publish_window_lifecycle(&state, &label_owned, notification).await;
+        // Abort and drop this window's notification forwarder so the per-window
+        // forwarder map never grows unbounded across a session and a reused
+        // Tauri label re-binds cleanly on its next `mcp_subscribe`.
+        crate::commands::unbind_window_forwarder(&label_owned);
+    });
     tracing::info!(label = %label, "removed window entry on mid-session close");
 }
 
-/// Rebuild the Window menu when a secondary window is destroyed. Actual
-/// UIState cleanup already happened in `on_window_close_requested`.
+/// Rebuild the Window menu when a secondary window is destroyed.
+///
+/// UiState cleanup and the focus-layer reconcile already happened in
+/// `on_window_close_requested` — the reconcile cannot run here because the
+/// window→board mapping is cleared before `Destroyed` fires, so the per-board
+/// focus host the React side pushed into would no longer resolve.
 fn on_window_destroyed(window: &tauri::Window) {
     let state = window.app_handle().state::<AppState>();
     if state.shutting_down.load(Ordering::SeqCst) {
@@ -368,7 +611,7 @@ fn handle_run_event(app_handle: &tauri::AppHandle, event: tauri::RunEvent) {
     // (via update_window_geometry), so this is the single save point that
     // captures the latest positions.
     if let Err(e) = state.ui_state.save() {
-        tracing::error!(error = %e, "failed to save UIState on exit");
+        tracing::error!(error = %e, "failed to save UiState on exit");
     }
     // Stop every in-process AI agent endpoint so no loopback WebSocket server
     // outlives the process. Each `RunningAgent` also aborts its accept loop on

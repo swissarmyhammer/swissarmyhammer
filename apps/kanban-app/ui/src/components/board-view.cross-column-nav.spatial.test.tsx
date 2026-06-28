@@ -195,6 +195,7 @@ vi.mock("@/components/perspective-container", () => ({
 
 import { BoardView } from "./board-view";
 import { AppShell } from "./app-shell";
+import { commandToolCall } from "@/test/mock-command-list";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -323,6 +324,10 @@ async function defaultInvokeImpl(
   cmd: string,
   _args?: unknown,
 ): Promise<unknown> {
+  // The global keybinding layer (arrows / hjkl → `nav.*`) is sourced from
+  // the metadata-driven Command registry via `useCommandList`, fetched
+  // through the `command_tool_call` bridge's `list command` op.
+  if (cmd === "command_tool_call") return commandToolCall(_args);
   if (cmd === "list_entity_types") return ["task", "column"];
   if (cmd === "get_entity_schema") {
     return {

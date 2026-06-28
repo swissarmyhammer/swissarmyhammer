@@ -2,9 +2,11 @@
  * Undo/redo context — pure passthrough to the Rust backend.
  *
  * Zero undo logic lives in TypeScript. The frontend dispatches `app.undo` and
- * `app.redo` commands to the backend and queries `get_undo_state` to reflect
- * whether undo/redo are available. State is refreshed on every entity mutation
- * event (`entity-created`, `entity-removed`, `entity-field-changed`).
+ * `app.redo` commands to the backend and reflects whether undo/redo are
+ * available. The initial state comes from `get_undo_state`; thereafter the
+ * webview is a pure MCP client and tracks availability from the
+ * `notifications/store/undo_changed` plane, which the backend emits whenever
+ * the undo stack changes (a command, an undo, or a redo).
  */
 import {
   createContext,
@@ -15,7 +17,7 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { subscribeUndoChanged } from "@/lib/mcp-notifications";
 import { useDispatchCommand } from "@/lib/command-scope";
 
 /** The shape of the undo state exposed to consumers. */
@@ -61,8 +63,10 @@ async function fetchUndoState(): Promise<{
 /**
  * Provides undo/redo operations and state to the component tree.
  *
- * Dispatches undo/redo to the Rust backend and refreshes `canUndo`/`canRedo`
- * from `get_undo_state` on mount and on every entity mutation event.
+ * Dispatches undo/redo to the Rust backend, seeds `canUndo`/`canRedo` from
+ * `get_undo_state` on mount, and thereafter tracks them from the MCP
+ * `notifications/store/undo_changed` plane — the same control-state stream an
+ * external agent observes.
  */
 export function UndoProvider({ children }: { children: ReactNode }) {
   const [canUndo, setCanUndo] = useState(false);
@@ -70,40 +74,38 @@ export function UndoProvider({ children }: { children: ReactNode }) {
   const dispatchUndo = useDispatchCommand("app.undo");
   const dispatchRedo = useDispatchCommand("app.redo");
 
-  /** Refresh undo/redo availability from the backend. */
+  /** Seed undo/redo availability from the backend (initial state only). */
   const refreshState = useCallback(async () => {
     const state = await fetchUndoState();
     setCanUndo(state.canUndo);
     setCanRedo(state.canRedo);
   }, []);
 
-  // Fetch initial state and subscribe to all entity mutation events.
+  // Seed the initial state, then subscribe to the MCP undo-state plane. Every
+  // command / undo / redo emits a fresh `undo_changed` carrying the new
+  // availability, so there is no per-event refetch.
   useEffect(() => {
+    let disposed = false;
     refreshState();
-    const events = [
-      "entity-created",
-      "entity-removed",
-      "entity-field-changed",
-    ] as const;
-    const unlisteners = events.map((name) =>
-      listen(name, () => {
-        refreshState();
-      }),
-    );
+    const unsubPromise = subscribeUndoChanged((state) => {
+      setCanUndo(state.can_undo);
+      setCanRedo(state.can_redo);
+    });
     return () => {
-      unlisteners.forEach((p) => p.then((fn) => fn()));
+      disposed = true;
+      unsubPromise.then((unsub) => {
+        if (disposed) unsub();
+      });
     };
   }, [refreshState]);
 
   const undo = useCallback(async () => {
     await dispatchUndo();
-    await refreshState();
-  }, [dispatchUndo, refreshState]);
+  }, [dispatchUndo]);
 
   const redo = useCallback(async () => {
     await dispatchRedo();
-    await refreshState();
-  }, [dispatchRedo, refreshState]);
+  }, [dispatchRedo]);
 
   const value: UndoState = { undo, redo, canUndo, canRedo };
 

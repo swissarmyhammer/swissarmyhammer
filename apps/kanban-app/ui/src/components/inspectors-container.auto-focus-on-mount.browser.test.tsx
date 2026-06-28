@@ -24,28 +24,9 @@ import * as React from "react";
 // Hoisted Tauri-API mocks.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -100,11 +81,28 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Collect every `spatial_focus` invocation, in order. */
+/**
+ * Collect every `set focus` invocation, in order.
+ *
+ * Production routes the dispatch through the in-process `focus` MCP server,
+ * so the fq lives at `args.params.fq` for the `command_tool_call` envelope
+ * and at `args.fq` for the legacy `spatial_focus` command.
+ */
 function spatialFocusCalls(): FullyQualifiedMoniker[] {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
-    .map((c) => (c[1] as { fq: FullyQualifiedMoniker }).fq);
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
+    .map((c) => {
+      const a = c[1] as
+        | { fq?: FullyQualifiedMoniker; params?: { fq?: FullyQualifiedMoniker } }
+        | undefined;
+      return (a?.params?.fq ?? a?.fq) as FullyQualifiedMoniker;
+    });
 }
 
 /**
@@ -204,11 +202,24 @@ describe("InspectorsContainer — auto-focus on mount", () => {
     // Stub IPC: forward `focus-changed` events the kernel would emit
     // after a successful `spatial_focus` call so the entity-focus
     // bridge can mirror the new FQM.
+    // Production routes `set focus` through the in-process `focus` MCP
+    // server, so the dispatch arrives as `command_tool_call`
+    // (`{ module: "focus", op: "set focus", params: { fq } }`). Accept both
+    // that envelope and the legacy `spatial_focus` command, forwarding the
+    // `focus-changed` event the kernel would emit on a successful commit so
+    // the entity-focus bridge can mirror the new FQM.
     mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
       const a = (args ?? {}) as Record<string, unknown>;
-      if (cmd === "spatial_focus") {
-        const fq = a.fq as FullyQualifiedMoniker;
-        const handlers = listeners.get("focus-changed") ?? [];
+      const fq =
+        cmd === "spatial_focus"
+          ? (a.fq as FullyQualifiedMoniker | undefined)
+          : cmd === "command_tool_call" &&
+              a.module === "focus" &&
+              a.op === "set focus"
+            ? ((a.params as { fq?: FullyQualifiedMoniker } | undefined)?.fq)
+            : undefined;
+      if (fq) {
+        const handlers = listeners.get("notifications/focus/changed") ?? [];
         for (const h of handlers) {
           h({
             payload: {

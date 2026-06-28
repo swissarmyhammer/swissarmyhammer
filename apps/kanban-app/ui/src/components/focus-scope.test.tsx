@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor, act } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
+import { answerListCommand } from "@/test/mock-command-list";
 
 // Capture focus-changed listeners so the kernel-emit simulation below can
-// fire them when the test invokes `spatial_focus`. The default invoke
-// implementation is replaced per-test where needed.
+// fire them when the test drives the focus server's `set focus` op. The
+// default invoke implementation is replaced per-test where needed.
 type ListenCallback = (event: { payload: unknown }) => void;
 const focusListeners: ListenCallback[] = [];
 
@@ -14,7 +15,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((event: string, cb: ListenCallback) => {
-    if (event === "focus-changed") focusListeners.push(cb);
+    if (event === "notifications/focus/changed") focusListeners.push(cb);
     return Promise.resolve(() => {
       const idx = focusListeners.indexOf(cb);
       if (idx >= 0) focusListeners.splice(idx, 1);
@@ -26,35 +27,73 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
 
+// `useContextMenu` fetches the Command registry at right-click time
+// (`list command` via `command_tool_call`); drive it through `mockRegistry` —
+// both invoke implementations below answer the list op from it.
+let mockRegistry: Array<Record<string, unknown>> = [];
+
+/**
+ * Extract the target FQM when an invoke call is the focus server's
+ * `set focus` commit (`command_tool_call` against the `focus` tool).
+ *
+ * Click and right-click focus claims route here in production: the
+ * primitive dispatches the plugin-owned `nav.focus` command, whose single
+ * webview execution leg (the bus handler `<SpatialFocusProvider>`
+ * registers) runs the snapshot-bearing `actions.focus(fq)` — which calls
+ * `command_tool_call({ tool: "focus", op: "set focus", params: { fq, … } })`.
+ * The legacy `spatial_focus` Tauri command is gone.
+ *
+ * @returns The `params.fq` of a `set focus` call, or `null` for any other
+ *   invoke.
+ */
+function setFocusFq(cmd: string, args?: unknown): string | null {
+  if (cmd !== "command_tool_call") return null;
+  const a = (args ?? {}) as {
+    tool?: string;
+    op?: string;
+    params?: { fq?: string };
+  };
+  if (a.tool !== "focus" || a.op !== "set focus") return null;
+  return a.params?.fq ?? null;
+}
+
+// Previous FQM emitted by the kernel simulation, so successive `set focus`
+// commits carry a faithful `prev_fq` (the real kernel reports the slot it
+// vacates). Reset per test.
+let lastEmittedFq: string | null = null;
+
 /**
  * Default invoke implementation that emits a synthetic `focus-changed`
- * event when `spatial_focus({fq})` is called. This mirrors the real
- * kernel's emit-after-write contract so tests that fire a click and
- * then read the entity-focus store see the post-emit state.
+ * event when the focus server's `set focus` op is called. This mirrors
+ * the real kernel's emit-after-write contract so tests that fire a click
+ * and then read the entity-focus store see the post-emit state. Also
+ * answers the context menu's click-time `list command` fetch from
+ * `mockRegistry`.
  */
 function emitFocusChangedDefault() {
   (invoke as ReturnType<typeof vi.fn>).mockImplementation(
     (cmd: string, args?: unknown) => {
-      if (cmd === "spatial_focus") {
-        const a = (args ?? {}) as { fq?: string };
-        const fq = a.fq ?? null;
-        // Sync emit so click-then-read tests see the post-emit state in
-        // the same tick. Wrap in `act()` so React flushes the resulting
-        // store update.
-        if (fq && focusListeners.length > 0) {
-          act(() => {
-            for (const h of focusListeners) {
-              h({
-                payload: {
-                  window_label: "main",
-                  prev_fq: null,
-                  next_fq: fq,
-                  next_segment: null,
-                },
-              });
-            }
-          });
-        }
+      const listResult = answerListCommand(cmd, args, mockRegistry);
+      if (listResult) return listResult;
+      const fq = setFocusFq(cmd, args);
+      // Sync emit so click-then-read tests see the post-emit state in
+      // the same tick. Wrap in `act()` so React flushes the resulting
+      // store update.
+      if (fq && focusListeners.length > 0) {
+        const prev = lastEmittedFq;
+        lastEmittedFq = fq;
+        act(() => {
+          for (const h of focusListeners) {
+            h({
+              payload: {
+                window_label: "main",
+                prev_fq: prev,
+                next_fq: fq,
+                next_segment: null,
+              },
+            });
+          }
+        });
       }
       return Promise.resolve();
     },
@@ -92,34 +131,30 @@ interface ResolvedCommand {
 }
 
 /**
- * Helper: configure invoke mock to return the given commands when
- * `list_commands_for_scope` is called, and resolve for everything else.
+ * Helper: publish the given commands into `mockRegistry` (served to the
+ * context menu's click-time `list command` fetch) and configure the invoke
+ * mock to resolve for everything else.
  */
 function mockListCommands(commands: ResolvedCommand[]) {
-  (invoke as ReturnType<typeof vi.fn>).mockImplementation(
-    (cmd: string, args?: unknown) => {
-      if (cmd === "list_commands_for_scope") return Promise.resolve(commands);
-      if (cmd === "spatial_focus") {
-        const a = (args ?? {}) as { fq?: string };
-        const fq = a.fq ?? null;
-        if (fq && focusListeners.length > 0) {
-          act(() => {
-            for (const h of focusListeners) {
-              h({
-                payload: {
-                  window_label: "main",
-                  prev_fq: null,
-                  next_fq: fq,
-                  next_segment: null,
-                },
-              });
-            }
-          });
-        }
-      }
-      return Promise.resolve();
-    },
-  );
+  // Publish the commands as global (unscoped) context-menu rows so they match
+  // any right-click chain — mirroring the old mock that returned the same
+  // fixed list for every `list_commands_for_scope` call regardless of scope.
+  // `context_menu_group` is derived from the legacy `group` string so adjacent
+  // rows in different groups still get a separator between them.
+  const groupIndex = new Map<string, number>();
+  mockRegistry = commands.map((c) => {
+    if (!groupIndex.has(c.group)) groupIndex.set(c.group, groupIndex.size);
+    return {
+      id: c.id,
+      name: c.name,
+      context_menu: c.context_menu,
+      context_menu_group: groupIndex.get(c.group),
+    };
+  });
+  // Same invoke implementation as the default — `answerListCommand` reads
+  // the freshly published `mockRegistry`, and `set focus` commits keep
+  // emitting the synthetic `focus-changed`.
+  emitFocusChangedDefault();
 }
 
 /** Helper to read focus state from inside the provider.
@@ -149,7 +184,9 @@ function renderWithFocus(ui: React.ReactElement) {
 describe("FocusScope", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRegistry = [];
     focusListeners.length = 0;
+    lastEmittedFq = null;
     emitFocusChangedDefault();
   });
 
@@ -187,15 +224,26 @@ describe("FocusScope", () => {
     fireEvent.contextMenu(getByText("card"));
     expect(getByTestId("focus-reader").textContent).toBe("task:abc");
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("show_context_menu", {
-        items: [
-          expect.objectContaining({
-            cmd: "entity.inspect",
-            name: "Inspect",
-            separator: false,
-          }),
-        ],
-      });
+      expect(invoke).toHaveBeenCalledWith(
+        "command_tool_call",
+        expect.objectContaining({
+          tool: "window",
+          op: "show context menu",
+          // `window_label` rides alongside `items`: the MCP wire has no
+          // ambient calling window, so the menu call targets this window
+          // explicitly (the mocked `getCurrentWindow().label`).
+          params: {
+            items: [
+              expect.objectContaining({
+                cmd: "entity.inspect",
+                name: "Inspect",
+                separator: false,
+              }),
+            ],
+            window_label: "main",
+          },
+        }),
+      );
     });
   });
 
@@ -271,15 +319,18 @@ describe("FocusScope", () => {
       </FocusScope>,
     );
     fireEvent.contextMenu(getByText("tag"));
-    // show_context_menu should be called exactly once (inner scope handles it, stopPropagation prevents outer)
+    // show context menu should be called exactly once (inner scope handles it, stopPropagation prevents outer)
     await waitFor(() => {
       const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(ctxCalls).toHaveLength(1);
       const call = ctxCalls[0];
       // Inner scope should show both inner and outer commands (scope chain walks up on backend)
-      const items = call[1].items;
+      const items = (call[1] as { params: { items: { cmd: string }[] } }).params
+        .items;
       expect(
         items.find((i: { cmd: string }) => i.cmd === "inner.cmd"),
       ).toBeTruthy();
@@ -333,11 +384,13 @@ describe("FocusScope", () => {
     fireEvent.contextMenu(getByText("tag"));
     await waitFor(() => {
       const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(ctxCalls).toHaveLength(1);
       const call = ctxCalls[0];
-      const items = call[1].items;
+      const items = (call[1] as { params: { items: unknown[] } }).params.items;
       // No target -> shadow by id alone: inner "Inspect tag" shadows outer "Inspect task"
       expect(items).toHaveLength(1);
       expect(items[0]).toEqual(
@@ -405,22 +458,22 @@ describe("FocusScope", () => {
     fireEvent.contextMenu(getByText("tag"));
     await waitFor(() => {
       const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(ctxCalls).toHaveLength(1);
       const call = ctxCalls[0];
-      const items = call[1].items;
+      const items = (
+        call[1] as {
+          params: { items: { name: string; separator: boolean }[] };
+        }
+      ).params.items;
       // Different targets -> both accumulate
-      const commandItems = items.filter(
-        (i: { separator: boolean }) => !i.separator,
-      );
+      const commandItems = items.filter((i) => !i.separator);
       expect(commandItems).toHaveLength(2);
-      expect(
-        commandItems.find((i: { name: string }) => i.name === "Inspect tag"),
-      ).toBeTruthy();
-      expect(
-        commandItems.find((i: { name: string }) => i.name === "Inspect task"),
-      ).toBeTruthy();
+      expect(commandItems.find((i) => i.name === "Inspect tag")).toBeTruthy();
+      expect(commandItems.find((i) => i.name === "Inspect task")).toBeTruthy();
     });
   });
 
@@ -471,11 +524,14 @@ describe("FocusScope", () => {
     fireEvent.contextMenu(getByText("tag"));
     await waitFor(() => {
       const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(ctxCalls).toHaveLength(1);
       const call = ctxCalls[0];
-      const items = call[1].items;
+      const items = (call[1] as { params: { items: { name: string }[] } })
+        .params.items;
       // Same target -> shadow: inner wins
       expect(items).toHaveLength(1);
       expect(items[0].name).toBe("Inspect task inner");
@@ -515,21 +571,18 @@ describe("FocusScope", () => {
       </FocusScope>,
     );
     fireEvent.contextMenu(getByText("tag"));
-    // Allow the async list_commands_for_scope call to settle
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith(
-        "list_commands_for_scope",
-        expect.anything(),
-      );
-    });
-    // Backend returns empty: no context menu shown.
-    expect(invoke).not.toHaveBeenCalledWith(
-      "show_context_menu",
-      expect.anything(),
+    // Registry returns no matching context-menu commands (inner blocks outer):
+    // no menu is shown. Give the async right-click path a tick to settle.
+    await new Promise((r) => setTimeout(r, 10));
+    const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) =>
+        c[0] === "command_tool_call" &&
+        (c[1] as { op?: string })?.op === "show context menu",
     );
+    expect(ctxCalls).toHaveLength(0);
   });
 
-  // Double-click → `ui.inspect` is no longer a `<FocusScope>` concern.
+  // Double-click → `app.inspect` is no longer a `<FocusScope>` concern.
   // It moved to the `<Inspectable>` wrapper component (see
   // `inspectable.tsx`); the unit tests for the dispatch contract live
   // alongside it in `inspectable.spatial.test.tsx`. `<FocusScope>` is
@@ -596,15 +649,23 @@ describe("FocusScope", () => {
     );
     fireEvent.contextMenu(getByText("card"));
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("show_context_menu", {
-        items: [
-          expect.objectContaining({
-            cmd: "entity.inspect",
-            name: "Inspect",
-            separator: false,
-          }),
-        ],
-      });
+      expect(invoke).toHaveBeenCalledWith(
+        "command_tool_call",
+        expect.objectContaining({
+          tool: "window",
+          op: "show context menu",
+          params: {
+            items: [
+              expect.objectContaining({
+                cmd: "entity.inspect",
+                name: "Inspect",
+                separator: false,
+              }),
+            ],
+            window_label: "main",
+          },
+        }),
+      );
     });
   });
 
@@ -670,14 +731,22 @@ describe("FocusScope", () => {
     );
     fireEvent.contextMenu(getByText("tag pill"));
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("show_context_menu", {
-        items: [
-          expect.objectContaining({
-            cmd: "tag.inspect",
-            name: "Inspect tag",
-          }),
-        ],
-      });
+      expect(invoke).toHaveBeenCalledWith(
+        "command_tool_call",
+        expect.objectContaining({
+          tool: "window",
+          op: "show context menu",
+          params: {
+            items: [
+              expect.objectContaining({
+                cmd: "tag.inspect",
+                name: "Inspect tag",
+              }),
+            ],
+            window_label: "main",
+          },
+        }),
+      );
     });
   });
 
@@ -712,10 +781,12 @@ describe("FocusScope", () => {
     fireEvent.contextMenu(getByText("tag pill"));
     // Give time for any async calls to settle
     await new Promise((r) => setTimeout(r, 50));
-    expect(invoke).not.toHaveBeenCalledWith(
-      "show_context_menu",
-      expect.anything(),
+    const ctxCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) =>
+        c[0] === "command_tool_call" &&
+        (c[1] as { op?: string })?.op === "show context menu",
     );
+    expect(ctxCalls).toHaveLength(0);
   });
 
   describe("useParentFocusScope", () => {
@@ -925,7 +996,8 @@ describe("FocusScope", () => {
   /**
    * Composition tests — verify FocusScope is the leaf primitive,
    * forwards `navOverride` through to the registration call, and routes
-   * click to the primitive's `spatial_focus` invoke. Every test in this
+   * click through `nav.focus` to the focus server's `set focus` op (the
+   * legacy `spatial_focus` Tauri command is gone). Every test in this
    * file mounts the primitive inside the spatial provider stack
    * (`SpatialFocusProvider` + `FocusLayer`) — the no-spatial-context
    * fallback path was removed in card `01KQPVA127YMJ8D7NB6M824595`, so
@@ -1021,7 +1093,7 @@ describe("FocusScope", () => {
       });
     });
 
-    it("click invokes spatial_focus with the primitive's key", async () => {
+    it("click drives the focus server's set focus op with the primitive's key", async () => {
       const { getByText } = render(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
@@ -1047,14 +1119,20 @@ describe("FocusScope", () => {
       );
       const registeredKey = (registerCall![1] as { fq: string }).fq;
 
-      // Click the rendered leaf — the primitive's onClick fires
-      // `spatial_focus` with the key it minted on mount.
+      // Click the rendered leaf — the primitive's onClick dispatches the
+      // plugin-owned `nav.focus` command with the key it composed on
+      // mount; the webview bus handler completes it by committing the
+      // focus server's `set focus` op with that fq.
       fireEvent.click(getByText("card"));
 
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith(
-          "spatial_focus",
-          expect.objectContaining({ fq: registeredKey }),
+          "command_tool_call",
+          expect.objectContaining({
+            tool: "focus",
+            op: "set focus",
+            params: expect.objectContaining({ fq: registeredKey }),
+          }),
         );
       });
     });

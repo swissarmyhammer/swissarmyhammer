@@ -11,7 +11,7 @@ import {
   useFocusedMoniker,
   useFocusBySegmentPath,
 } from "@/lib/entity-focus-context";
-import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
+import { registerWebviewCommandHandler } from "@/lib/webview-command-bus";
 import { useActivePerspective } from "@/components/perspective-container";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Field } from "@/components/fields/field";
@@ -319,12 +319,12 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
 }
 
 /**
- * Snapshot of the data the row-extreme / grid-extreme commands need at
- * execute time.
+ * Snapshot of the data the row-extreme / grid-extreme handlers need at
+ * dispatch time.
  *
- * Held in a ref so the command closures can be minted once per `useMemo`
+ * Held in a ref so the webview-bus handlers can be minted once on mount
  * without re-binding on every cursor move. The ref is updated synchronously
- * on each render so the closures always read fresh data when they fire.
+ * on each render so the handlers always read fresh data when they fire.
  */
 interface GridExtremeContext {
   entities: Entity[];
@@ -439,228 +439,174 @@ function focusGridCell(
 }
 
 /**
- * Build the grid-scope commands that have no global `nav.*` counterpart.
+ * The live data every grid webview-bus handler reads at dispatch time.
  *
- * These commands route through the spatial-nav kernel via `setFocus` —
- * never via the legacy broadcast path. The cardinal directions
- * (`up`/`down`/`left`/`right`) and the global `first`/`last` (vim `Shift+G`,
- * cua `Home`/`End` outside the grid scope) are owned by the global
- * `nav.*` commands in `app-shell.tsx` and intentionally NOT shadowed here.
- *
- * The four commands kept here:
- *
- *   - `grid.moveToRowStart` (vim `0`, cua `Home`) — first cell of the
- *     focused row. Shadows the global `nav.first` cua `Home` binding so
- *     `Home` inside the grid means "row start", not "grid start".
- *   - `grid.moveToRowEnd` (vim `$`, cua `End`) — last cell of the focused
- *     row. Shadows the global `nav.last` cua `End` binding so `End` inside
- *     the grid means "row end", not "grid end".
- *   - `grid.firstCell` (cua `Mod+Home`) — absolute first cell of the grid.
- *     Fills a gap: the global `nav.first` only binds `Home` (cua), not
- *     `Mod+Home`.
- *   - `grid.lastCell` (cua `Mod+End`) — absolute last cell of the grid.
- *     Fills a gap: the global `nav.last` binds `Shift+G` (vim) and `End`
- *     (cua), but not `Mod+End`.
+ * Extends the row-extreme bag with the grid mode handle, the sanitized
+ * entity type, and the ad-hoc dispatcher the row-mutation handlers re-enter
+ * `useDispatchCommand` through. One bag, one ref, updated every render —
+ * handlers are minted once on mount and always see fresh state.
  */
-function buildGridExtremeCommands(
-  ctxRef: React.RefObject<GridExtremeContext>,
-): CommandDef[] {
-  return [
-    {
-      id: "grid.moveToRowStart",
-      name: "Row Start",
-      keys: { vim: "0", cua: "Home" },
-      execute: () => {
-        const ctx = ctxRef.current;
-        const row = rowFromFocus(ctx.spatial?.focusedFq() ?? null);
-        if (row === null || ctx.columns.length === 0) return;
-        focusGridCell(ctx, row, ctx.columns[0].field.name);
-      },
-    },
-    {
-      id: "grid.moveToRowEnd",
-      name: "Row End",
-      keys: { vim: "$", cua: "End" },
-      execute: () => {
-        const ctx = ctxRef.current;
-        const row = rowFromFocus(ctx.spatial?.focusedFq() ?? null);
-        if (row === null || ctx.columns.length === 0) return;
-        focusGridCell(ctx, row, ctx.columns[ctx.columns.length - 1].field.name);
-      },
-    },
-    {
-      id: "grid.firstCell",
-      name: "First Cell",
-      keys: { cua: "Mod+Home" },
-      execute: () => {
-        const ctx = ctxRef.current;
-        if (ctx.columns.length === 0 || ctx.entities.length === 0) return;
-        focusGridCell(ctx, 0, ctx.columns[0].field.name);
-      },
-    },
-    {
-      id: "grid.lastCell",
-      name: "Last Cell",
-      keys: { cua: "Mod+End" },
-      execute: () => {
-        const ctx = ctxRef.current;
-        if (ctx.columns.length === 0 || ctx.entities.length === 0) return;
-        focusGridCell(
-          ctx,
-          ctx.entities.length - 1,
-          ctx.columns[ctx.columns.length - 1].field.name,
-        );
-      },
-    },
-  ];
-}
-
-/** Grid mode-switching commands (edit, exit, visual). */
-function buildGridModeCommands(
-  gridRef: React.RefObject<ReturnType<typeof useGrid>>,
-): CommandDef[] {
-  return [
-    {
-      id: "grid.edit",
-      name: "Edit Cell",
-      keys: { vim: "i", cua: "Enter" },
-      execute: () => gridRef.current.enterEdit(),
-    },
-    {
-      id: "grid.editEnter",
-      name: "Edit Cell (Enter)",
-      keys: { vim: "Enter" },
-      execute: () => gridRef.current.enterEdit(),
-    },
-    {
-      id: "grid.exitEdit",
-      name: "Exit Edit",
-      execute: () => {
-        if (gridRef.current.mode === "edit") gridRef.current.exitEdit();
-        else if (gridRef.current.mode === "visual")
-          gridRef.current.exitVisual();
-      },
-    },
-    {
-      id: "grid.toggleVisual",
-      name: "Toggle Visual Mode",
-      keys: { vim: "v" },
-      execute: () => {
-        if (gridRef.current.mode === "visual") gridRef.current.exitVisual();
-        else gridRef.current.enterVisual();
-      },
-    },
-  ];
-}
-
-/** Grid row-mutation commands (delete row, new row above/below). */
-function buildGridRowCommands(
-  gridRef: React.RefObject<ReturnType<typeof useGrid>>,
-  entities: Entity[],
-  entityType: string,
-  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
-): CommandDef[] {
-  return [
-    {
-      id: "grid.deleteRow",
-      name: "Delete Row",
-      execute: () => {
-        const row = gridRef.current.cursor.row;
-        if (row >= 0 && row < entities.length) {
-          dispatch(`${entityType}.archive`, {
-            args: { id: entities[row].id },
-          }).catch((err) => console.error("Failed to delete row:", err));
-        }
-      },
-    },
-    {
-      id: "grid.newBelow",
-      name: "New Row Below",
-      keys: { vim: "o", cua: "Mod+Enter" },
-      execute: () => {
-        if (entityType === "") return;
-        addNewEntity(dispatch, entityType);
-      },
-    },
-    {
-      id: "grid.newAbove",
-      name: "New Row Above",
-      keys: { vim: "O", cua: "Mod+Shift+Enter" },
-      execute: () => {
-        if (entityType === "") return;
-        addNewEntity(dispatch, entityType);
-      },
-    },
-  ];
-}
-
-/** Build editing and row-mutation CommandDefs for the grid. */
-function buildGridEditCommands(
-  gridRef: React.RefObject<ReturnType<typeof useGrid>>,
-  entities: Entity[],
-  entityType: string,
-  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
-): CommandDef[] {
-  return [
-    ...buildGridModeCommands(gridRef),
-    ...buildGridRowCommands(gridRef, entities, entityType, dispatch),
-  ];
+interface GridHandlerContext extends GridExtremeContext {
+  /** The live grid mode/selection handle from `useGrid`. */
+  grid: ReturnType<typeof useGrid>;
+  /** The sanitized entity type slug (`""` when the view's type is invalid). */
+  entityType: string;
+  /** Ad-hoc dispatcher for re-dispatching backend-op commands. */
+  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>;
 }
 
 /**
- * Compose the full grid CommandDef array.
+ * Build the webview-bus handlers for the eleven plugin-owned `grid.*`
+ * commands, keyed by command id.
  *
- * The grid scope owns two non-overlapping command families:
+ * Card C: the commands are DEFINED (id / name / keys / `scope: ["ui:grid"]`)
+ * by the `grid-commands` builtin plugin — this module owns only the BEHAVIOR,
+ * registered on the webview command bus so `useDispatchCommand` routes a
+ * dispatched id here and skips the backend's inert no-op execute.
  *
- *   - Edit / mode / row-mutation commands (`grid.edit`, `grid.toggleVisual`,
- *     `grid.deleteRow`, `grid.newAbove`/`grid.newBelow`, …) — these have no
- *     equivalent at any other scope.
- *   - Row-extreme and grid-extreme cell-jump commands
- *     (`grid.moveToRowStart`, `grid.moveToRowEnd`, `grid.firstCell`,
- *     `grid.lastCell`) — these route through the spatial-nav kernel via
- *     `setFocus`. The cardinal-direction nav commands (`nav.up` /
- *     `nav.down` / `nav.left` / `nav.right`) live at the global scope in
- *     `app-shell.tsx` and intentionally are NOT shadowed here — the global
- *     versions correctly dispatch `spatial_navigate` against the focused
- *     cell's FQM.
+ * Every handler is pure presentation (the bus invariant, enforced by
+ * `webview-command-bus.guard.node.test.ts`):
+ *
+ *   - The row-extreme / grid-extreme jumps (`grid.moveToRowStart`,
+ *     `grid.moveToRowEnd`, `grid.firstCell`, `grid.lastCell`) route through
+ *     the spatial-nav kernel by re-dispatching `nav.focus` against a
+ *     computed cell FQM (`focusGridCell`). Inside the grid they shadow the
+ *     global `nav.first`/`nav.last` `Home`/`End` keys (the plugin's
+ *     `ui:grid` scope gates the binding); the cardinal `nav.*` directions
+ *     are intentionally NOT shadowed.
+ *   - The mode toggles (`grid.edit`, `grid.editEnter`, `grid.exitEdit`,
+ *     `grid.toggleVisual`) flip the live `useGrid` handle.
+ *   - The row mutations (`grid.deleteRow`, `grid.newBelow`, `grid.newAbove`)
+ *     perform NO durable effect inline — they re-dispatch the backend-op
+ *     plugin commands `entity.archive` (targeting the cursor row's moniker)
+ *     / `entity.add:{entityType}` through `useDispatchCommand`.
  */
-function useGridCommands(
+function buildGridCommandHandlers(
+  ctxRef: React.RefObject<GridHandlerContext>,
+): Record<string, () => void> {
+  const enterEdit = () => ctxRef.current.grid.enterEdit();
+  return {
+    // ── Row-extreme / grid-extreme cell jumps ───────────────────────────
+    "grid.moveToRowStart": () => {
+      const ctx = ctxRef.current;
+      const row = rowFromFocus(ctx.spatial?.focusedFq() ?? null);
+      if (row === null || ctx.columns.length === 0) return;
+      focusGridCell(ctx, row, ctx.columns[0].field.name);
+    },
+    "grid.moveToRowEnd": () => {
+      const ctx = ctxRef.current;
+      const row = rowFromFocus(ctx.spatial?.focusedFq() ?? null);
+      if (row === null || ctx.columns.length === 0) return;
+      focusGridCell(ctx, row, ctx.columns[ctx.columns.length - 1].field.name);
+    },
+    "grid.firstCell": () => {
+      const ctx = ctxRef.current;
+      if (ctx.columns.length === 0 || ctx.entities.length === 0) return;
+      focusGridCell(ctx, 0, ctx.columns[0].field.name);
+    },
+    "grid.lastCell": () => {
+      const ctx = ctxRef.current;
+      if (ctx.columns.length === 0 || ctx.entities.length === 0) return;
+      focusGridCell(
+        ctx,
+        ctx.entities.length - 1,
+        ctx.columns[ctx.columns.length - 1].field.name,
+      );
+    },
+    // ── Mode toggles on the live grid handle ────────────────────────────
+    "grid.edit": enterEdit,
+    "grid.editEnter": enterEdit,
+    "grid.exitEdit": () => {
+      const { grid } = ctxRef.current;
+      if (grid.mode === "edit") grid.exitEdit();
+      else if (grid.mode === "visual") grid.exitVisual();
+    },
+    "grid.toggleVisual": () => {
+      const { grid } = ctxRef.current;
+      if (grid.mode === "visual") grid.exitVisual();
+      else grid.enterVisual();
+    },
+    // ── Row mutations — durable effects re-dispatch backend-op commands ─
+    "grid.deleteRow": () => {
+      const { grid, entities, dispatch } = ctxRef.current;
+      const row = grid.cursor.row;
+      if (row >= 0 && row < entities.length) {
+        // The cross-cutting `entity.archive` resolves its entity from the
+        // target moniker (`from: target`). No per-type `{type}.archive`
+        // command is registered, so it must NOT be synthesized here.
+        dispatch("entity.archive", {
+          target: entities[row].moniker,
+        }).catch((err) => console.error("Failed to delete row:", err));
+      }
+    },
+    "grid.newBelow": () => {
+      const { entityType, dispatch } = ctxRef.current;
+      if (entityType === "") return;
+      addNewEntity(dispatch, entityType);
+    },
+    "grid.newAbove": () => {
+      const { entityType, dispatch } = ctxRef.current;
+      if (entityType === "") return;
+      addNewEntity(dispatch, entityType);
+    },
+  };
+}
+
+/**
+ * Register the grid's webview-bus handlers for the lifetime of the grid view.
+ *
+ * Replaces the retired `useGridCommands` (which minted client-side
+ * `CommandDef`s in a `CommandScopeProvider`): no `grid.*` command is DEFINED
+ * in React anymore — the `grid-commands` builtin plugin owns the metadata,
+ * and this hook installs the live behavior per id on mount. The
+ * ownership-guarded cleanup clears every slot on unmount so a stale closure
+ * never lingers (and a StrictMode / HMR remount is never wiped by an older
+ * cleanup).
+ *
+ * Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow through `nav.focus`
+ * rather than calling the kernel-facing `setFocus` primitive directly, so
+ * cross-cutting concerns (telemetry, animations, scroll-on-focus) hang off
+ * one closure — the pre-bound dispatcher rides in the handler context bag.
+ */
+function useGridCommandHandlers(
   grid: ReturnType<typeof useGrid>,
   entities: Entity[],
   columns: DataTableColumn[],
   entityType: string,
   dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
-): CommandDef[] {
-  const gridRef = useRef(grid);
-  gridRef.current = grid;
-
-  // Read the spatial-focus actions (for `focusedFq()`) and the
-  // pre-bound `nav.focus` dispatcher once and stash them in a context
-  // bag for the row-extreme commands. The bag is held in a ref so the
-  // commands minted in `useMemo` below can read fresh values (cursor
-  // row, visible columns) without re-binding on every keystroke.
-  //
-  // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow through
-  // `nav.focus` rather than calling the kernel-facing `setFocus`
-  // primitive directly, so cross-cutting concerns (telemetry,
-  // animations, scroll-on-focus) hang off one closure.
+): void {
   const spatial = useOptionalSpatialFocusActions();
   const dispatchNavFocus = useDispatchCommand("nav.focus");
-  const extremeCtxRef = useRef<GridExtremeContext>({
+  // One context bag in a ref, refreshed synchronously every render, so the
+  // handlers registered once on mount always read live data (cursor row,
+  // visible columns, grid mode) without re-registering per keystroke.
+  const ctxRef = useRef<GridHandlerContext>({
     entities,
     columns,
     spatial,
     dispatchNavFocus,
+    grid,
+    entityType,
+    dispatch,
   });
-  extremeCtxRef.current = { entities, columns, spatial, dispatchNavFocus };
+  ctxRef.current = {
+    entities,
+    columns,
+    spatial,
+    dispatchNavFocus,
+    grid,
+    entityType,
+    dispatch,
+  };
 
-  return useMemo<CommandDef[]>(
-    () => [
-      ...buildGridExtremeCommands(extremeCtxRef),
-      ...buildGridEditCommands(gridRef, entities, entityType, dispatch),
-    ],
-    [entities, entityType, dispatch],
-  );
+  useEffect(() => {
+    const cleanups = Object.entries(buildGridCommandHandlers(ctxRef)).map(
+      ([id, handler]) => registerWebviewCommandHandler(id, handler),
+    );
+    return () => {
+      for (const cleanup of cleanups) cleanup();
+    };
+  }, []);
 }
 
 /** Props for the GridView component — the view definition that specifies entity type and columns. */
@@ -715,13 +661,6 @@ function useGridCallbacks(
   };
 }
 
-/**
- * Grid (spreadsheet-style) view for entities.
- *
- * Thin orchestrator that delegates layout computation to useGridLayout,
- * keyboard command definitions to useGridCommands, callback construction
- * to useGridCallbacks, and rendering to DataTable.
- */
 /** Status bar showing row count, grid mode, and cursor position. */
 function GridStatusBar({
   rowCount,
@@ -1007,11 +946,24 @@ function GridSpatialZone({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * Grid (spreadsheet-style) view for entities.
+ *
+ * Thin orchestrator: data and column layout come from `useGridData`,
+ * spatial navigation from `useGridNavigation`, the webview-bus behaviors
+ * for the plugin-defined `grid.*` commands from `useGridCommandHandlers`,
+ * callback construction from `useGridCallbacks`, and rendering is
+ * delegated to `DataTable`.
+ */
 export function GridView({ view }: GridViewProps) {
   const dispatch = useDispatchCommand();
   const data = useGridData(view);
   const nav = useGridNavigation(data.entities, data.columns);
-  const gridCommands = useGridCommands(
+  // The `grid.*` commands are DEFINED by the `grid-commands` builtin plugin
+  // (id / name / keys / scope) — this hook only registers their live
+  // BEHAVIORS on the webview command bus. No CommandScopeProvider: the grid
+  // defines no client-side commands anymore.
+  useGridCommandHandlers(
     nav.grid,
     data.entities,
     data.columns,
@@ -1032,13 +984,6 @@ export function GridView({ view }: GridViewProps) {
   }
 
   return (
-    <CommandScopeProvider commands={gridCommands}>
-      <GridBody
-        data={data}
-        nav={nav}
-        callbacks={callbacks}
-        dispatch={dispatch}
-      />
-    </CommandScopeProvider>
+    <GridBody data={data} nav={nav} callbacks={callbacks} dispatch={dispatch} />
   );
 }

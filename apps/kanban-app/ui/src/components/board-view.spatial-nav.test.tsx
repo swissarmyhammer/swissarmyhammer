@@ -197,15 +197,24 @@ function pushedLayers(): Array<{
   parent: string | null;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_push_layer")
-    .map(
+    .filter(
       (c) =>
-        c[1] as {
-          fq: string;
-          name: string;
-          parent: string | null;
-        },
-    );
+        c[0] === "spatial_push_layer" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "push layer"),
+    )
+    .map((c) => {
+      // The MCP transport wraps the op args in a `command_tool_call`
+      // envelope (`{ module, tool, op, params }`); unwrap `params` to
+      // reach the push record (legacy calls carry the bag directly).
+      const outer = c[1] as Record<string, unknown>;
+      return (outer?.params ?? outer) as {
+        fq: string;
+        name: string;
+        parent: string | null;
+      };
+    });
 }
 
 // ---------------------------------------------------------------------------

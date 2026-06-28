@@ -522,7 +522,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     await flushSetup();
 
     const focusCallsFromHost = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_focus",
+      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
     );
     expect(focusCallsFromHost.length).toBeGreaterThan(0);
 
@@ -540,7 +540,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     await flushSetup();
 
     const focusCallsFromHandle = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_focus",
+      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
     );
     expect(focusCallsFromHandle.length).toBe(0);
 

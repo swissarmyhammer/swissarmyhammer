@@ -1,0 +1,3 @@
+color: e7791f
+description: 'Remove the plugin.json manifest the original plugin-arch work introduced but the user never asked for. A plugin becomes a directory of TypeScript only: the entry is index.ts (or index.js) by convention — no configurable entry; the plugin''s identity is its bundle directory name — no redundant id field; name and version become props on the Plugin class — not JSON; the provides server-name allowlist is dropped entirely. Done transitionally (discovery dual-supports plugin.json + index.ts during the migration) so every task keeps the build green, with a final task removing plugin.json/Manifest/provides outright.'
+name: TS-only Plugins (drop plugin.json)

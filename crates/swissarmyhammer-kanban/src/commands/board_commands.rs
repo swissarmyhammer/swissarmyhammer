@@ -13,10 +13,10 @@
 
 use super::run_op;
 use crate::board::UpdateBoard;
+use crate::commands_core::{Command, CommandContext};
 use crate::context::KanbanContext;
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_commands::{Command, CommandContext};
 
 /// Update the board entity's `name`, `description`, or `model` field.
 ///
@@ -43,7 +43,7 @@ impl Command for UpdateBoardCmd {
     /// three supported fields the caller supplied. A call with no
     /// recognized fields succeeds as a no-op so a future caller can issue
     /// a partial save without special-casing the empty path.
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let mut op = UpdateBoard::new();

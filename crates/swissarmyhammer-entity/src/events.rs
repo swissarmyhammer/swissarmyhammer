@@ -46,6 +46,16 @@ pub enum EntityEvent {
         /// on-disk state. Empty only when `EntityCache` detects a no-op write,
         /// in which case no event is emitted at all.
         changes: Vec<FieldChange>,
+        /// The ambient transaction id this change belongs to, when one was
+        /// active (`None` for an untransacted per-write edit or a
+        /// watcher-sourced refresh). A single command's N changes share one
+        /// `txn` so a consumer can coalesce them into one UI update.
+        txn: Option<String>,
+        /// The actor classification: `"user"`, `"agent:<id>"`, `"undo"`,
+        /// `"redo"`, or `"watcher"`. The plain `write` path stamps `"user"`;
+        /// the reconcile stamps `"undo"`/`"redo"`; the file watcher stamps
+        /// `"watcher"`.
+        origin: String,
     },
     /// An entity was deleted.
     EntityDeleted {
@@ -53,6 +63,11 @@ pub enum EntityEvent {
         entity_type: String,
         /// The entity id.
         id: String,
+        /// The ambient transaction id this deletion belongs to, when one was
+        /// active. See [`EntityEvent::EntityChanged::txn`].
+        txn: Option<String>,
+        /// The actor classification. See [`EntityEvent::EntityChanged::origin`].
+        origin: String,
     },
     /// A file under an entity's `.attachments/` directory was created,
     /// modified, or removed.

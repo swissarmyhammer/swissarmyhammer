@@ -19,7 +19,6 @@ ulid = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
 swissarmyhammer-common = { workspace = true }
-swissarmyhammer-commands = { workspace = true }
 swissarmyhammer-fields = { workspace = true }
 swissarmyhammer-store = { workspace = true }
 diffy = { workspace = true }
@@ -33,6 +32,7 @@ test-support = ["dep:tempfile"]
 
 [dev-dependencies]
 swissarmyhammer-entity = { path = ".", features = ["test-support"] }
+swissarmyhammer-ui-state = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }

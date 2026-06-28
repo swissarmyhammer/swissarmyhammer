@@ -22,7 +22,7 @@
  * The sentinel's `commands` prop registers an `app.dismiss` shadow whose
  * `execute` calls the overlay's `handleDismiss` — restore prior focus,
  * then `onClose`. This is the same shadow pattern the inspector layer
- * uses (`ui.inspector.close`) but keyed on `app.dismiss` because the
+ * uses (`app.inspector.close`) but keyed on `app.dismiss` because the
  * overlay has no "first close just one panel" notion.
  *
  * # Dismiss paths
@@ -58,9 +58,27 @@ import {
   fqRoot,
   type FullyQualifiedMoniker,
 } from "@/types/spatial";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 /** Identity-stable layer-name segment for the jump-to overlay layer. */
 const JUMP_TO_LAYER_NAME = asSegment("jump-to");
+
+/**
+ * Early-boot fallback FQM for the window-root layer of THIS window
+ * (`/<label>/window`), computed once at module load.
+ *
+ * Used by {@link useJumpTargets} only for the edge case where the overlay
+ * opens before any layer has registered (so `topLayerFq()` is null).
+ * Mirrors the window-rooted shape `<App>` pushes (`parentLayerFq` =
+ * `/<label>`, layer name `window`) so the fallback names the same layer the
+ * running app registers, rather than the legacy shared `/window`. Computed
+ * at module scope because the window label is constant for the webview's
+ * lifetime — never recompute inline.
+ */
+const WINDOW_LAYER_FALLBACK_FQ = composeFq(
+  fqRoot(asSegment(getCurrentWindow().label)),
+  asSegment("window"),
+);
 /** Identity-stable sentinel-scope segment inside the jump-to layer. */
 const JUMP_TO_SENTINEL_SEGMENT = asSegment("jump-to-sentinel");
 
@@ -649,12 +667,31 @@ function useJumpTargets(
   useEffect(() => {
     let cancelled = false;
     // Read the topmost layer FQM. The window layer is always pushed at
-    // app boot, so under normal conditions this is non-null. Fall back
-    // to `/window` defensively for the early-boot edge case where the
-    // overlay opens before any layer has registered.
-    const topLayerFq = spatial.topLayerFq() ?? fqRoot(asSegment("window"));
-    const enumerated = spatial
-      .enumerateScopesInLayer(topLayerFq)
+    // app boot, so under normal conditions this is non-null and already
+    // window-rooted (`/<label>/window/...`). Fall back to this window's
+    // own window-root layer (`/<label>/window`) for the early-boot edge
+    // case where the overlay opens before any layer has registered — the
+    // window-rooted shape mirrors what `<App>` pushes so the fallback
+    // resolves the same layer rather than the legacy shared `/window`.
+    const topLayerFq = spatial.topLayerFq() ?? WINDOW_LAYER_FALLBACK_FQ;
+    const allScopes = spatial.enumerateScopesInLayer(topLayerFq);
+    // Jump pills land on every **focusable** scope in the layer — anything
+    // the user can visibly claim focus on is a legitimate jump target
+    // (vim-sneak / AceJump: "jump to whatever you can see"). That includes
+    // focusable leaves nested inside another focusable scope, e.g. a card's
+    // (i) inspect button or its fields. Only structural zones
+    // (`showFocus={false}` — columns, the board well) are skipped: focus on
+    // them has no visible indicator, so a pill there would land the user
+    // nowhere discernible.
+    //
+    // NOTE: deliberately NOT tier-filtered. An earlier change filtered jump
+    // down to top-tier focusables (mirroring the kernel's tier-locked arrow
+    // nav), which silently removed nested actionable buttons — the card (i)
+    // inspect and inspector (x) close leaves — from the jump-target set.
+    // Arrow-nav tier locking is a kernel concern (`navigate.rs`) and is
+    // unaffected by jump landing focus on a nested leaf.
+    const enumerated = allScopes
+      .filter((s) => s.focusable)
       // First pass: drop collapsed (zero-area) scopes — they have no
       // meaningful anchor to hit-test.
       .filter((s) => s.rect.width > 0 && s.rect.height > 0)
@@ -670,11 +707,18 @@ function useJumpTargets(
     generateSneakCodes(enumerated.length)
       .then((codes: string[]) => {
         if (cancelled) return;
-        const paired: JumpTarget[] = enumerated.map((s, i) => ({
-          fq: s.fq,
-          rect: s.rect,
-          code: codes[i],
-        }));
+        // Pair only the targets that actually received a code. A degraded
+        // generator response (fewer codes than requested) must never
+        // produce a target with `code: undefined` — the key matcher's
+        // prefix test (`c.startsWith(...)`) would crash on the first
+        // keystroke.
+        const paired: JumpTarget[] = enumerated
+          .slice(0, codes.length)
+          .map((s, i) => ({
+            fq: s.fq,
+            rect: s.rect,
+            code: codes[i],
+          }));
         setTargets(paired);
       })
       .catch((err) => {

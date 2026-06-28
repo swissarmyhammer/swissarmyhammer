@@ -1,0 +1,1 @@
+{"id":"01KV3P5JPST0C3C4SBT8Z2824A","timestamp":"2026-06-14T18:26:40.985023Z","op":"create","item_id":"01KV3P5JPRPGYE4GF2AFSC8FBK","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 7057ff\n+tag_name: Test-Failure\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 7057ff\n-tag_name: Test-Failure\n","transaction_id":null}

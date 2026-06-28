@@ -118,6 +118,29 @@ impl FullyQualifiedMoniker {
         let tail = s.rsplit(FQ_SEPARATOR).next().unwrap_or(s);
         SegmentMoniker::from_string(tail)
     }
+
+    /// Read the leading path component as a [`SegmentMoniker`], or `None`
+    /// when the FQM carries no path segment (empty string).
+    ///
+    /// Every focus FQM is window-rooted: [`Self::root`] mints `/<label>`
+    /// and child scopes compose beneath it, so the canonical shape is
+    /// `/<window-label>/window/...`. The first segment after the leading
+    /// separator is therefore the owning window's label. The focus kernel
+    /// uses this to derive the owning [`WindowLabel`] from the path itself —
+    /// "the window is in the path" — rather than a side field or a
+    /// possibly-wrong explicit arg.
+    ///
+    /// Returns `None` for an empty FQM (the zero-valued schema prototype)
+    /// since there is no segment to read.
+    pub fn root_segment(&self) -> Option<SegmentMoniker> {
+        // A well-formed FQM starts with the separator (`/winA/...`), so the
+        // first split component is the empty leading string; skip empties and
+        // land on the root segment.
+        self.as_str()
+            .split(FQ_SEPARATOR)
+            .find(|seg| !seg.is_empty())
+            .map(SegmentMoniker::from_string)
+    }
 }
 
 /// Navigation direction passed to `spatial_navigate`.
@@ -410,6 +433,30 @@ mod tests {
             &SegmentMoniker::from_string("field:T1.title"),
         );
         assert_eq!(field.as_str(), "/window/inspector/field:T1.title");
+    }
+
+    /// `FullyQualifiedMoniker::root_segment` reads the *first* path
+    /// component — the window label in a window-rooted FQM
+    /// (`/<label>/window/...`). This is the inverse of `last_segment`
+    /// and the basis for kernel window-derivation-from-the-path.
+    #[test]
+    fn fq_root_segment_reads_first_component() {
+        let card = FullyQualifiedMoniker::from_string("/winA/window/board:b/task:t");
+        assert_eq!(
+            card.root_segment(),
+            Some(SegmentMoniker::from_string("winA"))
+        );
+
+        // A bare window root is its own root segment.
+        let root = FullyQualifiedMoniker::from_string("/winB/window");
+        assert_eq!(
+            root.root_segment(),
+            Some(SegmentMoniker::from_string("winB"))
+        );
+
+        // An empty FQM (the zero-valued schema prototype) has no segment.
+        let empty = FullyQualifiedMoniker::from_string("");
+        assert_eq!(empty.root_segment(), None);
     }
 
     /// `SegmentMoniker` and `FullyQualifiedMoniker` are distinct types

@@ -21,6 +21,8 @@ import {
 } from "@/lib/command-scope";
 import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
+import { useCommandList } from "@/hooks/use-command-list";
+import { useCommandAvailability } from "@/hooks/use-command-availability";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
 import { moniker } from "@/lib/moniker";
 import { FocusScope } from "@/components/focus-scope";
@@ -79,79 +81,85 @@ export function CommandPalette({
   const { keymap_mode: mode } = useUIState();
   // Scope chain is sourced from `FocusedScopeContext` — the frontend-
   // authoritative focus tree — rather than from `useUIState().scope_chain`.
-  // The backend echoes scope_chain on every `ui.setFocus`, but the
+  // The backend echoes scope_chain on every `app.setFocus`, but the
   // `UIStateProvider` suppresses those events to keep `useUIState()`
-  // reference-stable. Reading the chain directly from the focus context
-  // preserves the "refetch commands when focus moves while palette is
-  // open" semantic without the round-trip.
+  // reference-stable.
   const focusedScope = useContext(FocusedScopeContext);
-  const scopeChain = useMemo(
+  const liveScopeChain = useMemo(
     () => scopeChainFromScope(focusedScope),
     [focusedScope],
   );
+
+  // The palette CAPTURES the focused scope chain once, at open, and uses the
+  // captured chain for everything — the `useCommandList` caption ctx,
+  // availability, and the dispatch (passed explicitly, the context-menu
+  // pattern). The palette is an overlay: after it opens, the LIVE chain can
+  // move off the entity the captions were rendered against (the palette
+  // mounts its own `<FocusLayer>`; search rows mount `FocusScope`s), so
+  // dispatching with the live chain could execute against a different
+  // entity than the row's caption promised (kanban card
+  // 01KTY6XTJQFCG9ENKTAMC6N3JV: "Inspect Task" silently no-oped). Freezing
+  // one chain at open makes caption and execution agree by construction.
+  //
+  // The live chain is read through a ref so the capture effect depends only
+  // on `open` — focus movement while the palette is open must NOT re-capture.
+  const liveScopeChainRef = useRef(liveScopeChain);
+  liveScopeChainRef.current = liveScopeChain;
+  const [scopeChain, setScopeChain] = useState<string[]>(liveScopeChain);
+
   const dispatch = useDispatchCommand();
 
-  /** Shape returned by the backend. */
-  interface ResolvedCommand {
-    id: string;
-    name: string;
-    target?: string;
-    context_menu: boolean;
-    keys?: { vim?: string; cua?: string; emacs?: string };
-    available: boolean;
-    /**
-     * Pre-filled dispatch arguments for fan-out palette rows.
-     *
-     * Dynamic emitters (e.g. per-view "Switch to X") ship the canonical
-     * command id (`view.set`) plus the distinguishing argument
-     * (`{ view_id: "..." }`) inside `args`. `executeSelectedCommand`
-     * forwards this bag to `dispatch(id, { args, target })` verbatim,
-     * so no client-side suffix parsing is needed.
-     */
-    args?: Record<string, unknown>;
-  }
+  // The innermost scope moniker is the palette's `useCommandList` filter:
+  // `list command` keeps global commands plus those whose `scope` contains it,
+  // matching the per-scope set the registry surfaces for this focus point.
+  const currentScope = scopeChain[0];
 
-  // Fetch commands from the backend when the palette opens or scope changes.
-  const [backendCommands, setBackendCommands] = useState<ResolvedCommand[]>([]);
-  useEffect(() => {
-    if (!open) return;
-    invoke<ResolvedCommand[]>("list_commands_for_scope", {
-      scopeChain,
-    })
-      .then(setBackendCommands)
-      .catch((e) => {
-        console.error("list_commands_for_scope failed:", e);
-        setBackendCommands([]);
-      });
-  }, [open, scopeChain]);
+  // Source commands from the metadata-driven Command registry rather than a
+  // hardcoded list — re-fetched live on `commands/changed`. The palette only
+  // renders in command mode, so the list is unused (but cheap) in search mode.
+  // The CAPTURED pre-open scope chain rides along as the list ctx so the
+  // service renders caption templates ({{entity.type}}) against the object
+  // that was focused when the palette opened — "Inspect Task", never a raw
+  // placeholder, and never the overlay's own chain.
+  const { commands: registryCommands, epoch: registryEpoch } = useCommandList(
+    currentScope !== undefined
+      ? { scope: currentScope, scopeChain }
+      : { scopeChain },
+  );
 
-  // Adapt backend commands to the shape the palette expects (CommandAtDepth)
+  // Adapt registry commands to the shape the palette renders (CommandAtDepth).
+  // Hidden commands (`visible: false`) never reach a surface.
   const allCommands: CommandAtDepth[] = useMemo(
     () =>
-      backendCommands.map((cmd) => ({
-        command: {
-          id: cmd.id,
-          name: cmd.name,
-          target: cmd.target,
-          keys: cmd.keys,
-          args: cmd.args,
-        },
-        depth: 0,
-      })),
-    [backendCommands],
+      registryCommands
+        .filter((cmd) => cmd.visible !== false)
+        .map((cmd) => ({
+          command: {
+            id: cmd.id,
+            name: cmd.name,
+            keys: cmd.keys,
+          },
+          depth: 0,
+        })),
+    [registryCommands],
   );
 
   // Dispatch inspect for search mode — dispatches to the backend via
   // the standard command system, which updates UIState inspector_stack.
-  const dispatchInspect = useDispatchCommand("ui.inspect");
+  const dispatchInspect = useDispatchCommand("app.inspect");
 
-  // Reset state when palette opens.
+  // Reset state when palette opens, and capture the pre-open scope chain
+  // (see the capture rationale above). The capture runs before the palette's
+  // own `<FocusLayer>` push can move spatial focus — child effects commit
+  // before parent effects — so the captured chain is the entity chain that
+  // was focused when the user invoked the palette.
   useEffect(() => {
     if (open) {
       setFilter("");
       setDebouncedFilter("");
       setSelectedIndex(0);
       setSearchResults([]);
+      setScopeChain(liveScopeChainRef.current);
     }
   }, [open]);
 
@@ -240,6 +248,24 @@ export function CommandPalette({
     return scored.map((s) => s.entry);
   }, [filter, allCommands, paletteMode]);
 
+  // Evaluate `available command` for every visible row. The hook batches the
+  // ids into one concurrency-limited fan-out and caches the verdicts until the
+  // scope chain changes — so re-opening or typing does not re-hit the service.
+  // Unevaluated ids are absent from the map and treated as available, so a
+  // command never flickers grayed-out before its verdict resolves.
+  const visibleIds = useMemo(
+    () => filteredCommands.map((entry) => entry.command.id),
+    [filteredCommands],
+  );
+  const { availability } = useCommandAvailability({
+    enabled: open && paletteMode === "command",
+    ids: visibleIds,
+    scopeChain,
+    // Invalidate cached verdicts when the registry changes (commands/changed),
+    // so an already-open palette re-evaluates instead of showing stale rows.
+    epoch: registryEpoch,
+  });
+
   // Combined length for selection clamping
   const filteredLength =
     paletteMode === "search" ? searchResults.length : filteredCommands.length;
@@ -249,20 +275,27 @@ export function CommandPalette({
     setSelectedIndex((prev) => Math.min(prev, Math.max(0, filteredLength - 1)));
   }, [filteredLength]);
 
-  // Execute the selected command (command mode)
+  // Execute the selected command (command mode). The dispatch carries the
+  // CAPTURED pre-open scope chain explicitly (the context-menu pattern):
+  // the row's caption was rendered against that chain, so executing against
+  // the same chain guarantees caption and effect agree even though `onClose`
+  // (and the overlay itself) may have moved live focus.
   const executeSelectedCommand = useCallback(() => {
     const entry = filteredCommands[selectedIndex];
-    if (entry) {
-      onClose();
-      // `args` is populated by dynamic-emission rows (e.g. "Switch to
-      // Board View" carries `{ view_id: "board-view" }`). Forward it
-      // verbatim so the canonical command sees its pre-filled arg bag.
-      dispatch(entry.command.id, {
-        target: entry.command.target,
-        args: entry.command.args,
-      }).catch(console.error);
-    }
-  }, [filteredCommands, selectedIndex, onClose, dispatch]);
+    if (!entry) return;
+    // Unavailable commands are inert — Enter on a grayed-out row is a no-op,
+    // matching the grayed-out click affordance.
+    if (availability[entry.command.id]?.available === false) return;
+    onClose();
+    dispatch(entry.command.id, { scopeChain }).catch(console.error);
+  }, [
+    filteredCommands,
+    selectedIndex,
+    onClose,
+    dispatch,
+    availability,
+    scopeChain,
+  ]);
 
   // Execute the selected entity result (search mode)
   const executeSelectedResult = useCallback(() => {
@@ -278,8 +311,18 @@ export function CommandPalette({
       onSwitchBoard(result.entity_id);
     }
     const entityMoniker = moniker(result.entity_type, result.entity_id);
-    dispatchInspect({ target: entityMoniker }).catch(console.error);
-  }, [searchResults, selectedIndex, onClose, dispatchInspect, onSwitchBoard]);
+    // The explicit target wins verbatim server-side; the captured pre-open
+    // chain rides along so the ui_state op resolves the correct window even
+    // though the result rows' FocusScopes moved live focus.
+    dispatchInspect({ target: entityMoniker, scopeChain }).catch(console.error);
+  }, [
+    searchResults,
+    selectedIndex,
+    onClose,
+    dispatchInspect,
+    onSwitchBoard,
+    scopeChain,
+  ]);
 
   const executeSelected =
     paletteMode === "search" ? executeSelectedResult : executeSelectedCommand;
@@ -434,35 +477,43 @@ export function CommandPalette({
           ) : (
             filteredCommands.map((entry, index) => {
               const hint = keyHint(entry);
-              // Fan-out rows (e.g. multiple "view.set" entries with
-              // different `args.view_id`) share an id and target, so the
-              // React key must also depend on `args` or the list would
-              // collapse to a single row.
-              const argsKey = entry.command.args
-                ? JSON.stringify(entry.command.args)
-                : "";
+              // Availability is consulted per visible row. A missing verdict
+              // (not yet resolved) defaults to available so commands never
+              // flicker grayed-out; an explicit `available: false` grays the
+              // row out and surfaces `reason` as the tooltip.
+              const verdict = availability[entry.command.id];
+              const isUnavailable = verdict?.available === false;
+              const reason = verdict?.reason;
               return (
                 <div
-                  key={
-                    entry.command.id +
-                    ":" +
-                    (entry.command.target ?? "") +
-                    ":" +
-                    argsKey
-                  }
+                  key={entry.command.id}
                   role="option"
                   aria-selected={index === selectedIndex}
-                  data-testid={`command-item-${entry.command.id}${
-                    argsKey ? `:${argsKey}` : ""
-                  }`}
-                  className={`flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm
-                      ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
+                  aria-disabled={isUnavailable}
+                  title={isUnavailable ? reason : undefined}
+                  data-testid={`command-item-${entry.command.id}`}
+                  data-available={isUnavailable ? "false" : "true"}
+                  className={`flex items-center justify-between px-3 py-1.5 text-sm
+                      ${
+                        isUnavailable
+                          ? "cursor-not-allowed text-muted-foreground/50"
+                          : "cursor-pointer"
+                      }
+                      ${
+                        index === selectedIndex
+                          ? "bg-accent text-accent-foreground"
+                          : "hover:bg-accent/50"
+                      }`}
                   onClick={() => {
+                    // Unavailable commands are inert — match the grayed-out
+                    // affordance by swallowing the click. The dispatch
+                    // carries the captured pre-open chain, like
+                    // executeSelectedCommand.
+                    if (isUnavailable) return;
                     onClose();
-                    dispatch(entry.command.id, {
-                      target: entry.command.target,
-                      args: entry.command.args,
-                    }).catch(console.error);
+                    dispatch(entry.command.id, { scopeChain }).catch(
+                      console.error,
+                    );
                   }}
                   onMouseEnter={() => setSelectedIndex(index)}
                 >

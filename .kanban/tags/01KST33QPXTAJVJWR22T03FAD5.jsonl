@@ -1,0 +1,1 @@
+{"id":"01KST33QPXATGSRBZ4RC82F5DM","timestamp":"2026-05-29T14:44:45.917817Z","op":"create","item_id":"01KST33QPXTAJVJWR22T03FAD5","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 0075ca\n+tag_name: jump-to\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 0075ca\n-tag_name: jump-to\n","transaction_id":null}

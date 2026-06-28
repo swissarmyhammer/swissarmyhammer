@@ -23,7 +23,7 @@ import { createMentionTooltips } from "@/lib/cm-mention-tooltip";
 import type { MentionMeta } from "@/lib/mention-meta";
 import { slugify } from "@/lib/slugify";
 import type { Entity, VirtualTagMeta } from "@/types/kanban";
-import { getStr } from "@/types/kanban";
+import { getStr, getEntityField } from "@/types/kanban";
 
 /** Debounce delay for mention search queries against the Tauri backend. */
 const MENTION_SEARCH_DEBOUNCE_MS = 150;
@@ -102,7 +102,7 @@ export function buildMentionMetaMap(
   for (const e of entities) {
     const color = getStr(e, "color", "888888");
     if (slugField) {
-      const slug = getStr(e, slugField);
+      const slug = getEntityField(e, slugField);
       if (!slug) continue;
       // displayName = slug (pill label), description = display value (tooltip).
       const title = getStr(e, displayField) || undefined;

@@ -1,5 +1,6 @@
-import { icons, LayoutGrid } from "lucide-react";
+import { LayoutGrid } from "lucide-react";
 import { useViews } from "@/lib/views-context";
+import { viewIcon } from "@/components/view-icon";
 import { CommandScopeProvider, useDispatchCommand } from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
 import { moniker } from "@/lib/moniker";
@@ -14,31 +15,18 @@ import {
 import { asSegment } from "@/types/spatial";
 import type { ViewDef } from "@/types/kanban";
 
-/** Convert kebab-case icon name to PascalCase key for lucide-react lookup. */
-function kebabToPascal(s: string): string {
-  return s.replace(/(^|-)([a-z])/g, (_, _dash, c: string) => c.toUpperCase());
-}
-
-/** Resolve a view's icon from its YAML `icon` property via dynamic lucide lookup. */
-function viewIcon(view: ViewDef) {
-  const name = view.icon ?? view.kind;
-  if (name) {
-    const key = kebabToPascal(name);
-    const Icon = icons[key as keyof typeof icons];
-    if (Icon) return <Icon className="h-4 w-4" />;
-  }
-  return <LayoutGrid className="h-4 w-4" />;
-}
-
 /**
  * Left-nav sidebar listing every known view as an icon button.
  *
  * Each button is wrapped in its own {@link CommandScopeProvider} with a
  * `view:{id}` moniker so right-click on that specific button resolves a
- * scope chain the backend recognises. View switching is palette-only, so
- * the context menu never shows a "Switch to <ViewName>" entry; the
- * `view:{id}` moniker is still needed for other dynamics (e.g.
- * `entity.add:{type}` when the view declares an `entity_type`).
+ * scope chain the backend recognises. The backend's `commands_for_scope`
+ * flips THIS view's "Switch to View «name»" row to `context_menu: true`
+ * when its `view:{id}` is in the chain, so right-clicking view X surfaces
+ * exactly "Switch to View «X»" (and nothing for sibling views). The same
+ * `view:{id}` moniker also resolves other dynamics (e.g. `entity.add:{type}`
+ * when the view declares an `entity_type`). View switching to ANY view stays
+ * available from the command palette everywhere.
  */
 export function LeftNav() {
   const { views, activeView } = useViews();
@@ -76,10 +64,11 @@ interface ScopedViewButtonProps {
  *
  * Mirrors `ScopedPerspectiveTab` in `perspective-tab-bar.tsx`: the moniker
  * placed in the scope chain is what `useContextMenu` reads via
- * `CommandScopeContext`. The backend does not emit `view.switch:*` as a
- * context-menu entry, but other dynamic commands (notably
- * `entity.add:{type}` for views with an `entity_type`) still require the
- * `view:{id}` moniker to resolve their scope.
+ * `CommandScopeContext`. The backend resolves this view's own
+ * "Switch to View «name»" row (the canonical `view.set` command with
+ * `args.view_id`) to `context_menu: true` for the in-scope `view:{id}`, and
+ * other dynamic commands (notably `entity.add:{type}` for views with an
+ * `entity_type`) also require the `view:{id}` moniker to resolve their scope.
  */
 function ScopedViewButton({ view, isActive }: ScopedViewButtonProps) {
   return (
@@ -113,14 +102,17 @@ function ScopedViewButton({ view, isActive }: ScopedViewButtonProps) {
  * Left-click dispatches the canonical `view.set` command with the view id
  * in `args` (the palette fan-out that used to emit `view.switch:{id}` was
  * retired in 01KPZMXXEXKVE3RNPA4XJP0105). Right-click raises the native
- * context menu via `useContextMenu`. The menu never contains a
- * `Switch to <ViewName>` entry — view switching is palette-only — but
- * scope-dependent dynamics (e.g. `entity.add:{type}`) still surface for
- * views that declare an `entity_type`.
+ * context menu via `useContextMenu`, which surfaces this view's own
+ * "Switch to View «name»" entry (scope-resolved to its `view:{id}`) plus any
+ * scope-dependent dynamics (e.g. `entity.add:{type}`) for views that declare
+ * an `entity_type`. Switching to ANY view stays available from the palette.
  */
 function ViewButton({ view, isActive }: ScopedViewButtonProps) {
   const dispatch = useDispatchCommand("view.set");
   const handleContextMenu = useContextMenu();
+  // Dumb lookup of the metadata-declared icon; LayoutGrid is the single
+  // documented fallback for views whose metadata declares no (known) icon.
+  const Icon = viewIcon(view) ?? LayoutGrid;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -142,7 +134,7 @@ function ViewButton({ view, isActive }: ScopedViewButtonProps) {
                 : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
             )}
           >
-            {viewIcon(view)}
+            <Icon className="h-4 w-4" />
           </button>
         </Pressable>
       </TooltipTrigger>

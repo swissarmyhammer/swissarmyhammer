@@ -124,6 +124,26 @@ impl SpatialRegistry {
         self.layers.remove(fq);
     }
 
+    /// Remove **every** layer whose `window_label` equals `label`, returning
+    /// the number removed.
+    ///
+    /// This is the reconcile op for a window that went away without running
+    /// its per-layer pops: a webview full reload (the new page never popped
+    /// the old page's layers) or a destroyed window (no cleanup runs at all).
+    /// The window-root layer self-heals — the new page re-pushes the same FQM
+    /// idempotently via [`Self::push_layer`] — but OVERLAY layers (inspector,
+    /// palette, dialog) open at that moment would otherwise linger forever in
+    /// the store. Calling this before the new page pushes fresh layers leaves
+    /// the window holding only what the new page declares.
+    ///
+    /// Layers for any OTHER window are untouched, so this is safe to call per
+    /// window without disturbing sibling windows that share layer FQMs.
+    pub fn remove_layers_for_window(&mut self, label: &WindowLabel) -> usize {
+        let before = self.layers.len();
+        self.layers.retain(|_fq, l| &l.window_label != label);
+        before - self.layers.len()
+    }
+
     /// Borrow a layer by FQM.
     pub fn layer(&self, fq: &FullyQualifiedMoniker) -> Option<&FocusLayer> {
         self.layers.get(fq)
@@ -261,12 +281,14 @@ mod tests {
                     rect: rect_zero(),
                     parent_zone: None,
                     nav_override: HashMap::new(),
+                    focusable: true,
                 },
                 SnapshotScope {
                     fq: FullyQualifiedMoniker::from_string("/L/zone/leaf"),
                     rect: rect_zero(),
                     parent_zone: Some(FullyQualifiedMoniker::from_string("/L/zone")),
                     nav_override: HashMap::new(),
+                    focusable: true,
                 },
             ],
         };
@@ -301,6 +323,83 @@ mod tests {
             reg.layer(&FullyQualifiedMoniker::from_string("/L"))
                 .and_then(|l| l.last_focused.clone()),
             Some(FullyQualifiedMoniker::from_string("/L/leaf")),
+        );
+    }
+
+    #[test]
+    fn remove_layers_for_window_removes_only_that_windows_layers() {
+        let mut reg = SpatialRegistry::new();
+        // Window "w1": a root + two overlay layers.
+        reg.push_layer(make_layer("/w1", "w1", None));
+        reg.push_layer(make_layer("/w1/inspector", "w1", Some("/w1")));
+        reg.push_layer(make_layer("/w1/palette", "w1", Some("/w1")));
+        // Window "w2": a root + one overlay.
+        reg.push_layer(make_layer("/w2", "w2", None));
+        reg.push_layer(make_layer("/w2/inspector", "w2", Some("/w2")));
+
+        let removed = reg.remove_layers_for_window(&WindowLabel::from_string("w1"));
+
+        assert_eq!(removed, 3, "all three w1 layers are removed");
+        assert!(
+            reg.layer(&FullyQualifiedMoniker::from_string("/w1"))
+                .is_none(),
+            "w1 root is gone",
+        );
+        assert!(
+            reg.layer(&FullyQualifiedMoniker::from_string("/w1/inspector"))
+                .is_none(),
+            "w1 inspector overlay is gone",
+        );
+        assert!(
+            reg.layer(&FullyQualifiedMoniker::from_string("/w1/palette"))
+                .is_none(),
+            "w1 palette overlay is gone",
+        );
+        assert!(
+            reg.layer(&FullyQualifiedMoniker::from_string("/w2"))
+                .is_some(),
+            "w2 root survives",
+        );
+        assert!(
+            reg.layer(&FullyQualifiedMoniker::from_string("/w2/inspector"))
+                .is_some(),
+            "w2 overlay survives",
+        );
+    }
+
+    #[test]
+    fn re_bound_window_starts_with_only_layers_the_new_page_pushed() {
+        // Simulate a webview full reload: the old page left a window root and an
+        // OVERLAY (palette) open; React cleanups never ran, so neither was
+        // popped. The host reconciles the window BEFORE the new page mounts.
+        let mut reg = SpatialRegistry::new();
+        reg.push_layer(make_layer("/w1", "w1", None));
+        reg.push_layer(make_layer("/w1/palette", "w1", Some("/w1")));
+
+        // Reconcile on re-bind: drop every stale layer for the window.
+        reg.remove_layers_for_window(&WindowLabel::from_string("w1"));
+
+        // The new page re-pushes only the window-root layer (no overlay open).
+        reg.push_layer(make_layer("/w1", "w1", None));
+
+        let w1_layers: Vec<_> = reg
+            .children_of_layer(&FullyQualifiedMoniker::from_string("/w1"))
+            .into_iter()
+            .map(|l| l.fq.as_str().to_string())
+            .collect();
+        assert!(
+            w1_layers.is_empty(),
+            "the re-bound window has no stale overlay children; got {w1_layers:?}",
+        );
+        assert!(
+            reg.layer(&FullyQualifiedMoniker::from_string("/w1/palette"))
+                .is_none(),
+            "the stale palette overlay did not survive the re-bind",
+        );
+        assert!(
+            reg.layer(&FullyQualifiedMoniker::from_string("/w1"))
+                .is_some(),
+            "the freshly-pushed window root is present",
         );
     }
 }

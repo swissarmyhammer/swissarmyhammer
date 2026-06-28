@@ -18,7 +18,7 @@
  * The matching frontend invariant tested here:
  *   - Backdrop click on the inspector (a "click outside the active
  *     layer" gesture) dispatches `app.dismiss`, NOT a hard-coded
- *     `ui.inspector.close_all`. This is the load-bearing change in
+ *     `app.inspector.close_all`. This is the load-bearing change in
  *     card `01KR7CDEFWWVF4WH0BCHE8Y21J`: the backdrop's intent is
  *     "dismiss the topmost layer", and that decision belongs to the
  *     backend's `DismissCmd`, not the frontend.
@@ -139,6 +139,7 @@ vi.mock("@/lib/entity-focus-context", () => {
     useIsFocused: () => false,
     useIsDirectFocus: () => false,
     useOptionalIsDirectFocus: () => false,
+    useOptionalIsFocusWithin: () => false,
     useOptionalFocusStore: () => null,
   };
 });
@@ -222,7 +223,7 @@ describe("app.dismiss — topmost-layer aware (frontend dispatch path)", () => {
     mockEntitiesByType.mockReturnValue({});
   });
 
-  it("backdrop click with an inspector open dispatches app.dismiss (NOT ui.inspector.close_all)", async () => {
+  it("backdrop click with an inspector open dispatches app.dismiss (NOT app.inspector.close_all)", async () => {
     // Inspector panel open — backdrop is rendered.
     mockUIState.mockReturnValue(uiStateWithStack(["task:t1"]));
     const { container, unmount } = renderInspectors();
@@ -235,12 +236,12 @@ describe("app.dismiss — topmost-layer aware (frontend dispatch path)", () => {
     await flush();
 
     // The frontend dispatched `app.dismiss` to the backend — NOT
-    // `ui.inspector.close_all`. The backend's `DismissCmd` decides
+    // `app.inspector.close_all`. The backend's `DismissCmd` decides
     // which layer to close based on the topmost-layer rule.
     const calls = backendDispatchCalls();
     expect(calls.find((c) => c.cmd === "app.dismiss")).toBeDefined();
     expect(
-      calls.find((c) => c.cmd === "ui.inspector.close_all"),
+      calls.find((c) => c.cmd === "app.inspector.close_all"),
     ).toBeUndefined();
 
     unmount();
@@ -284,7 +285,7 @@ describe("app.dismiss — topmost-layer aware (frontend dispatch path)", () => {
     const calls = backendDispatchCalls();
     expect(calls.find((c) => c.cmd === "app.dismiss")).toBeDefined();
     expect(
-      calls.find((c) => c.cmd === "ui.inspector.close_all"),
+      calls.find((c) => c.cmd === "app.inspector.close_all"),
     ).toBeUndefined();
 
     unmount();

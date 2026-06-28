@@ -18,7 +18,8 @@ import { CommandBusyProvider } from "@/lib/command-scope";
 import { FocusDebugProvider } from "@/lib/focus-debug-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
-import { asSegment } from "@/types/spatial";
+import { asSegment, fqRoot } from "@/types/spatial";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { DiagErrorBoundary } from "@/components/diag-error-boundary";
 
 /**
@@ -29,6 +30,33 @@ import { DiagErrorBoundary } from "@/components/diag-error-boundary";
  * would force an unnecessary tear-down / re-push of the window root layer.
  */
 const WINDOW_LAYER_NAME = asSegment("window");
+
+/**
+ * Identity-stable parent FQM for the window-root `<FocusLayer>`, rooted at
+ * THIS window's unique label (`/<label>`).
+ *
+ * Why a UNIQUE root per window: the kernel's `SpatialRegistry.layers` map is
+ * keyed by FQM. If every window rooted its layer at the literal `/window`,
+ * two windows on the same board would collide on that key — the second push
+ * clobbers the first, and any window resolution that leans on the layer's
+ * `window_label` side field then targets the wrong window (the cross-window
+ * focus/nav contamination bug). Rooting at the window label makes the layer
+ * FQM `/<label>/window`, the board a nested segment below it, and every
+ * descendant scope window-unique by construction.
+ *
+ * Why MODULE SCOPE (computed once, never inline in JSX): the prior rooting
+ * attempt computed `fqRoot(getCurrentWindow().label)` inline in the
+ * `parentLayerFq` prop. That minted a fresh value on every render; the
+ * `<FocusLayer>` `fq` memo (and therefore the push fq) churned, tearing the
+ * layer down and re-pushing it under a shifting identity while focus commits
+ * raced the gap — every commit dropped with "focus snapshot names an
+ * unregistered layer". Computing the root ONCE at module load (the window
+ * label is constant for the webview's lifetime) keeps the parent — and thus
+ * the composed layer fq, the registry key, and the snapshot's `layer_fq` —
+ * identity-stable and mutually equal. Mirrors `WINDOW_LAYER_NAME` above and
+ * `window-container.tsx`'s module-scope `WINDOW_LABEL`.
+ */
+const WINDOW_ROOT_FQ = fqRoot(asSegment(getCurrentWindow().label));
 
 /** Parse URL params once at module level. */
 const URL_PARAMS = new URLSearchParams(window.location.search);
@@ -72,7 +100,7 @@ function App() {
     <DiagErrorBoundary>
       <FocusDebugProvider enabled={false}>
         <SpatialFocusProvider>
-          <FocusLayer name={WINDOW_LAYER_NAME}>
+          <FocusLayer name={WINDOW_LAYER_NAME} parentLayerFq={WINDOW_ROOT_FQ}>
             <CommandBusyProvider>
               <RustEngineContainer>
                 <WindowContainer>
@@ -119,10 +147,11 @@ function App() {
  * duplicating individual providers. Sets body/html to transparent so
  * the borderless window shows only the styled card.
  *
- * Wrapped in `<SpatialFocusProvider>` + `<FocusLayer name="window">` to
- * match the main `App` shell — every Tauri webview's React root must
- * mount its own window-root layer so descendants that consume spatial
- * primitives have a layer to register against. The capture form does
+ * Wrapped in `<SpatialFocusProvider>` + `<FocusLayer name="window"
+ * parentLayerFq={WINDOW_ROOT_FQ}>` to match the main `App` shell — every
+ * Tauri webview's React root must mount its own window-root layer, rooted
+ * at this window's unique label (`/<label>/window`) so its FQMs never
+ * collide with another window's. The capture form does
  * not currently use spatial primitives directly, but the wrapping is
  * harmless when no descendants register and future-proofs the window
  * for spatial-aware children (e.g. arrow-key navigation between fields).
@@ -135,7 +164,7 @@ function QuickCaptureApp() {
   return (
     <FocusDebugProvider enabled={false}>
       <SpatialFocusProvider>
-        <FocusLayer name={WINDOW_LAYER_NAME}>
+        <FocusLayer name={WINDOW_LAYER_NAME} parentLayerFq={WINDOW_ROOT_FQ}>
           <RustEngineContainer>
             <QuickCapture />
           </RustEngineContainer>

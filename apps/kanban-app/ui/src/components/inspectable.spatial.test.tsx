@@ -2,11 +2,11 @@
  * Browser-mode tests for the `<Inspectable>` wrapper and its sibling
  * `useInspectOnDoubleClick` hook (see `inspectable.tsx`).
  *
- * `<Inspectable>` is the single source of the double-click → `ui.inspect`
+ * `<Inspectable>` is the single source of the double-click → `app.inspect`
  * dispatch in the codebase. After card 01KQ7K7KZNR3EHS9SY0XY79NYE the
  * spatial-nav primitives `<FocusScope>` and `<FocusScope>` are pure
  * spatial: they no longer carry an `inspectOnDoubleClick` prop and never
- * call `useDispatchCommand("ui.inspect")`. Inspect lives here.
+ * call `useDispatchCommand("app.inspect")`. Inspect lives here.
  *
  * This file pins the wrapper's contract end-to-end:
  *
@@ -15,7 +15,7 @@
  *   3. `<Inspectable>` composes around `<FocusScope>` cleanly — exactly
  *      one dispatch fires (the wrapper handles it; the scope no longer
  *      does).
- *   4. `<FocusScope>` alone does NOT register a `ui.inspect` dispatch
+ *   4. `<FocusScope>` alone does NOT register a `app.inspect` dispatch
  *      handler (regression guard for the dispatch hook leaking back
  *      into the primitive).
  *   5. Symmetric for `<FocusScope>`.
@@ -37,28 +37,9 @@ import type { Entity } from "@/types/kanban";
 // Tauri API mocks — must come before component imports.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -90,7 +71,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // Spy patch for `useDispatchCommand` — capture which preset command IDs
 // are registered. Tests #4 and #5 rely on this to assert that
 // `<FocusScope>` / `<FocusScope>` (used outside of an `<Inspectable>`)
-// never register `useDispatchCommand("ui.inspect")`.
+// never register `useDispatchCommand("app.inspect")`.
 //
 // We swap the real module for a thin wrapper that records every call's
 // preset cmd id, then re-exports everything else untouched. The spy
@@ -185,9 +166,9 @@ function dispatchCommandCalls(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/** Filter `dispatch_command` calls down to those for `ui.inspect`. */
+/** Filter `dispatch_command` calls down to those for `app.inspect`. */
 function inspectDispatches(): Array<Record<string, unknown>> {
-  return dispatchCommandCalls().filter((c) => c.cmd === "ui.inspect");
+  return dispatchCommandCalls().filter((c) => c.cmd === "app.inspect");
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +192,7 @@ describe("Inspectable — core dispatch contract", () => {
   // #1: <Inspectable> alone fires inspect on dblclick
   // -------------------------------------------------------------------------
 
-  it("dblclick inside <Inspectable> dispatches ui.inspect with target=moniker", async () => {
+  it("dblclick inside <Inspectable> dispatches app.inspect with target=moniker", async () => {
     const { getByTestId, unmount } = render(
       withSpatialStack(
         <Inspectable moniker={asSegment("task:fake")}>
@@ -288,10 +269,10 @@ describe("Inspectable — core dispatch contract", () => {
   });
 
   // -------------------------------------------------------------------------
-  // #4: <FocusScope> alone does NOT register a `ui.inspect` dispatch handler
+  // #4: <FocusScope> alone does NOT register a `app.inspect` dispatch handler
   // -------------------------------------------------------------------------
 
-  it("<FocusScope> outside any <Inspectable> never registers useDispatchCommand(ui.inspect)", async () => {
+  it("<FocusScope> outside any <Inspectable> never registers useDispatchCommand(app.inspect)", async () => {
     useDispatchSpy.calls = [];
 
     const { unmount } = render(
@@ -303,7 +284,7 @@ describe("Inspectable — core dispatch contract", () => {
     );
     await flushSetup();
 
-    expect(useDispatchSpy.calls).not.toContain("ui.inspect");
+    expect(useDispatchSpy.calls).not.toContain("app.inspect");
 
     unmount();
   });
@@ -312,7 +293,7 @@ describe("Inspectable — core dispatch contract", () => {
   // #5: Symmetric — <FocusScope> alone does NOT register either
   // -------------------------------------------------------------------------
 
-  it("<FocusScope> outside any <Inspectable> never registers useDispatchCommand(ui.inspect)", async () => {
+  it("<FocusScope> outside any <Inspectable> never registers useDispatchCommand(app.inspect)", async () => {
     useDispatchSpy.calls = [];
 
     const { unmount } = render(
@@ -324,7 +305,7 @@ describe("Inspectable — core dispatch contract", () => {
     );
     await flushSetup();
 
-    expect(useDispatchSpy.calls).not.toContain("ui.inspect");
+    expect(useDispatchSpy.calls).not.toContain("app.inspect");
 
     unmount();
   });
@@ -351,7 +332,7 @@ describe("Inspectable — real-world entity wrappers", () => {
   // #6: real-world card → inspect fires with target = task moniker
   // -------------------------------------------------------------------------
 
-  it("EntityCard — dblclick dispatches ui.inspect with target=task:<id>", async () => {
+  it("EntityCard — dblclick dispatches app.inspect with target=task:<id>", async () => {
     const taskEntity: Entity = {
       entity_type: "task",
       id: "01TASK001",
@@ -382,7 +363,7 @@ describe("Inspectable — real-world entity wrappers", () => {
   // #7: real-world column → inspect fires with target = column moniker
   // -------------------------------------------------------------------------
 
-  it("ColumnView — dblclick on column body dispatches ui.inspect with target=column:<id>", async () => {
+  it("ColumnView — dblclick on column body dispatches app.inspect with target=column:<id>", async () => {
     const column: Entity = {
       entity_type: "column",
       id: "01ABCDEFGHJKMNPQRSTVWXYZ01",
@@ -441,7 +422,7 @@ describe("Inspectable — real-world entity wrappers", () => {
     // The inner handler ran exactly once.
     expect(innerHandler).toHaveBeenCalledTimes(1);
 
-    // No `ui.inspect` dispatch at the wrapping `<Inspectable>` — the
+    // No `app.inspect` dispatch at the wrapping `<Inspectable>` — the
     // inner button's `e.stopPropagation()` killed the bubbling gesture
     // before the wrapper's `onDoubleClick` could see it.
     expect(inspectDispatches()).toHaveLength(0);

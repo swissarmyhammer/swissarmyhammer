@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, act, screen, fireEvent } from "@testing-library/react";
-import React, { useContext, useEffect } from "react";
+import React, { useEffect } from "react";
 
 // ---------------------------------------------------------------------------
 // Tauri API mocks — must come before component imports.
@@ -100,6 +100,7 @@ vi.mock("@/lib/entity-focus-context", () => {
     useIsFocused: () => false,
     useIsDirectFocus: () => false,
     useOptionalIsDirectFocus: () => false,
+    useOptionalIsFocusWithin: () => false,
     useOptionalFocusStore: () => null,
     useFocusBySegmentPath: () => vi.fn(),
     useFocusedFq: () => null,
@@ -137,23 +138,31 @@ vi.mock("@/components/data-table", () => ({
 
 import { GridView } from "./grid-view";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { CommandScopeContext, resolveCommand } from "@/lib/command-scope";
+import { getWebviewCommandHandler } from "@/lib/webview-command-bus";
 
 // ---------------------------------------------------------------------------
-// Probe — reaches into the grid's CommandScope and runs a command by id.
+// Probe — runs a grid command's webview-bus handler by id.
 // ---------------------------------------------------------------------------
 
 /**
- * Looks up a command by id in the enclosing CommandScope and invokes its
- * `execute` on mount. Used by tests to exercise keyboard commands without
- * simulating the full key-binding pipeline.
+ * Invokes the webview-bus handler registered for `id` shortly after mount
+ * (Card C: the `grid.*` commands are defined by the `grid-commands` plugin;
+ * the grid view registers their live behaviors on the bus). Used by tests to
+ * exercise keyboard commands without simulating the full key-binding
+ * pipeline.
+ *
+ * The dispatch is deferred one macrotask because React runs child effects
+ * before parent effects — `GridView`'s registration effect has not fired yet
+ * when this probe (rendered inside the mocked `DataTable`) mounts. Callers
+ * await a `setTimeout(0)` round-trip after rendering.
  */
 function RunCommandProbe({ id }: { id: string }) {
-  const scope = useContext(CommandScopeContext);
   useEffect(() => {
-    const cmd = resolveCommand(scope, id);
-    if (cmd?.execute) cmd.execute();
-  }, [scope, id]);
+    const timer = setTimeout(() => {
+      void getWebviewCommandHandler(id)?.({});
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [id]);
   return null;
 }
 
@@ -295,6 +304,10 @@ describe("GridView", () => {
               />
             </TooltipProvider>,
           );
+          // Flush the RunCommandProbe's deferred bus dispatch (it fires one
+          // macrotask after GridView's registration effect installs the
+          // webview-bus handlers).
+          await new Promise((r) => setTimeout(r, 10));
         });
 
         const button = screen.getByRole("button", { name: buttonLabel });
@@ -349,6 +362,10 @@ describe("GridView", () => {
               />
             </TooltipProvider>,
           );
+          // Flush the RunCommandProbe's deferred bus dispatch (it fires one
+          // macrotask after GridView's registration effect installs the
+          // webview-bus handlers).
+          await new Promise((r) => setTimeout(r, 10));
         });
 
         const dispatchCalls = mockInvoke.mock.calls.filter(
@@ -395,6 +412,10 @@ describe("GridView", () => {
               />
             </TooltipProvider>,
           );
+          // Flush the RunCommandProbe's deferred bus dispatch (it fires one
+          // macrotask after GridView's registration effect installs the
+          // webview-bus handlers).
+          await new Promise((r) => setTimeout(r, 10));
         });
 
         const dispatchCalls = mockInvoke.mock.calls.filter(

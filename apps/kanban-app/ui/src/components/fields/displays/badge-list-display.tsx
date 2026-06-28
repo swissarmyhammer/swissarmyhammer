@@ -54,8 +54,18 @@ function useMentionItems(
 
 /**
  * For tags on a task, add an in-place "Remove Tag" command to every pill's
- * context menu. Gated on `targetEntityType === "tag"` so only tag fields
- * get the untag menu.
+ * context menu and keyboard scope. Gated on `targetEntityType === "tag"`
+ * so only tag fields get the untag command.
+ *
+ * The `keys` block mirrors the registry `task.untag` definition
+ * (`builtin/plugins/task-commands/index.ts`: `keys: { vim: "x", cua:
+ * "Delete" }`). The registry command is scope-gated
+ * (`scope: ["entity:tag", "entity:task"]`), and scope-gated commands
+ * contribute NO global keybinding (`extractKeymapBindings` skips them —
+ * card `01KTQ6QZNB3VN4MAND7VPASM21`), so this scope-level `CommandDef` is
+ * the sole carrier of those keys: `extractChainBindings` picks them up
+ * when a tag pill's `<FocusScope>` is the spatial focus. Same pattern as
+ * `ScopedPerspectiveTab`'s per-tab `app.entity.startRename` Enter binding.
  */
 function useTagUntagCommands(
   targetEntityType: string | undefined,
@@ -71,6 +81,7 @@ function useTagUntagCommands(
         id: "task.untag",
         name: "Remove Tag",
         contextMenu: true,
+        keys: { vim: "x", cua: "Delete" },
         args: { id: entityId },
       },
     ];

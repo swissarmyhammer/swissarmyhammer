@@ -1775,10 +1775,11 @@ impl AcpServer {
             *client_requested_version
         } else {
             // Otherwise, return agent's latest supported version
-            *Self::SUPPORTED_PROTOCOL_VERSIONS
+            Self::SUPPORTED_PROTOCOL_VERSIONS
                 .iter()
                 .max()
-                .unwrap_or(&agent_client_protocol::schema::ProtocolVersion::V1)
+                .copied()
+                .unwrap_or(agent_client_protocol::schema::ProtocolVersion::V1)
         }
     }
 

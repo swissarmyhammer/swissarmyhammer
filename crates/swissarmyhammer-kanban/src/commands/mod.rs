@@ -4,7 +4,6 @@
 //! The `register_commands()` function returns a map of command IDs to
 //! trait objects, ready to be inserted into a `CommandsRegistry`.
 
-pub mod ai_commands;
 pub mod app_commands;
 pub mod board_commands;
 pub mod clipboard_commands;
@@ -18,20 +17,17 @@ pub mod perspective_commands;
 pub mod task_commands;
 pub mod ui_commands;
 
+use crate::commands_core::{Command, CommandError};
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::KanbanOperationProcessor;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use swissarmyhammer_commands::{Command, CommandError};
 use swissarmyhammer_operations::{Execute, OperationProcessor};
 
 /// Run a kanban operation through the processor, mapping errors to `CommandError`.
-pub(crate) async fn run_op<T>(
-    op: &T,
-    kanban: &KanbanContext,
-) -> swissarmyhammer_commands::Result<Value>
+pub(crate) async fn run_op<T>(op: &T, kanban: &KanbanContext) -> crate::commands_core::Result<Value>
 where
     T: Execute<KanbanContext, KanbanError> + Send + Sync,
 {
@@ -133,39 +129,44 @@ fn register_column(map: &mut CmdMap) {
 }
 
 fn register_ui(map: &mut CmdMap) {
-    map.insert("ui.inspect".into(), Arc::new(ui_commands::InspectCmd));
+    map.insert("app.inspect".into(), Arc::new(ui_commands::InspectCmd));
     map.insert(
-        "ui.inspector.close".into(),
+        "app.inspector.close".into(),
         Arc::new(ui_commands::InspectorCloseCmd),
     );
     map.insert(
-        "ui.inspector.close_all".into(),
+        "app.inspector.close_all".into(),
         Arc::new(ui_commands::InspectorCloseAllCmd),
     );
     map.insert(
-        "ui.inspector.set_width".into(),
+        "app.inspector.set_width".into(),
         Arc::new(ui_commands::InspectorSetWidthCmd),
     );
+    // The ids here match the live catalogue's `app.*` names (the `ui.*`
+    // command namespace was retired by mop-up card 01KTEBZSVGAZ881RAZZWWZXGPE;
+    // the palette opener adopted `app.palette.open` at move time in Card A
+    // 01KTCQFH7AEQDZD0QETSMCMGP0). This map has no production callers
+    // (test-only).
     map.insert(
-        "ui.palette.open".into(),
+        "app.palette.open".into(),
         Arc::new(ui_commands::PaletteOpenCmd),
     );
     map.insert(
-        "ui.palette.close".into(),
+        "app.palette.close".into(),
         Arc::new(ui_commands::PaletteCloseCmd),
     );
     map.insert(
-        "ui.entity.startRename".into(),
+        "app.entity.startRename".into(),
         Arc::new(ui_commands::StartRenamePerspectiveCmd),
     );
-    map.insert("ui.setFocus".into(), Arc::new(ui_commands::SetFocusCmd));
-    map.insert("ui.mode.set".into(), Arc::new(ui_commands::SetAppModeCmd));
+    map.insert("app.setFocus".into(), Arc::new(ui_commands::SetFocusCmd));
+    map.insert("app.mode.set".into(), Arc::new(ui_commands::SetAppModeCmd));
 }
 
 /// Register `view.*` kanban commands.
 ///
 /// Currently only `view.set` — the impl lives in `ui_commands.rs` (the
-/// command mutates `UIState::active_view_id` which is a UI-surface concern)
+/// command mutates `UiState::active_view_id` which is a UI-surface concern)
 /// but the YAML declaration and id live in the kanban `view` namespace
 /// because "view" is a kanban concept, not a generic UI primitive.
 /// Relocated from `ui.view.set` in 01KPY02X405QTP5ACH67THHSN8.
@@ -277,29 +278,12 @@ fn register_perspective(map: &mut CmdMap) {
     // predecessor `ui.perspective.set`). The handler loads the perspective,
     // evaluates its filter DSL against the board's tasks, and writes BOTH
     // `active_perspective_id` and a per-window `filtered_task_ids` list in
-    // one atomic `UIStateChange::PerspectiveSwitch`. See
+    // one atomic `UiStateChange::PerspectiveSwitch`. See
     // `SwitchPerspectiveCmd` in `perspective_commands.rs`.
     map.insert(
         "perspective.switch".into(),
         Arc::new(perspective_commands::SwitchPerspectiveCmd),
     );
-}
-
-/// Register the `ai.*` window-layer commands that drive the AI panel.
-///
-/// Every impl is a no-op on the backend — the AI panel's open-state,
-/// conversation, and ACP session are webview-only, so the frontend resolves a
-/// local `execute` handler before any dispatch reaches the backend (the
-/// `ui.entity.startRename` pattern). The commands are still registered here so
-/// the YAML ↔ Rust completeness guard passes and the palette / keybinding
-/// pipeline has a registered command to surface. `ai.cancel` is the one impl
-/// with a real `available()` gate (streaming-only).
-fn register_ai(map: &mut CmdMap) {
-    map.insert("ai.toggle".into(), Arc::new(ai_commands::AiToggleCmd));
-    map.insert("ai.focus".into(), Arc::new(ai_commands::AiFocusCmd));
-    map.insert("ai.newChat".into(), Arc::new(ai_commands::AiNewChatCmd));
-    map.insert("ai.model".into(), Arc::new(ai_commands::AiModelCmd));
-    map.insert("ai.cancel".into(), Arc::new(ai_commands::AiCancelCmd));
 }
 
 fn register_app(map: &mut CmdMap) {
@@ -360,22 +344,32 @@ pub fn register_commands() -> CmdMap {
     register_file(&mut map);
     register_perspective(&mut map);
     register_app(&mut map);
-    register_ai(&mut map);
     map
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands_core::CommandContext;
+    use crate::test_support::default_window_moniker;
     use serde_json::Value;
     use std::sync::Arc;
-    use swissarmyhammer_commands::{CommandContext, UIState};
+    use swissarmyhammer_ui_state::UiState;
 
-    /// Build a CommandContext with the given scope chain, target, and optional UIState.
-    fn ctx_with(scope: &[&str], target: Option<&str>, ui: Option<Arc<UIState>>) -> CommandContext {
+    /// Build a CommandContext with the given scope chain, target, and optional UiState.
+    ///
+    /// When the scope carries no `window:` moniker, the default test window
+    /// (`crate::test_support::DEFAULT_TEST_WINDOW`) is appended: per-window ops
+    /// (palette, inspector, view, app-mode, perspective) require a window in
+    /// scope and no longer fall back to a silent "main".
+    fn ctx_with(scope: &[&str], target: Option<&str>, ui: Option<Arc<UiState>>) -> CommandContext {
+        let mut scope: Vec<String> = scope.iter().map(|s| s.to_string()).collect();
+        if !scope.iter().any(|m| m.starts_with("window:")) {
+            scope.push(default_window_moniker());
+        }
         let mut ctx = CommandContext::new(
             "test",
-            scope.iter().map(|s| s.to_string()).collect(),
+            scope,
             target.map(|s| s.to_string()),
             std::collections::HashMap::new(),
         );
@@ -426,105 +420,17 @@ mod tests {
         // + 0 project — project.add retired in favour of dynamic
         // `entity.add:project`; project.delete retired in favour of the
         // cross-cutting `entity.delete` auto-emit.
-        // + 5 ai (toggle, focus, newChat, model, cancel) — window-layer
-        //   commands driving the AI panel; backend impls are no-ops, the
-        //   frontend resolves a local `execute` handler. Added by
-        //   01KRRN69YDB2B03RB1N9G6RR3J.
-        // + 1 board (update.board) — wraps `crate::board::UpdateBoard` so
-        //   the AI panel and future board-metadata editors can persist
-        //   `name`/`description`/`model` through the unified dispatcher.
-        //   Added by 01KSNJ6AE18EQYDC2WSYFSSAY1 to fix the regression where
-        //   `update.board` was dispatched by the AI panel but had no
-        //   registered impl — every model selection was rejected with
-        //   `Unknown command: update.board` and the model never reached
-        //   `.kanban/boards/board.yaml`.
-        // = 68 (67 prior, +1 for `update.board`).
-        assert_eq!(cmds.len(), 68);
-    }
-
-    // =========================================================================
-    // AI panel command resolution + availability tests
-    // =========================================================================
-
-    /// Every `ai.*` command must resolve to a registered handler.
-    #[test]
-    fn ai_commands_all_registered() {
-        let cmds = register_commands();
-        for id in [
-            "ai.toggle",
-            "ai.focus",
-            "ai.newChat",
-            "ai.model",
-            "ai.cancel",
-        ] {
-            assert!(
-                cmds.contains_key(id),
-                "{id} must be registered by register_ai()",
-            );
-        }
-    }
-
-    /// `ai.toggle`, `ai.focus`, `ai.newChat`, and `ai.model` are always
-    /// available — they have no precondition.
-    #[test]
-    fn ai_toggle_focus_new_chat_model_always_available() {
-        let cmds = register_commands();
-        for id in ["ai.toggle", "ai.focus", "ai.newChat", "ai.model"] {
-            let cmd = cmds.get(id).unwrap();
-            assert!(
-                cmd.available(&ctx_scope(&[])),
-                "{id} should always be available"
-            );
-        }
-    }
-
-    /// `ai.cancel` is unavailable when the conversation is idle (or when no
-    /// UIState is present) and available only while it is streaming.
-    #[test]
-    fn ai_cancel_gated_to_streaming_state() {
-        let cmds = register_commands();
-        let cmd = cmds.get("ai.cancel").unwrap();
-
-        // No UIState — fail closed.
-        assert!(
-            !cmd.available(&ctx_scope(&[])),
-            "ai.cancel must be unavailable without UIState"
-        );
-
-        // UIState present, not streaming — unavailable.
-        let idle = Arc::new(UIState::new());
-        assert!(
-            !cmd.available(&ctx_with(&[], None, Some(idle))),
-            "ai.cancel must be unavailable when the conversation is idle"
-        );
-
-        // UIState present, streaming — available.
-        let streaming = Arc::new(UIState::new());
-        streaming.set_ai_streaming(true);
-        assert!(
-            cmd.available(&ctx_with(&[], None, Some(streaming))),
-            "ai.cancel must be available while the conversation streams"
-        );
-    }
-
-    /// Each `ai.*` backend impl is a deliberate no-op returning null — the
-    /// webview intercepts the command with a local `execute` handler.
-    #[tokio::test]
-    async fn ai_commands_execute_as_noops() {
-        let cmds = register_commands();
-        let ui = Arc::new(UIState::new());
-        ui.set_ai_streaming(true);
-        let ctx = ctx_with(&[], None, Some(ui));
-        for id in [
-            "ai.toggle",
-            "ai.focus",
-            "ai.newChat",
-            "ai.model",
-            "ai.cancel",
-        ] {
-            let result = cmds.get(id).unwrap().execute(&ctx).await.unwrap();
-            assert!(result.is_null(), "{id} backend execute must be a no-op");
-        }
+        // The `ai.*` window-layer commands (toggle, focus, newChat, model,
+        // cancel) were migrated OFF this legacy in-process map onto the
+        // `ai-commands` builtin command plugin (the last non-nav YAML command
+        // source retired in 01KT6WWYYWFQ2F4PGQ358SAHY7), so they are no longer
+        // registered here.
+        // + 1 board (update.board) — wraps `crate::board::UpdateBoard` so the AI
+        //   panel can persist `name`/`description`/`model` through the unified
+        //   dispatcher (merged from main, 01KSNJ6AE18EQYDC2WSYFSSAY1; ported
+        //   onto `commands_core` after the command cutover).
+        // = 63.
+        assert_eq!(cmds.len(), 63);
     }
 
     // =========================================================================
@@ -704,14 +610,14 @@ mod tests {
     // Paste command availability tests
     // =========================================================================
 
-    fn ui_with_task_clipboard() -> Arc<UIState> {
-        let ui = Arc::new(UIState::new());
+    fn ui_with_task_clipboard() -> Arc<UiState> {
+        let ui = Arc::new(UiState::new());
         ui.set_clipboard_entity_type("task");
         ui
     }
 
-    fn ui_with_tag_clipboard() -> Arc<UIState> {
-        let ui = Arc::new(UIState::new());
+    fn ui_with_tag_clipboard() -> Arc<UiState> {
+        let ui = Arc::new(UiState::new());
         ui.set_clipboard_entity_type("tag");
         ui
     }
@@ -762,7 +668,7 @@ mod tests {
     fn paste_not_available_without_clipboard() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.paste").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let ctx = ctx_with(&[], Some("column:todo"), Some(ui));
         assert!(!cmd.available(&ctx));
     }
@@ -777,13 +683,13 @@ mod tests {
     }
 
     // =========================================================================
-    // UI command tests — use in-memory UIState, no disk I/O
+    // UI command tests — use in-memory UiState, no disk I/O
     // =========================================================================
 
     #[test]
     fn inspect_available_with_target() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.inspect").unwrap();
+        let cmd = cmds.get("app.inspect").unwrap();
         let ctx = ctx_with(&[], Some("task:01ABC"), None);
         assert!(cmd.available(&ctx));
     }
@@ -791,7 +697,7 @@ mod tests {
     #[test]
     fn inspect_available_with_scope() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.inspect").unwrap();
+        let cmd = cmds.get("app.inspect").unwrap();
         let ctx = ctx_scope(&["task:01ABC"]);
         assert!(cmd.available(&ctx));
     }
@@ -799,7 +705,7 @@ mod tests {
     #[test]
     fn inspect_not_available_without_target_or_scope() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.inspect").unwrap();
+        let cmd = cmds.get("app.inspect").unwrap();
         let ctx = ctx_scope(&[]);
         assert!(!cmd.available(&ctx));
     }
@@ -807,25 +713,24 @@ mod tests {
     #[tokio::test]
     async fn inspect_executes_updates_ui_state() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.inspect").unwrap();
-        let ui = Arc::new(UIState::new());
-        let ctx = ctx_with(&[], Some("task:01XYZ"), Some(Arc::clone(&ui)));
+        let cmd = cmds.get("app.inspect").unwrap();
+        let ui = Arc::new(UiState::new());
+        let ctx = ctx_with(&["window:main"], Some("task:01XYZ"), Some(Arc::clone(&ui)));
 
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
-        // ctx has no window_label set, so falls back to "main"
         assert_eq!(ui.inspector_stack("main"), vec!["task:01XYZ"]);
     }
 
     #[tokio::test]
     async fn inspector_close_executes() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.inspector.close").unwrap();
-        let ui = Arc::new(UIState::new());
+        let cmd = cmds.get("app.inspector.close").unwrap();
+        let ui = Arc::new(UiState::new());
         ui.inspect("main", "task:01XYZ");
         ui.inspect("main", "tag:01TAG");
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert_eq!(ui.inspector_stack("main"), vec!["task:01XYZ"]);
@@ -834,12 +739,12 @@ mod tests {
     #[tokio::test]
     async fn inspector_close_all_executes() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.inspector.close_all").unwrap();
-        let ui = Arc::new(UIState::new());
+        let cmd = cmds.get("app.inspector.close_all").unwrap();
+        let ui = Arc::new(UiState::new());
         ui.inspect("main", "task:01XYZ");
         ui.inspect("main", "tag:01TAG");
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(ui.inspector_stack("main").is_empty());
@@ -848,11 +753,11 @@ mod tests {
     #[tokio::test]
     async fn palette_open_executes() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.palette.open").unwrap();
-        let ui = Arc::new(UIState::new());
+        let cmd = cmds.get("app.palette.open").unwrap();
+        let ui = Arc::new(UiState::new());
         assert!(!ui.palette_open("main"));
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(ui.palette_open("main"));
@@ -861,11 +766,11 @@ mod tests {
     #[tokio::test]
     async fn palette_close_executes() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.palette.close").unwrap();
-        let ui = Arc::new(UIState::new());
+        let cmd = cmds.get("app.palette.close").unwrap();
+        let ui = Arc::new(UiState::new());
         ui.set_palette_open("main", true);
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(!ui.palette_open("main"));
@@ -875,7 +780,7 @@ mod tests {
     async fn set_keymap_mode_executes() {
         let cmds = register_commands();
         let cmd = cmds.get("settings.keymap.vim").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         assert_eq!(ui.keymap_mode(), "cua");
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
@@ -887,8 +792,8 @@ mod tests {
     #[tokio::test]
     async fn set_focus_cmd_sets_scope_chain() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.setFocus").unwrap();
-        let ui = Arc::new(UIState::new());
+        let cmd = cmds.get("app.setFocus").unwrap();
+        let ui = Arc::new(UiState::new());
         assert!(ui.scope_chain().is_empty());
 
         let mut args = std::collections::HashMap::new();
@@ -896,7 +801,7 @@ mod tests {
             "scope_chain".to_string(),
             serde_json::json!(["task:01XYZ", "column:todo"]),
         );
-        let mut ctx = CommandContext::new("ui.setFocus", vec![], None, args);
+        let mut ctx = CommandContext::new("app.setFocus", vec![], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await;
@@ -907,13 +812,13 @@ mod tests {
     #[tokio::test]
     async fn set_focus_cmd_clears_scope_chain_with_empty_arg() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.setFocus").unwrap();
-        let ui = Arc::new(UIState::new());
+        let cmd = cmds.get("app.setFocus").unwrap();
+        let ui = Arc::new(UiState::new());
         ui.set_scope_chain(vec!["task:01XYZ".to_string()]);
 
         let mut args = std::collections::HashMap::new();
         args.insert("scope_chain".to_string(), serde_json::json!([]));
-        let mut ctx = CommandContext::new("ui.setFocus", vec![], None, args);
+        let mut ctx = CommandContext::new("app.setFocus", vec![], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await;
@@ -924,13 +829,13 @@ mod tests {
     #[tokio::test]
     async fn set_focus_cmd_defaults_to_empty_when_no_arg() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.setFocus").unwrap();
-        let ui = Arc::new(UIState::new());
+        let cmd = cmds.get("app.setFocus").unwrap();
+        let ui = Arc::new(UiState::new());
         ui.set_scope_chain(vec!["task:01XYZ".to_string()]);
 
         // No scope_chain arg — should default to empty
         let ctx_empty: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
-        let mut ctx = CommandContext::new("ui.setFocus", vec![], None, ctx_empty);
+        let mut ctx = CommandContext::new("app.setFocus", vec![], None, ctx_empty);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await;
@@ -942,16 +847,15 @@ mod tests {
     async fn set_active_view_executes() {
         let cmds = register_commands();
         let cmd = cmds.get("view.set").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let mut args = std::collections::HashMap::new();
         args.insert("view_id".to_string(), Value::String("my-view".into()));
-        let mut ctx = CommandContext::new("test", vec![], None, args);
+        let mut ctx = CommandContext::new("test", vec!["window:main".into()], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
-        // No window_label in ctx — defaults to "main"
         assert_eq!(ui.active_view_id("main"), "my-view");
     }
 
@@ -1023,10 +927,10 @@ mod tests {
     async fn command_palette_opens_palette_in_command_mode() {
         let cmds = register_commands();
         let cmd = cmds.get("app.command").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         assert!(!ui.palette_open("main"));
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(ui.palette_open("main"));
@@ -1037,10 +941,10 @@ mod tests {
     async fn search_palette_opens_palette_in_search_mode() {
         let cmds = register_commands();
         let cmd = cmds.get("app.search").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         assert!(!ui.palette_open("main"));
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(ui.palette_open("main"));
@@ -1051,7 +955,7 @@ mod tests {
     async fn command_palette_targets_invoking_window_only() {
         let cmds = register_commands();
         let cmd = cmds.get("app.command").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         // Execute with scope chain containing window:secondary
         let ctx = ctx_with(&["window:secondary"], None, Some(Arc::clone(&ui)));
@@ -1073,10 +977,10 @@ mod tests {
     async fn dismiss_closes_palette_when_open() {
         let cmds = register_commands();
         let cmd = cmds.get("app.dismiss").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.set_palette_open("main", true);
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(!ui.palette_open("main"));
@@ -1086,12 +990,12 @@ mod tests {
     async fn dismiss_closes_inspector_when_palette_closed() {
         let cmds = register_commands();
         let cmd = cmds.get("app.dismiss").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.inspect("main", "task:01XYZ");
         assert!(!ui.palette_open("main"));
         assert_eq!(ui.inspector_stack("main").len(), 1);
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
         assert!(ui.inspector_stack("main").is_empty());
@@ -1101,9 +1005,9 @@ mod tests {
     async fn dismiss_returns_null_when_nothing_to_dismiss() {
         let cmds = register_commands();
         let cmd = cmds.get("app.dismiss").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await.unwrap();
         assert!(result.is_null());
     }
@@ -1116,7 +1020,7 @@ mod tests {
     fn undo_unavailable_without_ui_state() {
         let cmds = register_commands();
         let cmd = cmds.get("app.undo").unwrap();
-        // No UIState on context — undo should not be available
+        // No UiState on context — undo should not be available
         assert!(!cmd.available(&ctx_scope(&[])));
     }
 
@@ -1124,7 +1028,7 @@ mod tests {
     fn redo_unavailable_without_ui_state() {
         let cmds = register_commands();
         let cmd = cmds.get("app.redo").unwrap();
-        // No UIState on context — redo should not be available
+        // No UiState on context — redo should not be available
         assert!(!cmd.available(&ctx_scope(&[])));
     }
 
@@ -1132,8 +1036,8 @@ mod tests {
     fn undo_unavailable_when_stack_empty() {
         let cmds = register_commands();
         let cmd = cmds.get("app.undo").unwrap();
-        let ui = Arc::new(UIState::new());
-        // UIState present but can_undo defaults to false
+        let ui = Arc::new(UiState::new());
+        // UiState present but can_undo defaults to false
         assert!(!cmd.available(&ctx_with(&[], None, Some(ui))));
     }
 
@@ -1141,7 +1045,7 @@ mod tests {
     fn undo_available_when_can_undo_set() {
         let cmds = register_commands();
         let cmd = cmds.get("app.undo").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.set_undo_redo_state(true, false);
         assert!(cmd.available(&ctx_with(&[], None, Some(ui))));
     }
@@ -1150,7 +1054,7 @@ mod tests {
     fn redo_available_when_can_redo_set() {
         let cmds = register_commands();
         let cmd = cmds.get("app.redo").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.set_undo_redo_state(false, true);
         assert!(cmd.available(&ctx_with(&[], None, Some(ui))));
     }
@@ -1165,21 +1069,24 @@ mod tests {
         // then execute. This verifies that register_commands() produces working
         // trait objects that the dispatcher can drive.
         let cmds = register_commands();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
-        // Dispatch ui.inspect with a target
-        let cmd = cmds.get("ui.inspect").unwrap();
-        let ctx = ctx_with(&["task:01ABC"], Some("task:01ABC"), Some(Arc::clone(&ui)));
+        // Dispatch app.inspect with a target
+        let cmd = cmds.get("app.inspect").unwrap();
+        let ctx = ctx_with(
+            &["task:01ABC", "window:main"],
+            Some("task:01ABC"),
+            Some(Arc::clone(&ui)),
+        );
 
         assert!(cmd.available(&ctx), "inspect should be available");
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok(), "inspect should succeed");
-        // ctx has no window_label set, so falls back to "main"
         assert_eq!(ui.inspector_stack("main"), vec!["task:01ABC"]);
 
-        // Dispatch ui.inspector.close
-        let cmd = cmds.get("ui.inspector.close").unwrap();
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        // Dispatch app.inspector.close
+        let cmd = cmds.get("app.inspector.close").unwrap();
+        let ctx = ctx_with(&["window:main"], None, Some(Arc::clone(&ui)));
         assert!(cmd.available(&ctx));
         cmd.execute(&ctx).await.unwrap();
         assert!(ui.inspector_stack("main").is_empty());
@@ -1200,14 +1107,14 @@ mod tests {
     async fn drag_start_cmd_stores_session() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.start").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         assert!(ui.drag_session().is_none());
 
         let mut args = std::collections::HashMap::new();
         args.insert("boardPath".into(), serde_json::json!("/boards/a/.kanban"));
         args.insert("taskId".into(), serde_json::json!("task-123"));
         args.insert("taskFields".into(), serde_json::json!({"title": "My Task"}));
-        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        let mut ctx = CommandContext::new("drag.start", vec!["window:main".into()], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await;
@@ -1224,12 +1131,12 @@ mod tests {
     async fn drag_start_cmd_returns_drag_start_result() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.start").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let mut args = std::collections::HashMap::new();
         args.insert("boardPath".into(), serde_json::json!("/boards/b/.kanban"));
         args.insert("taskId".into(), serde_json::json!("task-456"));
-        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        let mut ctx = CommandContext::new("drag.start", vec!["window:main".into()], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await.unwrap();
@@ -1249,13 +1156,13 @@ mod tests {
     async fn drag_start_cmd_replaces_existing_session() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.start").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         // Start first session
         let mut args1 = std::collections::HashMap::new();
         args1.insert("boardPath".into(), serde_json::json!("/boards/a"));
         args1.insert("taskId".into(), serde_json::json!("task-1"));
-        let mut ctx1 = CommandContext::new("drag.start", vec![], None, args1);
+        let mut ctx1 = CommandContext::new("drag.start", vec!["window:main".into()], None, args1);
         ctx1.ui_state = Some(Arc::clone(&ui));
         cmd.execute(&ctx1).await.unwrap();
 
@@ -1263,7 +1170,7 @@ mod tests {
         let mut args2 = std::collections::HashMap::new();
         args2.insert("boardPath".into(), serde_json::json!("/boards/b"));
         args2.insert("taskId".into(), serde_json::json!("task-2"));
-        let mut ctx2 = CommandContext::new("drag.start", vec![], None, args2);
+        let mut ctx2 = CommandContext::new("drag.start", vec!["window:main".into()], None, args2);
         ctx2.ui_state = Some(Arc::clone(&ui));
         cmd.execute(&ctx2).await.unwrap();
 
@@ -1276,12 +1183,12 @@ mod tests {
     async fn drag_start_cmd_missing_task_id_returns_error() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.start").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let mut args = std::collections::HashMap::new();
         args.insert("boardPath".into(), serde_json::json!("/boards/a"));
         // taskId intentionally omitted
-        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        let mut ctx = CommandContext::new("drag.start", vec!["window:main".into()], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         let result = cmd.execute(&ctx).await;
@@ -1292,13 +1199,13 @@ mod tests {
     async fn drag_start_cmd_copy_mode_defaults_to_false() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.start").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let mut args = std::collections::HashMap::new();
         args.insert("boardPath".into(), serde_json::json!("/boards/a"));
         args.insert("taskId".into(), serde_json::json!("task-1"));
         // copyMode not provided
-        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        let mut ctx = CommandContext::new("drag.start", vec!["window:main".into()], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         cmd.execute(&ctx).await.unwrap();
@@ -1314,14 +1221,15 @@ mod tests {
     async fn drag_cancel_cmd_clears_session() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.cancel").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         // Start a session first via drag.start
         let start_cmd = cmds.get("drag.start").unwrap();
         let mut start_args = std::collections::HashMap::new();
         start_args.insert("boardPath".into(), serde_json::json!("/boards/a/.kanban"));
         start_args.insert("taskId".into(), serde_json::json!("task-999"));
-        let mut start_ctx = CommandContext::new("drag.start", vec![], None, start_args);
+        let mut start_ctx =
+            CommandContext::new("drag.start", vec!["window:main".into()], None, start_args);
         start_ctx.ui_state = Some(Arc::clone(&ui));
         start_cmd.execute(&start_ctx).await.unwrap();
         assert!(ui.drag_session().is_some(), "session should be active");
@@ -1352,7 +1260,7 @@ mod tests {
     async fn drag_cancel_cmd_no_session_returns_null() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.cancel").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         assert!(ui.drag_session().is_none(), "no session should be active");
 
         let mut ctx = CommandContext::new(
@@ -1374,13 +1282,13 @@ mod tests {
     async fn drag_start_cmd_copy_mode_can_be_set() {
         let cmds = register_commands();
         let cmd = cmds.get("drag.start").unwrap();
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let mut args = std::collections::HashMap::new();
         args.insert("boardPath".into(), serde_json::json!("/boards/a"));
         args.insert("taskId".into(), serde_json::json!("task-1"));
         args.insert("copyMode".into(), serde_json::json!(true));
-        let mut ctx = CommandContext::new("drag.start", vec![], None, args);
+        let mut ctx = CommandContext::new("drag.start", vec!["window:main".into()], None, args);
         ctx.ui_state = Some(Arc::clone(&ui));
 
         cmd.execute(&ctx).await.unwrap();
@@ -1389,69 +1297,91 @@ mod tests {
     }
 
     // =========================================================================
-    // YAML ↔ Rust completeness check
+    // Builtin YAML command-source guard (post cut-over)
     // =========================================================================
 
-    /// Collect every command id declared across all builtin YAML sources the
-    /// app composes at startup: generic commands from `swissarmyhammer-commands`
-    /// (`app`, `settings`, `entity`, `ui`, `drag`) and kanban-specific commands
-    /// from this crate's own `builtin/commands/` (`task`, `column`, `tag`,
-    /// `attachment`, `perspective`, `file`).
+    /// Collect every command id declared across the builtin YAML command
+    /// sources the app composes at startup.
     ///
-    /// Mirrors the stacking order in `kanban-app/src/state.rs` so this test
-    /// sees exactly the set the running app resolves.
+    /// As of the kanban command cut-over there are NO such sources: every
+    /// `builtin/commands/*.yaml` was deleted (the generic ones in Stage 4,
+    /// and finally `ai.yaml` in 01KT6WWYYWFQ2F4PGQ358SAHY7), so both
+    /// [`crate::commands_core::builtin_yaml_sources`] and
+    /// [`crate::builtin_yaml_sources`] return empty. The command model now
+    /// lives in the builtin command plugins, dispatched through
+    /// `CommandService`. This helper is retained as the guard that the empty
+    /// state holds — if a future change re-embeds a YAML command source, the
+    /// guard below fires.
     fn all_yaml_ids() -> Vec<String> {
-        swissarmyhammer_commands::builtin_yaml_sources()
+        crate::commands_core::builtin_yaml_sources()
             .into_iter()
             .chain(crate::builtin_yaml_sources())
             .flat_map(|(_name, yaml_content)| {
-                serde_yaml_ng::from_str::<Vec<swissarmyhammer_commands::CommandDef>>(yaml_content)
+                serde_yaml_ng::from_str::<Vec<crate::commands_core::CommandDef>>(yaml_content)
                     .unwrap_or_default()
             })
             .map(|def| def.id)
             .collect()
     }
 
+    /// The builtin YAML command model is fully retired: no `builtin/commands/`
+    /// YAML source is embedded anymore. This pins that decision so a future
+    /// regression cannot silently re-embed a YAML command source and revive
+    /// the YAML/Rust two-source split the cut-over removed.
+    ///
+    /// The companion `register_commands()` map is now a legacy in-process
+    /// façade (the synchronous shape the menu / scope-resolution code still
+    /// reads) with NO YAML counterpart by design — so the prior
+    /// `test_no_orphan_rust_commands_without_yaml` guard, which asserted a
+    /// YAML↔Rust pairing, no longer describes the architecture and has been
+    /// removed alongside the YAML sources it policed.
     #[test]
-    fn test_all_yaml_commands_have_rust_implementations() {
-        let rust_map = register_commands();
-        let yaml_ids = all_yaml_ids();
-
-        let missing: Vec<String> = yaml_ids
-            .iter()
-            .filter(|id| !rust_map.contains_key(*id))
-            .cloned()
-            .collect();
-
+    fn test_no_builtin_yaml_command_sources_remain() {
+        // The assertion reads as near-tautological today (no YAML is embedded,
+        // so `all_yaml_ids()` is empty by construction). Its real value is as a
+        // regression tripwire on the TWO `builtin_yaml_sources()` embedding
+        // points it drains (`commands_core::builtin_yaml_sources` +
+        // `crate::builtin_yaml_sources`): if a future change re-adds an
+        // `include_str!`/`include_dir!` YAML command source to either, this
+        // test fails — keeping the "commands live in plugins, not YAML"
+        // invariant from silently regressing.
         assert!(
-            missing.is_empty(),
-            "YAML-defined commands missing Rust implementations: {:?}\n\
-             Every command in builtin/commands/*.yaml must have a corresponding \
-             entry in register_commands()",
-            missing,
+            all_yaml_ids().is_empty(),
+            "no builtin/commands/*.yaml command source should be embedded after \
+             the cut-over — the command model lives in the builtin command \
+             plugins, dispatched through CommandService; found ids: {:?}",
+            all_yaml_ids(),
         );
     }
 
-    /// Reverse of `test_all_yaml_commands_have_rust_implementations` — guards
-    /// against a `register_commands()` entry that no YAML file declares. The
-    /// registry is the source of truth for the palette, context menus, and
-    /// keybindings; a Rust-only command would be unreachable from every
-    /// surface but still billed as an undoable side-effect.
+    /// Filesystem companion to [`test_no_builtin_yaml_command_sources_remain`].
+    ///
+    /// The embedding guard above only inspects the two
+    /// `builtin_yaml_sources()` functions, so a stranded YAML command file
+    /// that nothing embeds survives it undetected — exactly how
+    /// `builtin/commands/board.yaml` outlived the cut-over. This test closes
+    /// that gap by asserting no `*.yaml` file physically exists under this
+    /// crate's `builtin/commands/` directory (absent directory is fine).
+    ///
+    /// Scope: kanban crate only — `swissarmyhammer-focus/builtin/commands/`
+    /// is still a live `include_dir!` source owned by a separate migration.
     #[test]
-    fn test_no_orphan_rust_commands_without_yaml() {
-        let rust_map = register_commands();
-        let yaml_ids: std::collections::HashSet<String> = all_yaml_ids().into_iter().collect();
-
-        let orphans: Vec<&String> = rust_map
-            .keys()
-            .filter(|id| !yaml_ids.contains(*id))
+    fn test_no_builtin_yaml_command_files_on_disk() {
+        let commands_dir =
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/builtin/commands"));
+        let Ok(entries) = std::fs::read_dir(commands_dir) else {
+            // Directory absent: the fully-retired state. Nothing to check.
+            return;
+        };
+        let yaml_files: Vec<_> = entries
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext == "yaml"))
             .collect();
-
         assert!(
-            orphans.is_empty(),
-            "Rust commands registered without a matching YAML definition: {:?}\n\
-             Every entry in register_commands() must be declared in builtin/commands/*.yaml",
-            orphans,
+            yaml_files.is_empty(),
+            "no *.yaml file may exist under the kanban crate's builtin/commands/ \
+             after the cut-over — the command model lives in the builtin command \
+             plugins, dispatched through CommandService; found: {yaml_files:?}",
         );
     }
 }

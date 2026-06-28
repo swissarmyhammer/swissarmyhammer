@@ -34,7 +34,7 @@
  * Mock pattern matches `grid-view.nav-is-eventdriven.test.tsx` and
  * `perspective-bar.spatial.test.tsx`:
  *   - `vi.hoisted` builds an invoke / listen mock pair the test owns.
- *   - `mockListen` records every `listen("focus-changed", cb)` callback
+ *   - `mockListen` records every `listen("notifications/focus/changed", cb)` callback
  *     so `fireFocusChanged(key)` can drive the React tree as if the
  *     Rust kernel had emitted a `focus-changed` event.
  *
@@ -61,10 +61,10 @@
  *     verified indirectly by the legacy-nav-stripped assertions below.
  *   - **#5 Space → inspect**: NOT covered here. Space is bound at
  *     `<AppShell>` (or its scope-binding pipeline) to a card-scoped
- *     `ui.inspect` command. The card itself owns no Space handler.
+ *     `app.inspect` command. The card itself owns no Space handler.
  *     Verified indirectly by the legacy-nav-stripped assertions and by
  *     the existing `entity-card.test.tsx` suite that pins the
- *     `ui.inspect` dispatch shape on the (i) button.
+ *     `app.inspect` dispatch shape on the (i) button.
  *   - **#6 Enter → drill-in**: NOT covered here. Enter is bound at
  *     `<AppShell>` to `nav.drillIn`, which reads the focused
  *     `FullyQualifiedMoniker` and invokes `spatial_drill_in`. Covered in
@@ -91,28 +91,9 @@ import { render, fireEvent, act, waitFor } from "@testing-library/react";
 // Tauri API mocks — must come before component imports.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -427,7 +408,7 @@ async function fireFocusChanged({
     next_fq,
     next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get("notifications/focus/changed") ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();
@@ -444,8 +425,18 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 /** Collect every `spatial_focus` call's args, in order. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
+      return args;
+    });
 }
 
 /** Collect every `spatial_unregister_scope` call's args, in order. */
@@ -660,7 +651,7 @@ describe("EntityCard — browser spatial behaviour", () => {
   // ---------------------------------------------------------------------
   // #5 Space → inspect (deferred — covered by app-shell scope bindings)
   // ---------------------------------------------------------------------
-  // Space is a card-scoped command (`ui.inspect` for cards). Binding
+  // Space is a card-scoped command (`app.inspect` for cards). Binding
   // happens through the CommandScope chain that AppShell's keymap
   // pipeline reads. The card side of the contract is "do nothing on
   // raw Space — let the global handler resolve the binding from scope".
@@ -682,7 +673,11 @@ describe("EntityCard — browser spatial behaviour", () => {
     await flushSetup();
 
     const navigateCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_navigate",
+      (c) =>
+        c[0] === "spatial_navigate" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "navigate focus"),
     );
     expect(navigateCalls).toEqual([]);
 
@@ -713,7 +708,11 @@ describe("EntityCard — browser spatial behaviour", () => {
     // No card-owned drill-in — the global handler is what wires Enter,
     // and it is not mounted in this harness.
     const drillCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_drill_in",
+      (c) =>
+        c[0] === "spatial_drill_in" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "drill_in layer"),
     );
     expect(drillCalls).toEqual([]);
 

@@ -6,11 +6,12 @@ type:
   derive: parse-body-tags
   entity: tag
   commit_display_names: true
-  # Declare the cross-entity dependency so any tag mutation invalidates
-  # the cached `tags` values on all tasks — this is what the derived-output
-  # cache consults via `FieldsContext::entity_types_depending_on`.
+  # `tags` is derived purely from `#tag` mentions in the body, so it depends
+  # on `body`. This drives two things: the derived-output cache invalidates
+  # when the body changes, and the write-path field-change diff recomputes
+  # `tags` when `body` changes so the UI re-renders the field after an edit.
   depends_on:
-    - tag
+    - body
 icon: tag
 editor: multi-select
 display: badge-list

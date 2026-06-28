@@ -23,7 +23,7 @@ const TASK_SCHEMA = {
     fields: ["title", "progress", "body"],
     commands: [
       {
-        id: "ui.inspect",
+        id: "app.inspect",
         name: "Inspect {{entity.type}}",
         context_menu: true,
       },

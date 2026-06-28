@@ -77,6 +77,17 @@ export interface ScopeEntry {
   readonly navOverride?: FocusOverrides;
   /** The relative segment the scope was mounted with. */
   readonly segment: SegmentMoniker;
+  /**
+   * Whether this scope is a real focus target (the `<FocusScope showFocus>`
+   * prop). Emitted into each snapshot scope as `focusable` so the kernel
+   * skips structural zones (`showFocus={false}`) as cardinal-nav
+   * candidates. See `SnapshotScope.focusable`.
+   *
+   * Optional: when omitted (some unit tests build entries by hand) it
+   * defaults to `true` in `buildSnapshot`, matching the Rust-side serde
+   * default — an entry is a target unless explicitly marked otherwise.
+   */
+  readonly showFocus?: boolean;
   /** Last bounding rect sampled for this scope; `null` until the first
    * `updateRect` call. */
   lastKnownRect: Rect | null;
@@ -337,6 +348,7 @@ export class LayerScopeRegistry {
         },
         parent_zone: entry.parentZone,
         nav_override: entry.navOverride ?? {},
+        focusable: entry.showFocus ?? true,
       });
     }
     return { layer_fq: layerFq, scopes };

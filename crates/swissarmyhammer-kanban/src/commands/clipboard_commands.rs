@@ -19,23 +19,33 @@ use super::paste_handlers::{register_paste_handlers, PasteMatrix};
 use super::run_op;
 use crate::attachment::{match_attachment_index, DeleteAttachment};
 use crate::clipboard::{self, ClipboardProviderExt};
+use crate::commands_core::{parse_moniker, Command, CommandContext, CommandError};
 use crate::context::KanbanContext;
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_commands::{parse_moniker, Command, CommandContext, CommandError};
 
-/// Entity types that have a known copy path (generic via
-/// `EntityContext::read`). Must stay in sync with the entity definitions
-/// under `swissarmyhammer-kanban/builtin/entities/*.yaml`.
-const COPYABLE_ENTITY_TYPES: &[&str] = &[
-    "task",
-    "tag",
-    "column",
-    "board",
-    "actor",
-    "project",
-    "attachment",
-];
+/// Entity types that can be the SUBJECT of a clipboard / CRUD operation —
+/// the entity types with a known copy path (generic via `EntityContext::read`)
+/// AND that make sense as the subject of cut/copy/delete/archive/unarchive.
+/// Must stay in sync with the entity definitions under
+/// `swissarmyhammer-kanban/builtin/entities/*.yaml`.
+///
+/// This is the CANONICAL clipboard-SUBJECT capability set. It is the
+/// dispatch-time `available()` gate here, and it is also the source of truth
+/// the list-time gate is pinned against: the `entity-commands` plugin's
+/// `SUBJECT_OPERABLE_ENTITY_TYPES` (`builtin/plugins/entity-commands/index.ts`)
+/// declares the same set as each subject command's `applies_to`, and the
+/// drift guard `support::assert_operable_applies_to` asserts the TS-surfaced
+/// `applies_to` equals THIS constant — so declared (list) and enforced
+/// (dispatch) can never silently diverge.
+///
+/// `board` is deliberately EXCLUDED: the board is the ROOT, so it can never be
+/// the subject of its own cut/copy/delete/archive/unarchive. The board IS a
+/// valid PASTE TARGET, but that is the opposite direction (clipboard contents
+/// drop INTO the board) and is gated by the registered `PasteMatrix` handlers
+/// (`task_into_board` / `column_into_board`), NOT by this subject set.
+pub const COPYABLE_ENTITY_TYPES: &[&str] =
+    &["task", "tag", "column", "actor", "project", "attachment"];
 
 /// Check whether a target moniker names a known entity type that can be
 /// copied. Returns `true` when the moniker parses and the entity type is
@@ -62,7 +72,7 @@ async fn write_to_clipboard(
     ctx: &CommandContext,
     clipboard_json: &str,
     entity_type: &str,
-) -> swissarmyhammer_commands::Result<()> {
+) -> crate::commands_core::Result<()> {
     if let Ok(clipboard) = ctx.require_extension::<ClipboardProviderExt>() {
         clipboard
             .0
@@ -91,7 +101,7 @@ async fn snapshot_entity_to_clipboard(
     entity_type: &str,
     entity_id: &str,
     mode: &str,
-) -> swissarmyhammer_commands::Result<String> {
+) -> crate::commands_core::Result<String> {
     let ectx = kanban
         .entity_context()
         .await
@@ -126,7 +136,7 @@ async fn snapshot_entity_to_clipboard(
 async fn stage_cut_attachment(
     source_path: &str,
     _clipboard_json: &str,
-) -> swissarmyhammer_commands::Result<String> {
+) -> crate::commands_core::Result<String> {
     let basename = std::path::Path::new(source_path)
         .file_name()
         .and_then(|s| s.to_str())
@@ -156,7 +166,7 @@ async fn stage_cut_attachment(
 fn rewrite_attachment_entity_id(
     clipboard_json: &str,
     new_entity_id: &str,
-) -> swissarmyhammer_commands::Result<String> {
+) -> crate::commands_core::Result<String> {
     let mut payload = clipboard::deserialize_from_clipboard(clipboard_json).ok_or_else(|| {
         CommandError::ExecutionFailed(
             "internal: cut snapshot is not a swissarmyhammer payload".into(),
@@ -191,7 +201,7 @@ async fn snapshot_attachment_to_clipboard(
     ctx: &CommandContext,
     attachment_path: &str,
     mode: &str,
-) -> swissarmyhammer_commands::Result<String> {
+) -> crate::commands_core::Result<String> {
     let task_id = ctx
         .resolve_entity_id("task")
         .ok_or_else(|| CommandError::MissingScope("task".into()))?;
@@ -241,7 +251,7 @@ impl Command for CopyEntityCmd {
         target_is_copyable(ctx.target.as_deref())
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let moniker = ctx
@@ -315,7 +325,7 @@ impl Command for CutEntityCmd {
         }
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
         let moniker = ctx
@@ -403,7 +413,7 @@ impl Command for CutEntityCmd {
 /// Paste whatever is on the clipboard onto the targeted entity.
 ///
 /// Cross-cutting command: reads `ctx.target` to pick the destination
-/// moniker, reads `UIState::clipboard_entity_type()` (for availability
+/// moniker, reads `UiState::clipboard_entity_type()` (for availability
 /// gating) and the clipboard text (for execution). Dispatches through a
 /// [`PasteMatrix`] keyed by `(clipboard_type, target_type)`. Registers
 /// the production matrix lazily on first use via `once_cell` so callers
@@ -448,7 +458,7 @@ impl Command for PasteEntityCmd {
         self.matrix.find(&clipboard_type, target_type).is_some()
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let moniker = ctx
             .target
             .as_deref()
@@ -498,13 +508,13 @@ mod tests {
     use crate::Execute;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::UIState;
+    use swissarmyhammer_ui_state::UiState;
 
     async fn setup() -> (
         tempfile::TempDir,
         Arc<KanbanContext>,
         Arc<ClipboardProviderExt>,
-        Arc<UIState>,
+        Arc<UiState>,
     ) {
         let temp = tempfile::TempDir::new().unwrap();
         let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
@@ -514,7 +524,7 @@ mod tests {
             .into_result()
             .unwrap();
         let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         (temp, kanban, clipboard, ui)
     }
 
@@ -524,7 +534,7 @@ mod tests {
         target: Option<&str>,
         kanban: &Arc<KanbanContext>,
         clipboard: &Arc<ClipboardProviderExt>,
-        ui: &Arc<UIState>,
+        ui: &Arc<UiState>,
     ) -> CommandContext {
         let mut ctx = CommandContext::new(
             command_id,
@@ -1220,7 +1230,7 @@ mod tests {
         task_id: &str,
         kanban: &Arc<KanbanContext>,
         clipboard: &Arc<ClipboardProviderExt>,
-        ui: &Arc<UIState>,
+        ui: &Arc<UiState>,
     ) -> CommandContext {
         make_ctx(
             command_id,
@@ -1250,7 +1260,7 @@ mod tests {
             .into_result()
             .unwrap();
         let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let task = AddTask::new("Has attachment")
             .execute(kanban.as_ref())
@@ -1315,7 +1325,7 @@ mod tests {
             .into_result()
             .unwrap();
         let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let task = AddTask::new("Cut me")
             .execute(kanban.as_ref())
@@ -1394,7 +1404,7 @@ mod tests {
             .into_result()
             .unwrap();
         let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let source_task = AddTask::new("Source")
             .execute(kanban.as_ref())
@@ -1474,7 +1484,7 @@ mod tests {
             .into_result()
             .unwrap();
         let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let source_task = AddTask::new("Source")
             .execute(kanban.as_ref())
@@ -1551,7 +1561,7 @@ mod tests {
             .into_result()
             .unwrap();
         let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
 
         let source_task = AddTask::new("Source")
             .execute(kanban.as_ref())

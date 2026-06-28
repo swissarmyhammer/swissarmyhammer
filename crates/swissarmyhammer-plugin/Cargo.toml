@@ -1,0 +1,104 @@
+[package]
+name = "swissarmyhammer-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Plugin platform for SwissArmyHammer: registers MCP servers and dispatches operations to them"
+
+[dependencies]
+# JS runtime used to host plugin code
+deno_core = { workspace = true }
+# `transpiling` pulls in the swc-backed TypeScript-to-JavaScript transform and
+# the source-map emitter; the bare crate exposes only parsing. The workspace
+# pin carries no features, so the feature is opted into here.
+deno_ast = { workspace = true, features = ["transpiling"] }
+# Supplies JsErrorBox, the error type deno_core ops surface to JavaScript.
+deno_error = { workspace = true }
+
+# MCP server/client protocol
+rmcp = { workspace = true }
+
+# HTTP header types for the UrlServer transport's custom headers
+http = { workspace = true }
+
+# Async runtime and utilities
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Encodes the transpiled source map as the base64 payload of the inline
+# `//# sourceMappingURL=data:...` trailer V8 reads for stack traces.
+base64 = { workspace = true }
+
+# Error handling and diagnostics
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# Directory stacking for plugin discovery
+swissarmyhammer-directory = { workspace = true }
+
+# Shared file-system utilities — supplies the atomic write_atomic primitive the
+# codegen emitter uses to publish app.d.ts via a temp sibling and a rename.
+swissarmyhammer-common = { workspace = true }
+
+[dev-dependencies]
+# Used by the cli_server integration test to probe whether a spawned
+# subprocess is still alive via kill(2) with signal 0.
+libc = { workspace = true }
+
+# Used by the url_server integration test to stand up a real HTTP MCP
+# endpoint: `axum` mounts the rmcp `StreamableHttpService` on a loopback
+# port. The `http` types the test also needs come in through the crate's
+# own dependency on `http`.
+axum = { workspace = true }
+
+# Used by the module_loader integration test to lay out real plugin bundles
+# (entry plus relative-import helpers) in throwaway directories on disk.
+tempfile = { workspace = true }
+
+# Used by the files_dispatch_e2e integration test to obtain the REAL in-process
+# `files` MCP tool and expose it to a `PluginHost` exactly as the production
+# bootstrap does. `swissarmyhammer-tools` depends on `swissarmyhammer-plugin`
+# as a normal dependency; this reverse edge is a *dev-dependency only*, so the
+# pair forms a normal-dep + dev-dep cycle — which Cargo permits because the
+# dev-dependency is never compiled into the library itself.
+swissarmyhammer-tools = { workspace = true }
+
+# Supplies the empty `TemplateLibrary` the `files_dispatch_e2e` test hands to the
+# MCP server bootstrap when building the real tool registry.
+swissarmyhammer-templating = { workspace = true }
+
+# Used by the `kanban_tasks_e2e` integration test's `support::expose_kanban_module`
+# helper to build a `ToolContext` for the in-process `kanban` operation tool:
+# `swissarmyhammer-config` supplies `ModelConfig` and `swissarmyhammer-git`
+# supplies `GitOperations`, the two types `ToolContext::new` requires. This
+# mirrors the production wiring in `apps/kanban-app/src/plugins.rs`.
+swissarmyhammer-config = { workspace = true }
+swissarmyhammer-git = { workspace = true }
+
+# Used by the `tests/integration/*.rs` SDK-helper end-to-end tests, which
+# bootstrap the real command service into a `PluginHost` so a probe plugin's
+# `ensureServices` + `registerCommands` calls land on a genuine in-process
+# command registry. The dependency is dev-only — `swissarmyhammer-command-service`
+# depends on `swissarmyhammer-plugin` as a normal dependency, so this reverse
+# edge forms a normal-dep + dev-dep cycle Cargo permits.
+swissarmyhammer-command-service = { workspace = true }
+
+[lints]
+workspace = true
+
+# A minimal stdio MCP server used purely as a test fixture for the `CliServer`
+# transport. The `cli_server` integration test spawns it as a child process and
+# locates it through the `CARGO_BIN_EXE_cli_server_fixture` environment variable
+# that Cargo sets for integration tests. It is not part of the platform's
+# public surface.
+[[bin]]
+name = "cli_server_fixture"
+path = "src/bin/cli_server_fixture.rs"

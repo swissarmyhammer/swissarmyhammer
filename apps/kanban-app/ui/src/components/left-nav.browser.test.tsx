@@ -8,14 +8,22 @@ import type { ViewDef } from "@/types/kanban";
 // transitively pull them in through context providers.
 // ---------------------------------------------------------------------------
 
+import { answerListCommand } from "@/test/mock-command-list";
+
+// The right-click context menu fetches the Command registry at click time
+// (`list command` via `command_tool_call`); drive it through `mockRegistry`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+
 /**
  * Records and controls `invoke` calls. Tests assert on the argument list of
- * each call — particularly `list_commands_for_scope` (right-click builds
- * the menu) and `show_context_menu` (the native menu that actually pops up).
+ * each call — particularly the `list command` fetch (right-click builds the
+ * menu from it) and `show context menu` (the native menu that actually pops
+ * up).
  */
 const mockInvoke = vi.fn(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (_cmd: string, _args?: any): Promise<unknown> => Promise.resolve(null),
+  (cmd: string, args?: any): Promise<unknown> =>
+    answerListCommand(cmd, args, mockRegistry) ?? Promise.resolve(null),
 );
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -96,6 +104,7 @@ const V2: ViewDef = { id: "v2", name: "View 2", kind: "grid", icon: "table" };
 describe("LeftNav — right-click context menu", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRegistry = [];
     mockViewsValue = {
       views: [V1, V2],
       activeView: V1,
@@ -105,17 +114,15 @@ describe("LeftNav — right-click context menu", () => {
   });
 
   /**
-   * Right-click on a view button must call `list_commands_for_scope` with
-   * that view's moniker in the scope chain. This is what the Rust backend
-   * uses to emit only the matching `view.switch:{id}` as a context-menu
-   * entry.
+   * Right-click on a view button must build its menu items with that view's
+   * moniker in the scope chain. This is what the dispatcher resolves the
+   * chosen command against.
    */
-  it("right-click on a view button queries commands with that view's scope", () => {
-    // First button corresponds to view v1.
-    mockInvoke.mockImplementationOnce(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (_cmd: string, _args?: any) => Promise.resolve([]),
-    );
+  it("right-click on a view button builds a menu carrying that view's scope", async () => {
+    // A global context-menu command so the menu renders; the item it produces
+    // must carry the right-clicked view's moniker (`view:v1`) in its
+    // `scope_chain`, which the dispatcher resolves against.
+    mockRegistry = [{ id: "app.help", name: "Help", context_menu: true }];
 
     renderLeftNav();
 
@@ -125,13 +132,58 @@ describe("LeftNav — right-click context menu", () => {
 
     fireEvent.contextMenu(buttons[0]);
 
-    expect(mockInvoke).toHaveBeenCalledWith(
-      "list_commands_for_scope",
-      expect.objectContaining({
-        scopeChain: expect.arrayContaining(["view:v1"]),
-        contextMenu: true,
-      }),
+    // `useContextMenu` fetches `list command` at click time and then awaits
+    // the `show context menu` op — give the async chain a tick to settle.
+    await new Promise((r) => setTimeout(r, 10));
+
+    const showCall = mockInvoke.mock.calls.find(
+      ([cmd, args]) =>
+        cmd === "command_tool_call" &&
+        (args as { op?: string })?.op === "show context menu",
     );
+    expect(showCall).toBeDefined();
+    const items = (
+      showCall![1] as { params: { items: { scope_chain: string[] }[] } }
+    ).params.items;
+    expect(items[0].scope_chain).toEqual(expect.arrayContaining(["view:v1"]));
+  });
+
+  /**
+   * Right-clicking a view must forward the view's focus context (`target` +
+   * `scope_chain`) to the `list command` fetch. This is the load-bearing
+   * contract behind the metadata-driven `applies_to` gate: the backend reads
+   * `ctx` to resolve the focused entity type and suppresses commands whose
+   * declared `applies_to` set excludes it (e.g. the clipboard trio
+   * `entity.cut` / `entity.copy` / `entity.paste`, which never apply to a
+   * `view`). If the frontend failed to send `ctx`, the backend gate could not
+   * fire and clipboard commands would leak back onto views — so this test
+   * pins the wire contract that keeps the gate effective.
+   */
+  it("right-click forwards the view's focus ctx to the list command fetch", async () => {
+    mockRegistry = [{ id: "app.help", name: "Help", context_menu: true }];
+
+    renderLeftNav();
+
+    const buttons = screen.getAllByRole("button");
+    fireEvent.contextMenu(buttons[0]);
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    const listCall = mockInvoke.mock.calls.find(
+      ([cmd, args]) =>
+        cmd === "command_tool_call" &&
+        (args as { op?: string })?.op === "list command",
+    );
+    expect(listCall).toBeDefined();
+    const ctx = (
+      listCall![1] as {
+        params: { ctx?: { target?: string; scope_chain?: string[] } };
+      }
+    ).params.ctx;
+    // The focused entity type the backend gate resolves from is `view` — the
+    // type half of the target / innermost scope-chain moniker.
+    expect(ctx?.target).toBe("view:v1");
+    expect(ctx?.scope_chain).toEqual(expect.arrayContaining(["view:v1"]));
   });
 
   /**
@@ -139,46 +191,40 @@ describe("LeftNav — right-click context menu", () => {
    * must never surface a `Switch to <ViewName>` entry. The backend no longer
    * returns `view.switch:*` commands when `contextMenu: true`, and whatever
    * other entries it does return (e.g. `entity.add:*` for views declaring an
-   * `entity_type`) must be forwarded to `show_context_menu` without any
+   * `entity_type`) must be forwarded to the `show context menu` op without any
    * `view.switch:*` items sneaking in.
    */
   it("right-click does not surface any view.switch:* entries", async () => {
-    mockInvoke.mockImplementation(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (cmd: string, _args?: any) => {
-        if (cmd === "list_commands_for_scope") {
-          // Backend returns an entity.add entry (what a view with an
-          // entity_type would legitimately surface) but no view.switch:*.
-          return Promise.resolve([
-            {
-              id: "entity.add:task",
-              name: "Add Task",
-              group: "entity",
-              context_menu: true,
-              available: true,
-            },
-          ]);
-        }
-        return Promise.resolve(null);
+    // The registry surfaces an entity.add entry (what a view with an
+    // entity_type would legitimately surface) but no view.switch:* — view
+    // switching is palette-only and never carries `context_menu`.
+    mockRegistry = [
+      {
+        id: "entity.add:task",
+        name: "Add Task",
+        context_menu: true,
+        scope: ["view:v1"],
       },
-    );
+    ];
 
     renderLeftNav();
 
     const buttons = screen.getAllByRole("button");
     fireEvent.contextMenu(buttons[0]);
 
-    // `useContextMenu` kicks off list_commands_for_scope then awaits the
-    // promise before calling show_context_menu; flush microtasks so the
-    // second invoke has happened by the time we assert.
-    await Promise.resolve();
-    await Promise.resolve();
+    // `useContextMenu` fetches `list command` at click time, filters, then
+    // awaits the `show context menu` op call; give the async chain a tick so
+    // the invoke has happened by the time we assert.
+    await new Promise((r) => setTimeout(r, 10));
 
     const showCall = mockInvoke.mock.calls.find(
-      ([cmd]) => cmd === "show_context_menu",
+      ([cmd, args]) =>
+        cmd === "command_tool_call" &&
+        (args as { op?: string })?.op === "show context menu",
     );
     expect(showCall).toBeDefined();
-    const items = (showCall![1] as { items: unknown[] }).items as Array<{
+    const items = (showCall![1] as { params: { items: unknown[] } }).params
+      .items as Array<{
       cmd: string;
       name: string;
       separator: boolean;

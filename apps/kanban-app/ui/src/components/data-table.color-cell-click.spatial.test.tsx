@@ -21,7 +21,7 @@
  *      wrapper, no extra `onClick` on the path between the trigger and
  *      its `<Popover>` root.
  *
- *   2. **Double-click on a color cell dispatched `ui.inspect`.** The
+ *   2. **Double-click on a color cell dispatched `app.inspect`.** The
  *      surrounding `<EntityRow>` attaches `useInspectOnDoubleClick(rowMk)`
  *      to its `<tr>`. The cell's own `onDoubleClick` calls `enterEdit()`
  *      but does not stop propagation, so the gesture also reaches the
@@ -58,7 +58,7 @@
  *    popover content wrapper) somewhere in the document.
  *
  * 2. **No-inspect test**: double-click on a color cell → no
- *    `dispatch_command` IPC fires with `cmd === "ui.inspect"`. The
+ *    `dispatch_command` IPC fires with `cmd === "app.inspect"`. The
  *    `enterEdit()` call still happens (so the picker can open).
  */
 
@@ -288,7 +288,7 @@ describe("DataTable color cell — click opens picker, dblclick does not inspect
     });
   });
 
-  it("double click on a color cell opens the picker and does NOT dispatch ui.inspect", async () => {
+  it("double click on a color cell opens the picker and does NOT dispatch app.inspect", async () => {
     const { container, baseElement, enterEditSpy } = await renderHarness();
     const target = findColorCellClickTarget(container);
 
@@ -311,13 +311,13 @@ describe("DataTable color cell — click opens picker, dblclick does not inspect
       expect(popper).not.toBeNull();
     });
 
-    // CRITICAL: no `ui.inspect` dispatch fired. Color is a leaf editor —
+    // CRITICAL: no `app.inspect` dispatch fired. Color is a leaf editor —
     // double-click drills in, it must NOT pop the inspector for the row
     // entity. Both the structured `dispatch_command` shape and a defensive
     // string match are checked so a future rename of the IPC name does
     // not silently let a regression through.
     const inspectCalls = dispatchCommandCalls().filter(
-      (c) => c.cmd === "ui.inspect",
+      (c) => c.cmd === "app.inspect",
     );
     expect(inspectCalls).toHaveLength(0);
 

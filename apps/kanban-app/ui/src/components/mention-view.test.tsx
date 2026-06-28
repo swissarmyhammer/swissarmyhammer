@@ -34,6 +34,17 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
 
+// The right-click context menu reads commands from the Command registry via
+// `useCommandList`; drive it through `mockRegistry`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: mockRegistry,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),
   warn: vi.fn(),
@@ -41,6 +52,19 @@ vi.mock("@tauri-apps/plugin-log", () => ({
   debug: vi.fn(),
   trace: vi.fn(),
   attachConsole: vi.fn(() => Promise.resolve()),
+}));
+
+// Spy on the tooltip factory so we can assert MentionView wires it per type.
+// The stub returns an empty extension bundle — CM6 hoverTooltip cannot fire in
+// jsdom anyway, so the tooltip behavior is covered by cm-mention-tooltip.test.ts.
+const mockCreateMentionTooltips = vi.fn(
+  (_prefix: string, _cssClass: string) => ({
+    extension: () => [],
+  }),
+);
+vi.mock("@/lib/cm-mention-tooltip", () => ({
+  createMentionTooltips: (...args: [string, string]) =>
+    mockCreateMentionTooltips(...args),
 }));
 
 // ---------------------------------------------------------------------------
@@ -97,13 +121,28 @@ interface ResolvedCommand {
  * `list_commands_for_scope` is called, and resolve for everything else.
  */
 function mockListCommands(commands: ResolvedCommand[]) {
-  mockInvoke.mockImplementation(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (cmd: string, _args?: any): Promise<unknown> => {
-      if (cmd === "list_commands_for_scope") return Promise.resolve(commands);
-      return Promise.resolve(undefined);
-    },
-  );
+  // Publish as `entity:tag`-scoped context-menu rows so they match a chain
+  // carrying a `tag:<id>` moniker.
+  mockRegistry = commands.map((c) => ({
+    id: c.id,
+    name: c.name,
+    context_menu: c.context_menu,
+    scope: ["entity:tag"],
+  }));
+  // Production's right-click flow fetches commands via the `command` MCP tool's
+  // `list command` op (callCommandTool(LIST_COMMAND_OP, …) →
+  // invoke("command_tool_call", { op: "list command", … })) and expects a
+  // `{ commands }` envelope — it no longer reads the `useCommandList` hook.
+  // Serve the same rows so openContextMenu's filter admits them for the
+  // `tag:tag-1` chain and pops the menu.
+  mockInvoke.mockImplementation((...args: unknown[]): Promise<unknown> => {
+    if (
+      args[0] === "command_tool_call" &&
+      (args[1] as { op?: string })?.op === "list command"
+    )
+      return Promise.resolve({ commands: mockRegistry });
+    return Promise.resolve(undefined);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +233,7 @@ describe("MentionView — single mode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockInvoke.mockResolvedValue(undefined);
+    mockRegistry = [];
     setupFixtures();
   });
 
@@ -263,6 +303,89 @@ describe("MentionView — single mode", () => {
     expect(widget?.textContent).toBe("^28rfp1r");
   });
 
+  it("wires createMentionTooltips for the rendered task pill type", async () => {
+    // Pills must get the same rich hover tooltip as inline body-text mentions.
+    // MentionView's buildScopedExtensions must build the per-type tooltip
+    // extension `createMentionTooltips("^", "cm-task-tooltip")` alongside the
+    // decoration extension. The CM6 hover cannot fire in jsdom, so assert the
+    // factory was invoked with the prefix + per-type css class instead.
+    mockEntities = {
+      task: [
+        {
+          id: "01KT4CNAYW7JG0X8F8W28RFP1R",
+          entity_type: "task",
+          moniker: "task:01KT4CNAYW7JG0X8F8W28RFP1R",
+          fields: {
+            short_id: "28rfp1r",
+            title: "Long Sentence-Like Task Title",
+            color: "00ff00",
+          },
+        },
+      ],
+    };
+    mockMentionableTypes = [
+      {
+        entityType: "task",
+        prefix: "^",
+        displayField: "title",
+        slugField: "short_id",
+      },
+    ];
+
+    render(
+      <Providers>
+        <MentionView entityType="task" id="01KT4CNAYW7JG0X8F8W28RFP1R" />
+      </Providers>,
+    );
+    await flush();
+
+    expect(mockCreateMentionTooltips).toHaveBeenCalledWith(
+      "^",
+      "cm-task-tooltip",
+    );
+  });
+
+  it("renders a $project pill when the type's slug field is the top-level id", async () => {
+    // Projects declare `mention_slug_field: id`. The mention slug must be read
+    // from the top-level `Entity.id` (which `entityFromBag` lifts out of the
+    // `fields` bag), not `fields["id"]`. Before the fix the empty slug left the
+    // metaMap without a project entry, so this rendered as raw `$task-card-fields`
+    // text (a muted `.cm-project-pill` mark) instead of a resolved pill.
+    mockEntities = {
+      project: [
+        {
+          id: "task-card-fields",
+          entity_type: "project",
+          moniker: "project:task-card-fields",
+          fields: {
+            name: "Task Card Fields",
+            color: "6366f1",
+          },
+        },
+      ],
+    };
+    mockMentionableTypes = [
+      {
+        entityType: "project",
+        prefix: "$",
+        displayField: "name",
+        slugField: "id",
+      },
+    ];
+
+    const { container } = render(
+      <Providers>
+        <MentionView entityType="project" id="task-card-fields" />
+      </Providers>,
+    );
+    await flush();
+
+    // A resolved mention widget (not the muted raw-text fallback).
+    const widget = container.querySelector(".cm-mention-pill");
+    expect(widget).toBeTruthy();
+    expect(widget?.textContent).toBe("$task-card-fields");
+  });
+
   it("falls back to raw id with muted mark styling when entity is missing", async () => {
     mockEntities = { project: [] };
     const { container } = render(
@@ -287,6 +410,7 @@ describe("MentionView — list mode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockInvoke.mockResolvedValue(undefined);
+    mockRegistry = [];
     setupFixtures();
   });
 
@@ -401,6 +525,7 @@ describe("MentionView — extraCommands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockInvoke.mockResolvedValue(undefined);
+    mockRegistry = [];
     setupFixtures();
   });
 
@@ -449,11 +574,14 @@ describe("MentionView — extraCommands", () => {
 
     await waitFor(() => {
       const call = mockInvoke.mock.calls.find(
-        (c: unknown[]) => c[0] === "show_context_menu",
+        (c: unknown[]) =>
+          c[0] === "command_tool_call" &&
+          (c[1] as { op?: string })?.op === "show context menu",
       );
       expect(call).toBeTruthy();
-      const items = (call![1] as { items: { cmd: string; name: string }[] })
-        .items;
+      const items = (
+        call![1] as { params: { items: { cmd: string; name: string }[] } }
+      ).params.items;
       expect(items.find((i) => i.cmd === "task.untag")).toBeTruthy();
     });
   });

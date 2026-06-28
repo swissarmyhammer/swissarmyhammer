@@ -50,6 +50,13 @@ vi.mock("@/lib/ui-state-context", () => ({
 
 // ---------------------------------------------------------------------------
 // Mock useDispatchCommand to capture dispatched commands.
+//
+// Built on the STRICT factory (`@/test/strict-dispatch-mock`): every id the
+// rendered tree requests must be enumerated below — captures for the ids
+// the tests assert on, explicit no-ops for the ids the tree legitimately
+// dispatches but these tests ignore. Any other id (retired, renamed,
+// typo'd — e.g. the old `ui.inspector.close`) throws and fails the test,
+// instead of the historical silent no-op fallback.
 // ---------------------------------------------------------------------------
 
 const mockDispatchClose = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -58,14 +65,20 @@ const mockDispatchAppDismiss = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("@/lib/command-scope", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/command-scope")>();
+  const { strictUseDispatchCommand } =
+    await import("@/test/strict-dispatch-mock");
   return {
     ...actual,
-    useDispatchCommand: (cmd: string) => {
-      if (cmd === "ui.inspector.close") return mockDispatchClose;
-      if (cmd === "ui.inspector.close_all") return mockDispatchCloseAll;
-      if (cmd === "app.dismiss") return mockDispatchAppDismiss;
-      return vi.fn(() => Promise.resolve());
-    },
+    useDispatchCommand: strictUseDispatchCommand({
+      "app.inspector.close": mockDispatchClose,
+      "app.inspector.close_all": mockDispatchCloseAll,
+      "app.dismiss": mockDispatchAppDismiss,
+      // Requested by the tree but not asserted on here: the container's
+      // resize-persist dispatch and the focus-claim choke point that
+      // `<FocusScope>` / `<EntityInspector>` pre-bind.
+      "app.inspector.set_width": () => Promise.resolve(),
+      "nav.focus": () => Promise.resolve(),
+    }),
   };
 });
 
@@ -107,6 +120,7 @@ vi.mock("@/lib/entity-focus-context", () => {
     useIsFocused: () => false,
     useIsDirectFocus: () => false,
     useOptionalIsDirectFocus: () => false,
+    useOptionalIsFocusWithin: () => false,
     useOptionalFocusStore: () => null,
   };
 });
@@ -206,22 +220,41 @@ async function flushSetup() {
 /** Pull every `spatial_push_layer` push as a `{ fq, name, parent }` record. */
 function pushedLayers() {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_push_layer")
-    .map(
+    .filter(
       (c) =>
-        c[1] as {
-          fq: FullyQualifiedMoniker;
-          name: string;
-          parent: FullyQualifiedMoniker | null;
-        },
-    );
+        c[0] === "spatial_push_layer" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "push layer"),
+    )
+    .map((c) => {
+      // The MCP wire nests the op args under `params`; the legacy Tauri
+      // command passes them flat. Unwrap so both shapes read alike
+      // (mirrors `poppedLayers` below).
+      const outer = c[1] as Record<string, unknown>;
+      return (outer?.params ?? outer) as {
+        fq: FullyQualifiedMoniker;
+        name: string;
+        parent: FullyQualifiedMoniker | null;
+      };
+    });
 }
 
 /** Pull every `spatial_pop_layer` pop as a `{ key }` record. */
 function poppedLayers() {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_pop_layer")
-    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+    .filter(
+      (c) =>
+        c[0] === "spatial_pop_layer" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "pop layer"),
+    )
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
+      return args;
+    });
 }
 
 /** Pull every `spatial_register_scope` registration. */
@@ -303,11 +336,11 @@ describe("InspectorsContainer", () => {
     // backdrop's "click outside, close the topmost layer" gesture is
     // routed through `app.dismiss` — the single top-layer-aware
     // command — rather than the layer-specific
-    // `ui.inspector.close_all`. The backend's `app.dismiss` handler
+    // `app.inspector.close_all`. The backend's `app.dismiss` handler
     // decides which layer to close based on the topmost-layer rule
     // (palette → inspector → no-op when only window is mounted).
     //
-    // Replaces the earlier hard-coded `ui.inspector.close_all`
+    // Replaces the earlier hard-coded `app.inspector.close_all`
     // dispatch, which assumed the inspector was always the active
     // layer.
     mockUIState.mockReturnValue(uiStateWithStack(["task:t1"]));

@@ -34,18 +34,32 @@ swissarmyhammer-entity = { workspace = true }
 swissarmyhammer-views = { workspace = true }
 swissarmyhammer-perspectives = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
-swissarmyhammer-commands = { workspace = true }
+swissarmyhammer-command-options = { workspace = true }
+swissarmyhammer-command-service = { workspace = true }
+swissarmyhammer-ui-state = { workspace = true }
 swissarmyhammer-store = { workspace = true }
 swissarmyhammer-filter-expr = { workspace = true }
+# The MCP notification bridge lives in the platform crate. The kanban crate is
+# the natural fan-in home: it already depends on the entity/views/perspectives
+# event buses, and `swissarmyhammer-plugin` does not depend on this crate, so
+# the edge is acyclic (the bridge's own module docs explain why the platform
+# crate cannot subscribe to the domain buses itself).
+swissarmyhammer-plugin = { workspace = true }
 
 include_dir = { workspace = true }
 fractional_index = "2.0.2"
 
+# Optional, only linked when the `test-support` feature is on (or for this
+# crate's own tests via the dev-dependency). The shared `test_support::setup`
+# helper needs `TempDir`; everything else is gated behind cfg(test).
+tempfile = { workspace = true, optional = true }
+
 [features]
-# Exposes test-only helpers (e.g. `test_support::composed_builtin_yaml_sources`)
-# to integration tests and downstream crates. Enabled automatically for this
-# crate's own tests via the dev-dependency below. No extra dependencies.
-test-support = []
+# Exposes test-only helpers (e.g. `test_support::composed_builtin_yaml_sources`
+# and `test_support::setup`) to integration tests and downstream crates.
+# Enabled automatically for this crate's own tests via the dev-dependency
+# below. Pulls in `tempfile`, which the `setup` helper uses.
+test-support = ["dep:tempfile"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

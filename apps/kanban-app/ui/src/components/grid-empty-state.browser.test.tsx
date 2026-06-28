@@ -40,6 +40,17 @@ vi.mock("@tauri-apps/api/window", () => ({
   }),
 }));
 
+// The right-click context menu reads commands from the Command registry via
+// `useCommandList`; drive it through `mockRegistry`.
+let mockRegistry: Array<Record<string, unknown>> = [];
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: mockRegistry,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
 // ---------------------------------------------------------------------------
 // Dependency mocks.
 // ---------------------------------------------------------------------------
@@ -113,6 +124,7 @@ vi.mock("@/lib/entity-focus-context", () => {
     useIsFocused: () => false,
     useIsDirectFocus: () => false,
     useOptionalIsDirectFocus: () => false,
+    useOptionalIsFocusWithin: () => false,
     useOptionalFocusStore: () => null,
     useFocusBySegmentPath: () => vi.fn(),
     useFocusedFq: () => null,
@@ -177,10 +189,23 @@ async function renderTagsEmptyGrid(viewId: string) {
 describe("GridEmptyState", () => {
   beforeEach(() => {
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(async (cmd: string): Promise<unknown> => {
-      if (cmd === "list_commands_for_scope") return [];
-      return undefined;
-    });
+    // Production's right-click flow fetches commands via the `command` MCP
+    // tool's `list command` op (callCommandTool(LIST_COMMAND_OP, …) →
+    // invoke("command_tool_call", { op: "list command", … })) and expects a
+    // `{ commands }` envelope — it no longer reads the `useCommandList` hook.
+    // Serve the rows tests publish via `mockRegistry` so openContextMenu's
+    // filter admits them for the `view:<id>` chain and pops the menu.
+    mockInvoke.mockImplementation(
+      async (cmd: string, args?: unknown): Promise<unknown> => {
+        if (
+          cmd === "command_tool_call" &&
+          (args as { op?: string })?.op === "list command"
+        )
+          return { commands: mockRegistry };
+        return undefined;
+      },
+    );
+    mockRegistry = [];
     // Reset the active-perspective mock between tests so the filter-active
     // case in one test doesn't leak into the no-filter default of the next.
     activePerspectiveHolder.current = null;
@@ -247,25 +272,38 @@ describe("GridEmptyState", () => {
     expect(screen.queryByRole("button", { name: "New Tag" })).toBeNull();
   });
 
-  it("fires list_commands_for_scope on context-menu over the empty-state wrapper", async () => {
+  it("builds a context menu carrying the view scope over the empty-state wrapper", async () => {
+    // A view-scoped context-menu command so the menu renders; its item must
+    // carry the `view:v-tags` moniker injected by the parent
+    // CommandScopeProvider in its `scope_chain`.
+    mockRegistry = [
+      {
+        id: "entity.add:tag",
+        name: "New Tag",
+        context_menu: true,
+        scope: ["view:v-tags"],
+      },
+    ];
     await renderTagsEmptyGrid("v-tags");
 
     const wrapper = screen.getByTestId("grid-empty-state");
     await act(async () => {
       fireEvent.contextMenu(wrapper);
+      await new Promise((r) => setTimeout(r, 10));
     });
 
-    const listCall = mockInvoke.mock.calls.find(
-      (c) => c[0] === "list_commands_for_scope",
+    const showCall = mockInvoke.mock.calls.find(
+      (c) =>
+        c[0] === "command_tool_call" &&
+        (c[1] as { op?: string })?.op === "show context menu",
     );
-    expect(listCall).toBeTruthy();
-    const args = listCall?.[1] as
-      | { scopeChain?: string[]; contextMenu?: boolean }
-      | undefined;
-    expect(args?.contextMenu).toBe(true);
-    // The scope chain must include the `view:<id>` moniker injected by the
-    // parent CommandScopeProvider — that's how the backend emits the
-    // view-scoped `entity.add:{type}` command.
-    expect(args?.scopeChain).toEqual(expect.arrayContaining(["view:v-tags"]));
+    expect(showCall).toBeTruthy();
+    const items = (
+      showCall?.[1] as { params: { items: { scope_chain: string[] }[] } }
+    ).params.items;
+    // The scope chain must include the `view:<id>` moniker.
+    expect(items[0].scope_chain).toEqual(
+      expect.arrayContaining(["view:v-tags"]),
+    );
   });
 });

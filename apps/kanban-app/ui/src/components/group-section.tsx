@@ -11,11 +11,35 @@
  * with the unmount and the user's collapse choice would silently
  * reset. Hoisting the state to the parent (keyed by `bucket.value`)
  * keeps the choice durable across recycling.
+ *
+ * # Spatial scope + keyboard collapse
+ *
+ * Each section wraps its content in a `<FocusScope moniker="group:<value>">`
+ * so the inner board (`board:<id>` and its columns / cards) composes a focus
+ * path that is UNIQUE per group — the same board renders inside every
+ * section, so without this segment their FQMs would collide and a keyboard
+ * command could not tell which group holds focus.
+ *
+ * On top of that scope the section registers the `group.toggleCollapse`
+ * (vim `z o`) webview-bus handler via `useFocusedWebviewCommandHandlers`,
+ * gated to focus being within this section. The command is DEFINED by the
+ * `board-commands` builtin plugin (`keys: { vim: "z o" }`, `scope:
+ * ["ui:board"]`); the handler here is its presentation-only behavior —
+ * flipping the parent's collapse map for this bucket. Only the focused
+ * group's handler is live, so a dispatch flips exactly the group the user is
+ * in (the `<Field>` / `<Pressable>` many-instance precedent).
  */
 
+import { useMemo } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { BoardView } from "@/components/board-view";
+import { FocusScope } from "@/components/focus-scope";
+import { useFocusedWebviewCommandHandlers } from "@/lib/use-focused-webview-command-handlers";
+import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
+import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
+import { moniker } from "@/lib/moniker";
+import { asSegment } from "@/types/spatial";
 import type { GroupBucket } from "@/lib/group-utils";
 import type { BoardData } from "@/types/kanban";
 
@@ -80,9 +104,8 @@ const EXPANDED_BODY_CLASS = "h-[70vh] min-h-0 flex flex-col";
  *
  * @param bucket - Group bucket with label and tasks.
  * @param board - Board data shared across all group sections.
- * @param groupField - The field name used for grouping (currently unused
- *   inside the section, retained for future per-section behavior keyed
- *   by the grouping dimension).
+ * @param groupField - The field name used for grouping (not read inside the
+ *   section — the per-group spatial scope keys off `bucket.value`).
  * @param collapsed - Whether the section is currently collapsed.
  * @param onToggleCollapsed - Invoked on header click to flip the parent's
  *   collapse map for this bucket.
@@ -94,12 +117,36 @@ export function GroupSection({
   collapsed,
   onToggleCollapsed,
 }: GroupSectionProps) {
-  return (
-    <div
-      className="shrink-0"
-      data-group-section=""
-      data-group-value={bucket.value}
-    >
+  // Each section is its own spatial sub-tree keyed by the bucket value:
+  // `group:<value>`. The inner `<BoardView>`'s `board:<id>` scope and every
+  // column / card below it compose their FQMs UNDER this segment, so the
+  // focus path is unique per group even though the same board (and the same
+  // `board:<id>` moniker) renders inside every section. Without this the
+  // grouped board's column / card FQMs would be identical across groups and a
+  // keyboard command could not tell which group holds focus.
+  const groupSegment = useMemo(
+    () => asSegment(moniker("group", bucket.value)),
+    [bucket.value],
+  );
+
+  // Register the `group.toggleCollapse` (vim `z o`) bus handler WHILE spatial
+  // focus is within this section's subtree. The webview command bus holds one
+  // handler per id; focus-gating means only the focused group's handler is
+  // live, so a dispatch flips exactly the group the user is in. The command is
+  // DEFINED by the `board-commands` plugin (keys + `ui:board` scope); this is
+  // its presentation-only behavior — `onToggleCollapsed` flips the parent's
+  // collapse map for this bucket, no durable mutation. Mirrors the
+  // `<Field>` / `<Pressable>` many-instance precedent. The hook self-degrades
+  // to never registering outside the spatial provider stack (the same
+  // condition under which the `<FocusScope>` below is omitted).
+  const handlers = useMemo(
+    () => ({ "group.toggleCollapse": () => onToggleCollapsed() }),
+    [onToggleCollapsed],
+  );
+  useFocusedWebviewCommandHandlers(groupSegment, handlers);
+
+  const body = (
+    <>
       <div className="h-px bg-border mx-3" />
       <button
         type="button"
@@ -126,6 +173,45 @@ export function GroupSection({
           />
         </div>
       )}
-    </div>
+    </>
+  );
+
+  // The `<FocusScope>` requires the spatial-nav provider stack (it throws
+  // outside a `<FocusLayer>`). Production always mounts it, but lightweight
+  // unit tests render a `<GroupSection>` bare. Mirror `PerspectiveSpatialZone`
+  // (perspective-container.tsx): render the spatial frame only when the stack
+  // is present, otherwise a plain `<div>` carrying the same
+  // `data-group-section` / `data-group-value` selectors and `shrink-0` layout
+  // class. Either branch renders identical content; only the FQM frame differs.
+  const layerKey = useOptionalEnclosingLayerFq();
+  const actions = useOptionalSpatialFocusActions();
+  if (!layerKey || !actions) {
+    return (
+      <div
+        className="shrink-0"
+        data-group-section=""
+        data-group-value={bucket.value}
+      >
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <FocusScope
+      moniker={groupSegment}
+      // Viewport-spanning group strip: a focus rectangle around the whole
+      // section would be noise. The board columns / cards inside own their
+      // own focus indicators. The section is a passive spatial frame for FQM
+      // composition + the collapse-toggle handler, not a click target, so
+      // event handling is suppressed too (the header button owns its click).
+      showFocus={false}
+      handleEvents={false}
+      className="shrink-0"
+      data-group-section=""
+      data-group-value={bucket.value}
+    >
+      {body}
+    </FocusScope>
   );
 }

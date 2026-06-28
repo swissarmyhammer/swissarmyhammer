@@ -1,16 +1,16 @@
 /**
- * Wiring test for the entity-field-changed → BoardData patch pipeline.
+ * Wiring test for the store/changed → BoardData patch pipeline.
  *
  * The bug this protects against: after a column reorder + undo, the
- * backend emits N `entity-field-changed` events (one per column whose
+ * backend emits N `store/changed` notifications (one per column whose
  * `order` field reverted), but `BoardData.columns` in WindowContainer
  * stayed stale because no listener applied `patchBoardData` to it.
  * Result: the board view didn't redraw, and the columns stayed visually
  * in their post-drag order.
  *
- * This test mounts the `useBoardDataSync` hook, fires a mocked Tauri
- * `entity-field-changed` event for a column, and asserts that the hook
- * called `setBoard` with the patched data — i.e. the order field of the
+ * This test mounts the `useBoardDataSync` hook, fires a mocked MCP
+ * `notifications/store/changed` notification for a column, and asserts the
+ * hook called `setBoard` with the patched data — i.e. the order field of the
  * named column was updated.
  */
 // @vitest-environment jsdom
@@ -108,6 +108,58 @@ async function fireEvent(eventName: string, payload: unknown) {
   });
 }
 
+interface StoreChangePayload {
+  store: string;
+  item: string;
+  op?: "created" | "removed" | "updated";
+  changes?: Array<{ field: string; value: unknown }>;
+  txn?: string | null;
+  origin?: string;
+}
+
+/** Fire one `notifications/store/changed` notification at the hook. */
+async function fireStoreChanged(p: StoreChangePayload) {
+  await fireEvent("notifications/store/changed", {
+    op: "updated",
+    txn: null,
+    origin: "user",
+    ...p,
+  });
+}
+
+/** Fire a batch of same-`txn` `store/changed` notifications, flushed together. */
+async function fireStoreChangedBatch(notes: StoreChangePayload[]) {
+  const cbs = listeners.get("notifications/store/changed") ?? [];
+  await act(async () => {
+    for (const note of notes) {
+      for (const cb of cbs) {
+        cb({ payload: { op: "updated", origin: "user", ...note } });
+      }
+    }
+    // Let the txn batcher's microtask flush.
+    await Promise.resolve();
+  });
+}
+
+/**
+ * Spin microtasks until the lazy `subscribeStoreChanged` import chain has
+ * registered its listener. The first test pays the cold dynamic-import cost
+ * for `@tauri-apps/api/event`, which takes more than one microtask to settle;
+ * without waiting, the fired event is dropped and the patch never applies.
+ */
+async function waitForSubscription() {
+  // Poll up to ~2s. The first test pays the cold `import("@tauri-apps/api/event")`
+  // cost (a real module fetch in browser mode), which can take many ms to
+  // resolve before `subscribeStoreChanged` registers its listener; without
+  // waiting, the fired event has no listener and the patch is dropped.
+  for (let i = 0; i < 200; i++) {
+    if ((listeners.get("notifications/store/changed")?.length ?? 0) > 0) return;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+  }
+}
+
 describe("useBoardDataSync", () => {
   beforeEach(() => {
     listeners.clear();
@@ -115,18 +167,15 @@ describe("useBoardDataSync", () => {
     latestBoard = null;
   });
 
-  it("patches a column's order field when entity-field-changed fires", async () => {
+  it("patches a column's order field when a column store/changed fires", async () => {
     render(<Harness initial={makeBoard()} />);
 
-    // Wait a microtask for the listener registration promise to settle.
-    await act(async () => {
-      await Promise.resolve();
-    });
+    // Wait a microtask for the subscription promise to settle.
+    await waitForSubscription();
 
-    await fireEvent("entity-field-changed", {
-      kind: "entity-field-changed",
-      entity_type: "column",
-      id: "todo",
+    await fireStoreChanged({
+      store: "column",
+      item: "todo",
       changes: [{ field: "order", value: 99 }],
     });
 
@@ -135,24 +184,21 @@ describe("useBoardDataSync", () => {
     expect(todo!.fields.order).toBe(99);
   });
 
-  it("patches the board entity when entity-field-changed fires for the board", async () => {
+  it("patches the board entity when a board store/changed fires", async () => {
     render(<Harness initial={makeBoard()} />);
 
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await waitForSubscription();
 
-    await fireEvent("entity-field-changed", {
-      kind: "entity-field-changed",
-      entity_type: "board",
-      id: "board",
+    await fireStoreChanged({
+      store: "board",
+      item: "board",
       changes: [{ field: "name", value: "Renamed Board" }],
     });
 
     expect(latestBoard!.board.fields.name).toBe("Renamed Board");
   });
 
-  it("does not touch BoardData for non-structural entity types (task)", async () => {
+  it("does not touch BoardData for non-structural stores (task)", async () => {
     const initial = makeBoard();
     render(<Harness initial={initial} />);
 
@@ -161,89 +207,45 @@ describe("useBoardDataSync", () => {
     });
 
     const before = latestBoard;
-    await fireEvent("entity-field-changed", {
-      kind: "entity-field-changed",
-      entity_type: "task",
-      id: "some-task",
+    await fireStoreChanged({
+      store: "task",
+      item: "some-task",
       changes: [{ field: "title", value: "renamed" }],
     });
 
-    // BoardData reference should be the same — patchBoardData returned null
-    // and the hook short-circuited.
+    // BoardData reference should be the same — the hook short-circuited
+    // before calling setBoard for a non-structural store.
     expect(latestBoard).toBe(before);
   });
 
-  it("ignores events tagged with a different board_path", async () => {
-    render(
-      <Harness initial={makeBoard()} activeBoardPath="/Users/me/boardA" />,
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const before = latestBoard;
-    await fireEvent("entity-field-changed", {
-      kind: "entity-field-changed",
-      entity_type: "column",
-      id: "todo",
-      changes: [{ field: "order", value: 99 }],
-      board_path: "/Users/me/boardB",
-    });
-
-    // Reference unchanged — the patch was filtered out.
-    expect(latestBoard).toBe(before);
-  });
-
-  it("applies events whose board_path matches the active board", async () => {
-    render(
-      <Harness initial={makeBoard()} activeBoardPath="/Users/me/boardA" />,
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    await fireEvent("entity-field-changed", {
-      kind: "entity-field-changed",
-      entity_type: "column",
-      id: "todo",
-      changes: [{ field: "order", value: 99 }],
-      board_path: "/Users/me/boardA",
-    });
-
-    const todo = latestBoard!.columns.find((c) => c.id === "todo");
-    expect(todo!.fields.order).toBe(99);
-  });
-
-  it("applies multiple column-order events from one undo group", async () => {
+  it("ignores reload-item stores (perspective)", async () => {
     render(<Harness initial={makeBoard()} />);
 
     await act(async () => {
       await Promise.resolve();
     });
 
-    // Simulate the three field-changed events from undoing a column drag
-    // that swapped todo (0→2), doing (1→0), done (2→1) — i.e. revert each
-    // column's `order` back to its pre-drag value.
-    await fireEvent("entity-field-changed", {
-      kind: "entity-field-changed",
-      entity_type: "column",
-      id: "todo",
-      changes: [{ field: "order", value: 0 }],
+    const before = latestBoard;
+    await fireStoreChanged({ store: "perspective", item: "p1" });
+
+    expect(latestBoard).toBe(before);
+  });
+
+  it("applies multiple column-order changes from one undo txn as a single batch", async () => {
+    render(<Harness initial={makeBoard()} />);
+
+    await act(async () => {
+      await Promise.resolve();
     });
-    await fireEvent("entity-field-changed", {
-      kind: "entity-field-changed",
-      entity_type: "column",
-      id: "doing",
-      changes: [{ field: "order", value: 1 }],
-    });
-    await fireEvent("entity-field-changed", {
-      kind: "entity-field-changed",
-      entity_type: "column",
-      id: "done",
-      changes: [{ field: "order", value: 2 }],
-    });
+
+    // Simulate the three store/changed notifications from undoing a column
+    // drag that swapped todo (0→2), doing (1→0), done (2→1) — all sharing one
+    // `txn`, so they flush as one atomic board patch.
+    await fireStoreChangedBatch([
+      { store: "column", item: "todo", changes: [{ field: "order", value: 0 }], txn: "t1" },
+      { store: "column", item: "doing", changes: [{ field: "order", value: 1 }], txn: "t1" },
+      { store: "column", item: "done", changes: [{ field: "order", value: 2 }], txn: "t1" },
+    ]);
 
     const byId = (id: string) =>
       latestBoard!.columns.find((c) => c.id === id)!.fields.order;

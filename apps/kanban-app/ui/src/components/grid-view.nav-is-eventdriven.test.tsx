@@ -8,7 +8,7 @@
  * `useFieldValue(entityType, entityId, fieldName)` and redraw from the
  * store — no re-fetch required.
  *
- * The allowed per-nav IPC is `ui.setFocus`, which is a state-mutation
+ * The allowed per-nav IPC is `app.setFocus`, which is a state-mutation
  * dispatch (the frontend tells the backend "focus is now on moniker X"),
  * not a data fetch.
  *
@@ -32,28 +32,9 @@ import { memo, useEffect, useState } from "react";
 // Tauri API mocks — must come before component imports.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -270,7 +251,7 @@ function invokeCallsFor(name: string): unknown[][] {
 /**
  * Filter `dispatch_command` calls to those whose payload `cmd` matches the
  * given command id. Helpful for isolating `perspective.list` from
- * `ui.setFocus` in the same mock.
+ * `app.setFocus` in the same mock.
  */
 function dispatchCallsFor(cmd: string): unknown[][] {
   return mockInvoke.mock.calls.filter(
@@ -343,7 +324,7 @@ describe("GridView — nav is event-driven", () => {
 
     // Simulate nav by driving `setFocus(moniker)` against the entity
     // focus store — this is the effect every matching nav claim has on
-    // production. Drives the `ui.setFocus` dispatch path end-to-end,
+    // production. Drives the `app.setFocus` dispatch path end-to-end,
     // which is the one IPC legitimately allowed on nav. Cycle through
     // every seeded task so the contract is exercised across every
     // moniker real keyboard nav would surface.
@@ -385,15 +366,15 @@ describe("GridView — nav is event-driven", () => {
       "perspective.list must not fire on navigation",
     ).toHaveLength(0);
 
-    // Sanity check: `ui.setFocus` IS allowed — it's a state-mutation dispatch,
+    // Sanity check: `app.setFocus` IS allowed — it's a state-mutation dispatch,
     // not a fetch. Navigating should dispatch at least one of these.
     expect(
-      dispatchCallsFor("ui.setFocus").length,
-      "ui.setFocus is the legitimate per-nav dispatch",
+      dispatchCallsFor("app.setFocus").length,
+      "app.setFocus is the legitimate per-nav dispatch",
     ).toBeGreaterThan(0);
   });
 
-  it("allows ui.setFocus through — the only legitimate per-nav dispatch", async () => {
+  it("allows app.setFocus through — the only legitimate per-nav dispatch", async () => {
     const navRef: NavRef = { setFocus: null };
     const entities = { task: fiveTasks() };
 
@@ -407,7 +388,7 @@ describe("GridView — nav is event-driven", () => {
 
     mockInvoke.mockClear();
 
-    // A focus change should surface a ui.setFocus dispatch — nothing else.
+    // A focus change should surface a app.setFocus dispatch — nothing else.
     await act(async () => {
       navRef.setFocus?.(asFq("field:task:t2.title"));
     });
@@ -416,22 +397,22 @@ describe("GridView — nav is event-driven", () => {
       await new Promise((r) => setTimeout(r, 50));
     });
 
-    // Every non-ui.setFocus dispatch_command call is a violator — the grid
+    // Every non-app.setFocus dispatch_command call is a violator — the grid
     // must not issue command dispatches of any other kind on a bare nav.
     const bogusDispatches = mockInvoke.mock.calls.filter((c) => {
       if (c[0] !== "dispatch_command") return false;
       const cmd = (c[1] as { cmd?: string } | undefined)?.cmd;
-      return cmd !== "ui.setFocus";
+      return cmd !== "app.setFocus";
     });
     expect(
       bogusDispatches.map((c) => (c[1] as { cmd?: string }).cmd),
-      "nav must not dispatch any command other than ui.setFocus",
+      "nav must not dispatch any command other than app.setFocus",
     ).toEqual([]);
 
     // And the one legitimate dispatch did happen.
     expect(
-      dispatchCallsFor("ui.setFocus").length,
-      "setFocus must drive exactly one ui.setFocus dispatch",
+      dispatchCallsFor("app.setFocus").length,
+      "setFocus must drive exactly one app.setFocus dispatch",
     ).toBeGreaterThan(0);
   });
 

@@ -29,7 +29,7 @@
  *
  * Mock pattern matches `nav-bar.spatial-nav.test.tsx`:
  *   - `vi.hoisted` builds an invoke / listen mock pair the test owns.
- *   - `mockListen` records every `listen("focus-changed", cb)` callback
+ *   - `mockListen` records every `listen("notifications/focus/changed", cb)` callback
  *     so `fireFocusChanged(key)` drives the React tree as if the Rust
  *     kernel had emitted the event.
  *
@@ -45,28 +45,9 @@ import type { BoardData, OpenBoard } from "@/types/kanban";
 // Tauri API mocks — must come before component imports.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -120,13 +101,21 @@ const mockIsBusy = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("@/lib/command-scope", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/command-scope")>();
+  const { strictUseDispatchCommand } =
+    await import("@/test/strict-dispatch-mock");
   return {
     ...actual,
-    useDispatchCommand: (cmd: string) => {
-      if (cmd === "ui.inspect") return mockDispatchInspect;
-      if (cmd === "app.search") return mockDispatchSearch;
-      return vi.fn(() => Promise.resolve());
-    },
+    // Strict mock: any command id outside this map (retired, renamed,
+    // typo'd) throws instead of silently no-opping.
+    useDispatchCommand: strictUseDispatchCommand({
+      "app.inspect": mockDispatchInspect,
+      "app.search": mockDispatchSearch,
+      // Requested by the tree but not asserted on here: the focus-claim
+      // choke point `<FocusScope>` pre-binds and the board selector's
+      // tear-off command.
+      "nav.focus": () => Promise.resolve(),
+      "window.new": () => Promise.resolve(),
+    }),
     useCommandBusy: () => ({ isBusy: mockIsBusy() }),
   };
 });
@@ -245,7 +234,7 @@ async function fireFocusChanged({
     next_fq,
     next_segment: null,
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get("notifications/focus/changed") ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();
