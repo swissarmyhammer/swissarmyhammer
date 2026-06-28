@@ -40,6 +40,23 @@ comments:
   id: 01kw5hq2k76vsxt4sr0bar4r4f
   text: 'Iter 1 implement landed green in doing. Lever 1 (whole-file framing in fleet.rs: OUTPUT_CONTRACT review-scope section, render_file_block boundary note + diff demoted to "orientation only", render_focus_files whole-file language) AND lever 2 (RESCAN_PROMPT + rescan_for_completeness, one extra fork turn on warm-fork arm, capped at 1 pass, additive-only). New tests: one_rule_with_many_instances_reports_them_all_on_the_first_pass, completeness_rescan_fires_once_and_merges_the_missed_instances (verified RED→GREEN), output_contract_names_the_whole_file_as_the_review_boundary_not_the_diff; extended synthesize one_rule_matching_multiple_lines_renders_every_instance to N=4 first-pass. validators crate 290/290, clippy -D warnings clean, fmt applied. Now running /test across blast radius.'
   timestamp: 2026-06-27T22:03:02.119889+00:00
+- actor: claude-code
+  id: 01kw5scmanb2z8gsw3hmpa3zvt
+  text: 'Iter 1 review (review sha HEAD~1..HEAD on 7449c0c9): 3 confirmed / 1 refuted, 32 validators attempted 0 failed. Task → review. Findings: (1) fleet.rs:137 run_fleet unused _config param — remove or document; (2) fleet.rs:830 collect_forked_task ~66 lines, extract handle_fork_success/handle_fork_failed/handle_pool_error/handle_delivery_error; (3) synthesize.rs:153 synthesize takes Vec instead of impl IntoIterator<Item=VerifiedFinding>. All clarity/API on the two files this card already touches. Dispatching iter 2 /implement to fix at root.'
+  timestamp: 2026-06-28T00:17:08.437935+00:00
+- actor: claude-code
+  id: 01kw5swsk3n1n9sg03hqgqd2n3
+  text: |-
+    Iter 2 /implement: addressed all 3 review findings AT THE ROOT in fleet.rs + synthesize.rs. No severity reintroduced; whole-file framing + completeness re-scan untouched.
+
+    (1) fleet.rs run_fleet unused `_config: FleetConfig` — REMOVED entirely. Investigated: batching is done UPSTREAM in run_review (synthesize.rs) via batch_work_list(work, fleet_config.batch_size) BEFORE run_fleet is called per-batch; run_fleet receives one already-content-budgeted batch and never needed the config. Updated signature to `run_fleet(work, loader, pool)`, added a doc paragraph stating the size policy is applied upstream by run_review. Updated all 9 in-crate call sites (synthesize.rs run_review + 8 fleet.rs tests incl. run_fleet_and_unpin helper). swissarmyhammer-tools review_op.rs is unaffected — it constructs FleetConfig for run_review/run_review_over_agent, not run_fleet. FleetConfig struct kept (still carries batch_size for run_review; test asserts default==DEFAULT_BATCH_SIZE keeps the import live).
+
+    (2) fleet.rs collect_forked_task (~66 lines, nested match arms) — extracted each arm into a focused helper so the fn is now a clean dispatch: handle_fork_success (warm/degraded success: reuse log + parse_task_response + bounded completeness re-scan, identical incl. the warm-fork rescan_for_completeness call), handle_fork_failed (monolithic fresh-session fallback), handle_pool_error (Err(()) zero findings), handle_delivery_error (dropped channel -> Err(())). Behavior byte-identical; each helper carries a doc comment.
+
+    (3) synthesize.rs synthesize — widened `verified: Vec<VerifiedFinding>` to `verified: impl IntoIterator<Item = VerifiedFinding>`; collects to Vec at the top (`let verified = verified.into_iter().collect::<Vec<_>>();`) so the downstream .iter()/.len()/.into_iter() are unchanged. Source-compatible for the existing Vec callers (run_review + all tests), so no call-site changes needed.
+
+    Green: cargo nextest -p swissarmyhammer-validators 290/290 pass; cargo clippy -p swissarmyhammer-validators -p swissarmyhammer-tools --all-targets -- -D warnings clean (exit 0, no warnings); cargo fmt applied. Left in doing.
+  timestamp: 2026-06-28T00:25:58.115139+00:00
 position_column: doing
 position_ordinal: '8280'
 project: local-review
@@ -86,3 +103,9 @@ Make the find stage review the **entire inlined file** for every rule, explicitl
 ## Notes
 - Do NOT reintroduce severity — review stays binary pass/fail.
 - Source of truth for skills is `builtin/skills/...`; the skill text ("Fix at the root, not the cited line") is already correct and is the *agent's* fixing behavior — this card fixes the *engine's reporting* behavior so the agent actually receives all instances to fix.
+
+## Review Findings (2026-06-27 19:06)
+
+- [ ] `crates/swissarmyhammer-validators/src/review/fleet.rs:137` — Unused `_config` parameter creates noise in the API surface. Callers must construct and pass `FleetConfig` even though `run_fleet` never uses it — wasted API friction. Remove the `_config` parameter entirely. If this is reserved for future use, add a `TODO` comment in the docstring instead; don't silently accept unused parameters. If the parameter must stay for API stability, add a comment explaining why.
+- [ ] `crates/swissarmyhammer-validators/src/review/fleet.rs:830` — The `collect_forked_task` function spans approximately 66 lines (from line 830 to 895), exceeding the 50-line guideline. It handles multiple error cases with nested match arms and logging, making it difficult to follow the primary logic path. Extract error handling into separate helper functions: `handle_fork_success()`, `handle_fork_failed()`, `handle_pool_error()`, and `handle_delivery_error()`. This will make each path's responsibility clearer and improve testability.
+- [ ] `crates/swissarmyhammer-validators/src/review/synthesize.rs:153` — Function `synthesize()` accepts `Vec<VerifiedFinding>` directly instead of a generic iterator, limiting API flexibility. Callers with other iterable sources must convert to Vec; future callers with non-Vec collections incur unnecessary friction. Change signature to `pub fn synthesize(verified: impl IntoIterator<Item = VerifiedFinding>, tally: &FleetTally, now: &str) -> ReviewReport`. Collect to Vec at function start: `let verified = verified.into_iter().collect::<Vec<_>>();` to support the existing `.len()` call on line 156.

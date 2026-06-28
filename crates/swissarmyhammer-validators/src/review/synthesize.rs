@@ -114,7 +114,16 @@ pub struct ReviewReport {
 /// kept no findings — the resolved scope was empty — the report states
 /// "Nothing in scope to review." so an empty scope cannot be mistaken for a
 /// clean review either.
-pub fn synthesize(verified: Vec<VerifiedFinding>, tally: &FleetTally, now: &str) -> ReviewReport {
+///
+/// `verified` is any iterable of [`VerifiedFinding`]s (a `Vec` being the common
+/// caller) — it is collected once up front so a caller need not materialize a
+/// `Vec` just to hand it over.
+pub fn synthesize(
+    verified: impl IntoIterator<Item = VerifiedFinding>,
+    tally: &FleetTally,
+    now: &str,
+) -> ReviewReport {
+    let verified = verified.into_iter().collect::<Vec<_>>();
     let counts_confirmed = verified.iter().filter(|v| v.confirmed).count();
     let counts_refuted = verified.len() - counts_confirmed;
 
@@ -307,7 +316,7 @@ pub async fn run_review(
 
         // Fan out this batch: one shared prime over its files, forked per
         // validator. The outcome carries the tally and the batch's prime pin.
-        let fleet = run_fleet(batch, loader, pool, fleet_config).await;
+        let fleet = run_fleet(batch, loader, pool).await;
         attempted += fleet.attempted;
         failed += fleet.failed;
         let FleetOutcome {

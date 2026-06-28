@@ -178,6 +178,13 @@ impl std::fmt::Debug for FleetOutcome {
 /// A validator in the work-list with no matching RuleSet in the loader is logged
 /// and skipped rather than rendered with empty instructions.
 ///
+/// `work` is one already content-budgeted batch: the size policy
+/// ([`FleetConfig::batch_size`]) is applied upstream by
+/// [`run_review`](crate::review::run_review), which splits the work-list into
+/// batches ([`batch_work_list`](crate::review::scope::batch_work_list)) and calls
+/// `run_fleet` once per batch. So `run_fleet` itself takes no config — it just
+/// fans the batch it is given out across the pool.
+///
 /// The returned findings are ordered by validator (work-list order). Alongside
 /// them, the returned [`FleetOutcome`] carries the task tally — how many tasks
 /// were attempted and how many failed — so a saturated run (most tasks rejected)
@@ -189,7 +196,6 @@ pub async fn run_fleet(
     work: &WorkList,
     loader: &ValidatorLoader,
     pool: &AgentPool,
-    _config: FleetConfig,
 ) -> FleetOutcome {
     // Plan the fan-out BEFORE priming so an empty plan (no matching ruleset)
     // skips the prime entirely — an empty run never prompts the agent.
@@ -611,61 +617,113 @@ async fn collect_forked_task(
 ) -> Result<Vec<Finding>, ()> {
     let name = validator.validator_name.as_str();
     match delivered {
-        Ok(Ok(turn)) => {
-            let reuse = classify_reuse(turn.fork, turn.cache_usage);
-            tracing::info!(
-                validator = %name,
-                files = ?files,
-                session = %turn.session_id,
-                reuse = reuse.label(),
-                reused_tokens = ?reuse.reused_tokens(),
-                cache_read_input_tokens = ?reuse.cache_read(),
-                cache_creation_input_tokens = ?reuse.cache_created(),
-                "fleet task prefix reuse"
-            );
-            if matches!(reuse, PrefixReuse::Cold) {
-                tracing::warn!(
-                    validator = %name,
-                    files = ?files,
-                    session = %turn.session_id,
-                    "fleet task fork was degraded (no warm prefix reuse); proceeding cold"
-                );
-            }
-            let findings = parse_task_response(&turn.content, name, files)?;
-            Ok(rescan_for_completeness(pool, &turn.session_id, name, files, findings).await)
-        }
+        Ok(Ok(turn)) => handle_fork_success(turn, name, files, pool).await,
         Ok(Err(PoolError::ForkFailed {
             parent_session_id,
             message,
         })) => {
-            tracing::warn!(
-                validator = %name,
-                files = ?files,
-                parent = %parent_session_id,
-                error = %message,
-                "fleet task fork failed; falling back to a monolithic fresh-session prompt"
-            );
-            let prompt = render_fleet_prompt(change_purpose, validator, ruleset);
-            collect_task(pool.submit(prompt).await, name, files)
+            handle_fork_failed(
+                parent_session_id,
+                message,
+                change_purpose,
+                validator,
+                ruleset,
+                files,
+                pool,
+            )
+            .await
         }
-        Ok(Err(err)) => {
-            tracing::warn!(
-                validator = %name,
-                files = ?files,
-                error = %err,
-                "fleet task failed; yielding zero findings for this validator"
-            );
-            Err(())
-        }
-        Err(_) => {
-            tracing::warn!(
-                validator = %name,
-                files = ?files,
-                "fleet task result was dropped before delivery; yielding zero findings"
-            );
-            Err(())
-        }
+        Ok(Err(err)) => handle_pool_error(err, name, files),
+        Err(_) => handle_delivery_error(name, files),
     }
+}
+
+/// The warm/degraded fork-success arm of [`collect_forked_task`]: log the prefix
+/// reuse, parse the delivered turn exactly like the monolithic path, then run the
+/// bounded within-file completeness re-scan on the result.
+///
+/// A turn whose fork ran cold (no warm prefix reuse) is logged as degraded but
+/// still parsed — correctness never depends on the cache hit. Returns `Err(())`
+/// only when the response does not parse (propagated from [`parse_task_response`]).
+async fn handle_fork_success(
+    turn: SessionTurn,
+    name: &str,
+    files: &[String],
+    pool: &AgentPool,
+) -> Result<Vec<Finding>, ()> {
+    let reuse = classify_reuse(turn.fork, turn.cache_usage);
+    tracing::info!(
+        validator = %name,
+        files = ?files,
+        session = %turn.session_id,
+        reuse = reuse.label(),
+        reused_tokens = ?reuse.reused_tokens(),
+        cache_read_input_tokens = ?reuse.cache_read(),
+        cache_creation_input_tokens = ?reuse.cache_created(),
+        "fleet task prefix reuse"
+    );
+    if matches!(reuse, PrefixReuse::Cold) {
+        tracing::warn!(
+            validator = %name,
+            files = ?files,
+            session = %turn.session_id,
+            "fleet task fork was degraded (no warm prefix reuse); proceeding cold"
+        );
+    }
+    let findings = parse_task_response(&turn.content, name, files)?;
+    Ok(rescan_for_completeness(pool, &turn.session_id, name, files, findings).await)
+}
+
+/// The fork-failed arm of [`collect_forked_task`]: the `session/fork` call failed,
+/// so the validator never ran on the primed prefix. Fall back to a monolithic
+/// fresh-session prompt for the validator — degraded (cold, no shared prime) but
+/// correct; a fork failure must never lose a task.
+async fn handle_fork_failed(
+    parent_session_id: String,
+    message: String,
+    change_purpose: &str,
+    validator: &ValidatorWork,
+    ruleset: &RuleSet,
+    files: &[String],
+    pool: &AgentPool,
+) -> Result<Vec<Finding>, ()> {
+    let name = validator.validator_name.as_str();
+    tracing::warn!(
+        validator = %name,
+        files = ?files,
+        parent = %parent_session_id,
+        error = %message,
+        "fleet task fork failed; falling back to a monolithic fresh-session prompt"
+    );
+    let prompt = render_fleet_prompt(change_purpose, validator, ruleset);
+    collect_task(pool.submit(prompt).await, name, files)
+}
+
+/// The pool-error arm of [`collect_forked_task`]: the task failed for any reason
+/// other than a fork failure (idle/ceiling abandonment, an extension failure, or
+/// an agent error). Logged and degraded to zero findings — one bad task never
+/// aborts the rest — returning `Err(())` so the caller tallies it as failed rather
+/// than conflating it with a clean validator.
+fn handle_pool_error(err: PoolError, name: &str, files: &[String]) -> Result<Vec<Finding>, ()> {
+    tracing::warn!(
+        validator = %name,
+        files = ?files,
+        error = %err,
+        "fleet task failed; yielding zero findings for this validator"
+    );
+    Err(())
+}
+
+/// The dropped-delivery arm of [`collect_forked_task`]: the result channel closed
+/// before any turn was delivered. Logged and degraded to zero findings with
+/// `Err(())`, exactly like [`handle_pool_error`].
+fn handle_delivery_error(name: &str, files: &[String]) -> Result<Vec<Finding>, ()> {
+    tracing::warn!(
+        validator = %name,
+        files = ?files,
+        "fleet task result was dropped before delivery; yielding zero findings"
+    );
+    Err(())
 }
 
 /// Run one bounded within-file completeness re-scan and merge any additional
@@ -1273,7 +1331,7 @@ mod tests {
         loader: &ValidatorLoader,
         pool: &AgentPool,
     ) -> FleetOutcome {
-        let outcome = run_fleet(work, loader, pool, FleetConfig::default()).await;
+        let outcome = run_fleet(work, loader, pool).await;
         if let Some(guard) = outcome.prime {
             unpin_prefix_session(guard).await;
         }
@@ -1668,9 +1726,7 @@ mod tests {
         let agent_probe = Arc::clone(&agent);
 
         let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig::default())
-                .await
-                .findings
+            run_fleet(&work, &loader, &pool).await.findings
         })
         .await;
 
@@ -1755,9 +1811,7 @@ mod tests {
         ]);
 
         let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig::default())
-                .await
-                .findings
+            run_fleet(&work, &loader, &pool).await.findings
         })
         .await;
 
@@ -1818,9 +1872,7 @@ mod tests {
         let probe = Arc::clone(&agent);
 
         let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig::default())
-                .await
-                .findings
+            run_fleet(&work, &loader, &pool).await.findings
         })
         .await;
 
@@ -1882,7 +1934,7 @@ mod tests {
         let agent_probe = Arc::clone(&agent);
 
         let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig::default()).await
+            run_fleet(&work, &loader, &pool).await
         })
         .await;
 
@@ -1947,7 +1999,7 @@ mod tests {
 
         let agent = forking_agent(vec![]);
         let _findings = with_pool(agent, PoolConfig::remote(1), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig::default()).await
+            run_fleet(&work, &loader, &pool).await
         })
         .await;
 
@@ -2005,7 +2057,7 @@ mod tests {
         // Drive the prime lifecycle the way `run_review` does: run the fleet,
         // then release the returned shared-prime guard once the run drains.
         let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            let outcome = run_fleet(&work, &loader, &pool, FleetConfig::default()).await;
+            let outcome = run_fleet(&work, &loader, &pool).await;
             if let Some(guard) = outcome.prime {
                 unpin_prefix_session(guard).await;
             }
@@ -2432,9 +2484,7 @@ mod tests {
         let agent_probe = Arc::clone(&agent);
 
         with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            let fanout = tokio::spawn(async move {
-                run_fleet(&work, &loader, &pool, FleetConfig::default()).await
-            });
+            let fanout = tokio::spawn(async move { run_fleet(&work, &loader, &pool).await });
 
             // Wait until the prefix is pinned and the wedged validator fork is in
             // flight — the run is now mid-collect.
@@ -2568,7 +2618,7 @@ mod tests {
         let agent_probe = Arc::clone(&agent);
 
         let outcome = with_pool(agent, PoolConfig::remote(1), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig::default()).await
+            run_fleet(&work, &loader, &pool).await
         })
         .await;
 
