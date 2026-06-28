@@ -189,7 +189,22 @@ async function renderTagsEmptyGrid(viewId: string) {
 describe("GridEmptyState", () => {
   beforeEach(() => {
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation(async (): Promise<unknown> => undefined);
+    // Production's right-click flow fetches commands via the `command` MCP
+    // tool's `list command` op (callCommandTool(LIST_COMMAND_OP, …) →
+    // invoke("command_tool_call", { op: "list command", … })) and expects a
+    // `{ commands }` envelope — it no longer reads the `useCommandList` hook.
+    // Serve the rows tests publish via `mockRegistry` so openContextMenu's
+    // filter admits them for the `view:<id>` chain and pops the menu.
+    mockInvoke.mockImplementation(
+      async (cmd: string, args?: unknown): Promise<unknown> => {
+        if (
+          cmd === "command_tool_call" &&
+          (args as { op?: string })?.op === "list command"
+        )
+          return { commands: mockRegistry };
+        return undefined;
+      },
+    );
     mockRegistry = [];
     // Reset the active-perspective mock between tests so the filter-active
     // case in one test doesn't leak into the no-filter default of the next.

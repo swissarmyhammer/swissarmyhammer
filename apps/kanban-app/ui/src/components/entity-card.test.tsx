@@ -88,6 +88,25 @@ const mockInvoke = vi.fn((...args: any[]) => {
       },
     ]);
   if (args[0] === "show_context_menu") return Promise.resolve();
+  // Production right-click flow fetches commands via the `command` MCP tool's
+  // `list command` op (callCommandTool(LIST_COMMAND_OP, …) →
+  // invoke("command_tool_call", { op: "list command", … })). Return an
+  // `entity:task`-scoped `app.inspect` so openContextMenu's filter admits it
+  // for the `task:task-1` chain and pops the menu.
+  if (
+    args[0] === "command_tool_call" &&
+    (args[1] as { op?: string })?.op === "list command"
+  )
+    return Promise.resolve({
+      commands: [
+        {
+          id: "app.inspect",
+          name: "Inspect task",
+          context_menu: true,
+          scope: ["entity:task"],
+        },
+      ],
+    });
   return Promise.resolve("ok");
 });
 

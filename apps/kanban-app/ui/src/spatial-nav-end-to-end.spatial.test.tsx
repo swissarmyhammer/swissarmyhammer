@@ -1279,34 +1279,39 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   });
 
   // =========================================================================
-  // Family 5 — Enter activates / F2 renames on a focused perspective tab
+  // Family 5 — Enter activates an inactive tab / F2 renames the focused tab
   //
-  // Pins `01KTYQY0ZB62KHN6BPK3FBMBD7`: Enter on a focused tab is the
-  // primary action — it ACTIVATES the perspective (the tab's positional
-  // `nav.drillIn` shadow dispatches `perspective.switch`); F2 is the
-  // deliberate rename gesture that mounts the inline editor.
+  // Pins `01KV0MBDBW06NRXCWVZBJ0445S` (refines `01KTYQY0ZB62KHN6BPK3FBMBD7`):
+  // Enter follows the tab/drill idiom — on a focused INACTIVE tab it
+  // ACTIVATES the perspective (the tab's positional `nav.drillIn` shadow
+  // dispatches `perspective.switch` with that tab's id, no rename editor);
+  // on the ALREADY-ACTIVE tab Enter drills in (arms rename), which is
+  // covered by the dedicated perspective-tab-bar.activate-and-rename suite.
+  // F2 is the deliberate rename gesture that mounts the inline editor.
   // =========================================================================
 
-  describe("Family 5 — Enter activates / F2 renames on focused perspective tab", () => {
-    it("Enter on the focused active perspective tab dispatches perspective.switch (no rename editor)", async () => {
+  describe("Family 5 — Enter activates an inactive tab / F2 renames focused tab", () => {
+    it("Enter on a focused inactive perspective tab dispatches perspective.switch (no rename editor)", async () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
+      // `default` is the active perspective; the `secondary` tab is the
+      // inactive one whose Enter must ACTIVATE it via the drill shadow.
       const tabKey = harness.getRegisteredFqBySegment(
-        "perspective_tab:default",
+        "perspective_tab:secondary",
       );
       expect(tabKey).not.toBeNull();
 
       await harness.fireFocusChanged({
         next_fq: tabKey!,
-        next_segment: asSegment("perspective_tab:default"),
+        next_segment: asSegment("perspective_tab:secondary"),
       });
       await flushAppMount();
 
-      // Confirm focus landed on the active tab.
+      // Confirm focus landed on the inactive tab.
       await waitFor(() => {
         const tab = container.querySelector(
-          "[data-segment='perspective_tab:default'][data-focused='true']",
+          "[data-segment='perspective_tab:secondary'][data-focused='true']",
         );
         expect(tab).not.toBeNull();
       });
@@ -1321,12 +1326,12 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         const switchCalls = dispatchCallsFor("perspective.switch");
         expect(
           switchCalls.length,
-          "Enter on a focused tab must dispatch perspective.switch",
+          "Enter on a focused inactive tab must dispatch perspective.switch",
         ).toBeGreaterThan(0);
         const targetsTab = switchCalls.some(
           (c) =>
             (c.args as { perspective_id?: unknown })?.perspective_id ===
-            "default",
+            "secondary",
         );
         expect(
           targetsTab,
@@ -1334,12 +1339,12 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         ).toBe(true);
       });
 
-      // Enter no longer arms rename.
+      // Activating (not drilling into) the tab does not arm rename.
       expect(
         container.querySelector(
-          "[data-segment='perspective_tab:default'] .cm-editor",
+          "[data-segment='perspective_tab:secondary'] .cm-editor",
         ),
-        "Enter must NOT mount the inline rename editor",
+        "Enter on an inactive tab must NOT mount the inline rename editor",
       ).toBeNull();
 
       unmount();

@@ -129,6 +129,20 @@ function mockListCommands(commands: ResolvedCommand[]) {
     context_menu: c.context_menu,
     scope: ["entity:tag"],
   }));
+  // Production's right-click flow fetches commands via the `command` MCP tool's
+  // `list command` op (callCommandTool(LIST_COMMAND_OP, …) →
+  // invoke("command_tool_call", { op: "list command", … })) and expects a
+  // `{ commands }` envelope — it no longer reads the `useCommandList` hook.
+  // Serve the same rows so openContextMenu's filter admits them for the
+  // `tag:tag-1` chain and pops the menu.
+  mockInvoke.mockImplementation((...args: unknown[]): Promise<unknown> => {
+    if (
+      args[0] === "command_tool_call" &&
+      (args[1] as { op?: string })?.op === "list command"
+    )
+      return Promise.resolve({ commands: mockRegistry });
+    return Promise.resolve(undefined);
+  });
 }
 
 // ---------------------------------------------------------------------------
