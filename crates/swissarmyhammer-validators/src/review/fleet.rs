@@ -1162,6 +1162,11 @@ mod tests {
     /// it keeps the fixtures from sprinkling an unexplained literal.
     const TEST_FINDING_LINE: u32 = 42;
 
+    /// The 1-based line the shared `file_work` fixture's `duplicates` probe row
+    /// cites. Like [`TEST_FINDING_LINE`] the exact value is immaterial; naming it
+    /// keeps the hidden fixture constant out of the probe row and its assertions.
+    const TEST_PROBE_LINE: u32 = 88;
+
     /// A RuleSet whose mandate (description) and rule bodies are distinctive so
     /// the rendered prompt can be asserted against them verbatim.
     fn ruleset(name: &str, mandate: &str, rules: &[(&str, &str)]) -> RuleSet {
@@ -1234,7 +1239,7 @@ mod tests {
                 rows: vec![ProbeRow {
                     file_path: dup_at.to_string(),
                     symbol: Some(symbol.to_string()),
-                    line: Some(88),
+                    line: Some(TEST_PROBE_LINE),
                     similarity: Some(0.94),
                     detail: None,
                 }],
@@ -1432,7 +1437,10 @@ mod tests {
             prompt.contains("probe `duplicates`"),
             "probe evidence must be rendered: {prompt}"
         );
-        assert!(prompt.contains("src/dup_of_a.rs:88"), "{prompt}");
+        assert!(
+            prompt.contains(&format!("src/dup_of_a.rs:{TEST_PROBE_LINE}")),
+            "{prompt}"
+        );
         assert!(prompt.contains("@ 0.94"), "{prompt}");
     }
 
@@ -1794,14 +1802,33 @@ mod tests {
             )],
         };
 
-        // The agent reports FOUR instances of the one rule across the whole file
-        // in a single reply; its completeness re-scan then finds nothing more.
-        let first_pass = findings_array_json(&[
-            ("src/a.rs", 10, "no-magic", "magic number 7"),
-            ("src/a.rs", 22, "no-magic", "magic number 13"),
-            ("src/a.rs", 41, "no-magic", "magic number 99"),
-            ("src/a.rs", 88, "no-magic", "magic number 256"),
-        ]);
+        // The agent reports several instances of the one rule across the whole
+        // file in a single reply; its completeness re-scan then finds nothing
+        // more. Each instance sits on its own line derived from TEST_FINDING_LINE
+        // so the findings are distinct file:line instances, not a shared-line
+        // collapse — the exact lines are immaterial.
+        let instances = [
+            ("src/a.rs", TEST_FINDING_LINE, "no-magic", "magic number 7"),
+            (
+                "src/a.rs",
+                TEST_FINDING_LINE + 1,
+                "no-magic",
+                "magic number 13",
+            ),
+            (
+                "src/a.rs",
+                TEST_FINDING_LINE + 2,
+                "no-magic",
+                "magic number 99",
+            ),
+            (
+                "src/a.rs",
+                TEST_FINDING_LINE + 3,
+                "no-magic",
+                "magic number 256",
+            ),
+        ];
+        let first_pass = findings_array_json(&instances);
         let agent = forking_agent(vec![
             rescan_finds_nothing(),
             (
@@ -1821,8 +1848,8 @@ mod tests {
             .collect();
         assert_eq!(
             magic.len(),
-            4,
-            "all four instances of the one rule must report on the first pass, \
+            instances.len(),
+            "all instances of the one rule must report on the first pass, \
              not dribble one per round: {findings:#?}"
         );
         assert!(
@@ -1857,10 +1884,21 @@ mod tests {
         // missed. The re-scan entry is keyed on the re-scan header and ordered
         // first so it wins on the re-scan fork's context (which also inherits
         // the validator header) and never on the first-pass prompt.
-        let first_pass = findings_array_json(&[("src/a.rs", 10, "no-magic", "magic number 7")]);
+        let first_pass =
+            findings_array_json(&[("src/a.rs", TEST_FINDING_LINE, "no-magic", "magic number 7")]);
         let rescan = findings_array_json(&[
-            ("src/a.rs", 22, "no-magic", "magic number 13"),
-            ("src/a.rs", 41, "no-magic", "magic number 99"),
+            (
+                "src/a.rs",
+                TEST_FINDING_LINE + 1,
+                "no-magic",
+                "magic number 13",
+            ),
+            (
+                "src/a.rs",
+                TEST_FINDING_LINE + 2,
+                "no-magic",
+                "magic number 99",
+            ),
         ]);
         let agent = forking_agent(vec![
             (RESCAN_NEEDLE.to_string(), ScriptedReply::Text(rescan)),

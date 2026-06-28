@@ -394,6 +394,12 @@ mod tests {
     /// those stay readable.
     const NOW: &str = "2026-04-11 13:08";
 
+    /// How many fan-out tasks the tally fixtures pretend a run attempted. The
+    /// exact count is immaterial — these tests assert on the attempted/failed
+    /// relationship (all succeeded, or all failed), not the magnitude — so naming
+    /// it keeps the `FleetTally::new` arguments from reading as bare literals.
+    const ATTEMPTED_TASKS: usize = 8;
+
     /// A confirmed finding builder with the load-bearing fields set.
     fn confirmed(
         file: &str,
@@ -442,12 +448,20 @@ mod tests {
         // No findings (every task degraded to zero) but a non-zero failed tally —
         // the report must visibly flag the incomplete run rather than rendering
         // byte-identically to a clean diff, and surface the tally in its counts.
-        let report = synthesize(vec![], &FleetTally::new(60, 60), NOW);
+        // Every attempted task failed (failed == attempted), so the run is fully
+        // incomplete — the magnitude is immaterial.
+        let report = synthesize(
+            vec![],
+            &FleetTally::new(ATTEMPTED_TASKS, ATTEMPTED_TASKS),
+            NOW,
+        );
 
-        assert_eq!(report.counts.tasks_attempted, 60);
-        assert_eq!(report.counts.tasks_failed, 60);
+        assert_eq!(report.counts.tasks_attempted, ATTEMPTED_TASKS);
+        assert_eq!(report.counts.tasks_failed, ATTEMPTED_TASKS);
         assert!(
-            report.markdown.contains("60/60 review tasks failed"),
+            report.markdown.contains(&format!(
+                "{ATTEMPTED_TASKS}/{ATTEMPTED_TASKS} review tasks failed"
+            )),
             "the incomplete run must be flagged: {}",
             report.markdown
         );
@@ -462,10 +476,10 @@ mod tests {
     fn a_fully_successful_tally_adds_no_failure_flag() {
         // Every task succeeded — no warning line, byte-identical to today's clean
         // report, and a zero failed tally.
-        let report = synthesize(vec![], &FleetTally::new(8, 0), NOW);
+        let report = synthesize(vec![], &FleetTally::new(ATTEMPTED_TASKS, 0), NOW);
 
         assert_eq!(report.markdown, "## Review Findings (2026-04-11 13:08)\n");
-        assert_eq!(report.counts.tasks_attempted, 8);
+        assert_eq!(report.counts.tasks_attempted, ATTEMPTED_TASKS);
         assert_eq!(report.counts.tasks_failed, 0);
     }
 
@@ -506,7 +520,7 @@ mod tests {
     fn an_attempted_clean_run_carries_no_nothing_in_scope_marker() {
         // Tasks ran and found nothing — that is a clean review, not an empty
         // scope, so the marker must not appear.
-        let report = synthesize(vec![], &FleetTally::new(8, 0), NOW);
+        let report = synthesize(vec![], &FleetTally::new(ATTEMPTED_TASKS, 0), NOW);
         assert!(
             !report.markdown.contains("Nothing in scope"),
             "a clean attempted run is not an empty scope: {:?}",
