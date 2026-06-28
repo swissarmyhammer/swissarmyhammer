@@ -112,8 +112,16 @@ comments:
 
     GREEN: cargo fmt clean; cargo nextest -p swissarmyhammer-validators 290/290 pass; cargo clippy -p swissarmyhammer-validators -p swissarmyhammer-tools --all-targets -- -D warnings exit 0, no warnings. Left in doing.
   timestamp: 2026-06-28T01:28:26.251815+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01kw5y1ne9t9f983wyy08czmmh
+  text: Iter 4 implement+test green (validators 290/290, clippy+fmt clean, double-check PASS). Extracted 0.94 → const TEST_SIMILARITY (f32) at all 3 test sites; grep-proved no other same-class literal remains in either test module (synthesize test module has zero float literals). Flipped the 2 newest findings to [x] — all sections now fully checked. Checkpoint fdf4746f. Re-reviewing HEAD~1..HEAD — expecting clean → done.
+  timestamp: 2026-06-28T01:38:32.009355+00:00
+- actor: claude-code
+  id: 01kw5y91xztajcw0zje7k2q4m1
+  text: 'DONE. Iter 4 review clean (0 findings, 1 refuted, 16 attempted 0 failed); all 7 findings across 3 sections checked → moved to done. Shipped (local commits, NOT pushed): 7449c0c9 (whole-file framing + completeness re-scan), 5feebcd6 (refactor: drop unused param, extract fork handlers, generic synthesize), eb1d1762 (name line-number test literals), fdf4746f (name 0.94 similarity literal). Both levers landed. NOTE for the record: the loop reproduced the dribble live in its own test code — magic-number findings surfaced over 3 successive rounds (line 88 → 0.94) because each fix touched the file and HEAD~1..HEAD re-scoped it, and the agent''s "whole-module sweep" twice missed a sibling literal. That''s empirical support for lever 2 (engine-side completeness re-scan) and shows agent sweeps alone are unreliable. Real-model verification of the new framing on production code is still worthwhile once sah is rebuilt+reloaded (these were local-backend reviews).'
+  timestamp: 2026-06-28T01:42:34.175830+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffec80
 project: local-review
 title: Review find-stage must sweep the whole file, not the diff (kill finding-dribble)
 ---
