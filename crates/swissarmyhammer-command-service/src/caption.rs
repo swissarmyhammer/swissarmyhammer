@@ -292,8 +292,10 @@ mod tests {
         // An explicit target wins verbatim and is NOT filtered by the
         // entity-context prefix list, so arbitrary entity types (context-menu
         // semantics) keep their display-cased captions.
-        let mut ctx = CommandContext::default();
-        ctx.target = Some("saved_search:01S".to_string());
+        let ctx = CommandContext {
+            target: Some("saved_search:01S".to_string()),
+            ..Default::default()
+        };
         assert_eq!(
             render_caption("Open {{entity.type}}", &ctx),
             "Open Saved Search"
