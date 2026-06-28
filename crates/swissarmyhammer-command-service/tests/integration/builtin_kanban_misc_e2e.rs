@@ -551,24 +551,22 @@ async fn kanban_misc_commands_plugin_registers_and_executes() {
     // single `update column { order: target_index }` leaves two columns sharing
     // the moved column's old/new neighbors' orders.
     //
-    // Seed a fourth column `review` at order 3. Board: todo=0, doing=1, done=2,
-    // review=3.
-    kanban
-        .call(json!({ "op": "add column", "id": "review", "name": "Review", "order": 3 }))
-        .await;
+    // The default board already has FOUR columns — todo=0, doing=1, review=2,
+    // done=3 (see `default_column_entities`) — so no seeding is needed; the
+    // reorder below moves a column to a non-trivial middle index.
     let before = kanban.call(json!({ "op": "list columns" })).await;
     assert_eq!(
         (
             column_order(&before, "todo"),
             column_order(&before, "doing"),
-            column_order(&before, "done"),
             column_order(&before, "review"),
+            column_order(&before, "done"),
         ),
         (Some(0), Some(1), Some(2), Some(3)),
-        "the seeded four columns should start at orders 0,1,2,3"
+        "the default board's four columns start at todo=0, doing=1, review=2, done=3"
     );
 
-    // Move `done` (currently order 2) to index 1. Expected final sequence:
+    // Move `done` (currently order 3) to index 1. Expected final sequence:
     // todo=0, done=1, doing=2, review=3.
     let reorder = call_command(
         &service,

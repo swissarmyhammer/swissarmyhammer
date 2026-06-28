@@ -34,24 +34,28 @@ async fn health_check() -> axum::response::Json<serde_json::Value> {
     }))
 }
 
-/// Thread-safe file writer with immediate flush and sync for reliable debugging logs
+/// Thread-safe file writer that syncs to disk on `flush`, for reliable debugging logs
 ///
-/// This writer ensures that every write operation is immediately flushed to the OS buffer
-/// and synced to disk, providing reliable log output even if the process crashes unexpectedly.
-/// This is particularly important for debugging MCP communication issues.
+/// Each write delivers its bytes to the OS with a single `write` syscall — no
+/// userspace buffering, so the data is immediately visible to other readers of the
+/// file. The durability barrier (`File::sync_all`, an `fsync`/`F_FULLFSYNC`) is
+/// performed on `flush`, not on every individual write.
 ///
 /// # Thread Safety
 ///
-/// Multiple threads can safely write to the same `FileWriterGuard` instance. Each write
-/// operation acquires the mutex, writes the data, flushes to OS buffers, and syncs to disk
-/// before releasing the lock.
+/// Multiple threads can safely write to the same `FileWriterGuard` instance. Each
+/// operation acquires the mutex for the duration of its `write` (or `flush`) and
+/// releases it before returning.
 ///
 /// # Performance Considerations
 ///
-/// The immediate flush/sync strategy prioritizes reliability over performance. Each write
-/// operation results in a system call, which may impact performance for high-frequency logging.
-/// However, this trade-off is acceptable for MCP debugging scenarios where log reliability
-/// is more important than maximum throughput.
+/// Syncing on *every* write is pathological under high log volume: a single
+/// `F_FULLFSYNC` costs milliseconds, so a subscriber installed at a verbose level
+/// (this writer backs the MCP server's global tracing subscriber) would turn a burst
+/// of log events — e.g. the thousands emitted while transpiling a plugin's
+/// TypeScript — into thousands of serialized disk syncs, effectively wedging the
+/// emitting thread. Confining the sync to `flush` keeps log output durable at flush
+/// boundaries without making the logging hot path fsync-bound.
 ///
 /// # Error Handling
 ///
@@ -82,7 +86,8 @@ impl FileWriterGuard {
     /// * `file` - `Arc<Mutex<File>>` for thread-safe access to the underlying file
     ///
     /// # Returns
-    /// A new `FileWriterGuard` instance that will ensure immediate flushing for all writes
+    /// A new `FileWriterGuard` instance that writes to the file directly and syncs
+    /// to disk on `flush`
     pub fn new(file: Arc<Mutex<std::fs::File>>) -> Self {
         Self { file }
     }
@@ -91,10 +96,12 @@ impl FileWriterGuard {
 impl std::io::Write for FileWriterGuard {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut file = self.file.lock().expect("FileWriterGuard mutex was poisoned - this indicates a panic occurred while another thread held the lock");
-        let result = file.write(buf)?;
-        file.flush()?;
-        file.sync_all()?; // Ensure data is actually written to disk for debugging reliability
-        Ok(result)
+        // Durability (sync_all) is deferred to `flush`. Calling sync_all on every
+        // write turns a burst of log events into thousands of serialized fsyncs
+        // (F_FULLFSYNC), which wedges the emitting thread under high log volume —
+        // e.g. while transpiling a plugin's TypeScript through a verbose global
+        // subscriber backed by this writer.
+        file.write(buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
