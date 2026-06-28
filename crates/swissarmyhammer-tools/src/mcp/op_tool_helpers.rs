@@ -39,6 +39,18 @@ pub(crate) fn string_array_arg(
         .unwrap_or_default()
 }
 
+/// Read an optional non-negative integer argument as a `usize`.
+///
+/// Returns `None` when the key is absent or is not a JSON unsigned integer (a
+/// negative or fractional number is treated as absent, deferring to the caller's
+/// default).
+pub(crate) fn usize_arg(
+    args: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<usize> {
+    args.get(key).and_then(|v| v.as_u64()).map(|n| n as usize)
+}
+
 /// Serialize a value into a JSON-text [`CallToolResult`].
 ///
 /// The value is pretty-printed; a serialization failure (effectively
@@ -80,6 +92,23 @@ mod tests {
         // Non-array and absent both yield empty.
         assert!(string_array_arg(&args, "scalar").is_empty());
         assert!(string_array_arg(&args, "missing").is_empty());
+    }
+
+    #[test]
+    fn usize_arg_reads_unsigned_ints_only() {
+        let args = map(serde_json::json!({
+            "n": 32768,
+            "neg": -1,
+            "frac": 1.5,
+            "str": "8"
+        }));
+        assert_eq!(usize_arg(&args, "n"), Some(32768));
+        // Absent, negative, fractional, and string are all treated as absent so
+        // the caller falls back to its default.
+        assert_eq!(usize_arg(&args, "missing"), None);
+        assert_eq!(usize_arg(&args, "neg"), None);
+        assert_eq!(usize_arg(&args, "frac"), None);
+        assert_eq!(usize_arg(&args, "str"), None);
     }
 
     #[test]

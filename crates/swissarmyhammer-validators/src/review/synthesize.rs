@@ -35,7 +35,7 @@ use rusqlite::Connection;
 
 use crate::error::AvpError;
 use crate::review::fleet::{run_fleet, FleetConfig, FleetOutcome};
-use crate::review::scope::{scope_review, Scope, WorkList};
+use crate::review::scope::{batch_work_list, scope_review, Scope, WorkList};
 use crate::review::types::{Finding, VerifiedFinding};
 use crate::review::verify::{verify_findings, Candidate};
 use crate::validators::{AgentPool, ValidatorLoader};
@@ -237,27 +237,33 @@ fn sentence(text: &str) -> String {
 ///
 /// 1. [`scope_review`] — resolve `scope` into the per-validator [`WorkList`]
 ///    (deterministic, LLM-free).
-/// 2. [`run_fleet`] — fan every `(validator, file)` out across the shared `pool`
-///    and collect the candidate [`Finding`]s. Awaiting it drains every fan-out
-///    task.
-/// 3. [`verify_findings`] — pair each candidate back with its file's ground-truth
-///    context ([`build_candidates`]) and submit it to the **same** `pool` for the
-///    adversarial refute pass. Awaiting it drains every verify task.
-/// 4. [`synthesize`] — turn the surviving [`VerifiedFinding`]s into the dated,
-///    deduped, ordered [`ReviewReport`].
+/// 2. [`batch_work_list`] — split the work-list into content-budgeted batches at
+///    whole-file granularity ([`FleetConfig::batch_size`]) so no single shared
+///    prime overflows the model's context. A small diff is one batch; a large one
+///    is several. A single file larger than `batch_size` is a hard error here.
+/// 3. For **each batch**, independently: [`run_fleet`] fans every validator out
+///    across the shared `pool` over that batch's files (its own shared prime,
+///    forked per validator), then [`verify_findings`] pairs each candidate back
+///    with its file's ground-truth context ([`build_candidates`]) and runs the
+///    adversarial refute pass on the **same** `pool` — forking that batch's prime
+///    while it stays pinned, then releasing the pin once the batch has drained.
+/// 4. [`synthesize`] — merge every batch's confirmed [`VerifiedFinding`]s and
+///    turn them into the dated, deduped, ordered [`ReviewReport`] (synthesis dedups
+///    by `file:line`, so cross-batch findings collapse the same as within a batch).
 ///
-/// Because steps 2 and 3 each await all the tasks they submit before returning,
-/// the moment [`verify_findings`] resolves the shared pool has fully drained —
-/// all fan-out *and* all verify work is done — so synthesis is the natural
-/// barrier and needs no separate pool-join. The engine never reads the clock:
-/// `now` is the caller-supplied, already-formatted local timestamp
-/// (`YYYY-MM-DD HH:MM`) rendered verbatim into the report header.
+/// Because each batch awaits all the tasks it submits before the next begins, the
+/// shared pool fully drains between batches and the prime pin never outlives its
+/// batch. A one-batch run (the common small diff) is byte-for-byte the old single
+/// fan-out → verify path. The engine never reads the clock: `now` is the
+/// caller-supplied, already-formatted local timestamp (`YYYY-MM-DD HH:MM`)
+/// rendered verbatim into the report header.
 ///
 /// # Errors
 ///
-/// Returns the [`AvpError`] from [`scope_review`] on git or index failure, or
-/// when a matched validator declares an unknown probe. Fan-out and verify
-/// failures never error: a failed task degrades to zero findings (fan-out) or a
+/// Returns the [`AvpError`] from [`scope_review`] on git or index failure, or when
+/// a matched validator declares an unknown probe, or from [`batch_work_list`] when
+/// a single file's inlined source exceeds `batch_size`. Fan-out and verify failures
+/// never error: a failed task degrades to zero findings (fan-out) or a
 /// refute-by-default verdict (verify), so the report is always produced.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_review(
@@ -273,47 +279,63 @@ pub async fn run_review(
     // Stage 1: scope → work-list (deterministic, LLM-free).
     let work = scope_review(scope, repo_path, loader, conn, embedder).await?;
 
-    let total_files: usize = work.validators.iter().map(|v| v.files.len()).sum();
+    // Stage 2: split the work-list into content-budgeted batches (whole-file
+    // granularity). A single file over `batch_size` is a hard error here.
+    let batches = batch_work_list(&work, fleet_config.batch_size)?;
+
     tracing::info!(
         validators = work.validators.len(),
-        files = total_files,
-        "review run: scoped work-list ready, fanning out"
+        files = work.distinct_files().count(),
+        batches = batches.len(),
+        batch_size = fleet_config.batch_size,
+        "review run: scoped work-list ready, batched, fanning out"
     );
 
-    // Stage 2: fan out across the shared pool; awaiting drains every fan-out task.
-    // The fleet outcome carries the task tally (attempted/failed) alongside the
-    // findings, plus the run's shared primed-prefix pin guard (the change + all
-    // diffs, primed once) so the verify stage can reuse the same prime.
-    let fleet = run_fleet(&work, loader, pool, fleet_config).await;
-    let tally = FleetTally::from(&fleet);
-    // Destructure so verify can fork the prime while it is still pinned, then the
-    // guard is released once verify has drained (below).
-    let FleetOutcome {
-        findings: fleet_findings,
-        prime,
-        ..
-    } = fleet;
+    // Stage 3: run the full fan-out → verify pipeline independently per batch,
+    // accumulating every batch's verified findings and summing the task tally.
+    let mut verified: Vec<VerifiedFinding> = Vec::new();
+    let mut attempted = 0usize;
+    let mut failed = 0usize;
 
-    // Stage 3: pair each candidate with its file's ground-truth context, then
-    // verify on the SAME pool — each verify task FORKS the run's shared prime
-    // (reusing the cached change + diffs) while it stays pinned. Awaiting drains
-    // every verify task. Once this returns, the shared pool has fully drained —
-    // the single barrier.
-    let candidates = build_candidates(&work, fleet_findings);
-    let prime_session = prime.as_ref().map(|g| g.session_id());
-    let outcome = verify_findings(candidates, pool, prime_session).await;
+    for (index, batch) in batches.iter().enumerate() {
+        tracing::info!(
+            batch = index + 1,
+            of = batches.len(),
+            files = batch.distinct_files().count(),
+            "review run: fanning out batch"
+        );
 
-    // The whole run (fan-out AND verify) has drained: release the shared prime's
-    // pin so the pinned cache entry does not outlive the run. A run future
-    // dropped before this point releases it from the guard's `Drop` instead.
-    if let Some(guard) = prime {
-        crate::review::fleet::unpin_prefix_session(guard).await;
+        // Fan out this batch: one shared prime over its files, forked per
+        // validator. The outcome carries the tally and the batch's prime pin.
+        let fleet = run_fleet(batch, loader, pool, fleet_config).await;
+        attempted += fleet.attempted;
+        failed += fleet.failed;
+        let FleetOutcome {
+            findings: fleet_findings,
+            prime,
+            ..
+        } = fleet;
+
+        // Verify this batch on the SAME pool — each verify task FORKS the batch's
+        // shared prime while it stays pinned. Awaiting drains every verify task.
+        let candidates = build_candidates(batch, fleet_findings);
+        let prime_session = prime.as_ref().map(|g| g.session_id());
+        let outcome = verify_findings(candidates, pool, prime_session).await;
+
+        // The batch (fan-out AND verify) has drained: release its prime pin so the
+        // pinned cache entry does not outlive the batch. A run future dropped
+        // before this point releases it from the guard's `Drop` instead.
+        if let Some(guard) = prime {
+            crate::review::fleet::unpin_prefix_session(guard).await;
+        }
+
+        verified.extend(outcome.verified);
     }
 
-    // Stage 4: synthesize the deduped, ordered, dated report. The tally
-    // rides into the report so the tool boundary can flag/fail an incomplete run;
-    // the engine itself stays a pure data barrier and never errors on it.
-    let report = synthesize(outcome.verified, &tally, now);
+    // Stage 4: synthesize the merged, deduped, ordered, dated report. The summed
+    // tally rides into the report so the tool boundary can flag/fail an incomplete
+    // run; the engine itself stays a pure data barrier and never errors on it.
+    let report = synthesize(verified, &FleetTally::new(attempted, failed), now);
 
     Ok(report)
 }
@@ -778,7 +800,6 @@ mod tests {
             semantic_diff: vec![],
             changed_symbols: vec![],
             source_slice: format!("// slice for {path}"),
-            inlined_full: true,
             probe_results: vec![],
         }
     }

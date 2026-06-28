@@ -275,6 +275,51 @@ pub(crate) fn seeded_dup_repo() -> (TestRepo, Connection, model_embedding::mock:
     (repo, conn, model_embedding::mock::MockEmbedder::new(DIM))
 }
 
+/// Like [`seeded_dup_repo`] but with TWO uncommitted changed files, each gaining
+/// its own duplicate function: `src/lib.rs` (`compute` ~ `old_compute`) and
+/// `src/other.rs` (`render` ~ `old_render`). Both files' bodies are large enough
+/// that a small `batch_size` splits the review into two batches — the fixture the
+/// content-budgeted batching tests pack against.
+pub(crate) fn seeded_two_file_dup_repo(
+) -> (TestRepo, Connection, model_embedding::mock::MockEmbedder) {
+    let repo = TestRepo::new();
+    repo.write("src/lib.rs", "fn placeholder() {}\n");
+    repo.write("src/other.rs", "fn placeholder2() {}\n");
+    repo.commit("initial");
+
+    let lib_dup = body("compute");
+    let other_dup = body("render");
+    repo.write(
+        "src/lib.rs",
+        &format!("fn placeholder() {{}}\n\n{lib_dup}\n"),
+    );
+    repo.write(
+        "src/other.rs",
+        &format!("fn placeholder2() {{}}\n\n{other_dup}\n"),
+    );
+
+    let conn = index_conn();
+    // Two ORTHOGONAL embeddings so each file duplicates only its own pair: the
+    // `lib`/`other` files must not cross-reference each other (a shared embedding
+    // makes every file a duplicate of every other, leaking one file's source into
+    // the other's probe evidence and across batch boundaries).
+    let lib_emb = dup_emb(); // unit vector on axis 0
+    let mut other_emb = vec![0.0; DIM];
+    other_emb[1] = 1.0; // unit vector on axis 1 — orthogonal to `lib_emb`
+    seed_chunk(&conn, "src/lib.rs", "compute", &lib_dup, &lib_emb);
+    seed_chunk(&conn, "src/existing.rs", "old_compute", &lib_dup, &lib_emb);
+    seed_chunk(&conn, "src/other.rs", "render", &other_dup, &other_emb);
+    seed_chunk(
+        &conn,
+        "src/existing2.rs",
+        "old_render",
+        &other_dup,
+        &other_emb,
+    );
+
+    (repo, conn, model_embedding::mock::MockEmbedder::new(DIM))
+}
+
 /// A function body long enough to clear the default `min_chunk_bytes` (100).
 pub fn body(label: &str) -> String {
     format!(

@@ -285,7 +285,7 @@ describe("Board integration — real .kanban data", () => {
   it("creates a real board with real tasks on disk", async () => {
     expect(testBoardDir).toBeTruthy();
     expect(testTasks.length).toBe(4);
-    expect(testColumns.length).toBe(3);
+    expect(testColumns.length).toBe(4);
     expect(testTaskIds.length).toBe(4);
 
     // Read back a task from disk to prove it's real
@@ -313,6 +313,7 @@ describe("Board integration — real .kanban data", () => {
     // Columns visible
     expect(text).toContain("To Do");
     expect(text).toContain("Doing");
+    expect(text).toContain("Review");
     expect(text).toContain("Done");
 
     // Task cards visible

@@ -78,15 +78,44 @@ use crate::validators::{
 };
 use agent_client_protocol_extras::SessionStateStatusResponse;
 
+/// The default review `batch_size` in **bytes** (128 KiB).
+///
+/// Cramming every changed file's full source into one shared prime overflows the
+/// review model's context on a large diff (every fan-out validator then fails
+/// uniformly), and even when it fits it dilutes attention. So a run is split into
+/// byte-budgeted batches and each batch fans out independently. This budget is a
+/// deliberate, tunable knob — not derived from the model's context window.
+///
+/// It is sized to clear the largest single source file in a typical change
+/// (~95 KB) so an ordinary commit reviews in one or a few batches instead of
+/// tripping the oversize-file error, while a genuinely large multi-file diff
+/// still splits across batches. (32 KiB — the previous default — was smaller
+/// than many real source files, so default reviews of normal commits errored.)
+pub const DEFAULT_BATCH_SIZE: usize = 128 * 1024;
+
 /// Configuration for a fan-out run.
 ///
 /// The fan-out grain is the validator and the change's files live in the run's
-/// shared prime (not a per-task suffix), so there is no longer a file-batching
-/// dimension to configure. This stays a struct rather than a unit so the
-/// [`run_fleet`] / [`run_review`](crate::review::run_review) signatures keep room
-/// for future fan-out knobs without churning every caller.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FleetConfig {}
+/// shared prime. [`batch_size`](FleetConfig::batch_size) bounds how much inlined
+/// file content one prime may carry: [`run_review`](crate::review::run_review)
+/// uses it to split the work-list into batches
+/// ([`batch_work_list`](crate::review::scope::batch_work_list)) and fan each batch
+/// out independently, so a large diff no longer overflows the prime.
+#[derive(Debug, Clone, Copy)]
+pub struct FleetConfig {
+    /// The maximum inlined file content, in bytes, one batch's shared prime may
+    /// carry. Whole files are packed greedily up to this budget; a single file
+    /// larger than it is a hard error (never split, never sliced).
+    pub batch_size: usize,
+}
+
+impl Default for FleetConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: DEFAULT_BATCH_SIZE,
+        }
+    }
+}
 
 /// The result of a fan-out run: the merged findings plus the task tally.
 ///
@@ -892,33 +921,23 @@ in one go rather than re-reviewed match by match.
 Report only real issues. If you find none, emit an empty array `[]`.
 ";
 
-/// Append one file's review block: path, the full current source (or the bounded
-/// fallback for an oversized file), the semantic diff of what changed, and the
-/// probe results rendered as evidence.
+/// Append one file's review block: path, the full current source, the semantic
+/// diff of what changed, and the probe results rendered as evidence.
 ///
-/// The changed file is handed to the model **in full** when it fits the inline
-/// budget ([`FileWork::inlined_full`]), framed explicitly as the complete current
-/// contents the model does NOT need to re-read — the read-round-trips that
-/// dominated review wall-clock came from the model re-reading a file it was only
-/// given a partial slice of. An oversized file falls back to the bounded slice
-/// (which already carries a `read_file` note from the scope stage) and is framed
-/// as a partial view.
+/// The changed file is always handed to the model **in full** — framed explicitly
+/// as the complete current contents the model does NOT need to re-read, because
+/// the read-round-trips that dominated review wall-clock came from the model
+/// re-reading a file it was only given a partial slice of. A file too large for
+/// the review `batch_size` never reaches here as a partial view: the scope stage
+/// rejects it with a hard error rather than trimming it to a slice.
 fn render_file_block(out: &mut String, file: &FileWork) {
     let _ = writeln!(out, "## File: {}\n", file.path);
 
-    if file.inlined_full {
-        out.push_str(
-            "### Full current contents\n\n\
-             This is the COMPLETE current source of the file. You do not need to read this \
-             file — it is provided here in full. Review it directly.\n\n",
-        );
-    } else {
-        out.push_str(
-            "### Source slice (partial — file too large to inline in full)\n\n\
-             This is a BOUNDED slice of an oversized file, not its complete contents. \
-             Use `read_file` on this path to see the remainder before reasoning about it.\n\n",
-        );
-    }
+    out.push_str(
+        "### Full current contents\n\n\
+         This is the COMPLETE current source of the file. You do not need to read this \
+         file — it is provided here in full. Review it directly.\n\n",
+    );
     out.push_str("```\n");
     out.push_str(file.source_slice.trim_end());
     out.push_str("\n```\n\n");
@@ -1039,7 +1058,6 @@ mod tests {
             }],
             changed_symbols: vec![symbol.to_string()],
             source_slice: format!("// slice for {path}\nfn {symbol}() {{}}"),
-            inlined_full: true,
             probe_results: vec![ProbeResult {
                 name: "duplicates".to_string(),
                 kind: ProbeKind::Fact,
@@ -1114,6 +1132,18 @@ mod tests {
             prime: None,
             ..outcome
         }
+    }
+
+    // ---- config tests ----------------------------------------------------
+
+    #[test]
+    fn default_batch_size_is_128_kib() {
+        // The default budget clears the largest single source file in a typical
+        // change (~95 KB) so an ordinary commit reviews without tripping the
+        // oversize-file error; only genuinely huge multi-file diffs still split.
+        assert_eq!(DEFAULT_BATCH_SIZE, 128 * 1024);
+        assert_eq!(DEFAULT_BATCH_SIZE, 131072);
+        assert_eq!(FleetConfig::default().batch_size, DEFAULT_BATCH_SIZE);
     }
 
     // ---- renderer tests (pure) -------------------------------------------
@@ -1321,12 +1351,11 @@ mod tests {
     /// re-reading the changed file it was already handed.
     #[test]
     fn full_inline_payload_carries_complete_source_and_no_reread_framing() {
-        // A FileWork whose source_slice is the WHOLE file (inlined_full = true),
-        // including a marker line the old bounded slice would have trimmed.
+        // A FileWork whose source_slice is the WHOLE file, including a marker line
+        // the old bounded slice would have trimmed.
         let mut file = file_work("src/a.rs", "alpha", "src/x.rs");
         file.source_slice =
             "use std::fmt;\n// distant_marker_kept_in_full\npub fn alpha() {}".to_string();
-        file.inlined_full = true;
 
         let payload = render_file_payload(std::slice::from_ref(&file));
 
@@ -1341,30 +1370,6 @@ mod tests {
             payload.to_lowercase().contains("full")
                 && payload.to_lowercase().contains("do not need to read"),
             "the block must frame the source as the full file the model need not read: {payload}"
-        );
-    }
-
-    /// An oversized (fallback) changed file's payload carries the bounded slice
-    /// and the read-the-rest note carried through from the scope stage, and does
-    /// NOT claim to be the complete file.
-    #[test]
-    fn fallback_payload_keeps_the_read_for_the_rest_note() {
-        let mut file = file_work("src/big.rs", "huge", "src/x.rs");
-        file.source_slice =
-            "// bounded slice\npub fn huge() {}\n\n// NOTE: this file is too large to inline in full; \
-the slice above is bounded. Use `read_file` on this path to see the remainder before reasoning about it."
-                .to_string();
-        file.inlined_full = false;
-
-        let payload = render_file_payload(std::slice::from_ref(&file));
-
-        assert!(
-            payload.contains("read_file"),
-            "the fallback payload must direct the model to read_file for the rest: {payload}"
-        );
-        assert!(
-            !payload.to_lowercase().contains("do not need to read"),
-            "an oversized file must NOT be framed as fully provided: {payload}"
         );
     }
 
