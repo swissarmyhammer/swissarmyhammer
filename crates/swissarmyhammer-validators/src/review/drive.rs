@@ -425,10 +425,12 @@ mod tests {
     use futures::future::BoxFuture;
     use tokio::sync::Notify;
 
+    use crate::review::fleet::FleetConfig;
     use crate::review::scope::Scope;
     use crate::review::test_support::{
         findings_json as shared_findings_json, loader_with, prompt_text, ruleset, seeded_dup_repo,
-        verdict_json, ScriptedAdapter, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
+        seeded_two_file_dup_repo, verdict_json, ScriptedAdapter, ScriptedAgent,
+        ScriptedAgentConfig, ScriptedReply,
     };
 
     /// How long a wedged pipeline may run before a test fails instead of
@@ -458,7 +460,11 @@ mod tests {
 
     /// Keep-alive interval for the live turn — a small fraction of the idle
     /// window so the streaming turn never looks stalled.
-    const KEEP_ALIVE_INTERVAL: Duration = Duration::from_millis(ABANDON_IDLE_WINDOW_MS / 16);
+    // Keep-alive cadence as a fraction of the idle window: this many keep-alives
+    // per idle window keeps the streaming turn well clear of the idle-abandon deadline.
+    const KEEP_ALIVES_PER_IDLE_WINDOW: u64 = 16;
+    const KEEP_ALIVE_INTERVAL: Duration =
+        Duration::from_millis(ABANDON_IDLE_WINDOW_MS / KEEP_ALIVES_PER_IDLE_WINDOW);
 
     // ---- scripted ACP agent (shared harness) ------------------------------
     //
@@ -576,6 +582,102 @@ mod tests {
         );
         assert_eq!(report.counts.findings, 1);
         assert_eq!(report.counts.confirmed, 1);
+    }
+
+    // ---- content-budgeted batching: a large diff fans out as several batches --
+
+    /// A diff too large for one shared prime is split into content-budgeted
+    /// batches at whole-file granularity, each batch fans out independently, and
+    /// the findings from EVERY batch are merged into the one report. This is the
+    /// fix for the production bug where a large diff overflowed the single shared
+    /// prime and every fan-out task failed uniformly (15/15).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn review_batches_a_large_diff_and_merges_findings_across_batches() {
+        let (repo, conn, embedder) = seeded_two_file_dup_repo();
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+
+        // Each changed file inlines ~180 bytes of source; a 250-byte batch_size
+        // packs one file per batch, so the two files fan out as TWO batches. The
+        // fan-out prompt for each batch is keyed on the validator header AND that
+        // batch file's unique function SIGNATURE (`pub fn compute(` / `pub fn
+        // render(`), which only ever appears in that file's own inlined source —
+        // the bare symbol names leak across batches via shared probe evidence, so
+        // a path/symbol needle would not discriminate. The verify prompt names the
+        // per-file claim; verify entries are listed first so a verify prompt never
+        // matches a fan-out entry.
+        let script: Vec<(Vec<String>, ScriptedReply)> = vec![
+            (
+                vec!["lib-dup-claim".to_string()],
+                ScriptedReply::Text(verdict_json(true, "the lib duplicate is real")),
+            ),
+            (
+                vec!["other-dup-claim".to_string()],
+                ScriptedReply::Text(verdict_json(true, "the other duplicate is real")),
+            ),
+            (
+                vec![
+                    "# Validator: deduplicate".to_string(),
+                    "pub fn compute(".to_string(),
+                ],
+                ScriptedReply::Text(shared_findings_json("src/lib.rs", 3, "r", "lib-dup-claim")),
+            ),
+            (
+                vec![
+                    "# Validator: deduplicate".to_string(),
+                    "pub fn render(".to_string(),
+                ],
+                ScriptedReply::Text(shared_findings_json(
+                    "src/other.rs",
+                    3,
+                    "r",
+                    "other-dup-claim",
+                )),
+            ),
+        ];
+
+        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
+        let agent = ScriptedAgent::with_script(
+            script,
+            ScriptedAgentConfig {
+                broadcast: Some(notify_tx),
+                bridge_to_connection: true,
+                ..ScriptedAgentConfig::default()
+            },
+        );
+        let dyn_agent = DynConnectTo::new(ScriptedAdapter(agent));
+
+        let report = run_review_over_agent(
+            dyn_agent,
+            notification_rx,
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            PoolConfig::remote(2),
+            FleetConfig { batch_size: 250 },
+            TEST_NOW,
+        )
+        .await
+        .expect("pipeline should produce a report");
+
+        // Both batches' confirmed findings are merged into the one report.
+        assert!(
+            report.markdown.contains("- [ ] `src/lib.rs:3`"),
+            "batch 1's finding must be rendered: {}",
+            report.markdown
+        );
+        assert!(
+            report.markdown.contains("- [ ] `src/other.rs:3`"),
+            "batch 2's finding must be rendered: {}",
+            report.markdown
+        );
+        assert_eq!(
+            report.counts.findings, 2,
+            "findings from both batches are merged: {}",
+            report.markdown
+        );
+        assert_eq!(report.counts.confirmed, 2);
     }
 
     // ---- agent↔client permission deadlock reproduction (the keystone) ------

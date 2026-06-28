@@ -35,7 +35,7 @@ use rusqlite::Connection;
 
 use crate::error::AvpError;
 use crate::review::fleet::{run_fleet, FleetConfig, FleetOutcome};
-use crate::review::scope::{scope_review, Scope, WorkList};
+use crate::review::scope::{batch_work_list, scope_review, Scope, WorkList};
 use crate::review::types::{Finding, VerifiedFinding};
 use crate::review::verify::{verify_findings, Candidate};
 use crate::validators::{AgentPool, ValidatorLoader};
@@ -114,7 +114,16 @@ pub struct ReviewReport {
 /// kept no findings — the resolved scope was empty — the report states
 /// "Nothing in scope to review." so an empty scope cannot be mistaken for a
 /// clean review either.
-pub fn synthesize(verified: Vec<VerifiedFinding>, tally: &FleetTally, now: &str) -> ReviewReport {
+///
+/// `verified` is any iterable of [`VerifiedFinding`]s (a `Vec` being the common
+/// caller) — it is collected once up front so a caller need not materialize a
+/// `Vec` just to hand it over.
+pub fn synthesize(
+    verified: impl IntoIterator<Item = VerifiedFinding>,
+    tally: &FleetTally,
+    now: &str,
+) -> ReviewReport {
+    let verified = verified.into_iter().collect::<Vec<_>>();
     let counts_confirmed = verified.iter().filter(|v| v.confirmed).count();
     let counts_refuted = verified.len() - counts_confirmed;
 
@@ -237,27 +246,33 @@ fn sentence(text: &str) -> String {
 ///
 /// 1. [`scope_review`] — resolve `scope` into the per-validator [`WorkList`]
 ///    (deterministic, LLM-free).
-/// 2. [`run_fleet`] — fan every `(validator, file)` out across the shared `pool`
-///    and collect the candidate [`Finding`]s. Awaiting it drains every fan-out
-///    task.
-/// 3. [`verify_findings`] — pair each candidate back with its file's ground-truth
-///    context ([`build_candidates`]) and submit it to the **same** `pool` for the
-///    adversarial refute pass. Awaiting it drains every verify task.
-/// 4. [`synthesize`] — turn the surviving [`VerifiedFinding`]s into the dated,
-///    deduped, ordered [`ReviewReport`].
+/// 2. [`batch_work_list`] — split the work-list into content-budgeted batches at
+///    whole-file granularity ([`FleetConfig::batch_size`]) so no single shared
+///    prime overflows the model's context. A small diff is one batch; a large one
+///    is several. A single file larger than `batch_size` is a hard error here.
+/// 3. For **each batch**, independently: [`run_fleet`] fans every validator out
+///    across the shared `pool` over that batch's files (its own shared prime,
+///    forked per validator), then [`verify_findings`] pairs each candidate back
+///    with its file's ground-truth context ([`build_candidates`]) and runs the
+///    adversarial refute pass on the **same** `pool` — forking that batch's prime
+///    while it stays pinned, then releasing the pin once the batch has drained.
+/// 4. [`synthesize`] — merge every batch's confirmed [`VerifiedFinding`]s and
+///    turn them into the dated, deduped, ordered [`ReviewReport`] (synthesis dedups
+///    by `file:line`, so cross-batch findings collapse the same as within a batch).
 ///
-/// Because steps 2 and 3 each await all the tasks they submit before returning,
-/// the moment [`verify_findings`] resolves the shared pool has fully drained —
-/// all fan-out *and* all verify work is done — so synthesis is the natural
-/// barrier and needs no separate pool-join. The engine never reads the clock:
-/// `now` is the caller-supplied, already-formatted local timestamp
-/// (`YYYY-MM-DD HH:MM`) rendered verbatim into the report header.
+/// Because each batch awaits all the tasks it submits before the next begins, the
+/// shared pool fully drains between batches and the prime pin never outlives its
+/// batch. A one-batch run (the common small diff) is byte-for-byte the old single
+/// fan-out → verify path. The engine never reads the clock: `now` is the
+/// caller-supplied, already-formatted local timestamp (`YYYY-MM-DD HH:MM`)
+/// rendered verbatim into the report header.
 ///
 /// # Errors
 ///
-/// Returns the [`AvpError`] from [`scope_review`] on git or index failure, or
-/// when a matched validator declares an unknown probe. Fan-out and verify
-/// failures never error: a failed task degrades to zero findings (fan-out) or a
+/// Returns the [`AvpError`] from [`scope_review`] on git or index failure, or when
+/// a matched validator declares an unknown probe, or from [`batch_work_list`] when
+/// a single file's inlined source exceeds `batch_size`. Fan-out and verify failures
+/// never error: a failed task degrades to zero findings (fan-out) or a
 /// refute-by-default verdict (verify), so the report is always produced.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_review(
@@ -273,47 +288,63 @@ pub async fn run_review(
     // Stage 1: scope → work-list (deterministic, LLM-free).
     let work = scope_review(scope, repo_path, loader, conn, embedder).await?;
 
-    let total_files: usize = work.validators.iter().map(|v| v.files.len()).sum();
+    // Stage 2: split the work-list into content-budgeted batches (whole-file
+    // granularity). A single file over `batch_size` is a hard error here.
+    let batches = batch_work_list(&work, fleet_config.batch_size)?;
+
     tracing::info!(
         validators = work.validators.len(),
-        files = total_files,
-        "review run: scoped work-list ready, fanning out"
+        files = work.distinct_files().count(),
+        batches = batches.len(),
+        batch_size = fleet_config.batch_size,
+        "review run: scoped work-list ready, batched, fanning out"
     );
 
-    // Stage 2: fan out across the shared pool; awaiting drains every fan-out task.
-    // The fleet outcome carries the task tally (attempted/failed) alongside the
-    // findings, plus the run's shared primed-prefix pin guard (the change + all
-    // diffs, primed once) so the verify stage can reuse the same prime.
-    let fleet = run_fleet(&work, loader, pool, fleet_config).await;
-    let tally = FleetTally::from(&fleet);
-    // Destructure so verify can fork the prime while it is still pinned, then the
-    // guard is released once verify has drained (below).
-    let FleetOutcome {
-        findings: fleet_findings,
-        prime,
-        ..
-    } = fleet;
+    // Stage 3: run the full fan-out → verify pipeline independently per batch,
+    // accumulating every batch's verified findings and summing the task tally.
+    let mut verified: Vec<VerifiedFinding> = Vec::new();
+    let mut attempted = 0usize;
+    let mut failed = 0usize;
 
-    // Stage 3: pair each candidate with its file's ground-truth context, then
-    // verify on the SAME pool — each verify task FORKS the run's shared prime
-    // (reusing the cached change + diffs) while it stays pinned. Awaiting drains
-    // every verify task. Once this returns, the shared pool has fully drained —
-    // the single barrier.
-    let candidates = build_candidates(&work, fleet_findings);
-    let prime_session = prime.as_ref().map(|g| g.session_id());
-    let outcome = verify_findings(candidates, pool, prime_session).await;
+    for (index, batch) in batches.iter().enumerate() {
+        tracing::info!(
+            batch = index + 1,
+            of = batches.len(),
+            files = batch.distinct_files().count(),
+            "review run: fanning out batch"
+        );
 
-    // The whole run (fan-out AND verify) has drained: release the shared prime's
-    // pin so the pinned cache entry does not outlive the run. A run future
-    // dropped before this point releases it from the guard's `Drop` instead.
-    if let Some(guard) = prime {
-        crate::review::fleet::unpin_prefix_session(guard).await;
+        // Fan out this batch: one shared prime over its files, forked per
+        // validator. The outcome carries the tally and the batch's prime pin.
+        let fleet = run_fleet(batch, loader, pool).await;
+        attempted += fleet.attempted;
+        failed += fleet.failed;
+        let FleetOutcome {
+            findings: fleet_findings,
+            prime,
+            ..
+        } = fleet;
+
+        // Verify this batch on the SAME pool — each verify task FORKS the batch's
+        // shared prime while it stays pinned. Awaiting drains every verify task.
+        let candidates = build_candidates(batch, fleet_findings);
+        let prime_session = prime.as_ref().map(|g| g.session_id());
+        let outcome = verify_findings(candidates, pool, prime_session).await;
+
+        // The batch (fan-out AND verify) has drained: release its prime pin so the
+        // pinned cache entry does not outlive the batch. A run future dropped
+        // before this point releases it from the guard's `Drop` instead.
+        if let Some(guard) = prime {
+            crate::review::fleet::unpin_prefix_session(guard).await;
+        }
+
+        verified.extend(outcome.verified);
     }
 
-    // Stage 4: synthesize the deduped, ordered, dated report. The tally
-    // rides into the report so the tool boundary can flag/fail an incomplete run;
-    // the engine itself stays a pure data barrier and never errors on it.
-    let report = synthesize(outcome.verified, &tally, now);
+    // Stage 4: synthesize the merged, deduped, ordered, dated report. The summed
+    // tally rides into the report so the tool boundary can flag/fail an incomplete
+    // run; the engine itself stays a pure data barrier and never errors on it.
+    let report = synthesize(verified, &FleetTally::new(attempted, failed), now);
 
     Ok(report)
 }
@@ -363,6 +394,12 @@ mod tests {
     /// those stay readable.
     const NOW: &str = "2026-04-11 13:08";
 
+    /// How many fan-out tasks the tally fixtures pretend a run attempted. The
+    /// exact count is immaterial — these tests assert on the attempted/failed
+    /// relationship (all succeeded, or all failed), not the magnitude — so naming
+    /// it keeps the `FleetTally::new` arguments from reading as bare literals.
+    const ATTEMPTED_TASKS: usize = 8;
+
     /// A confirmed finding builder with the load-bearing fields set.
     fn confirmed(
         file: &str,
@@ -411,12 +448,20 @@ mod tests {
         // No findings (every task degraded to zero) but a non-zero failed tally —
         // the report must visibly flag the incomplete run rather than rendering
         // byte-identically to a clean diff, and surface the tally in its counts.
-        let report = synthesize(vec![], &FleetTally::new(60, 60), NOW);
+        // Every attempted task failed (failed == attempted), so the run is fully
+        // incomplete — the magnitude is immaterial.
+        let report = synthesize(
+            vec![],
+            &FleetTally::new(ATTEMPTED_TASKS, ATTEMPTED_TASKS),
+            NOW,
+        );
 
-        assert_eq!(report.counts.tasks_attempted, 60);
-        assert_eq!(report.counts.tasks_failed, 60);
+        assert_eq!(report.counts.tasks_attempted, ATTEMPTED_TASKS);
+        assert_eq!(report.counts.tasks_failed, ATTEMPTED_TASKS);
         assert!(
-            report.markdown.contains("60/60 review tasks failed"),
+            report.markdown.contains(&format!(
+                "{ATTEMPTED_TASKS}/{ATTEMPTED_TASKS} review tasks failed"
+            )),
             "the incomplete run must be flagged: {}",
             report.markdown
         );
@@ -431,10 +476,10 @@ mod tests {
     fn a_fully_successful_tally_adds_no_failure_flag() {
         // Every task succeeded — no warning line, byte-identical to today's clean
         // report, and a zero failed tally.
-        let report = synthesize(vec![], &FleetTally::new(8, 0), NOW);
+        let report = synthesize(vec![], &FleetTally::new(ATTEMPTED_TASKS, 0), NOW);
 
         assert_eq!(report.markdown, "## Review Findings (2026-04-11 13:08)\n");
-        assert_eq!(report.counts.tasks_attempted, 8);
+        assert_eq!(report.counts.tasks_attempted, ATTEMPTED_TASKS);
         assert_eq!(report.counts.tasks_failed, 0);
     }
 
@@ -475,7 +520,7 @@ mod tests {
     fn an_attempted_clean_run_carries_no_nothing_in_scope_marker() {
         // Tasks ran and found nothing — that is a clean review, not an empty
         // scope, so the marker must not appear.
-        let report = synthesize(vec![], &FleetTally::new(8, 0), NOW);
+        let report = synthesize(vec![], &FleetTally::new(ATTEMPTED_TASKS, 0), NOW);
         assert!(
             !report.markdown.contains("Nothing in scope"),
             "a clean attempted run is not an empty scope: {:?}",
@@ -613,63 +658,47 @@ mod tests {
 
     #[test]
     fn one_rule_matching_multiple_lines_renders_every_instance() {
-        // The no-bail-fast contract: a single rule firing on N lines of one file
-        // yields N findings, all rendered — never collapsed to the first match.
-        // Same file, validator, rule, and claim; only the line differs, so the
-        // conservative dedup key (which includes the line) keeps each occurrence.
+        // The no-bail-fast / whole-file-sweep contract: a single rule firing on
+        // N lines of ONE file touched by ONE commit yields N findings on the
+        // first pass, all rendered — never collapsed to the first match, never
+        // dribbled one-per-re-review. Same file, validator, rule, and claim;
+        // only the line differs, so the conservative dedup key (which includes
+        // the line) keeps each occurrence.
         let rule = Some("no-unused");
-        let verified = vec![
-            confirmed(
-                "src/a.rs",
-                12,
-                "dead-code",
-                rule,
-                "`foo` is never called",
-                None,
-            ),
-            confirmed(
-                "src/a.rs",
-                34,
-                "dead-code",
-                rule,
-                "`foo` is never called",
-                None,
-            ),
-            confirmed(
-                "src/a.rs",
-                56,
-                "dead-code",
-                rule,
-                "`foo` is never called",
-                None,
-            ),
-        ];
+        let lines = [12u32, 34, 56, 78];
+        let verified: Vec<_> = lines
+            .iter()
+            .map(|line| {
+                confirmed(
+                    "src/a.rs",
+                    *line,
+                    "dead-code",
+                    rule,
+                    "`foo` is never called",
+                    None,
+                )
+            })
+            .collect();
         let report = synthesize(verified, &FleetTally::default(), NOW);
 
         // Every occurrence survives as its own checklist item, one per file:line.
-        assert!(
-            report.markdown.contains("- [ ] `src/a.rs:12`"),
-            "{}",
-            report.markdown
-        );
-        assert!(
-            report.markdown.contains("- [ ] `src/a.rs:34`"),
-            "{}",
-            report.markdown
-        );
-        assert!(
-            report.markdown.contains("- [ ] `src/a.rs:56`"),
-            "{}",
-            report.markdown
-        );
-        // Not collapsed to one: all three render and are counted.
+        for line in lines {
+            assert!(
+                report
+                    .markdown
+                    .contains(&format!("- [ ] `src/a.rs:{line}`")),
+                "instance at line {line} must render: {}",
+                report.markdown
+            );
+        }
+        // Not collapsed: all N render and are counted on the first pass.
         assert_eq!(
             report.markdown.matches("- [ ] `src/a.rs:").count(),
-            3,
+            lines.len(),
             "every instance of the rule must render: {}",
             report.markdown
         );
-        assert_eq!(report.counts.findings, 3);
+        assert_eq!(report.counts.findings, lines.len());
     }
 
     #[test]
@@ -778,7 +807,6 @@ mod tests {
             semantic_diff: vec![],
             changed_symbols: vec![],
             source_slice: format!("// slice for {path}"),
-            inlined_full: true,
             probe_results: vec![],
         }
     }

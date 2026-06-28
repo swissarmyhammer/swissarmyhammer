@@ -76,17 +76,47 @@ use crate::validators::{
     AgentPool, ForkAttachment, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult,
     ValidatorLoader,
 };
+use agent_client_protocol::schema::SessionId;
 use agent_client_protocol_extras::SessionStateStatusResponse;
+
+/// The default review `batch_size` in **bytes** (128 KiB).
+///
+/// Cramming every changed file's full source into one shared prime overflows the
+/// review model's context on a large diff (every fan-out validator then fails
+/// uniformly), and even when it fits it dilutes attention. So a run is split into
+/// byte-budgeted batches and each batch fans out independently. This budget is a
+/// deliberate, tunable knob — not derived from the model's context window.
+///
+/// It is sized to clear the largest single source file in a typical change
+/// (~95 KB) so an ordinary commit reviews in one or a few batches instead of
+/// tripping the oversize-file error, while a genuinely large multi-file diff
+/// still splits across batches. (32 KiB — the previous default — was smaller
+/// than many real source files, so default reviews of normal commits errored.)
+pub const DEFAULT_BATCH_SIZE: usize = 128 * 1024;
 
 /// Configuration for a fan-out run.
 ///
 /// The fan-out grain is the validator and the change's files live in the run's
-/// shared prime (not a per-task suffix), so there is no longer a file-batching
-/// dimension to configure. This stays a struct rather than a unit so the
-/// [`run_fleet`] / [`run_review`](crate::review::run_review) signatures keep room
-/// for future fan-out knobs without churning every caller.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FleetConfig {}
+/// shared prime. [`batch_size`](FleetConfig::batch_size) bounds how much inlined
+/// file content one prime may carry: [`run_review`](crate::review::run_review)
+/// uses it to split the work-list into batches
+/// ([`batch_work_list`](crate::review::scope::batch_work_list)) and fan each batch
+/// out independently, so a large diff no longer overflows the prime.
+#[derive(Debug, Clone, Copy)]
+pub struct FleetConfig {
+    /// The maximum inlined file content, in bytes, one batch's shared prime may
+    /// carry. Whole files are packed greedily up to this budget; a single file
+    /// larger than it is a hard error (never split, never sliced).
+    pub batch_size: usize,
+}
+
+impl Default for FleetConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: DEFAULT_BATCH_SIZE,
+        }
+    }
+}
 
 /// The result of a fan-out run: the merged findings plus the task tally.
 ///
@@ -148,6 +178,13 @@ impl std::fmt::Debug for FleetOutcome {
 /// A validator in the work-list with no matching RuleSet in the loader is logged
 /// and skipped rather than rendered with empty instructions.
 ///
+/// `work` is one already content-budgeted batch: the size policy
+/// ([`FleetConfig::batch_size`]) is applied upstream by
+/// [`run_review`](crate::review::run_review), which splits the work-list into
+/// batches ([`batch_work_list`](crate::review::scope::batch_work_list)) and calls
+/// `run_fleet` once per batch. So `run_fleet` itself takes no config — it just
+/// fans the batch it is given out across the pool.
+///
 /// The returned findings are ordered by validator (work-list order). Alongside
 /// them, the returned [`FleetOutcome`] carries the task tally — how many tasks
 /// were attempted and how many failed — so a saturated run (most tasks rejected)
@@ -159,7 +196,6 @@ pub async fn run_fleet(
     work: &WorkList,
     loader: &ValidatorLoader,
     pool: &AgentPool,
-    _config: FleetConfig,
 ) -> FleetOutcome {
     // Plan the fan-out BEFORE priming so an empty plan (no matching ruleset)
     // skips the prime entirely — an empty run never prompts the agent.
@@ -581,60 +617,169 @@ async fn collect_forked_task(
 ) -> Result<Vec<Finding>, ()> {
     let name = validator.validator_name.as_str();
     match delivered {
-        Ok(Ok(turn)) => {
-            let reuse = classify_reuse(turn.fork, turn.cache_usage);
-            tracing::info!(
-                validator = %name,
-                files = ?files,
-                session = %turn.session_id,
-                reuse = reuse.label(),
-                reused_tokens = ?reuse.reused_tokens(),
-                cache_read_input_tokens = ?reuse.cache_read(),
-                cache_creation_input_tokens = ?reuse.cache_created(),
-                "fleet task prefix reuse"
-            );
-            if matches!(reuse, PrefixReuse::Cold) {
-                tracing::warn!(
-                    validator = %name,
-                    files = ?files,
-                    session = %turn.session_id,
-                    "fleet task fork was degraded (no warm prefix reuse); proceeding cold"
-                );
-            }
-            parse_task_response(&turn.content, name, files)
-        }
+        Ok(Ok(turn)) => handle_fork_success(turn, name, files, pool).await,
         Ok(Err(PoolError::ForkFailed {
             parent_session_id,
             message,
         })) => {
-            tracing::warn!(
-                validator = %name,
-                files = ?files,
-                parent = %parent_session_id,
-                error = %message,
-                "fleet task fork failed; falling back to a monolithic fresh-session prompt"
-            );
-            let prompt = render_fleet_prompt(change_purpose, validator, ruleset);
-            collect_task(pool.submit(prompt).await, name, files)
+            handle_fork_failed(
+                parent_session_id,
+                message,
+                change_purpose,
+                validator,
+                ruleset,
+                files,
+                pool,
+            )
+            .await
         }
-        Ok(Err(err)) => {
-            tracing::warn!(
-                validator = %name,
-                files = ?files,
-                error = %err,
-                "fleet task failed; yielding zero findings for this validator"
-            );
-            Err(())
-        }
-        Err(_) => {
-            tracing::warn!(
-                validator = %name,
-                files = ?files,
-                "fleet task result was dropped before delivery; yielding zero findings"
-            );
-            Err(())
-        }
+        Ok(Err(err)) => handle_pool_error(err, name, files),
+        Err(_) => handle_delivery_error(name, files),
     }
+}
+
+/// The warm/degraded fork-success arm of [`collect_forked_task`]: log the prefix
+/// reuse, parse the delivered turn exactly like the monolithic path, then run the
+/// bounded within-file completeness re-scan on the result.
+///
+/// A turn whose fork ran cold (no warm prefix reuse) is logged as degraded but
+/// still parsed — correctness never depends on the cache hit. Returns `Err(())`
+/// only when the response does not parse (propagated from [`parse_task_response`]).
+async fn handle_fork_success(
+    turn: SessionTurn,
+    name: &str,
+    files: &[String],
+    pool: &AgentPool,
+) -> Result<Vec<Finding>, ()> {
+    let reuse = classify_reuse(turn.fork, turn.cache_usage);
+    tracing::info!(
+        validator = %name,
+        files = ?files,
+        session = %turn.session_id,
+        reuse = reuse.label(),
+        reused_tokens = ?reuse.reused_tokens(),
+        cache_read_input_tokens = ?reuse.cache_read(),
+        cache_creation_input_tokens = ?reuse.cache_created(),
+        "fleet task prefix reuse"
+    );
+    if matches!(reuse, PrefixReuse::Cold) {
+        tracing::warn!(
+            validator = %name,
+            files = ?files,
+            session = %turn.session_id,
+            "fleet task fork was degraded (no warm prefix reuse); proceeding cold"
+        );
+    }
+    let findings = parse_task_response(&turn.content, name, files)?;
+    Ok(rescan_for_completeness(pool, &turn.session_id, name, files, findings).await)
+}
+
+/// The fork-failed arm of [`collect_forked_task`]: the `session/fork` call failed,
+/// so the validator never ran on the primed prefix. Fall back to a monolithic
+/// fresh-session prompt for the validator — degraded (cold, no shared prime) but
+/// correct; a fork failure must never lose a task.
+async fn handle_fork_failed(
+    parent_session_id: String,
+    message: String,
+    change_purpose: &str,
+    validator: &ValidatorWork,
+    ruleset: &RuleSet,
+    files: &[String],
+    pool: &AgentPool,
+) -> Result<Vec<Finding>, ()> {
+    let name = validator.validator_name.as_str();
+    tracing::warn!(
+        validator = %name,
+        files = ?files,
+        parent = %parent_session_id,
+        error = %message,
+        "fleet task fork failed; falling back to a monolithic fresh-session prompt"
+    );
+    let prompt = render_fleet_prompt(change_purpose, validator, ruleset);
+    collect_task(pool.submit(prompt).await, name, files)
+}
+
+/// The pool-error arm of [`collect_forked_task`]: the task failed for any reason
+/// other than a fork failure (idle/ceiling abandonment, an extension failure, or
+/// an agent error). Logged and degraded to zero findings — one bad task never
+/// aborts the rest — returning `Err(())` so the caller tallies it as failed rather
+/// than conflating it with a clean validator.
+fn handle_pool_error(err: PoolError, name: &str, files: &[String]) -> Result<Vec<Finding>, ()> {
+    tracing::warn!(
+        validator = %name,
+        files = ?files,
+        error = %err,
+        "fleet task failed; yielding zero findings for this validator"
+    );
+    Err(())
+}
+
+/// The dropped-delivery arm of [`collect_forked_task`]: the result channel closed
+/// before any turn was delivered. Logged and degraded to zero findings with
+/// `Err(())`, exactly like [`handle_pool_error`].
+fn handle_delivery_error(name: &str, files: &[String]) -> Result<Vec<Finding>, ()> {
+    tracing::warn!(
+        validator = %name,
+        files = ?files,
+        "fleet task result was dropped before delivery; yielding zero findings"
+    );
+    Err(())
+}
+
+/// Run one bounded within-file completeness re-scan and merge any additional
+/// findings into `findings`.
+///
+/// After a validator's first-pass fork returned `findings`, fork its session
+/// once more (so the re-scan inherits the full file AND the first-pass
+/// conversation) and send [`RESCAN_PROMPT`], which asks the model to sweep the
+/// SAME files for any further instance of the same rules it missed. The extra
+/// findings are tagged and appended; downstream [`dedup_exact`] collapses any
+/// exact repeats.
+///
+/// Capped at exactly one extra pass — this never recurses on its own result, so
+/// the cost is bounded to a single fork turn per validator. It only ever ADDS:
+/// an empty first pass skips the re-scan entirely, and a re-scan that
+/// fork-fails, errors, returns nothing, or does not parse leaves the first-pass
+/// findings exactly as they were.
+///
+/// [`dedup_exact`]: crate::review::synthesize
+async fn rescan_for_completeness(
+    pool: &AgentPool,
+    parent_session: &SessionId,
+    validator: &str,
+    files: &[String],
+    findings: Vec<Finding>,
+) -> Vec<Finding> {
+    // Nothing reported → nothing to be incomplete about; do not spend a turn.
+    if findings.is_empty() {
+        return findings;
+    }
+    let delivered = pool
+        .submit_forked(parent_session, RESCAN_PROMPT.to_string())
+        .await;
+    let Ok(Ok(turn)) = delivered else {
+        tracing::debug!(
+            validator = %validator,
+            files = ?files,
+            "fleet completeness re-scan unavailable; keeping first-pass findings"
+        );
+        return findings;
+    };
+    let Ok(additional) = parse_task_response(&turn.content, validator, files) else {
+        return findings;
+    };
+    if additional.is_empty() {
+        return findings;
+    }
+    tracing::info!(
+        validator = %validator,
+        files = ?files,
+        added = additional.len(),
+        "fleet completeness re-scan recovered further instances on the first pass"
+    );
+    let mut merged = findings;
+    merged.extend(additional);
+    merged
 }
 
 /// Resolve one task's delivered result into tagged findings.
@@ -821,8 +966,10 @@ pub fn render_validator_suffix(validator: &ValidatorWork, ruleset: &RuleSet) -> 
 /// validator matched.
 fn render_focus_files(out: &mut String, files: &[FileWork]) {
     out.push_str(
-        "## Files in scope\n\nReview the change against the rules below, focusing on these \
-         files (their full contents are already provided above):\n\n",
+        "## Files in scope\n\nApply the rules below to the WHOLE current contents of each \
+         file listed here — their complete current source is already provided above. Review \
+         every line of these files, not only the lines the change touched: a rule that fires \
+         anywhere in one of these files is in scope and must be reported now.\n\n",
     );
     for file in files {
         let _ = writeln!(out, "- `{}`", file.path);
@@ -865,9 +1012,19 @@ available, but only for OTHER files: cross-file duplication evidence, a changed 
 symbol's callers, or a type defined elsewhere. Reach for them only when a \
 finding genuinely depends on a file that is not already inlined here.
 
+## Review scope
+
+The review boundary is the WHOLE current file, not the changed lines. Each changed \
+file is inlined above in full; review every line of it. Pre-existing instances of a \
+rule — ones that were already there before this change, anywhere in a changed file — \
+are in scope and must be reported now, in this same pass, alongside instances in the \
+changed region. The \"What changed\" semantic diff is orientation only: it tells you \
+what this change touched, it is NOT the review boundary and NOT where to limit your \
+search. Do not treat the diff as the review boundary.
+
 ## Output contract
 
-Once you have reviewed the inlined files (reading other files only if needed), \
+Once you have reviewed the inlined files in full (reading other files only if needed), \
 reply with your findings as a JSON array, written directly as the plain text of \
 your reply — the reply is parsed as JSON. The findings reply itself must be \
 plain JSON text, never a tool call: a tool call is not a valid way to report \
@@ -883,47 +1040,78 @@ Each finding is one object with these fields:
 (e.g. \"per `duplicates`: 0.94 at `bar.rs:88`\") or a `file:line` citation.
 - `suggestion`: the fix.
 
-Report every occurrence of every rule that fires, in this single pass: when a \
-rule matches on several lines, emit a separate finding for each match — one \
-finding per `file:line`. Do not stop at the first match and do not collapse \
-repeated matches into one finding; list them all so the whole file can be fixed \
-in one go rather than re-reviewed match by match.
+Report every occurrence of every rule that fires, in this single pass — across the \
+WHOLE file, not just the changed lines: when a rule matches on several lines, emit a \
+separate finding for each match — one finding per `file:line`. Do not stop at the \
+first match and do not collapse repeated matches into one finding; list them ALL, \
+including pre-existing instances that sit outside the changed region, so the whole \
+file can be fixed in one go rather than re-reviewed match by match.
 
 Report only real issues. If you find none, emit an empty array `[]`.
 ";
 
-/// Append one file's review block: path, the full current source (or the bounded
-/// fallback for an oversized file), the semantic diff of what changed, and the
-/// probe results rendered as evidence.
+/// The bounded within-file completeness re-scan prompt, sent as ONE extra fork
+/// turn after a validator's first pass returned findings.
 ///
-/// The changed file is handed to the model **in full** when it fits the inline
-/// budget ([`FileWork::inlined_full`]), framed explicitly as the complete current
-/// contents the model does NOT need to re-read — the read-round-trips that
-/// dominated review wall-clock came from the model re-reading a file it was only
-/// given a partial slice of. An oversized file falls back to the bounded slice
-/// (which already carries a `read_file` note from the scope stage) and is framed
-/// as a partial view.
+/// Small models under-report pre-existing instances of a rule on the first pass
+/// even with the whole-file contract — they anchor on the salient match. This
+/// turn re-asks the SAME session (which already holds the full file and its own
+/// first-pass findings) to sweep the same files once more for any instance it
+/// missed, recovering the misses without a `/finish` re-review round trip. It is
+/// issued at most once per validator (no loop), so the extra cost is bounded to a
+/// single fork turn.
+///
+/// It must NOT contain [`PRIME_HANDOFF`] (so the turn is treated as a real review
+/// turn, not a prime), and its `## Completeness re-scan` header is the stable
+/// marker the fan-out logs and tests key on.
+const RESCAN_PROMPT: &str = "\
+## Completeness re-scan
+
+You just reported your findings for these files. Before we finish, scan the SAME \
+files again — their full current contents are already provided above — for any \
+FURTHER instance of the same rules that you missed the first time: pre-existing \
+matches outside the changed region, or additional lines the same rule fires on. \
+This is a within-file completeness sweep of the whole file, not a new review and \
+not a re-listing of what you already reported.
+
+Reply with ONLY the additional findings, as a JSON array in the exact same object \
+shape as before (`file`, `line`, `rule`, `claim`, `evidence`, `suggestion`), \
+written directly as the plain text of your reply — never a tool call. If you \
+already reported every instance and there are none left, reply with an empty \
+array `[]`.
+";
+
+/// Append one file's review block: path, the full current source, the semantic
+/// diff of what changed, and the probe results rendered as evidence.
+///
+/// The changed file is always handed to the model **in full** — framed explicitly
+/// as the complete current contents the model does NOT need to re-read, because
+/// the read-round-trips that dominated review wall-clock came from the model
+/// re-reading a file it was only given a partial slice of. A file too large for
+/// the review `batch_size` never reaches here as a partial view: the scope stage
+/// rejects it with a hard error rather than trimming it to a slice.
 fn render_file_block(out: &mut String, file: &FileWork) {
     let _ = writeln!(out, "## File: {}\n", file.path);
 
-    if file.inlined_full {
-        out.push_str(
-            "### Full current contents\n\n\
-             This is the COMPLETE current source of the file. You do not need to read this \
-             file — it is provided here in full. Review it directly.\n\n",
-        );
-    } else {
-        out.push_str(
-            "### Source slice (partial — file too large to inline in full)\n\n\
-             This is a BOUNDED slice of an oversized file, not its complete contents. \
-             Use `read_file` on this path to see the remainder before reasoning about it.\n\n",
-        );
-    }
+    out.push_str(
+        "### Full current contents\n\n\
+         This is the COMPLETE current source of the file. You do not need to read this \
+         file — it is provided here in full. Review it directly. This whole file is the \
+         review boundary: report every place a rule fires anywhere in it, including \
+         pre-existing instances that sit outside the change described below.\n\n",
+    );
     out.push_str("```\n");
     out.push_str(file.source_slice.trim_end());
     out.push_str("\n```\n\n");
 
-    out.push_str("### What changed (semantic diff)\n\n");
+    out.push_str(
+        "### What changed (semantic diff — orientation only, NOT the review boundary)\n\n",
+    );
+    out.push_str(
+        "The entities below are what this change touched, to orient you. They are context, \
+         not the review scope: do NOT limit findings to these lines. Review the whole file \
+         above and report every instance of every rule, changed or pre-existing.\n\n",
+    );
     render_semantic_diff(out, file);
 
     out.push_str("### Probe evidence\n\n");
@@ -973,6 +1161,19 @@ mod tests {
     /// exact value is immaterial to these tests (none assert on the line); naming
     /// it keeps the fixtures from sprinkling an unexplained literal.
     const TEST_FINDING_LINE: u32 = 42;
+
+    /// The 1-based line the shared `file_work` fixture's `duplicates` probe row
+    /// cites. Like [`TEST_FINDING_LINE`] the exact value is immaterial; naming it
+    /// keeps the hidden fixture constant out of the probe row and its assertions.
+    const TEST_PROBE_LINE: u32 = 88;
+
+    /// The similarity score the shared `file_work` fixture's `duplicates` probe
+    /// row reports. Like [`TEST_PROBE_LINE`] the exact value is immaterial; naming
+    /// it keeps the score out of the fixture, the agent-output helper, and the
+    /// rendered-prompt assertion so all three stay locked to one number. Rendered
+    /// with `{:.2}` (matching the production probe formatting) wherever it appears
+    /// as text.
+    const TEST_SIMILARITY: f32 = 0.94;
 
     /// A RuleSet whose mandate (description) and rule bodies are distinctive so
     /// the rendered prompt can be asserted against them verbatim.
@@ -1039,7 +1240,6 @@ mod tests {
             }],
             changed_symbols: vec![symbol.to_string()],
             source_slice: format!("// slice for {path}\nfn {symbol}() {{}}"),
-            inlined_full: true,
             probe_results: vec![ProbeResult {
                 name: "duplicates".to_string(),
                 kind: ProbeKind::Fact,
@@ -1047,8 +1247,8 @@ mod tests {
                 rows: vec![ProbeRow {
                     file_path: dup_at.to_string(),
                     symbol: Some(symbol.to_string()),
-                    line: Some(88),
-                    similarity: Some(0.94),
+                    line: Some(TEST_PROBE_LINE),
+                    similarity: Some(TEST_SIMILARITY),
                     detail: None,
                 }],
             }],
@@ -1096,6 +1296,44 @@ mod tests {
         )
     }
 
+    /// The stable header [`RESCAN_PROMPT`] carries — only the completeness
+    /// re-scan turn sends it, so a script entry keyed on it matches the re-scan
+    /// fork's context and never the first-pass prompt.
+    const RESCAN_NEEDLE: &str = "## Completeness re-scan";
+
+    /// A scripted re-scan reply that finds nothing further. Every warm fork now
+    /// issues one within-file completeness re-scan after its first pass; a test
+    /// asserting unchanged first-pass behavior scripts the re-scan to add
+    /// nothing. Keyed on [`RESCAN_NEEDLE`] and ordered FIRST so it wins on the
+    /// re-scan fork's context (which also inherits the first-pass needles).
+    fn rescan_finds_nothing() -> (String, ScriptedReply) {
+        (
+            RESCAN_NEEDLE.to_string(),
+            ScriptedReply::Text("[]".to_string()),
+        )
+    }
+
+    /// A findings array of N objects as an agent emits it, fenced in prose — the
+    /// multi-instance shape `findings_json` (a single finding) does not cover.
+    /// Each tuple is `(file, line, rule, claim)`.
+    fn findings_array_json(items: &[(&str, u32, &str, &str)]) -> String {
+        let objects: Vec<String> = items
+            .iter()
+            .map(|(file, line, rule, claim)| {
+                format!(
+                    "{{\"file\":\"{file}\",\"line\":{line},\
+                     \"validator\":\"ignored-by-agent\",\"rule\":\"{rule}\",\
+                     \"claim\":\"{claim}\",\"evidence\":\"per `duplicates`: {TEST_SIMILARITY:.2}\",\
+                     \"suggestion\":\"extract a helper\"}}"
+                )
+            })
+            .collect();
+        format!(
+            "Here are my findings:\n\n```json\n[{}]\n```\n",
+            objects.join(",")
+        )
+    }
+
     /// Run the fleet and then release its shared-prime pin, exactly as
     /// `run_review` drives the prime lifecycle (fan-out primes once, the caller
     /// unpins when the run drains). The returned outcome has its `prime` cleared
@@ -1106,7 +1344,7 @@ mod tests {
         loader: &ValidatorLoader,
         pool: &AgentPool,
     ) -> FleetOutcome {
-        let outcome = run_fleet(work, loader, pool, FleetConfig::default()).await;
+        let outcome = run_fleet(work, loader, pool).await;
         if let Some(guard) = outcome.prime {
             unpin_prefix_session(guard).await;
         }
@@ -1114,6 +1352,18 @@ mod tests {
             prime: None,
             ..outcome
         }
+    }
+
+    // ---- config tests ----------------------------------------------------
+
+    #[test]
+    fn default_batch_size_is_128_kib() {
+        // The default budget clears the largest single source file in a typical
+        // change (~95 KB) so an ordinary commit reviews without tripping the
+        // oversize-file error; only genuinely huge multi-file diffs still split.
+        assert_eq!(DEFAULT_BATCH_SIZE, 128 * 1024);
+        assert_eq!(DEFAULT_BATCH_SIZE, 131072);
+        assert_eq!(FleetConfig::default().batch_size, DEFAULT_BATCH_SIZE);
     }
 
     // ---- renderer tests (pure) -------------------------------------------
@@ -1195,8 +1445,14 @@ mod tests {
             prompt.contains("probe `duplicates`"),
             "probe evidence must be rendered: {prompt}"
         );
-        assert!(prompt.contains("src/dup_of_a.rs:88"), "{prompt}");
-        assert!(prompt.contains("@ 0.94"), "{prompt}");
+        assert!(
+            prompt.contains(&format!("src/dup_of_a.rs:{TEST_PROBE_LINE}")),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains(&format!("@ {TEST_SIMILARITY:.2}")),
+            "{prompt}"
+        );
     }
 
     /// The run prime carries the change + every diff and NOT any validator text;
@@ -1321,12 +1577,11 @@ mod tests {
     /// re-reading the changed file it was already handed.
     #[test]
     fn full_inline_payload_carries_complete_source_and_no_reread_framing() {
-        // A FileWork whose source_slice is the WHOLE file (inlined_full = true),
-        // including a marker line the old bounded slice would have trimmed.
+        // A FileWork whose source_slice is the WHOLE file, including a marker line
+        // the old bounded slice would have trimmed.
         let mut file = file_work("src/a.rs", "alpha", "src/x.rs");
         file.source_slice =
             "use std::fmt;\n// distant_marker_kept_in_full\npub fn alpha() {}".to_string();
-        file.inlined_full = true;
 
         let payload = render_file_payload(std::slice::from_ref(&file));
 
@@ -1342,29 +1597,21 @@ mod tests {
                 && payload.to_lowercase().contains("do not need to read"),
             "the block must frame the source as the full file the model need not read: {payload}"
         );
-    }
-
-    /// An oversized (fallback) changed file's payload carries the bounded slice
-    /// and the read-the-rest note carried through from the scope stage, and does
-    /// NOT claim to be the complete file.
-    #[test]
-    fn fallback_payload_keeps_the_read_for_the_rest_note() {
-        let mut file = file_work("src/big.rs", "huge", "src/x.rs");
-        file.source_slice =
-            "// bounded slice\npub fn huge() {}\n\n// NOTE: this file is too large to inline in full; \
-the slice above is bounded. Use `read_file` on this path to see the remainder before reasoning about it."
-                .to_string();
-        file.inlined_full = false;
-
-        let payload = render_file_payload(std::slice::from_ref(&file));
-
+        // The whole inlined file is the review boundary; the "What changed"
+        // semantic diff is orientation only, NOT the review boundary — so the
+        // model reviews every line, not just the changed region.
+        let lower = payload.to_lowercase();
         assert!(
-            payload.contains("read_file"),
-            "the fallback payload must direct the model to read_file for the rest: {payload}"
+            lower.contains("whole file") || lower.contains("every line"),
+            "the block must name the whole file as the review boundary: {payload}"
         );
         assert!(
-            !payload.to_lowercase().contains("do not need to read"),
-            "an oversized file must NOT be framed as fully provided: {payload}"
+            lower.contains("orientation only"),
+            "the diff section must be framed as orientation only: {payload}"
+        );
+        assert!(
+            lower.contains("not the review boundary"),
+            "the diff section must be framed as NOT the review boundary: {payload}"
         );
     }
 
@@ -1406,6 +1653,36 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         );
     }
 
+    /// The contract must name the WHOLE current file as the review boundary and
+    /// demote the semantic diff to orientation only — so a small model does not
+    /// anchor on the changed region and under-report pre-existing instances
+    /// elsewhere in the file (the finding-dribble this card kills).
+    #[test]
+    fn output_contract_names_the_whole_file_as_the_review_boundary_not_the_diff() {
+        let lower = OUTPUT_CONTRACT.to_lowercase();
+        assert!(
+            OUTPUT_CONTRACT.contains("## Review scope"),
+            "the contract must carry an explicit review-scope section: {OUTPUT_CONTRACT}"
+        );
+        assert!(
+            lower.contains("whole current file"),
+            "the contract must name the whole current file as the review boundary: \
+             {OUTPUT_CONTRACT}"
+        );
+        assert!(
+            lower.contains("pre-existing instances"),
+            "the contract must put pre-existing instances in scope: {OUTPUT_CONTRACT}"
+        );
+        assert!(
+            lower.contains("orientation only"),
+            "the contract must frame the semantic diff as orientation only: {OUTPUT_CONTRACT}"
+        );
+        assert!(
+            lower.contains("not the review boundary"),
+            "the contract must state the diff is NOT the review boundary: {OUTPUT_CONTRACT}"
+        );
+    }
+
     // ---- orchestrator tests (scripted mock agent) ------------------------
 
     #[tokio::test]
@@ -1442,6 +1719,10 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         // prime (all files) and appends the validator suffix carrying the
         // validator header, so we key on that header.
         let agent = forking_agent(vec![
+            // Each validator's first pass is exhaustive, so its completeness
+            // re-scan finds nothing more — this test asserts the first-pass
+            // fan-out shape (one prime + one fork per validator + one re-scan).
+            rescan_finds_nothing(),
             (
                 "# Validator: val-a".to_string() + "\n\n## Mandate",
                 ScriptedReply::Text(findings_json(
@@ -1464,9 +1745,7 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         let agent_probe = Arc::clone(&agent);
 
         let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig::default())
-                .await
-                .findings
+            run_fleet(&work, &loader, &pool).await.findings
         })
         .await;
 
@@ -1486,7 +1765,13 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
             validator_tasks, 2,
             "one forked task per validator: {seen:#?}"
         );
-        assert_eq!(agent_probe.fork_count(), 2, "one fork per validator task");
+        // Two validator forks PLUS one completeness re-scan fork each (the
+        // re-scan inherits the validator session) = four forks total.
+        assert_eq!(
+            agent_probe.fork_count(),
+            4,
+            "one validator fork plus one completeness re-scan fork per validator"
+        );
 
         // Every finding is tagged with its validator (overriding the agent's
         // self-reported `ignored-by-agent`), and the rule tag survives.
@@ -1505,6 +1790,167 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         assert!(
             findings.iter().all(|f| f.validator != "ignored-by-agent"),
             "the agent's self-reported validator must be overridden"
+        );
+    }
+
+    /// A file containing several instances of ONE rule, touched by a single
+    /// commit, must yield ALL of them on the FIRST review pass — the whole-file
+    /// sweep, not a dribble of one-instance-per-re-review. Driven end-to-end
+    /// through `run_fleet` with a scripted agent that reports every instance.
+    #[tokio::test]
+    async fn one_rule_with_many_instances_reports_them_all_on_the_first_pass() {
+        let rs = ruleset(
+            "magic-numbers",
+            "no unexplained numeric literals",
+            &[("no-magic", "name your constants")],
+        );
+        let loader = loader_with(vec![rs]);
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work(
+                "magic-numbers",
+                vec![file_work("src/a.rs", "alpha", "src/x.rs")],
+            )],
+        };
+
+        // The agent reports several instances of the one rule across the whole
+        // file in a single reply; its completeness re-scan then finds nothing
+        // more. Each instance sits on its own line derived from TEST_FINDING_LINE
+        // so the findings are distinct file:line instances, not a shared-line
+        // collapse — the exact lines are immaterial.
+        let instances = [
+            ("src/a.rs", TEST_FINDING_LINE, "no-magic", "magic number 7"),
+            (
+                "src/a.rs",
+                TEST_FINDING_LINE + 1,
+                "no-magic",
+                "magic number 13",
+            ),
+            (
+                "src/a.rs",
+                TEST_FINDING_LINE + 2,
+                "no-magic",
+                "magic number 99",
+            ),
+            (
+                "src/a.rs",
+                TEST_FINDING_LINE + 3,
+                "no-magic",
+                "magic number 256",
+            ),
+        ];
+        let first_pass = findings_array_json(&instances);
+        let agent = forking_agent(vec![
+            rescan_finds_nothing(),
+            (
+                "# Validator: magic-numbers".to_string() + "\n\n## Mandate",
+                ScriptedReply::Text(first_pass),
+            ),
+        ]);
+
+        let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
+            run_fleet(&work, &loader, &pool).await.findings
+        })
+        .await;
+
+        let magic: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule.as_deref() == Some("no-magic"))
+            .collect();
+        assert_eq!(
+            magic.len(),
+            instances.len(),
+            "all instances of the one rule must report on the first pass, \
+             not dribble one per round: {findings:#?}"
+        );
+        assert!(
+            magic.iter().all(|f| f.validator == "magic-numbers"),
+            "every instance is tagged with its validator: {findings:#?}"
+        );
+    }
+
+    /// Lever 2 — the bounded within-file completeness re-scan. When the first
+    /// pass under-reports (the model returns one instance and misses two), the
+    /// re-scan fires EXACTLY once, recovers the missed instances, and merges
+    /// them — so the run still surfaces every instance on the first review,
+    /// without a re-review round trip. Capped at one extra pass: the re-scan
+    /// returns more findings yet never triggers a second re-scan.
+    #[tokio::test]
+    async fn completeness_rescan_fires_once_and_merges_the_missed_instances() {
+        let rs = ruleset(
+            "magic-numbers",
+            "no unexplained numeric literals",
+            &[("no-magic", "name your constants")],
+        );
+        let loader = loader_with(vec![rs]);
+        let work = WorkList {
+            change_purpose: "purpose".to_string(),
+            validators: vec![validator_work(
+                "magic-numbers",
+                vec![file_work("src/a.rs", "alpha", "src/x.rs")],
+            )],
+        };
+
+        // First pass under-reports ONE instance; the re-scan surfaces the TWO it
+        // missed. The re-scan entry is keyed on the re-scan header and ordered
+        // first so it wins on the re-scan fork's context (which also inherits
+        // the validator header) and never on the first-pass prompt.
+        let first_pass =
+            findings_array_json(&[("src/a.rs", TEST_FINDING_LINE, "no-magic", "magic number 7")]);
+        let rescan = findings_array_json(&[
+            (
+                "src/a.rs",
+                TEST_FINDING_LINE + 1,
+                "no-magic",
+                "magic number 13",
+            ),
+            (
+                "src/a.rs",
+                TEST_FINDING_LINE + 2,
+                "no-magic",
+                "magic number 99",
+            ),
+        ]);
+        let agent = forking_agent(vec![
+            (RESCAN_NEEDLE.to_string(), ScriptedReply::Text(rescan)),
+            (
+                "# Validator: magic-numbers".to_string() + "\n\n## Mandate",
+                ScriptedReply::Text(first_pass),
+            ),
+        ]);
+        let probe = Arc::clone(&agent);
+
+        let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
+            run_fleet(&work, &loader, &pool).await.findings
+        })
+        .await;
+
+        // First pass (1) + re-scan (2) = 3 findings merged on the first review.
+        assert_eq!(
+            findings.len(),
+            3,
+            "the re-scan's missed instances must merge into the first-pass findings: {findings:#?}"
+        );
+        assert!(
+            findings
+                .iter()
+                .all(|f| f.validator == "magic-numbers" && f.rule.as_deref() == Some("no-magic")),
+            "merged findings keep their validator and rule tags: {findings:#?}"
+        );
+
+        // The re-scan fired EXACTLY once (capped) — one prompt carrying its
+        // header, even though it returned more findings (no recursion).
+        let seen = probe.seen_prompts();
+        let rescans = seen.iter().filter(|p| p.contains(RESCAN_NEEDLE)).count();
+        assert_eq!(
+            rescans, 1,
+            "the completeness re-scan must fire exactly once and not loop: {seen:#?}"
+        );
+        // One validator fork plus exactly one bounded re-scan fork.
+        assert_eq!(
+            probe.fork_count(),
+            2,
+            "one validator fork plus one bounded re-scan fork"
         );
     }
 
@@ -1537,7 +1983,7 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         let agent_probe = Arc::clone(&agent);
 
         let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig::default()).await
+            run_fleet(&work, &loader, &pool).await
         })
         .await;
 
@@ -1602,7 +2048,7 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
 
         let agent = forking_agent(vec![]);
         let _findings = with_pool(agent, PoolConfig::remote(1), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig::default()).await
+            run_fleet(&work, &loader, &pool).await
         })
         .await;
 
@@ -1640,21 +2086,27 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         // The validator's fork emits a finding. The fork inherits the shared
         // prime (all files) and appends the validator suffix (which carries the
         // mandate marker), so we key on that marker.
-        let agent = forking_agent(vec![(
-            "MANDATE_MARKER".to_string(),
-            ScriptedReply::Text(findings_json(
-                "src/f0.rs",
-                TEST_FINDING_LINE,
-                "r1",
-                "warm finding",
-            )),
-        )]);
+        let agent = forking_agent(vec![
+            // The first pass is exhaustive; its completeness re-scan finds
+            // nothing more, so this test asserts the unchanged one-fork-per-
+            // validator prime shape (plus the bounded re-scan fork).
+            rescan_finds_nothing(),
+            (
+                "MANDATE_MARKER".to_string(),
+                ScriptedReply::Text(findings_json(
+                    "src/f0.rs",
+                    TEST_FINDING_LINE,
+                    "r1",
+                    "warm finding",
+                )),
+            ),
+        ]);
         let agent_probe = Arc::clone(&agent);
 
         // Drive the prime lifecycle the way `run_review` does: run the fleet,
         // then release the returned shared-prime guard once the run drains.
         let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            let outcome = run_fleet(&work, &loader, &pool, FleetConfig::default()).await;
+            let outcome = run_fleet(&work, &loader, &pool).await;
             if let Some(guard) = outcome.prime {
                 unpin_prefix_session(guard).await;
             }
@@ -1705,7 +2157,12 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         // The single validator fork carries BOTH of the validator's rules.
         assert!(validator_tasks[0].contains("RULE1_MARKER"));
         assert!(validator_tasks[0].contains("RULE2_MARKER"));
-        assert_eq!(agent_probe.fork_count(), 1, "one fork per validator");
+        // One validator fork plus its one bounded completeness re-scan fork.
+        assert_eq!(
+            agent_probe.fork_count(),
+            2,
+            "one validator fork plus one completeness re-scan fork"
+        );
 
         assert_eq!(outcome.attempted, 1);
         assert_eq!(outcome.failed, 0);
@@ -1907,15 +2364,18 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         // Forks succeed but attach no parent state — the task proceeds on the
         // forked session (history is intact, just cold) and is logged.
         let agent = agent_with_fork_mode(
-            vec![(
-                "## File: src/a.rs".to_string(),
-                ScriptedReply::Text(findings_json(
-                    "src/a.rs",
-                    TEST_FINDING_LINE,
-                    "r",
-                    "cold but correct",
-                )),
-            )],
+            vec![
+                rescan_finds_nothing(),
+                (
+                    "## File: src/a.rs".to_string(),
+                    ScriptedReply::Text(findings_json(
+                        "src/a.rs",
+                        TEST_FINDING_LINE,
+                        "r",
+                        "cold but correct",
+                    )),
+                ),
+            ],
             ForkMode::DegradedAttach,
         );
 
@@ -1954,15 +2414,18 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         // `prefix_tokens == None`); the turn's `_meta` reports a warm cache read,
         // which is what makes the reuse observable on claude.
         let agent = ScriptedAgent::with_config(
-            vec![(
-                "## File: src/a.rs".to_string(),
-                ScriptedReply::Text(findings_json(
-                    "src/a.rs",
-                    TEST_FINDING_LINE,
-                    "r",
-                    "warm on claude",
-                )),
-            )],
+            vec![
+                rescan_finds_nothing(),
+                (
+                    "## File: src/a.rs".to_string(),
+                    ScriptedReply::Text(findings_json(
+                        "src/a.rs",
+                        TEST_FINDING_LINE,
+                        "r",
+                        "warm on claude",
+                    )),
+                ),
+            ],
             ScriptedAgentConfig {
                 fork_mode: ForkMode::DegradedAttach,
                 cache_usage: Some(CacheUsage {
@@ -2070,9 +2533,7 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         let agent_probe = Arc::clone(&agent);
 
         with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-            let fanout = tokio::spawn(async move {
-                run_fleet(&work, &loader, &pool, FleetConfig::default()).await
-            });
+            let fanout = tokio::spawn(async move { run_fleet(&work, &loader, &pool).await });
 
             // Wait until the prefix is pinned and the wedged validator fork is in
             // flight — the run is now mid-collect.
@@ -2122,6 +2583,9 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         // The fork carrying `BAD_BODY` errors; the `GOOD_BODY` one returns a
         // finding. Both keys appear only in their own validator's suffix.
         let agent = forking_agent(vec![
+            // The good validator's first pass is exhaustive; its completeness
+            // re-scan finds nothing more, so the surviving count is unchanged.
+            rescan_finds_nothing(),
             ("BAD_BODY".to_string(), ScriptedReply::Error),
             (
                 "GOOD_BODY".to_string(),
@@ -2203,7 +2667,7 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         let agent_probe = Arc::clone(&agent);
 
         let outcome = with_pool(agent, PoolConfig::remote(1), move |pool| async move {
-            run_fleet(&work, &loader, &pool, FleetConfig::default()).await
+            run_fleet(&work, &loader, &pool).await
         })
         .await;
 

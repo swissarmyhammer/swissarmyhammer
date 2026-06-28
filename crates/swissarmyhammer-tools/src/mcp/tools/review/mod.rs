@@ -36,7 +36,7 @@ use swissarmyhammer_operations::{
 };
 use swissarmyhammer_validators::review::Scope;
 
-use crate::mcp::op_tool_helpers::{json_result, string_arg, string_array_arg};
+use crate::mcp::op_tool_helpers::{json_result, string_arg, string_array_arg, usize_arg};
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use review_op::{AgentFactory, EmbedderFactory, ReviewRequest, ReviewResponse};
 
@@ -58,6 +58,14 @@ const BACKEND_PARAM: ParamMeta = ParamMeta::new("backend")
     .description("Agent backend / concurrency policy: `session` (remote default) or `local` (one in-process worker).")
     .param_type(ParamType::String);
 
+/// The shared `batch_size?` modifier (bytes), declared once and spliced into each
+/// `review` op's parameter list.
+const BATCH_SIZE_PARAM: ParamMeta = ParamMeta::new("batch_size")
+    .description(
+        "Max inlined file content per review batch, in BYTES (default 131072 = 128 KiB). Changed files are packed whole into batches up to this budget and each batch is reviewed independently; a single file larger than this is an error. Raise it to review larger files in one batch, lower it for smaller batches.",
+    )
+    .param_type(ParamType::Integer);
+
 /// `review file` — review an explicit file path or glob.
 #[derive(Debug, Default)]
 pub struct ReviewFile;
@@ -68,6 +76,7 @@ static REVIEW_FILE_PARAMS: &[ParamMeta] = &[
         .param_type(ParamType::String),
     VALIDATORS_PARAM,
     BACKEND_PARAM,
+    BATCH_SIZE_PARAM,
 ];
 
 impl Operation for ReviewFile {
@@ -104,7 +113,7 @@ impl Operation for ReviewWorking {
     }
 }
 
-static REVIEW_WORKING_PARAMS: &[ParamMeta] = &[VALIDATORS_PARAM, BACKEND_PARAM];
+static REVIEW_WORKING_PARAMS: &[ParamMeta] = &[VALIDATORS_PARAM, BACKEND_PARAM, BATCH_SIZE_PARAM];
 
 /// `review sha` — review the changes in/since a commit or range.
 #[derive(Debug, Default)]
@@ -117,6 +126,7 @@ static REVIEW_SHA_PARAMS: &[ParamMeta] = &[
         .required(),
     VALIDATORS_PARAM,
     BACKEND_PARAM,
+    BATCH_SIZE_PARAM,
 ];
 
 impl Operation for ReviewSha {
@@ -316,6 +326,7 @@ impl ReviewTool {
             backend: string_arg(args, "backend"),
             validators: string_array_arg(args, "validators"),
             concurrency: self.concurrency,
+            batch_size: usize_arg(args, "batch_size"),
         };
 
         let embedder_factory = self

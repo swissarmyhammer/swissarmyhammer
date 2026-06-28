@@ -163,6 +163,9 @@ pub struct ReviewRequest {
     /// The pinned pool worker count from `review.concurrency`, applied by the
     /// server at the wiring layer. `None` defers to the coarse `backend` policy.
     pub concurrency: Option<usize>,
+    /// The content-budgeted batch size in BYTES, from the `batch_size` modifier.
+    /// `None` defers to [`FleetConfig`]'s default (128 KiB). Applies to every scope.
+    pub batch_size: Option<usize>,
 }
 
 /// Run a resolved review request end to end and return the report.
@@ -242,6 +245,14 @@ async fn run_review_request_inner(
 
     let handle = agent_factory().await?;
 
+    // Thread the `batch_size` modifier into the engine config; `None` keeps the
+    // FleetConfig default (128 KiB).
+    let fleet_config = FleetConfig {
+        batch_size: request
+            .batch_size
+            .unwrap_or_else(|| FleetConfig::default().batch_size),
+    };
+
     let report = run_review_over_agent(
         handle.agent,
         handle.notification_rx,
@@ -251,7 +262,7 @@ async fn run_review_request_inner(
         &conn,
         embedder.as_ref(),
         pool_config_for(request.backend.as_deref(), request.concurrency),
-        FleetConfig::default(),
+        fleet_config,
         &now,
     )
     .await
@@ -294,8 +305,12 @@ fn check_review_completeness(report: &ReviewReport) -> Result<(), String> {
     if failed as f64 > attempted as f64 * INCOMPLETE_REVIEW_FAILURE_RATE {
         return Err(format!(
             "incomplete review: {failed}/{attempted} fan-out tasks failed \
-             (over {:.0}% — likely a saturated or unavailable agent queue); \
-             the results are not trustworthy and were not returned as a clean pass",
+             (over {:.0}%) — the review did not actually run, so the empty findings are not a \
+             clean pass and were not returned. This is a genuine fan-out failure (the review \
+             agent/backend erroring or timing out per task), NOT the diff being too large: a \
+             large diff is reviewed in content-budgeted batches, and a single file over \
+             `batch_size` fails fast with its own distinct error. Check the agent/backend health \
+             (and `review.concurrency`), then retry.",
             INCOMPLETE_REVIEW_FAILURE_RATE * 100.0
         ));
     }
