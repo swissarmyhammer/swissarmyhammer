@@ -1,5 +1,12 @@
 [profile.default]
 fail-fast = false
+# Absorb the environmental flaky tail on the self-hosted runner: real-model llama
+# tests (GPU compute is time-sliced -> KV/contention variance), LSP leader-election
+# timing, and FSEvents-watcher timing intermittently fail a different small subset
+# each CI run while passing in isolation. Retry only RE-RUNS failures (no happy-path
+# cost); a genuinely broken test still fails all attempts, while a nondeterministic
+# flake that passes on a retry no longer reds the whole run.
+retries = 2
 # Warn every 5s, hard-kill after 60 periods (5 minutes)
 slow-timeout = { period = "5s", terminate-after = 60 }
 # Note: swissarmyhammer-embedding integration tests are gated behind the
