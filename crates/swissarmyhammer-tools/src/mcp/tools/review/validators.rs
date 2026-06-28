@@ -5,7 +5,7 @@
 //! [`swissarmyhammer_validators::load_rules`] and report on it:
 //!
 //! - `list validators` — one summary row per loaded RuleSet (name, description,
-//!   source layer, match globs, severity, probes, rule count, path), optionally
+//!   source layer, match globs, probes, rule count, path), optionally
 //!   filtered by `source` and/or a path/glob `match`.
 //! - `get validator` — one RuleSet's full rule bodies + probes.
 //! - `check validators` — lint every loaded RuleSet: frontmatter is valid (it
@@ -30,8 +30,6 @@ pub struct ValidatorSummary {
     pub source_layer: String,
     /// The file globs the RuleSet matches against.
     pub match_globs: Vec<String>,
-    /// The RuleSet's default severity (`info` / `warn` / `error`).
-    pub severity: String,
     /// The probe names the RuleSet declares.
     pub probes: Vec<String>,
     /// How many rules the RuleSet carries.
@@ -45,8 +43,6 @@ pub struct ValidatorSummary {
 pub struct RuleDetail {
     /// The rule name.
     pub name: String,
-    /// The rule's effective severity word (`info` / `warn` / `error`).
-    pub severity: String,
     /// The rule's markdown body verbatim.
     pub body: String,
 }
@@ -64,7 +60,7 @@ pub struct ValidatorDetail {
     pub path: String,
     /// The probe names the RuleSet declares.
     pub probes: Vec<String>,
-    /// Each rule's name, severity, and full body.
+    /// Each rule's name and full body.
     pub rules: Vec<RuleDetail>,
 }
 
@@ -75,8 +71,6 @@ pub struct ValidatorFrontmatterView {
     pub name: String,
     /// The RuleSet description.
     pub description: String,
-    /// The default severity word.
-    pub severity: String,
     /// The file globs.
     pub match_globs: Vec<String>,
     /// The declared tags.
@@ -122,7 +116,6 @@ fn summary(ruleset: &RuleSet) -> ValidatorSummary {
         description: ruleset.description().to_string(),
         source_layer: ruleset.source.to_string(),
         match_globs: match_globs(ruleset),
-        severity: ruleset.manifest.severity.to_string(),
         probes: ruleset.manifest.probes.clone(),
         rule_count: ruleset.rules.len(),
         path: ruleset.base_path.display().to_string(),
@@ -196,7 +189,6 @@ pub fn get_validator(name: &str) -> Result<ValidatorDetail, String> {
         .iter()
         .map(|rule| RuleDetail {
             name: rule.name.clone(),
-            severity: rule.effective_severity(ruleset).to_string(),
             body: rule.body.clone(),
         })
         .collect();
@@ -206,7 +198,6 @@ pub fn get_validator(name: &str) -> Result<ValidatorDetail, String> {
         frontmatter: ValidatorFrontmatterView {
             name: ruleset.name().to_string(),
             description: ruleset.description().to_string(),
-            severity: ruleset.manifest.severity.to_string(),
             match_globs: match_globs(ruleset),
             tags: ruleset.manifest.tags.clone(),
             version: ruleset.manifest.metadata.version.clone(),

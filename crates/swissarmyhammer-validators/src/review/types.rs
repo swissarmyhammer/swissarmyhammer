@@ -13,33 +13,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AvpError;
 
-/// Severity of a review [`Finding`].
-///
-/// Serializes to exactly `blocker` / `warning` / `nit`, matching the review
-/// skill's checklist sections so a finding's severity maps straight onto the
-/// section it is rendered under.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Severity {
-    /// Must be fixed before the change can merge.
-    Blocker,
-    /// Should be addressed but does not block.
-    Warning,
-    /// Minor / cosmetic; nice to fix.
-    Nit,
-}
-
-impl std::fmt::Display for Severity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Severity::Blocker => "blocker",
-            Severity::Warning => "warning",
-            Severity::Nit => "nit",
-        };
-        f.write_str(s)
-    }
-}
-
 /// A single structured review finding.
 ///
 /// This is the structured shape a fleet review agent emits and every later
@@ -70,9 +43,6 @@ pub struct Finding {
     /// still valid without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule: Option<String>,
-
-    /// How serious the finding is.
-    pub severity: Severity,
 
     /// What is wrong **and why it matters** — the human-facing sentence.
     ///
@@ -294,48 +264,11 @@ mod tests {
             line: 88,
             validator: "deduplicate".to_string(),
             rule: rule.map(String::from),
-            severity: Severity::Warning,
             claim: "Duplicated logic with foo.rs — a future edit will fix only one copy."
                 .to_string(),
             evidence: "`find_duplicates`: 0.94 match at `foo.rs:42`".to_string(),
             suggestion: suggestion.map(String::from),
         }
-    }
-
-    #[test]
-    fn severity_serializes_to_lowercase_words() {
-        assert_eq!(
-            serde_json::to_string(&Severity::Blocker).unwrap(),
-            "\"blocker\""
-        );
-        assert_eq!(
-            serde_json::to_string(&Severity::Warning).unwrap(),
-            "\"warning\""
-        );
-        assert_eq!(serde_json::to_string(&Severity::Nit).unwrap(), "\"nit\"");
-    }
-
-    #[test]
-    fn severity_deserializes_from_lowercase_words() {
-        assert_eq!(
-            serde_json::from_str::<Severity>("\"blocker\"").unwrap(),
-            Severity::Blocker
-        );
-        assert_eq!(
-            serde_json::from_str::<Severity>("\"warning\"").unwrap(),
-            Severity::Warning
-        );
-        assert_eq!(
-            serde_json::from_str::<Severity>("\"nit\"").unwrap(),
-            Severity::Nit
-        );
-    }
-
-    #[test]
-    fn severity_display_matches_serde() {
-        assert_eq!(Severity::Blocker.to_string(), "blocker");
-        assert_eq!(Severity::Warning.to_string(), "warning");
-        assert_eq!(Severity::Nit.to_string(), "nit");
     }
 
     #[test]
@@ -355,6 +288,32 @@ mod tests {
         assert_eq!(finding, back);
         assert_eq!(back.rule, None);
         assert_eq!(back.suggestion, None);
+    }
+
+    #[test]
+    fn finding_serializes_without_a_severity_field() {
+        // Review is a binary pass/fail model: a finding carries no severity tier.
+        // The on-the-wire shape must never include a `severity` key.
+        let json = serde_json::to_value(sample_finding(None, None)).unwrap();
+        assert!(
+            json.get("severity").is_none(),
+            "a finding must not serialize a severity field: {json}"
+        );
+    }
+
+    #[test]
+    fn finding_parses_without_a_severity_field() {
+        // A contract-shaped finding the fan-out agent emits carries no severity.
+        let json = r#"{
+            "file": "src/bar.rs",
+            "line": 88,
+            "validator": "deduplicate",
+            "claim": "Duplicated logic.",
+            "evidence": "0.94 match"
+        }"#;
+        let finding: Finding = serde_json::from_str(json).unwrap();
+        assert_eq!(finding.file, "src/bar.rs");
+        assert_eq!(finding.line, 88);
     }
 
     #[test]
@@ -381,7 +340,6 @@ mod tests {
         let finding: Finding = serde_json::from_str(json).unwrap();
         assert_eq!(finding.rule, None);
         assert_eq!(finding.suggestion, None);
-        assert_eq!(finding.severity, Severity::Warning);
     }
 
     #[test]
@@ -435,7 +393,6 @@ mod tests {
         let findings = parse_findings(text).unwrap();
         assert_eq!(findings.len(), 2);
         assert_eq!(findings[0].rule, None);
-        assert_eq!(findings[0].severity, Severity::Blocker);
         assert_eq!(findings[1].rule.as_deref(), Some("r2"));
         assert_eq!(findings[1].suggestion.as_deref(), Some("fix it"));
     }
@@ -455,7 +412,6 @@ mod tests {
         assert_eq!(findings.len(), 1);
         // The agent left it empty; the fleet stage fills the authoritative name.
         assert_eq!(findings[0].validator, "");
-        assert_eq!(findings[0].severity, Severity::Blocker);
         assert_eq!(findings[0].file, "lib.rs");
     }
 
@@ -484,7 +440,6 @@ Let me know if you want more detail."#;
         let findings = parse_findings(text).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].file, "src/bar.rs");
-        assert_eq!(findings[0].severity, Severity::Warning);
         assert_eq!(findings[0].rule.as_deref(), Some("no-copy-paste"));
     }
 
@@ -528,7 +483,6 @@ Let me know if you want more detail."#;
         let findings = parse_findings(text).expect("a single bare finding object must parse");
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule.as_deref(), Some("no-magic-numbers"));
-        assert_eq!(findings[0].severity, Severity::Warning);
     }
 
     #[test]
@@ -554,7 +508,6 @@ Let me know if you want more detail."#;
         let findings = parse_findings(text).expect("a single fenced finding object must parse");
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].line, 7);
-        assert_eq!(findings[0].severity, Severity::Nit);
     }
 
     #[test]

@@ -61,7 +61,7 @@
 //!   then the prime handoff. No validator text.
 //! - [`render_validator_suffix`] (forked per validator): the **validator
 //!   instructions** — the mandate (the validator's `description`), the paths of
-//!   the validator's files in scope, every rule body verbatim, the severity
+//!   the validator's files in scope, every rule body verbatim, the
 //!   default, and the output contract (every finding emits `rule` + `claim` +
 //!   `evidence` + `suggestion`, matching the [`Finding`] type).
 //! - [`render_fleet_prompt`] (degraded fallback): the change purpose, the
@@ -74,19 +74,48 @@ use crate::review::scope::{FileWork, ValidatorWork, WorkList};
 use crate::review::types::{parse_findings, Finding};
 use crate::validators::{
     AgentPool, ForkAttachment, PoolError, RuleSet, SessionPinGuard, SessionTurn, SessionTurnResult,
-    Severity, ValidatorLoader,
+    ValidatorLoader,
 };
 use agent_client_protocol_extras::SessionStateStatusResponse;
+
+/// The default review `batch_size` in **bytes** (128 KiB).
+///
+/// Cramming every changed file's full source into one shared prime overflows the
+/// review model's context on a large diff (every fan-out validator then fails
+/// uniformly), and even when it fits it dilutes attention. So a run is split into
+/// byte-budgeted batches and each batch fans out independently. This budget is a
+/// deliberate, tunable knob — not derived from the model's context window.
+///
+/// It is sized to clear the largest single source file in a typical change
+/// (~95 KB) so an ordinary commit reviews in one or a few batches instead of
+/// tripping the oversize-file error, while a genuinely large multi-file diff
+/// still splits across batches. (32 KiB — the previous default — was smaller
+/// than many real source files, so default reviews of normal commits errored.)
+pub const DEFAULT_BATCH_SIZE: usize = 128 * 1024;
 
 /// Configuration for a fan-out run.
 ///
 /// The fan-out grain is the validator and the change's files live in the run's
-/// shared prime (not a per-task suffix), so there is no longer a file-batching
-/// dimension to configure. This stays a struct rather than a unit so the
-/// [`run_fleet`] / [`run_review`](crate::review::run_review) signatures keep room
-/// for future fan-out knobs without churning every caller.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FleetConfig {}
+/// shared prime. [`batch_size`](FleetConfig::batch_size) bounds how much inlined
+/// file content one prime may carry: [`run_review`](crate::review::run_review)
+/// uses it to split the work-list into batches
+/// ([`batch_work_list`](crate::review::scope::batch_work_list)) and fan each batch
+/// out independently, so a large diff no longer overflows the prime.
+#[derive(Debug, Clone, Copy)]
+pub struct FleetConfig {
+    /// The maximum inlined file content, in bytes, one batch's shared prime may
+    /// carry. Whole files are packed greedily up to this budget; a single file
+    /// larger than it is a hard error (never split, never sliced).
+    pub batch_size: usize,
+}
+
+impl Default for FleetConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: DEFAULT_BATCH_SIZE,
+        }
+    }
+}
 
 /// The result of a fan-out run: the merged findings plus the task tally.
 ///
@@ -724,7 +753,7 @@ fn tag_findings(mut findings: Vec<Finding>, validator: &str) -> Vec<Finding> {
 /// Self-contained and scoped exactly as the old per-validator prompt was: the
 /// change purpose, that validator's own files (path + semantic diff + bounded
 /// source slice + probe evidence), and the validator's instructions (mandate +
-/// every rule body + severity default + output contract). It is the cold fallback
+/// every rule body + output contract). It is the cold fallback
 /// when priming or this validator's fork fails — correct, just not warm.
 ///
 /// The warm path splits the run's large shared content into the run prime
@@ -787,7 +816,7 @@ pub fn render_run_prime(work: &WorkList) -> String {
 
 /// Render the per-validator suffix a forked session is prompted with: the
 /// validator header, mandate, the files this validator must focus on, every one
-/// of the validator's rule bodies, the severity default, and the output contract.
+/// of the validator's rule bodies, and the output contract.
 /// The files' contents are already in the fork's inherited prime; only their
 /// paths are named here so the validator stays scoped to its matched files (not
 /// every file in the prime), without re-sending any diff.
@@ -809,12 +838,6 @@ pub fn render_validator_suffix(validator: &ValidatorWork, ruleset: &RuleSet) -> 
         out.push_str(rule.body.trim());
         out.push_str("\n\n");
     }
-
-    let _ = writeln!(
-        out,
-        "## Default severity\n\nUnless a rule states otherwise, findings default to severity `{}`.\n",
-        severity_default(validator.severity)
-    );
 
     out.push_str(OUTPUT_CONTRACT);
     out.push('\n');
@@ -846,17 +869,6 @@ pub fn render_file_payload(files: &[FileWork]) -> String {
         render_file_block(&mut out, file);
     }
     out
-}
-
-/// The validator's default severity as the `blocker`/`warning`/`nit` word the
-/// [`Finding`] severity field uses, so the contract speaks the agent's output
-/// vocabulary rather than the loader's internal `info`/`warn`/`error`.
-fn severity_default(severity: Severity) -> &'static str {
-    match severity {
-        Severity::Error => "blocker",
-        Severity::Warn => "warning",
-        Severity::Info => "nit",
-    }
 }
 
 /// The finding output contract, shared verbatim by every fan-out prompt.
@@ -895,42 +907,37 @@ Each finding is one object with these fields:
 - `file`: the path of the file the finding is about.
 - `line`: the 1-based line number the finding points at.
 - `rule`: which rule of this validator fired.
-- `severity`: one of `blocker`, `warning`, `nit`.
 - `claim`: what is wrong AND why it matters — one concern per finding.
 - `evidence`: the proof the issue is real — cite the injected probe result \
 (e.g. \"per `duplicates`: 0.94 at `bar.rs:88`\") or a `file:line` citation.
 - `suggestion`: the fix.
 
+Report every occurrence of every rule that fires, in this single pass: when a \
+rule matches on several lines, emit a separate finding for each match — one \
+finding per `file:line`. Do not stop at the first match and do not collapse \
+repeated matches into one finding; list them all so the whole file can be fixed \
+in one go rather than re-reviewed match by match.
+
 Report only real issues. If you find none, emit an empty array `[]`.
 ";
 
-/// Append one file's review block: path, the full current source (or the bounded
-/// fallback for an oversized file), the semantic diff of what changed, and the
-/// probe results rendered as evidence.
+/// Append one file's review block: path, the full current source, the semantic
+/// diff of what changed, and the probe results rendered as evidence.
 ///
-/// The changed file is handed to the model **in full** when it fits the inline
-/// budget ([`FileWork::inlined_full`]), framed explicitly as the complete current
-/// contents the model does NOT need to re-read — the read-round-trips that
-/// dominated review wall-clock came from the model re-reading a file it was only
-/// given a partial slice of. An oversized file falls back to the bounded slice
-/// (which already carries a `read_file` note from the scope stage) and is framed
-/// as a partial view.
+/// The changed file is always handed to the model **in full** — framed explicitly
+/// as the complete current contents the model does NOT need to re-read, because
+/// the read-round-trips that dominated review wall-clock came from the model
+/// re-reading a file it was only given a partial slice of. A file too large for
+/// the review `batch_size` never reaches here as a partial view: the scope stage
+/// rejects it with a hard error rather than trimming it to a slice.
 fn render_file_block(out: &mut String, file: &FileWork) {
     let _ = writeln!(out, "## File: {}\n", file.path);
 
-    if file.inlined_full {
-        out.push_str(
-            "### Full current contents\n\n\
-             This is the COMPLETE current source of the file. You do not need to read this \
-             file — it is provided here in full. Review it directly.\n\n",
-        );
-    } else {
-        out.push_str(
-            "### Source slice (partial — file too large to inline in full)\n\n\
-             This is a BOUNDED slice of an oversized file, not its complete contents. \
-             Use `read_file` on this path to see the remainder before reasoning about it.\n\n",
-        );
-    }
+    out.push_str(
+        "### Full current contents\n\n\
+         This is the COMPLETE current source of the file. You do not need to read this \
+         file — it is provided here in full. Review it directly.\n\n",
+    );
     out.push_str("```\n");
     out.push_str(file.source_slice.trim_end());
     out.push_str("\n```\n\n");
@@ -1003,7 +1010,6 @@ mod tests {
                 trigger_matcher: None,
                 tags: vec![],
                 probes: vec![],
-                severity: Severity::Warn,
                 timeout: 30,
                 once: false,
             },
@@ -1013,7 +1019,6 @@ mod tests {
                     name: rname.to_string(),
                     description: format!("{rname} description"),
                     body: body.to_string(),
-                    severity: None,
                     timeout: None,
                 })
                 .collect(),
@@ -1053,7 +1058,6 @@ mod tests {
             }],
             changed_symbols: vec![symbol.to_string()],
             source_slice: format!("// slice for {path}\nfn {symbol}() {{}}"),
-            inlined_full: true,
             probe_results: vec![ProbeResult {
                 name: "duplicates".to_string(),
                 kind: ProbeKind::Fact,
@@ -1072,7 +1076,6 @@ mod tests {
     fn validator_work(name: &str, files: Vec<FileWork>) -> ValidatorWork {
         ValidatorWork {
             validator_name: name.to_string(),
-            severity: Severity::Warn,
             rules: vec![format!("{name}-rule")],
             probes: vec!["duplicates".to_string()],
             files,
@@ -1131,6 +1134,18 @@ mod tests {
         }
     }
 
+    // ---- config tests ----------------------------------------------------
+
+    #[test]
+    fn default_batch_size_is_128_kib() {
+        // The default budget clears the largest single source file in a typical
+        // change (~95 KB) so an ordinary commit reviews without tripping the
+        // oversize-file error; only genuinely huge multi-file diffs still split.
+        assert_eq!(DEFAULT_BATCH_SIZE, 128 * 1024);
+        assert_eq!(DEFAULT_BATCH_SIZE, 131072);
+        assert_eq!(FleetConfig::default().batch_size, DEFAULT_BATCH_SIZE);
+    }
+
     // ---- renderer tests (pure) -------------------------------------------
 
     #[test]
@@ -1173,8 +1188,8 @@ mod tests {
         assert!(prompt.contains("`claim`"), "{prompt}");
         assert!(prompt.contains("`evidence`"), "{prompt}");
         assert!(prompt.contains("`suggestion`"), "{prompt}");
-        // Severity default rendered from the validator severity (warn → warning).
-        assert!(prompt.contains("severity `warning`"), "{prompt}");
+        // Binary pass/fail: the contract carries no severity field at all.
+        assert!(!prompt.contains("`severity`"), "{prompt}");
     }
 
     #[test]
@@ -1336,12 +1351,11 @@ mod tests {
     /// re-reading the changed file it was already handed.
     #[test]
     fn full_inline_payload_carries_complete_source_and_no_reread_framing() {
-        // A FileWork whose source_slice is the WHOLE file (inlined_full = true),
-        // including a marker line the old bounded slice would have trimmed.
+        // A FileWork whose source_slice is the WHOLE file, including a marker line
+        // the old bounded slice would have trimmed.
         let mut file = file_work("src/a.rs", "alpha", "src/x.rs");
         file.source_slice =
             "use std::fmt;\n// distant_marker_kept_in_full\npub fn alpha() {}".to_string();
-        file.inlined_full = true;
 
         let payload = render_file_payload(std::slice::from_ref(&file));
 
@@ -1356,30 +1370,6 @@ mod tests {
             payload.to_lowercase().contains("full")
                 && payload.to_lowercase().contains("do not need to read"),
             "the block must frame the source as the full file the model need not read: {payload}"
-        );
-    }
-
-    /// An oversized (fallback) changed file's payload carries the bounded slice
-    /// and the read-the-rest note carried through from the scope stage, and does
-    /// NOT claim to be the complete file.
-    #[test]
-    fn fallback_payload_keeps_the_read_for_the_rest_note() {
-        let mut file = file_work("src/big.rs", "huge", "src/x.rs");
-        file.source_slice =
-            "// bounded slice\npub fn huge() {}\n\n// NOTE: this file is too large to inline in full; \
-the slice above is bounded. Use `read_file` on this path to see the remainder before reasoning about it."
-                .to_string();
-        file.inlined_full = false;
-
-        let payload = render_file_payload(std::slice::from_ref(&file));
-
-        assert!(
-            payload.contains("read_file"),
-            "the fallback payload must direct the model to read_file for the rest: {payload}"
-        );
-        assert!(
-            !payload.to_lowercase().contains("do not need to read"),
-            "an oversized file must NOT be framed as fully provided: {payload}"
         );
     }
 
@@ -1400,11 +1390,25 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
         );
     }
 
+    /// The contract must demand reporting EVERY occurrence of every rule that
+    /// fires in a single pass — one finding per `file:line`, never stopping at the
+    /// first match. Bail-fast (find-one → fix → re-review) is the re-review token
+    /// storm this contract exists to prevent.
     #[test]
-    fn severity_default_maps_to_finding_vocabulary() {
-        assert_eq!(severity_default(Severity::Error), "blocker");
-        assert_eq!(severity_default(Severity::Warn), "warning");
-        assert_eq!(severity_default(Severity::Info), "nit");
+    fn output_contract_demands_every_occurrence_with_no_bail_fast() {
+        let lower = OUTPUT_CONTRACT.to_lowercase();
+        assert!(
+            lower.contains("every occurrence of every rule"),
+            "the contract must demand every occurrence of every rule: {OUTPUT_CONTRACT}"
+        );
+        assert!(
+            lower.contains("do not stop at the first"),
+            "the contract must forbid stopping at the first match: {OUTPUT_CONTRACT}"
+        );
+        assert!(
+            OUTPUT_CONTRACT.contains("one finding per `file:line`"),
+            "the contract must require one finding per file:line: {OUTPUT_CONTRACT}"
+        );
     }
 
     // ---- orchestrator tests (scripted mock agent) ------------------------
@@ -1449,7 +1453,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "ra",
-                    "warning",
                     "dup in a",
                 )),
             ),
@@ -1459,7 +1462,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/b.rs",
                     TEST_FINDING_LINE,
                     "rb",
-                    "warning",
                     "dup in b",
                 )),
             ),
@@ -1649,7 +1651,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                 "src/f0.rs",
                 TEST_FINDING_LINE,
                 "r1",
-                "warning",
                 "warm finding",
             )),
         )]);
@@ -1798,7 +1799,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "r",
-                    "warning",
                     "found despite fork failure",
                 )),
             )],
@@ -1861,7 +1861,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/b.rs",
                     TEST_FINDING_LINE,
                     "r",
-                    "warning",
                     "found without forks",
                 )),
             )],
@@ -1919,7 +1918,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "r",
-                    "warning",
                     "cold but correct",
                 )),
             )],
@@ -1967,7 +1965,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "r",
-                    "warning",
                     "warm on claude",
                 )),
             )],
@@ -2137,7 +2134,6 @@ the slice above is bounded. Use `read_file` on this path to see the remainder be
                     "src/a.rs",
                     TEST_FINDING_LINE,
                     "good-rule",
-                    "warning",
                     "real issue",
                 )),
             ),

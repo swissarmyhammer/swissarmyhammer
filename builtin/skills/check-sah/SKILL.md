@@ -26,7 +26,6 @@ SLUG=$(echo "$REPO" | sed 's#[/. ]#-#g')
 TRANSCRIPTS="$HOME/.claude/projects/$SLUG"
 # Fallback if the slug doesn't resolve: list and match by basename
 [ -d "$TRANSCRIPTS" ] || TRANSCRIPTS="$HOME/.claude/projects/$(ls "$HOME/.claude/projects/" | grep -i "$(basename "$REPO")" | head -1)"
-HASHES="$REPO/.validators/.hashes"   # review-engine hash store
 ```
 
 Pin `REPO` and `TRANSCRIPTS` for the whole run and pass them forward in every scheduled wake-up.
@@ -36,7 +35,7 @@ Pin `REPO` and `TRANSCRIPTS` for the whole run and pass them forward in every sc
 - `$TRANSCRIPTS/<uuid>.jsonl` — a session (the orchestrator for `/finish`, `/plan`, etc.).
 - `$TRANSCRIPTS/<uuid>/subagents/agent-*.jsonl` — that session's delegated subagents (implementer/tester/reviewer/committer/double-check).
 - `$TRANSCRIPTS/019*-*.jsonl` (top-level) — the **review engine** fans out into *separate* top-level sessions (content contains `Files under review` / `current contents`). These are NOT under the finish session's `subagents/` dir and are easy to miss when summing tokens.
-- `$HASHES/<dir>/<file>.yaml` — review skip-hashes, keyed by **relative** path (`content_hash`, `rules_hash`, `reviewed_at`).
+- Each `/finish` review is scoped to that checkpoint's commit delta (`sha HEAD~1..HEAD`) and content-batched by `batch_size` (default 128 KB). There is **no per-file hash store / skip-hash cache** to inspect — the old `.validators/.hashes/` incremental-tracking subsystem was removed, so there is nothing on disk that records what was reviewed.
 - The project repo is typically reset between runs; per-task `/finish` commits are **local, never pushed**.
 
 ## Locate the active finish session
@@ -67,6 +66,7 @@ Run every wake-up (keep each shell command **< 4000 chars**; split into multiple
 2. **Error scan** — count `"is_error":true` across finish + subagents; count `security check failed` blocks. Classify new ones (see Benign patterns). Flag NEW/fatal.
 3. **Token quant** (below).
 4. **sah tool errors & behavior** (below).
+5. **Review-rule health** (below) — contradictions, invalid-code findings, declined/force-closed findings, churn, stuck tasks.
 
 ## Token quant (cache_creation + cache_read = the cost driver)
 
@@ -76,7 +76,7 @@ Sum **scoped to this run** (mtime-filter the review sessions — a naive `019*` 
 - **Orchestrator**: the finish session file itself (surprisingly large — re-reads its growing transcript each turn).
 - **GRAND** = review + subagents + orch. Report per-task.
 
-**Calibration** (reference, from an 8–9 task greenfield build — adjust per project): healthy ≈ **9–10.5M tokens/task**; a broken-hash run ≈ **15M/task**. Three "big rocks" ≈ 80% of spend: **review engine** (~35–39%), **implementer** (~22–28%), **orchestrator** (often ~11–18M, roughly fixed regardless of task count). Treat the first run you observe as the baseline; flag later runs that deviate.
+**Calibration** (reference, from an 8–9 task greenfield build — adjust per project): healthy ≈ **9–10.5M tokens/task**; flag a run drifting toward **15M+/task** as a regression to investigate. Three "big rocks" ≈ 80% of spend: **review engine** (~35–39%), **implementer** (~22–28%), **orchestrator** (often ~11–18M, roughly fixed regardless of task count). Treat the first run you observe as the baseline; flag later runs that deviate.
 
 ## sah tool errors & behavior
 
@@ -115,6 +115,18 @@ Known tooling issues to recognize (examples, not exhaustive):
 - **`kanban`** — `delete column: missing id` / `get task: missing id` (parse retries); `init board: already exists`.
 - **`shell`** — `security check failed` false-positives (see Benign patterns); `Unknown operation 'detect projects'` when `detect projects` is mis-routed to `shell` instead of `code_context`.
 
+## Review-rule health (the agent should obey findings, not fight them)
+
+The finish agent must **obey** every review finding (fix the code) or — only for a genuine contradiction / impossibility — **report it and park the task stuck** for a human to fix the rule. It must **never** dismiss a finding, rewrite a validator to silence one, or force a task to `done` with findings open. Each cycle, watch for these and surface each with the offending finding quoted verbatim and the likely validator named:
+
+1. **Force-closed / declined findings — cardinal violation, flag hard.** The orchestrator moved a task to `done` (`complete task`, or `move task … done`) while its latest `/review` was non-clean, or prior `- [ ]` items were still unchecked. Tell-tale prose around the close: "decline", "exercise (orchestrator) judgment", "review-churn", "pedantic", "no bonus refactoring", "I'll close/exercise judgment". This is the behavior the updated finish/review skills forbid; report the close **and** the open findings it skipped.
+2. **Genuine bad rule — a finding that demands invalid code or fights a deliberate contract.** e.g. `null`→`undefined` where `tsc` needs `T | null`; `snake_case`→camelCase on a parameter mirroring a backend/IPC payload; any suggestion that wouldn't compile. Here the agent is *right* to refuse to hand-apply it — but the correct resolution is a **human-made builtin validator fix**, not a silent close. Surface as a "candidate validator bug" naming the rule (`js-ts/api-design` undefined-over-null, `naming/naming-consistency`, etc.).
+3. **Contradictory findings.** Two findings on the same file/lines whose fixes are mutually exclusive. NB: `data-driven`/reuse (consolidate) vs `function-length` (split) is **not** a true contradiction — a spec-table + generator satisfies both; if the agent declined citing that "conflict," that is an agent failure, not a rule bug. A true contradiction is two rules that genuinely cannot both hold.
+4. **Review-churn / non-convergence.** Re-review of byte-identical (or trivially-changed) content surfaces *new* findings each round instead of converging to zero — rising finding `counts` across dated `## Review Findings` sections, or fresh findings on unchanged lines. This is review-engine instability (non-deterministic fan-out, no suppression of already-declined items) and is what pressures the agent into force-closing.
+5. **Stuck tasks.** A task that hit the step-7 guardrail (same finding ×3) or has sat in `review` many iterations on the same finding. Under the current skill this should be **parked stuck with the contradiction reported** — confirm that happened and surface it as a human-actionable rule-fix candidate; flag hard if the agent force-closed it instead.
+
+Detection: diff the dated `## Review Findings (...)` sections on each in-`review` task round-over-round (from `get task` and the orchestrator's `update task` calls); pull each `review` tool_result's `counts`; and check every `complete task` / `move task→done` against the immediately-preceding review verdict and the task's unchecked boxes. Classify each into one of the five above; (1) and a force-closed (5) are agent disobedience, (2)–(3) are validator bugs to escalate, (4) is engine instability.
+
 ## Stop & final summary
 
 STOP (do not reschedule) when the board is fully clear (all tasks `done`) **or** finish did `clear ralph` / went idle (subagents *and* orchestrator not advancing across two checks). Final summary:
@@ -122,7 +134,8 @@ STOP (do not reschedule) when the board is fully clear (all tasks `done`) **or**
 - **sah tool** op breakdown (every `mcp__sah__*` tool/op) + any errors (exact tool + op + input + result).
 - All commits (`git -C "$REPO" log --oneline`).
 - Full error list (classified), review-fix loops, committer slowness, scope adherence.
-- **Standing token-saving recs**: (1) review-engine — cut per-round fan-out, don't full-sweep on re-review, share a cached file prefix, stop `force:true`; (2) orchestrator slimming (large fixed overhead); (3) committer — stop re-running clippy/nextest/fmt on an already-verified tree (commit inline); (4) test skill — empty suite ≠ failure, never author tests to force green; (5) `get-lines` — shell `execute` should inline small output instead of a mandatory 2nd call (median output ~13 lines; ~46% of shell calls were paging); (6) fix the security-guard false-positive (see below) and the `code_context` "invalid regex pattern" mislabel.
+- **Review-rule health**: every force-closed/declined finding (the close + the open findings it skipped, quoted), candidate validator bugs (invalid-code / contract-fighting findings, naming the rule to fix in `builtin/validators/…`), true contradictions, churn/non-convergence, and stuck tasks correctly parked for a human rule-fix — classified as agent-disobedience vs validator-bug vs engine-instability.
+- **Standing token-saving recs**: (1) review-engine — cut per-round fan-out and tune `batch_size` so each per-commit `HEAD~1..HEAD` review packs files efficiently (the review is already commit-delta-scoped — there is no hash cache left to skip unchanged files, so the levers are fan-out width and batch packing, not re-review suppression); (2) orchestrator slimming (large fixed overhead); (3) committer — stop re-running clippy/nextest/fmt on an already-verified tree (commit inline); (4) test skill — empty suite ≠ failure, never author tests to force green; (5) `get-lines` — shell `execute` should inline small output instead of a mandatory 2nd call (median output ~13 lines; ~46% of shell calls were paging); (6) fix the security-guard false-positive (see below) and the `code_context` "invalid regex pattern" mislabel.
 
 ## Benign / known error patterns
 
@@ -136,5 +149,5 @@ Self-pace with `ScheduleWakeup` at **600s** (10 min), passing this skill's monit
 
 - **Never** put the literal `Dynamic code eval`+`uation` phrase in a command — the shell security guard false-positive-blocks any command containing it (it will block your own analysis command). Use `grep 'security check failed'` to count blocks.
 - Keep commands **< 4096 chars**; split long analyses; avoid escaped `\"` inside `python3 -c`.
-- Transcript/hash timestamps are **UTC** (= local + 5h).
+- Transcript timestamps are **UTC** (= local + 5h).
 - The board often resets to empty (`todo→doing→done`) between runs; the `review` column gets appended later and can momentarily land terminal — finish fixes the column order autonomously (benign).

@@ -163,11 +163,9 @@ pub struct ReviewRequest {
     /// The pinned pool worker count from `review.concurrency`, applied by the
     /// server at the wiring layer. `None` defers to the coarse `backend` policy.
     pub concurrency: Option<usize>,
-    /// The force/all escape hatch. `false` (the default) keeps `review working`
-    /// incremental — files unchanged since their last review are subtracted via
-    /// the `.validators/.hashes/` tracking baseline. `true` ignores tracking and
-    /// reviews the whole resolved set. Inert for non-working scopes.
-    pub force: bool,
+    /// The content-budgeted batch size in BYTES, from the `batch_size` modifier.
+    /// `None` defers to [`FleetConfig`]'s default (128 KiB). Applies to every scope.
+    pub batch_size: Option<usize>,
 }
 
 /// Run a resolved review request end to end and return the report.
@@ -247,10 +245,14 @@ async fn run_review_request_inner(
 
     let handle = agent_factory().await?;
 
-    // Incremental working review unless the caller forced a full pass: the engine
-    // subtracts files unchanged since their last review (via `.validators/.hashes/`)
-    // and records a fresh baseline for every reviewed file when the pass completes.
-    let use_tracking = !request.force;
+    // Thread the `batch_size` modifier into the engine config; `None` keeps the
+    // FleetConfig default (128 KiB).
+    let fleet_config = FleetConfig {
+        batch_size: request
+            .batch_size
+            .unwrap_or_else(|| FleetConfig::default().batch_size),
+    };
+
     let report = run_review_over_agent(
         handle.agent,
         handle.notification_rx,
@@ -260,9 +262,8 @@ async fn run_review_request_inner(
         &conn,
         embedder.as_ref(),
         pool_config_for(request.backend.as_deref(), request.concurrency),
-        FleetConfig::default(),
+        fleet_config,
         &now,
-        use_tracking,
     )
     .await
     .map_err(|e| format!("review pipeline failed: {e}"))?;
@@ -304,8 +305,12 @@ fn check_review_completeness(report: &ReviewReport) -> Result<(), String> {
     if failed as f64 > attempted as f64 * INCOMPLETE_REVIEW_FAILURE_RATE {
         return Err(format!(
             "incomplete review: {failed}/{attempted} fan-out tasks failed \
-             (over {:.0}% — likely a saturated or unavailable agent queue); \
-             the results are not trustworthy and were not returned as a clean pass",
+             (over {:.0}%) — the review did not actually run, so the empty findings are not a \
+             clean pass and were not returned. This is a genuine fan-out failure (the review \
+             agent/backend erroring or timing out per task), NOT the diff being too large: a \
+             large diff is reviewed in content-budgeted batches, and a single file over \
+             `batch_size` fails fast with its own distinct error. Check the agent/backend health \
+             (and `review.concurrency`), then retry.",
             INCOMPLETE_REVIEW_FAILURE_RATE * 100.0
         ));
     }
@@ -342,24 +347,23 @@ fn open_index_connection(repo_path: &Path) -> Result<Connection, String> {
 }
 
 /// The JSON shape returned for a `review file/working/sha` op: the rendered
-/// markdown plus the per-severity / per-verdict counts.
+/// markdown plus the per-verdict counts.
 #[derive(Debug, Serialize)]
 pub struct ReviewResponse {
     /// The dated GFM `## Review Findings (...)` section.
     pub markdown: String,
-    /// The per-severity / per-verdict tallies.
+    /// The per-verdict tallies.
     pub counts: ReviewCountsView,
 }
 
 /// The serializable view of the engine's review counts.
+///
+/// Review is binary pass/fail — there is no graded severity — so the rendered
+/// failures are a single `findings` count, not a per-tier breakdown.
 #[derive(Debug, Serialize)]
 pub struct ReviewCountsView {
-    /// Confirmed blocker findings.
-    pub blockers: usize,
-    /// Confirmed warning findings.
-    pub warnings: usize,
-    /// Confirmed nit findings.
-    pub nits: usize,
+    /// Confirmed findings rendered into the checklist (post-dedup).
+    pub findings: usize,
     /// Findings the verifier confirmed.
     pub confirmed: usize,
     /// Findings the verifier refuted.
@@ -376,9 +380,7 @@ impl From<ReviewReport> for ReviewResponse {
         ReviewResponse {
             markdown: report.markdown,
             counts: ReviewCountsView {
-                blockers: report.counts.blockers,
-                warnings: report.counts.warnings,
-                nits: report.counts.nits,
+                findings: report.counts.findings,
                 confirmed: report.counts.confirmed,
                 refuted: report.counts.refuted,
                 attempted: report.counts.tasks_attempted,

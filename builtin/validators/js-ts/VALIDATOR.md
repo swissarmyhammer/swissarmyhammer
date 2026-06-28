@@ -12,7 +12,6 @@ match:
     - "**/*.jsx"
     - "**/*.ts"
     - "**/*.tsx"
-severity: warn
 ---
 
 # JavaScript/TypeScript Review Validator
@@ -28,5 +27,6 @@ equivalent of `**/*.{js,jsx,ts,tsx}`: the validator engine matches with the
 extensions are listed individually.
 
 Each rule is an **in-file idiom judgment** read from the diff — there are no
-engine probes. Most findings are warnings or nits; hard disqualifiers from the
-source carry `error` severity.
+engine probes. Every rule that fires must be fixed — review is binary
+pass/fail, with no advisory or severity tier among findings. Only add a rule to
+this validator if you want it enforced; there are no advisory rules.

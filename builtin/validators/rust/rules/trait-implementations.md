@@ -1,7 +1,6 @@
 ---
 name: trait-implementations
 description: New public types must implement all applicable traits
-severity: warn
 ---
 
 # Rust Trait Implementations

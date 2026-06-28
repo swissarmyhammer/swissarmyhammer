@@ -11,7 +11,6 @@ match:
   files:
     - "@file_groups/source_code"
     - "@file_groups/test_files"
-severity: error
 ---
 
 # Test Integrity Validator

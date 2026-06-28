@@ -22,18 +22,6 @@ pub(crate) fn string_arg(
     args.get(key).and_then(|v| v.as_str()).map(str::to_string)
 }
 
-/// Read an optional boolean flag (`false` when absent or wrong-typed).
-///
-/// Accepts a real JSON `true`/`false` or the strings `"true"`/`"false"` so a
-/// forgiving caller can pass either shape.
-pub(crate) fn bool_arg(args: &serde_json::Map<String, serde_json::Value>, key: &str) -> bool {
-    match args.get(key) {
-        Some(serde_json::Value::Bool(b)) => *b,
-        Some(serde_json::Value::String(s)) => s.eq_ignore_ascii_case("true"),
-        _ => false,
-    }
-}
-
 /// Read an optional string-array argument (empty when absent or wrong-typed).
 ///
 /// Non-string array elements are silently skipped.
@@ -49,6 +37,18 @@ pub(crate) fn string_array_arg(
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Read an optional non-negative integer argument as a `usize`.
+///
+/// Returns `None` when the key is absent or is not a JSON unsigned integer (a
+/// negative or fractional number is treated as absent, deferring to the caller's
+/// default).
+pub(crate) fn usize_arg(
+    args: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<usize> {
+    args.get(key).and_then(|v| v.as_u64()).map(|n| n as usize)
 }
 
 /// Serialize a value into a JSON-text [`CallToolResult`].
@@ -80,23 +80,6 @@ mod tests {
     }
 
     #[test]
-    fn bool_arg_accepts_json_bool_and_string() {
-        let args = map(serde_json::json!({
-            "t": true,
-            "f": false,
-            "st": "TrUe",
-            "sf": "no",
-            "n": 1
-        }));
-        assert!(bool_arg(&args, "t"));
-        assert!(!bool_arg(&args, "f"));
-        assert!(bool_arg(&args, "st"));
-        assert!(!bool_arg(&args, "sf"));
-        assert!(!bool_arg(&args, "n"));
-        assert!(!bool_arg(&args, "missing"));
-    }
-
-    #[test]
     fn string_array_arg_collects_strings_only() {
         let args = map(serde_json::json!({
             "xs": ["a", 1, "b", null],
@@ -109,6 +92,23 @@ mod tests {
         // Non-array and absent both yield empty.
         assert!(string_array_arg(&args, "scalar").is_empty());
         assert!(string_array_arg(&args, "missing").is_empty());
+    }
+
+    #[test]
+    fn usize_arg_reads_unsigned_ints_only() {
+        let args = map(serde_json::json!({
+            "n": 32768,
+            "neg": -1,
+            "frac": 1.5,
+            "str": "8"
+        }));
+        assert_eq!(usize_arg(&args, "n"), Some(32768));
+        // Absent, negative, fractional, and string are all treated as absent so
+        // the caller falls back to its default.
+        assert_eq!(usize_arg(&args, "missing"), None);
+        assert_eq!(usize_arg(&args, "neg"), None);
+        assert_eq!(usize_arg(&args, "frac"), None);
+        assert_eq!(usize_arg(&args, "str"), None);
     }
 
     #[test]

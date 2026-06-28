@@ -1,7 +1,6 @@
 ---
 name: type-safety
 description: Newtypes, no adjacent bools, builders, and sealed traits
-severity: warn
 ---
 
 # Rust Type Safety

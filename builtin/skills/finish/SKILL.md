@@ -85,7 +85,7 @@ Pin `<TASK_ID>` for the entire loop — never `next task`, never switch tasks.
    - **clean** → task moves to `done`. Step 6.
    - **findings** → fresh dated `## Review Findings` checklist appended, task stays in `review`. Step 2 — `/implement <TASK_ID>` pulls it back to `doing`, works the unchecked items, and flips them to `- [x]`.
 6. **Verify done**: `op: "get task"`. Not in `done` → step 2. In `done` → the last checkpoint (step 4) already **is** the verified-good commit (green + clean review); no separate post-done commit is needed.
-7. **Guardrail**: same finding (file:line + message) across 3 iterations — or 3 consecutive no-change iterations (step 4 "nothing to commit") — → stop, clear ralph, report what persists.
+7. **Guardrail**: same finding (file:line + message) across 3 iterations — or 3 consecutive no-change iterations (step 4 "nothing to commit") — → stop, clear ralph, report what persists. Hitting the guardrail means the task is **stuck**: leave it in `review` and report it — **never force it to `done`**. A finding that survives 3 rounds is either a fix you haven't cracked yet or a contradictory/faulty rule; if it's the latter (per Scope), report it on the task and leave it **stuck** for a human to resolve — do not edit validators yourself and do not re-close. Closing a task with open findings is out of bounds.
 8. **Clear ralph** and report: task id, iterations, final test status, persistent findings.
 
 ### Scoped-batch mode
@@ -128,7 +128,12 @@ Pin `<TASK_ID>` for the entire loop — never `next task`, never switch tasks.
 - Parallel agents on the shared tree have repeatedly clobbered work via stash/revert races. If asked to "speed up" finish, say no — slow and correct beats fast and lost.
 
 ### Scope
-- Do only what tasks say. No bonus refactoring.
+- Do only what tasks say. No bonus refactoring — no **self-initiated** scope creep beyond the task and its review findings.
+- **Review findings are in scope by definition.** A finding recorded by `/review` is work the task must address; acting on it is never "bonus refactoring." The no-bonus-refactoring rule restrains changes *you* invent — never the engine's findings.
+- **Obey findings; never decline and never rewrite the rules.** A finding is an instruction. A task reaches `done` only through the review gate: a fresh `/review` returns zero new findings and every prior item is checked, and `/review` itself moves it. Do **not** force a task to `done` with `complete task` / `move task` while findings are open, do not "exercise orchestrator judgment" to dismiss them, and do **not** edit any validator to make a finding disappear — dismissing the order and rewriting the rulebook are both disobedience. Each finding is handled exactly one of two ways:
+  1. **Fix the code at the root** — the default, and nearly always the answer. A finding names one instance of a cause; satisfy it by eliminating that cause across the whole file so a re-review of that file finds zero recurrences — not by patching only the cited line. Review is binary, like the test suite: any open finding means the task is **not done**, no matter how minor it looks — there is no severity tier that makes a finding optional. If findings feel like "churn" or "pedantry," that means the right fix hasn't been found yet, not that the finding is wrong. Re-review surfacing *new* findings each round is the engine working, not noise to wave off.
+  2. **Report a contradiction — you cannot obey impossible orders.** Only when the findings genuinely cannot all be satisfied: two rules that can't both hold (a real contradiction), or a finding that demands code that won't compile / type-check, or that fights a deliberate documented contract (e.g. `snake_case` mirroring a backend payload, `null` required by a `T | null` type). Then **record the conflict on the task as a blocker, mark the task stuck, and stop.** You do not pick a winner, you do not touch `builtin/validators/…`, and you do not close. A human resolves the rule and re-runs.
+- **"Data-driven" and "keep functions short" do not conflict.** A long function full of near-duplicate parallel branches is the *symptom* of not being data-driven; the fix — a spec table/map plus one generator or loop — is simultaneously shorter and DRY. If review flags both, satisfy both. Never decline one by citing the other; that is the agent failing to find the table-driven form, not a contradiction in the rules.
 - Kanban is the single source of truth — no TodoWrite/TaskCreate.
 
 ### When done

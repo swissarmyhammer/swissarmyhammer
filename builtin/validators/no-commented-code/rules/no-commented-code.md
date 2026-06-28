@@ -1,7 +1,6 @@
 ---
 name: no-commented-code
 description: Detect large blocks of commented-out code
-severity: info
 ---
 
 # No Commented Code Validator

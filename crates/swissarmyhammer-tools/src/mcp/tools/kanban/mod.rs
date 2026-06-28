@@ -557,7 +557,7 @@ mod tests {
         // Verify default columns exist
         assert!(data["columns"].is_array());
         let columns = data["columns"].as_array().unwrap();
-        assert_eq!(columns.len(), 3); // To Do, Doing, Done
+        assert_eq!(columns.len(), 4); // To Do, Doing, Review, Done
     }
 
     #[tokio::test]
@@ -1738,14 +1738,14 @@ mod tests {
 
         let mut args = serde_json::Map::new();
         args.insert("op".to_string(), json!("add column"));
-        args.insert("id".to_string(), json!("review"));
-        args.insert("name".to_string(), json!("Review"));
+        args.insert("id".to_string(), json!("qa"));
+        args.insert("name".to_string(), json!("QA"));
 
         let result = tool.execute(args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        assert_eq!(data["id"], "review");
-        assert_eq!(data["name"], "Review");
+        assert_eq!(data["id"], "qa");
+        assert_eq!(data["name"], "QA");
     }
 
     #[tokio::test]
@@ -1784,10 +1784,10 @@ mod tests {
         let data = parse_json(&result);
 
         // Response format: {"columns": [...], "count": N}
-        assert_eq!(data["count"], 3);
+        assert_eq!(data["count"], 4);
         assert!(data["columns"].is_array());
-        // Default board has 3 columns
-        assert_eq!(data["columns"].as_array().unwrap().len(), 3);
+        // Default board has 4 columns: To Do, Doing, Review, Done
+        assert_eq!(data["columns"].as_array().unwrap().len(), 4);
     }
 
     // =========================================================================
@@ -1982,14 +1982,14 @@ mod tests {
         // Add a new column to delete (don't delete default ones)
         let mut add_args = serde_json::Map::new();
         add_args.insert("op".to_string(), json!("add column"));
-        add_args.insert("id".to_string(), json!("review"));
-        add_args.insert("name".to_string(), json!("Review"));
+        add_args.insert("id".to_string(), json!("qa"));
+        add_args.insert("name".to_string(), json!("QA"));
         tool.execute(add_args, &context).await.unwrap();
 
         // Delete the column
         let mut delete_args = serde_json::Map::new();
         delete_args.insert("op".to_string(), json!("delete column"));
-        delete_args.insert("id".to_string(), json!("review"));
+        delete_args.insert("id".to_string(), json!("qa"));
 
         let result = tool.execute(delete_args, &context).await;
         assert!(result.is_ok());
@@ -1997,7 +1997,7 @@ mod tests {
         // Verify it's gone
         let mut get_args = serde_json::Map::new();
         get_args.insert("op".to_string(), json!("get column"));
-        get_args.insert("id".to_string(), json!("review"));
+        get_args.insert("id".to_string(), json!("qa"));
 
         let get_result = tool.execute(get_args, &context).await;
         assert!(get_result.is_err());

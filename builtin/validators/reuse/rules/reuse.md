@@ -1,7 +1,6 @@
 ---
 name: reuse
 description: Detect reimplementations of existing shared code and needless one-call-site helpers
-severity: warn
 ---
 
 # Reuse Validator

@@ -45,33 +45,7 @@ use swissarmyhammer_sem::parser::plugins::create_default_registry;
 
 use crate::error::AvpError;
 use crate::review::probes::{run_probes, ChangeEntry, FileChange as ProbeChange, ProbeResult};
-use crate::review::tracking;
-use crate::validators::{MatchContext, RuleSet, Severity, ValidatorLoader};
-
-/// How many lines of context to keep on each side of a changed hunk in the
-/// bounded [`source_slice`](FileWork::source_slice).
-const HUNK_WINDOW_LINES: usize = 40;
-
-/// How many leading lines of a file count as its "header" (imports / module
-/// declaration) for the bounded slice.
-const HEADER_LINES: usize = 20;
-
-/// Maximum byte length of a changed file's source to inline **in full** in the
-/// review payload.
-///
-/// The binding constraint is the review model's **context window**, not the
-/// per-call generation cap ([`crate::validators::DEFAULT_MAX_TOKENS`] = 16 Ki,
-/// which bounds the *reply*, never the input). The fan-out's primed prefix is
-/// only ~5k tokens, so a context window of 32k+ tokens has ample headroom to
-/// carry a typical source file whole alongside its prefix and the reply budget.
-///
-/// This is the inline budget expressed in **bytes** (~1 byte ≈ ¼ token for code,
-/// so this corresponds to roughly the per-file slice of an ~8k-token inline
-/// budget — well inside a 32k context window after the prefix and reply). Only a
-/// pathologically large file relative to the window exceeds it; such a file
-/// falls back to the bounded [`bounded_slice`] plus an explicit note directing
-/// the model to `read_file` for the remainder. Typical source files inline whole.
-const MAX_INLINE_SOURCE_BYTES: usize = 32 * 1024;
+use crate::validators::{MatchContext, RuleSet, ValidatorLoader};
 
 /// The synthetic validator name carried on scope-stage [`AvpError::Validator`]s.
 ///
@@ -160,11 +134,9 @@ impl WorkList {
     ///
     /// Several validators can match the same file; this yields each file once,
     /// the first time its path appears. It is the single dedup the fan-out prime
-    /// ([`render_run_prime`](crate::review::fleet::render_run_prime)) and the
-    /// incremental-tracking baseline
-    /// ([`record_baseline_if_working`](crate::review::tracking::record_baseline_if_working))
-    /// both build their file set from. First-seen order keeps the rendered prime
-    /// byte-stable across calls.
+    /// ([`render_run_prime`](crate::review::fleet::render_run_prime)) builds its
+    /// file set from. First-seen order keeps the rendered prime byte-stable
+    /// across calls.
     pub fn distinct_files(&self) -> impl Iterator<Item = &FileWork> {
         let mut seen = std::collections::BTreeSet::new();
         self.validators
@@ -179,8 +151,6 @@ impl WorkList {
 pub struct ValidatorWork {
     /// The validator (RuleSet) name.
     pub validator_name: String,
-    /// The validator's severity.
-    pub severity: Severity,
     /// The rule names inside the validator.
     pub rules: Vec<String>,
     /// The probe names the validator declared.
@@ -198,18 +168,16 @@ pub struct FileWork {
     pub semantic_diff: Vec<SemanticChange>,
     /// The names of the changed symbols.
     pub changed_symbols: Vec<String>,
-    /// The file's source for the review payload.
+    /// The file's **complete** current source, inlined in full into the review
+    /// payload so the model never needs to `read_file` the changed file.
     ///
-    /// When [`inlined_full`](FileWork::inlined_full) is `true` this is the file's
-    /// **complete** current contents, so the model never needs to `read_file` the
-    /// changed file. When `false` (a file too large for the inline budget,
-    /// [`MAX_INLINE_SOURCE_BYTES`]) it is the bounded [`bounded_slice`] plus a note
-    /// directing the model to `read_file` for the remainder.
+    /// A changed file is always inlined whole: it is the file's complete current
+    /// contents (empty only for a deletion, which has no current content — the
+    /// removal is carried by [`semantic_diff`](FileWork::semantic_diff)). A file
+    /// whose source would exceed the review `batch_size` is never trimmed to a
+    /// slice; [`batch_work_list`] rejects it with a hard error instead, so this is
+    /// never a partial view.
     pub source_slice: String,
-    /// Whether [`source_slice`](FileWork::source_slice) is the file's complete
-    /// contents (`true`) or the bounded-slice fallback for an oversized file
-    /// (`false`).
-    pub inlined_full: bool,
     /// The shared `(file, probe)` results.
     pub probe_results: Vec<ProbeResult>,
 }
@@ -234,16 +202,6 @@ pub struct FileWork {
 /// this signature: task context is plumbed in a later wiring stage that wraps
 /// this call, not derived inside the deterministic scope stage.
 ///
-/// # Incremental working scope
-///
-/// When `use_tracking` is `true` and `scope` is [`Scope::Working`], the resolved
-/// candidate set is narrowed by the [`tracking`] filter: a file whose current
-/// `context_hash` (path + content + global rules hash) matches its recorded
-/// `.validators/.hashes/<path>.yaml` entry is **subtracted**, so a `/finish`
-/// fix-loop only re-reviews files actually edited since the last pass. `false`
-/// (the force/all hatch) ignores tracking and reviews the whole set. The flag is
-/// inert for every non-working scope (`sha`/`file`/`glob` are explicit targets).
-///
 /// # Errors
 ///
 /// Returns [`AvpError::Context`] on git or index failure, or
@@ -254,12 +212,8 @@ pub async fn scope_review(
     loader: &ValidatorLoader,
     conn: &Connection,
     embedder: &dyn TextEmbedder,
-    use_tracking: bool,
 ) -> Result<WorkList, AvpError> {
-    // The global rules hash feeds the working-scope tracking filter so a rule
-    // edit invalidates every entry; computed once per run from the loaded rules.
-    let rules_hash = tracking::rules_hash(loader);
-    let resolved = resolve_scope_files(&scope, repo_path, use_tracking, &rules_hash)?;
+    let resolved = resolve_scope_files(&scope, repo_path)?;
 
     // The single semantic-diff pass: one `FileChange` per resolved file fed to
     // the sem differ once. Whole-content files (glob / unchanged single file)
@@ -269,20 +223,85 @@ pub async fn scope_review(
 
     // Group the diff's entities by file, and derive the probe change-set (every
     // changed entity across the whole diff) so probes run over the real diff.
+    let grouped = group_entities_by_file(diff.changes);
+
+    // Match validators per file via the shared `matching_rulesets` code path.
+    let matched = match_validators_and_files(&resolved.files, loader);
+
+    // Run probes ONCE over the whole change set with the union of every declared
+    // probe name. This is the N+M guarantee: each distinct `(file, probe)` is
+    // computed exactly once and the shared result fans out to every validator
+    // that declared it (the distribution below is a pure filter, never a re-run).
+    let probe_cache = run_probe_cache(
+        &matched.validators,
+        &grouped.change_entities,
+        conn,
+        embedder,
+    )
+    .await?;
+
+    // Pre-compute the bounded slice + changed symbols per file once (shared by
+    // every validator that reviews the same file).
+    let per_file = compute_per_file_facts(
+        &matched.matched_files,
+        &grouped.entities_by_file,
+        &resolved.after_content,
+    );
+
+    // Assemble the work-list: name-sorted validators, each carrying their matched
+    // files (path-sorted) with the shared facts + their probe subset.
+    let validator_work = assemble_validator_work(matched.validators, &per_file, &probe_cache);
+
+    log_scope_selection(&validator_work);
+
+    Ok(WorkList {
+        change_purpose: resolved.change_purpose,
+        validators: validator_work,
+    })
+}
+
+/// The semantic diff's entities, grouped by file, plus the flattened probe
+/// change-set — the two views [`scope_review`] needs from one pass over the diff.
+struct GroupedEntities {
+    /// One file path → its changed entities, the input to the per-file facts.
+    entities_by_file: BTreeMap<String, Vec<SemanticChange>>,
+    /// Every changed entity across the whole diff, as probe-runner inputs.
+    change_entities: Vec<ChangeEntry>,
+}
+
+/// Group the semantic diff's changes by file path, while flattening every changed
+/// entity into the probe runner's change-set so probes run over the real diff.
+fn group_entities_by_file(changes: Vec<SemanticChange>) -> GroupedEntities {
     let mut entities_by_file: BTreeMap<String, Vec<SemanticChange>> = BTreeMap::new();
     let mut change_entities: Vec<ChangeEntry> = Vec::new();
-    for change in diff.changes {
+    for change in changes {
         change_entities.push(to_probe_entry(&change));
         entities_by_file
             .entry(change.file_path.clone())
             .or_default()
             .push(change);
     }
+    GroupedEntities {
+        entities_by_file,
+        change_entities,
+    }
+}
 
-    // Match validators per file via the shared `matching_rulesets` code path.
+/// The validators matched against the scope's files, plus the set of files at
+/// least one validator matched.
+struct MatchedValidators {
+    /// Files that at least one validator matched (the per-file-facts key set).
+    matched_files: BTreeSet<String>,
+    /// Validator name → its accumulated match (rules, probes, files).
+    validators: BTreeMap<String, MatchedValidator>,
+}
+
+/// Match every resolved file against the loader's validators via the shared
+/// `matching_rulesets` code path, accumulating each validator's matched files.
+fn match_validators_and_files(files: &[String], loader: &ValidatorLoader) -> MatchedValidators {
     let mut matched_files: BTreeSet<String> = BTreeSet::new();
     let mut validators: BTreeMap<String, MatchedValidator> = BTreeMap::new();
-    for file in &resolved.files {
+    for file in files {
         let ctx = MatchContext::new().with_file(file.clone());
         let rulesets = loader.matching_rulesets(&ctx);
         if rulesets.is_empty() {
@@ -297,33 +316,48 @@ pub async fn scope_review(
                 .insert(file.clone());
         }
     }
+    MatchedValidators {
+        matched_files,
+        validators,
+    }
+}
 
-    // Run probes ONCE over the whole change set with the union of every declared
-    // probe name. This is the N+M guarantee: each distinct `(file, probe)` is
-    // computed exactly once and the shared result fans out to every validator
-    // that declared it (the distribution below is a pure filter, never a re-run).
-    let probe_cache = run_probe_cache(&validators, &change_entities, conn, embedder).await?;
-
-    // Pre-compute the bounded slice + changed symbols per file once (shared by
-    // every validator that reviews the same file).
+/// Pre-compute the [`FileFacts`] (full inlined source, changed symbols, semantic
+/// diff) once per matched file — shared by every validator that reviews that file.
+fn compute_per_file_facts(
+    matched_files: &BTreeSet<String>,
+    entities_by_file: &BTreeMap<String, Vec<SemanticChange>>,
+    after_content: &BTreeMap<String, String>,
+) -> BTreeMap<String, FileFacts> {
     let mut per_file: BTreeMap<String, FileFacts> = BTreeMap::new();
-    for file in &matched_files {
+    for file in matched_files {
         let entities = entities_by_file.get(file).cloned().unwrap_or_default();
-        let after = resolved.after_content.get(file).map(String::as_str);
-        let (source_slice, inlined_full) = inline_or_slice(after, &entities);
+        // The changed file is always inlined in FULL: the model re-reads any file
+        // it is not given whole, and those round-trips dominate review wall-clock.
+        // A deletion has no current content, so its source is empty (the removal
+        // is carried by the semantic diff). A file too large for the review
+        // `batch_size` is never trimmed here — [`batch_work_list`] rejects it.
+        let source_slice = after_content.get(file).cloned().unwrap_or_default();
         per_file.insert(
             file.clone(),
             FileFacts {
                 changed_symbols: changed_symbols(&entities),
                 source_slice,
-                inlined_full,
                 semantic_diff: entities,
             },
         );
     }
+    per_file
+}
 
-    // Assemble the work-list: name-sorted validators, each carrying their matched
-    // files (path-sorted) with the shared facts + their probe subset.
+/// Assemble the final work-list: name-sorted validators, each carrying their
+/// matched files (path-sorted) with the shared per-file facts and the validator's
+/// probe subset selected from the shared `probe_cache`.
+fn assemble_validator_work(
+    validators: BTreeMap<String, MatchedValidator>,
+    per_file: &BTreeMap<String, FileFacts>,
+    probe_cache: &[ProbeResult],
+) -> Vec<ValidatorWork> {
     let mut validator_work: Vec<ValidatorWork> = validators
         .into_values()
         .map(|mv| {
@@ -337,9 +371,8 @@ pub async fn scope_review(
                         semantic_diff: facts.semantic_diff.clone(),
                         changed_symbols: facts.changed_symbols.clone(),
                         source_slice: facts.source_slice.clone(),
-                        inlined_full: facts.inlined_full,
                         probe_results: select_probe_results(
-                            &probe_cache,
+                            probe_cache,
                             file,
                             &facts.changed_symbols,
                             &mv.probes,
@@ -350,7 +383,6 @@ pub async fn scope_review(
             files.sort_by(|a, b| a.path.cmp(&b.path));
             ValidatorWork {
                 validator_name: mv.name,
-                severity: mv.severity,
                 rules: mv.rules,
                 probes: mv.probes,
                 files,
@@ -358,13 +390,7 @@ pub async fn scope_review(
         })
         .collect();
     validator_work.sort_by(|a, b| a.validator_name.cmp(&b.validator_name));
-
-    log_scope_selection(&validator_work);
-
-    Ok(WorkList {
-        change_purpose: resolved.change_purpose,
-        validators: validator_work,
-    })
+    validator_work
 }
 
 /// Log the resolved review scope: an INFO summary naming the matched validators
@@ -402,7 +428,6 @@ fn log_scope_selection(validators: &[ValidatorWork]) {
 /// A validator matched to one or more files, accumulated during matching.
 struct MatchedValidator {
     name: String,
-    severity: Severity,
     rules: Vec<String>,
     probes: Vec<String>,
     files: BTreeSet<String>,
@@ -412,7 +437,6 @@ impl MatchedValidator {
     fn from_ruleset(rs: &RuleSet) -> Self {
         Self {
             name: rs.name().to_string(),
-            severity: rs.manifest.severity,
             rules: rs.rules.iter().map(|r| r.name.clone()).collect(),
             probes: rs.manifest.probes.clone(),
             files: BTreeSet::new(),
@@ -425,7 +449,6 @@ struct FileFacts {
     semantic_diff: Vec<SemanticChange>,
     changed_symbols: Vec<String>,
     source_slice: String,
-    inlined_full: bool,
 }
 
 /// The resolved scope: the changed-file set, the sem-diff inputs, the per-file
@@ -450,18 +473,9 @@ fn to_probe_entry(change: &SemanticChange) -> ChangeEntry {
 
 /// Resolve a [`Scope`] to its changed-file set and the inputs every later step
 /// needs (sem-diff `FileChange`s, after-content, change purpose).
-///
-/// `use_tracking`/`rules_hash` only steer [`Scope::Working`]: they drive the
-/// incremental subtract-unchanged filter. Every other scope is an explicit
-/// target and ignores them.
-fn resolve_scope_files(
-    scope: &Scope,
-    repo_path: &Path,
-    use_tracking: bool,
-    rules_hash: &str,
-) -> Result<ResolvedScope, AvpError> {
+fn resolve_scope_files(scope: &Scope, repo_path: &Path) -> Result<ResolvedScope, AvpError> {
     match scope {
-        Scope::Working => resolve_working(repo_path, use_tracking, rules_hash),
+        Scope::Working => resolve_working(repo_path),
         Scope::Sha(range) => resolve_sha(repo_path, range),
         Scope::File(path) => resolve_file(repo_path, path),
         Scope::Glob(pattern) => resolve_glob(repo_path, pattern),
@@ -530,18 +544,7 @@ fn read_at_ref(
 
 /// Resolve the working-tree scope: uncommitted changes vs HEAD (staged +
 /// unstaged + untracked), reusing the git tool's changed-file accounting.
-///
-/// When `use_tracking` is set, the candidate set is narrowed by the [`tracking`]
-/// subtract-unchanged filter: a file whose current content hashes to the same
-/// `context_hash` recorded on its last review is dropped before any diff/probe
-/// work, so an incremental `review working` only carries files edited since the
-/// baseline. Each survivor's `before` stays HEAD, so its semantic diff still
-/// shows the real change — tracking decides *inclusion* only, never the diff.
-fn resolve_working(
-    repo_path: &Path,
-    use_tracking: bool,
-    rules_hash: &str,
-) -> Result<ResolvedScope, AvpError> {
+fn resolve_working(repo_path: &Path) -> Result<ResolvedScope, AvpError> {
     let repo = open_repo(repo_path)?;
     let status = repo
         .get_status()
@@ -556,36 +559,12 @@ fn resolve_working(
     files.sort();
     files.dedup();
 
-    // Read each candidate's working-tree content once, then (when tracking is on)
-    // subtract files unchanged since their last review. A file with no readable
-    // content (a deletion) carries an empty string here; it has no tracking entry
-    // to match, so it always survives the filter and is diffed as a deletion.
+    // Read each candidate's working-tree content once. A file with no readable
+    // content (a deletion) carries `None` here and is diffed as a deletion.
     let after_by_path: BTreeMap<String, Option<String>> = files
         .iter()
         .map(|path| Ok((path.clone(), read_working(repo_path, path)?)))
         .collect::<Result<_, AvpError>>()?;
-
-    if use_tracking {
-        let candidates: Vec<(String, String)> = files
-            .iter()
-            .map(|path| {
-                let content = after_by_path
-                    .get(path)
-                    .and_then(|c| c.clone())
-                    .unwrap_or_default();
-                (path.clone(), content)
-            })
-            .collect();
-        let before = files.len();
-        files = tracking::subtract_unchanged(repo_path, &candidates, rules_hash);
-        files.sort();
-        tracing::info!(
-            candidates = before,
-            survivors = files.len(),
-            subtracted = before - files.len(),
-            "review working: incremental tracking filter applied"
-        );
-    }
 
     let mut builder = FileChangeBuilder::new();
     for path in &files {
@@ -791,98 +770,98 @@ fn changed_symbols(entities: &[SemanticChange]) -> Vec<String> {
     names.into_iter().collect()
 }
 
-/// The note appended to the bounded-slice fallback, directing the model to read
-/// the rest of an oversized changed file rather than reasoning from the slice
-/// alone. Names `read_file` explicitly so the model knows which tool to reach for.
-const OVERSIZED_FILE_READ_NOTE: &str =
-    "\n\n// NOTE: this file is too large to inline in full; the slice above is bounded. \
-Use `read_file` on this path to see the remainder before reasoning about it.";
-
-/// Resolve a changed file's review source, returning the source text and whether
-/// it is the file's **complete** contents.
+/// Split a [`WorkList`] into content-budgeted batches at **whole-file**
+/// granularity, so every batch's primed prefix stays inside `batch_size` bytes.
 ///
-/// The model re-reads any file it is not given in full, and those tool
-/// round-trips dominate review wall-clock — so the changed file is inlined whole
-/// whenever it fits the inline budget ([`MAX_INLINE_SOURCE_BYTES`], keyed off the
-/// model's context window, NOT the generation cap). Returns `(full_source, true)`
-/// in that common case.
+/// Cramming every changed file's full source into one shared prime overflows the
+/// review model's context on a large diff — every fan-out validator then fails
+/// uniformly. So the run is split into batches and each batch fans out
+/// independently. The files are packed greedily, in [`WorkList::distinct_files`]
+/// order (the same order the prime renders them): each file is added to the
+/// current batch until adding the next file's inlined source would push the batch
+/// past `batch_size`, at which point a new batch starts. A file is **atomic** — it
+/// is never split across batches.
 ///
-/// Only a pathologically large file relative to the window exceeds the budget; it
-/// falls back to the bounded [`bounded_slice`] plus [`OVERSIZED_FILE_READ_NOTE`]
-/// and returns `(slice_with_note, false)` so the caller frames it as a partial
-/// view the model should `read_file` to complete.
-fn inline_or_slice(after: Option<&str>, entities: &[SemanticChange]) -> (String, bool) {
-    match after {
-        Some(content) if content.len() <= MAX_INLINE_SOURCE_BYTES => (content.to_string(), true),
-        _ => {
-            let mut slice = bounded_slice(after, entities);
-            slice.push_str(OVERSIZED_FILE_READ_NOTE);
-            (slice, false)
+/// Each returned [`WorkList`] carries every validator that has at least one file
+/// in that batch, with the validator's files filtered to the batch (validators
+/// left with no files in a batch are dropped). The change purpose is carried
+/// verbatim so every batch's prime frames the same overall change. A work-list
+/// with no files (no validator matched) yields no batches.
+///
+/// # Errors
+///
+/// Returns [`AvpError::Validator`] when a single file's inlined source alone
+/// exceeds `batch_size`: it cannot be packed without either splitting it
+/// (forbidden) or blowing the budget. The error names the file, its byte size, and
+/// the limit, and directs the caller to raise `batch_size` or narrow the scope.
+/// This is the loud replacement for the old silent slice-degrade of an oversized
+/// file.
+pub fn batch_work_list(work: &WorkList, batch_size: usize) -> Result<Vec<WorkList>, AvpError> {
+    // Pack the distinct files (first-seen order, matching the prime's file set)
+    // into byte-budgeted batches; a file is never split across a batch boundary.
+    let mut batches: Vec<Vec<String>> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    let mut current_bytes = 0usize;
+    for file in work.distinct_files() {
+        let size = file.source_slice.len();
+        if size > batch_size {
+            return Err(AvpError::Validator {
+                validator: SCOPE_VALIDATOR.to_string(),
+                message: format!(
+                    "file `{}` inlines {size} bytes, over the {batch_size}-byte review batch_size; \
+                     a file is never split across review batches — raise `batch_size` or narrow the review scope",
+                    file.path
+                ),
+            });
         }
+        if !current.is_empty() && current_bytes + size > batch_size {
+            batches.push(std::mem::take(&mut current));
+            current_bytes = 0;
+        }
+        current.push(file.path.clone());
+        current_bytes += size;
     }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+
+    Ok(batches
+        .into_iter()
+        .map(|paths| project_onto_files(work, &paths))
+        .collect())
 }
 
-/// Build the bounded source slice for a file: its header, each changed entity's
-/// `after_content`, and a window around each changed entity's location in the
-/// after-content — never the whole file.
-fn bounded_slice(after: Option<&str>, entities: &[SemanticChange]) -> String {
-    let mut sections: Vec<String> = Vec::new();
-
-    // Header: the file's leading lines (imports / module decl).
-    if let Some(content) = after {
-        let header: Vec<&str> = content.lines().take(HEADER_LINES).collect();
-        if !header.is_empty() {
-            sections.push(header.join("\n"));
-        }
-    }
-
-    // Each changed entity's full source, plus a window around its location.
-    for entity in entities {
-        if let Some(body) = &entity.after_content {
-            sections.push(body.clone());
-            if let Some(content) = after {
-                if let Some(window) = hunk_window(content, body) {
-                    sections.push(window);
-                }
+/// Project a [`WorkList`] onto a subset of file paths: keep every validator that
+/// has at least one file in `paths`, with its files filtered to `paths` (order
+/// preserved). Validators left with no files are dropped. The change purpose is
+/// carried verbatim so the batch's prime still frames the whole change.
+fn project_onto_files(work: &WorkList, paths: &[String]) -> WorkList {
+    let keep: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+    let validators = work
+        .validators
+        .iter()
+        .filter_map(|validator| {
+            let files: Vec<FileWork> = validator
+                .files
+                .iter()
+                .filter(|file| keep.contains(file.path.as_str()))
+                .cloned()
+                .collect();
+            if files.is_empty() {
+                return None;
             }
-        }
+            Some(ValidatorWork {
+                validator_name: validator.validator_name.clone(),
+                rules: validator.rules.clone(),
+                probes: validator.probes.clone(),
+                files,
+            })
+        })
+        .collect();
+    WorkList {
+        change_purpose: work.change_purpose.clone(),
+        validators,
     }
-
-    dedup_sections(sections).join("\n")
-}
-
-/// A ~`HUNK_WINDOW_LINES`-line window of `content` centered on where `body`
-/// first appears, `None` when `body` is not found verbatim.
-fn hunk_window(content: &str, body: &str) -> Option<String> {
-    let first_body_line = body.lines().next()?.trim();
-    if first_body_line.is_empty() {
-        return None;
-    }
-    let lines: Vec<&str> = content.lines().collect();
-    let idx = lines.iter().position(|l| l.trim() == first_body_line)?;
-    let start = idx.saturating_sub(HUNK_WINDOW_LINES / 2);
-    let end = (idx + HUNK_WINDOW_LINES / 2).min(lines.len());
-    Some(lines[start..end].join("\n"))
-}
-
-/// Drop duplicate / fully-contained sections so the slice stays bounded and
-/// doesn't repeat the same entity body via overlapping windows.
-fn dedup_sections(sections: Vec<String>) -> Vec<String> {
-    let mut kept: Vec<String> = Vec::new();
-    for section in sections {
-        let trimmed = section.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if kept
-            .iter()
-            .any(|k| k.contains(trimmed) || trimmed.contains(k.as_str()))
-        {
-            continue;
-        }
-        kept.push(section);
-    }
-    kept
 }
 
 #[cfg(test)]
@@ -966,19 +945,12 @@ mod tests {
         seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
         seed_chunk(&conn, "src/existing.rs", "old_compute", &dup, &emb);
 
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         let validator = work
             .validators
@@ -1000,10 +972,9 @@ mod tests {
             file.changed_symbols
         );
 
-        // Full source: a small changed file is inlined whole, so the model never
-        // re-reads it. The changed function, the header, AND the distant unrelated
-        // marker (which the old bounded slice trimmed) are all present.
-        assert!(file.inlined_full, "a small changed file inlines in full");
+        // Full source: a changed file is always inlined whole, so the model never
+        // re-reads it. The changed function, the header, AND a distant unrelated
+        // marker are all present (nothing is trimmed to a slice).
         assert!(
             file.source_slice.contains("pub fn compute"),
             "full source must include the changed function"
@@ -1044,19 +1015,12 @@ mod tests {
         repo.write("src/new.rs", &format!("{}\n", body("brand_new")));
 
         let conn = index_conn();
-        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
+        let loader = loader_with("rust", "*.rs", &[]);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         let validator = work
             .validators
@@ -1086,19 +1050,12 @@ mod tests {
         repo.write("logs/run.log", "lots of noise\n");
 
         let conn = index_conn();
-        let loader = loader_with("everything", "*", &[], Severity::Warn);
+        let loader = loader_with("everything", "*", &[]);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         assert!(
             work.validators.is_empty(),
@@ -1121,19 +1078,12 @@ mod tests {
         repo.write("notes.txt", "original\nedited\n");
 
         let conn = index_conn();
-        let loader = loader_with("everything", "*", &[], Severity::Warn);
+        let loader = loader_with("everything", "*", &[]);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         let validator = work
             .validators
@@ -1156,12 +1106,17 @@ mod tests {
     /// A minimal `FileWork` carrying only a path — enough to assert the
     /// dedup/order semantics of [`WorkList::distinct_files`].
     fn file_at(path: &str) -> FileWork {
+        file_sized(path, 0)
+    }
+
+    /// A `FileWork` whose inlined `source_slice` is exactly `bytes` bytes — the
+    /// knob [`batch_work_list`] packs against.
+    fn file_sized(path: &str, bytes: usize) -> FileWork {
         FileWork {
             path: path.to_string(),
             semantic_diff: vec![],
             changed_symbols: vec![],
-            source_slice: String::new(),
-            inlined_full: true,
+            source_slice: "x".repeat(bytes),
             probe_results: vec![],
         }
     }
@@ -1169,11 +1124,148 @@ mod tests {
     fn validator_over(name: &str, paths: &[&str]) -> ValidatorWork {
         ValidatorWork {
             validator_name: name.to_string(),
-            severity: Severity::Warn,
-            rules: vec![],
+            rules: vec![format!("{name}-rule")],
             probes: vec![],
             files: paths.iter().map(|p| file_at(p)).collect(),
         }
+    }
+
+    /// A validator over `(path, byte-size)` files, for [`batch_work_list`] packing
+    /// assertions.
+    fn validator_sized(name: &str, files: &[(&str, usize)]) -> ValidatorWork {
+        ValidatorWork {
+            validator_name: name.to_string(),
+            rules: vec![format!("{name}-rule")],
+            probes: vec![],
+            files: files.iter().map(|(p, n)| file_sized(p, *n)).collect(),
+        }
+    }
+
+    /// The validator names a batch carries, in order.
+    fn batch_validators(batch: &WorkList) -> Vec<String> {
+        batch
+            .validators
+            .iter()
+            .map(|v| v.validator_name.clone())
+            .collect()
+    }
+
+    /// The file paths a batch carries (distinct, prime order).
+    fn batch_paths(batch: &WorkList) -> Vec<String> {
+        batch.distinct_files().map(|f| f.path.clone()).collect()
+    }
+
+    #[test]
+    fn batch_work_list_packs_whole_files_within_the_byte_budget() {
+        // Three 10-byte files, budget 25 → greedy packing gives [a,b],[c]; the
+        // running total never exceeds the budget and no file is split.
+        let work = WorkList {
+            change_purpose: "p".to_string(),
+            validators: vec![validator_sized(
+                "v",
+                &[("a.rs", 10), ("b.rs", 10), ("c.rs", 10)],
+            )],
+        };
+
+        let batches = batch_work_list(&work, 25).expect("packs within budget");
+
+        assert_eq!(
+            batches.iter().map(batch_paths).collect::<Vec<_>>(),
+            vec![vec!["a.rs", "b.rs"], vec!["c.rs"]],
+            "files pack greedily into whole-file batches under the budget"
+        );
+        for batch in &batches {
+            let total: usize = batch.distinct_files().map(|f| f.source_slice.len()).sum();
+            assert!(total <= 25, "every batch stays within the byte budget");
+        }
+    }
+
+    #[test]
+    fn batch_work_list_errors_on_a_single_file_over_the_budget() {
+        // One file larger than the budget cannot be packed without splitting it
+        // (forbidden) — it is a hard error, not a slice, not a spill.
+        let work = WorkList {
+            change_purpose: "p".to_string(),
+            validators: vec![validator_sized("v", &[("big.rs", 100)])],
+        };
+
+        let err = batch_work_list(&work, 32).expect_err("an oversized file errors");
+        let msg = err.to_string();
+        assert!(msg.contains("big.rs"), "names the offending file: {msg}");
+        assert!(msg.contains("100"), "names the file's size: {msg}");
+        assert!(msg.contains("32"), "names the limit: {msg}");
+        assert!(
+            msg.contains("batch_size") && msg.contains("narrow"),
+            "directs the caller to raise batch_size or narrow scope: {msg}"
+        );
+    }
+
+    #[test]
+    fn batch_work_list_small_diff_is_exactly_one_batch() {
+        // Today's fast path: a small diff fits one batch, unchanged.
+        let work = WorkList {
+            change_purpose: "p".to_string(),
+            validators: vec![validator_sized("v", &[("a.rs", 10), ("b.rs", 10)])],
+        };
+
+        let batches = batch_work_list(&work, 32 * 1024).expect("small diff packs");
+
+        assert_eq!(batches.len(), 1, "a small diff is a single batch");
+        assert_eq!(batch_paths(&batches[0]), vec!["a.rs", "b.rs"]);
+    }
+
+    #[test]
+    fn batch_work_list_projects_each_validator_onto_its_batch_files() {
+        // v1 owns a.rs,b.rs; v2 owns c.rs. Budget 25 splits into [a,b],[c], so v1
+        // lands wholly in batch 1 and v2 wholly in batch 2 — a validator with no
+        // files in a batch is dropped from it.
+        let work = WorkList {
+            change_purpose: "p".to_string(),
+            validators: vec![
+                validator_sized("v1", &[("a.rs", 10), ("b.rs", 10)]),
+                validator_sized("v2", &[("c.rs", 10)]),
+            ],
+        };
+
+        let batches = batch_work_list(&work, 25).expect("packs within budget");
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batch_validators(&batches[0]), vec!["v1"]);
+        assert_eq!(batch_paths(&batches[0]), vec!["a.rs", "b.rs"]);
+        assert_eq!(batch_validators(&batches[1]), vec!["v2"]);
+        assert_eq!(batch_paths(&batches[1]), vec!["c.rs"]);
+    }
+
+    #[test]
+    fn batch_work_list_keeps_a_shared_file_atomic_in_one_batch() {
+        // `shared.rs` is matched by two validators but is ONE distinct file: it is
+        // packed once, into a single batch, never duplicated or split.
+        let work = WorkList {
+            change_purpose: "p".to_string(),
+            validators: vec![
+                validator_sized("v1", &[("shared.rs", 10)]),
+                validator_sized("v2", &[("shared.rs", 10)]),
+            ],
+        };
+
+        let batches = batch_work_list(&work, 25).expect("packs within budget");
+
+        assert_eq!(batches.len(), 1, "the one distinct file is one batch");
+        assert_eq!(batch_paths(&batches[0]), vec!["shared.rs"]);
+        assert_eq!(
+            batch_validators(&batches[0]),
+            vec!["v1", "v2"],
+            "both validators that matched the shared file ride the same batch"
+        );
+    }
+
+    #[test]
+    fn batch_work_list_empty_work_yields_no_batches() {
+        let work = WorkList {
+            change_purpose: "p".to_string(),
+            validators: vec![],
+        };
+        assert!(batch_work_list(&work, 32 * 1024).unwrap().is_empty());
     }
 
     #[test]
@@ -1196,196 +1288,6 @@ mod tests {
         );
     }
 
-    // ---- scope_review: incremental tracking filter -----------------------
-
-    /// Every file path that appears anywhere in a work-list, deduped.
-    fn worklist_files(work: &WorkList) -> BTreeSet<String> {
-        work.validators
-            .iter()
-            .flat_map(|v| v.files.iter().map(|f| f.path.clone()))
-            .collect()
-    }
-
-    /// Seed a tracking entry whose `context_hash` matches `content` for `path`,
-    /// so a later `subtract_unchanged` over the same content drops it.
-    fn seed_tracking(repo_path: &Path, path: &str, content: &str, rules_hash: &str) {
-        let entry = crate::review::tracking::TrackingEntry::new(
-            path,
-            content,
-            rules_hash,
-            "2026-06-14T00:00:00Z",
-        );
-        crate::review::tracking::upsert_entry(repo_path, &entry).unwrap();
-    }
-
-    #[tokio::test]
-    async fn tracking_subtracts_unchanged_keeps_changed_and_new() {
-        let repo = TestRepo::new();
-        // Two committed files; a third is added untracked. After commit, edit one.
-        let stable = format!("{}\n", body("stable_fn"));
-        let edited_before = format!("{}\n", body("edited_fn"));
-        repo.write("src/stable.rs", &stable);
-        repo.write("src/edited.rs", &edited_before);
-        repo.commit("initial");
-
-        // Edit one file and add a brand-new one.
-        let edited_after = format!("{}\n// edited\n", body("edited_fn"));
-        repo.write("src/edited.rs", &edited_after);
-        repo.write("src/fresh.rs", &format!("{}\n", body("fresh_fn")));
-
-        let conn = index_conn();
-        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
-        let embedder = MockEmbedder::new(DIM);
-
-        // Baseline tracking: stable matches its current content; edited's entry is
-        // for the OLD content; fresh has no entry. The rules hash must match what
-        // scope_review computes from this loader.
-        let rules = crate::review::tracking::rules_hash(&loader);
-        seed_tracking(repo.path(), "src/stable.rs", &stable, &rules);
-        seed_tracking(repo.path(), "src/edited.rs", &edited_before, &rules);
-
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, true)
-            .await
-            .unwrap();
-        let files = worklist_files(&work);
-
-        assert!(
-            !files.contains("src/stable.rs"),
-            "an unchanged tracked file is subtracted, got: {files:?}"
-        );
-        assert!(
-            files.contains("src/edited.rs"),
-            "an edited file (its tracked content differs) survives, got: {files:?}"
-        );
-        assert!(
-            files.contains("src/fresh.rs"),
-            "a brand-new file (no entry) survives, got: {files:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn force_full_ignores_tracking_and_reviews_everything() {
-        let repo = TestRepo::new();
-        let stable = format!("{}\n", body("stable_fn"));
-        repo.write("src/stable.rs", &stable);
-        repo.commit("initial");
-        // A working-tree edit so there is at least one change in scope.
-        repo.write("src/stable.rs", &format!("{stable}// touched\n"));
-
-        let conn = index_conn();
-        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
-        let embedder = MockEmbedder::new(DIM);
-
-        // Seed an entry matching the CURRENT (touched) content, which `use_tracking`
-        // would subtract — but the force hatch must ignore it.
-        let rules = crate::review::tracking::rules_hash(&loader);
-        seed_tracking(
-            repo.path(),
-            "src/stable.rs",
-            &format!("{stable}// touched\n"),
-            &rules,
-        );
-
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
-        assert!(
-            worklist_files(&work).contains("src/stable.rs"),
-            "the force/all hatch reviews the file even though tracking would subtract it"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_rules_change_keeps_every_file_in_scope() {
-        let repo = TestRepo::new();
-        let stable = format!("{}\n", body("stable_fn"));
-        repo.write("src/stable.rs", &stable);
-        repo.commit("initial");
-        // Touch it so it is a working change.
-        repo.write("src/stable.rs", &format!("{stable}// change\n"));
-        let current = format!("{stable}// change\n");
-
-        let conn = index_conn();
-        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
-        let embedder = MockEmbedder::new(DIM);
-
-        // The entry matches the current content but under a DIFFERENT (stale) rules
-        // hash, so its context hash no longer matches and the file must survive.
-        seed_tracking(repo.path(), "src/stable.rs", &current, "sha256:stale-rules");
-
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, true)
-            .await
-            .unwrap();
-        assert!(
-            worklist_files(&work).contains("src/stable.rs"),
-            "a rules change invalidates the tracking entry and keeps the file in scope"
-        );
-    }
-
-    /// The production round-trip: a real `review working` pass records its
-    /// baseline through the live recorder ([`record_baseline_if_working`]) — NOT a
-    /// hand-seeded entry — and a second pass over the unedited content must
-    /// subtract the file. This is the one test that exercises the record↔lookup
-    /// key agreement end to end: the recorder's write-side key and
-    /// `subtract_unchanged`'s read-side key must collapse to the same on-disk
-    /// entry, which the fixture-seeding `tracking_subtracts_*` tests cannot prove.
-    #[tokio::test]
-    async fn working_round_trip_subtracts_after_real_baseline_record() {
-        use crate::review::synthesize::FleetTally;
-        use crate::review::tracking::record_baseline_if_working;
-
-        let repo = TestRepo::new();
-        // A committed file, then a working-tree edit so it is genuinely in scope
-        // for the first pass.
-        let base = format!("{}\n", body("round_trip_fn"));
-        repo.write("src/round_trip.rs", &base);
-        repo.commit("initial");
-        let edited = format!("{base}// working edit\n");
-        repo.write("src/round_trip.rs", &edited);
-
-        let conn = index_conn();
-        let loader = loader_with("rust", "*.rs", &[], Severity::Warn);
-        let embedder = MockEmbedder::new(DIM);
-
-        // First pass: tracking on, no baseline yet, so the edited file is in scope.
-        let first = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, true)
-            .await
-            .unwrap();
-        assert!(
-            worklist_files(&first).contains("src/round_trip.rs"),
-            "the first pass must review the edited file, got: {:?}",
-            worklist_files(&first)
-        );
-
-        // Record the baseline the way production does — from the real work-list
-        // through the shared recorder, with a tally showing fan-out actually ran.
-        record_baseline_if_working(
-            true,
-            repo.path(),
-            &loader,
-            &first,
-            &FleetTally::new(1, 0),
-            "2026-06-20T00:00:00Z",
-        );
-
-        // Second pass over the SAME (unedited) content must subtract the file.
-        let second = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, true)
-            .await
-            .unwrap();
-        assert!(
-            !worklist_files(&second).contains("src/round_trip.rs"),
-            "an unedited second pass must subtract the file recorded by the real baseline, got: {:?}",
-            worklist_files(&second)
-        );
-    }
-
     // ---- scope_review: observability tracing -----------------------------
 
     #[tokio::test]
@@ -1401,19 +1303,12 @@ mod tests {
         let emb = dup_emb();
         seed_chunk(&conn, "src/lib.rs", "compute", &dup, &emb);
 
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
-        let _work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         // The selection summary names the matched validator and file count.
         assert!(logs_contain("review scope resolved"));
@@ -1434,19 +1329,12 @@ mod tests {
         repo.write("Cargo.lock", "# lockfile\nupdated = true\n");
 
         let conn = index_conn();
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
-        let _work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         // The summary still fires, reporting zero matched validators.
         assert!(logs_contain("review scope resolved"));
@@ -1473,14 +1361,13 @@ mod tests {
         // the probe runner's observable execution count — a re-run repeats the
         // changed-set embedding work.
         let baseline_embedder = MockEmbedder::new(DIM);
-        let single = loader_with("dedupe-a", "*.rs", &["duplicates"], Severity::Warn);
+        let single = loader_with("dedupe-a", "*.rs", &["duplicates"]);
         scope_review(
             Scope::Working,
             repo.path(),
             &single,
             &conn,
             &baseline_embedder,
-            false,
         )
         .await
         .unwrap();
@@ -1489,20 +1376,13 @@ mod tests {
 
         // Two validators, both declaring `duplicates`, both matching *.rs.
         let mut loader = ValidatorLoader::new();
-        loader.add_builtin_ruleset(ruleset("dedupe-a", "*.rs", &["duplicates"], Severity::Warn));
-        loader.add_builtin_ruleset(ruleset("dedupe-b", "*.rs", &["duplicates"], Severity::Warn));
+        loader.add_builtin_ruleset(ruleset("dedupe-a", "*.rs", &["duplicates"]));
+        loader.add_builtin_ruleset(ruleset("dedupe-b", "*.rs", &["duplicates"]));
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         // Execution count: the shared (file, probe) run embeds exactly as often
         // as the single-validator baseline — a per-validator re-run would
@@ -1555,19 +1435,12 @@ mod tests {
         seed_chunk(&conn, "src/util.rs", "existing_util", &added, &query_vec);
 
         // One validator declaring BOTH symbol-targeted probes on the .rs file.
-        let loader = loader_with("reuse", "*.rs", &["callers", "similar"], Severity::Warn);
+        let loader = loader_with("reuse", "*.rs", &["callers", "similar"]);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         let validator = work
             .validators
@@ -1625,7 +1498,7 @@ mod tests {
         repo.commit("Add the added function for review");
 
         let conn = index_conn();
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(
@@ -1634,7 +1507,6 @@ mod tests {
             &loader,
             &conn,
             &embedder,
-            false,
         )
         .await
         .unwrap();
@@ -1656,7 +1528,7 @@ mod tests {
         repo.commit("initial");
 
         let conn = index_conn();
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
         let work = scope_review(
@@ -1665,7 +1537,6 @@ mod tests {
             &loader,
             &conn,
             &embedder,
-            false,
         )
         .await
         .unwrap();
@@ -1704,97 +1575,17 @@ mod tests {
 
         let conn = index_conn();
         // The only validator matches *.rs, never a .lock file.
-        let loader = loader_with("deduplicate", "*.rs", &["duplicates"], Severity::Warn);
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            false,
-        )
-        .await
-        .unwrap();
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+            .await
+            .unwrap();
 
         assert!(
             work.validators.is_empty(),
             "a changed .lock with no matching validator yields no work, got: {:?}",
             work.validators
-        );
-    }
-
-    // ---- inline_or_slice: full source under the cap, bounded fallback over ----
-
-    /// A small changed file inlines its COMPLETE source (every line, including
-    /// ones the bounded slice would have trimmed) and reports `inlined_full`.
-    #[test]
-    fn small_file_inlines_full_source_and_reports_inlined_full() {
-        // A distant marker far from the header and the changed hunk — exactly
-        // what `bounded_slice` trims away, so its presence proves the FULL file
-        // is inlined, not the slice.
-        let mid_padding: String = (0..30).map(|i| format!("// mid {i}\n")).collect();
-        let after = format!(
-            "use std::fmt;\n{mid_padding}fn distant_unrelated_marker() {{}}\npub fn compute() {{}}\n"
-        );
-        let entities = vec![added_entity("compute", "pub fn compute() {}")];
-
-        let (source, inlined_full) = inline_or_slice(Some(&after), &entities);
-
-        assert!(inlined_full, "a small file must inline in full");
-        assert!(
-            source.contains("distant_unrelated_marker"),
-            "the full inline must carry the distant line the bounded slice trims, got:\n{source}"
-        );
-        assert!(
-            source.contains("pub fn compute"),
-            "the full inline must carry the changed function, got:\n{source}"
-        );
-    }
-
-    /// A changed file whose full content exceeds [`MAX_INLINE_SOURCE_BYTES`]
-    /// falls back to the bounded slice plus an explicit read-the-rest note, and
-    /// reports `inlined_full == false`.
-    #[test]
-    fn oversized_file_falls_back_to_bounded_slice_with_read_note() {
-        // A short header (imports), then a marker placed in the MIDDLE of a huge
-        // body — outside both the header window (`HEADER_LINES`) and the changed
-        // hunk — so the bounded slice trims it. Its absence proves the fallback
-        // is the slice, not the whole file.
-        let header = "use std::fmt;\n";
-        // Many newline-separated lines so the marker sits far past the header
-        // window (line > HEADER_LINES) and far from the changed hunk, and the
-        // whole file still blows past the inline byte cap.
-        let lead: String = (0..MAX_INLINE_SOURCE_BYTES)
-            .map(|i| format!("// lead {i}\n"))
-            .collect();
-        let trail: String = (0..MAX_INLINE_SOURCE_BYTES)
-            .map(|i| format!("// trail {i}\n"))
-            .collect();
-        let after = format!(
-            "{header}{lead}fn distant_unrelated_marker() {{}}\n{trail}pub fn compute() {{}}\n"
-        );
-        assert!(
-            after.len() > MAX_INLINE_SOURCE_BYTES,
-            "fixture must exceed the inline cap"
-        );
-        let entities = vec![added_entity("compute", "pub fn compute() {}")];
-
-        let (source, inlined_full) = inline_or_slice(Some(&after), &entities);
-
-        assert!(!inlined_full, "an oversized file must NOT inline in full");
-        assert!(
-            source.contains("pub fn compute"),
-            "the fallback slice must still carry the changed function, got:\n{source}"
-        );
-        assert!(
-            !source.contains("distant_unrelated_marker"),
-            "the fallback must be the bounded slice, not the whole file, got:\n{source}"
-        );
-        assert!(
-            source.contains("read_file"),
-            "the fallback must direct the model to read_file for the remainder, got:\n{source}"
         );
     }
 
@@ -1889,27 +1680,6 @@ mod tests {
                 );
             }
             other => panic!("expected AvpError::Context, got: {other:?}"),
-        }
-    }
-
-    /// A small `SemanticChange` carrying just an added entity's body, enough to
-    /// drive the bounded-slice path in the helper tests.
-    fn added_entity(name: &str, body: &str) -> SemanticChange {
-        use swissarmyhammer_sem::model::change::ChangeType;
-        SemanticChange {
-            id: format!("test:{name}"),
-            entity_id: name.to_string(),
-            change_type: ChangeType::Added,
-            entity_type: "function".to_string(),
-            entity_name: name.to_string(),
-            file_path: "src/lib.rs".to_string(),
-            old_file_path: None,
-            before_content: None,
-            after_content: Some(body.to_string()),
-            commit_sha: None,
-            author: None,
-            timestamp: None,
-            structural_change: None,
         }
     }
 }

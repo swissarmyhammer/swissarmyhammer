@@ -1,7 +1,6 @@
 ---
 name: injection
 description: Detect SQL injection, XSS, command injection, and other input validation vulnerabilities
-severity: error
 ---
 
 # Injection Rule

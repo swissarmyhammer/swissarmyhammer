@@ -28,8 +28,8 @@ $ARGUMENTS
 
 The engine is op-dispatched (verb + noun). Each `review` op returns a `ReviewReport`:
 
-- `markdown` — a dated `## Review Findings (YYYY-MM-DD HH:MM)` section, organized by severity, already formatted as a GFM checklist. Write it onto the task verbatim.
-- `counts` — `{ blockers, warnings, nits, confirmed, refuted }`. Use it for the summary.
+- `markdown` — a dated `## Review Findings (YYYY-MM-DD HH:MM)` section: one flat GFM checklist ordered by `file:line`. Review is binary pass/fail — there is no graded severity. Write it onto the task verbatim.
+- `counts` — `{ findings, confirmed, refuted }`. Use it for the summary.
 
 | Op | Scope | When |
 |----|-------|------|
@@ -171,7 +171,7 @@ Never create one kanban task per finding. Findings = checklist items on a host t
 
 - **Mode**: task-mode (with id) or range-mode (with scope)
 - **Scope reviewed**: the op and its target (`review working`, `review sha HEAD~4..HEAD`, `review file src/auth.rs`)
-- **Counts**: from `counts` — by severity ("1 blocker, 3 warnings, 5 nits" or "clean")
+- **Counts**: from `counts` — the findings tally ("3 findings" or "clean")
 - **Outcome**: one of
   - task advanced to terminal column
   - findings appended to task `<id>`; remains in `review`
@@ -196,7 +196,7 @@ The column move is the verdict — no findings appended, history preserved.
 
 1. Ensure review column.
 2. `review` empty → range-mode. `{"op": "review sha", "sha": "HEAD~4..HEAD"}`.
-3. Engine returns `markdown` with 1 blocker + 2 nits and the matching `counts`.
+3. Engine returns `markdown` with 3 findings and the matching `counts`.
 4. Ensure `#review` tag.
 5. Create tracking task in `review` with `Scope: HEAD~4..HEAD` + the report's `markdown`.
 6. Tag it `review`.
@@ -208,6 +208,8 @@ Subsequent `/review <new-id>` follows task-mode — moves to `done` once items a
 ## Rules
 
 - **The engine is the analysis.** You drive it and record its findings; you do not re-run layers, re-read files, or second-guess the report.
+- **Findings are obeyed, never declined.** A finding is an instruction: satisfy it by fixing the code. You may not dismiss a finding, and you may not edit a validator to make one disappear — both are disobedience. The one exception is findings that genuinely cannot all be satisfied (two rules that can't both hold, or one demanding code that won't compile/type-check, or fighting a deliberate documented contract like `snake_case` mirroring a backend payload or `null` required by a type): you can't obey contradictory orders, so **report it** — record it on the task and leave it in `review` (stuck) for a human to fix the rule. You do not pick a winner, edit validators, or force a verdict. Column movement remains the only verdict.
+- **Fix at the root, not the cited line.** A finding names one instance of a cause; satisfy it by eliminating that cause across the whole file, so a re-review of that file finds zero recurrences — never by patching only the line cited. Review is binary, like a test suite: any open finding means not done, regardless of how minor it looks. There is no severity tier that makes a finding optional or advisory — every finding is mandatory.
 - **Facts over opinions.** The engine reports technical findings; relay them, don't editorialize.
 - **One concern per checklist item.** The engine already formats this way — preserve it.
 - **No per-finding tasks.** Findings = checklist items on the source task (task-mode) or a single tracking task (range-mode). The retired `review-finding` tag — don't create or reuse it.

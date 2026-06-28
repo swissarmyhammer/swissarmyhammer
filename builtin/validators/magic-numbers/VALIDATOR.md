@@ -8,7 +8,6 @@ metadata:
 match:
   files:
     - "@file_groups/source_code"
-severity: info
 ---
 
 # Magic Numbers Validator

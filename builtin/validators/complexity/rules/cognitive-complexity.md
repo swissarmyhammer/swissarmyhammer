@@ -1,7 +1,6 @@
 ---
 name: cognitive-complexity
 description: Limit cognitive complexity of functions
-severity: warn
 ---
 
 # Cognitive Complexity Validator

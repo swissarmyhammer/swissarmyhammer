@@ -1,7 +1,6 @@
 ---
 name: hashing-and-equality
 description: Immutable objects with __eq__ must implement __hash__, never hash mutable attributes
-severity: warn
 ---
 
 # Python Hashing and Equality

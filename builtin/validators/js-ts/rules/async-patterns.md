@@ -1,7 +1,6 @@
 ---
 name: async-patterns
 description: Promises over callbacks, async/await, bounded concurrency, top-level await
-severity: warn
 ---
 
 # JavaScript/TypeScript Async Patterns

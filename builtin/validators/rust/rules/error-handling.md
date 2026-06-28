@@ -1,7 +1,6 @@
 ---
 name: error-handling
 description: Typed errors for libraries, anyhow with context for applications
-severity: error
 ---
 
 # Rust Error Handling

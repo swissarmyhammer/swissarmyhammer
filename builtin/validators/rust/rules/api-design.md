@@ -1,7 +1,6 @@
 ---
 name: api-design
 description: Accept generics, expose intermediate results, conversion naming, From over Into
-severity: error
 ---
 
 # Rust API Design

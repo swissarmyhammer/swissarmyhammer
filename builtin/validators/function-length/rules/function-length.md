@@ -1,7 +1,6 @@
 ---
 name: function-length
 description: Functions should be less than 50 lines
-severity: warn
 ---
 
 # Function Length Validator

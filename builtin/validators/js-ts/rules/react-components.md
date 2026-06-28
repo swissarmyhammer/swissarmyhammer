@@ -1,7 +1,6 @@
 ---
 name: react-components
 description: Named prop interfaces, Component+ComponentProps naming, no hardcoded field/entity logic
-severity: warn
 ---
 
 # React Components

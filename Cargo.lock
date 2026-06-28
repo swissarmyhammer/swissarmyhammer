@@ -3433,23 +3433,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "heb"
-version = "0.17.0"
-dependencies = [
- "chrono",
- "dirs",
- "md5",
- "rusqlite",
- "serde",
- "serde_json",
- "swissarmyhammer-leader-election",
- "tempfile",
- "thiserror 2.0.18",
- "tracing",
- "ulid",
-]
-
-[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

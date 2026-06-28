@@ -1,7 +1,6 @@
 ---
 name: missing-docs
 description: Check that public functions and types have documentation comments
-severity: info
 ---
 
 # Missing Documentation Validator

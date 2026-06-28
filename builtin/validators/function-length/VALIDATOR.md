@@ -8,7 +8,6 @@ metadata:
 match:
   files:
     - "@file_groups/source_code"
-severity: warn
 ---
 
 # Function Length Validator
