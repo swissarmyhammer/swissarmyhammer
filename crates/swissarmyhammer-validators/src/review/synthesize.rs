@@ -635,63 +635,47 @@ mod tests {
 
     #[test]
     fn one_rule_matching_multiple_lines_renders_every_instance() {
-        // The no-bail-fast contract: a single rule firing on N lines of one file
-        // yields N findings, all rendered — never collapsed to the first match.
-        // Same file, validator, rule, and claim; only the line differs, so the
-        // conservative dedup key (which includes the line) keeps each occurrence.
+        // The no-bail-fast / whole-file-sweep contract: a single rule firing on
+        // N lines of ONE file touched by ONE commit yields N findings on the
+        // first pass, all rendered — never collapsed to the first match, never
+        // dribbled one-per-re-review. Same file, validator, rule, and claim;
+        // only the line differs, so the conservative dedup key (which includes
+        // the line) keeps each occurrence.
         let rule = Some("no-unused");
-        let verified = vec![
-            confirmed(
-                "src/a.rs",
-                12,
-                "dead-code",
-                rule,
-                "`foo` is never called",
-                None,
-            ),
-            confirmed(
-                "src/a.rs",
-                34,
-                "dead-code",
-                rule,
-                "`foo` is never called",
-                None,
-            ),
-            confirmed(
-                "src/a.rs",
-                56,
-                "dead-code",
-                rule,
-                "`foo` is never called",
-                None,
-            ),
-        ];
+        let lines = [12u32, 34, 56, 78];
+        let verified: Vec<_> = lines
+            .iter()
+            .map(|line| {
+                confirmed(
+                    "src/a.rs",
+                    *line,
+                    "dead-code",
+                    rule,
+                    "`foo` is never called",
+                    None,
+                )
+            })
+            .collect();
         let report = synthesize(verified, &FleetTally::default(), NOW);
 
         // Every occurrence survives as its own checklist item, one per file:line.
-        assert!(
-            report.markdown.contains("- [ ] `src/a.rs:12`"),
-            "{}",
-            report.markdown
-        );
-        assert!(
-            report.markdown.contains("- [ ] `src/a.rs:34`"),
-            "{}",
-            report.markdown
-        );
-        assert!(
-            report.markdown.contains("- [ ] `src/a.rs:56`"),
-            "{}",
-            report.markdown
-        );
-        // Not collapsed to one: all three render and are counted.
+        for line in lines {
+            assert!(
+                report
+                    .markdown
+                    .contains(&format!("- [ ] `src/a.rs:{line}`")),
+                "instance at line {line} must render: {}",
+                report.markdown
+            );
+        }
+        // Not collapsed: all N render and are counted on the first pass.
         assert_eq!(
             report.markdown.matches("- [ ] `src/a.rs:").count(),
-            3,
+            lines.len(),
             "every instance of the rule must render: {}",
             report.markdown
         );
-        assert_eq!(report.counts.findings, 3);
+        assert_eq!(report.counts.findings, lines.len());
     }
 
     #[test]
