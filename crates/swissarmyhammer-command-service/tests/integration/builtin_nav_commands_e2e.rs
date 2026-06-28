@@ -776,7 +776,7 @@ fn two_window_snapshot(window: &str) -> NavSnapshot {
     let zone = win_zone(window);
     let leaf = win_leaf(window);
     NavSnapshot {
-        layer_fq: FullyQualifiedMoniker::from_string(&win_layer(window)),
+        layer_fq: FullyQualifiedMoniker::from_string(win_layer(window)),
         scopes: vec![
             SnapshotScope {
                 fq: FullyQualifiedMoniker::from_string(&zone),
@@ -835,7 +835,7 @@ impl UiGeometryProvider for TwoWindowWebviewProvider {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(window.as_str())
-            .map(|s| FullyQualifiedMoniker::from_string(s))
+            .map(FullyQualifiedMoniker::from_string)
     }
 }
 
@@ -860,7 +860,7 @@ async fn expose_focus_two_windows(
         let mut reg = registry.lock().await;
         for window in [WIN_A, WIN_B] {
             reg.push_layer(FocusLayer {
-                fq: FullyQualifiedMoniker::from_string(&win_layer(window)),
+                fq: FullyQualifiedMoniker::from_string(win_layer(window)),
                 segment: SegmentMoniker::from_string("window"),
                 name: LayerName::from_string("window"),
                 parent: None,
@@ -875,13 +875,13 @@ async fn expose_focus_two_windows(
         st.focus(
             &mut reg,
             &two_window_snapshot(WIN_A),
-            FullyQualifiedMoniker::from_string(&win_zone(WIN_A)),
+            FullyQualifiedMoniker::from_string(win_zone(WIN_A)),
             None,
         );
         st.focus(
             &mut reg,
             &two_window_snapshot(WIN_B),
-            FullyQualifiedMoniker::from_string(&win_leaf(WIN_B)),
+            FullyQualifiedMoniker::from_string(win_leaf(WIN_B)),
             None,
         );
     }

@@ -36,7 +36,7 @@ fn is_exempt(path: &Path, root: &Path) -> bool {
         Some(c) => c.as_os_str().to_string_lossy().into_owned(),
         None => return false,
     };
-    EXEMPT_DIRS.iter().any(|d| *d == first.as_str())
+    EXEMPT_DIRS.contains(&first.as_str())
 }
 
 /// Walk every `.rs` and `.toml` file under the workspace and assert none
