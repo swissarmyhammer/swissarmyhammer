@@ -139,8 +139,8 @@ comments:
   id: 01kwa2fe8qr4ee8hgsrkptp9v5
   text: 'Orchestrator: iteration-6 implement landed green in doing — extracted setup_and_execute_write_test helper, routed the 2 named tests + 6 sibling tests sharing the same boilerplate through it; left genuinely-distinct tests (overwrite, nested-dir, relative-path, error-path, atomic) alone. nextest 1408 passed/0 failed, clippy zero warnings. 1 finding flipped to [x]. Proceeding to checkpoint commit, then re-review.'
   timestamp: 2026-06-29T16:12:55.447644+00:00
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffed80
 project: file-edit-tools
 title: write files should clobber existing files — drop (or escape-hatch) the read-before-write freshness guard
 ---
