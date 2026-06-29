@@ -138,10 +138,14 @@ Given `read files` output:
 - **Object array** — `edits: [{search: "2:a3", with: "…"}, {find: "fn calculate_total",
   replace: "fn calc_total"}]` → mixed styles and aliases, each resolved independently.
 
-**`write files` — read-before-write guard.** For an existing file require a freshness
-token (a whole-file hash from a prior `read`, or session read-tracking); on divergence
-return current content rather than clobbering. New/nonexistent files unguarded. Mirrors
-the hashline read-before-edit mandate and composes with the closed-write-surface goal.
+**`write files` — unguarded full-file replacement.** A full-file write always
+clobbers the target — new or existing — with no freshness check and no token.
+Whole-file replacement is the whole point of `write`, and source control is the
+recovery path. The lost-update guard idea applies to `edit`, not `write`:
+line-anchored `edit files` carries per-line staleness via hashline. Removing the
+guard does not weaken the closed-write-surface / inline-diagnostics goal — those
+flow from the write going through the instrumented tool at all, regardless of any
+hash check, and a successful overwrite still carries the normal mutation envelope.
 
 **All mutating ops — shared result contract.** Extend `EditResult` (and write
 results) with `tagged_content` (re-tagged view of the changed file, so the model chains

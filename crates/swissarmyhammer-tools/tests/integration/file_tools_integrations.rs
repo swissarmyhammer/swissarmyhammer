@@ -2260,17 +2260,13 @@ async fn test_write_tool_overwrite_existing_file() {
     let initial_content = "Initial content";
     fs::write(test_file, initial_content).unwrap();
 
-    // Overwriting an existing file now requires the read-before-write freshness
-    // token the model saw on its prior read. Present the current whole-file hash
-    // so the guard lets the overwrite proceed.
-    let expected_hash = files::shared_utils::whole_file_hash(initial_content);
-
+    // A full-file write clobbers an existing file unconditionally — no
+    // freshness token, no hash check.
     let new_content = "New overwritten content";
     let mut arguments = serde_json::Map::new();
     arguments.insert("op".to_string(), json!("write file"));
     arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("content".to_string(), json!(new_content));
-    arguments.insert("expected_hash".to_string(), json!(expected_hash));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "File overwrite should succeed");
@@ -2285,17 +2281,17 @@ async fn test_write_tool_overwrite_existing_file() {
 }
 
 #[tokio::test]
-async fn test_write_tool_existing_file_without_token_does_not_clobber() {
+async fn test_write_tool_existing_file_clobbers_without_token() {
     // Through the production dispatcher (`op: "write file"`), an existing-file
-    // write with NO `expected_hash` must NOT clobber: it returns the current
-    // content (with its `#hash:` token) as a SUCCESS so the model can re-base.
+    // write with NO token clobbers the target and returns the normal mutation
+    // envelope — there is no read-before-write guard.
     let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files").unwrap();
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
-    let test_file = &temp_dir.join("guard_no_token.txt");
+    let test_file = &temp_dir.join("clobber_no_token.txt");
     let initial_content = "Initial content the model never read";
     fs::write(test_file, initial_content).unwrap();
 
@@ -2305,26 +2301,20 @@ async fn test_write_tool_existing_file_without_token_does_not_clobber() {
     arguments.insert("content".to_string(), json!("clobbered!"));
 
     let result = tool.execute(arguments, &context).await;
-    assert!(
-        result.is_ok(),
-        "missing-token write returns a successful re-base, not an error"
-    );
+    assert!(result.is_ok(), "unguarded write should succeed");
     let call_result = result.unwrap();
     assert_eq!(call_result.is_error, Some(false));
 
-    // File is untouched.
-    assert_eq!(fs::read_to_string(test_file).unwrap(), initial_content);
+    // File is overwritten.
+    assert_eq!(fs::read_to_string(test_file).unwrap(), "clobbered!");
 
-    // Payload carries the current freshness token so the model can re-base.
-    let text = match &call_result.content[0].raw {
-        rmcp::model::RawContent::Text(t) => t.text.clone(),
-        _ => panic!("Expected text content"),
-    };
-    let token = files::shared_utils::whole_file_hash(initial_content);
-    assert!(
-        text.starts_with(&format!("#hash:{token}\n")),
-        "payload should lead with the current freshness token, got: {text}"
-    );
+    // The overwrite carries the mutation envelope, not a re-base payload.
+    let structured = call_result
+        .structured_content
+        .expect("successful overwrite sets structured content");
+    let mutation = &structured["mutation"];
+    assert!(mutation["bytes_written"].as_u64().unwrap() > 0);
+    assert_eq!(mutation["mutated_paths"].as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]

@@ -19,9 +19,9 @@ The first line of a successful read is always a freshness-token metadata line:
 ```
 
 `<hex>` is a whole-file content hash over the **full** on-disk bytes (independent
-of any `offset`/`limit`). Carry it back to `write files` / `edit files` as the
-`expected_hash` token so they can detect whole-file staleness and refuse to
-clobber a file the model has not seen in its current state.
+of any `offset`/`limit`). The per-line `N:HH` anchors are how `edit files`
+detects staleness and refuses to clobber a line the model has not seen in its
+current state; a full-file `write files` is unguarded and always clobbers.
 
 Everything after that first line is the file content (subject to
 `offset`/`limit`), rendered according to `format`:
