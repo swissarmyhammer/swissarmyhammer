@@ -27,7 +27,7 @@ pub(crate) const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10 MiB
 const FILE_WRITE_COST: u32 = 1;
 
 /// Operation metadata for writing files
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct WriteFile;
 
 static WRITE_FILE_PARAMS: &[ParamMeta] = &[
@@ -61,7 +61,7 @@ impl Operation for WriteFile {
 }
 
 /// Tool for creating new files or completely overwriting existing files with atomic operations
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct WriteFileTool;
 
 impl WriteFileTool {
@@ -280,6 +280,42 @@ mod tests {
     #[cfg(unix)]
     const READ_ONLY_PERMS: u32 = 0o444;
 
+    /// JSON key for the top-level mutation envelope object in a success result's
+    /// structured content.
+    const RESPONSE_MUTATION_KEY: &str = "mutation";
+    /// JSON key for the hashline-tagged post-write content inside the envelope.
+    const RESPONSE_TAGGED_CONTENT_KEY: &str = "tagged_content";
+    /// JSON key for the array of mutated paths inside the envelope.
+    const RESPONSE_MUTATED_PATHS_KEY: &str = "mutated_paths";
+    /// JSON key for the byte count written, carried in the envelope's `extra`.
+    const RESPONSE_BYTES_WRITTEN_KEY: &str = "bytes_written";
+
+    /// Assert that a successful write's structured content carries the full
+    /// mutation envelope: `tagged_content` equal to the hashline tagging of
+    /// `expected_content`, a single `mutated_paths` entry ending in
+    /// `expected_filename_suffix`, and a positive `bytes_written`.
+    ///
+    /// Shared by every test that asserts the envelope so the assertions stay in
+    /// lockstep.
+    fn assert_mutation_envelope(
+        structured: &serde_json::Value,
+        expected_content: &str,
+        expected_filename_suffix: &str,
+    ) {
+        let mutation = &structured[RESPONSE_MUTATION_KEY];
+        assert_eq!(
+            mutation[RESPONSE_TAGGED_CONTENT_KEY].as_str().unwrap(),
+            swissarmyhammer_hashline::tag(expected_content, 1)
+        );
+        let paths = mutation[RESPONSE_MUTATED_PATHS_KEY].as_array().unwrap();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0]
+            .as_str()
+            .unwrap()
+            .ends_with(expected_filename_suffix));
+        assert!(mutation[RESPONSE_BYTES_WRITTEN_KEY].as_u64().unwrap() > 0);
+    }
+
     /// Create test arguments for the write tool
     fn create_test_arguments(
         file_path: &str,
@@ -377,15 +413,7 @@ mod tests {
         let structured = call_result
             .structured_content
             .expect("successful overwrite sets structured content");
-        let mutation = &structured["mutation"];
-        assert_eq!(
-            mutation["tagged_content"].as_str().unwrap(),
-            swissarmyhammer_hashline::tag(new_content, 1)
-        );
-        let paths = mutation["mutated_paths"].as_array().unwrap();
-        assert_eq!(paths.len(), 1);
-        assert!(paths[0].as_str().unwrap().ends_with("test_overwrite.txt"));
-        assert!(mutation["bytes_written"].as_u64().unwrap() > 0);
+        assert_mutation_envelope(&structured, new_content, "test_overwrite.txt");
     }
 
     #[tokio::test]
@@ -561,12 +589,11 @@ mod tests {
     #[test]
     fn test_write_file_tool_new_equals_default() {
         // Unit struct with no fields: the constructor must yield the same value
-        // as the canonical `Default`. Compare their `Debug` form (the only
-        // observable surface) to assert equivalence rather than just no-panic
-        // construction.
+        // as the canonical `Default`. With `PartialEq` derived they compare
+        // directly, asserting equivalence rather than just no-panic construction.
         let new = WriteFileTool::new();
         let default = <WriteFileTool as Default>::default();
-        assert_eq!(format!("{new:?}"), format!("{default:?}"));
+        assert_eq!(new, default);
     }
 
     /// The atomic-write rename step can itself fail (the temp file was written
@@ -666,14 +693,7 @@ mod tests {
         let structured = call_result
             .structured_content
             .expect("successful write sets structured content");
-        let mutation = &structured["mutation"];
-        assert_eq!(
-            mutation["tagged_content"].as_str().unwrap(),
-            swissarmyhammer_hashline::tag(test_content, 1)
-        );
-        let paths = mutation["mutated_paths"].as_array().unwrap();
-        assert_eq!(paths.len(), 1);
-        assert!(paths[0].as_str().unwrap().ends_with("response_test.txt"));
+        assert_mutation_envelope(&structured, test_content, "response_test.txt");
     }
 
     #[tokio::test]
@@ -725,7 +745,7 @@ mod tests {
     /// in the structured surface, plus an appended text block; the first content
     /// block stays the plain "OK".
     #[tokio::test]
-    async fn successful_write_carries_tagged_content_and_mutated_paths() {
+    async fn test_successful_write_carries_tagged_content_and_mutated_paths() {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("write_envelope.txt");
         let content = "first\nsecond\nthird\n";
@@ -746,17 +766,11 @@ mod tests {
             .structured_content
             .clone()
             .expect("successful write sets structured content");
-        let mutation = &structured["mutation"];
-        let expected_tagged = swissarmyhammer_hashline::tag(content, 1);
-        assert_eq!(
-            mutation["tagged_content"].as_str().unwrap(),
-            expected_tagged
-        );
-        let paths = mutation["mutated_paths"].as_array().unwrap();
-        assert_eq!(paths.len(), 1);
-        assert!(paths[0].as_str().unwrap().ends_with("write_envelope.txt"));
-        assert!(mutation["bytes_written"].as_u64().unwrap() > 0);
+        assert_mutation_envelope(&structured, content, "write_envelope.txt");
 
+        // The appended text block also carries the tagged content so a chained
+        // edit can lift an anchor straight from result text.
+        let expected_tagged = swissarmyhammer_hashline::tag(content, 1);
         let all_text = call
             .content
             .iter()
@@ -776,7 +790,7 @@ mod tests {
     /// resolves against the on-disk file in an immediately-following `edit files`
     /// call, with NO intervening read.
     #[tokio::test]
-    async fn anchor_from_write_envelope_resolves_in_edit() {
+    async fn test_anchor_from_write_envelope_resolves_in_edit() {
         use crate::mcp::tools::files::edit::execute_edit;
 
         let temp_dir = TempDir::new().unwrap();
@@ -787,7 +801,7 @@ mod tests {
         let args = create_test_arguments(&test_file.to_string_lossy(), content);
         let call = execute_write(args, &context).await.unwrap();
         let structured = call.structured_content.expect("structured content");
-        let tagged = structured["mutation"]["tagged_content"]
+        let tagged = structured[RESPONSE_MUTATION_KEY][RESPONSE_TAGGED_CONTENT_KEY]
             .as_str()
             .unwrap()
             .to_string();
