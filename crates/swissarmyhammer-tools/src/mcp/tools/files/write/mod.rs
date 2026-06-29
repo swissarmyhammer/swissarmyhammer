@@ -6,6 +6,7 @@
 use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
+use serde::Deserialize;
 use std::path::Path;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 use tracing::{debug, info};
@@ -41,9 +42,11 @@ static WRITE_FILE_PARAMS: &[ParamMeta] = &[
 ];
 
 impl Operation for WriteFile {
+    /// Returns the verb part of the operation: `"write"`.
     fn verb(&self) -> &'static str {
         "write"
     }
+    /// Returns the noun part of the operation: `"file"`.
     fn noun(&self) -> &'static str {
         "file"
     }
@@ -56,7 +59,7 @@ impl Operation for WriteFile {
 }
 
 /// Tool for creating new files or completely overwriting existing files with atomic operations
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct WriteFileTool;
 
 impl WriteFileTool {
@@ -128,31 +131,36 @@ impl WriteFileTool {
     }
 }
 
-/// Execute a file write operation
-pub async fn execute_write(
-    arguments: serde_json::Map<String, serde_json::Value>,
+/// Parsed `write` request: the target path plus the complete file content.
+#[derive(Deserialize)]
+struct WriteRequest {
+    #[serde(alias = "path", alias = "absolute_path")]
+    file_path: String,
+    content: String,
+}
+
+/// Validate `request` and resolve its target to an absolute path.
+///
+/// Rejects an empty/whitespace `file_path` and content over [`MAX_FILE_SIZE`].
+///
+/// Path resolution is intentionally absolute-path-friendly: the documented
+/// contract (see `description.md`, `file_path` param: "Absolute path for the
+/// new or existing file") is that callers pass an absolute target, and agents
+/// rely on writing to absolute paths anywhere they have OS permission. An
+/// absolute path is therefore taken as-is — NOT confined to the session root.
+/// A relative path is the convenience case: it resolves against the session
+/// working directory (the board dir), never the process CWD.
+///
+/// `..` traversal is rejected in either form. This guards against a relative
+/// path climbing out of the session root and against an absolute path smuggling
+/// a `ParentDir` component; it deliberately does NOT confine absolute paths to
+/// the session root, which would break the documented absolute-path contract.
+fn validate_and_resolve_path(
+    request: &WriteRequest,
     context: &ToolContext,
-) -> Result<CallToolResult, McpError> {
-    use crate::mcp::tools::files::shared_utils::{
-        ensure_directory_exists, mutation_success_response,
-    };
-    use serde::Deserialize;
+) -> Result<std::path::PathBuf, McpError> {
     use std::path::PathBuf;
 
-    #[derive(Deserialize)]
-    struct WriteRequest {
-        #[serde(alias = "path", alias = "absolute_path")]
-        file_path: String,
-        content: String,
-    }
-
-    // Parse arguments
-    let request: WriteRequest = BaseToolImpl::parse_arguments(arguments)?;
-
-    // Check rate limit (shared helper; keyed by the current Tokio task).
-    crate::mcp::tools::files::shared_utils::enforce_rate_limit("file_write", FILE_WRITE_COST)?;
-
-    // Validate parameters
     if request.file_path.trim().is_empty() {
         return Err(McpError::invalid_request(
             "file_path cannot be empty".to_string(),
@@ -167,13 +175,6 @@ pub async fn execute_write(
         ));
     }
 
-    // Path resolution is intentionally absolute-path-friendly: the documented
-    // contract (see `description.md`, `file_path` param: "Absolute path for the
-    // new or existing file") is that callers pass an absolute target, and agents
-    // rely on writing to absolute paths anywhere they have OS permission. An
-    // absolute path is therefore taken as-is — NOT confined to the session root.
-    // A relative path is the convenience case: it resolves against the session
-    // working directory (the board dir), never the process CWD.
     let path_buf = PathBuf::from(&request.file_path);
     let validated_path = if path_buf.is_absolute() {
         path_buf
@@ -181,27 +182,48 @@ pub async fn execute_write(
         context.session_root().join(path_buf)
     };
 
-    // Reject `..` traversal in either form. This guards against a relative path
-    // climbing out of the session root and against an absolute path smuggling a
-    // `ParentDir` component; it deliberately does NOT confine absolute paths to
-    // the session root, which would break the documented absolute-path contract.
     for component in validated_path.components() {
         if matches!(component, std::path::Component::ParentDir) {
             return Err(McpError::invalid_request(
-                format!("Path traversal detected: {}", validated_path.display()),
+                format!("path traversal detected: {}", validated_path.display()),
                 None,
             ));
         }
     }
 
-    // Ensure parent directory exists before checking permissions
-    if let Some(parent) = validated_path.parent() {
+    Ok(validated_path)
+}
+
+/// Prepare `path` to receive a write: ensure its parent directory exists, then
+/// verify the target is writable. Returns once the path is ready to be written.
+fn prepare_write_target(path: &Path) -> Result<(), McpError> {
+    use crate::mcp::tools::files::shared_utils::{
+        check_file_permissions, ensure_directory_exists, FileOperation,
+    };
+
+    // Ensure parent directory exists before checking permissions.
+    if let Some(parent) = path.parent() {
         ensure_directory_exists(parent)?;
     }
 
-    // Check write permissions after ensuring parent directory exists
-    use crate::mcp::tools::files::shared_utils::{check_file_permissions, FileOperation};
-    check_file_permissions(&validated_path, FileOperation::Write)?;
+    // Check write permissions after ensuring parent directory exists.
+    check_file_permissions(path, FileOperation::Write)
+}
+
+/// Execute a file write operation
+pub async fn execute_write(
+    arguments: serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    use crate::mcp::tools::files::shared_utils::mutation_success_response;
+
+    let request: WriteRequest = BaseToolImpl::parse_arguments(arguments)?;
+
+    // Check rate limit (shared helper; keyed by the current Tokio task).
+    crate::mcp::tools::files::shared_utils::enforce_rate_limit("file_write", FILE_WRITE_COST)?;
+
+    let validated_path = validate_and_resolve_path(&request, context)?;
+    prepare_write_target(&validated_path)?;
 
     // Log file write attempt for security auditing
     info!(path = %validated_path.display(), content_length = request.content.len(), "Attempting to write file");
