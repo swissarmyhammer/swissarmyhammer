@@ -333,6 +333,31 @@ mod tests {
         args
     }
 
+    /// Run the canonical "write a file under a fresh temp dir" flow shared by
+    /// every happy-path write test: create a [`TempDir`], target `file_name`
+    /// inside it, build a context and args, `execute_write`, unwrap, and assert
+    /// the call reports `is_error: false`.
+    ///
+    /// Returns the `CallToolResult` plus the owned `TempDir`, the target path,
+    /// and the `ToolContext` — all four so the caller can run its unique
+    /// assertions (read the file off disk, inspect the envelope, chain a follow-up
+    /// `execute_edit`) without the temp dir being dropped (and deleted) early.
+    async fn setup_and_execute_write_test(
+        file_name: &str,
+        content: &str,
+    ) -> (CallToolResult, TempDir, std::path::PathBuf, ToolContext) {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join(file_name);
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_test_arguments(&test_file.to_string_lossy(), content);
+
+        let call_result = execute_write(args, &context).await.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+
+        (call_result, temp_dir, test_file, context)
+    }
+
     /// Assert no leftover `*.tmp.*` files remain in `parent_dir` — the atomic
     /// write must clean up its temporary file on success and on every failure.
     fn assert_no_temp_files_remain(parent_dir: &Path) {
@@ -368,15 +393,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_new_file_success() {
-        let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("test_new_file.txt");
         let test_content = "Hello, World!\nThis is a test file.";
-
-        let context = crate::test_utils::create_test_context().await;
-        let args = create_test_arguments(&test_file.to_string_lossy(), test_content);
-
-        let call_result = execute_write(args, &context).await.unwrap();
-        assert_eq!(call_result.is_error, Some(false));
+        let (_call_result, _temp_dir, test_file, _context) =
+            setup_and_execute_write_test("test_new_file.txt", test_content).await;
 
         // Verify file was created with correct content
         assert!(test_file.exists());
@@ -508,15 +527,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_unicode_content() {
-        let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("unicode_test.txt");
         let unicode_content = "Hello 🦀 Rust!\n你好世界\nПривет мир\n🚀✨🎉";
-
-        let context = crate::test_utils::create_test_context().await;
-        let args = create_test_arguments(&test_file.to_string_lossy(), unicode_content);
-
-        let result = execute_write(args, &context).await;
-        assert!(result.is_ok());
+        let (_call_result, _temp_dir, test_file, _context) =
+            setup_and_execute_write_test("unicode_test.txt", unicode_content).await;
 
         // Verify Unicode content was written correctly
         let written_content = fs::read_to_string(&test_file).unwrap();
@@ -525,15 +538,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_empty_content() {
-        let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("empty_file.txt");
         let empty_content = "";
-
-        let context = crate::test_utils::create_test_context().await;
-        let args = create_test_arguments(&test_file.to_string_lossy(), empty_content);
-
-        let result = execute_write(args, &context).await;
-        assert!(result.is_ok());
+        let (_call_result, _temp_dir, test_file, _context) =
+            setup_and_execute_write_test("empty_file.txt", empty_content).await;
 
         // Verify empty file was created
         assert!(test_file.exists());
@@ -624,16 +631,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_with_special_characters() {
-        let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("special_chars.txt");
         let special_content =
             "Line 1\nLine 2\r\nTab\tcharacter\nNull: \0 (null byte)\nBackslash: \\ forward: /";
-
-        let context = crate::test_utils::create_test_context().await;
-        let args = create_test_arguments(&test_file.to_string_lossy(), special_content);
-
-        let result = execute_write(args, &context).await;
-        assert!(result.is_ok());
+        let (_call_result, _temp_dir, test_file, _context) =
+            setup_and_execute_write_test("special_chars.txt", special_content).await;
 
         // Verify special characters were written correctly
         let written_content = fs::read_to_string(&test_file).unwrap();
@@ -661,18 +662,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_success_response_format() {
-        let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("response_test.txt");
         let test_content = "Testing response format";
-
-        let context = crate::test_utils::create_test_context().await;
-        let args = create_test_arguments(&test_file.to_string_lossy(), test_content);
-
-        let result = execute_write(args, &context).await;
-        assert!(result.is_ok());
-
-        let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(false));
+        let (call_result, _temp_dir, test_file, _context) =
+            setup_and_execute_write_test("response_test.txt", test_content).await;
         assert!(!call_result.content.is_empty());
 
         // The first content block stays the plain "OK" success message.
@@ -723,17 +715,10 @@ mod tests {
     #[tokio::test]
     async fn test_write_new_file_is_unguarded() {
         // A brand-new (nonexistent) file writes freely with no token — the same
-        // unguarded path a full-file write always takes.
-        let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("guard_new.txt");
-        assert!(!test_file.exists());
-
-        let context = crate::test_utils::create_test_context().await;
-        let args = create_test_arguments(&test_file.to_string_lossy(), "fresh content");
-
-        let result = execute_write(args, &context).await;
-        assert!(result.is_ok(), "new-file write should succeed unguarded");
-        assert_eq!(result.unwrap().is_error, Some(false));
+        // unguarded path a full-file write always takes. The helper targets a
+        // fresh temp dir, so `guard_new.txt` does not exist before the write.
+        let (_call_result, _temp_dir, test_file, _context) =
+            setup_and_execute_write_test("guard_new.txt", "fresh content").await;
 
         assert_eq!(fs::read_to_string(&test_file).unwrap(), "fresh content");
     }
@@ -746,15 +731,9 @@ mod tests {
     /// block stays the plain "OK".
     #[tokio::test]
     async fn test_successful_write_carries_tagged_content_and_mutated_paths() {
-        let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("write_envelope.txt");
         let content = "first\nsecond\nthird\n";
-
-        let context = crate::test_utils::create_test_context().await;
-        let args = create_test_arguments(&test_file.to_string_lossy(), content);
-
-        let call = execute_write(args, &context).await.unwrap();
-        assert_eq!(call.is_error, Some(false));
+        let (call, _temp_dir, _test_file, _context) =
+            setup_and_execute_write_test("write_envelope.txt", content).await;
 
         // First block stays the plain success message.
         match &call.content[0].raw {
@@ -793,13 +772,9 @@ mod tests {
     async fn test_anchor_from_write_envelope_resolves_in_edit() {
         use crate::mcp::tools::files::edit::execute_edit;
 
-        let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("write_roundtrip.txt");
         let content = "one\ntwo\nthree\n";
-
-        let context = crate::test_utils::create_test_context().await;
-        let args = create_test_arguments(&test_file.to_string_lossy(), content);
-        let call = execute_write(args, &context).await.unwrap();
+        let (call, _temp_dir, test_file, context) =
+            setup_and_execute_write_test("write_roundtrip.txt", content).await;
         let structured = call.structured_content.expect("structured content");
         let tagged = structured[RESPONSE_MUTATION_KEY][RESPONSE_TAGGED_CONTENT_KEY]
             .as_str()

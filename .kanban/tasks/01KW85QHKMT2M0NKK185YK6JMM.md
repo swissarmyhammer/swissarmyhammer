@@ -122,6 +122,23 @@ comments:
   id: 01kwa0yp1r6ddkb96t5mg0wghv
   text: 'Orchestrator: iteration-5 implement landed green in doing — all 8 findings fixed at class level with whole-file sweeps: WriteFile + WriteFileTool both full derive set (Debug,Default,Clone,Copy,PartialEq,Eq); one assert_mutation_envelope helper used by all 3 envelope tests; all JSON response keys → named consts (zero literal matches remain); every #[test] fn test_-prefixed. nextest 1408 passed/0 failed, clippy zero warnings. 8 findings flipped to [x]. Proceeding to checkpoint commit, then re-review.'
   timestamp: 2026-06-29T15:46:17.784377+00:00
+- actor: claude-code
+  id: 01kwa1csejmby4w3czccddh0pq
+  text: 'Orchestrator: iteration-5 re-review = 1 finding (2026-06-29 10:47) — strong convergence (8→5→7→8→1). Single residual: test_write_success_response_format + test_successful_write_carries_tagged_content_and_mutated_paths still share duplicated SETUP (temp file/context/args/execute); the round-4 assert_mutation_envelope extraction deduped the assertion block but not the setup. Fix: extract a shared setup_and_execute_write_test helper. No correctness findings; contract points untouched. Iteration 6 to fix this one, then re-review.'
+  timestamp: 2026-06-29T15:54:00.018634+00:00
+- actor: claude-code
+  id: 01kwa2cayc04k89gmbnh9g7441
+  text: |-
+    Worked the 2026-06-29 10:47 review finding (test setup duplication). Extracted `async fn setup_and_execute_write_test(file_name, content) -> (CallToolResult, TempDir, PathBuf, ToolContext)` in the write/mod.rs test module — it does the shared temp-dir + context + args + execute_write + unwrap + assert is_error==Some(false) flow, returning the owned TempDir (so it isn't dropped early), the target path, and the context.
+
+    Routed the two named tests (test_write_success_response_format, test_successful_write_carries_tagged_content_and_mutated_paths) through it, plus the SWEEP siblings that genuinely share the same setup: test_write_new_file_success, test_write_unicode_content, test_write_empty_content, test_write_file_with_special_characters, test_write_new_file_is_unguarded, and test_anchor_from_write_envelope_resolves_in_edit (reuses the returned context for the chained execute_edit). Left tests that genuinely differ untouched: pre-existing-file overwrite, nested-dir parent creation, relative-path + cwd guard, error-path (blank/size/json/readonly), and direct write_file_atomic callers.
+
+    No runtime behavior changed; absolute-path contract and no-freshness-guard left intact. cargo nextest run -p swissarmyhammer-tools: 1408 passed, 0 failed. cargo clippy -p swissarmyhammer-tools --all-targets: 0 warnings.
+  timestamp: 2026-06-29T16:11:13.740100+00:00
+- actor: claude-code
+  id: 01kwa2fe8qr4ee8hgsrkptp9v5
+  text: 'Orchestrator: iteration-6 implement landed green in doing — extracted setup_and_execute_write_test helper, routed the 2 named tests + 6 sibling tests sharing the same boilerplate through it; left genuinely-distinct tests (overwrite, nested-dir, relative-path, error-path, atomic) alone. nextest 1408 passed/0 failed, clippy zero warnings. 1 finding flipped to [x]. Proceeding to checkpoint commit, then re-review.'
+  timestamp: 2026-06-29T16:12:55.447644+00:00
 position_column: doing
 position_ordinal: '8280'
 project: file-edit-tools
@@ -207,3 +224,7 @@ Scope: HEAD~1..HEAD. `write/mod.rs` reviewed (8 findings); `write/description.md
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:593` — Third instance of mutation envelope assertion block (in successful_write_carries_tagged_content_and_mutated_paths). Same pattern as lines 299 and 565, with minor variation (call.structured_content.clone() vs call_result.structured_content). Replace with call to shared helper function (see line 299 finding).
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:664` — Test function missing `test_` prefix convention. All other test functions in this file (e.g., `test_write_tool_creation`, `test_write_new_file_success`, etc.) use the `test_` prefix; this function breaks the established pattern. Rename to `test_successful_write_carries_tagged_content_and_mutated_paths`.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:707` — Test function missing `test_` prefix convention. All other test functions in this file use the `test_` prefix; this function breaks the established pattern. Rename to `test_anchor_from_write_envelope_resolves_in_edit`.
+
+## Review Findings (2026-06-29 10:47)
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/files/write/mod.rs:566` — `test_write_success_response_format` and `test_successful_write_carries_tagged_content_and_mutated_paths` share a large overlapping setup and assertion block (temp file creation, context, args, write execution, and envelope assertion). They differ only by variable names (call_result vs call, test_content vs content), file name literals (response_test.txt vs write_envelope.txt), and minor assertion style differences (is_ok() vs is_error == Some(false)). This code should be extracted into a shared helper to avoid drift and reduce maintenance surface. Extract a helper function like `async fn setup_and_execute_write_test(file_name: &str, content: &str) -> (CallToolResult, TempDir)` that performs the common setup (temp dir, context, args, execute, unwrap, assert is_error) and returns the result and temp dir. Each test can then call this helper and perform its unique assertions (envelope check, appended text check, etc.).
