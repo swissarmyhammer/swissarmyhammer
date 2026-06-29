@@ -50,9 +50,11 @@ impl Operation for WriteFile {
     fn noun(&self) -> &'static str {
         "file"
     }
+    /// Returns a one-line description of the file write operation.
     fn description(&self) -> &'static str {
         "Create new files or overwrite existing files with atomic operations"
     }
+    /// Returns the parameter metadata the `write` operation accepts.
     fn parameters(&self) -> &'static [ParamMeta] {
         WRITE_FILE_PARAMS
     }
@@ -170,7 +172,7 @@ fn validate_and_resolve_path(
 
     if request.content.len() > MAX_FILE_SIZE {
         return Err(McpError::invalid_request(
-            "content exceeds maximum size limit of 10MB".to_string(),
+            "content exceeds maximum size limit of 10 MiB".to_string(),
             None,
         ));
     }
@@ -413,28 +415,24 @@ mod tests {
         assert_eq!(written_content, test_content);
     }
 
+    /// An empty or whitespace-only `file_path` is rejected with the same
+    /// "file_path cannot be empty" error — both trim to nothing.
     #[tokio::test]
-    async fn test_write_empty_file_path() {
+    async fn test_write_blank_file_path_is_rejected() {
         let context = crate::test_utils::create_test_context().await;
-        let args = create_test_arguments("", "test content");
 
-        let result = execute_write(args, &context).await;
-        assert!(result.is_err());
+        for (file_path, label) in [("", "empty"), ("   ", "whitespace")] {
+            let args = create_test_arguments(file_path, "test content");
 
-        let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("file_path cannot be empty"));
-    }
+            let result = execute_write(args, &context).await;
+            assert!(result.is_err(), "{label} file_path should be rejected");
 
-    #[tokio::test]
-    async fn test_write_whitespace_file_path() {
-        let context = crate::test_utils::create_test_context().await;
-        let args = create_test_arguments("   ", "test content");
-
-        let result = execute_write(args, &context).await;
-        assert!(result.is_err());
-
-        let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("file_path cannot be empty"));
+            let error = result.unwrap_err();
+            assert!(
+                format!("{:?}", error).contains("file_path cannot be empty"),
+                "{label} file_path should report empty: {error:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -562,9 +560,13 @@ mod tests {
     /// value — the public constructor is equivalent to `default()`.
     #[test]
     fn test_write_file_tool_new_equals_default() {
-        let _new = WriteFileTool::new();
-        let _default = WriteFileTool;
-        // Unit struct: construction simply must succeed via both paths.
+        // Unit struct with no fields: the constructor must yield the same value
+        // as the canonical `Default`. Compare their `Debug` form (the only
+        // observable surface) to assert equivalence rather than just no-panic
+        // construction.
+        let new = WriteFileTool::new();
+        let default = <WriteFileTool as Default>::default();
+        assert_eq!(format!("{new:?}"), format!("{default:?}"));
     }
 
     /// The atomic-write rename step can itself fail (the temp file was written
