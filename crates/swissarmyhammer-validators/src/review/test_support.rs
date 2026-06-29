@@ -48,6 +48,11 @@ pub(crate) fn new_notifier() -> std::sync::Arc<claude_agent::NotificationSender>
 /// The LSP `SymbolKind` code for a function — what every [`seed_symbol`] row is.
 const LSP_SYMBOL_KIND_FUNCTION: i64 = 12;
 
+/// Per-validator execution budget, in seconds, baked into every fixture
+/// [`RuleSet`]'s manifest. A fixed placeholder — the review-test fixtures assert
+/// on matching, scoping, and probe wiring, never on timeout enforcement.
+const RULESET_TIMEOUT_SECS: u32 = 30;
+
 /// A deterministic embedding two chunks can share so they register as
 /// duplicates. The length derives from [`DIM`] so the seeded index and the
 /// mock embedder can never drift apart.
@@ -82,6 +87,26 @@ impl Default for TestRepo {
     }
 }
 
+/// Strip a working-tree-relative path down to only its `Normal` components so a
+/// [`Path::join`] onto the repo root can never escape it. Drops a leading `/`
+/// (which would otherwise make `join` replace the whole path), `..` climbs, and
+/// any prefix/root component. A path that reduces to nothing yields `"."`.
+fn confine_relative(rel: &str) -> PathBuf {
+    use std::path::Component;
+    let confined: PathBuf = Path::new(rel)
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(seg) => Some(seg),
+            _ => None,
+        })
+        .collect();
+    if confined.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        confined
+    }
+}
+
 impl TestRepo {
     /// Create a fresh test git repository initialized with libgit2, backed by a
     /// throwaway [`TempDir`] and configured with a deterministic test identity so
@@ -103,8 +128,13 @@ impl TestRepo {
     }
 
     /// Write a file to the working tree (no staging).
+    ///
+    /// `rel` is confined under the repo root: a leading `/` or any `..`/prefix
+    /// component is dropped so only `Normal` path segments survive. Without this,
+    /// an absolute `rel` would make [`Path::join`] replace the whole path and
+    /// escape the [`TempDir`], and a `..` segment would climb out of it.
     pub fn write(&self, rel: &str, content: &str) {
-        let full = self.dir.path().join(rel);
+        let full = self.dir.path().join(confine_relative(rel));
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
@@ -253,8 +283,8 @@ pub fn ruleset(name: &str, file_glob: &str, probes: &[&str]) -> RuleSet {
             }),
             trigger_matcher: None,
             tags: vec![],
-            probes: probes.iter().map(|p| p.to_string()).collect(),
-            timeout: 30,
+                probes: probes.iter().map(|p| p.to_string()).collect(),
+                timeout: RULESET_TIMEOUT_SECS,
             once: false,
         },
         rules: vec![Rule {
@@ -453,7 +483,7 @@ impl ScriptedReply {
 }
 
 /// How the mock agent answers the session-fork extension surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ForkMode {
     /// Fork/status/pin behave like the llama backend (state + token counts).
     Supported,
@@ -471,6 +501,16 @@ pub enum ForkMode {
 /// plainest agent: no fork extension, replies emitted over the live
 /// connection, no mid-turn agent→client round-trips, and an empty findings
 /// array (`[]`) when no script entry matches.
+///
+/// The fields are deliberately all `pub` and the struct is deliberately NOT
+/// `#[non_exhaustive]`. This is a `test-support`-gated fixture, not a public
+/// API surface: its consumers — both this crate's test modules and the
+/// downstream `swissarmyhammer-tools` review tests — set the knobs they care
+/// about by struct literal with `..Default::default()`, across the crate
+/// boundary (e.g. `review_fixture.rs`). `#[non_exhaustive]` would forbid exactly
+/// that cross-crate struct-literal construction, breaking every consumer for no
+/// semver benefit a test fixture can ever owe. New knobs are added here with a
+/// `Default`, so existing `..Default::default()` sites keep compiling.
 #[derive(Debug, Clone)]
 pub struct ScriptedAgentConfig {
     /// How the session-fork extension surface answers.
@@ -866,55 +906,71 @@ async fn handle_prompt(
     } else {
         mock.reply_for(&context)
     };
-    let text = match reply {
+    // `None` means the reply was [`ScriptedReply::Error`]: fail the prompt.
+    let Some(text) = resolve_reply_text(mock, reply).await else {
+        return responder
+            .cast::<PromptResponse>()
+            .respond_with_error(agent_client_protocol::Error::internal_error());
+    };
+    mock.emit_reply(cx, &req.session_id, text);
+    mock.complete_turn(&session_key, pin_on_save(&req));
+    responder
+        .cast()
+        .respond_with_result(Ok(build_prompt_response(mock)))
+}
+
+/// Resolve a matched [`ScriptedReply`] to the text the turn streams back.
+/// Returns `None` for [`ScriptedReply::Error`] — the caller fails the prompt.
+/// A [`ScriptedReply::Stall`] sleeps far past any test window before resolving.
+async fn resolve_reply_text(mock: &ScriptedAgent, reply: ScriptedReply) -> Option<String> {
+    match reply {
         ScriptedReply::Sequence(queue) => {
             let mut q = queue.lock().unwrap();
             // Yield the next scripted delta, sticking on the last once drained,
             // so a sequence longer than the actual turn count is safe and a
             // sequence shorter than it keeps answering with its final element.
-            if q.len() > 1 {
+            let text = if q.len() > 1 {
                 q.pop_front().unwrap()
             } else {
-                q.front().cloned().unwrap_or_else(|| {
-                    mock.config.default_response.clone()
-                })
-            }
+                q.front()
+                    .cloned()
+                    .unwrap_or_else(|| mock.config.default_response.clone())
+            };
+            Some(text)
         }
-        ScriptedReply::Error => {
-            return responder
-                .cast::<PromptResponse>()
-                .respond_with_error(agent_client_protocol::Error::internal_error());
-        }
+        ScriptedReply::Error => None,
         ScriptedReply::Stall => {
-            // Far longer than any test's windows; the test cancels or abandons
-            // the turn long before this resolves.
             tokio::time::sleep(std::time::Duration::from_secs(STALL_DURATION_SECS)).await;
-            mock.config.default_response.clone()
+            Some(mock.config.default_response.clone())
         }
-        ScriptedReply::Text(text) => text,
-    };
-    mock.emit_reply(cx, &req.session_id, text);
-    // The turn completed: the session now has saved state. A prime turn carries
-    // the born-pinned save intent in its `_meta` (`PIN_ON_SAVE_META_KEY`), so
-    // the saved prefix is pinned atomically at save time — the production
-    // prime→pin race close — rather than relying on a separate post-turn pin.
-    let pin_on_save = req
-        .meta
+        ScriptedReply::Text(text) => Some(text),
+    }
+}
+
+/// Whether a prompt carries the prime turn's born-pinned save intent in its
+/// `_meta` (`PIN_ON_SAVE_META_KEY`). When set, the saved prefix is pinned
+/// atomically at save time — the production prime→pin race close — rather than
+/// relying on a separate post-turn pin.
+fn pin_on_save(req: &PromptRequest) -> bool {
+    req.meta
         .as_ref()
         .and_then(|m| m.get(PIN_ON_SAVE_META_KEY))
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    mock.complete_turn(&session_key, pin_on_save);
-    // Attach prompt-cache usage to `_meta` exactly as a real claude agent does
-    // (`agent_prompt_handling::build_streaming_response`), so a fleet test can
-    // drive the warm/cold cache-usage log path off this mock.
+        .unwrap_or(false)
+}
+
+/// Build the turn's [`PromptResponse`], attaching prompt-cache usage to `_meta`
+/// exactly as a real claude agent does (`agent_prompt_handling::build_streaming_response`)
+/// when the config carries it, so a fleet test can drive the warm/cold
+/// cache-usage log path off this mock.
+fn build_prompt_response(mock: &ScriptedAgent) -> PromptResponse {
     let mut response = PromptResponse::new(StopReason::EndTurn);
     if let Some(usage) = mock.config.cache_usage {
         let mut meta = serde_json::Map::new();
         meta.insert("cache_usage".to_string(), usage.to_meta_json());
         response = response.meta(meta);
     }
-    responder.cast().respond_with_result(Ok(response))
+    response
 }
 
 /// Issue the mid-turn `session/request_permission` round-trip a real `claude`
@@ -1140,19 +1196,116 @@ where
 /// Binary pass/fail: a finding carries no severity field, matching the fan-out
 /// output contract.
 pub(crate) fn findings_json(file: &str, line: u32, rule: &str, claim: &str) -> String {
-    format!(
-        "Here are my findings:\n\n```json\n[{{\"file\":\"{file}\",\"line\":{line},\
-         \"validator\":\"ignored-by-agent\",\"rule\":\"{rule}\",\
-         \"claim\":\"{claim}\",\"evidence\":\"per `duplicates`: 0.94\",\
-         \"suggestion\":\"extract a helper\"}}]\n```\n"
-    )
+    // Built through `serde_json` so a `"` or `\` in any interpolated field is
+    // escaped correctly rather than corrupting the array.
+    let array = serde_json::json!([{
+        "file": file,
+        "line": line,
+        "validator": "ignored-by-agent",
+        "rule": rule,
+        "claim": claim,
+        "evidence": "per `duplicates`: 0.94",
+        "suggestion": "extract a helper",
+    }]);
+    format!("Here are my findings:\n\n```json\n{array}\n```\n")
 }
 
 /// A verify verdict object as the verifier agent would emit it, fenced in
 /// prose (`confirmed: true` keeps the finding, `false` refutes it).
 pub(crate) fn verdict_json(confirmed: bool, reason: &str) -> String {
-    format!(
-        "After trying to disprove the claim:\n\n```json\n{{\"confirmed\": {confirmed}, \
-         \"reason\": \"{reason}\"}}\n```\n"
-    )
+    // Built through `serde_json` so a `"` or `\` in `reason` is escaped correctly
+    // rather than corrupting the object.
+    let object = serde_json::json!({
+        "confirmed": confirmed,
+        "reason": reason,
+    });
+    format!("After trying to disprove the claim:\n\n```json\n{object}\n```\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `TestRepo::write` must confine writes under its temp dir even when handed
+    /// an absolute path: `PathBuf::join` would otherwise let an absolute `rel`
+    /// replace the whole path and escape the repo root.
+    #[test]
+    fn write_confines_an_absolute_rel_under_the_repo_root() {
+        let repo = TestRepo::new();
+        // A marker unique to this repo's temp dir so the escape assertion can
+        // never collide with a leftover or a parallel test.
+        let outside = std::env::temp_dir().join(format!(
+            "test_support_escape_{}.txt",
+            repo.path().file_name().unwrap().to_string_lossy()
+        ));
+        let _ = std::fs::remove_file(&outside);
+
+        // An absolute path — naive `join` would write straight to `outside`.
+        repo.write(outside.to_str().unwrap(), "leaked");
+
+        assert!(
+            !outside.exists(),
+            "an absolute rel must not escape the repo root and write to {}",
+            outside.display()
+        );
+    }
+
+    /// `TestRepo::write` must reject `..` components so a relative-but-climbing
+    /// path cannot escape the repo root: the climb is dropped and the file lands
+    /// under the root instead of in (or above) its parent.
+    #[test]
+    fn write_confines_a_dotdot_rel_under_the_repo_root() {
+        let repo = TestRepo::new();
+        // A marker unique to this repo's temp dir, so a leftover or a parallel
+        // test can never make the parent-escape assertion below flaky.
+        let marker = format!(
+            "escape_marker_{}.txt",
+            repo.path().file_name().unwrap().to_string_lossy()
+        );
+        repo.write(&format!("../{marker}"), "leaked");
+
+        // The `..` is stripped, so the file lives under the root...
+        assert!(
+            repo.path().join(&marker).exists(),
+            "the `..` climb should be dropped, landing the file under the root"
+        );
+        // ...and the climb did NOT write into the temp dir's parent.
+        let above = repo.path().parent().unwrap().join(&marker);
+        assert!(
+            !above.exists(),
+            "a `..` rel must not climb out of the repo root to {}",
+            above.display()
+        );
+    }
+
+    /// A `claim` containing a double quote must still produce a parseable findings
+    /// array — raw interpolation would corrupt the JSON.
+    #[test]
+    fn findings_json_escapes_a_quote_in_the_claim() {
+        let raw = findings_json("a.rs", 7, "r", r#"a "quoted" claim"#);
+        let json = raw
+            .split("```json")
+            .nth(1)
+            .and_then(|s| s.split("```").next())
+            .expect("fenced json block")
+            .trim();
+        let parsed: serde_json::Value = serde_json::from_str(json).expect("valid JSON array");
+        assert_eq!(parsed[0]["claim"], r#"a "quoted" claim"#);
+    }
+
+    /// A `reason` containing a double quote and a backslash must still produce a
+    /// parseable verdict object.
+    #[test]
+    fn verdict_json_escapes_quote_and_backslash_in_the_reason() {
+        let raw = verdict_json(false, r#"path C:\x is not a "real" bug"#);
+        let json = raw
+            .split("```json")
+            .nth(1)
+            .and_then(|s| s.split("```").next())
+            .expect("fenced json block")
+            .trim();
+        let parsed: serde_json::Value = serde_json::from_str(json).expect("valid JSON object");
+        assert_eq!(parsed["confirmed"], false);
+        assert_eq!(parsed["reason"], r#"path C:\x is not a "real" bug"#);
+    }
 }

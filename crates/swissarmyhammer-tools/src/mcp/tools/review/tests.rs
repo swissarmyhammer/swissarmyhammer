@@ -33,6 +33,21 @@ use super::*;
 use crate::mcp::tool_handlers::ToolHandlers;
 use crate::mcp::tool_registry::{ToolContext, ToolRegistry};
 
+/// Capacity of the per-connection backend broadcast each scripted agent streams
+/// onto. A single review run here emits few notifications, well under capacity,
+/// so the subscriber never lags a chunk away.
+///
+/// This (and [`extract_text`] / [`scripted_factory`] / [`mock_embedder_factory`])
+/// deliberately mirror the integration-test copies in
+/// `tests/integration/review_fixture.rs`. The two cannot share a helper: this is a
+/// `#[cfg(test)]` unit-test module and that one is an integration-test module —
+/// separate compilation units that cannot import each other. The factories return
+/// tools-crate-local types (`AgentFactory`/`EmbedderFactory`), so they cannot move
+/// to the cross-crate `test_support` seam, and this crate forbids adding a
+/// `test-support` feature. So the small per-unit copies stand by design; only the
+/// buffer capacity is named.
+const SCRIPTED_AGENT_NOTIFY_BUFFER_SIZE: usize = 64;
+
 // ---------------------------------------------------------------------------
 // registration
 // ---------------------------------------------------------------------------
@@ -809,7 +824,8 @@ fn scripted_factory(agent: Arc<ScriptedAgent>) -> AgentFactory {
     Arc::new(move || {
         let agent = Arc::clone(&agent);
         Box::pin(async move {
-            let (notify_tx, notification_rx) = broadcast::channel(64);
+            let (notify_tx, notification_rx) =
+                broadcast::channel(SCRIPTED_AGENT_NOTIFY_BUFFER_SIZE);
             // Rebind the shared harness onto this run's broadcast and bridge each
             // reply onto the live connection too (the production dual-emission the
             // driver must collect once).

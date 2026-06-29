@@ -130,11 +130,14 @@ impl Default for FleetConfig {
 pub struct FleetOutcome {
     /// The merged, validator-tagged findings from every task that succeeded.
     pub findings: Vec<Finding>,
-    /// How many validator tasks were submitted.
-    pub attempted: usize,
+    /// How many validator tasks were submitted. Read through
+    /// [`attempted`](Self::attempted); private so the tally can evolve without a
+    /// field-level API commitment.
+    attempted: usize,
     /// How many of those tasks failed (errored, were dropped, or did not parse)
-    /// and so degraded to zero findings.
-    pub failed: usize,
+    /// and so degraded to zero findings. Read through [`failed`](Self::failed);
+    /// private for the same reason as [`attempted`](Self::attempted).
+    failed: usize,
     /// The run's shared primed-prefix pin guard, when priming succeeded.
     ///
     /// The change + diffs are primed ONCE per run and forked per validator here;
@@ -144,6 +147,19 @@ pub struct FleetOutcome {
     /// failed (every task ran the monolithic fallback) so there is nothing to
     /// release.
     pub prime: Option<SessionPinGuard>,
+}
+
+impl FleetOutcome {
+    /// How many validator tasks were submitted in this run.
+    pub fn attempted(&self) -> usize {
+        self.attempted
+    }
+
+    /// How many submitted tasks failed (errored, were dropped, or did not parse)
+    /// and so degraded to zero findings.
+    pub fn failed(&self) -> usize {
+        self.failed
+    }
 }
 
 impl std::fmt::Debug for FleetOutcome {
@@ -633,8 +649,18 @@ async fn collect_forked_task(
             )
             .await
         }
-        Ok(Err(err)) => handle_pool_error(err, name, files),
-        Err(_) => handle_delivery_error(name, files),
+        Ok(Err(err)) => handle_task_failure(
+            name,
+            files,
+            Some(&err),
+            "fleet task failed; yielding zero findings for this validator",
+        ),
+        Err(_) => handle_task_failure(
+            name,
+            files,
+            None,
+            "fleet task result was dropped before delivery; yielding zero findings",
+        ),
     }
 }
 
@@ -700,29 +726,25 @@ async fn handle_fork_failed(
     collect_task(pool.submit(prompt).await, name, files)
 }
 
-/// The pool-error arm of [`collect_forked_task`]: the task failed for any reason
-/// other than a fork failure (idle/ceiling abandonment, an extension failure, or
-/// an agent error). Logged and degraded to zero findings — one bad task never
-/// aborts the rest — returning `Err(())` so the caller tallies it as failed rather
-/// than conflating it with a clean validator.
-fn handle_pool_error(err: PoolError, name: &str, files: &[String]) -> Result<Vec<Finding>, ()> {
+/// The failure arm of the task collectors ([`collect_forked_task`] /
+/// [`collect_task`]): a task that failed for any reason other than a fork
+/// failure — a pool error (idle/ceiling abandonment, an extension failure, or an
+/// agent error) or a dropped result channel. Logged with `message` (and the
+/// `error` field when the failure carried one — a [`PoolError`], absent for a
+/// dropped delivery) and degraded to zero findings — one bad task never aborts
+/// the rest — returning `Err(())` so the caller tallies it as failed rather than
+/// conflating it with a clean validator.
+fn handle_task_failure(
+    name: &str,
+    files: &[String],
+    error: Option<&PoolError>,
+    message: &str,
+) -> Result<Vec<Finding>, ()> {
     tracing::warn!(
         validator = %name,
         files = ?files,
-        error = %err,
-        "fleet task failed; yielding zero findings for this validator"
-    );
-    Err(())
-}
-
-/// The dropped-delivery arm of [`collect_forked_task`]: the result channel closed
-/// before any turn was delivered. Logged and degraded to zero findings with
-/// `Err(())`, exactly like [`handle_pool_error`].
-fn handle_delivery_error(name: &str, files: &[String]) -> Result<Vec<Finding>, ()> {
-    tracing::warn!(
-        validator = %name,
-        files = ?files,
-        "fleet task result was dropped before delivery; yielding zero findings"
+        error = error.map(tracing::field::display),
+        "{message}"
     );
     Err(())
 }
@@ -833,8 +855,22 @@ fn collect_task(
 ) -> Result<Vec<Finding>, ()> {
     let response = match delivered {
         Ok(Ok(response)) => response,
-        Ok(Err(err)) => return handle_pool_error(err, validator, files),
-        Err(_) => return handle_delivery_error(validator, files),
+        Ok(Err(err)) => {
+            return handle_task_failure(
+                validator,
+                files,
+                Some(&err),
+                "fleet task failed; yielding zero findings for this validator",
+            )
+        }
+        Err(_) => {
+            return handle_task_failure(
+                validator,
+                files,
+                None,
+                "fleet task result was dropped before delivery; yielding zero findings",
+            )
+        }
     };
 
     // A monolithic task runs on a fresh session (no fork), so any reuse is
@@ -950,6 +986,17 @@ pub fn render_run_prime(work: &WorkList) -> String {
     out
 }
 
+/// The line that opens every per-validator suffix: `# Validator: ` immediately
+/// followed by the validator name. The single source of truth shared by
+/// [`render_validator_suffix`] and the tests that key scripts/assertions on the
+/// header, so a format change lands in one place.
+pub(crate) const VALIDATOR_HEADER: &str = "# Validator: ";
+
+/// The mandate section header that follows the validator line in every suffix.
+/// Shared by [`render_validator_suffix`] and the header-keyed tests so the
+/// format stays synchronized in one place.
+pub(crate) const MANDATE_HEADER: &str = "## Mandate\n\n";
+
 /// Render the per-validator suffix a forked session is prompted with: the
 /// validator header, mandate, the files this validator must focus on, every one
 /// of the validator's rule bodies, and the output contract.
@@ -961,8 +1008,8 @@ pub fn render_run_prime(work: &WorkList) -> String {
 /// so a fork turn never degenerates to a full reprocess (`lcp == new_len`).
 pub fn render_validator_suffix(validator: &ValidatorWork, ruleset: &RuleSet) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "# Validator: {}\n", validator.validator_name);
-    out.push_str("## Mandate\n\n");
+    let _ = writeln!(out, "{VALIDATOR_HEADER}{}\n", validator.validator_name);
+    out.push_str(MANDATE_HEADER);
     out.push_str(ruleset.description().trim());
     out.push_str("\n\n");
 
@@ -1305,17 +1352,13 @@ mod tests {
     // selects a degraded `ForkMode` explicitly.
 
     /// A fork-capable scripted agent — the default fleet backend under test.
+    /// The [`ForkMode::Supported`] special case of [`agent_with_fork_mode`].
     fn forking_agent(script: Vec<(String, ScriptedReply)>) -> Arc<ScriptedAgent> {
-        ScriptedAgent::with_config(
-            script,
-            ScriptedAgentConfig {
-                fork_mode: ForkMode::Supported,
-                ..ScriptedAgentConfig::default()
-            },
-        )
+        agent_with_fork_mode(script, ForkMode::Supported)
     }
 
-    /// A degraded fork-capable scripted agent in the given [`ForkMode`].
+    /// A scripted agent in the given [`ForkMode`] (the default fleet config
+    /// otherwise).
     fn agent_with_fork_mode(
         script: Vec<(String, ScriptedReply)>,
         fork_mode: ForkMode,
@@ -1333,6 +1376,11 @@ mod tests {
     /// turn sends it, so a script entry keyed on it matches a sweep fork's
     /// context and never the first-pass prompt.
     const RESCAN_NEEDLE: &str = "## Completeness re-scan";
+
+    /// Broadcast-channel capacity for a rebind's notification stream. A small
+    /// buffer is plenty here: these single-prompt rebinds emit one reply each,
+    /// well under capacity, so the subscriber never lags chunks away.
+    const BROADCAST_BUFFER_SIZE: usize = 8;
 
     /// A scripted follow-up reply that finds nothing further, going dry on the
     /// first sweep. Every warm fork now drives at least one follow-up sweep after
@@ -1367,7 +1415,7 @@ mod tests {
         // Each rebind submits one prompt matching the sequence needle and reads
         // back which delta it served.
         async fn first_served(base: &Arc<ScriptedAgent>) -> String {
-            let (tx, _) = tokio::sync::broadcast::channel(8);
+            let (tx, _) = tokio::sync::broadcast::channel(BROADCAST_BUFFER_SIZE);
             // Bridge onto the live connection too, so the pool's connection-side
             // collector (the stream `with_pool` wires up) sees the reply.
             let rebind = ScriptedAgent::rebind_broadcast(base, tx, true);
@@ -1594,7 +1642,10 @@ mod tests {
 
         // The SUFFIX carries the validator + mandate + EVERY rule + contract,
         // and NOT the file's source contents (those live in the prime).
-        assert!(suffix.contains("# Validator: deduplicate"), "{suffix}");
+        assert!(
+            suffix.contains(&format!("{VALIDATOR_HEADER}deduplicate")),
+            "{suffix}"
+        );
         assert!(suffix.contains("DEDUP_MANDATE"), "{suffix}");
         assert!(
             suffix.contains("RULE_BODY") && suffix.contains("OTHER_RULE_BODY"),
@@ -1806,7 +1857,7 @@ mod tests {
             // fan-out shape (one prime + one fork per validator + one re-scan).
             rescan_finds_nothing(),
             (
-                "# Validator: val-a".to_string() + "\n\n## Mandate",
+                format!("{VALIDATOR_HEADER}val-a\n\n{MANDATE_HEADER}"),
                 ScriptedReply::Text(findings_json(
                     "src/a.rs",
                     TEST_FINDING_LINE,
@@ -1815,7 +1866,7 @@ mod tests {
                 )),
             ),
             (
-                "# Validator: val-b".to_string() + "\n\n## Mandate",
+                format!("{VALIDATOR_HEADER}val-b\n\n{MANDATE_HEADER}"),
                 ScriptedReply::Text(findings_json(
                     "src/b.rs",
                     TEST_FINDING_LINE,
@@ -1925,7 +1976,7 @@ mod tests {
         let agent = forking_agent(vec![
             rescan_finds_nothing(),
             (
-                "# Validator: magic-numbers".to_string() + "\n\n## Mandate",
+                format!("{VALIDATOR_HEADER}magic-numbers\n\n{MANDATE_HEADER}"),
                 ScriptedReply::Text(first_pass),
             ),
         ]);
@@ -2242,7 +2293,7 @@ mod tests {
             validator_tasks, 1,
             "one validator → one forked validator task (not three rule tasks, not ten file tasks): {seen:#?}"
         );
-        assert_eq!(outcome.attempted, 1, "one validator task attempted");
+        assert_eq!(outcome.attempted(), 1, "one validator task attempted");
 
         // The single prime carries ALL ten files' diffs; the validator fork
         // carries every rule of the validator (no file content re-sent).
@@ -2408,8 +2459,8 @@ mod tests {
             "one validator fork plus one completeness re-scan fork"
         );
 
-        assert_eq!(outcome.attempted, 1);
-        assert_eq!(outcome.failed, 0);
+        assert_eq!(outcome.attempted(), 1);
+        assert_eq!(outcome.failed(), 0);
         assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
         assert_eq!(outcome.findings[0].claim, "warm finding");
         assert_eq!(outcome.findings[0].validator, "val");
@@ -2507,8 +2558,8 @@ mod tests {
         })
         .await;
 
-        assert_eq!(outcome.attempted, 1, "one validator task");
-        assert_eq!(outcome.failed, 0, "a failed fork is never a lost task");
+        assert_eq!(outcome.attempted(), 1, "one validator task");
+        assert_eq!(outcome.failed(), 0, "a failed fork is never a lost task");
         assert_eq!(outcome.findings.len(), 1);
         assert_eq!(outcome.findings[0].claim, "found despite fork failure");
 
@@ -2516,7 +2567,7 @@ mod tests {
         let seen = agent_probe.seen_prompts();
         let monolithic = seen
             .iter()
-            .filter(|p| p.contains("## Mandate") && p.contains("# Files under review"))
+            .filter(|p| p.contains(MANDATE_HEADER) && p.contains("# Files under review"))
             .count();
         assert_eq!(
             monolithic, 1,
@@ -2569,8 +2620,8 @@ mod tests {
         })
         .await;
 
-        assert_eq!(outcome.attempted, 1, "one validator task");
-        assert_eq!(outcome.failed, 0);
+        assert_eq!(outcome.attempted(), 1, "one validator task");
+        assert_eq!(outcome.failed(), 0);
         assert_eq!(outcome.findings.len(), 1);
         assert_eq!(outcome.findings[0].claim, "found without forks");
 
@@ -2628,8 +2679,8 @@ mod tests {
         })
         .await;
 
-        assert_eq!(outcome.attempted, 1);
-        assert_eq!(outcome.failed, 0);
+        assert_eq!(outcome.attempted(), 1);
+        assert_eq!(outcome.failed(), 0);
         assert_eq!(outcome.findings.len(), 1);
         assert_eq!(outcome.findings[0].claim, "cold but correct");
         assert!(logs_contain("fleet task fork was degraded"));
@@ -2687,9 +2738,9 @@ mod tests {
         })
         .await;
 
-        assert_eq!(outcome.attempted, 1);
+        assert_eq!(outcome.attempted(), 1);
         assert_eq!(
-            outcome.failed, 0,
+            outcome.failed(), 0,
             "the forked task resolved through collect_forked_task without error"
         );
         assert_eq!(outcome.findings.len(), 1);
@@ -2727,9 +2778,9 @@ mod tests {
         })
         .await;
 
-        assert_eq!(outcome.attempted, 2, "two validator tasks");
+        assert_eq!(outcome.attempted(), 2, "two validator tasks");
         assert_eq!(
-            outcome.failed, 1,
+            outcome.failed(), 1,
             "the erroring validator task is a failed task"
         );
         assert_eq!(
@@ -2856,8 +2907,8 @@ mod tests {
         assert_eq!(outcome.findings[0].claim, "real issue");
         assert_eq!(outcome.findings[0].validator, "val-good");
         // The tally records both tasks attempted and exactly the one that failed.
-        assert_eq!(outcome.attempted, 2, "two validator tasks attempted");
-        assert_eq!(outcome.failed, 1, "the erroring task is counted as failed");
+        assert_eq!(outcome.attempted(), 2, "two validator tasks attempted");
+        assert_eq!(outcome.failed(), 1, "the erroring task is counted as failed");
     }
 
     #[tokio::test]
@@ -2891,8 +2942,8 @@ mod tests {
             outcome.findings.is_empty(),
             "every task failed, so there are no findings"
         );
-        assert_eq!(outcome.attempted, 3, "three validator tasks attempted");
-        assert_eq!(outcome.failed, 3, "all three failed");
+        assert_eq!(outcome.attempted(), 3, "three validator tasks attempted");
+        assert_eq!(outcome.failed(), 3, "all three failed");
     }
 
     #[tokio::test]
@@ -2920,10 +2971,10 @@ mod tests {
             "an unknown validator yields no findings"
         );
         assert_eq!(
-            outcome.attempted, 0,
+            outcome.attempted(), 0,
             "no task is attempted for a validator missing from the loader"
         );
-        assert_eq!(outcome.failed, 0);
+        assert_eq!(outcome.failed(), 0);
         assert!(
             agent_probe.seen_prompts().is_empty(),
             "no task is submitted for a validator missing from the loader"

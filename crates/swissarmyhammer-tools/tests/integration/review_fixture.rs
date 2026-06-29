@@ -51,9 +51,17 @@ use tokio::sync::broadcast;
 // scripted agent fires each validator response exactly once.
 // ---------------------------------------------------------------------------
 
+/// Path to the planted `payments.rs` — the diff file carrying the duplication,
+/// data-driven, no-secrets, and rust findings (items 1, 3, 5, 6, 8).
 pub const FILE_PAYMENTS: &str = "src/payments.rs";
+/// Path to the planted `util_reuse.rs` — the diff file reimplementing the shared
+/// util the reuse validator flags (item 2).
 pub const FILE_REUSE: &str = "src/util_reuse.rs";
+/// Path to the planted `orphan.rs` — the diff file holding the truly-dead
+/// function the dead-code validator flags (item 4).
 pub const FILE_ORPHAN: &str = "src/orphan.rs";
+/// Path to the planted `live.rs` — the diff file holding the function the
+/// dead-code guard wrongly suspects is dead (the guard red herring, item 7).
 pub const FILE_LIVE: &str = "src/live.rs";
 
 /// An existing indexed file whose function the duplicate (item 1) copies. It is
@@ -223,30 +231,36 @@ fn verify(claim: &str, verdict: &str) -> Rule {
     )
 }
 
-/// A findings JSON array (fenced) with one finding. `validator` is overwritten by
-/// the engine, but must be present to deserialize.
+/// One finding JSON object as an agent would emit it. `validator` is overwritten
+/// by the engine, but must be present to deserialize. Built through `serde_json`
+/// so any `"`/`\` in an interpolated field is escaped correctly — the single
+/// object template shared by [`finding`] and [`two_findings`].
+fn finding_obj(file: &str, line: u32, severity: &str, claim: &str) -> serde_json::Value {
+    json!({
+        "file": file,
+        "line": line,
+        "validator": "agent-tagged",
+        "rule": "r",
+        "severity": severity,
+        "claim": claim,
+        "evidence": "per probe evidence",
+        "suggestion": "fix it",
+    })
+}
+
+/// A findings JSON array (fenced) with one finding.
 fn finding(file: &str, line: u32, severity: &str, claim: &str) -> String {
-    format!(
-        "```json\n[{{\"file\":\"{file}\",\"line\":{line},\"validator\":\"agent-tagged\",\
-         \"rule\":\"r\",\"severity\":\"{severity}\",\"claim\":\"{claim}\",\
-         \"evidence\":\"per probe evidence\",\"suggestion\":\"fix it\"}}]\n```"
-    )
+    let array = json!([finding_obj(file, line, severity, claim)]);
+    format!("```json\n{array}\n```")
 }
 
 /// Two findings in one array (for a validator that flags two files in one batch).
 fn two_findings(a: (&str, u32, &str, &str), b: (&str, u32, &str, &str)) -> String {
-    let obj = |file: &str, line: u32, severity: &str, claim: &str| {
-        format!(
-            "{{\"file\":\"{file}\",\"line\":{line},\"validator\":\"agent-tagged\",\
-             \"rule\":\"r\",\"severity\":\"{severity}\",\"claim\":\"{claim}\",\
-             \"evidence\":\"per probe evidence\",\"suggestion\":\"fix it\"}}"
-        )
-    };
-    format!(
-        "```json\n[{},{}]\n```",
-        obj(a.0, a.1, a.2, a.3),
-        obj(b.0, b.1, b.2, b.3),
-    )
+    let array = json!([
+        finding_obj(a.0, a.1, a.2, a.3),
+        finding_obj(b.0, b.1, b.2, b.3),
+    ]);
+    format!("```json\n{array}\n```")
 }
 
 /// A confirming verify verdict.
@@ -261,77 +275,99 @@ fn refute() -> String {
 
 // ---- unique claim strings (keys shared by fan-out emission and verify) -------
 
+/// Item 1's claim: the duplication finding. Keyed to the fan-out emission and
+/// the confirming verify verdict.
 pub const CLAIM_DUP: &str = "copy-pasted sum_amounts duplicates compute_total";
+/// Item 2's claim: the reuse finding (a helper reimplementing the shared util).
 pub const CLAIM_REUSE: &str = "my_mean_squared reimplements the shared mean_squared_error util";
+/// Item 3's claim: the data-driven finding (a tier if-chain that should be a table).
 pub const CLAIM_DATA: &str = "fee_for_tier hardcodes a tier if-chain that should be a table";
+/// Item 4's claim: the real dead-code finding (an orphan with no inbound callers).
 pub const CLAIM_DEAD_ORPHAN: &str = "orphan_never_called has no inbound callers and is dead";
+/// Item 5's claim: the no-secrets finding (a hardcoded live secret).
 pub const CLAIM_SECRET: &str = "STRIPE_KEY is a hardcoded live secret";
+/// Item 6's claim: the agent red herring — correct code that looks buggy, which
+/// the adversarial verifier refutes.
 pub const CLAIM_RED_HERRING: &str = "last_index looks like an off-by-one bug";
+/// Item 7's claim: the guard red herring — a function the dead-code guard
+/// intercepts (it has a caller in the index) before any verify prompt is made.
 pub const CLAIM_GUARD_HERRING: &str = "claimed_dead_but_called appears to be dead code";
+/// Item 8's claim: the rust-idiom finding (a bare `f64` where a typed value fits).
 pub const CLAIM_RUST_IDIOM: &str =
     "fee_for_tier returns a bare f64 where a typed Money would be safer";
 
-/// The full scripted agent for the planted diff: each validator's fan-out emits
-/// its planted finding(s); each confirmable claim confirms on verify; the two red
-/// herrings are refuted (item 6 by the agent here, item 7 by the guard — no verify
-/// rule, the guard intercepts it first).
+/// The fan-out rules: one entry per (validator, file), each emitting that
+/// validator's planted finding(s). `dead-code` and `rust` each emit two findings
+/// in one batch — a real finding plus a red herring the later stages refute.
+fn fanout_rules() -> Vec<Rule> {
+    vec![
+        fanout(
+            "duplication",
+            FILE_PAYMENTS,
+            &finding(FILE_PAYMENTS, 8, "blocker", CLAIM_DUP),
+        ),
+        fanout(
+            "reuse",
+            FILE_REUSE,
+            &finding(FILE_REUSE, 3, "warning", CLAIM_REUSE),
+        ),
+        fanout(
+            "data-driven",
+            FILE_PAYMENTS,
+            &finding(FILE_PAYMENTS, 16, "warning", CLAIM_DATA),
+        ),
+        fanout(
+            "no-secrets",
+            FILE_PAYMENTS,
+            &finding(FILE_PAYMENTS, 5, "blocker", CLAIM_SECRET),
+        ),
+        // dead-code flags BOTH the real orphan (item 4) and the red-herring it
+        // wrongly believes is dead (item 7). One fan-out task, two findings.
+        fanout(
+            "dead-code",
+            FILE_ORPHAN,
+            &two_findings(
+                (FILE_ORPHAN, 3, "blocker", CLAIM_DEAD_ORPHAN),
+                (FILE_LIVE, 3, "blocker", CLAIM_GUARD_HERRING),
+            ),
+        ),
+        // rust flags a real idiom (item 8) and a correct-but-looks-buggy red
+        // herring (item 6) that the verifier will refute.
+        fanout(
+            "rust",
+            FILE_PAYMENTS,
+            &two_findings(
+                (FILE_PAYMENTS, 16, "warning", CLAIM_RUST_IDIOM),
+                (FILE_PAYMENTS, 22, "warning", CLAIM_RED_HERRING),
+            ),
+        ),
+    ]
+}
+
+/// The verify rules: confirm every real finding, refute the agent red herring
+/// (item 6). Item 7 deliberately has NO verify rule — the guard refutes it first,
+/// so a verify prompt for it must never be generated.
+fn verify_rules() -> Vec<Rule> {
+    vec![
+        verify(CLAIM_DUP, &confirm()),
+        verify(CLAIM_REUSE, &confirm()),
+        verify(CLAIM_DATA, &confirm()),
+        verify(CLAIM_SECRET, &confirm()),
+        verify(CLAIM_DEAD_ORPHAN, &confirm()),
+        verify(CLAIM_RUST_IDIOM, &confirm()),
+        // item 6: looks buggy, is correct → the adversarial verifier refutes it.
+        verify(CLAIM_RED_HERRING, &refute()),
+    ]
+}
+
+/// The full scripted agent for the planted diff: the fan-out rules emit each
+/// validator's planted finding(s) and the verify rules adjudicate them; the two
+/// red herrings are refuted (item 6 by the agent here, item 7 by the guard).
 pub fn planted_agent() -> Arc<ScriptedAgent> {
     use swissarmyhammer_validators::review::test_support::ScriptedAgentConfig;
+    let script: Vec<Rule> = fanout_rules().into_iter().chain(verify_rules()).collect();
     ScriptedAgent::with_script(
-        vec![
-            // ---- fan-out: one rule per (validator, file) -------------------------
-            fanout(
-                "duplication",
-                FILE_PAYMENTS,
-                &finding(FILE_PAYMENTS, 8, "blocker", CLAIM_DUP),
-            ),
-            fanout(
-                "reuse",
-                FILE_REUSE,
-                &finding(FILE_REUSE, 3, "warning", CLAIM_REUSE),
-            ),
-            fanout(
-                "data-driven",
-                FILE_PAYMENTS,
-                &finding(FILE_PAYMENTS, 16, "warning", CLAIM_DATA),
-            ),
-            fanout(
-                "no-secrets",
-                FILE_PAYMENTS,
-                &finding(FILE_PAYMENTS, 5, "blocker", CLAIM_SECRET),
-            ),
-            // dead-code flags BOTH the real orphan (item 4) and the red-herring it
-            // wrongly believes is dead (item 7). One fan-out task, two findings.
-            fanout(
-                "dead-code",
-                FILE_ORPHAN,
-                &two_findings(
-                    (FILE_ORPHAN, 3, "blocker", CLAIM_DEAD_ORPHAN),
-                    (FILE_LIVE, 3, "blocker", CLAIM_GUARD_HERRING),
-                ),
-            ),
-            // rust flags a real idiom (item 8) and a correct-but-looks-buggy red
-            // herring (item 6) that the verifier will refute.
-            fanout(
-                "rust",
-                FILE_PAYMENTS,
-                &two_findings(
-                    (FILE_PAYMENTS, 16, "warning", CLAIM_RUST_IDIOM),
-                    (FILE_PAYMENTS, 22, "warning", CLAIM_RED_HERRING),
-                ),
-            ),
-            // ---- verify: confirm the real findings, refute the agent red herring --
-            verify(CLAIM_DUP, &confirm()),
-            verify(CLAIM_REUSE, &confirm()),
-            verify(CLAIM_DATA, &confirm()),
-            verify(CLAIM_SECRET, &confirm()),
-            verify(CLAIM_DEAD_ORPHAN, &confirm()),
-            verify(CLAIM_RUST_IDIOM, &confirm()),
-            // item 6: looks buggy, is correct → the adversarial verifier refutes it.
-            verify(CLAIM_RED_HERRING, &refute()),
-            // item 7 deliberately has NO verify rule: the guard refutes it first, so a
-            // verify prompt for it must never be generated.
-        ],
+        script,
         ScriptedAgentConfig {
             // No rule matched: an empty findings array for fan-out, which also
             // parses as "no verdict" for verify → refute by default.
@@ -341,17 +377,33 @@ pub fn planted_agent() -> Arc<ScriptedAgent> {
     )
 }
 
+/// Capacity of the per-connection backend broadcast each minted agent streams
+/// onto. Generous so a slow subscriber in the heavier integration scenarios never
+/// lags a notification away mid-run (`broadcast` silently drops for laggards).
+///
+/// This (and [`scripted_factory`] / [`mock_embedder_factory`] / [`extract_text`])
+/// deliberately mirror the unit-test copies in
+/// `swissarmyhammer-tools/src/mcp/tools/review/tests.rs`. The two cannot share a
+/// helper: this file is an integration-test module and that one is a `#[cfg(test)]`
+/// unit-test module — separate compilation units that cannot import each other.
+/// The factories return tools-crate-local types (`AgentFactory`/`EmbedderFactory`),
+/// so they cannot move to the cross-crate `test_support` seam either, and this
+/// crate forbids adding a `test-support` feature. So the small per-unit copies
+/// stand by design; only the buffer capacity is named.
+const FIXTURE_AGENT_NOTIFY_BUFFER_SIZE: usize = 256;
+
 /// Adapt a scripted agent into an [`AgentFactory`], opening a fresh
-/// `broadcast(256)` notification channel per connection so each minted agent is
-/// shaped like a real `AcpAgentHandle`: it streams onto a backend broadcast (the
-/// handle's `notification_rx`) AND bridges the same notification onto the live
-/// connection. Both come for free from the shared harness's per-connection
-/// broadcast rebind.
+/// [`FIXTURE_AGENT_NOTIFY_BUFFER_SIZE`]-slot notification channel per connection
+/// so each minted agent is shaped like a real `AcpAgentHandle`: it streams onto a
+/// backend broadcast (the handle's `notification_rx`) AND bridges the same
+/// notification onto the live connection. Both come for free from the shared
+/// harness's per-connection broadcast rebind.
 pub fn scripted_factory(agent: Arc<ScriptedAgent>) -> AgentFactory {
     Arc::new(move || {
         let agent = Arc::clone(&agent);
         Box::pin(async move {
-            let (notify_tx, notification_rx) = broadcast::channel(256);
+            let (notify_tx, notification_rx) =
+                broadcast::channel(FIXTURE_AGENT_NOTIFY_BUFFER_SIZE);
             let agent = ScriptedAgent::rebind_broadcast(&agent, notify_tx, true);
             let dyn_agent = DynConnectTo::new(ScriptedAdapter::new(agent));
             Ok(AgentHandle {

@@ -65,8 +65,8 @@ impl FleetTally {
 impl From<&FleetOutcome> for FleetTally {
     fn from(outcome: &FleetOutcome) -> Self {
         Self {
-            attempted: outcome.attempted,
-            failed: outcome.failed,
+            attempted: outcome.attempted(),
+            failed: outcome.failed(),
         }
     }
 }
@@ -317,8 +317,8 @@ pub async fn run_review(
         // Fan out this batch: one shared prime over its files, forked per
         // validator. The outcome carries the tally and the batch's prime pin.
         let fleet = run_fleet(batch, loader, pool).await;
-        attempted += fleet.attempted;
-        failed += fleet.failed;
+        attempted += fleet.attempted();
+        failed += fleet.failed();
         let FleetOutcome {
             findings: fleet_findings,
             prime,

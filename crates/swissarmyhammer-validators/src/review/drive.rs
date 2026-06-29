@@ -448,6 +448,16 @@ mod tests {
     /// EVERY chunk sent before any collector subscribes and drains.
     const PRELOADED_STREAM_CAPACITY: usize = 256;
 
+    /// Worker count for the pool the pipeline tests fan out across. Two workers
+    /// let the multi-validator/multi-batch tests exercise genuine concurrency
+    /// (more than one task in flight) while staying small and deterministic.
+    const TEST_POOL_WORKERS: usize = 2;
+
+    /// Content budget per fan-out batch, in bytes, for the batching tests. Each
+    /// changed file inlines ~180 bytes of source, so a 250-byte budget forces a
+    /// two-file diff to split across two batches — the boundary these tests pin.
+    const TEST_BATCH_SIZE_BYTES: usize = 250;
+
     /// The caller-formatted timestamp rendered verbatim into the report header.
     const TEST_NOW: &str = "2026-06-05 12:00";
 
@@ -556,7 +566,7 @@ mod tests {
             &loader,
             &conn,
             &embedder,
-            PoolConfig::remote(2),
+            PoolConfig::remote(TEST_POOL_WORKERS),
             FleetConfig::default(),
             TEST_NOW,
         )
@@ -654,8 +664,8 @@ mod tests {
             &loader,
             &conn,
             &embedder,
-            PoolConfig::remote(2),
-            FleetConfig { batch_size: 250 },
+            PoolConfig::remote(TEST_POOL_WORKERS),
+            FleetConfig { batch_size: TEST_BATCH_SIZE_BYTES },
             TEST_NOW,
         )
         .await
@@ -732,7 +742,7 @@ mod tests {
                 &loader,
                 &conn,
                 &embedder,
-                PoolConfig::remote(2),
+                PoolConfig::remote(TEST_POOL_WORKERS),
                 FleetConfig::default(),
                 TEST_NOW,
             ),
@@ -787,7 +797,7 @@ mod tests {
                 &loader,
                 &conn,
                 &embedder,
-                PoolConfig::remote(2),
+                PoolConfig::remote(TEST_POOL_WORKERS),
                 FleetConfig::default(),
                 TEST_NOW,
             ),
@@ -1181,7 +1191,7 @@ mod tests {
                 // fast; the live turn's keep-alives sail well under it. See
                 // [`ABANDON_IDLE_WINDOW_MS`] for why it must exceed
                 // claude-agent's post-response notification-drain sleep.
-                PoolConfig::remote(2)
+                PoolConfig::remote(TEST_POOL_WORKERS)
                     .with_idle_timeout(Duration::from_millis(ABANDON_IDLE_WINDOW_MS)),
                 FleetConfig::default(),
                 TEST_NOW,
