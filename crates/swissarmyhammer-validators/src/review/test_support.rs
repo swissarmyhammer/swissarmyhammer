@@ -379,11 +379,29 @@ const STALL_DURATION_SECS: u64 = 60;
 pub enum ScriptedReply {
     /// Stream this text back as an `agent_message_chunk`, then end the turn.
     Text(String),
+    /// Stream successive texts on successive matches of the same needle, then
+    /// stick on the last one once the sequence is drained. The follow-up sweep
+    /// drives the SAME accumulating session forward with the SAME prompt every
+    /// turn, so its turns all match one needle; a sequence lets a single script
+    /// entry answer those turns with a different delta each time (e.g. findings,
+    /// then findings, then `[]`) — the only way to script convergence when the
+    /// prompt text is constant across the loop.
+    Sequence(std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>),
     /// Fail the prompt with an internal error.
     Error,
     /// Wedge the turn (sleep far longer than any test window) — the shape of a
     /// hung task, used to hold a fan-out open while a test cancels it.
     Stall,
+}
+
+impl ScriptedReply {
+    /// A [`ScriptedReply::Sequence`] that yields `replies` in order on
+    /// successive matches and then sticks on the final element once drained.
+    pub fn sequence(replies: impl IntoIterator<Item = String>) -> Self {
+        ScriptedReply::Sequence(std::sync::Arc::new(std::sync::Mutex::new(
+            replies.into_iter().collect(),
+        )))
+    }
 }
 
 /// How the mock agent answers the session-fork extension surface.
@@ -569,6 +587,19 @@ impl ScriptedAgent {
             .iter()
             .map(|(session, _)| session.clone())
             .collect()
+    }
+
+    /// A session's accumulated conversation history — the inherited prefix plus
+    /// every prompt run on it. A forward-driven follow-up loop accumulates each
+    /// sweep prompt into the next session it forks, so a later sweep's history
+    /// carries the sweep prompt more than once; a re-fork of the first pass would
+    /// carry it only once. Returns `None` for an id that never ran.
+    pub(crate) fn session_history(&self, session_id: &str) -> Option<String> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map(|state| state.history.clone())
     }
 
     pub(crate) fn pin_calls(&self) -> Vec<(String, bool)> {
@@ -764,6 +795,19 @@ async fn handle_prompt(
         mock.reply_for(&context)
     };
     let text = match reply {
+        ScriptedReply::Sequence(queue) => {
+            let mut q = queue.lock().unwrap();
+            // Yield the next scripted delta, sticking on the last once drained,
+            // so a sequence longer than the actual turn count is safe and a
+            // sequence shorter than it keeps answering with its final element.
+            if q.len() > 1 {
+                q.pop_front().unwrap()
+            } else {
+                q.front().cloned().unwrap_or_else(|| {
+                    mock.config.default_response.clone()
+                })
+            }
+        }
         ScriptedReply::Error => {
             return responder
                 .cast::<PromptResponse>()

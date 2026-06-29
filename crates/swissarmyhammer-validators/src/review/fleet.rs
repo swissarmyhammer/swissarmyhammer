@@ -639,8 +639,9 @@ async fn collect_forked_task(
 }
 
 /// The warm/degraded fork-success arm of [`collect_forked_task`]: log the prefix
-/// reuse, parse the delivered turn exactly like the monolithic path, then run the
-/// bounded within-file completeness re-scan on the result.
+/// reuse, parse the delivered turn exactly like the monolithic path, then drive
+/// the session forward with [`sweep_until_dry`] to recover under-reported
+/// instances before returning.
 ///
 /// A turn whose fork ran cold (no warm prefix reuse) is logged as degraded but
 /// still parsed — correctness never depends on the cache hit. Returns `Err(())`
@@ -671,7 +672,7 @@ async fn handle_fork_success(
         );
     }
     let findings = parse_task_response(&turn.content, name, files)?;
-    Ok(rescan_for_completeness(pool, &turn.session_id, name, files, findings).await)
+    Ok(sweep_until_dry(pool, &turn.session_id, name, files, findings).await)
 }
 
 /// The fork-failed arm of [`collect_forked_task`]: the `session/fork` call failed,
@@ -726,24 +727,34 @@ fn handle_delivery_error(name: &str, files: &[String]) -> Result<Vec<Finding>, (
     Err(())
 }
 
-/// Run one bounded within-file completeness re-scan and merge any additional
-/// findings into `findings`.
+/// Drive a validator's review session forward with a repeated "any more?"
+/// follow-up until it goes dry, merging every additional finding into `findings`.
 ///
-/// After a validator's first-pass fork returned `findings`, fork its session
-/// once more (so the re-scan inherits the full file AND the first-pass
-/// conversation) and send [`RESCAN_PROMPT`], which asks the model to sweep the
-/// SAME files for any further instance of the same rules it missed. The extra
-/// findings are tagged and appended; downstream [`dedup_exact`] collapses any
-/// exact repeats.
+/// Per-pass recall is low: a small model anchors on the salient match and
+/// under-reports the other instances of a rule on its first pass, even under the
+/// whole-file [`OUTPUT_CONTRACT`]. More admonishment text does not beat the
+/// anchoring; the fix is structural. After the first pass returned `findings`,
+/// this tacks [`FOLLOWUP_PROMPT`] onto the SAME accumulating session — "you've
+/// listed these; report any ADDITIONAL violations you have not already named" —
+/// and repeats that nudge, terminating when the model itself answers with an
+/// empty array (it is the authority on "found them all").
 ///
-/// Capped at exactly one extra pass — this never recurses on its own result, so
-/// the cost is bounded to a single fork turn per validator. It only ever ADDS:
-/// an empty first pass skips the re-scan entirely, and a re-scan that
-/// fork-fails, errors, returns nothing, or does not parse leaves the first-pass
-/// findings exactly as they were.
+/// The loop is **forward-driving, not a re-fork of the first pass**. Each turn
+/// forks the session that produced the PRIOR follow-up answer
+/// ([`SessionTurn::session_id`]), so the model's own accumulated answers are in
+/// context and "additional" means additional-to-everything-said-so-far. Were it
+/// to re-fork the first-pass session every iteration, each nudge would only see
+/// the first-pass findings and re-report them — it would oscillate, never go dry.
+///
+/// Termination is the empty turn OR the [`MAX_FOLLOWUP_SWEEPS`] runaway cap;
+/// both are logged. It only ever ADDS: an empty first pass spends zero follow-up
+/// turns, and a follow-up that fork-fails, errors, returns nothing, or does not
+/// parse ends the loop while keeping every finding gathered so far. Downstream
+/// [`dedup_exact`] collapses any exact repeat, so a model that re-lists something
+/// is harmless rather than a convergence breaker.
 ///
 /// [`dedup_exact`]: crate::review::synthesize
-async fn rescan_for_completeness(
+async fn sweep_until_dry(
     pool: &AgentPool,
     parent_session: &SessionId,
     validator: &str,
@@ -754,31 +765,55 @@ async fn rescan_for_completeness(
     if findings.is_empty() {
         return findings;
     }
-    let delivered = pool
-        .submit_forked(parent_session, RESCAN_PROMPT.to_string())
-        .await;
-    let Ok(Ok(turn)) = delivered else {
-        tracing::debug!(
+    let mut merged = findings;
+    // The session each follow-up turn forks from: the first pass, then the
+    // session that delivered the previous follow-up answer. Driving this forward
+    // is what makes "additional, not already listed" well-defined.
+    let mut session = parent_session.clone();
+    for sweep in 1..=MAX_FOLLOWUP_SWEEPS {
+        let delivered = pool
+            .submit_forked(&session, FOLLOWUP_PROMPT.to_string())
+            .await;
+        let Ok(Ok(turn)) = delivered else {
+            tracing::debug!(
+                validator = %validator,
+                files = ?files,
+                sweep,
+                "fleet follow-up sweep unavailable; ending the loop with the findings gathered so far"
+            );
+            return merged;
+        };
+        let Ok(additional) = parse_task_response(&turn.content, validator, files) else {
+            return merged;
+        };
+        if additional.is_empty() {
+            tracing::info!(
+                validator = %validator,
+                files = ?files,
+                sweep,
+                "fleet follow-up sweep went dry; the model reports no further instances"
+            );
+            return merged;
+        }
+        tracing::info!(
             validator = %validator,
             files = ?files,
-            "fleet completeness re-scan unavailable; keeping first-pass findings"
+            sweep,
+            added = additional.len(),
+            "fleet follow-up sweep recovered further instances on the first review"
         );
-        return findings;
-    };
-    let Ok(additional) = parse_task_response(&turn.content, validator, files) else {
-        return findings;
-    };
-    if additional.is_empty() {
-        return findings;
+        merged.extend(additional);
+        // Drive the SAME session forward: the next nudge forks the session that
+        // just answered, so it sees its own accumulated findings — never a
+        // re-fork of the first pass, which would re-report and never go dry.
+        session = turn.session_id;
     }
     tracing::info!(
         validator = %validator,
         files = ?files,
-        added = additional.len(),
-        "fleet completeness re-scan recovered further instances on the first pass"
+        cap = MAX_FOLLOWUP_SWEEPS,
+        "fleet follow-up sweep hit the runaway cap without going dry; keeping the gathered findings"
     );
-    let mut merged = findings;
-    merged.extend(additional);
     merged
 }
 
@@ -1050,35 +1085,48 @@ file can be fixed in one go rather than re-reviewed match by match.
 Report only real issues. If you find none, emit an empty array `[]`.
 ";
 
-/// The bounded within-file completeness re-scan prompt, sent as ONE extra fork
-/// turn after a validator's first pass returned findings.
+/// The hard cap on follow-up sweep turns [`sweep_until_dry`] drives after a
+/// validator's first pass, before it gives up on the model going dry on its own.
 ///
-/// Small models under-report pre-existing instances of a rule on the first pass
-/// even with the whole-file contract — they anchor on the salient match. This
-/// turn re-asks the SAME session (which already holds the full file and its own
-/// first-pass findings) to sweep the same files once more for any instance it
-/// missed, recovering the misses without a `/finish` re-review round trip. It is
-/// issued at most once per validator (no loop), so the extra cost is bounded to a
-/// single fork turn.
+/// The loop normally terminates when the model itself answers a follow-up with
+/// an empty array; this cap is only the runaway backstop for a model that never
+/// says "none left". Set small (a few turns): each turn is a cheap warm-session
+/// delta, but the recall gain falls off fast, and the next `/finish` round plus
+/// downstream [`dedup_exact`] still backstop anything not recovered here.
+///
+/// [`dedup_exact`]: crate::review::synthesize
+const MAX_FOLLOWUP_SWEEPS: u32 = 4;
+
+/// The follow-up "any more?" prompt [`sweep_until_dry`] tacks onto a validator's
+/// review session, repeated each sweep until the model goes dry.
+///
+/// Small models under-report instances of a rule on the first pass even under the
+/// whole-file [`OUTPUT_CONTRACT`] — they anchor on the salient match, and more
+/// admonishment text does not beat the anchoring. So instead of one re-ask, the
+/// session is driven forward conversationally: each turn runs on the session that
+/// already holds the model's OWN accumulated answers, so "additional, not already
+/// listed" is well-defined and the loop can actually go dry. The same prompt is
+/// re-sent every sweep — its meaning shifts because the context (the prior
+/// answers) grows under it.
 ///
 /// It must NOT contain [`PRIME_HANDOFF`] (so the turn is treated as a real review
 /// turn, not a prime), and its `## Completeness re-scan` header is the stable
 /// marker the fan-out logs and tests key on.
-const RESCAN_PROMPT: &str = "\
+const FOLLOWUP_PROMPT: &str = "\
 ## Completeness re-scan
 
 You just reported your findings for these files. Before we finish, scan the SAME \
-files again — their full current contents are already provided above — for any \
-FURTHER instance of the same rules that you missed the first time: pre-existing \
-matches outside the changed region, or additional lines the same rule fires on. \
-This is a within-file completeness sweep of the whole file, not a new review and \
-not a re-listing of what you already reported.
+files again — their full current contents are already provided above — and report \
+any ADDITIONAL violations of the same rules that you have NOT already named: \
+pre-existing matches outside the changed region, or further lines the same rule \
+fires on. This is a within-file completeness sweep of the whole file, not a new \
+review.
 
-Reply with ONLY the additional findings, as a JSON array in the exact same object \
-shape as before (`file`, `line`, `rule`, `claim`, `evidence`, `suggestion`), \
-written directly as the plain text of your reply — never a tool call. If you \
-already reported every instance and there are none left, reply with an empty \
-array `[]`.
+Reply with ONLY the additional, not-already-listed findings, as a JSON array in \
+the exact same object shape as before (`file`, `line`, `rule`, `claim`, \
+`evidence`, `suggestion`), written directly as the plain text of your reply — \
+never a tool call. If you have now named every instance and none remain, reply \
+with an empty array `[]`.
 ";
 
 /// Append one file's review block: path, the full current source, the semantic
@@ -1296,16 +1344,17 @@ mod tests {
         )
     }
 
-    /// The stable header [`RESCAN_PROMPT`] carries — only the completeness
-    /// re-scan turn sends it, so a script entry keyed on it matches the re-scan
-    /// fork's context and never the first-pass prompt.
+    /// The stable header [`FOLLOWUP_PROMPT`] carries — only a follow-up sweep
+    /// turn sends it, so a script entry keyed on it matches a sweep fork's
+    /// context and never the first-pass prompt.
     const RESCAN_NEEDLE: &str = "## Completeness re-scan";
 
-    /// A scripted re-scan reply that finds nothing further. Every warm fork now
-    /// issues one within-file completeness re-scan after its first pass; a test
-    /// asserting unchanged first-pass behavior scripts the re-scan to add
-    /// nothing. Keyed on [`RESCAN_NEEDLE`] and ordered FIRST so it wins on the
-    /// re-scan fork's context (which also inherits the first-pass needles).
+    /// A scripted follow-up reply that finds nothing further, going dry on the
+    /// first sweep. Every warm fork now drives at least one follow-up sweep after
+    /// its first pass; a test asserting unchanged first-pass behavior scripts the
+    /// first sweep to add nothing so the loop terminates immediately. Keyed on
+    /// [`RESCAN_NEEDLE`] and ordered FIRST so it wins on the sweep fork's context
+    /// (which also inherits the first-pass needles).
     fn rescan_finds_nothing() -> (String, ScriptedReply) {
         (
             RESCAN_NEEDLE.to_string(),
@@ -1869,14 +1918,10 @@ mod tests {
         );
     }
 
-    /// Lever 2 — the bounded within-file completeness re-scan. When the first
-    /// pass under-reports (the model returns one instance and misses two), the
-    /// re-scan fires EXACTLY once, recovers the missed instances, and merges
-    /// them — so the run still surfaces every instance on the first review,
-    /// without a re-review round trip. Capped at one extra pass: the re-scan
-    /// returns more findings yet never triggers a second re-scan.
-    #[tokio::test]
-    async fn completeness_rescan_fires_once_and_merges_the_missed_instances() {
+    /// A magic-numbers single-validator `WorkList` over one file — the shared
+    /// setup for the follow-up-sweep tests, which all drive the loop on one
+    /// validator and assert on what it surfaced and how many sweeps it took.
+    fn magic_numbers_work() -> (ValidatorLoader, WorkList) {
         let rs = ruleset(
             "magic-numbers",
             "no unexplained numeric literals",
@@ -1890,33 +1935,65 @@ mod tests {
                 vec![file_work("src/a.rs", "alpha", "src/x.rs")],
             )],
         };
+        (loader, work)
+    }
 
-        // First pass under-reports ONE instance; the re-scan surfaces the TWO it
-        // missed. The re-scan entry is keyed on the re-scan header and ordered
-        // first so it wins on the re-scan fork's context (which also inherits
-        // the validator header) and never on the first-pass prompt.
+    /// The first-pass script entry: keyed on the validator header so it answers
+    /// the first review turn (never a follow-up sweep, which carries the sweep
+    /// header instead) with `findings`.
+    fn first_pass_entry(findings: String) -> (String, ScriptedReply) {
+        (
+            "# Validator: magic-numbers".to_string() + "\n\n## Mandate",
+            ScriptedReply::Text(findings),
+        )
+    }
+
+    /// The sessions each follow-up sweep turn ran on, in order — the prompts
+    /// carrying the sweep header, mapped to their session. The loop drives the
+    /// session forward, so these must be a chain of DISTINCT sessions (one fresh
+    /// fork per sweep), never the same session re-forked.
+    fn sweep_sessions(probe: &ScriptedAgent) -> Vec<String> {
+        probe
+            .prompted_sessions()
+            .into_iter()
+            .zip(probe.seen_prompts())
+            .filter(|(_, prompt)| prompt.contains(RESCAN_NEEDLE))
+            .map(|(session, _)| session)
+            .collect()
+    }
+
+    /// Lever 2 (a) — the follow-up sweep keeps going while turns return findings
+    /// and STOPS when a turn goes dry (`[]`). The first pass under-reports one
+    /// instance; sweep 1 recovers one more, sweep 2 one more, sweep 3 is empty
+    /// and ends the loop. All four findings merge on the first review, distinct.
+    #[tokio::test]
+    async fn followup_sweep_continues_while_findings_arrive_and_stops_when_dry() {
+        let (loader, work) = magic_numbers_work();
+
         let first_pass =
             findings_array_json(&[("src/a.rs", TEST_FINDING_LINE, "no-magic", "magic number 7")]);
-        let rescan = findings_array_json(&[
-            (
+        // ONE script entry keyed on the sweep header answers EVERY sweep, with a
+        // different delta each turn — findings, findings, then dry. A constant
+        // prompt is re-sent each sweep, so this sequence is the only way to script
+        // the model converging across the loop.
+        let sweep_deltas = ScriptedReply::sequence([
+            findings_array_json(&[(
                 "src/a.rs",
                 TEST_FINDING_LINE + 1,
                 "no-magic",
                 "magic number 13",
-            ),
-            (
+            )]),
+            findings_array_json(&[(
                 "src/a.rs",
                 TEST_FINDING_LINE + 2,
                 "no-magic",
                 "magic number 99",
-            ),
+            )]),
+            "[]".to_string(),
         ]);
         let agent = forking_agent(vec![
-            (RESCAN_NEEDLE.to_string(), ScriptedReply::Text(rescan)),
-            (
-                "# Validator: magic-numbers".to_string() + "\n\n## Mandate",
-                ScriptedReply::Text(first_pass),
-            ),
+            (RESCAN_NEEDLE.to_string(), sweep_deltas),
+            first_pass_entry(first_pass),
         ]);
         let probe = Arc::clone(&agent);
 
@@ -1925,11 +2002,17 @@ mod tests {
         })
         .await;
 
-        // First pass (1) + re-scan (2) = 3 findings merged on the first review.
+        // First pass (1) + sweep 1 (1) + sweep 2 (1) = 3 findings; sweep 3 is dry.
         assert_eq!(
             findings.len(),
             3,
-            "the re-scan's missed instances must merge into the first-pass findings: {findings:#?}"
+            "every instance recovered across the sweeps must merge: {findings:#?}"
+        );
+        let lines: std::collections::BTreeSet<u32> = findings.iter().map(|f| f.line).collect();
+        assert_eq!(
+            lines.len(),
+            3,
+            "the merged findings are distinct file:line instances, not re-reports: {findings:#?}"
         );
         assert!(
             findings
@@ -1938,19 +2021,147 @@ mod tests {
             "merged findings keep their validator and rule tags: {findings:#?}"
         );
 
-        // The re-scan fired EXACTLY once (capped) — one prompt carrying its
-        // header, even though it returned more findings (no recursion).
-        let seen = probe.seen_prompts();
-        let rescans = seen.iter().filter(|p| p.contains(RESCAN_NEEDLE)).count();
+        // Three sweep turns fired: two that returned findings plus the dry one
+        // that stopped the loop — well under the runaway cap.
+        let sessions = sweep_sessions(&probe);
         assert_eq!(
-            rescans, 1,
-            "the completeness re-scan must fire exactly once and not loop: {seen:#?}"
+            sessions.len(),
+            3,
+            "the loop runs sweeps until one goes dry, then stops: {sessions:#?}"
         );
-        // One validator fork plus exactly one bounded re-scan fork.
+    }
+
+    /// Lever 2 (c) — the loop drives the SAME accumulating session forward, not a
+    /// re-fork of the first pass. Each sweep forks the session that delivered the
+    /// PRIOR sweep's answer, so the sweeps run on a chain of distinct sessions and
+    /// the model's own earlier answers are in context — the structural reason it
+    /// converges instead of oscillating.
+    #[tokio::test]
+    async fn followup_sweep_drives_the_session_forward_not_reforking_the_first_pass() {
+        let (loader, work) = magic_numbers_work();
+
+        let first_pass =
+            findings_array_json(&[("src/a.rs", TEST_FINDING_LINE, "no-magic", "magic number 7")]);
+        let sweep_deltas = ScriptedReply::sequence([
+            findings_array_json(&[(
+                "src/a.rs",
+                TEST_FINDING_LINE + 1,
+                "no-magic",
+                "magic number 13",
+            )]),
+            "[]".to_string(),
+        ]);
+        let agent = forking_agent(vec![
+            (RESCAN_NEEDLE.to_string(), sweep_deltas),
+            first_pass_entry(first_pass),
+        ]);
+        let probe = Arc::clone(&agent);
+
+        with_pool(agent, PoolConfig::remote(4), move |pool| async move {
+            run_fleet(&work, &loader, &pool).await;
+        })
+        .await;
+
+        let sessions = sweep_sessions(&probe);
+        assert_eq!(
+            sessions.len(),
+            2,
+            "two sweeps fired (one with findings, one dry): {sessions:#?}"
+        );
+        let distinct: std::collections::BTreeSet<&String> = sessions.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            sessions.len(),
+            "each sweep runs on a fresh fork of the prior sweep's session — a forward chain, \
+             never the same first-pass session re-forked: {sessions:#?}"
+        );
+
+        // The load-bearing proof: the SECOND sweep ran on a session forked from
+        // the FIRST sweep's session, so its accumulated context already carries
+        // the first sweep's nudge — the sweep header appears TWICE. Re-forking the
+        // first pass each time would leave it appearing only once, the model would
+        // never see its own prior answer, and the loop could not converge.
+        let last_sweep_history = probe
+            .session_history(sessions.last().unwrap())
+            .expect("the last sweep's session ran");
+        let header_occurrences = last_sweep_history.matches(RESCAN_NEEDLE).count();
+        assert_eq!(
+            header_occurrences, 2,
+            "the second sweep continues the first sweep's session (forward chain), so its context \
+             holds the nudge twice — not a re-fork of the first pass: {last_sweep_history}"
+        );
+    }
+
+    /// Lever 2 (b) — the runaway cap. A model that never goes dry (every sweep
+    /// returns the same finding) is bounded: the loop stops after exactly
+    /// [`MAX_FOLLOWUP_SWEEPS`] sweeps rather than looping forever. The re-reported
+    /// duplicates are harmless — downstream `dedup_exact` collapses them.
+    #[tokio::test]
+    async fn followup_sweep_stops_at_the_cap_when_never_dry() {
+        let (loader, work) = magic_numbers_work();
+
+        let first_pass =
+            findings_array_json(&[("src/a.rs", TEST_FINDING_LINE, "no-magic", "magic number 7")]);
+        // Every sweep returns a (non-empty) finding, so the model never says
+        // "none left" — only the cap can terminate the loop.
+        let never_dry = findings_array_json(&[(
+            "src/a.rs",
+            TEST_FINDING_LINE + 1,
+            "no-magic",
+            "magic number 13",
+        )]);
+        let agent = forking_agent(vec![
+            (RESCAN_NEEDLE.to_string(), ScriptedReply::Text(never_dry)),
+            first_pass_entry(first_pass),
+        ]);
+        let probe = Arc::clone(&agent);
+
+        with_pool(agent, PoolConfig::remote(4), move |pool| async move {
+            run_fleet(&work, &loader, &pool).await;
+        })
+        .await;
+
+        let sessions = sweep_sessions(&probe);
+        assert_eq!(
+            sessions.len() as u32,
+            MAX_FOLLOWUP_SWEEPS,
+            "a never-dry model is bounded at the runaway cap, not looped forever: {sessions:#?}"
+        );
+    }
+
+    /// Lever 2 (d) — an empty first pass spends ZERO follow-up turns. A clean
+    /// validator has nothing to be incomplete about, so the loop is skipped
+    /// entirely: one validator fork, no sweeps.
+    #[tokio::test]
+    async fn empty_first_pass_spends_no_followup_sweeps() {
+        let (loader, work) = magic_numbers_work();
+
+        // The first pass finds nothing; the sweep header still has a (would-be)
+        // entry so a stray sweep would be observable — it must not fire.
+        let agent = forking_agent(vec![
+            (RESCAN_NEEDLE.to_string(), ScriptedReply::Text("[]".to_string())),
+            first_pass_entry("[]".to_string()),
+        ]);
+        let probe = Arc::clone(&agent);
+
+        let findings = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
+            run_fleet(&work, &loader, &pool).await.findings
+        })
+        .await;
+
+        assert!(
+            findings.is_empty(),
+            "a clean validator reports nothing: {findings:#?}"
+        );
+        let sessions = sweep_sessions(&probe);
+        assert!(
+            sessions.is_empty(),
+            "an empty first pass must not spend any follow-up sweep turn: {sessions:#?}"
+        );
         assert_eq!(
             probe.fork_count(),
-            2,
-            "one validator fork plus one bounded re-scan fork"
+            1,
+            "exactly one validator fork and no sweep fork on a clean validator"
         );
     }
 
