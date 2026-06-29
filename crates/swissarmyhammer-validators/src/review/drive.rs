@@ -546,7 +546,7 @@ mod tests {
         let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
         let agent = broadcast_agent(dedup_script(), notify_tx, true);
 
-        let dyn_agent = DynConnectTo::new(ScriptedAdapter(agent));
+        let dyn_agent = DynConnectTo::new(ScriptedAdapter::new(agent));
 
         let report = run_review_over_agent(
             dyn_agent,
@@ -644,7 +644,7 @@ mod tests {
                 ..ScriptedAgentConfig::default()
             },
         );
-        let dyn_agent = DynConnectTo::new(ScriptedAdapter(agent));
+        let dyn_agent = DynConnectTo::new(ScriptedAdapter::new(agent));
 
         let report = run_review_over_agent(
             dyn_agent,
@@ -720,7 +720,7 @@ mod tests {
             },
         );
 
-        let dyn_agent = DynConnectTo::new(ScriptedAdapter(agent));
+        let dyn_agent = DynConnectTo::new(ScriptedAdapter::new(agent));
 
         let report = tokio::time::timeout(
             PIPELINE_TIMEOUT,
@@ -775,7 +775,7 @@ mod tests {
         );
         let agent_probe = Arc::clone(&agent);
 
-        let dyn_agent = DynConnectTo::new(ScriptedAdapter(agent));
+        let dyn_agent = DynConnectTo::new(ScriptedAdapter::new(agent));
 
         let report = tokio::time::timeout(
             PIPELINE_TIMEOUT,

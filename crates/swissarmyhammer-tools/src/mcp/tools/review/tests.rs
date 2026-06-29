@@ -814,7 +814,7 @@ fn scripted_factory(agent: Arc<ScriptedAgent>) -> AgentFactory {
             // reply onto the live connection too (the production dual-emission the
             // driver must collect once).
             let agent = ScriptedAgent::rebind_broadcast(&agent, notify_tx, true);
-            let dyn_agent = DynConnectTo::new(ScriptedAdapter(agent));
+            let dyn_agent = DynConnectTo::new(ScriptedAdapter::new(agent));
             Ok(AgentHandle {
                 agent: dyn_agent,
                 notification_rx,

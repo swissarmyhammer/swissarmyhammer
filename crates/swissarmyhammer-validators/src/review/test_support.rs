@@ -32,11 +32,16 @@ use crate::validators::{Rule, ValidatorLoader, ValidatorSource};
 /// Embedding dimension shared by the seeded index and the mock embedder.
 pub const DIM: usize = 4;
 
-/// A fresh notification channel for pool-backed tests. The 64-slot buffer
-/// comfortably exceeds any test's notification volume so the broadcast
-/// subscription never lags mid-assertion.
+/// The broadcast-buffer slot count for the pool-backed test notifier. Comfortably
+/// exceeds any test's notification volume so the broadcast subscription never
+/// lags mid-assertion.
+const NOTIFICATION_BUFFER_SIZE: usize = 64;
+
+/// A fresh notification channel for pool-backed tests. The slot buffer
+/// ([`NOTIFICATION_BUFFER_SIZE`]) comfortably exceeds any test's notification
+/// volume so the broadcast subscription never lags mid-assertion.
 pub(crate) fn new_notifier() -> std::sync::Arc<claude_agent::NotificationSender> {
-    let (notifier, _) = claude_agent::NotificationSender::new(64);
+    let (notifier, _) = claude_agent::NotificationSender::new(NOTIFICATION_BUFFER_SIZE);
     std::sync::Arc::new(notifier)
 }
 
@@ -61,6 +66,16 @@ pub struct TestRepo {
     repo: git2::Repository,
 }
 
+impl std::fmt::Debug for TestRepo {
+    /// Hand-rolled because `git2::Repository` is not `Debug`; reports the
+    /// working-tree path, which is the only useful identity for a test fixture.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TestRepo")
+            .field("path", &self.dir.path())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for TestRepo {
     fn default() -> Self {
         Self::new()
@@ -68,6 +83,9 @@ impl Default for TestRepo {
 }
 
 impl TestRepo {
+    /// Create a fresh test git repository initialized with libgit2, backed by a
+    /// throwaway [`TempDir`] and configured with a deterministic test identity so
+    /// commits succeed without the machine's global git config.
     pub fn new() -> Self {
         let dir = TempDir::new().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
@@ -79,6 +97,7 @@ impl TestRepo {
         Self { dir, repo }
     }
 
+    /// The repository's working-tree root (the [`TempDir`] path).
     pub fn path(&self) -> &Path {
         self.dir.path()
     }
@@ -375,6 +394,12 @@ pub const MOCK_PREFIX_TOKENS: u64 = 1234;
 const STALL_DURATION_SECS: u64 = 60;
 
 /// One scripted reaction, matched in script order by substring needle.
+///
+/// `Clone` is the cheap shallow clone (a [`ScriptedReply::Sequence`] SHARES its
+/// `Arc<Mutex<VecDeque>>` so successive turns on ONE agent keep draining the same
+/// queue — that shared advance is what scripts a converging follow-up loop). To
+/// hand a SEPARATE agent an independent queue, use [`ScriptedReply::deep_clone`]
+/// (what [`ScriptedAgent::rebind_broadcast`] does), not `Clone`.
 #[derive(Debug, Clone)]
 pub enum ScriptedReply {
     /// Stream this text back as an `agent_message_chunk`, then end the turn.
@@ -392,6 +417,29 @@ pub enum ScriptedReply {
     /// Wedge the turn (sleep far longer than any test window) — the shape of a
     /// hung task, used to hold a fan-out open while a test cancels it.
     Stall,
+}
+
+impl ScriptedReply {
+    /// A clone that, unlike the shallow `Clone`, gives a [`ScriptedReply::Sequence`]
+    /// a FRESH independent queue (the `VecDeque` contents copied into a new
+    /// `Arc<Mutex<..>>`) rather than sharing the original's `Arc`.
+    ///
+    /// `Clone` deliberately shares the `Arc` so successive turns on ONE agent
+    /// drain the same sequence (how a converging loop is scripted). But
+    /// [`ScriptedAgent::rebind_broadcast`] mints a per-connection rebind the
+    /// docstring promises is a "fresh agent": were it to share the `Arc`, two
+    /// rebinds would pop deltas from ONE queue and one rebind's consumption would
+    /// corrupt the other's, silently breaking test isolation. So a rebind
+    /// deep-clones, giving every rebind an independent sequence.
+    fn deep_clone(&self) -> Self {
+        match self {
+            ScriptedReply::Sequence(queue) => {
+                let contents = queue.lock().unwrap().clone();
+                ScriptedReply::Sequence(std::sync::Arc::new(std::sync::Mutex::new(contents)))
+            }
+            other => other.clone(),
+        }
+    }
 }
 
 impl ScriptedReply {
@@ -468,7 +516,7 @@ impl Default for ScriptedAgentConfig {
 
 /// Per-session mock state: the accumulated conversation, whether a turn has
 /// completed (what `saved` reports), and the effective pin state.
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct SessionState {
     history: String,
     completed_turns: usize,
@@ -479,6 +527,7 @@ struct SessionState {
 /// defaults) or [`ScriptedAgent::with_config`], wire it up with
 /// [`ScriptedAdapter`] (or [`with_pool`] for pool-backed tests), and probe what
 /// it saw through the accessor methods.
+#[derive(Debug)]
 pub struct ScriptedAgent {
     next_session: AtomicUsize,
     /// (needles, reply), matched in order against the session's full
@@ -512,20 +561,17 @@ impl ScriptedAgent {
     /// A scripted agent matching on a single substring per entry — the common
     /// case (each entry's needle is matched with `contains` against the
     /// session's accumulated context).
-    pub fn new(script: Vec<(String, ScriptedReply)>) -> Arc<Self> {
+    pub fn new(script: impl IntoIterator<Item = (String, ScriptedReply)>) -> Arc<Self> {
         Self::with_config(script, ScriptedAgentConfig::default())
     }
 
     /// A scripted agent with a custom [`ScriptedAgentConfig`], matching on a
     /// single substring per entry.
     pub fn with_config(
-        script: Vec<(String, ScriptedReply)>,
+        script: impl IntoIterator<Item = (String, ScriptedReply)>,
         config: ScriptedAgentConfig,
     ) -> Arc<Self> {
-        Self::with_script(
-            script.into_iter().map(|(n, r)| (vec![n], r)).collect(),
-            config,
-        )
+        Self::with_script(script.into_iter().map(|(n, r)| (vec![n], r)), config)
     }
 
     /// A scripted agent whose entries each match a SET of needles (all must be
@@ -533,12 +579,12 @@ impl ScriptedAgent {
     /// [`with_config`](Self::with_config); a fan-out script keys on both a
     /// validator header and a file/claim this way.
     pub fn with_script(
-        script: Vec<(Vec<String>, ScriptedReply)>,
+        script: impl IntoIterator<Item = (Vec<String>, ScriptedReply)>,
         config: ScriptedAgentConfig,
     ) -> Arc<Self> {
         Arc::new(Self {
             next_session: AtomicUsize::new(0),
-            script,
+            script: script.into_iter().collect(),
             config,
             seen: Mutex::new(Vec::new()),
             sessions: Mutex::new(HashMap::new()),
@@ -559,8 +605,17 @@ impl ScriptedAgent {
         broadcast: broadcast::Sender<SessionNotification>,
         bridge_to_connection: bool,
     ) -> Arc<Self> {
+        // Deep-clone each reply so a [`ScriptedReply::Sequence`] gets a FRESH
+        // independent queue: the rebind is a "fresh agent", so it must not share
+        // sequence consumption with `base` or with a sibling rebind (a shallow
+        // `Arc` clone would).
+        let script: Vec<_> = base
+            .script
+            .iter()
+            .map(|(needles, reply)| (needles.clone(), reply.deep_clone()))
+            .collect();
         Self::with_script(
-            base.script.clone(),
+            script,
             ScriptedAgentConfig {
                 broadcast: Some(broadcast),
                 bridge_to_connection,
@@ -569,24 +624,26 @@ impl ScriptedAgent {
         )
     }
 
+    /// Lock `seen` and project each recorded `(session, prompt)` entry through
+    /// `selector`, collecting the results in order. The shared lock-iterate-map-
+    /// collect body behind [`seen_prompts`](Self::seen_prompts) and
+    /// [`prompted_sessions`](Self::prompted_sessions), which differ only by which
+    /// tuple element they take.
+    fn project_seen<F>(&self, selector: F) -> Vec<String>
+    where
+        F: Fn(&(String, String)) -> String,
+    {
+        self.seen.lock().unwrap().iter().map(selector).collect()
+    }
+
     /// The text of every prompt seen, in order.
     pub(crate) fn seen_prompts(&self) -> Vec<String> {
-        self.seen
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(_, prompt)| prompt.clone())
-            .collect()
+        self.project_seen(|(_, prompt)| prompt.clone())
     }
 
     /// The session each prompt ran on, in order.
     pub(crate) fn prompted_sessions(&self) -> Vec<String> {
-        self.seen
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(session, _)| session.clone())
-            .collect()
+        self.project_seen(|(session, _)| session.clone())
     }
 
     /// A session's accumulated conversation history — the inherited prefix plus
@@ -602,6 +659,7 @@ impl ScriptedAgent {
             .map(|state| state.history.clone())
     }
 
+    /// Every `session/pin` call seen, in order, as `(session id, requested pin)`.
     pub(crate) fn pin_calls(&self) -> Vec<(String, bool)> {
         self.pin_calls.lock().unwrap().clone()
     }
@@ -613,6 +671,7 @@ impl ScriptedAgent {
         self.born_pinned.lock().unwrap().clone()
     }
 
+    /// The number of successful `session/fork` calls served so far.
     pub(crate) fn fork_count(&self) -> usize {
         self.forks.load(Ordering::SeqCst)
     }
@@ -695,7 +754,20 @@ impl ScriptedAgent {
 }
 
 /// Adapter wiring a [`ScriptedAgent`] as an ACP server over a channel.
-pub struct ScriptedAdapter(pub Arc<ScriptedAgent>);
+#[derive(Debug)]
+pub struct ScriptedAdapter(Arc<ScriptedAgent>);
+
+impl ScriptedAdapter {
+    /// Wrap `agent` so it can be served as an ACP server over a channel.
+    pub fn new(agent: Arc<ScriptedAgent>) -> Self {
+        Self(agent)
+    }
+
+    /// The wrapped scripted agent.
+    pub fn agent(&self) -> &Arc<ScriptedAgent> {
+        &self.0
+    }
+}
 
 impl ConnectTo<Client> for ScriptedAdapter {
     async fn connect_to(
@@ -1037,7 +1109,7 @@ where
     let (channel_a, channel_b) = Channel::duplex();
 
     let agent_task = tokio::spawn(async move {
-        let _ = ScriptedAdapter(agent).connect_to(channel_a).await;
+        let _ = ScriptedAdapter::new(agent).connect_to(channel_a).await;
     });
 
     let notifier_for_handler = Arc::clone(&notifier);

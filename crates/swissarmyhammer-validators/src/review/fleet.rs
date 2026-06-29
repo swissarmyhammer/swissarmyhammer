@@ -833,23 +833,8 @@ fn collect_task(
 ) -> Result<Vec<Finding>, ()> {
     let response = match delivered {
         Ok(Ok(response)) => response,
-        Ok(Err(err)) => {
-            tracing::warn!(
-                validator = %validator,
-                files = ?files,
-                error = %err,
-                "fleet task failed; yielding zero findings for this validator"
-            );
-            return Err(());
-        }
-        Err(_) => {
-            tracing::warn!(
-                validator = %validator,
-                files = ?files,
-                "fleet task result was dropped before delivery; yielding zero findings"
-            );
-            return Err(());
-        }
+        Ok(Err(err)) => return handle_pool_error(err, validator, files),
+        Err(_) => return handle_delivery_error(validator, files),
     };
 
     // A monolithic task runs on a fresh session (no fork), so any reuse is
@@ -1360,6 +1345,54 @@ mod tests {
             RESCAN_NEEDLE.to_string(),
             ScriptedReply::Text("[]".to_string()),
         )
+    }
+
+    /// Two independent rebinds of one base agent must NOT share a
+    /// [`ScriptedReply::Sequence`] queue — each rebind is a "fresh agent", so
+    /// consuming the sequence on one must leave the other's untouched.
+    ///
+    /// `rebind_broadcast` deep-clones the script, so each rebind gets its own
+    /// queue and a prompt matching the sequence needle yields the SAME first delta
+    /// on both. With a shallow `Arc` share (the pre-fix bug), the first rebind's
+    /// prompt would pop the queue and the second would see the drained tail — a
+    /// silent cross-rebind test-isolation leak.
+    #[tokio::test]
+    async fn rebinds_do_not_share_sequence_state() {
+        const NEEDLE: &str = "consume the sequence";
+        let base = forking_agent(vec![(
+            NEEDLE.to_string(),
+            ScriptedReply::sequence(["first-delta".to_string(), "second-delta".to_string()]),
+        )]);
+
+        // Each rebind submits one prompt matching the sequence needle and reads
+        // back which delta it served.
+        async fn first_served(base: &Arc<ScriptedAgent>) -> String {
+            let (tx, _) = tokio::sync::broadcast::channel(8);
+            // Bridge onto the live connection too, so the pool's connection-side
+            // collector (the stream `with_pool` wires up) sees the reply.
+            let rebind = ScriptedAgent::rebind_broadcast(base, tx, true);
+            with_pool(rebind, PoolConfig::remote(1), |pool| async move {
+                let result = pool
+                    .submit(format!("please {NEEDLE} now"))
+                    .await
+                    .expect("result")
+                    .expect("ok");
+                result.content
+            })
+            .await
+        }
+
+        let one = first_served(&base).await;
+        let two = first_served(&base).await;
+        assert_eq!(
+            one, two,
+            "each rebind has its own sequence queue, so both serve the first delta; \
+             a shared queue would drain across rebinds and they would diverge"
+        );
+        assert!(
+            one.contains("first-delta"),
+            "a fresh rebind serves the sequence's first delta, got: {one}"
+        );
     }
 
     /// A findings array of N objects as an agent emits it, fenced in prose — the
