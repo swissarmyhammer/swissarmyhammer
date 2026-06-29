@@ -22,7 +22,7 @@ the test passes, and the change ships — while a symmetric or sibling path the
 same change implies is left broken. This validator reads the diff and looks for
 that gap.
 
-Three one-concern rules, each an **in-file judgment** over the diff (no engine
+Four one-concern rules, each an **in-file judgment** over the diff (no engine
 probe required):
 
 - `inverse-operation-coverage` — a change to one direction of a paired operation
@@ -34,6 +34,10 @@ probe required):
 - `public-output-contract` — an existing user-facing message/output reformatted
   without need, or an error made to "go away" by silently swallowing it instead
   of preserving the intended side-effect (warn / log / return value).
+- `case-sensitivity-coverage` — code that recognizes/parses/dispatches on textual
+  tokens whose tests only use one spelling, so the case contract is unproven in
+  both the positive (mixed-case accepted) and negative (wrong-case rejected)
+  direction.
 
 These are **warnings**, not blockers: they mark places a reviewer (or the
 implementer picking the task back up) must look harder before calling the work

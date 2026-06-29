@@ -1,7 +1,6 @@
 ---
 name: array-edge-cases
 description: Array edge cases (empty/zero-size, scalar, broadcasting, mixed/partial) must be guarded at the right granularity and covered across every calling convention
-severity: error
 ---
 
 # Array Edge-Cases Validator

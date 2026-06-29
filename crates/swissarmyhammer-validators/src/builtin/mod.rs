@@ -91,7 +91,6 @@ mod tests {
         "function-length",
         "naming",
         "no-commented-code",
-        "magic-numbers",
         "missing-docs",
     ];
 

@@ -7,9 +7,11 @@ description: Don't needlessly reformat user-facing output, and don't make errors
 
 You are a completeness validator. User-facing output — warning/error message
 text, log lines, printed/returned formatting — is part of the contract callers
-and tests depend on. Two opposite mistakes both ship broken behaviour: changing
-that output when the task did not ask you to, and *removing* an intended output
-while making an error condition stop.
+and tests depend on — and so are an operation's *severity* (does it warn, return,
+or raise) and a diagnostic's *code/id*. Several mistakes all ship broken
+behaviour: changing output the task did not ask you to, *removing* an intended
+output while silencing an error, *adding* a hard failure to a path that used to
+succeed, or changing the severity/id of a diagnostic the caller keys on.
 
 ## What to Check
 
@@ -35,6 +37,28 @@ while making an error condition stop.
    new/edge path (e.g. an empty-input short-circuit returns a single array where
    the normal path returns a per-axis tuple), so callers that unpack the normal
    shape break on the edge case.
+
+4. **A previously-succeeding path now fails hard.** The mirror image of #2: the
+   diff makes a path that used to return/complete now `raise`/`abort`/exit
+   non-zero (often justified as "surface the problem clearly"). Turning a silent
+   or recoverable operation into a hard failure is a contract change as much as
+   silencing one — callers and tests that invoke that path expecting completion
+   now error. Confirm the task actually asked to fail here, not to *resolve* the
+   condition and continue. (Classic: a data migration that hit a conflict is made
+   to raise a clearer error, when the intended behaviour is to reconcile the
+   conflict and complete.)
+
+5. **Diagnostic severity or identity changed — or a referenced one never
+   created.** When the output is a structured diagnostic (an error/warning with a
+   *level/severity* and a stable *code/id* — lint codes, check ids, log levels,
+   HTTP status, exit codes), the severity and the id are themselves the contract.
+   Flag a diff that reuses an existing high-severity code where the task/test
+   speaks of a *new* code or a *lower* severity (e.g. emits an existing `E###`
+   error when the intended behaviour is a new `W###` warning with a guidance
+   hint), or that changes the severity/id of an existing diagnostic without the
+   task asking. Cross-check the set of codes/severities the changed code can emit
+   against those named in the issue or failing test; a code the test expects but
+   the patch never defines is the finding.
 
 ## Why This Matters
 

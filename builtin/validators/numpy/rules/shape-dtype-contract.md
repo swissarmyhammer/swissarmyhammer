@@ -1,7 +1,6 @@
 ---
 name: shape-dtype-contract
 description: Edge/short-circuit branches in array code must pass inputs through or slice the normal result, not fabricate arrays that re-derive the shape/dtype/container contract
-severity: error
 ---
 
 # Shape / dtype Contract Validator
