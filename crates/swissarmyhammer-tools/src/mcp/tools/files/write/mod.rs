@@ -10,6 +10,21 @@ use std::path::Path;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 use tracing::{debug, info};
 
+/// Maximum size, in bytes, of content a single `write` accepts (10 MiB).
+///
+/// Lifted to module scope so the size-limit test can assert against the same
+/// value the production path enforces, rather than re-deriving the literal.
+pub(crate) const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10 MiB
+
+/// Rate-limit token cost charged per `write` call.
+///
+/// A whole-file write is one logical operation, so it costs a single token in
+/// the shared `"file_write"` bucket (mirrors `read`, which also costs `1`; the
+/// per-edit-pair cost of `edit` is the variable case). See [`enforce_rate_limit`].
+///
+/// [`enforce_rate_limit`]: crate::mcp::tools::files::shared_utils::enforce_rate_limit
+const FILE_WRITE_COST: u32 = 1;
+
 /// Operation metadata for writing files
 #[derive(Debug, Default)]
 pub struct WriteFile;
@@ -84,32 +99,28 @@ impl WriteFileTool {
 
         debug!(target_path = %file_path.display(), temp_path = %temp_path.display(), content_length = content.len(), "Starting atomic write operation");
 
-        // Write content to temporary file
-        let write_result = fs::write(temp_path, content.as_bytes())
-            .await
-            .map_err(|e| handle_file_error(e, "write temporary file", temp_path));
+        // Write content to the temp file, then atomically rename it onto the
+        // target. Both steps share a single cleanup path: on any failure the
+        // temp file is removed once before the error is surfaced.
+        let write_then_rename = async {
+            fs::write(temp_path, content.as_bytes())
+                .await
+                .map_err(|e| handle_file_error(e, "write temporary file", temp_path))?;
+            fs::rename(temp_path, file_path)
+                .await
+                .map_err(|e| handle_file_error(e, "rename to target", file_path))?;
+            Ok(())
+        }
+        .await;
 
-        match write_result {
+        match write_then_rename {
             Ok(()) => {
-                // Atomically move temporary file to target location
-                let rename_result = fs::rename(temp_path, file_path)
-                    .await
-                    .map_err(|e| handle_file_error(e, "rename to target", file_path));
-
-                match rename_result {
-                    Ok(()) => {
-                        debug!(path = %file_path.display(), bytes_written = content.len(), "Atomic write operation completed successfully");
-                        Ok(content.len())
-                    }
-                    Err(e) => {
-                        // Clean up temporary file on rename failure
-                        let _ = fs::remove_file(temp_path).await;
-                        Err(e)
-                    }
-                }
+                debug!(path = %file_path.display(), bytes_written = content.len(), "Atomic write operation completed successfully");
+                Ok(content.len())
             }
             Err(e) => {
-                // Clean up temporary file on write failure
+                // Single cleanup path: remove the temp file on any failure
+                // (write or rename). A missing temp file is a benign no-op.
                 let _ = fs::remove_file(temp_path).await;
                 Err(e)
             }
@@ -139,7 +150,7 @@ pub async fn execute_write(
     let request: WriteRequest = BaseToolImpl::parse_arguments(arguments)?;
 
     // Check rate limit (shared helper; keyed by the current Tokio task).
-    crate::mcp::tools::files::shared_utils::enforce_rate_limit("file_write", 1)?;
+    crate::mcp::tools::files::shared_utils::enforce_rate_limit("file_write", FILE_WRITE_COST)?;
 
     // Validate parameters
     if request.file_path.trim().is_empty() {
@@ -149,8 +160,6 @@ pub async fn execute_write(
         ));
     }
 
-    const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
-
     if request.content.len() > MAX_FILE_SIZE {
         return Err(McpError::invalid_request(
             "content exceeds maximum size limit of 10MB".to_string(),
@@ -158,8 +167,13 @@ pub async fn execute_write(
         ));
     }
 
-    // Resolve to absolute path against the session working directory (the board
-    // dir), never the process CWD.
+    // Path resolution is intentionally absolute-path-friendly: the documented
+    // contract (see `description.md`, `file_path` param: "Absolute path for the
+    // new or existing file") is that callers pass an absolute target, and agents
+    // rely on writing to absolute paths anywhere they have OS permission. An
+    // absolute path is therefore taken as-is — NOT confined to the session root.
+    // A relative path is the convenience case: it resolves against the session
+    // working directory (the board dir), never the process CWD.
     let path_buf = PathBuf::from(&request.file_path);
     let validated_path = if path_buf.is_absolute() {
         path_buf
@@ -167,7 +181,10 @@ pub async fn execute_write(
         context.session_root().join(path_buf)
     };
 
-    // Check for path traversal attempts
+    // Reject `..` traversal in either form. This guards against a relative path
+    // climbing out of the session root and against an absolute path smuggling a
+    // `ParentDir` component; it deliberately does NOT confine absolute paths to
+    // the session root, which would break the documented absolute-path contract.
     for component in validated_path.components() {
         if matches!(component, std::path::Component::ParentDir) {
             return Err(McpError::invalid_request(
@@ -226,7 +243,18 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
+
+    /// One byte over [`MAX_FILE_SIZE`], so a write of this size must be rejected.
+    /// Derived from the production constant rather than re-stating the literal,
+    /// so the test stays in sync if the limit ever changes.
+    const TEST_FILE_SIZE_OVER_LIMIT: usize = MAX_FILE_SIZE + 1;
+
+    /// Read-only-for-all Unix permission bits (`r--r--r--`), used to make a test
+    /// fixture file reject writes.
+    #[cfg(unix)]
+    const READ_ONLY_PERMS: u32 = 0o444;
 
     /// Create test arguments for the write tool
     fn create_test_arguments(
@@ -244,6 +272,31 @@ mod tests {
         );
         args
     }
+
+    /// Assert no leftover `*.tmp.*` files remain in `parent_dir` — the atomic
+    /// write must clean up its temporary file on success and on every failure.
+    fn assert_no_temp_files_remain(parent_dir: &Path) {
+        let temp_files: Vec<_> = fs::read_dir(parent_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(
+            temp_files.is_empty(),
+            "temporary files should be cleaned up, found: {temp_files:?}"
+        );
+    }
+
+    /// Set `path` to read-only permissions so a subsequent write fails. No-op on
+    /// non-Unix targets (the read-only-rename behavior is Unix-specific here).
+    #[cfg(unix)]
+    fn make_file_readonly(path: &Path) {
+        use std::fs::Permissions;
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, Permissions::from_mode(READ_ONLY_PERMS)).unwrap();
+    }
+    #[cfg(not(unix))]
+    fn make_file_readonly(_path: &Path) {}
 
     #[test]
     fn test_write_tool_creation() {
@@ -392,8 +445,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("large_file.txt");
 
-        // Create content larger than 10MB limit (10 * 1024 * 1024 = 10,485,760 bytes)
-        let large_content = "x".repeat(10 * 1024 * 1024 + 1);
+        // One byte over the limit, derived from MAX_FILE_SIZE via the test constant.
+        let large_content = "x".repeat(TEST_FILE_SIZE_OVER_LIMIT);
 
         let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments(&test_file.to_string_lossy(), &large_content);
@@ -459,56 +512,28 @@ mod tests {
         let written_content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(written_content, test_content);
 
-        // Verify no temporary files remain (checking for any .tmp.* pattern)
-        let parent_dir = test_file.parent().unwrap();
-        let entries: Vec<_> = fs::read_dir(parent_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name().to_string_lossy().contains(&format!(
-                    "{}.tmp.",
-                    test_file.file_name().unwrap().to_string_lossy()
-                ))
-            })
-            .collect();
-        assert!(entries.is_empty(), "Temporary files should be cleaned up");
+        // Verify no temporary files remain.
+        assert_no_temp_files_remain(test_file.parent().unwrap());
     }
 
     #[tokio::test]
     async fn test_atomic_write_cleanup_on_failure() {
-        use std::fs::Permissions;
-        use std::os::unix::fs::PermissionsExt;
-
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("readonly_test.txt");
 
         // Create a read-only file that should cause rename to fail
         fs::write(&test_file, "existing content").unwrap();
-
-        #[cfg(unix)]
-        {
-            let readonly_permissions = Permissions::from_mode(0o444);
-            fs::set_permissions(&test_file, readonly_permissions).unwrap();
-        }
+        make_file_readonly(&test_file);
 
         let test_content = "This should fail to write";
 
         // The atomic write should fail but clean up temporary file
         let _result = WriteFileTool::write_file_atomic(&test_file, test_content).await;
 
-        // Note: This test may pass on some systems where rename succeeds despite readonly target
-        // The key is that temporary file should be cleaned up regardless
-        // Check for any .tmp.* files in the directory
-        let parent_dir = test_file.parent().unwrap();
-        let temp_files: Vec<_> = fs::read_dir(parent_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
-            .collect();
-        assert!(
-            temp_files.is_empty(),
-            "Temporary files should be cleaned up after failure"
-        );
+        // Note: This test may pass on some systems where rename succeeds despite
+        // a readonly target. The key invariant is that the temporary file is
+        // cleaned up regardless of whether the rename succeeded or failed.
+        assert_no_temp_files_remain(test_file.parent().unwrap());
     }
 
     /// `WriteFileTool::new()` and the derived `Default` produce the same unit
@@ -543,16 +568,7 @@ mod tests {
         assert_eq!(fs::read_dir(&target_dir).unwrap().count(), 0);
 
         // No leftover temp files in the parent.
-        let parent_dir = temp_dir.path();
-        let temp_files: Vec<_> = fs::read_dir(parent_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
-            .collect();
-        assert!(
-            temp_files.is_empty(),
-            "temp file must be cleaned up after a rename failure"
-        );
+        assert_no_temp_files_remain(temp_dir.path());
     }
 
     #[tokio::test]
@@ -638,16 +654,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_readonly_file_fails() {
-        use std::fs::{self, Permissions};
-        use std::os::unix::fs::PermissionsExt;
-
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("readonly_file.txt");
 
         // Create a file and make it read-only
         fs::write(&test_file, "initial content").unwrap();
-        let readonly_permissions = Permissions::from_mode(0o444);
-        fs::set_permissions(&test_file, readonly_permissions).unwrap();
+        make_file_readonly(&test_file);
 
         let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments(&test_file.to_string_lossy(), "new content");
@@ -683,20 +695,6 @@ mod tests {
     }
 
     // --- Mutating-result envelope: tagged_content + mutated_paths ------------
-
-    /// Join every text content block of a result, so envelope assertions can
-    /// scan the whole surfaced text — not just `content[0]`.
-    fn all_text(result: &CallToolResult) -> String {
-        result
-            .content
-            .iter()
-            .filter_map(|c| match &c.raw {
-                rmcp::model::RawContent::Text(t) => Some(t.text.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
 
     /// A successful write (here a brand-new file) carries the mutation envelope:
     /// `tagged_content` (hashline-tagged content just written) + `mutated_paths`
@@ -735,8 +733,17 @@ mod tests {
         assert!(paths[0].as_str().unwrap().ends_with("write_envelope.txt"));
         assert!(mutation["bytes_written"].as_u64().unwrap() > 0);
 
+        let all_text = call
+            .content
+            .iter()
+            .filter_map(|c| match &c.raw {
+                rmcp::model::RawContent::Text(t) => Some(t.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            all_text(&call).contains(&expected_tagged),
+            all_text.contains(&expected_tagged),
             "envelope text block carries the tagged content"
         );
     }
