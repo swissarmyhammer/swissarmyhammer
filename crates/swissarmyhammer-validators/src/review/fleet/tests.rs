@@ -63,6 +63,7 @@ fn ruleset_with_body(
             match_criteria: Some(ValidatorMatch {
                 tools: vec![],
                 files: vec!["*.rs".to_string()],
+                exclude: vec![],
             }),
             trigger_matcher: None,
             tags: vec![],

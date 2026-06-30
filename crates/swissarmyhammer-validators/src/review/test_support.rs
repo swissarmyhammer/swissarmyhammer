@@ -263,6 +263,21 @@ pub fn loader_with(name: &str, file_glob: &str, probes: &[&str]) -> ValidatorLoa
     loader
 }
 
+/// A loader carrying one RuleSet named `name` that matches `file_glob`, declares
+/// `probes`, and *excludes* any path matching one of `exclude` — the structural
+/// carve-out the `data-driven`/`duplication` validators use to keep test files
+/// out of the candidate set before the finder runs.
+pub fn loader_with_exclude(
+    name: &str,
+    file_glob: &str,
+    exclude: &[&str],
+    probes: &[&str],
+) -> ValidatorLoader {
+    let mut loader = ValidatorLoader::new();
+    loader.add_builtin_ruleset(ruleset_excluding(name, file_glob, exclude, probes));
+    loader
+}
+
 /// A single-rule RuleSet named `name` that matches `file_glob` and declares
 /// `probes`.
 ///
@@ -270,6 +285,19 @@ pub fn loader_with(name: &str, file_glob: &str, probes: &[&str]) -> ValidatorLoa
 /// test crates. The rule body is a fixed placeholder — tests assert on matching,
 /// scoping, and probe wiring, not on rule prose.
 pub fn ruleset(name: &str, file_glob: &str, probes: &[&str]) -> RuleSet {
+    ruleset_excluding(name, file_glob, &[], probes)
+}
+
+/// Like [`ruleset`] but with an `exclude` glob set on the match criteria — a
+/// path matching one of `exclude` never matches the RuleSet even though it
+/// matches `file_glob`. The structural test-file carve-out the
+/// `data-driven`/`duplication` validators rely on.
+pub fn ruleset_excluding(
+    name: &str,
+    file_glob: &str,
+    exclude: &[&str],
+    probes: &[&str],
+) -> RuleSet {
     RuleSet {
         manifest: RuleSetManifest {
             name: name.to_string(),
@@ -280,6 +308,7 @@ pub fn ruleset(name: &str, file_glob: &str, probes: &[&str]) -> RuleSet {
             match_criteria: Some(ValidatorMatch {
                 tools: vec![],
                 files: vec![file_glob.to_string()],
+                exclude: exclude.iter().map(|e| e.to_string()).collect(),
             }),
             trigger_matcher: None,
             tags: vec![],

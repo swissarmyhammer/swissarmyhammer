@@ -21,8 +21,8 @@ comments:
 
     Production logic untouched. No staging/commit done.
   timestamp: 2026-06-30T16:10:52.918342+00:00
-position_column: doing
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffee80
 project: local-review
 title: Extract fleet.rs test module to a sibling file to restore reviewability
 ---
