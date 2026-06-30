@@ -112,6 +112,34 @@ comments:
   id: 01kwd1whaspaahby3jtwm1fx9m
   text: 'Iteration 4 implement: both findings resolved. (1) types.rs ProjectTypeSpec gained #[derive(Debug, Clone, Copy)] (all fields Copy). (2) detect.rs extracted read_optional_config(path, filename) -> Result<Option<String>, ProjectDetectionError>; both detect_rust_workspace + detect_npm_workspace call it; behavior byte-for-byte preserved. Verified: affected crates + callers 3053/3053, clippy --workspace -D warnings clean, fmt clean. Parallel-shell files untouched. Proceeding to checkpoint commit → re-review.'
   timestamp: 2026-06-30T20:00:19.289854+00:00
+- actor: claude-code
+  id: 01kwd2a6q96qmragxpnekrwq4g
+  text: 'Review iteration 4: both prior findings verified [x]. 1 NEW finding (convergence 21→3→2→1): types.rs:72 ProjectSymbols::default() can panic on malformed builtin config YAML (.expect) but lacks a # Panics doc. This is pre-existing code in a delta-touched file (in scope). To prevent a per-nit file-walk next round, instructing /implement to fix the CAUSE across the whole file: add # Panics to default() AND sweep types.rs + detect.rs for every other public-API panic path (.expect/.unwrap/panic!/indexing) and document each — so re-review finds zero recurrences. Guardrail: 4 review rounds, each distinct + reducing — not tripped; watching for non-convergence after this pass.'
+  timestamp: 2026-06-30T20:07:47.177784+00:00
+- actor: claude-code
+  id: 01kwd2frgd0fcfjk7hmrt1cmt9
+  text: |-
+    Worked 2026-06-30 15:01 review finding (panic doc). Doc-comment-only pass, no behavior change.
+
+    Cause-sweep of both task files for every public API that can panic:
+    - types.rs `ProjectSymbols::default()` — added # Panics (malformed BUILTIN_CONFIG_YAML deserialize). [cited finding]
+    - types.rs `spec_for()` — added # Panics (.expect if a ProjectType has no PROJECT_TYPE_SPECS entry).
+    - types.rs `ProjectSymbols::get()` — added # Panics (delegates to spec_for).
+    - types.rs `ProjectType::marker_files()` — added # Panics (delegates to spec_for).
+    - detect.rs: only public fn is `detect_projects`, returns Result, canonicalize errors → Err; no .expect/.unwrap/panic!/indexing. Cannot panic — deliberately NOT given a # Panics (would be misleading). All other detect.rs fns are private.
+    - Other types.rs public items (project_type_specs, should_skip_directory, data structs/enums/consts) cannot panic.
+
+    Verification (all green):
+    - cargo fmt -p swissarmyhammer-project-detection -- --check: exit 0
+    - cargo clippy --workspace --all-targets -- -D warnings: exit 0
+    - cargo nextest run -p swissarmyhammer-project-detection -p swissarmyhammer-tools -p swissarmyhammer-lsp -p swissarmyhammer-cli -p swissarmyhammer-config: 3053 passed, 0 failed, 0 skipped.
+
+    Task left GREEN in doing for /review.
+  timestamp: 2026-06-30T20:10:49.229246+00:00
+- actor: claude-code
+  id: 01kwd2gj4ahwwgb87n6g1webzv
+  text: 'Iteration 5 implement: finding fixed + cause swept across both files. # Panics docs added to all 4 panicking public APIs in types.rs: default() (malformed YAML .expect), spec_for() (.expect missing variant), get() + marker_files() (delegate to spec_for). detect.rs detect_projects() correctly NOT documented (returns Result, no panic path — avoided misleading doc). Doc-only, no behavior change. Verified: affected crates + callers 3053/3053, clippy --workspace clean, fmt clean. Only types.rs changed. Proceeding to checkpoint commit → re-review. Expecting clean (panic-doc cause eliminated file-wide).'
+  timestamp: 2026-06-30T20:11:15.466450+00:00
 position_column: doing
 position_ordinal: '8380'
 title: Add Swift project detection + project-types partial (prefer ULID via yaslab/ULID.swift)
@@ -133,3 +161,7 @@ Result: `PROJECT_TYPE_SPECS` is the ONE authoritative per-variant roster. Adding
 
 - [x] `crates/swissarmyhammer-project-detection/src/types.rs` — Public struct `ProjectTypeSpec` lacks a `Debug` implementation. This delta made the struct `pub` (and added `name`/`key`/`partial` fields), so the public-type contract now applies: all public types with a non-empty representation must derive `Debug`. Add `#[derive(Debug)]` to `ProjectTypeSpec`.
 - [x] `crates/swissarmyhammer-project-detection/src/detect.rs` — `detect_rust_workspace` and `detect_npm_workspace` duplicate the same file-reading + error-handling pattern: join a filename to the path, check existence, `fs::read_to_string` with the identical `ProjectDetectionError::ReadFile { path, source }` mapping, returning `Ok(None)` when the file is absent. Extract a shared helper (e.g. `fn read_optional_config(path: &Path, filename: &str) -> Result<Option<String>, ProjectDetectionError>`) that encapsulates the existence check, read, and error mapping, then call it from both functions so the two cannot drift.
+
+## Review Findings (2026-06-30 15:01)
+
+- [x] `crates/swissarmyhammer-project-detection/src/types.rs:72` — The `default()` method can panic if the builtin config YAML is malformed, but this panic is not documented in the doc comment, violating the rule that panics must be documented. Added a `# Panics` section. CAUSE-SWEEP of both task files for every public API that can panic: in types.rs added/extended `# Panics` on `ProjectSymbols::default()` (YAML parse), `spec_for()` (`.expect` if a variant has no spec entry), `ProjectSymbols::get()` and `ProjectType::marker_files()` (both delegate to `spec_for`). detect.rs has only one public fn, `detect_projects`, which returns `Result` (canonicalize errors → `Err`) and cannot panic — no misleading `# Panics` added. Doc-only; no behavior change.

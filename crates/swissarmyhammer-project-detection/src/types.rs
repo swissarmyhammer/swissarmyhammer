@@ -99,7 +99,12 @@ pub struct ProjectSymbols {
 }
 
 impl Default for ProjectSymbols {
-    /// Load defaults from the builtin config yaml
+    /// Load defaults from the builtin config yaml.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the builtin config YAML ([`BUILTIN_CONFIG_YAML`]) is malformed
+    /// and fails to deserialize into a [`ProjectDetectionConfig`].
     fn default() -> Self {
         let config: ProjectDetectionConfig =
             serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).expect("builtin config.yaml must parse");
@@ -251,6 +256,13 @@ pub fn project_type_specs() -> &'static [ProjectTypeSpec] {
 ///
 /// Every [`ProjectType`] variant has exactly one entry in [`PROJECT_TYPE_SPECS`],
 /// so this never returns `None` in practice.
+///
+/// # Panics
+///
+/// Panics if the given [`ProjectType`] has no entry in [`PROJECT_TYPE_SPECS`].
+/// Every variant is expected to have one (guarded by tests), so this cannot
+/// happen in practice, but a future variant added without a matching table
+/// entry would trip it.
 pub fn spec_for(project_type: ProjectType) -> &'static ProjectTypeSpec {
     PROJECT_TYPE_SPECS
         .iter()
@@ -260,6 +272,11 @@ pub fn spec_for(project_type: ProjectType) -> &'static ProjectTypeSpec {
 
 impl ProjectSymbols {
     /// Get the symbol for a project type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `project_type` has no entry in [`PROJECT_TYPE_SPECS`] (see
+    /// [`spec_for`]). Every variant has one, so this cannot happen in practice.
     pub fn get(&self, project_type: ProjectType) -> &str {
         (spec_for(project_type).symbol)(self)
     }
@@ -267,6 +284,11 @@ impl ProjectSymbols {
 
 impl ProjectType {
     /// Get the marker files that identify this project type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this variant has no entry in [`PROJECT_TYPE_SPECS`] (see
+    /// [`spec_for`]). Every variant has one, so this cannot happen in practice.
     pub fn marker_files(&self) -> &[&str] {
         spec_for(*self).marker_files
     }
