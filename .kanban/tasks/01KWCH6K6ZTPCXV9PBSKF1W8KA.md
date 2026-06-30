@@ -1,8 +1,28 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a380
+comments:
+- actor: claude-code
+  id: 01kwcmk77vf8d954cgxb9zw339
+  text: Picked up. Extracted inline `#[cfg(test)] mod tests { ... }` (was lines 1239-3180) into new sibling file `src/review/fleet/tests.rs`; replaced inline block in fleet.rs with bare `#[cfg(test)]\nmod tests;`. Body dedented one 4-space level on move. Production code untouched (only the tail of fleet.rs changed). Awaiting adversarial double-check verdict before final report.
+  timestamp: 2026-06-30T16:08:02.555986+00:00
+- actor: claude-code
+  id: 01kwcmrdkp0spsp5d9d2f1tc9v
+  text: |-
+    DONE (left in doing for review).
+
+    Final results:
+    - fleet.rs: 55,149 bytes (was 135,248) — under 131,072 cap.
+    - New src/review/fleet/tests.rs: 72,972 bytes — also under cap. (Smaller than the cited ~80KB because the moved body was dedented one 4-space level on the move.)
+    - Tests: `cargo nextest run -p swissarmyhammer-validators` = 305 passed, 0 skipped. 37 tests (17 #[test] + 20 #[tokio::test]) now resolve under fleet::tests::*.
+    - Clippy: `cargo clippy -p swissarmyhammer-validators --all-targets` = exit 0, zero warnings.
+
+    Verification: independent git-diff confirms fleet.rs production code (everything before the test block) is byte-identical to HEAD; only change is inline `mod tests { ... }` → `#[cfg(test)]\nmod tests;`. Test function set (55 fns) identical before/after, DIFF_EXIT=0, no test dropped or duplicated. No multi-line raw strings, so the dedent corrupted no string literals. Adversarial double-check agent: PASS, no findings.
+
+    Production logic untouched. No staging/commit done.
+  timestamp: 2026-06-30T16:10:52.918342+00:00
+position_column: doing
+position_ordinal: '8380'
 project: local-review
 title: Extract fleet.rs test module to a sibling file to restore reviewability
 ---
