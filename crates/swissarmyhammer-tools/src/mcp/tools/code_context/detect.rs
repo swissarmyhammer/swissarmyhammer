@@ -37,6 +37,7 @@ fn project_type_name(pt: ProjectType) -> &'static str {
         ProjectType::Makefile => "Makefile",
         ProjectType::Flutter => "Flutter",
         ProjectType::Php => "PHP",
+        ProjectType::Swift => "Swift",
     }
 }
 
@@ -54,6 +55,7 @@ fn project_type_key(pt: ProjectType) -> &'static str {
         ProjectType::Makefile => "makefile",
         ProjectType::Flutter => "flutter",
         ProjectType::Php => "php",
+        ProjectType::Swift => "swift",
     }
 }
 
@@ -74,6 +76,7 @@ fn partial_name_for_type(pt: ProjectType) -> Option<&'static str> {
         ProjectType::Makefile => Some("_partials/project-types/makefile"),
         ProjectType::Flutter => Some("_partials/project-types/flutter"),
         ProjectType::Php => None,
+        ProjectType::Swift => Some("_partials/project-types/swift"),
     }
 }
 
@@ -306,6 +309,7 @@ mod tests {
             ProjectType::Makefile,
             ProjectType::Flutter,
             ProjectType::Php,
+            ProjectType::Swift,
         ];
         for pt in types {
             let name = project_type_name(pt);
@@ -329,6 +333,7 @@ mod tests {
             ProjectType::CMake,
             ProjectType::Makefile,
             ProjectType::Flutter,
+            ProjectType::Swift,
         ];
         for pt in types {
             let partial = partial_name_for_type(pt);
@@ -603,6 +608,7 @@ mod tests {
             (ProjectType::Makefile, "makefile"),
             (ProjectType::Flutter, "flutter"),
             (ProjectType::Php, "php"),
+            (ProjectType::Swift, "swift"),
         ];
         for (pt, expected_key) in all_types {
             assert_eq!(project_type_key(pt), expected_key, "Wrong key for {:?}", pt);

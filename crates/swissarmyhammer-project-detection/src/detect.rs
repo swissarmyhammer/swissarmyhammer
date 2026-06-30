@@ -112,6 +112,7 @@ fn detect_project_at_path(path: &Path) -> Result<Vec<DetectedProject>, String> {
         ProjectType::Makefile,
         ProjectType::Flutter,
         ProjectType::Php,
+        ProjectType::Swift,
     ];
 
     let mut detected = Vec::new();

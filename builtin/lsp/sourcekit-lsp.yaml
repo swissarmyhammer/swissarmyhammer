@@ -1,6 +1,7 @@
 # Swift LSP Server Configuration
 name: sourcekit-lsp
-project_types: []
+project_types:
+  - swift
 command: sourcekit-lsp
 args: []
 language_ids:

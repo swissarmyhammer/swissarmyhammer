@@ -106,6 +106,7 @@ mod tests {
             ProjectType::CMake,
             ProjectType::Makefile,
             ProjectType::Flutter,
+            ProjectType::Swift,
         ] {
             let _ = servers_for_project(pt);
         }

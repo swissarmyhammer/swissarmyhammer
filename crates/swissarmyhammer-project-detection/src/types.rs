@@ -53,6 +53,9 @@ pub enum ProjectType {
     /// PHP project (composer.json)
     #[serde(rename = "php")]
     Php,
+    /// Swift project (Package.swift, *.xcodeproj, or *.xcworkspace)
+    #[serde(rename = "swift")]
+    Swift,
 }
 
 /// Builtin config yaml, embedded at compile time.
@@ -82,6 +85,7 @@ pub struct ProjectSymbols {
     pub c_cpp: String,
     pub dart: String,
     pub php: String,
+    pub swift: String,
 }
 
 impl Default for ProjectSymbols {
@@ -106,6 +110,7 @@ impl ProjectSymbols {
             ProjectType::CMake | ProjectType::Makefile => &self.c_cpp,
             ProjectType::Flutter => &self.dart,
             ProjectType::Php => &self.php,
+            ProjectType::Swift => &self.swift,
         }
     }
 }
@@ -125,6 +130,7 @@ impl ProjectType {
             ProjectType::Makefile => &["Makefile"],
             ProjectType::Flutter => &["pubspec.yaml"],
             ProjectType::Php => &["composer.json"],
+            ProjectType::Swift => &["Package.swift", "*.xcodeproj", "*.xcworkspace"],
         }
     }
 }
@@ -202,6 +208,10 @@ mod tests {
         );
         assert!(!symbols.dart.is_empty(), "dart symbol should not be empty");
         assert!(!symbols.php.is_empty(), "php symbol should not be empty");
+        assert!(
+            !symbols.swift.is_empty(),
+            "swift symbol should not be empty"
+        );
     }
 
     #[test]
@@ -220,6 +230,7 @@ mod tests {
             ProjectType::Makefile,
             ProjectType::Flutter,
             ProjectType::Php,
+            ProjectType::Swift,
         ];
 
         for variant in &variants {
@@ -244,6 +255,7 @@ mod tests {
         assert_eq!(symbols.get(ProjectType::CSharp), &symbols.csharp);
         assert_eq!(symbols.get(ProjectType::Flutter), &symbols.dart);
         assert_eq!(symbols.get(ProjectType::Php), &symbols.php);
+        assert_eq!(symbols.get(ProjectType::Swift), &symbols.swift);
 
         // Shared mappings: Java variants both map to java
         assert_eq!(symbols.get(ProjectType::JavaMaven), &symbols.java);
