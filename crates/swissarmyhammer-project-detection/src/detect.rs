@@ -4,15 +4,34 @@ use super::types::*;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 /// Maximum depth to traverse when looking for projects
 const MAX_DEPTH: usize = 10;
+
+/// Errors that can occur while detecting projects.
+#[derive(Debug, Error)]
+pub enum ProjectDetectionError {
+    /// The root path could not be canonicalized (e.g. it does not exist).
+    #[error("Failed to canonicalize root path: {0}")]
+    Canonicalize(#[source] std::io::Error),
+
+    /// A project manifest file could not be read.
+    #[error("Failed to read {path}: {source}")]
+    ReadFile {
+        /// The file that could not be read.
+        path: String,
+        /// The underlying I/O error.
+        #[source]
+        source: std::io::Error,
+    },
+}
 
 /// Detect all projects starting from a root directory
 pub fn detect_projects(
     root: &Path,
     max_depth: Option<usize>,
-) -> Result<Vec<DetectedProject>, String> {
+) -> Result<Vec<DetectedProject>, ProjectDetectionError> {
     let max_depth = max_depth.unwrap_or(MAX_DEPTH);
     let mut projects = Vec::new();
     let mut visited_dirs = HashSet::new();
@@ -20,7 +39,7 @@ pub fn detect_projects(
     // Canonicalize the root path to avoid duplicates
     let root = root
         .canonicalize()
-        .map_err(|e| format!("Failed to canonicalize root path: {}", e))?;
+        .map_err(ProjectDetectionError::Canonicalize)?;
 
     detect_projects_recursive(&root, 0, max_depth, &mut projects, &mut visited_dirs)?;
 
@@ -37,7 +56,7 @@ fn detect_projects_recursive(
     max_depth: usize,
     projects: &mut Vec<DetectedProject>,
     visited_dirs: &mut HashSet<PathBuf>,
-) -> Result<(), String> {
+) -> Result<(), ProjectDetectionError> {
     // Stop if we've exceeded max depth
     if depth > max_depth {
         return Ok(());
@@ -50,15 +69,10 @@ fn detect_projects_recursive(
 
     // Check if this directory contains any project markers.
     // A single directory can match multiple project types (e.g. Cargo.toml + package.json).
+    // Traversal never stops early: we descend into every subdirectory so that
+    // monorepos with nested projects of multiple types are fully discovered.
     let detected = detect_project_at_path(current)?;
-    let should_stop = detected
-        .iter()
-        .any(|p| should_stop_after_project(&p.project_type));
     projects.extend(detected);
-
-    if should_stop {
-        return Ok(());
-    }
 
     // Read directory contents
     let entries = match fs::read_dir(current) {
@@ -99,7 +113,7 @@ fn detect_projects_recursive(
 /// A single directory can contain markers for multiple project types
 /// (e.g. both `Cargo.toml` and `package.json`). Returns all matches
 /// in priority order.
-fn detect_project_at_path(path: &Path) -> Result<Vec<DetectedProject>, String> {
+fn detect_project_at_path(path: &Path) -> Result<Vec<DetectedProject>, ProjectDetectionError> {
     let project_types = [
         ProjectType::Rust,
         ProjectType::NodeJs,
@@ -129,7 +143,7 @@ fn detect_project_at_path(path: &Path) -> Result<Vec<DetectedProject>, String> {
 fn check_project_type(
     path: &Path,
     project_type: ProjectType,
-) -> Result<Option<DetectedProject>, String> {
+) -> Result<Option<DetectedProject>, ProjectDetectionError> {
     let marker_files = project_type.marker_files();
     let mut found_markers = Vec::new();
 
@@ -164,7 +178,10 @@ fn check_project_type(
 }
 
 /// Find files matching a wildcard pattern in a directory
-fn find_wildcard_match(path: &Path, pattern: &str) -> Result<Option<String>, String> {
+fn find_wildcard_match(
+    path: &Path,
+    pattern: &str,
+) -> Result<Option<String>, ProjectDetectionError> {
     let entries = match fs::read_dir(path) {
         Ok(e) => e,
         Err(_) => return Ok(None),
@@ -192,7 +209,7 @@ fn find_wildcard_match(path: &Path, pattern: &str) -> Result<Option<String>, Str
 fn detect_workspace_info(
     path: &Path,
     project_type: ProjectType,
-) -> Result<Option<WorkspaceInfo>, String> {
+) -> Result<Option<WorkspaceInfo>, ProjectDetectionError> {
     match project_type {
         ProjectType::Rust => detect_rust_workspace(path),
         ProjectType::NodeJs => detect_npm_workspace(path),
@@ -201,14 +218,17 @@ fn detect_workspace_info(
 }
 
 /// Detect Rust workspace configuration
-fn detect_rust_workspace(path: &Path) -> Result<Option<WorkspaceInfo>, String> {
+fn detect_rust_workspace(path: &Path) -> Result<Option<WorkspaceInfo>, ProjectDetectionError> {
     let cargo_toml_path = path.join("Cargo.toml");
     if !cargo_toml_path.exists() {
         return Ok(None);
     }
 
-    let content = fs::read_to_string(&cargo_toml_path)
-        .map_err(|e| format!("Failed to read Cargo.toml: {}", e))?;
+    let content =
+        fs::read_to_string(&cargo_toml_path).map_err(|source| ProjectDetectionError::ReadFile {
+            path: cargo_toml_path.display().to_string(),
+            source,
+        })?;
 
     // Simple check for [workspace] section
     if content.contains("[workspace]") {
@@ -226,14 +246,18 @@ fn detect_rust_workspace(path: &Path) -> Result<Option<WorkspaceInfo>, String> {
 }
 
 /// Detect npm workspace configuration
-fn detect_npm_workspace(path: &Path) -> Result<Option<WorkspaceInfo>, String> {
+fn detect_npm_workspace(path: &Path) -> Result<Option<WorkspaceInfo>, ProjectDetectionError> {
     let package_json_path = path.join("package.json");
     if !package_json_path.exists() {
         return Ok(None);
     }
 
-    let content = fs::read_to_string(&package_json_path)
-        .map_err(|e| format!("Failed to read package.json: {}", e))?;
+    let content = fs::read_to_string(&package_json_path).map_err(|source| {
+        ProjectDetectionError::ReadFile {
+            path: package_json_path.display().to_string(),
+            source,
+        }
+    })?;
 
     // Try to parse as JSON and check for workspaces field
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
@@ -259,58 +283,71 @@ fn detect_npm_workspace(path: &Path) -> Result<Option<WorkspaceInfo>, String> {
     Ok(None)
 }
 
-/// Extract an array from TOML content (simple parser)
+/// Extract an array from TOML content (simple parser).
+///
+/// Handles inline arrays (`members = ["a", "b"]`), arrays spanning multiple
+/// lines, and lines that close the array (with or without items before the
+/// `]`). Returns the cleaned string items in document order.
 fn extract_toml_array(content: &str, key: &str) -> Vec<String> {
+    let opener = format!("{} = [", key);
     let mut members = Vec::new();
     let mut in_array = false;
 
     for line in content.lines() {
         let trimmed = line.trim();
 
-        if trimmed.starts_with(&format!("{} = [", key)) {
-            in_array = true;
-            // Extract items on same line if any
-            if let Some(items) = trimmed.strip_prefix(&format!("{} = [", key)) {
-                // Check if the array closes on this same line
-                let (items_part, closed) = if let Some(before_close) = items.strip_suffix(']') {
-                    (before_close, true)
-                } else if items.contains(']') {
-                    // closing bracket somewhere in the middle — take everything before it
-                    let idx = items.rfind(']').unwrap();
-                    (&items[..idx], true)
-                } else {
-                    (items, false)
-                };
-                for item in items_part.split(',') {
-                    if let Some(cleaned) = clean_toml_string(item) {
-                        members.push(cleaned);
-                    }
-                }
-                if closed {
-                    in_array = false;
-                }
-            }
-        } else if in_array {
-            if trimmed.contains(']') {
-                // End of array
-                if let Some(items) = trimmed.strip_suffix(']') {
-                    for item in items.split(',') {
-                        if let Some(cleaned) = clean_toml_string(item) {
-                            members.push(cleaned);
-                        }
-                    }
-                }
-                break;
-            } else {
-                // Array item on its own line
-                if let Some(cleaned) = clean_toml_string(trimmed) {
-                    members.push(cleaned);
-                }
-            }
+        if let Some(items) = trimmed.strip_prefix(&opener) {
+            // Opening line: parse any items before a closing `]` and learn
+            // whether the array closed on this same line.
+            let (items_part, closed) = split_open_line(items);
+            push_cleaned_items(&mut members, items_part);
+            in_array = !closed;
+        } else if in_array && !consume_array_line(&mut members, trimmed) {
+            // The line closed the array; stop scanning.
+            break;
         }
     }
 
     members
+}
+
+/// Split an array opening line's remainder into its items and whether the
+/// array closed on this line.
+///
+/// `segment` is the text after `key = [`. Returns the portion containing items
+/// (everything before the last `]`) and `true` when a closing `]` was present.
+fn split_open_line(segment: &str) -> (&str, bool) {
+    match segment.rfind(']') {
+        Some(idx) => (&segment[..idx], true),
+        None => (segment, false),
+    }
+}
+
+/// Consume one line inside a multi-line array.
+///
+/// Appends any items on the line to `members`. Returns `true` to keep scanning
+/// and `false` once the array has closed. A closing `]` only ends the array
+/// when it is the last character on the line (preserving the parser's existing
+/// handling of trailing content after `]`).
+fn consume_array_line(members: &mut Vec<String>, line: &str) -> bool {
+    if !line.contains(']') {
+        push_cleaned_items(members, line);
+        return true;
+    }
+    if let Some(before_close) = line.strip_suffix(']') {
+        push_cleaned_items(members, before_close);
+    }
+    false
+}
+
+/// Clean each comma-separated item in `segment` and append the non-empty
+/// results to `members`.
+fn push_cleaned_items(members: &mut Vec<String>, segment: &str) {
+    for item in segment.split(',') {
+        if let Some(cleaned) = clean_toml_string(item) {
+            members.push(cleaned);
+        }
+    }
 }
 
 /// Clean a TOML string value (remove quotes and whitespace)
@@ -327,13 +364,6 @@ fn clean_toml_string(s: &str) -> Option<String> {
     } else {
         Some(unquoted.to_string())
     }
-}
-
-/// Determine if we should stop traversing after finding this project type
-fn should_stop_after_project(_project_type: &ProjectType) -> bool {
-    // Don't stop for any project type - we want to find all nested projects
-    // This allows us to detect monorepos with multiple project types
-    false
 }
 
 #[cfg(test)]
@@ -616,10 +646,11 @@ members = [
     fn test_detect_projects_canonicalize_error() {
         // Passing a nonexistent path should trigger the canonicalize error branch
         let result = detect_projects(Path::new("/nonexistent/path/that/does/not/exist"), Some(1));
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("Failed to canonicalize root path"));
+        let err = result.expect_err("nonexistent path should error");
+        // The typed error stringifies to the canonicalize message...
+        assert!(err.to_string().contains("Failed to canonicalize root path"));
+        // ...and is the specific typed variant callers can match on.
+        assert!(matches!(err, ProjectDetectionError::Canonicalize(_)));
     }
 
     #[test]

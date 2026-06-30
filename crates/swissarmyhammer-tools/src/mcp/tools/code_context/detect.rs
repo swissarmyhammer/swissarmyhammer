@@ -15,6 +15,9 @@ use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_project_detection::{detect_projects, DetectedProject, ProjectType};
 use swissarmyhammer_templating::TemplateLibrary;
 
+/// Default directory traversal depth when the request omits `max_depth`.
+const DEFAULT_DETECT_MAX_DEPTH: usize = 3;
+
 /// Deserialize request parameters for project detection.
 #[derive(Deserialize, Default)]
 struct DetectRequest {
@@ -23,40 +26,118 @@ struct DetectRequest {
     include_guidelines: Option<bool>,
 }
 
+/// Per-variant presentation data for a [`ProjectType`].
+///
+/// One entry per variant in [`PROJECT_TYPE_DATA`] is the single source of truth
+/// for a type's display name, stable key, and guideline partial. The three
+/// accessors below are thin lookups, so adding a project type touches one entry.
+struct ProjectTypeData {
+    /// The project type this entry describes.
+    project_type: ProjectType,
+    /// Human-readable display name.
+    name: &'static str,
+    /// Stable string key. MUST match the serde `rename` in `ProjectType`
+    /// (verified by `test_project_type_key_matches_serde`).
+    key: &'static str,
+    /// Guideline partial path, or `None` for types without one (e.g. PHP).
+    partial: Option<&'static str>,
+}
+
+/// Single source of truth mapping each [`ProjectType`] to its presentation data.
+const PROJECT_TYPE_DATA: &[ProjectTypeData] = &[
+    ProjectTypeData {
+        project_type: ProjectType::Rust,
+        name: "Rust",
+        key: "rust",
+        partial: Some("_partials/project-types/rust"),
+    },
+    ProjectTypeData {
+        project_type: ProjectType::NodeJs,
+        name: "Node.js",
+        key: "nodejs",
+        partial: Some("_partials/project-types/nodejs"),
+    },
+    ProjectTypeData {
+        project_type: ProjectType::Python,
+        name: "Python",
+        key: "python",
+        partial: Some("_partials/project-types/python"),
+    },
+    ProjectTypeData {
+        project_type: ProjectType::Go,
+        name: "Go",
+        key: "go",
+        partial: Some("_partials/project-types/go"),
+    },
+    ProjectTypeData {
+        project_type: ProjectType::JavaMaven,
+        name: "Java (Maven)",
+        key: "java-maven",
+        partial: Some("_partials/project-types/java-maven"),
+    },
+    ProjectTypeData {
+        project_type: ProjectType::JavaGradle,
+        name: "Java (Gradle)",
+        key: "java-gradle",
+        partial: Some("_partials/project-types/java-gradle"),
+    },
+    ProjectTypeData {
+        project_type: ProjectType::CSharp,
+        name: "C# / .NET",
+        key: "csharp",
+        partial: Some("_partials/project-types/csharp"),
+    },
+    ProjectTypeData {
+        project_type: ProjectType::CMake,
+        name: "CMake",
+        key: "cmake",
+        partial: Some("_partials/project-types/cmake"),
+    },
+    ProjectTypeData {
+        project_type: ProjectType::Makefile,
+        name: "Makefile",
+        key: "makefile",
+        partial: Some("_partials/project-types/makefile"),
+    },
+    ProjectTypeData {
+        project_type: ProjectType::Flutter,
+        name: "Flutter",
+        key: "flutter",
+        partial: Some("_partials/project-types/flutter"),
+    },
+    ProjectTypeData {
+        project_type: ProjectType::Php,
+        name: "PHP",
+        key: "php",
+        partial: None,
+    },
+    ProjectTypeData {
+        project_type: ProjectType::Swift,
+        name: "Swift",
+        key: "swift",
+        partial: Some("_partials/project-types/swift"),
+    },
+];
+
+/// Look up the presentation data for a project type.
+///
+/// Every [`ProjectType`] variant has exactly one entry in [`PROJECT_TYPE_DATA`],
+/// so this never returns `None` in practice.
+fn project_type_data(pt: ProjectType) -> &'static ProjectTypeData {
+    PROJECT_TYPE_DATA
+        .iter()
+        .find(|d| d.project_type == pt)
+        .expect("every ProjectType variant has presentation data")
+}
+
 /// Get a display name for a project type.
 fn project_type_name(pt: ProjectType) -> &'static str {
-    match pt {
-        ProjectType::Rust => "Rust",
-        ProjectType::NodeJs => "Node.js",
-        ProjectType::Python => "Python",
-        ProjectType::Go => "Go",
-        ProjectType::JavaMaven => "Java (Maven)",
-        ProjectType::JavaGradle => "Java (Gradle)",
-        ProjectType::CSharp => "C# / .NET",
-        ProjectType::CMake => "CMake",
-        ProjectType::Makefile => "Makefile",
-        ProjectType::Flutter => "Flutter",
-        ProjectType::Php => "PHP",
-        ProjectType::Swift => "Swift",
-    }
+    project_type_data(pt).name
 }
 
 /// A stable string key for deduplication (matches serde rename).
 fn project_type_key(pt: ProjectType) -> &'static str {
-    match pt {
-        ProjectType::Rust => "rust",
-        ProjectType::NodeJs => "nodejs",
-        ProjectType::Python => "python",
-        ProjectType::Go => "go",
-        ProjectType::JavaMaven => "java-maven",
-        ProjectType::JavaGradle => "java-gradle",
-        ProjectType::CSharp => "csharp",
-        ProjectType::CMake => "cmake",
-        ProjectType::Makefile => "makefile",
-        ProjectType::Flutter => "flutter",
-        ProjectType::Php => "php",
-        ProjectType::Swift => "swift",
-    }
+    project_type_data(pt).key
 }
 
 /// Get the partial include name for a project type.
@@ -64,20 +145,7 @@ fn project_type_key(pt: ProjectType) -> &'static str {
 /// Returns `Some("_partials/project-types/{key}")` for types that have a guideline partial,
 /// `None` for types without one (e.g. Php).
 fn partial_name_for_type(pt: ProjectType) -> Option<&'static str> {
-    match pt {
-        ProjectType::Rust => Some("_partials/project-types/rust"),
-        ProjectType::NodeJs => Some("_partials/project-types/nodejs"),
-        ProjectType::Python => Some("_partials/project-types/python"),
-        ProjectType::Go => Some("_partials/project-types/go"),
-        ProjectType::JavaMaven => Some("_partials/project-types/java-maven"),
-        ProjectType::JavaGradle => Some("_partials/project-types/java-gradle"),
-        ProjectType::CSharp => Some("_partials/project-types/csharp"),
-        ProjectType::CMake => Some("_partials/project-types/cmake"),
-        ProjectType::Makefile => Some("_partials/project-types/makefile"),
-        ProjectType::Flutter => Some("_partials/project-types/flutter"),
-        ProjectType::Php => None,
-        ProjectType::Swift => Some("_partials/project-types/swift"),
-    }
+    project_type_data(pt).partial
 }
 
 /// Build a Liquid template string that includes guidelines for the given project types.
@@ -143,6 +211,27 @@ fn make_relative(path: &Path, root: &Path) -> String {
     }
 }
 
+/// Format a project's workspace section as markdown.
+///
+/// Returns an empty string when there is no workspace info or it is not the
+/// workspace root, so callers can append unconditionally.
+fn format_workspace_info(
+    workspace_info: Option<&swissarmyhammer_project_detection::WorkspaceInfo>,
+) -> String {
+    let Some(ws) = workspace_info else {
+        return String::new();
+    };
+    if !ws.is_root {
+        return String::new();
+    }
+
+    let mut section = format!("**Workspace:** Yes ({} members)\n", ws.members.len());
+    if !ws.members.is_empty() {
+        section.push_str(&format!("**Members:** {}\n", ws.members.join(", ")));
+    }
+    section
+}
+
 /// Format detected projects as markdown output.
 ///
 /// When `prompt_library` is provided and `include_guidelines` is true, project-type
@@ -175,19 +264,7 @@ fn format_detected_projects(
             rel_path,
             project.marker_files.join(", ")
         ));
-
-        if let Some(ref ws) = project.workspace_info {
-            if ws.is_root {
-                output.push_str(&format!(
-                    "**Workspace:** Yes ({} members)\n",
-                    ws.members.len()
-                ));
-                if !ws.members.is_empty() {
-                    output.push_str(&format!("**Members:** {}\n", ws.members.join(", ")));
-                }
-            }
-        }
-
+        output.push_str(&format_workspace_info(project.workspace_info.as_ref()));
         output.push('\n');
     }
 
@@ -212,7 +289,7 @@ fn format_detected_projects(
 ///
 /// If the request contains an explicit `path`, uses that. Otherwise falls back
 /// to the context's working directory, then finds the git repository root.
-fn resolve_workspace_path(request_path: Option<&String>, context: &ToolContext) -> PathBuf {
+fn resolve_workspace_path(request_path: Option<&str>, context: &ToolContext) -> PathBuf {
     if let Some(p) = request_path {
         return PathBuf::from(p);
     }
@@ -234,8 +311,8 @@ pub async fn execute_detect(
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
     let request: DetectRequest = BaseToolImpl::parse_arguments(arguments.clone())?;
-    let root_path = resolve_workspace_path(request.path.as_ref(), context);
-    let max_depth = request.max_depth.unwrap_or(3);
+    let root_path = resolve_workspace_path(request.path.as_deref(), context);
+    let max_depth = request.max_depth.unwrap_or(DEFAULT_DETECT_MAX_DEPTH);
     let include_guidelines = request.include_guidelines.unwrap_or(true);
 
     tracing::debug!(
@@ -612,6 +689,50 @@ mod tests {
         ];
         for (pt, expected_key) in all_types {
             assert_eq!(project_type_key(pt), expected_key, "Wrong key for {:?}", pt);
+        }
+    }
+
+    #[test]
+    fn test_project_type_key_matches_serde() {
+        // The table's `key` MUST match the serde representation of the variant,
+        // since the key doubles as the partial filename and the dedup key.
+        // Guard the hidden coupling: serialize each variant and compare.
+        for data in PROJECT_TYPE_DATA {
+            let serialized = serde_json::to_value(data.project_type)
+                .expect("ProjectType serializes")
+                .as_str()
+                .expect("ProjectType serializes to a string")
+                .to_string();
+            assert_eq!(
+                data.key, serialized,
+                "key for {:?} must match its serde rename",
+                data.project_type
+            );
+        }
+    }
+
+    #[test]
+    fn test_every_project_type_has_data() {
+        // project_type_data() expects an entry for every variant. Confirm the
+        // table covers all variants so the accessors can never panic.
+        let variants = [
+            ProjectType::Rust,
+            ProjectType::NodeJs,
+            ProjectType::Python,
+            ProjectType::Go,
+            ProjectType::JavaMaven,
+            ProjectType::JavaGradle,
+            ProjectType::CSharp,
+            ProjectType::CMake,
+            ProjectType::Makefile,
+            ProjectType::Flutter,
+            ProjectType::Php,
+            ProjectType::Swift,
+        ];
+        for pt in variants {
+            let data = project_type_data(pt);
+            assert_eq!(data.project_type, pt);
+            assert!(!data.name.is_empty(), "name for {pt:?} should be set");
         }
     }
 

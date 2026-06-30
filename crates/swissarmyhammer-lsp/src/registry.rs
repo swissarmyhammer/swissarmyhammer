@@ -12,6 +12,12 @@ use crate::server_spec::LSP_REGISTRY;
 
 use crate::types::{LspServerSpec, OwnedLspServerSpec};
 
+/// How long to wait for rust-analyzer to start before timing out.
+const RUST_ANALYZER_STARTUP_TIMEOUT_SECS: u64 = 30;
+
+/// How often to health-check the rust-analyzer server.
+const RUST_ANALYZER_HEALTH_CHECK_INTERVAL_SECS: u64 = 60;
+
 /// Built-in server registry — kept for API compatibility.
 ///
 /// Returns a static reference to the first registered Rust server for
@@ -24,8 +30,8 @@ pub static SERVERS: &[LspServerSpec] = &[LspServerSpec {
     language_ids: &["rust"],
     file_extensions: &["rs"],
     initialization_options: None,
-    startup_timeout: Duration::from_secs(30),
-    health_check_interval: Duration::from_secs(60),
+    startup_timeout: Duration::from_secs(RUST_ANALYZER_STARTUP_TIMEOUT_SECS),
+    health_check_interval: Duration::from_secs(RUST_ANALYZER_HEALTH_CHECK_INTERVAL_SECS),
     install_hint: "Install rust-analyzer: rustup component add rust-analyzer",
 }];
 

@@ -76,15 +76,25 @@ pub struct ProjectDetectionConfig {
 /// Defaults are loaded from `builtin/project-detection/config.yaml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectSymbols {
+    /// Nerd Font symbol for Rust projects
     pub rust: String,
+    /// Nerd Font symbol for Node.js projects
     pub nodejs: String,
+    /// Nerd Font symbol for Python projects
     pub python: String,
+    /// Nerd Font symbol for Go projects
     pub go: String,
+    /// Nerd Font symbol for Java projects (Maven and Gradle)
     pub java: String,
+    /// Nerd Font symbol for C# / .NET projects
     pub csharp: String,
+    /// Nerd Font symbol for C/C++ projects (CMake and Makefile)
     pub c_cpp: String,
+    /// Nerd Font symbol for Dart/Flutter projects
     pub dart: String,
+    /// Nerd Font symbol for PHP projects
     pub php: String,
+    /// Nerd Font symbol for Swift projects
     pub swift: String,
 }
 
@@ -97,41 +107,109 @@ impl Default for ProjectSymbols {
     }
 }
 
+/// Per-variant specification for a [`ProjectType`].
+///
+/// One entry per variant in [`PROJECT_TYPE_SPECS`] drives the data-driven
+/// accessors ([`ProjectSymbols::get`] and [`ProjectType::marker_files`]) so a
+/// new project type is added in exactly one place.
+struct ProjectTypeSpec {
+    /// The project type this entry describes.
+    project_type: ProjectType,
+    /// Marker files that identify this project type.
+    marker_files: &'static [&'static str],
+    /// Accessor for this type's configurable symbol within [`ProjectSymbols`].
+    symbol: fn(&ProjectSymbols) -> &str,
+}
+
+/// Single source of truth mapping each [`ProjectType`] to its metadata.
+///
+/// Adding a project type means adding one entry here; the accessors below are
+/// thin table lookups so the variants never drift out of lockstep.
+const PROJECT_TYPE_SPECS: &[ProjectTypeSpec] = &[
+    ProjectTypeSpec {
+        project_type: ProjectType::Rust,
+        marker_files: &["Cargo.toml"],
+        symbol: |s| &s.rust,
+    },
+    ProjectTypeSpec {
+        project_type: ProjectType::NodeJs,
+        marker_files: &["package.json"],
+        symbol: |s| &s.nodejs,
+    },
+    ProjectTypeSpec {
+        project_type: ProjectType::Python,
+        marker_files: &["pyproject.toml", "setup.py"],
+        symbol: |s| &s.python,
+    },
+    ProjectTypeSpec {
+        project_type: ProjectType::Go,
+        marker_files: &["go.mod"],
+        symbol: |s| &s.go,
+    },
+    ProjectTypeSpec {
+        project_type: ProjectType::JavaMaven,
+        marker_files: &["pom.xml"],
+        symbol: |s| &s.java,
+    },
+    ProjectTypeSpec {
+        project_type: ProjectType::JavaGradle,
+        marker_files: &["build.gradle", "build.gradle.kts"],
+        symbol: |s| &s.java,
+    },
+    ProjectTypeSpec {
+        project_type: ProjectType::CSharp,
+        marker_files: &["*.csproj", "*.sln"],
+        symbol: |s| &s.csharp,
+    },
+    ProjectTypeSpec {
+        project_type: ProjectType::CMake,
+        marker_files: &["CMakeLists.txt"],
+        symbol: |s| &s.c_cpp,
+    },
+    ProjectTypeSpec {
+        project_type: ProjectType::Makefile,
+        marker_files: &["Makefile"],
+        symbol: |s| &s.c_cpp,
+    },
+    ProjectTypeSpec {
+        project_type: ProjectType::Flutter,
+        marker_files: &["pubspec.yaml"],
+        symbol: |s| &s.dart,
+    },
+    ProjectTypeSpec {
+        project_type: ProjectType::Php,
+        marker_files: &["composer.json"],
+        symbol: |s| &s.php,
+    },
+    ProjectTypeSpec {
+        project_type: ProjectType::Swift,
+        marker_files: &["Package.swift", "*.xcodeproj", "*.xcworkspace"],
+        symbol: |s| &s.swift,
+    },
+];
+
+/// Look up the spec entry for a project type.
+///
+/// Every [`ProjectType`] variant has exactly one entry in [`PROJECT_TYPE_SPECS`],
+/// so this never returns `None` in practice.
+fn spec_for(project_type: ProjectType) -> &'static ProjectTypeSpec {
+    PROJECT_TYPE_SPECS
+        .iter()
+        .find(|spec| spec.project_type == project_type)
+        .expect("every ProjectType variant has a spec entry")
+}
+
 impl ProjectSymbols {
-    /// Get the symbol for a project type
+    /// Get the symbol for a project type.
     pub fn get(&self, project_type: ProjectType) -> &str {
-        match project_type {
-            ProjectType::Rust => &self.rust,
-            ProjectType::NodeJs => &self.nodejs,
-            ProjectType::Python => &self.python,
-            ProjectType::Go => &self.go,
-            ProjectType::JavaMaven | ProjectType::JavaGradle => &self.java,
-            ProjectType::CSharp => &self.csharp,
-            ProjectType::CMake | ProjectType::Makefile => &self.c_cpp,
-            ProjectType::Flutter => &self.dart,
-            ProjectType::Php => &self.php,
-            ProjectType::Swift => &self.swift,
-        }
+        (spec_for(project_type).symbol)(self)
     }
 }
 
 impl ProjectType {
-    /// Get the marker files that identify this project type
+    /// Get the marker files that identify this project type.
     pub fn marker_files(&self) -> &[&str] {
-        match self {
-            ProjectType::Rust => &["Cargo.toml"],
-            ProjectType::NodeJs => &["package.json"],
-            ProjectType::Python => &["pyproject.toml", "setup.py"],
-            ProjectType::Go => &["go.mod"],
-            ProjectType::JavaMaven => &["pom.xml"],
-            ProjectType::JavaGradle => &["build.gradle", "build.gradle.kts"],
-            ProjectType::CSharp => &["*.csproj", "*.sln"],
-            ProjectType::CMake => &["CMakeLists.txt"],
-            ProjectType::Makefile => &["Makefile"],
-            ProjectType::Flutter => &["pubspec.yaml"],
-            ProjectType::Php => &["composer.json"],
-            ProjectType::Swift => &["Package.swift", "*.xcodeproj", "*.xcworkspace"],
-        }
+        spec_for(*self).marker_files
     }
 }
 
@@ -264,5 +342,35 @@ mod tests {
         // Shared mappings: C/C++ variants both map to c_cpp
         assert_eq!(symbols.get(ProjectType::CMake), &symbols.c_cpp);
         assert_eq!(symbols.get(ProjectType::Makefile), &symbols.c_cpp);
+    }
+
+    #[test]
+    fn every_variant_has_a_spec_entry() {
+        // The data-driven accessors look the variant up in PROJECT_TYPE_SPECS and
+        // `expect()` an entry. Confirm the table covers every variant so the
+        // accessors can never panic in production.
+        let variants = [
+            ProjectType::Rust,
+            ProjectType::NodeJs,
+            ProjectType::Python,
+            ProjectType::Go,
+            ProjectType::JavaMaven,
+            ProjectType::JavaGradle,
+            ProjectType::CSharp,
+            ProjectType::CMake,
+            ProjectType::Makefile,
+            ProjectType::Flutter,
+            ProjectType::Php,
+            ProjectType::Swift,
+        ];
+        for variant in variants {
+            // Must not panic — every variant resolves to a spec.
+            let spec = spec_for(variant);
+            assert_eq!(spec.project_type, variant);
+            assert!(
+                !spec.marker_files.is_empty(),
+                "spec for {variant:?} should have marker files"
+            );
+        }
     }
 }
