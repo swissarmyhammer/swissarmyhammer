@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// A detected project with its type and metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DetectedProject {
     /// Absolute path to the project root
     pub path: PathBuf,
@@ -21,7 +21,7 @@ pub struct DetectedProject {
 }
 
 /// Type of project detected
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProjectType {
     /// Rust project (Cargo.toml)
@@ -64,7 +64,7 @@ pub const BUILTIN_CONFIG_YAML: &str =
     include_str!("../../../builtin/project-detection/config.yaml");
 
 /// Top-level config wrapper for the yaml file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProjectDetectionConfig {
     /// Configurable symbol strings for detected project types (Nerd Font glyphs)
     pub symbols: ProjectSymbols,
@@ -74,7 +74,7 @@ pub struct ProjectDetectionConfig {
 ///
 /// Like Starship, each language has a default Nerd Font symbol that can be overridden.
 /// Defaults are loaded from `builtin/project-detection/config.yaml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProjectSymbols {
     /// Nerd Font symbol for Rust projects
     pub rust: String,
@@ -119,6 +119,12 @@ impl Default for ProjectSymbols {
 /// symbol lookup, detection priority, and the tools-layer presentation metadata
 /// (display name, stable key, guideline partial) — derives from this table, so
 /// adding a project type touches exactly one entry here and nowhere else.
+///
+/// Intentionally does NOT derive `PartialEq`/`Eq`/`Hash`: the `symbol` field is
+/// a function pointer, and comparing function pointers is unpredictable (the
+/// `unpredictable_function_pointer_comparisons` lint, denied as a warning). The
+/// authoritative identity of a spec is its [`ProjectType`], which is fully
+/// comparable on its own.
 #[derive(Debug, Clone, Copy)]
 pub struct ProjectTypeSpec {
     /// The project type this entry describes.
@@ -295,7 +301,7 @@ impl ProjectType {
 }
 
 /// Workspace/monorepo information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceInfo {
     /// Is this the workspace root?
     pub is_root: bool,
@@ -473,6 +479,57 @@ mod tests {
                 spec.project_type
             );
         }
+    }
+
+    #[test]
+    fn value_types_support_equality() {
+        // Derive-contract guard: the public value types compare by value so
+        // downstream crates (blocked by orphan rules from adding the impls
+        // later) can use them in assertions and sets.
+        let a = ProjectSymbols::default();
+        let b = ProjectSymbols::default();
+        assert_eq!(a, b);
+
+        // `ProjectTypeSpec` deliberately does not derive `PartialEq` (its
+        // `symbol` field is a function pointer); compare by `project_type`.
+        let spec_a = spec_for(ProjectType::Rust);
+        let spec_b = spec_for(ProjectType::Rust);
+        assert_eq!(spec_a.project_type, spec_b.project_type);
+        assert_ne!(spec_a.project_type, spec_for(ProjectType::Go).project_type);
+
+        let config_a = ProjectDetectionConfig {
+            symbols: ProjectSymbols::default(),
+        };
+        let config_b = ProjectDetectionConfig {
+            symbols: ProjectSymbols::default(),
+        };
+        assert_eq!(config_a, config_b);
+
+        let ws_a = WorkspaceInfo {
+            is_root: true,
+            members: vec!["a".to_string()],
+            metadata: None,
+        };
+        let ws_b = WorkspaceInfo {
+            is_root: true,
+            members: vec!["a".to_string()],
+            metadata: None,
+        };
+        assert_eq!(ws_a, ws_b);
+
+        let proj_a = DetectedProject {
+            path: PathBuf::from("/tmp/x"),
+            project_type: ProjectType::Rust,
+            marker_files: vec!["Cargo.toml".to_string()],
+            workspace_info: None,
+        };
+        let proj_b = DetectedProject {
+            path: PathBuf::from("/tmp/x"),
+            project_type: ProjectType::Rust,
+            marker_files: vec!["Cargo.toml".to_string()],
+            workspace_info: None,
+        };
+        assert_eq!(proj_a, proj_b);
     }
 
     #[test]

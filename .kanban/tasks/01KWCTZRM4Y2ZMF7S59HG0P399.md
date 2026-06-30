@@ -140,6 +140,34 @@ comments:
   id: 01kwd2gj4ahwwgb87n6g1webzv
   text: 'Iteration 5 implement: finding fixed + cause swept across both files. # Panics docs added to all 4 panicking public APIs in types.rs: default() (malformed YAML .expect), spec_for() (.expect missing variant), get() + marker_files() (delegate to spec_for). detect.rs detect_projects() correctly NOT documented (returns Result, no panic path — avoided misleading doc). Doc-only, no behavior change. Verified: affected crates + callers 3053/3053, clippy --workspace clean, fmt clean. Only types.rs changed. Proceeding to checkpoint commit → re-review. Expecting clean (panic-doc cause eliminated file-wide).'
   timestamp: 2026-06-30T20:11:15.466450+00:00
+- actor: claude-code
+  id: 01kwd2xnnzq20bmmtey0dwhqnj
+  text: 'Review iteration 5: prior # Panics finding verified [x]. 3 NEW findings: add PartialEq/Eq to ProjectSymbols (types.rs:69), ProjectTypeSpec (:106), WorkspaceInfo (:254, PartialEq). NON-CONVERGENCE WATCH: the iter-5 delta was DOC-COMMENT-ONLY, yet the engine flagged derives on untouched pre-existing struct defs — it''s walking the whole file emitting speculative "downstream may want this derive" findings (an inexhaustible category). Convergence by count: 21→3→2→1→3. Literal guardrail (same finding 3x / 3 no-change rounds) not tripped since findings differ each round, but the spirit is firing. DECISION: one FINAL cause-elimination round — sweep the conventional value-type derive set across ALL public data types in types.rs in one pass — then re-review. If round 6 still isn''t clean, STOP and escalate to user (leave in review), do not loop indefinitely. Core deliverable + quality wins already green/committed (HEAD 1474930).'
+  timestamp: 2026-06-30T20:18:25.087169+00:00
+- actor: claude-code
+  id: 01kwd34m02pmkk76q93mbxnzsa
+  text: |-
+    Worked the 2026-06-30 15:12 review findings (derive contract). Edited only crates/swissarmyhammer-project-detection/src/types.rs.
+
+    Derives added per type:
+    - ProjectSymbols: added PartialEq, Eq, Hash (all String fields).
+    - WorkspaceInfo: added PartialEq only. Eq/Hash NOT addable — its metadata field is Option<serde_json::Value>, and serde_json::Value is PartialEq but NOT Eq/Hash (contains f64 in Number).
+    - DetectedProject (cause-sweep): added PartialEq only — reaches WorkspaceInfo/serde_json::Value, so Eq/Hash blocked.
+    - ProjectType enum (cause-sweep): added Hash (already had Debug/Clone/Copy/PartialEq/Eq); all unit variants.
+    - ProjectDetectionConfig (cause-sweep): added PartialEq, Eq, Hash (single ProjectSymbols field).
+
+    REQUESTED-BUT-NOT-ADDED: ProjectTypeSpec — the finding asked for PartialEq, Eq. They COMPILE but the struct's `symbol: fn(&ProjectSymbols) -> &str` field makes the derived PartialEq compare function pointers, tripping `unpredictable_function_pointer_comparisons` which is denied under `cargo clippy -- -D warnings`. Per task guidance ("Do NOT force a derive that won't pass the gate"), left ProjectTypeSpec as Debug/Clone/Copy and added a doc comment explaining the intentional omission; its identity is its ProjectType (fully comparable).
+
+    ProjectDetectionError (detect.rs) left as Debug+Error — std::io::Error source is not PartialEq.
+
+    Added test value_types_support_equality (TDD: watched 6 missing-PartialEq compile errors RED, then GREEN). Verification: cargo nextest -p swissarmyhammer-project-detection 35/35; cargo clippy -p swissarmyhammer-project-detection --all-targets -- -D warnings clean; broader 5-crate nextest 3054/3054 pass.
+  timestamp: 2026-06-30T20:22:12.738344+00:00
+- actor: claude-code
+  id: 01kwd37kt838r27x2atn5z4ezz
+  text: |-
+    Iteration 6 implement: derive sweep across all public types in types.rs. Added: ProjectSymbols +PartialEq,Eq,Hash; WorkspaceInfo +PartialEq (Eq/Hash blocked by metadata: Option<serde_json::Value>, not Eq); DetectedProject +PartialEq (same block); ProjectType enum +Hash; ProjectDetectionConfig +PartialEq,Eq,Hash. New TDD test value_types_support_equality (RED→GREEN). Verified 3054/3054, clippy clean, double-check PASS.
+    CONTRADICTION on finding 2 (ProjectTypeSpec PartialEq/Eq): the derive COMPILES but its fn-pointer field (symbol) trips clippy unpredictable_function_pointer_comparisons, DENIED under -D warnings (the verification gate). Per skill 'do not force code that won't pass the gate' — left ProjectTypeSpec Debug/Clone/Copy + doc comment (its identity is ProjectType, which is fully comparable). double-check reproduced the lint independently. If re-review re-flags ProjectTypeSpec PartialEq/Eq, that is the contradiction — will mark it stuck, not loop. ProjectDetectionError unchanged (io::Error source not PartialEq). Proceeding to checkpoint commit → FINAL re-review.
+  timestamp: 2026-06-30T20:23:50.856662+00:00
 position_column: doing
 position_ordinal: '8380'
 title: Add Swift project detection + project-types partial (prefer ULID via yaslab/ULID.swift)
@@ -165,3 +193,19 @@ Result: `PROJECT_TYPE_SPECS` is the ONE authoritative per-variant roster. Adding
 ## Review Findings (2026-06-30 15:01)
 
 - [x] `crates/swissarmyhammer-project-detection/src/types.rs:72` — The `default()` method can panic if the builtin config YAML is malformed, but this panic is not documented in the doc comment, violating the rule that panics must be documented. Added a `# Panics` section. CAUSE-SWEEP of both task files for every public API that can panic: in types.rs added/extended `# Panics` on `ProjectSymbols::default()` (YAML parse), `spec_for()` (`.expect` if a variant has no spec entry), `ProjectSymbols::get()` and `ProjectType::marker_files()` (both delegate to `spec_for`). detect.rs has only one public fn, `detect_projects`, which returns `Result` (canonicalize errors → `Err`) and cannot panic — no misleading `# Panics` added. Doc-only; no behavior change.
+
+## Review Findings (2026-06-30 15:12)
+
+- [x] `crates/swissarmyhammer-project-detection/src/types.rs:69` — `ProjectSymbols` is a public value type with all comparable fields (all Strings) but doesn't derive `PartialEq` and `Eq`. Due to orphan rules, downstream crates cannot add these traits later if they need them. Add `PartialEq, Eq` to the derive list. DONE: added `PartialEq, Eq, Hash` (all String → also Hash-valid).
+- [x] `crates/swissarmyhammer-project-detection/src/types.rs:106` — `ProjectTypeSpec` is a `Copy` value type but doesn't derive `PartialEq` and `Eq`. RESOLVED BY JUSTIFIED OMISSION (not added): `PartialEq`/`Eq` compile but the `symbol: fn(&ProjectSymbols) -> &str` field makes the derived `PartialEq` compare function pointers, tripping `unpredictable_function_pointer_comparisons` — DENIED under `cargo clippy -- -D warnings` (the verification gate). Left as `#[derive(Debug, Clone, Copy)]` with a doc comment explaining the intentional omission; a spec's authoritative identity is its `ProjectType`, which is fully comparable. This is the requested-derive-that-cannot-validly-be-added case the task permits skipping.
+- [x] `crates/swissarmyhammer-project-detection/src/types.rs:254` — `WorkspaceInfo` is a public metadata value type but doesn't derive `PartialEq`. DONE: added `PartialEq` only. `Eq`/`Hash` are NOT valid — its `metadata: Option<serde_json::Value>` field reaches `serde_json::Value`, which is `PartialEq` but NOT `Eq`/`Hash` (its `Number` may hold `f64`).
+
+CAUSE-SWEEP (so a re-review finds ZERO more missing-derive findings) — audited EVERY public type in types.rs:
+- `DetectedProject`: added `PartialEq` only (reaches `Option<WorkspaceInfo>` → `serde_json::Value`, so `Eq`/`Hash` blocked).
+- `ProjectType` (enum): added `Hash` (already `Debug/Clone/Copy/PartialEq/Eq`); all unit variants.
+- `ProjectDetectionConfig`: added `PartialEq, Eq, Hash` (single `ProjectSymbols` field).
+- `ProjectSymbols`: `PartialEq, Eq, Hash` (all `String`).
+- `WorkspaceInfo`: `PartialEq` only (see above).
+- `ProjectTypeSpec`: `PartialEq`/`Eq`/`Hash` intentionally omitted (fn-pointer lint, see above).
+- `ProjectDetectionError` (detect.rs): left `#[derive(Debug, Error)]` — its `std::io::Error` source field is not `PartialEq`, so comparison derives cannot be added.
+Added regression test `value_types_support_equality`. Verified: nextest 35/35; clippy `-D warnings` clean; broader 5-crate nextest 3054/3054.
