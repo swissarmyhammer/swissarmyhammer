@@ -466,6 +466,13 @@ pub fn parse_ruleset_directory<C: DirectoryConfig>(
 
     let manifest = parse_ruleset_manifest(&manifest_content, dir_path, expander)?;
 
+    // Capture the VALIDATOR.md prose body — authored validator-wide guidance,
+    // everything after the frontmatter's closing `---`, trimmed. This flows into
+    // the per-validator review prompt as a guidance block shared by every rule.
+    let manifest_body = extract_frontmatter(&manifest_content, dir_path)
+        .map(|(_, body)| body.trim().to_string())
+        .unwrap_or_default();
+
     // Load rules from rules/ directory
     let rules_dir = dir_path.join("rules");
     if !rules_dir.exists() {
@@ -543,6 +550,7 @@ pub fn parse_ruleset_directory<C: DirectoryConfig>(
     Ok(RuleSet {
         manifest,
         rules,
+        manifest_body,
         source,
         base_path: dir_path.to_path_buf(),
     })
@@ -1098,6 +1106,91 @@ Check second thing.
         assert_eq!(ruleset.rules[0].name, "rule-a");
         assert_eq!(ruleset.rules[1].name, "rule-b");
         assert_eq!(ruleset.source, ValidatorSource::Project);
+    }
+
+    #[test]
+    fn test_parse_ruleset_directory_captures_manifest_body() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("body-ruleset");
+        std::fs::create_dir_all(dir.join("rules")).unwrap();
+
+        std::fs::write(
+            dir.join("VALIDATOR.md"),
+            r#"---
+name: body-ruleset
+description: Has a body
+---
+
+# Body RuleSet
+
+This validator does not apply to test code.
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("rules/rule-a.md"),
+            "---\nname: rule-a\ndescription: First rule\n---\nBody.",
+        )
+        .unwrap();
+
+        let ruleset = parse_ruleset_directory::<swissarmyhammer_directory::ValidatorsConfig>(
+            &dir,
+            ValidatorSource::Project,
+            None,
+        )
+        .unwrap();
+
+        // The VALIDATOR.md prose body (after the frontmatter) is captured, trimmed.
+        assert!(
+            ruleset
+                .manifest_body()
+                .contains("This validator does not apply to test code."),
+            "manifest body should be captured, got: {:?}",
+            ruleset.manifest_body()
+        );
+        // The frontmatter itself is NOT part of the body.
+        assert!(
+            !ruleset.manifest_body().contains("description: Has a body"),
+            "the frontmatter must not leak into the body, got: {:?}",
+            ruleset.manifest_body()
+        );
+    }
+
+    #[test]
+    fn test_parse_ruleset_directory_empty_manifest_body() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("no-body-ruleset");
+        std::fs::create_dir_all(dir.join("rules")).unwrap();
+
+        // VALIDATOR.md with frontmatter but no prose body.
+        std::fs::write(
+            dir.join("VALIDATOR.md"),
+            "---\nname: no-body\ndescription: No body\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("rules/rule-a.md"),
+            "---\nname: rule-a\ndescription: First rule\n---\nBody.",
+        )
+        .unwrap();
+
+        let ruleset = parse_ruleset_directory::<swissarmyhammer_directory::ValidatorsConfig>(
+            &dir,
+            ValidatorSource::Project,
+            None,
+        )
+        .unwrap();
+
+        // No body → empty string, no panic.
+        assert!(
+            ruleset.manifest_body().is_empty(),
+            "an empty VALIDATOR.md body should yield an empty manifest body, got: {:?}",
+            ruleset.manifest_body()
+        );
     }
 
     #[test]

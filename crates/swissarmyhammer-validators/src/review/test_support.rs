@@ -293,6 +293,7 @@ pub fn ruleset(name: &str, file_glob: &str, probes: &[&str]) -> RuleSet {
             body: "body".to_string(),
             timeout: None,
         }],
+        manifest_body: String::new(),
         source: ValidatorSource::Builtin,
         base_path: PathBuf::from("/test"),
     }

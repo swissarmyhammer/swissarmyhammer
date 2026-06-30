@@ -606,6 +606,12 @@ pub struct RuleSet {
     /// Rules loaded from the rules/ directory.
     pub rules: Vec<Rule>,
 
+    /// The VALIDATOR.md prose body — everything after the frontmatter's closing
+    /// `---`, trimmed. This is authored validator-WIDE guidance (intent, scope,
+    /// blanket exclusions that apply across every rule), surfaced into the
+    /// per-validator review prompt. Empty when the manifest has no body.
+    pub manifest_body: String,
+
     /// Source of this RuleSet (builtin, user, or project).
     pub source: ValidatorSource,
 
@@ -622,6 +628,11 @@ impl RuleSet {
     /// Get the RuleSet description.
     pub fn description(&self) -> &str {
         &self.manifest.description
+    }
+
+    /// Get the VALIDATOR.md prose body (validator-wide guidance), trimmed.
+    pub fn manifest_body(&self) -> &str {
+        &self.manifest_body
     }
 
     /// Check if this RuleSet matches the given context.
@@ -1087,6 +1098,7 @@ mod tests {
                 once: false,
             },
             rules: vec![],
+            manifest_body: String::new(),
             source: ValidatorSource::Builtin,
             base_path: PathBuf::from("/test"),
         }

@@ -1013,6 +1013,8 @@ pub fn render_validator_suffix(validator: &ValidatorWork, ruleset: &RuleSet) -> 
     out.push_str(ruleset.description().trim());
     out.push_str("\n\n");
 
+    render_validator_guidance(&mut out, ruleset.manifest_body());
+
     render_focus_files(&mut out, &validator.files);
 
     out.push_str("## Rules\n\n");
@@ -1025,6 +1027,25 @@ pub fn render_validator_suffix(validator: &ValidatorWork, ruleset: &RuleSet) -> 
     out.push_str(OUTPUT_CONTRACT);
     out.push('\n');
     out
+}
+
+/// Append the validator's VALIDATOR.md prose body as a validator-level guidance
+/// block, emitted between the [`MANDATE_HEADER`] (the description) and `## Rules`
+/// so it is shared by every rule in the validator's fan-out.
+///
+/// This is authored validator-WIDE direction — intent, scope, and blanket
+/// exclusions that apply across all of a validator's rules (e.g. "this validator
+/// does not apply to test code"). An empty body emits nothing, keeping the render
+/// byte-identical for validators that carry no body (the fork-prefix reuse
+/// contract depends on this render being a pure function of its inputs).
+fn render_validator_guidance(out: &mut String, body: &str) {
+    let body = body.trim();
+    if body.is_empty() {
+        return;
+    }
+    out.push_str("## Guidance\n\n");
+    out.push_str(body);
+    out.push_str("\n\n");
 }
 
 /// Append the "files in scope for this validator" list: the paths of the
@@ -1257,8 +1278,20 @@ mod tests {
     const TEST_SIMILARITY: f32 = 0.94;
 
     /// A RuleSet whose mandate (description) and rule bodies are distinctive so
-    /// the rendered prompt can be asserted against them verbatim.
+    /// the rendered prompt can be asserted against them verbatim. Carries no
+    /// VALIDATOR.md body — use [`ruleset_with_body`] when the body matters.
     fn ruleset(name: &str, mandate: &str, rules: &[(&str, &str)]) -> RuleSet {
+        ruleset_with_body(name, mandate, "", rules)
+    }
+
+    /// Like [`ruleset`] but with a distinctive VALIDATOR.md prose `body` so the
+    /// rendered prompt can be asserted against the validator-wide guidance block.
+    fn ruleset_with_body(
+        name: &str,
+        mandate: &str,
+        body: &str,
+        rules: &[(&str, &str)],
+    ) -> RuleSet {
         RuleSet {
             manifest: RuleSetManifest {
                 name: name.to_string(),
@@ -1285,6 +1318,7 @@ mod tests {
                     timeout: None,
                 })
                 .collect(),
+            manifest_body: body.to_string(),
             source: ValidatorSource::Builtin,
             base_path: PathBuf::from("/test"),
         }
@@ -1704,6 +1738,89 @@ mod tests {
         assert!(monolithic.contains("RULE_BODY"), "{monolithic}");
         assert!(monolithic.contains("OTHER_RULE_BODY"), "{monolithic}");
         assert!(monolithic.ends_with(&suffix), "{monolithic}");
+    }
+
+    /// The validator's VALIDATOR.md prose body is folded into the per-validator
+    /// suffix as a validator-wide guidance block, positioned AFTER the mandate
+    /// (description) and BEFORE the rules so it is shared by every rule.
+    #[test]
+    fn validator_suffix_emits_the_manifest_body_after_mandate_before_rules() {
+        let rs = ruleset_with_body(
+            "duplication",
+            "DEDUP_MANDATE: never copy-paste logic.",
+            "This validator does not apply to test code.",
+            &[("no-copy-paste", "RULE_BODY: extract shared helpers.")],
+        );
+        let vw = validator_work(
+            "duplication",
+            vec![file_work("src/a.rs", "alpha", "src/x.rs")],
+        );
+
+        let suffix = render_validator_suffix(&vw, &rs);
+
+        // The body line appears verbatim in the suffix.
+        assert!(
+            suffix.contains("does not apply to test code"),
+            "the validator body guidance must appear in the suffix: {suffix}"
+        );
+
+        // Ordering: mandate < body guidance < rules.
+        let mandate_at = suffix
+            .find("DEDUP_MANDATE")
+            .expect("mandate must be present");
+        let body_at = suffix
+            .find("does not apply to test code")
+            .expect("body must be present");
+        let rules_at = suffix.find("## Rules").expect("rules header must be present");
+        assert!(
+            mandate_at < body_at,
+            "the body must come AFTER the mandate: {suffix}"
+        );
+        assert!(
+            body_at < rules_at,
+            "the body must come BEFORE the rules: {suffix}"
+        );
+    }
+
+    /// A validator with no VALIDATOR.md body emits no guidance block — the suffix
+    /// is unchanged for body-less validators (the fork-prefix reuse contract
+    /// depends on the render being a pure function of its inputs).
+    #[test]
+    fn validator_suffix_omits_guidance_when_body_is_empty() {
+        let rs = ruleset(
+            "duplication",
+            "mandate",
+            &[("no-copy-paste", "RULE_BODY")],
+        );
+        let vw = validator_work("duplication", vec![file_work("src/a.rs", "alpha", "src/x.rs")]);
+
+        let suffix = render_validator_suffix(&vw, &rs);
+        assert!(
+            !suffix.contains("## Guidance"),
+            "a body-less validator must emit no guidance block: {suffix}"
+        );
+    }
+
+    /// The monolithic fallback shares the same `render_validator_suffix`, so the
+    /// validator body guidance reaches the degraded path too.
+    #[test]
+    fn monolithic_prompt_contains_the_manifest_body_guidance() {
+        let rs = ruleset_with_body(
+            "duplication",
+            "mandate",
+            "This validator does not apply to test code.",
+            &[("no-copy-paste", "RULE_BODY")],
+        );
+        let vw = validator_work(
+            "duplication",
+            vec![file_work("src/a.rs", "alpha", "src/x.rs")],
+        );
+
+        let prompt = render_fleet_prompt("purpose", &vw, &rs);
+        assert!(
+            prompt.contains("does not apply to test code"),
+            "the validator body guidance must reach the monolithic fallback: {prompt}"
+        );
     }
 
     /// The run prime de-duplicates files matched by several validators: a file

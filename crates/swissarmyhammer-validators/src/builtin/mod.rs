@@ -317,6 +317,35 @@ mod tests {
     }
 
     #[test]
+    fn test_builtin_rulesets_carry_their_validator_md_body() {
+        // The VALIDATOR.md prose body is authored validator-wide guidance and
+        // must survive the builtin load path (not just the on-disk loader).
+        // Assert on the permanent `# <Name> Validator` heading of each body so
+        // the test stays hermetic against user revisions to the prose.
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        for (name, heading) in [
+            ("duplication", "Duplication Validator"),
+            ("data-driven", "Data-Driven Validator"),
+        ] {
+            let ruleset = loader
+                .get_ruleset(name)
+                .unwrap_or_else(|| panic!("{name} should be loaded"));
+            assert!(
+                !ruleset.manifest_body().is_empty(),
+                "{name} should carry a non-empty VALIDATOR.md body, got: {:?}",
+                ruleset.manifest_body()
+            );
+            assert!(
+                ruleset.manifest_body().contains(heading),
+                "{name} VALIDATOR.md body should carry its {heading:?} heading, got: {:?}",
+                ruleset.manifest_body()
+            );
+        }
+    }
+
+    #[test]
     fn test_load_builtins() {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
