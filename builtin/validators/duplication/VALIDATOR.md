@@ -25,3 +25,5 @@ The engine runs the `duplicates` probe (`find duplicates` over the changed files
 plus a changed-set comparison) and injects the matching blocks as ground-truth
 evidence — you do not have to ask the agent to go look for duplicates, the
 evidence is already on the finding.
+
+** IMPORTANT ** This rule does not apply to test code.

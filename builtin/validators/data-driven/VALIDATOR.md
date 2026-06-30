@@ -18,3 +18,5 @@ Machine-written code trends toward hardcoding — enumerating cases in control f
 and sprinkling literals — where the right shape is data interpreted by one code
 path. This validator pushes the other way. It is an **in-file judgment**: it
 reads the diff and needs no engine probe, so it declares none.
+
+** IMPORTANT ** This rule does not apply to test code.

@@ -19,8 +19,13 @@ Examine the changed code for hardcoding that should be data:
 2. **Repeated literals → named constant**: the same literal value appearing in
    several places. Name it once (a `const`/config entry) so it changes in one
    place.
-3. **Hardcoded configuration**: timeouts, limits, thresholds, sizes, ports, URLs
-   embedded inline that belong in a named constant or config entry.
+3. **Repeated or cross-cutting configuration → named constant**: a timeout,
+   limit, threshold, size, port, or URL that appears in **more than one place**,
+   or is a genuine knob shared/exported across a module. This is rule 2 applied
+   to configuration values, and it is bound by the **same carve-outs below** —
+   it is NOT a license to name every inline literal. A single configuration
+   value used **once** at an obvious call site (a buffer capacity passed to one
+   `channel(…)`, a timeout on one call) is a one-off, not a finding.
 
 ## Why This Matters
 

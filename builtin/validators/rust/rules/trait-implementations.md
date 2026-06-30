@@ -11,4 +11,3 @@ Check for: `Clone`, `Debug`, `Display`, `Default`, `PartialEq`, `Eq`, `Hash`, `P
 
 - Collections: implement `FromIterator` and `Extend`.
 - `serde`: `Serialize`/`Deserialize` behind an optional feature flag.
-- A new public type missing obvious trait impls is a silent semver hazard.
