@@ -144,6 +144,19 @@ pub struct ProjectTypeSpec {
     pub partial: Option<&'static str>,
 }
 
+/// Build a guideline partial path from a project-type key.
+///
+/// The partial filename always follows the `_partials/project-types/{key}`
+/// convention, so deriving it from the key here keeps the two in sync by
+/// construction rather than by a hand-maintained literal per entry. `$key`
+/// must be a string literal so the path is assembled at compile time via
+/// [`concat!`] (guarded by `spec_partial_matches_key`).
+macro_rules! partial {
+    ($key:literal) => {
+        Some(concat!("_partials/project-types/", $key))
+    };
+}
+
 /// Single source of truth mapping each [`ProjectType`] to its metadata.
 ///
 /// Adding a project type means adding one entry here; the accessors below (and
@@ -157,7 +170,7 @@ const PROJECT_TYPE_SPECS: &[ProjectTypeSpec] = &[
         symbol: |s| &s.rust,
         name: "Rust",
         key: "rust",
-        partial: Some("_partials/project-types/rust"),
+        partial: partial!("rust"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::NodeJs,
@@ -165,7 +178,7 @@ const PROJECT_TYPE_SPECS: &[ProjectTypeSpec] = &[
         symbol: |s| &s.nodejs,
         name: "Node.js",
         key: "nodejs",
-        partial: Some("_partials/project-types/nodejs"),
+        partial: partial!("nodejs"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::Go,
@@ -173,7 +186,7 @@ const PROJECT_TYPE_SPECS: &[ProjectTypeSpec] = &[
         symbol: |s| &s.go,
         name: "Go",
         key: "go",
-        partial: Some("_partials/project-types/go"),
+        partial: partial!("go"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::Python,
@@ -181,7 +194,7 @@ const PROJECT_TYPE_SPECS: &[ProjectTypeSpec] = &[
         symbol: |s| &s.python,
         name: "Python",
         key: "python",
-        partial: Some("_partials/project-types/python"),
+        partial: partial!("python"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::JavaMaven,
@@ -189,7 +202,7 @@ const PROJECT_TYPE_SPECS: &[ProjectTypeSpec] = &[
         symbol: |s| &s.java,
         name: "Java (Maven)",
         key: "java-maven",
-        partial: Some("_partials/project-types/java-maven"),
+        partial: partial!("java-maven"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::JavaGradle,
@@ -197,7 +210,7 @@ const PROJECT_TYPE_SPECS: &[ProjectTypeSpec] = &[
         symbol: |s| &s.java,
         name: "Java (Gradle)",
         key: "java-gradle",
-        partial: Some("_partials/project-types/java-gradle"),
+        partial: partial!("java-gradle"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::CSharp,
@@ -205,7 +218,7 @@ const PROJECT_TYPE_SPECS: &[ProjectTypeSpec] = &[
         symbol: |s| &s.csharp,
         name: "C# / .NET",
         key: "csharp",
-        partial: Some("_partials/project-types/csharp"),
+        partial: partial!("csharp"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::CMake,
@@ -213,7 +226,7 @@ const PROJECT_TYPE_SPECS: &[ProjectTypeSpec] = &[
         symbol: |s| &s.c_cpp,
         name: "CMake",
         key: "cmake",
-        partial: Some("_partials/project-types/cmake"),
+        partial: partial!("cmake"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::Makefile,
@@ -221,7 +234,7 @@ const PROJECT_TYPE_SPECS: &[ProjectTypeSpec] = &[
         symbol: |s| &s.c_cpp,
         name: "Makefile",
         key: "makefile",
-        partial: Some("_partials/project-types/makefile"),
+        partial: partial!("makefile"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::Flutter,
@@ -229,7 +242,7 @@ const PROJECT_TYPE_SPECS: &[ProjectTypeSpec] = &[
         symbol: |s| &s.dart,
         name: "Flutter",
         key: "flutter",
-        partial: Some("_partials/project-types/flutter"),
+        partial: partial!("flutter"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::Php,
@@ -245,7 +258,7 @@ const PROJECT_TYPE_SPECS: &[ProjectTypeSpec] = &[
         symbol: |s| &s.swift,
         name: "Swift",
         key: "swift",
-        partial: Some("_partials/project-types/swift"),
+        partial: partial!("swift"),
     },
 ];
 
@@ -483,12 +496,43 @@ mod tests {
 
     #[test]
     fn value_types_support_equality() {
+        use std::collections::HashSet;
+
         // Derive-contract guard: the public value types compare by value so
         // downstream crates (blocked by orphan rules from adding the impls
-        // later) can use them in assertions and sets.
+        // later) can use them in assertions and sets. Types deriving `Hash + Eq`
+        // are additionally exercised in a `HashSet` to prove set membership and
+        // deduplication, not just equality.
         let a = ProjectSymbols::default();
         let b = ProjectSymbols::default();
         assert_eq!(a, b);
+
+        // `ProjectSymbols` is `Hash + Eq`: equal values collapse to one entry,
+        // and membership is by value.
+        let symbol_set: HashSet<ProjectSymbols> = [a.clone(), b.clone()].into_iter().collect();
+        assert_eq!(
+            symbol_set.len(),
+            1,
+            "equal ProjectSymbols must dedup in a set"
+        );
+        assert!(
+            symbol_set.contains(&a),
+            "set must contain the value by equality"
+        );
+
+        // `ProjectType` is `Hash + Eq`: distinct variants stay distinct, and a
+        // re-inserted variant does not grow the set.
+        let mut type_set: HashSet<ProjectType> = HashSet::new();
+        type_set.insert(ProjectType::Rust);
+        type_set.insert(ProjectType::Go);
+        type_set.insert(ProjectType::Rust);
+        assert_eq!(
+            type_set.len(),
+            2,
+            "duplicate ProjectType must not grow the set"
+        );
+        assert!(type_set.contains(&ProjectType::Rust));
+        assert!(!type_set.contains(&ProjectType::Swift));
 
         // `ProjectTypeSpec` deliberately does not derive `PartialEq` (its
         // `symbol` field is a function pointer); compare by `project_type`.
@@ -504,6 +548,12 @@ mod tests {
             symbols: ProjectSymbols::default(),
         };
         assert_eq!(config_a, config_b);
+
+        // `ProjectDetectionConfig` is `Hash + Eq`: equal configs dedup in a set.
+        let config_set: HashSet<ProjectDetectionConfig> =
+            [config_a.clone(), config_b.clone()].into_iter().collect();
+        assert_eq!(config_set.len(), 1, "equal configs must dedup in a set");
+        assert!(config_set.contains(&config_a));
 
         let ws_a = WorkspaceInfo {
             is_root: true,

@@ -168,6 +168,21 @@ comments:
     Iteration 6 implement: derive sweep across all public types in types.rs. Added: ProjectSymbols +PartialEq,Eq,Hash; WorkspaceInfo +PartialEq (Eq/Hash blocked by metadata: Option<serde_json::Value>, not Eq); DetectedProject +PartialEq (same block); ProjectType enum +Hash; ProjectDetectionConfig +PartialEq,Eq,Hash. New TDD test value_types_support_equality (RED→GREEN). Verified 3054/3054, clippy clean, double-check PASS.
     CONTRADICTION on finding 2 (ProjectTypeSpec PartialEq/Eq): the derive COMPILES but its fn-pointer field (symbol) trips clippy unpredictable_function_pointer_comparisons, DENIED under -D warnings (the verification gate). Per skill 'do not force code that won't pass the gate' — left ProjectTypeSpec Debug/Clone/Copy + doc comment (its identity is ProjectType, which is fully comparable). double-check reproduced the lint independently. If re-review re-flags ProjectTypeSpec PartialEq/Eq, that is the contradiction — will mark it stuck, not loop. ProjectDetectionError unchanged (io::Error source not PartialEq). Proceeding to checkpoint commit → FINAL re-review.
   timestamp: 2026-06-30T20:23:50.856662+00:00
+- actor: claude-code
+  id: 01kwd944m7gg8e0224ze3rws1h
+  text: |-
+    Pulled review→doing to work the 2026-06-30 15:24 review findings.
+
+    Finding 1 (types.rs PROJECT_TYPE_SPECS partial repetition): added a `partial!($key:literal)` declarative macro => `Some(concat!("_partials/project-types/", $key))`. Replaced all 11 `partial: Some("_partials/project-types/{key}")` literals with `partial!("{key}")`; PHP stays `partial: None`. Partial strings are byte-identical (compile-time concat). The `spec_partial_matches_key` guard test kept (still documents the invariant) and stays green.
+
+    Finding 2 (value_types_support_equality test was assertions-only despite "and sets" docstring): added HashSet coverage for the Hash+Eq types — ProjectSymbols (dedup to 1 + contains), ProjectType (Rust/Go/Rust insert → len 2, contains Rust, !contains Swift), ProjectDetectionConfig (dedup to 1 + contains). Kept all existing assert_eq!. Did NOT add WorkspaceInfo/DetectedProject to a set (PartialEq-only, not Hash/Eq). Updated docstring to describe the added set coverage.
+
+    Verification: `cargo fmt -p swissarmyhammer-project-detection`; `cargo nextest run -p swissarmyhammer-project-detection` → 35/35 pass; `cargo clippy -p swissarmyhammer-project-detection --all-targets -- -D warnings` → clean; `cargo nextest run -p swissarmyhammer-project-detection -p swissarmyhammer-tools -p swissarmyhammer-lsp -p swissarmyhammer-cli -p swissarmyhammer-config` → 3054/3054 pass, 0 failures.
+  timestamp: 2026-06-30T22:06:48.455123+00:00
+- actor: claude-code
+  id: 01kwd97v2grxj3h4bwx0ysjvv1
+  text: 'Iteration 7 implement (per user ''one more round''): both 15:24 findings fixed in types.rs. (1) Added partial! macro (concat!("_partials/project-types/", key)) replacing 11 repeated literals — byte-identical static strs, PHP None, spec_partial_matches_key guard kept green. (2) value_types_support_equality now exercises HashSet for the 3 Hash+Eq types (ProjectSymbols dedup, ProjectType membership len-2, ProjectDetectionConfig dedup); PartialEq-only types correctly excluded; docstring made honest. Verified: project-detection 35/35, clippy -D warnings clean, 5-crate 3054/3054, double-check PASS. Only types.rs changed. NB: parallel-shell board sync dropped the 15:24 section from the live description (progress already 1.0) — fixes recorded here. Proceeding to checkpoint commit → re-review (expect clean → done).'
+  timestamp: 2026-06-30T22:08:49.744681+00:00
 position_column: doing
 position_ordinal: '8380'
 title: Add Swift project detection + project-types partial (prefer ULID via yaslab/ULID.swift)
