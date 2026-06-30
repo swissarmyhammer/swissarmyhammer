@@ -34,6 +34,17 @@ comments:
 
     Leaving task in `doing` for /review.
   timestamp: 2026-06-30T16:57:52.702478+00:00
+- actor: claude-code
+  id: 01kwcqk8tr9d414rcttmnnxtgs
+  text: |-
+    Code complete + committed (e4381850), left in `doing`. Proven by in-process real-pipeline test review_excludes_test_files_for_an_excluding_validator (test file → 0 findings; non-test → findings fire). 310 passed, clippy clean both crates, double-check PASS.
+
+    BLOCKED on a stale live-review gate before it can be validated via /review:
+    1. Running sah binary predates the new `exclude` field on ValidatorMatch (added by THIS commit, after the last rebuild) → live engine won't honor exclude. Needs cargo build + restart sah MCP server.
+    2. Live engine serves data-driven/duplication from ~/.validators (shadows builtin); the exclude frontmatter was added to builtin/validators/*.md, not ~/.validators. Needs the exclude line in ~/.validators/{data-driven,duplication}/VALIDATOR.md (redeploy adds it; init won't prune but will add).
+
+    Until both, a live /review will still flag test code — a stale-binary artifact, not a defect. After rebuild+restart+redeploy, re-run /review ^sa2v84v HEAD~1..HEAD to gate it, and it also unblocks a clean live re-review of ^q285h25 and ^0wvhgd7.
+  timestamp: 2026-06-30T17:00:29.912100+00:00
 position_column: doing
 position_ordinal: '8380'
 project: local-review
