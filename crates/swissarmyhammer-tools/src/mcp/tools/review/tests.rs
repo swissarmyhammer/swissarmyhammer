@@ -790,16 +790,38 @@ fn seed_on_disk_index(root: &Path, dup: &str) {
 /// A findings array as a fleet agent emits it (the `validator` field is tagged by
 /// the engine, but must be present for the finding to deserialize).
 fn findings_json(file: &str, claim: &str) -> String {
-    format!(
-        "```json\n[{{\"file\":\"{file}\",\"line\":1,\"validator\":\"agent-tagged\",\
-         \"rule\":\"r\",\"claim\":\"{claim}\",\
-         \"evidence\":\"per `duplicates`: 0.99\",\"suggestion\":\"extract a helper\"}}]\n```"
-    )
+    // Built through `serde_json` so any `"`/`\` in `file`/`claim` is escaped
+    // correctly — a raw `format!` template would corrupt the JSON.
+    let array = json!([{
+        "file": file,
+        "line": 1,
+        "validator": "agent-tagged",
+        "rule": "r",
+        "claim": claim,
+        "evidence": "per `duplicates`: 0.99",
+        "suggestion": "extract a helper",
+    }]);
+    format!("```json\n{array}\n```")
 }
 
 /// A confirming verify verdict.
 fn confirm_json() -> String {
     "```json\n{\"confirmed\": true, \"reason\": \"the duplicate is real\"}\n```".to_string()
+}
+
+#[test]
+fn findings_json_escapes_embedded_quotes() {
+    // A claim carrying a double quote must round-trip through valid JSON, proving
+    // the helper escapes rather than concatenates raw text.
+    let claim = r#"the literal "7" is a magic number"#;
+    let fenced = findings_json("src/a.rs", claim);
+    let body = fenced
+        .trim_start_matches("```json")
+        .trim_end_matches("```")
+        .trim();
+    let parsed: serde_json::Value = serde_json::from_str(body).expect("findings_json is valid JSON");
+    assert_eq!(parsed[0]["claim"], json!(claim));
+    assert_eq!(parsed[0]["file"], json!("src/a.rs"));
 }
 
 /// An [`EmbedderFactory`] yielding a deterministic mock embedder (no model load).

@@ -1221,6 +1221,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use serde_json::json;
     use swissarmyhammer_sem::model::change::{ChangeType, SemanticChange};
 
     use crate::review::probes::{ProbeKind, ProbeResult, ProbeRow};
@@ -1447,21 +1448,42 @@ mod tests {
     /// multi-instance shape `findings_json` (a single finding) does not cover.
     /// Each tuple is `(file, line, rule, claim)`.
     fn findings_array_json(items: &[(&str, u32, &str, &str)]) -> String {
-        let objects: Vec<String> = items
+        // Built through `serde_json` so any `"`/`\` in a field is escaped
+        // correctly — a raw `format!` template would corrupt the JSON.
+        let objects: Vec<serde_json::Value> = items
             .iter()
             .map(|(file, line, rule, claim)| {
-                format!(
-                    "{{\"file\":\"{file}\",\"line\":{line},\
-                     \"validator\":\"ignored-by-agent\",\"rule\":\"{rule}\",\
-                     \"claim\":\"{claim}\",\"evidence\":\"per `duplicates`: {TEST_SIMILARITY:.2}\",\
-                     \"suggestion\":\"extract a helper\"}}"
-                )
+                json!({
+                    "file": file,
+                    "line": line,
+                    "validator": "ignored-by-agent",
+                    "rule": rule,
+                    "claim": claim,
+                    "evidence": format!("per `duplicates`: {TEST_SIMILARITY:.2}"),
+                    "suggestion": "extract a helper",
+                })
             })
             .collect();
-        format!(
-            "Here are my findings:\n\n```json\n[{}]\n```\n",
-            objects.join(",")
-        )
+        let array = json!(objects);
+        format!("Here are my findings:\n\n```json\n{array}\n```\n")
+    }
+
+    #[test]
+    fn findings_array_json_escapes_embedded_quotes() {
+        // A claim carrying a double quote must round-trip through valid JSON,
+        // proving the helper escapes rather than concatenates raw text.
+        let claim = r#"the literal "7" is a magic number"#;
+        let fenced = findings_array_json(&[("src/a.rs", TEST_FINDING_LINE, "no-magic", claim)]);
+        let body = fenced
+            .split("```json")
+            .nth(1)
+            .and_then(|s| s.split("```").next())
+            .expect("fenced JSON block")
+            .trim();
+        let parsed: serde_json::Value =
+            serde_json::from_str(body).expect("findings_array_json is valid JSON");
+        assert_eq!(parsed[0]["claim"], json!(claim));
+        assert_eq!(parsed[0]["file"], json!("src/a.rs"));
     }
 
     /// Run the fleet and then release its shared-prime pin, exactly as
