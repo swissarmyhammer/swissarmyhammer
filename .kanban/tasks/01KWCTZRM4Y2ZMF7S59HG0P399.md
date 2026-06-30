@@ -54,8 +54,38 @@ comments:
   id: 01kwczszd07ztfpr7yt8tt554d
   text: 'Iteration 2 test: GREEN. Affected crate + ALL real detect_projects callers (project-detection, tools, lsp, cli, config) = 3051/3051 passed. Confirms the Result<_,String>→ProjectDetectionError typed-error change compiles+passes across every caller (doctor/checks.rs, config/template_context.rs, lsp/supervisor.rs, tools code_context detect/doctor/mod). Full rdeps sweep: 10824 passed, 5 timeouts — all heavy real-model/LLM e2e (kanban-app ai_panel_e2e qwen, llama-agent agent_tools_mount/dual_source, swissarmyhammer-agent review_real_model_e2e); none reference detect_projects in source = pre-existing model-e2e flakiness (known qwen NoKvCacheSlot KV-cache issue), NOT a regression from this task. Proceeding to checkpoint commit → re-review.'
   timestamp: 2026-06-30T19:23:58.240824+00:00
+- actor: claude-code
+  id: 01kwd0fzrzbshcjtt5qxm41wka
+  text: |-
+    Review iteration 2: all 21 prior findings verified [x]. 3 NEW findings (not repeats; guardrail not triggered):
+    1. detect.rs:16 — thiserror message capitalized; make lowercase ("failed to canonicalize root path: {0}").
+    2. detect.rs:110 — hardcoded ProjectType array in detect_project_at_path duplicates PROJECT_TYPE_SPECS roster (same crate); iterate the spec instead.
+    3. tools code_context/detect.rs:73 — PROJECT_TYPE_DATA is a THIRD parallel variant roster duplicating PROJECT_TYPE_SPECS; consolidate.
+    Theme: iter-2 collapsed dispatch logic but relocated the roster-drift risk into 3 parallel lists. Root fix = ONE authoritative roster. Precedent: ProjectSymbols glyphs already put per-type presentation metadata in the detection crate, so extending PROJECT_TYPE_SPECS with name/key/partial fields is consistent, NOT a layering violation. Looping to /implement to make PROJECT_TYPE_SPECS the single source everything derives from.
+  timestamp: 2026-06-30T19:35:59.519181+00:00
+- actor: claude-code
+  id: 01kwd0y24r3xj1vxmg4ghjckpe
+  text: |-
+    Re-implement iteration 3: worked all 3 review findings (2026-06-30 14:24) at the root after verifying each against actual source. Theme was correct — iter-2 collapsed dispatch but left THREE parallel rosters; this collapses them to ONE.
+
+    Finding 1 (detect.rs error messages): lowercased both thiserror variants — Canonicalize ("failed to canonicalize root path: {0}") and ReadFile ("failed to read {path}: {source}"). Updated test_detect_projects_canonicalize_error substring to "failed to canonicalize root path"; test stays green + still matches!s the typed variant.
+
+    Finding 2 (detect_project_at_path hardcoded array): deleted the 12-entry array; now iterates project_type_specs() (the authoritative PROJECT_TYPE_SPECS roster). Reordered PROJECT_TYPE_SPECS so its table order IS the detection priority order — Go before Python to byte-match the prior array (NOT Python-before-Go as the task text recalled; double-check confirmed the real prior code was Go-first, so behavior is unchanged). Documented the table order = priority order.
+
+    Finding 3 (PROJECT_TYPE_DATA third roster): ELIMINATED PROJECT_TYPE_DATA + ProjectTypeData + project_type_data from tools detect.rs. Extended ProjectTypeSpec (project-detection types.rs) with name/key/partial fields — consistent with the crate already owning ProjectSymbols glyphs (NOT a layering violation). project_type_name/project_type_key/partial_name_for_type are now thin spec_for(pt) lookups. Exported project_type_specs(), spec_for, ProjectTypeSpec from lib.rs. partial strings byte-identical (_partials/project-types/{key}, Php None). Guard tests: moved serde-key guard to types.rs (spec_key_matches_serde_repr) + added spec_partial_matches_key; tools-layer test_project_type_key_matches_serde + test_every_project_type_has_data rewritten to iterate project_type_specs() (non-vacuous).
+
+    Single authoritative roster confirmed: grepped non-test code — PROJECT_TYPE_SPECS is the ONLY hand-maintained full-variant roster. All other full-variant enumerations (registry.rs, types.rs tests, tools detect.rs tests) are inside #[cfg(test)], which the task explicitly permits as guards. Adding a project type now = one PROJECT_TYPE_SPECS entry.
+
+    Verification (all green, run this message): cargo fmt clean; cargo nextest -p swissarmyhammer-project-detection -p swissarmyhammer-tools -p swissarmyhammer-lsp -p swissarmyhammer-cli -p swissarmyhammer-config = 3053/3053 passed; cargo clippy --workspace --all-targets -D warnings = exit 0 zero warnings. Adversarial double-check = PASS (verified single roster, byte-identical order/keys/names/partials, non-vacuous guards, no layering concern, no dangling refs to deleted structs).
+
+    Files: crates/swissarmyhammer-project-detection/src/{types.rs,detect.rs,lib.rs}, crates/swissarmyhammer-tools/src/mcp/tools/code_context/detect.rs. Left green in doing for /review. (Note: parallel-shell modifications to review/validators files + task 2v84v in git status are NOT mine — untouched.)
+  timestamp: 2026-06-30T19:43:40.696774+00:00
+- actor: claude-code
+  id: 01kwd0z95vqqnb283wmdakt302
+  text: 'Iteration 3 implement: all 3 findings fixed at root. (1) Both ProjectDetectionError messages lowercased + test substring updated. (2) detect_project_at_path now iterates project_type_specs() — hardcoded array deleted; SPECS reordered to byte-match prior detection order (Go before Python, verified vs real prior code). (3) PROJECT_TYPE_DATA/ProjectTypeData/project_type_data deleted; ProjectTypeSpec gained name/key/partial; tools project_type_name/key/partial_name_for_type are thin spec_for() lookups; exported project_type_specs/spec_for/ProjectTypeSpec from lib.rs. Partial strings byte-identical, PHP None. Guards kept non-vacuous (spec_key_matches_serde_repr, spec_partial_matches_key). Single authoritative roster confirmed by grep — only PROJECT_TYPE_SPECS in non-test code; future project type = 1 table entry. Verified: affected crates + callers 3053/3053, clippy --workspace -D warnings clean, double-check PASS. Test evidence = implementer''s scoped run this session (avoided the slow rdeps sweep w/ known model-e2e timeouts). Proceeding to checkpoint commit. NB: tree has unrelated parallel-shell edits (review/validators, task 2v84v) — commit must stay scoped to this task''s files.'
+  timestamp: 2026-06-30T19:44:20.667599+00:00
 position_column: doing
-position_ordinal: '8480'
+position_ordinal: '8380'
 title: Add Swift project detection + project-types partial (prefer ULID via yaslab/ULID.swift)
 ---
 Add first-class Swift support to project detection and create the matching `swift` project-types partial. The partial filename MUST match the detection key string (`project_type_key` == "swift" → `builtin/_partials/project-types/swift.md`), exactly as `flutter`, `java-gradle`, etc. do today.
@@ -63,79 +93,10 @@ Add first-class Swift support to project detection and create the matching `swif
 ## Architecture note — there is NO duplicate detection
 Both the code-context `detect projects` op AND the LSP registry share ONE `ProjectType` enum (`swissarmyhammer-project-detection`; `swissarmyhammer-lsp/src/registry.rs:9` and `types.rs:14` import it). The thing that looks like duplication is actually an INCOMPLETE enum: Swift has no `ProjectType` variant, so `builtin/lsp/sourcekit-lsp.yaml` declares `project_types: []` and the Swift LSP is routed only by `file_extensions: [swift]` (the extension-fallback path `servers_for_extensions`). Kotlin and Ruby are in the same boat (also `project_types: []`) — but those are OUT OF SCOPE here. Adding `ProjectType::Swift` to the single enum fixes both layers at once: code-context detects Swift projects, and the LSP can be routed by project type.
 
-## Background / how the pieces wire together
-- `crates/swissarmyhammer-project-detection/src/types.rs`: `ProjectType` enum (serde `rename_all = "lowercase"`), `ProjectSymbols` struct + `get()`, `marker_files()`, and tests that enumerate every variant.
-- `crates/swissarmyhammer-project-detection/src/detect.rs`: `detect_project_at_path` priority list (must include the new variant or it is never detected).
-- `crates/swissarmyhammer-tools/src/mcp/tools/code_context/detect.rs`: `project_type_name` (display), `project_type_key` (stable key, matches serde rename + partial filename), `partial_name_for_type` (`Some("_partials/project-types/{key}")`). Tests `test_all_project_types_have_renderable_guidelines`, `test_project_type_name_all_types`, `test_project_type_key_all_types` enumerate every variant and render each partial through Liquid — they will fail until the new variant is added everywhere AND the partial file exists and renders non-empty.
-- `builtin/project-detection/config.yaml`: `symbols:` map; `ProjectSymbols::default()` parses this and will fail if a new struct field has no corresponding yaml key.
-- `crates/swissarmyhammer-lsp/src/registry.rs`: `test_all_project_types_queryable` enumerates variants — add Swift there too.
-- `builtin/lsp/sourcekit-lsp.yaml`: currently `project_types: []`.
+## Review Findings (2026-06-30 14:24)
 
-## Work items
+- [x] `crates/swissarmyhammer-project-detection/src/detect.rs:16` — Error message lowercased: both `Canonicalize` (`"failed to canonicalize root path: {0}"`) and `ReadFile` (`"failed to read {path}: {source}"`). The canonicalize-error test substring updated to `"failed to canonicalize root path"`; test stays green.
+- [x] `crates/swissarmyhammer-project-detection/src/detect.rs:110` — `detect_project_at_path` now iterates `project_type_specs()` (the authoritative `PROJECT_TYPE_SPECS` roster) instead of a hardcoded array; the array is gone. `PROJECT_TYPE_SPECS` reordered so its table order IS the detection priority order (Go before Python to match the prior list), documented as such.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/detect.rs:73` — `PROJECT_TYPE_DATA`/`ProjectTypeData`/`project_type_data` ELIMINATED. `ProjectTypeSpec` (project-detection crate) extended with `name`/`key`/`partial` fields; tools-layer `project_type_name`/`project_type_key`/`partial_name_for_type` are now thin lookups into `spec_for(pt)`. The serde-key guard lives in types.rs (`spec_key_matches_serde_repr`) AND is mirrored at the tools layer (`test_project_type_key_matches_serde` iterates `project_type_specs()`). `partial` strings unchanged (`_partials/project-types/{key}`, PHP None); added `spec_partial_matches_key` guard.
 
-### 1. types.rs (project-detection)
-- Add `Swift` variant to `ProjectType` (lowercase serde => "swift").
-- Add `marker_files()` arm: `&["Package.swift", "*.xcodeproj", "*.xcworkspace"]` (Package.swift = SwiftPM; xcodeproj/xcworkspace = Xcode).
-- Add `swift: String` field to `ProjectSymbols`; add `ProjectType::Swift => &self.swift` to `get()`.
-- Update the variant lists / symbol assertions in the types.rs tests (`project_symbols_default_loads_successfully`, `project_symbols_get_returns_nonempty_for_all_variants`, `project_symbols_get_maps_variants_to_correct_fields`).
-
-### 2. config.yaml
-- Add `swift: "<glyph> "` to the `symbols:` map (Nerd Font swift glyph — reuse the same glyph as `builtin/lsp/sourcekit-lsp.yaml`'s `icon` for consistency).
-
-### 3. detect.rs (project-detection crate)
-- Add `ProjectType::Swift` to the `project_types` array in `detect_project_at_path`.
-
-### 4. code_context/detect.rs (tools crate)
-- `project_type_name`: `ProjectType::Swift => "Swift"`.
-- `project_type_key`: `ProjectType::Swift => "swift"`.
-- `partial_name_for_type`: `ProjectType::Swift => Some("_partials/project-types/swift")`.
-- Add `Swift` to the variant lists in `test_project_type_name_all_types`, `test_all_project_types_have_renderable_guidelines`, and `test_project_type_key_all_types` (expected key "swift").
-
-### 5. LSP wiring
-- `crates/swissarmyhammer-lsp/src/registry.rs`: add `ProjectType::Swift` to the loop in `test_all_project_types_queryable`.
-- `builtin/lsp/sourcekit-lsp.yaml`: change `project_types: []` → `project_types:\n  - swift` so the Swift LSP routes by project type (not extension-only). Confirm the YAML still loads (LSP_REGISTRY tests).
-
-### 6. New partial: builtin/_partials/project-types/swift.md
-Follow the exact format of the existing partials (frontmatter `title`/`description`/`partial: true`, then `### Swift Project Guidelines`, testing section, common commands, file locations). Cover both SwiftPM and Xcode flows. Include the project default convention:
-
-**Prefer ULID for unique identifiers** as the default — use https://github.com/yaslab/ULID.swift (SwiftPM package URL `https://github.com/yaslab/ULID.swift`, product `ULID`). Show adding it to `Package.swift` dependencies and a one-line usage example (`let id = ULID()`), and state ULID is preferred over UUID for new identifiers.
-
-Suggested command coverage:
-- Testing (do NOT glob; `swift test` discovers tests; Xcode uses `xcodebuild test`): `swift test`, `swift test --filter <Suite>/<test>`.
-- Build/run: `swift build`, `swift run`.
-- Format/lint: `swift format` (or `swiftformat`), `swiftlint` if present.
-- Deps: edit `Package.swift`; `swift package resolve` / `swift package update`.
-- File locations: `Sources/`, `Tests/`, `Package.swift`; git-ignored `.build/`.
-
-## Verification
-- `cargo nextest run -p swissarmyhammer-project-detection`
-- `cargo nextest run -p swissarmyhammer-lsp`
-- `cargo nextest run -p swissarmyhammer-tools` (detect tests — confirms the partial renders non-empty and frontmatter is stripped).
-- `cargo fmt` + `cargo clippy -- -D warnings`.
-
-## Out of scope
-- Kotlin / Ruby (same empty-`project_types` situation) — separate follow-up.
-
-## Review Findings (2026-06-30 13:11)
-
-- [x] `crates/swissarmyhammer-lsp/src/registry.rs:22` — Hardcoded timeout value 30 (seconds) for startup timeout should be a named constant to explain its purpose and allow adjustment. Define a constant like `const RUST_ANALYZER_STARTUP_TIMEOUT_SECS: u64 = 30;` and use it here.
-- [x] `crates/swissarmyhammer-project-detection/src/detect.rs:8` — Public library function returns `Result<Vec<DetectedProject>, String>` instead of a typed error enum. This prevents callers from matching on specific error cases and is worse than `anyhow::Error` — returning an opaque string message gives callers no structured error information to work with. Define a typed error enum using `thiserror` (e.g., `#[derive(thiserror::Error)]` with variants like `#[error("Failed to canonicalize root path: {0}")]` and `#[error("Failed to read directory: {0}")]`), and return `Result<Vec<DetectedProject>, ProjectDetectionError>` instead.
-- [x] `crates/swissarmyhammer-project-detection/src/detect.rs:235` — The `extract_toml_array` function has excessive nesting depth reaching 6 levels (for → else if → if → if let → for → if let), making the control flow hard to follow. The function implements a state machine to parse TOML array syntax with multiple edge cases (arrays spanning multiple lines, items with closing brackets, etc.), but the nested conditionals obscure the logic. Refactor into separate helper functions: `extract_toml_array_line` (handles parsing a single line within an array), `should_parse_multiline_open` (detects array start), `should_parse_multiline_close` (detects array end). Extract the pattern-matching logic for inline arrays (with the `let (items_part, closed) = if ... else if ... else` block) into a dedicated `parse_inline_array` function to reduce nesting in the main loop.
-- [x] `crates/swissarmyhammer-project-detection/src/detect.rs:291` — Needless helper that wraps a single call site and always returns a constant. The function `should_stop_after_project()` has exactly one caller (line 52–54 in `detect_projects_recursive`) and unconditionally returns `false`, making the `if should_stop` control flow at line 55 dead code. Wrapping a constant in a function adds no meaningful abstraction. Remove the `should_stop_after_project()` function and the dead `if should_stop` block. Replace with a comment explaining that traversal never stops early to find all nested projects in monorepos.
-- [x] `crates/swissarmyhammer-project-detection/src/types.rs:73` — Public struct field `rust` lacks documentation. Other public structs in this file (DetectedProject, WorkspaceInfo) consistently document each field individually. Add a doc comment: `/// Nerd Font symbol for Rust projects`.
-- [x] `crates/swissarmyhammer-project-detection/src/types.rs:74` — Public struct field `nodejs` lacks documentation, inconsistent with the documented fields in other structs in this file. Add a doc comment: `/// Nerd Font symbol for Node.js projects`.
-- [x] `crates/swissarmyhammer-project-detection/src/types.rs:75` — Public struct field `python` lacks documentation. Add a doc comment: `/// Nerd Font symbol for Python projects`.
-- [x] `crates/swissarmyhammer-project-detection/src/types.rs:76` — Public struct field `go` lacks documentation. Add a doc comment: `/// Nerd Font symbol for Go projects`.
-- [x] `crates/swissarmyhammer-project-detection/src/types.rs:77` — Public struct field `java` lacks documentation. Add a doc comment: `/// Nerd Font symbol for Java projects`.
-- [x] `crates/swissarmyhammer-project-detection/src/types.rs:78` — Public struct field `csharp` lacks documentation. Add a doc comment: `/// Nerd Font symbol for C# / .NET projects`.
-- [x] `crates/swissarmyhammer-project-detection/src/types.rs:81` — Public struct field `php` lacks documentation. Add a doc comment: `/// Nerd Font symbol for PHP projects`.
-- [x] `crates/swissarmyhammer-project-detection/src/types.rs:82` — Public struct field `swift` lacks documentation. Add a doc comment: `/// Nerd Font symbol for Swift projects`.
-- [x] `crates/swissarmyhammer-project-detection/src/types.rs:89` — ProjectSymbols::get() is a match statement that maps each ProjectType variant to a struct field. Every new ProjectType requires manually adding an arm here, risking drift and omission. Extract the ProjectType-to-symbol-field mapping into a const data structure (e.g., const array of (ProjectType, &str field-name) or a build-time generated map), then implement get() as a single table lookup instead of a match.
-- [x] `crates/swissarmyhammer-project-detection/src/types.rs:104` — ProjectType::marker_files() is a match statement that maps each ProjectType to its marker files array. Every new ProjectType requires manually updating this function. Extract the ProjectType-to-marker-files mapping into a const data structure (e.g., const array or lazy_static map), then implement marker_files() as a single lookup instead of a match.
-- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/detect.rs:27` — project_type_name() is a match statement that maps each ProjectType to a human-readable display name. Every new ProjectType requires updating this function. Extract the ProjectType-to-display-name mapping into a const data structure, then implement project_type_name() as a single table lookup.
-- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/detect.rs:29` — Three functions (project_type_name, project_type_key, partial_name_for_type) implement the identical match-on-ProjectType dispatch pattern with only the returned values differing; this creates maintenance burden—adding a ProjectType variant requires updating all three in lockstep instead of one place. Extract a single helper (struct ProjectTypeData { name, key, partial_name } returned from a helper that dispatches once) or use a macro to generate the shared match statement, so each function queries the result once instead of reimplementing the dispatch.
-- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/detect.rs:43` — project_type_key() is a match statement that hardcodes serde key strings. These strings must match the serde(rename) attributes in types.rs, creating hidden coupling and duplication risk. Either: (1) derive the serde key programmatically using serde's serialization key extraction via a proc macro or trait, or (2) extract into a const data structure with a test that verifies keys match the serde attributes in types.rs.
-- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/detect.rs:60` — partial_name_for_type() is a match statement that maps each ProjectType to a guideline partial template name (with Php returning None as a special case). Every new ProjectType requires updating this function. Extract the ProjectType-to-partial-name mapping into a const data structure (e.g., const array of (ProjectType, Option<&str>) tuples), then implement partial_name_for_type() as a single table lookup instead of a match.
-- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/detect.rs:73` — Hardcoded default value 3 for max_depth configuration configures system behavior without explanation or named constant. Define a constant like `const DEFAULT_DETECT_MAX_DEPTH: usize = 3;` and use it here to clarify the default traversal depth.
-- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/detect.rs:97` — The `format_detected_projects` function has nesting depth of 4 levels (for → if let → if → if), which reaches the complexity threshold. The nested workspace info checks (if let ws, if is_root, if !members.is_empty) are sequential conditions that dilute readability. Extract workspace formatting into a helper function `format_workspace_info(ws: &WorkspaceInfo) -> String` to flatten the conditional chain. Replace the nested ifs with early returns or a dedicated function, reducing the nesting in the main loop to 2 levels (for → push_str calls only).
-- [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/detect.rs:161` — Function parameter accepts `Option<&String>` instead of the more general `Option<&str>`. Accepting the concrete String reference rather than the str primitive unnecessarily restricts callers and violates the principle to 'Accept generics, not concrete types.'. Change the parameter type to `Option<&str>` and update the call site to use `.as_deref()` instead of `.as_ref()`: `resolve_workspace_path(request.path.as_deref(), context)`.
+Result: `PROJECT_TYPE_SPECS` is the ONE authoritative per-variant roster. Adding a project type = one table entry. No parallel full-variant list remains in non-test code (verified by grep); the remaining full-variant enumerations are all test guards, which the task explicitly permits.

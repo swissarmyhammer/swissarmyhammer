@@ -13,11 +13,11 @@ const MAX_DEPTH: usize = 10;
 #[derive(Debug, Error)]
 pub enum ProjectDetectionError {
     /// The root path could not be canonicalized (e.g. it does not exist).
-    #[error("Failed to canonicalize root path: {0}")]
+    #[error("failed to canonicalize root path: {0}")]
     Canonicalize(#[source] std::io::Error),
 
     /// A project manifest file could not be read.
-    #[error("Failed to read {path}: {source}")]
+    #[error("failed to read {path}: {source}")]
     ReadFile {
         /// The file that could not be read.
         path: String,
@@ -114,24 +114,13 @@ fn detect_projects_recursive(
 /// (e.g. both `Cargo.toml` and `package.json`). Returns all matches
 /// in priority order.
 fn detect_project_at_path(path: &Path) -> Result<Vec<DetectedProject>, ProjectDetectionError> {
-    let project_types = [
-        ProjectType::Rust,
-        ProjectType::NodeJs,
-        ProjectType::Go,
-        ProjectType::Python,
-        ProjectType::JavaMaven,
-        ProjectType::JavaGradle,
-        ProjectType::CSharp,
-        ProjectType::CMake,
-        ProjectType::Makefile,
-        ProjectType::Flutter,
-        ProjectType::Php,
-        ProjectType::Swift,
-    ];
-
+    // Iterate the single authoritative roster (`PROJECT_TYPE_SPECS`) in its
+    // declared order, which is the detection priority order. There is no
+    // separate hardcoded variant list here: adding a project type to the spec
+    // table is the only change required for it to be detected.
     let mut detected = Vec::new();
-    for project_type in &project_types {
-        if let Some(project) = check_project_type(path, *project_type)? {
+    for spec in project_type_specs() {
+        if let Some(project) = check_project_type(path, spec.project_type)? {
             detected.push(project);
         }
     }
@@ -648,7 +637,7 @@ members = [
         let result = detect_projects(Path::new("/nonexistent/path/that/does/not/exist"), Some(1));
         let err = result.expect_err("nonexistent path should error");
         // The typed error stringifies to the canonicalize message...
-        assert!(err.to_string().contains("Failed to canonicalize root path"));
+        assert!(err.to_string().contains("failed to canonicalize root path"));
         // ...and is the specific typed variant callers can match on.
         assert!(matches!(err, ProjectDetectionError::Canonicalize(_)));
     }

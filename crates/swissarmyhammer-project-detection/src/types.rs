@@ -109,90 +109,148 @@ impl Default for ProjectSymbols {
 
 /// Per-variant specification for a [`ProjectType`].
 ///
-/// One entry per variant in [`PROJECT_TYPE_SPECS`] drives the data-driven
-/// accessors ([`ProjectSymbols::get`] and [`ProjectType::marker_files`]) so a
-/// new project type is added in exactly one place.
-struct ProjectTypeSpec {
+/// One entry per variant in [`PROJECT_TYPE_SPECS`] is the single authoritative
+/// roster of project types. Every per-variant behavior — marker-file detection,
+/// symbol lookup, detection priority, and the tools-layer presentation metadata
+/// (display name, stable key, guideline partial) — derives from this table, so
+/// adding a project type touches exactly one entry here and nowhere else.
+pub struct ProjectTypeSpec {
     /// The project type this entry describes.
-    project_type: ProjectType,
+    pub project_type: ProjectType,
     /// Marker files that identify this project type.
-    marker_files: &'static [&'static str],
+    pub marker_files: &'static [&'static str],
     /// Accessor for this type's configurable symbol within [`ProjectSymbols`].
-    symbol: fn(&ProjectSymbols) -> &str,
+    pub symbol: fn(&ProjectSymbols) -> &str,
+    /// Human-readable display name (e.g. `"Java (Maven)"`).
+    pub name: &'static str,
+    /// Stable string key. MUST equal the serde representation of
+    /// [`ProjectTypeSpec::project_type`] (guarded by tests) because it doubles
+    /// as the guideline partial filename and the deduplication key.
+    pub key: &'static str,
+    /// Guideline partial path (`_partials/project-types/{key}`), or `None` for
+    /// types without one (e.g. PHP).
+    pub partial: Option<&'static str>,
 }
 
 /// Single source of truth mapping each [`ProjectType`] to its metadata.
 ///
-/// Adding a project type means adding one entry here; the accessors below are
-/// thin table lookups so the variants never drift out of lockstep.
+/// Adding a project type means adding one entry here; the accessors below (and
+/// in the tools layer) are thin table lookups so the variants never drift out
+/// of lockstep. The table order is the **detection priority order** used by
+/// `detect_project_at_path` when a single directory matches multiple types.
 const PROJECT_TYPE_SPECS: &[ProjectTypeSpec] = &[
     ProjectTypeSpec {
         project_type: ProjectType::Rust,
         marker_files: &["Cargo.toml"],
         symbol: |s| &s.rust,
+        name: "Rust",
+        key: "rust",
+        partial: Some("_partials/project-types/rust"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::NodeJs,
         marker_files: &["package.json"],
         symbol: |s| &s.nodejs,
-    },
-    ProjectTypeSpec {
-        project_type: ProjectType::Python,
-        marker_files: &["pyproject.toml", "setup.py"],
-        symbol: |s| &s.python,
+        name: "Node.js",
+        key: "nodejs",
+        partial: Some("_partials/project-types/nodejs"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::Go,
         marker_files: &["go.mod"],
         symbol: |s| &s.go,
+        name: "Go",
+        key: "go",
+        partial: Some("_partials/project-types/go"),
+    },
+    ProjectTypeSpec {
+        project_type: ProjectType::Python,
+        marker_files: &["pyproject.toml", "setup.py"],
+        symbol: |s| &s.python,
+        name: "Python",
+        key: "python",
+        partial: Some("_partials/project-types/python"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::JavaMaven,
         marker_files: &["pom.xml"],
         symbol: |s| &s.java,
+        name: "Java (Maven)",
+        key: "java-maven",
+        partial: Some("_partials/project-types/java-maven"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::JavaGradle,
         marker_files: &["build.gradle", "build.gradle.kts"],
         symbol: |s| &s.java,
+        name: "Java (Gradle)",
+        key: "java-gradle",
+        partial: Some("_partials/project-types/java-gradle"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::CSharp,
         marker_files: &["*.csproj", "*.sln"],
         symbol: |s| &s.csharp,
+        name: "C# / .NET",
+        key: "csharp",
+        partial: Some("_partials/project-types/csharp"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::CMake,
         marker_files: &["CMakeLists.txt"],
         symbol: |s| &s.c_cpp,
+        name: "CMake",
+        key: "cmake",
+        partial: Some("_partials/project-types/cmake"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::Makefile,
         marker_files: &["Makefile"],
         symbol: |s| &s.c_cpp,
+        name: "Makefile",
+        key: "makefile",
+        partial: Some("_partials/project-types/makefile"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::Flutter,
         marker_files: &["pubspec.yaml"],
         symbol: |s| &s.dart,
+        name: "Flutter",
+        key: "flutter",
+        partial: Some("_partials/project-types/flutter"),
     },
     ProjectTypeSpec {
         project_type: ProjectType::Php,
         marker_files: &["composer.json"],
         symbol: |s| &s.php,
+        name: "PHP",
+        key: "php",
+        partial: None,
     },
     ProjectTypeSpec {
         project_type: ProjectType::Swift,
         marker_files: &["Package.swift", "*.xcodeproj", "*.xcworkspace"],
         symbol: |s| &s.swift,
+        name: "Swift",
+        key: "swift",
+        partial: Some("_partials/project-types/swift"),
     },
 ];
+
+/// The authoritative roster of project-type specifications.
+///
+/// Iterate this to enumerate every [`ProjectType`] in detection-priority order
+/// without maintaining a separate variant list. This is the single source of
+/// truth for the variant roster across the workspace.
+pub fn project_type_specs() -> &'static [ProjectTypeSpec] {
+    PROJECT_TYPE_SPECS
+}
 
 /// Look up the spec entry for a project type.
 ///
 /// Every [`ProjectType`] variant has exactly one entry in [`PROJECT_TYPE_SPECS`],
 /// so this never returns `None` in practice.
-fn spec_for(project_type: ProjectType) -> &'static ProjectTypeSpec {
+pub fn spec_for(project_type: ProjectType) -> &'static ProjectTypeSpec {
     PROJECT_TYPE_SPECS
         .iter()
         .find(|spec| spec.project_type == project_type)
@@ -371,6 +429,47 @@ mod tests {
                 !spec.marker_files.is_empty(),
                 "spec for {variant:?} should have marker files"
             );
+        }
+    }
+
+    #[test]
+    fn spec_key_matches_serde_repr() {
+        // The spec `key` MUST equal the serde representation of the variant,
+        // since the key doubles as the guideline partial filename and the
+        // deduplication key. Guard the hidden coupling: serialize each variant
+        // and compare.
+        for spec in project_type_specs() {
+            let serialized = serde_json::to_value(spec.project_type)
+                .expect("ProjectType serializes")
+                .as_str()
+                .expect("ProjectType serializes to a string")
+                .to_string();
+            assert_eq!(
+                spec.key, serialized,
+                "key for {:?} must match its serde rename",
+                spec.project_type
+            );
+        }
+    }
+
+    #[test]
+    fn spec_partial_matches_key() {
+        // Every type with a guideline partial uses the `_partials/project-types/{key}`
+        // convention. PHP is the deliberate exception with no partial.
+        for spec in project_type_specs() {
+            match spec.partial {
+                Some(partial) => assert_eq!(
+                    partial,
+                    format!("_partials/project-types/{}", spec.key),
+                    "partial for {:?} must follow the key convention",
+                    spec.project_type
+                ),
+                None => assert_eq!(
+                    spec.project_type,
+                    ProjectType::Php,
+                    "only PHP is expected to have no partial"
+                ),
+            }
         }
     }
 }

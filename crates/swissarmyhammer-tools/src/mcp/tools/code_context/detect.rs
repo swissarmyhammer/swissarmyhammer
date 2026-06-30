@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_config::TemplateContext;
-use swissarmyhammer_project_detection::{detect_projects, DetectedProject, ProjectType};
+use swissarmyhammer_project_detection::{detect_projects, spec_for, DetectedProject, ProjectType};
 use swissarmyhammer_templating::TemplateLibrary;
 
 /// Default directory traversal depth when the request omits `max_depth`.
@@ -26,118 +26,20 @@ struct DetectRequest {
     include_guidelines: Option<bool>,
 }
 
-/// Per-variant presentation data for a [`ProjectType`].
-///
-/// One entry per variant in [`PROJECT_TYPE_DATA`] is the single source of truth
-/// for a type's display name, stable key, and guideline partial. The three
-/// accessors below are thin lookups, so adding a project type touches one entry.
-struct ProjectTypeData {
-    /// The project type this entry describes.
-    project_type: ProjectType,
-    /// Human-readable display name.
-    name: &'static str,
-    /// Stable string key. MUST match the serde `rename` in `ProjectType`
-    /// (verified by `test_project_type_key_matches_serde`).
-    key: &'static str,
-    /// Guideline partial path, or `None` for types without one (e.g. PHP).
-    partial: Option<&'static str>,
-}
-
-/// Single source of truth mapping each [`ProjectType`] to its presentation data.
-const PROJECT_TYPE_DATA: &[ProjectTypeData] = &[
-    ProjectTypeData {
-        project_type: ProjectType::Rust,
-        name: "Rust",
-        key: "rust",
-        partial: Some("_partials/project-types/rust"),
-    },
-    ProjectTypeData {
-        project_type: ProjectType::NodeJs,
-        name: "Node.js",
-        key: "nodejs",
-        partial: Some("_partials/project-types/nodejs"),
-    },
-    ProjectTypeData {
-        project_type: ProjectType::Python,
-        name: "Python",
-        key: "python",
-        partial: Some("_partials/project-types/python"),
-    },
-    ProjectTypeData {
-        project_type: ProjectType::Go,
-        name: "Go",
-        key: "go",
-        partial: Some("_partials/project-types/go"),
-    },
-    ProjectTypeData {
-        project_type: ProjectType::JavaMaven,
-        name: "Java (Maven)",
-        key: "java-maven",
-        partial: Some("_partials/project-types/java-maven"),
-    },
-    ProjectTypeData {
-        project_type: ProjectType::JavaGradle,
-        name: "Java (Gradle)",
-        key: "java-gradle",
-        partial: Some("_partials/project-types/java-gradle"),
-    },
-    ProjectTypeData {
-        project_type: ProjectType::CSharp,
-        name: "C# / .NET",
-        key: "csharp",
-        partial: Some("_partials/project-types/csharp"),
-    },
-    ProjectTypeData {
-        project_type: ProjectType::CMake,
-        name: "CMake",
-        key: "cmake",
-        partial: Some("_partials/project-types/cmake"),
-    },
-    ProjectTypeData {
-        project_type: ProjectType::Makefile,
-        name: "Makefile",
-        key: "makefile",
-        partial: Some("_partials/project-types/makefile"),
-    },
-    ProjectTypeData {
-        project_type: ProjectType::Flutter,
-        name: "Flutter",
-        key: "flutter",
-        partial: Some("_partials/project-types/flutter"),
-    },
-    ProjectTypeData {
-        project_type: ProjectType::Php,
-        name: "PHP",
-        key: "php",
-        partial: None,
-    },
-    ProjectTypeData {
-        project_type: ProjectType::Swift,
-        name: "Swift",
-        key: "swift",
-        partial: Some("_partials/project-types/swift"),
-    },
-];
-
-/// Look up the presentation data for a project type.
-///
-/// Every [`ProjectType`] variant has exactly one entry in [`PROJECT_TYPE_DATA`],
-/// so this never returns `None` in practice.
-fn project_type_data(pt: ProjectType) -> &'static ProjectTypeData {
-    PROJECT_TYPE_DATA
-        .iter()
-        .find(|d| d.project_type == pt)
-        .expect("every ProjectType variant has presentation data")
-}
+// The per-variant presentation metadata (display name, stable key, guideline
+// partial) lives on `ProjectTypeSpec` in the project-detection crate, which is
+// the single authoritative roster of project types. The accessors below are
+// thin lookups into that shared spec, so adding a project type touches exactly
+// one table entry there and nothing here.
 
 /// Get a display name for a project type.
 fn project_type_name(pt: ProjectType) -> &'static str {
-    project_type_data(pt).name
+    spec_for(pt).name
 }
 
 /// A stable string key for deduplication (matches serde rename).
 fn project_type_key(pt: ProjectType) -> &'static str {
-    project_type_data(pt).key
+    spec_for(pt).key
 }
 
 /// Get the partial include name for a project type.
@@ -145,7 +47,7 @@ fn project_type_key(pt: ProjectType) -> &'static str {
 /// Returns `Some("_partials/project-types/{key}")` for types that have a guideline partial,
 /// `None` for types without one (e.g. Php).
 fn partial_name_for_type(pt: ProjectType) -> Option<&'static str> {
-    project_type_data(pt).partial
+    spec_for(pt).partial
 }
 
 /// Build a Liquid template string that includes guidelines for the given project types.
@@ -694,45 +596,39 @@ mod tests {
 
     #[test]
     fn test_project_type_key_matches_serde() {
-        // The table's `key` MUST match the serde representation of the variant,
-        // since the key doubles as the partial filename and the dedup key.
-        // Guard the hidden coupling: serialize each variant and compare.
-        for data in PROJECT_TYPE_DATA {
-            let serialized = serde_json::to_value(data.project_type)
+        // The shared spec `key` MUST match the serde representation of the
+        // variant, since the key doubles as the partial filename and the dedup
+        // key. Guard the hidden coupling at this layer too: serialize each
+        // variant the tools accessor reports and compare.
+        use swissarmyhammer_project_detection::project_type_specs;
+        for spec in project_type_specs() {
+            let serialized = serde_json::to_value(spec.project_type)
                 .expect("ProjectType serializes")
                 .as_str()
                 .expect("ProjectType serializes to a string")
                 .to_string();
             assert_eq!(
-                data.key, serialized,
+                project_type_key(spec.project_type),
+                serialized,
                 "key for {:?} must match its serde rename",
-                data.project_type
+                spec.project_type
             );
         }
     }
 
     #[test]
     fn test_every_project_type_has_data() {
-        // project_type_data() expects an entry for every variant. Confirm the
-        // table covers all variants so the accessors can never panic.
-        let variants = [
-            ProjectType::Rust,
-            ProjectType::NodeJs,
-            ProjectType::Python,
-            ProjectType::Go,
-            ProjectType::JavaMaven,
-            ProjectType::JavaGradle,
-            ProjectType::CSharp,
-            ProjectType::CMake,
-            ProjectType::Makefile,
-            ProjectType::Flutter,
-            ProjectType::Php,
-            ProjectType::Swift,
-        ];
-        for pt in variants {
-            let data = project_type_data(pt);
-            assert_eq!(data.project_type, pt);
-            assert!(!data.name.is_empty(), "name for {pt:?} should be set");
+        // The accessors look the variant up in the shared spec and `expect()`
+        // an entry. Confirm every variant the spec lists resolves to a
+        // non-empty display name through the tools accessor so they never panic.
+        use swissarmyhammer_project_detection::project_type_specs;
+        for spec in project_type_specs() {
+            let name = project_type_name(spec.project_type);
+            assert!(
+                !name.is_empty(),
+                "name for {:?} should be set",
+                spec.project_type
+            );
         }
     }
 
