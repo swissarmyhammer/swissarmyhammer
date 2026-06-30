@@ -206,18 +206,35 @@ fn detect_workspace_info(
     }
 }
 
-/// Detect Rust workspace configuration
-fn detect_rust_workspace(path: &Path) -> Result<Option<WorkspaceInfo>, ProjectDetectionError> {
-    let cargo_toml_path = path.join("Cargo.toml");
-    if !cargo_toml_path.exists() {
+/// Read an optional config file relative to `path`.
+///
+/// Returns `Ok(None)` when the file is absent (a missing manifest simply means
+/// "no workspace info here"), `Ok(Some(content))` when present and readable,
+/// and a [`ProjectDetectionError::ReadFile`] when it exists but cannot be read.
+fn read_optional_config(
+    path: &Path,
+    filename: &str,
+) -> Result<Option<String>, ProjectDetectionError> {
+    let file_path = path.join(filename);
+    if !file_path.exists() {
         return Ok(None);
     }
 
     let content =
-        fs::read_to_string(&cargo_toml_path).map_err(|source| ProjectDetectionError::ReadFile {
-            path: cargo_toml_path.display().to_string(),
+        fs::read_to_string(&file_path).map_err(|source| ProjectDetectionError::ReadFile {
+            path: file_path.display().to_string(),
             source,
         })?;
+
+    Ok(Some(content))
+}
+
+/// Detect Rust workspace configuration
+fn detect_rust_workspace(path: &Path) -> Result<Option<WorkspaceInfo>, ProjectDetectionError> {
+    let content = match read_optional_config(path, "Cargo.toml")? {
+        Some(content) => content,
+        None => return Ok(None),
+    };
 
     // Simple check for [workspace] section
     if content.contains("[workspace]") {
@@ -236,17 +253,10 @@ fn detect_rust_workspace(path: &Path) -> Result<Option<WorkspaceInfo>, ProjectDe
 
 /// Detect npm workspace configuration
 fn detect_npm_workspace(path: &Path) -> Result<Option<WorkspaceInfo>, ProjectDetectionError> {
-    let package_json_path = path.join("package.json");
-    if !package_json_path.exists() {
-        return Ok(None);
-    }
-
-    let content = fs::read_to_string(&package_json_path).map_err(|source| {
-        ProjectDetectionError::ReadFile {
-            path: package_json_path.display().to_string(),
-            source,
-        }
-    })?;
+    let content = match read_optional_config(path, "package.json")? {
+        Some(content) => content,
+        None => return Ok(None),
+    };
 
     // Try to parse as JSON and check for workspaces field
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {

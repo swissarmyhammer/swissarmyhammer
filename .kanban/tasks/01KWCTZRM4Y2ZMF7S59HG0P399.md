@@ -84,6 +84,34 @@ comments:
   id: 01kwd0z95vqqnb283wmdakt302
   text: 'Iteration 3 implement: all 3 findings fixed at root. (1) Both ProjectDetectionError messages lowercased + test substring updated. (2) detect_project_at_path now iterates project_type_specs() — hardcoded array deleted; SPECS reordered to byte-match prior detection order (Go before Python, verified vs real prior code). (3) PROJECT_TYPE_DATA/ProjectTypeData/project_type_data deleted; ProjectTypeSpec gained name/key/partial; tools project_type_name/key/partial_name_for_type are thin spec_for() lookups; exported project_type_specs/spec_for/ProjectTypeSpec from lib.rs. Partial strings byte-identical, PHP None. Guards kept non-vacuous (spec_key_matches_serde_repr, spec_partial_matches_key). Single authoritative roster confirmed by grep — only PROJECT_TYPE_SPECS in non-test code; future project type = 1 table entry. Verified: affected crates + callers 3053/3053, clippy --workspace -D warnings clean, double-check PASS. Test evidence = implementer''s scoped run this session (avoided the slow rdeps sweep w/ known model-e2e timeouts). Proceeding to checkpoint commit. NB: tree has unrelated parallel-shell edits (review/validators, task 2v84v) — commit must stay scoped to this task''s files.'
   timestamp: 2026-06-30T19:44:20.667599+00:00
+- actor: claude-code
+  id: 01kwd1npktaqtmwjgwgknac75c
+  text: |-
+    Review iteration 3: prior 3 findings verified [x] (roster consolidation + lowercase errors held). 2 NEW production findings (7 test-code findings dropped under blanket test-refactoring exception; distinct from all prior — guardrail not triggered; review converging 21→3→2):
+    1. types.rs — ProjectTypeSpec is now pub but lacks #[derive(Debug)]; add it (fn-ptr field supports Debug/Clone/Copy).
+    2. detect.rs — detect_rust_workspace + detect_npm_workspace duplicate the read_to_string + ProjectDetectionError::ReadFile mapping; extract a shared read_optional_config helper.
+    Both clean, small, non-contradictory. Looping to /implement.
+  timestamp: 2026-06-30T19:56:35.322726+00:00
+- actor: claude-code
+  id: 01kwd1vv0p6shxjqjc3rerhypf
+  text: |-
+    Worked the 2026-06-30 14:45 review findings (pulled review→doing).
+
+    Finding 1 (types.rs): Added `#[derive(Debug, Clone, Copy)]` to `pub struct ProjectTypeSpec`. Debug is the required derive (public-type contract); Clone+Copy added for consistency with the crate's other Copy spec type `ProjectType` and because every field is Copy (ProjectType is Copy, &'static refs, fn pointer, Option<&'static str>). Compiles, clippy clean.
+
+    Finding 2 (detect.rs): Extracted `read_optional_config(path: &Path, filename: &str) -> Result<Option<String>, ProjectDetectionError>` — joins filename, returns Ok(None) when absent, reads with the identical ProjectDetectionError::ReadFile { path, source } mapping otherwise. Both detect_rust_workspace ("Cargo.toml") and detect_npm_workspace ("package.json") now call it via `match ... { Some(c) => c, None => return Ok(None) }`. Exact behavior preserved: same return values, same error variant/fields, same file-absent→Ok(None) semantics. The npm-specific `package_json_path` local was removed in favor of the shared path inside the helper.
+
+    Verification (all green):
+    - cargo fmt -p swissarmyhammer-project-detection -- --check → exit 0
+    - cargo clippy --workspace --all-targets -- -D warnings → exit 0
+    - cargo nextest run -p swissarmyhammer-project-detection -p swissarmyhammer-tools -p swissarmyhammer-lsp -p swissarmyhammer-cli -p swissarmyhammer-config → 3053 tests run, 3053 passed, 0 failed. All workspace-detection tests (test_detect_rust_project, test_detect_monorepo, test_detect_npm_workspace_{array,string,absent_key,no_package_json,object}_form) pass.
+
+    Left GREEN in doing for /review. Did not touch unrelated parallel-shell changes.
+  timestamp: 2026-06-30T19:59:56.438620+00:00
+- actor: claude-code
+  id: 01kwd1whaspaahby3jtwm1fx9m
+  text: 'Iteration 4 implement: both findings resolved. (1) types.rs ProjectTypeSpec gained #[derive(Debug, Clone, Copy)] (all fields Copy). (2) detect.rs extracted read_optional_config(path, filename) -> Result<Option<String>, ProjectDetectionError>; both detect_rust_workspace + detect_npm_workspace call it; behavior byte-for-byte preserved. Verified: affected crates + callers 3053/3053, clippy --workspace -D warnings clean, fmt clean. Parallel-shell files untouched. Proceeding to checkpoint commit → re-review.'
+  timestamp: 2026-06-30T20:00:19.289854+00:00
 position_column: doing
 position_ordinal: '8380'
 title: Add Swift project detection + project-types partial (prefer ULID via yaslab/ULID.swift)
@@ -100,3 +128,8 @@ Both the code-context `detect projects` op AND the LSP registry share ONE `Proje
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/code_context/detect.rs:73` — `PROJECT_TYPE_DATA`/`ProjectTypeData`/`project_type_data` ELIMINATED. `ProjectTypeSpec` (project-detection crate) extended with `name`/`key`/`partial` fields; tools-layer `project_type_name`/`project_type_key`/`partial_name_for_type` are now thin lookups into `spec_for(pt)`. The serde-key guard lives in types.rs (`spec_key_matches_serde_repr`) AND is mirrored at the tools layer (`test_project_type_key_matches_serde` iterates `project_type_specs()`). `partial` strings unchanged (`_partials/project-types/{key}`, PHP None); added `spec_partial_matches_key` guard.
 
 Result: `PROJECT_TYPE_SPECS` is the ONE authoritative per-variant roster. Adding a project type = one table entry. No parallel full-variant list remains in non-test code (verified by grep); the remaining full-variant enumerations are all test guards, which the task explicitly permits.
+
+## Review Findings (2026-06-30 14:45)
+
+- [x] `crates/swissarmyhammer-project-detection/src/types.rs` — Public struct `ProjectTypeSpec` lacks a `Debug` implementation. This delta made the struct `pub` (and added `name`/`key`/`partial` fields), so the public-type contract now applies: all public types with a non-empty representation must derive `Debug`. Add `#[derive(Debug)]` to `ProjectTypeSpec`.
+- [x] `crates/swissarmyhammer-project-detection/src/detect.rs` — `detect_rust_workspace` and `detect_npm_workspace` duplicate the same file-reading + error-handling pattern: join a filename to the path, check existence, `fs::read_to_string` with the identical `ProjectDetectionError::ReadFile { path, source }` mapping, returning `Ok(None)` when the file is absent. Extract a shared helper (e.g. `fn read_optional_config(path: &Path, filename: &str) -> Result<Option<String>, ProjectDetectionError>`) that encapsulates the existence check, read, and error mapping, then call it from both functions so the two cannot drift.

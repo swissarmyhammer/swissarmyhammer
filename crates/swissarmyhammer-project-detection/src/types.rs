@@ -114,6 +114,7 @@ impl Default for ProjectSymbols {
 /// symbol lookup, detection priority, and the tools-layer presentation metadata
 /// (display name, stable key, guideline partial) — derives from this table, so
 /// adding a project type touches exactly one entry here and nowhere else.
+#[derive(Debug, Clone, Copy)]
 pub struct ProjectTypeSpec {
     /// The project type this entry describes.
     pub project_type: ProjectType,
