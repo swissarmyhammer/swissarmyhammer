@@ -183,8 +183,8 @@ comments:
   id: 01kwd97v2grxj3h4bwx0ysjvv1
   text: 'Iteration 7 implement (per user ''one more round''): both 15:24 findings fixed in types.rs. (1) Added partial! macro (concat!("_partials/project-types/", key)) replacing 11 repeated literals — byte-identical static strs, PHP None, spec_partial_matches_key guard kept green. (2) value_types_support_equality now exercises HashSet for the 3 Hash+Eq types (ProjectSymbols dedup, ProjectType membership len-2, ProjectDetectionConfig dedup); PartialEq-only types correctly excluded; docstring made honest. Verified: project-detection 35/35, clippy -D warnings clean, 5-crate 3054/3054, double-check PASS. Only types.rs changed. NB: parallel-shell board sync dropped the 15:24 section from the live description (progress already 1.0) — fixes recorded here. Proceeding to checkpoint commit → re-review (expect clean → done).'
   timestamp: 2026-06-30T22:08:49.744681+00:00
-position_column: doing
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffef80
 title: Add Swift project detection + project-types partial (prefer ULID via yaslab/ULID.swift)
 ---
 Add first-class Swift support to project detection and create the matching `swift` project-types partial. The partial filename MUST match the detection key string (`project_type_key` == "swift" → `builtin/_partials/project-types/swift.md`), exactly as `flutter`, `java-gradle`, etc. do today.

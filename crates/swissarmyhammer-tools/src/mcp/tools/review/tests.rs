@@ -819,7 +819,8 @@ fn findings_json_escapes_embedded_quotes() {
         .trim_start_matches("```json")
         .trim_end_matches("```")
         .trim();
-    let parsed: serde_json::Value = serde_json::from_str(body).expect("findings_json is valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_str(body).expect("findings_json is valid JSON");
     assert_eq!(parsed[0]["claim"], json!(claim));
     assert_eq!(parsed[0]["file"], json!("src/a.rs"));
 }
