@@ -41,7 +41,7 @@ The engine is op-dispatched (verb + noun). Each `review` op returns a `ReviewRep
 
 Every `review` op accepts two optional modifiers:
 
-- **`validators`** — an array naming a subset of validators to run (defaults to every matching validator). Use it when the user wants a narrowed review — e.g. "review just duplication" → pass the duplication validator's name in `validators`.
+- **`validators`** — an array of **validator names** to run (defaults to every matching validator). Scoping is **whole-validator**, never per-rule: each validator is a named bundle of rules — `duplication`, `security`, or a language validator like `swift` (which bundles `casing`, `optionals`, `concurrency`, … as its rules). You pick validators, not individual rules; there is no rule-level filter. Use it when the user wants a narrowed review — "review just duplication" → `["duplication"]`; "review the Swift idioms" → `["swift"]`. To discover the available names (and the rules each bundles), call `{"op": "list validators"}`, or `{"op": "get validator", "name": "<name>"}` for one validator's full rule list.
 - **`backend`** — `session` (the remote default) or `local`. Pass `"local"` when the user says "review locally" / wants the in-process Llama backend.
 
 ```json
@@ -49,7 +49,7 @@ Every `review` op accepts two optional modifiers:
 {"op": "review sha", "sha": "HEAD~4..HEAD", "backend": "local"}
 ```
 
-There are no "dimensions" — that concept is gone. Scope is the op (`working`/`sha`/`file`); narrowing is `validators`; the backend is `backend`.
+There are no "dimensions" — that concept is gone. Scope is the op (`working`/`sha`/`file`); narrowing is `validators` (whole validators, not individual rules); the backend is `backend`.
 
 ## Process
 
