@@ -1564,4 +1564,57 @@ Body.
         assert!(match_criteria.files.contains(&"*.rs".to_string()));
         assert!(match_criteria.files.contains(&"*.ts".to_string()));
     }
+
+    #[test]
+    fn test_parse_ruleset_manifest_expands_exclude_file_group() {
+        use swissarmyhammer_directory::ValidatorsConfig;
+
+        // The data-driven/duplication shape: `exclude` referencing the
+        // `@file_groups/test_files` group must expand exactly like `files` does,
+        // so the structural test-code carve-out is data-driven, not hardcoded.
+        let content = r#"---
+name: data-driven
+description: Test exclude expansion
+match:
+  files:
+    - "@file_groups/source_code"
+  exclude:
+    - "@file_groups/test_files"
+---
+
+Body.
+"#;
+
+        let mut expander = swissarmyhammer_directory::YamlExpander::<ValidatorsConfig>::new();
+        expander
+            .add_builtin(
+                "file_groups/source_code",
+                r#"
+- "*.rs"
+- "*.ts"
+"#,
+            )
+            .unwrap();
+        expander
+            .add_builtin(
+                "file_groups/test_files",
+                r#"
+- "*_test.rs"
+- "*.test.ts"
+"#,
+            )
+            .unwrap();
+
+        let manifest =
+            parse_ruleset_manifest(content, std::path::Path::new("test"), Some(&expander)).unwrap();
+
+        let match_criteria = manifest.match_criteria.unwrap();
+        assert!(match_criteria.files.contains(&"*.rs".to_string()));
+        assert!(
+            match_criteria.exclude.contains(&"*_test.rs".to_string()),
+            "the @file_groups/test_files reference must expand into `exclude`: {:?}",
+            match_criteria.exclude
+        );
+        assert!(match_criteria.exclude.contains(&"*.test.ts".to_string()));
+    }
 }
