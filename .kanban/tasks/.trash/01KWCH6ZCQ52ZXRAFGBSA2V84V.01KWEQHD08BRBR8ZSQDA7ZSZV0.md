@@ -45,6 +45,15 @@ comments:
 
     Until both, a live /review will still flag test code — a stale-binary artifact, not a defect. After rebuild+restart+redeploy, re-run /review ^sa2v84v HEAD~1..HEAD to gate it, and it also unblocks a clean live re-review of ^q285h25 and ^0wvhgd7.
   timestamp: 2026-06-30T17:00:29.912100+00:00
+- actor: claude-code
+  id: 01kweq47axwb9jc89dayj75ye7
+  text: |-
+    REVERTED — approach rejected. Path/glob-based test-file exclusion is nonsensical for Rust: tests live inline in source files (#[cfg(test)] mod tests), so "test files" isn't a file-level property. Removed everything e43818505 added: the ValidatorMatch.exclude field + matches_files subtraction, all exclude test/fixtures (types.rs unit tests, drive.rs real-pipeline test, test_support fixtures, parser.rs + builtin/mod.rs tests, fleet/tests.rs literal), and the `exclude:` blocks in both VALIDATOR.md — kept match.files, restored the `** IMPORTANT ** This rule does not apply to test code.` prose line. ~/.validators re-synced. Validators crate green (305 passed, clippy clean).
+
+    Decision recorded for posterity: test-code exclusion is a STATEMENT in VALIDATOR.md honored by the reviewing agent's judgment, NOT a deterministic engine filter. This card's premise was wrong; not to be reattempted. Suggest archiving.
+
+    Note: the revert edits are uncommitted in a working tree that also holds the user's parallel WIP; the user is committing them.
+  timestamp: 2026-07-01T11:30:45.725917+00:00
 position_column: doing
 position_ordinal: '8380'
 project: local-review

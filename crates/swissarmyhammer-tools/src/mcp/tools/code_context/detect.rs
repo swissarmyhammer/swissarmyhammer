@@ -12,8 +12,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_config::TemplateContext;
-use swissarmyhammer_project_detection::{detect_projects, DetectedProject, ProjectType};
+use swissarmyhammer_project_detection::{detect_projects, spec_for, DetectedProject, ProjectType};
 use swissarmyhammer_templating::TemplateLibrary;
+
+/// Default directory traversal depth when the request omits `max_depth`.
+const DEFAULT_DETECT_MAX_DEPTH: usize = 3;
 
 /// Deserialize request parameters for project detection.
 #[derive(Deserialize, Default)]
@@ -23,38 +26,20 @@ struct DetectRequest {
     include_guidelines: Option<bool>,
 }
 
+// The per-variant presentation metadata (display name, stable key, guideline
+// partial) lives on `ProjectTypeSpec` in the project-detection crate, which is
+// the single authoritative roster of project types. The accessors below are
+// thin lookups into that shared spec, so adding a project type touches exactly
+// one table entry there and nothing here.
+
 /// Get a display name for a project type.
 fn project_type_name(pt: ProjectType) -> &'static str {
-    match pt {
-        ProjectType::Rust => "Rust",
-        ProjectType::NodeJs => "Node.js",
-        ProjectType::Python => "Python",
-        ProjectType::Go => "Go",
-        ProjectType::JavaMaven => "Java (Maven)",
-        ProjectType::JavaGradle => "Java (Gradle)",
-        ProjectType::CSharp => "C# / .NET",
-        ProjectType::CMake => "CMake",
-        ProjectType::Makefile => "Makefile",
-        ProjectType::Flutter => "Flutter",
-        ProjectType::Php => "PHP",
-    }
+    spec_for(pt).name
 }
 
 /// A stable string key for deduplication (matches serde rename).
 fn project_type_key(pt: ProjectType) -> &'static str {
-    match pt {
-        ProjectType::Rust => "rust",
-        ProjectType::NodeJs => "nodejs",
-        ProjectType::Python => "python",
-        ProjectType::Go => "go",
-        ProjectType::JavaMaven => "java-maven",
-        ProjectType::JavaGradle => "java-gradle",
-        ProjectType::CSharp => "csharp",
-        ProjectType::CMake => "cmake",
-        ProjectType::Makefile => "makefile",
-        ProjectType::Flutter => "flutter",
-        ProjectType::Php => "php",
-    }
+    spec_for(pt).key
 }
 
 /// Get the partial include name for a project type.
@@ -62,19 +47,7 @@ fn project_type_key(pt: ProjectType) -> &'static str {
 /// Returns `Some("_partials/project-types/{key}")` for types that have a guideline partial,
 /// `None` for types without one (e.g. Php).
 fn partial_name_for_type(pt: ProjectType) -> Option<&'static str> {
-    match pt {
-        ProjectType::Rust => Some("_partials/project-types/rust"),
-        ProjectType::NodeJs => Some("_partials/project-types/nodejs"),
-        ProjectType::Python => Some("_partials/project-types/python"),
-        ProjectType::Go => Some("_partials/project-types/go"),
-        ProjectType::JavaMaven => Some("_partials/project-types/java-maven"),
-        ProjectType::JavaGradle => Some("_partials/project-types/java-gradle"),
-        ProjectType::CSharp => Some("_partials/project-types/csharp"),
-        ProjectType::CMake => Some("_partials/project-types/cmake"),
-        ProjectType::Makefile => Some("_partials/project-types/makefile"),
-        ProjectType::Flutter => Some("_partials/project-types/flutter"),
-        ProjectType::Php => None,
-    }
+    spec_for(pt).partial
 }
 
 /// Build a Liquid template string that includes guidelines for the given project types.
@@ -140,6 +113,27 @@ fn make_relative(path: &Path, root: &Path) -> String {
     }
 }
 
+/// Format a project's workspace section as markdown.
+///
+/// Returns an empty string when there is no workspace info or it is not the
+/// workspace root, so callers can append unconditionally.
+fn format_workspace_info(
+    workspace_info: Option<&swissarmyhammer_project_detection::WorkspaceInfo>,
+) -> String {
+    let Some(ws) = workspace_info else {
+        return String::new();
+    };
+    if !ws.is_root {
+        return String::new();
+    }
+
+    let mut section = format!("**Workspace:** Yes ({} members)\n", ws.members.len());
+    if !ws.members.is_empty() {
+        section.push_str(&format!("**Members:** {}\n", ws.members.join(", ")));
+    }
+    section
+}
+
 /// Format detected projects as markdown output.
 ///
 /// When `prompt_library` is provided and `include_guidelines` is true, project-type
@@ -172,19 +166,7 @@ fn format_detected_projects(
             rel_path,
             project.marker_files.join(", ")
         ));
-
-        if let Some(ref ws) = project.workspace_info {
-            if ws.is_root {
-                output.push_str(&format!(
-                    "**Workspace:** Yes ({} members)\n",
-                    ws.members.len()
-                ));
-                if !ws.members.is_empty() {
-                    output.push_str(&format!("**Members:** {}\n", ws.members.join(", ")));
-                }
-            }
-        }
-
+        output.push_str(&format_workspace_info(project.workspace_info.as_ref()));
         output.push('\n');
     }
 
@@ -209,7 +191,7 @@ fn format_detected_projects(
 ///
 /// If the request contains an explicit `path`, uses that. Otherwise falls back
 /// to the context's working directory, then finds the git repository root.
-fn resolve_workspace_path(request_path: Option<&String>, context: &ToolContext) -> PathBuf {
+fn resolve_workspace_path(request_path: Option<&str>, context: &ToolContext) -> PathBuf {
     if let Some(p) = request_path {
         return PathBuf::from(p);
     }
@@ -231,8 +213,8 @@ pub async fn execute_detect(
     context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
     let request: DetectRequest = BaseToolImpl::parse_arguments(arguments.clone())?;
-    let root_path = resolve_workspace_path(request.path.as_ref(), context);
-    let max_depth = request.max_depth.unwrap_or(3);
+    let root_path = resolve_workspace_path(request.path.as_deref(), context);
+    let max_depth = request.max_depth.unwrap_or(DEFAULT_DETECT_MAX_DEPTH);
     let include_guidelines = request.include_guidelines.unwrap_or(true);
 
     tracing::debug!(
@@ -306,6 +288,7 @@ mod tests {
             ProjectType::Makefile,
             ProjectType::Flutter,
             ProjectType::Php,
+            ProjectType::Swift,
         ];
         for pt in types {
             let name = project_type_name(pt);
@@ -329,6 +312,7 @@ mod tests {
             ProjectType::CMake,
             ProjectType::Makefile,
             ProjectType::Flutter,
+            ProjectType::Swift,
         ];
         for pt in types {
             let partial = partial_name_for_type(pt);
@@ -603,9 +587,48 @@ mod tests {
             (ProjectType::Makefile, "makefile"),
             (ProjectType::Flutter, "flutter"),
             (ProjectType::Php, "php"),
+            (ProjectType::Swift, "swift"),
         ];
         for (pt, expected_key) in all_types {
             assert_eq!(project_type_key(pt), expected_key, "Wrong key for {:?}", pt);
+        }
+    }
+
+    #[test]
+    fn test_project_type_key_matches_serde() {
+        // The shared spec `key` MUST match the serde representation of the
+        // variant, since the key doubles as the partial filename and the dedup
+        // key. Guard the hidden coupling at this layer too: serialize each
+        // variant the tools accessor reports and compare.
+        use swissarmyhammer_project_detection::project_type_specs;
+        for spec in project_type_specs() {
+            let serialized = serde_json::to_value(spec.project_type)
+                .expect("ProjectType serializes")
+                .as_str()
+                .expect("ProjectType serializes to a string")
+                .to_string();
+            assert_eq!(
+                project_type_key(spec.project_type),
+                serialized,
+                "key for {:?} must match its serde rename",
+                spec.project_type
+            );
+        }
+    }
+
+    #[test]
+    fn test_every_project_type_has_data() {
+        // The accessors look the variant up in the shared spec and `expect()`
+        // an entry. Confirm every variant the spec lists resolves to a
+        // non-empty display name through the tools accessor so they never panic.
+        use swissarmyhammer_project_detection::project_type_specs;
+        for spec in project_type_specs() {
+            let name = project_type_name(spec.project_type);
+            assert!(
+                !name.is_empty(),
+                "name for {:?} should be set",
+                spec.project_type
+            );
         }
     }
 

@@ -10,8 +10,9 @@
 mod detect;
 mod types;
 
-pub use detect::detect_projects;
+pub use detect::{detect_projects, ProjectDetectionError};
 pub use types::{
-    should_skip_directory, DetectedProject, ProjectDetectionConfig, ProjectSymbols, ProjectType,
-    WorkspaceInfo, BUILTIN_CONFIG_YAML, SKIP_DIRECTORIES,
+    project_type_specs, should_skip_directory, spec_for, DetectedProject, ProjectDetectionConfig,
+    ProjectSymbols, ProjectType, ProjectTypeSpec, WorkspaceInfo, BUILTIN_CONFIG_YAML,
+    SKIP_DIRECTORIES,
 };
