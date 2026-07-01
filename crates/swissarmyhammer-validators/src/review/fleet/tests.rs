@@ -12,9 +12,7 @@ use crate::review::test_support::{
     findings_json, with_pool, ForkMode, ScriptedAgent, ScriptedAgentConfig, ScriptedReply,
     MOCK_PREFIX_TOKENS,
 };
-use crate::validators::types::{
-    Rule, RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch,
-};
+use crate::validators::types::{Rule, RuleSet, RuleSetManifest, RuleSetMetadata, ValidatorMatch};
 use crate::validators::{PoolConfig, ValidatorLoader, ValidatorSource};
 use claude_agent::protocol_translator::CacheUsage;
 
@@ -47,12 +45,7 @@ fn ruleset(name: &str, mandate: &str, rules: &[(&str, &str)]) -> RuleSet {
 
 /// Like [`ruleset`] but with a distinctive VALIDATOR.md prose `body` so the
 /// rendered prompt can be asserted against the validator-wide guidance block.
-fn ruleset_with_body(
-    name: &str,
-    mandate: &str,
-    body: &str,
-    rules: &[(&str, &str)],
-) -> RuleSet {
+fn ruleset_with_body(name: &str, mandate: &str, body: &str, rules: &[(&str, &str)]) -> RuleSet {
     RuleSet {
         manifest: RuleSetManifest {
             name: name.to_string(),
@@ -63,7 +56,6 @@ fn ruleset_with_body(
             match_criteria: Some(ValidatorMatch {
                 tools: vec![],
                 files: vec!["*.rs".to_string()],
-                exclude: vec![],
             }),
             trigger_matcher: None,
             tags: vec![],
@@ -533,7 +525,9 @@ fn validator_suffix_emits_the_manifest_body_after_mandate_before_rules() {
     let body_at = suffix
         .find("does not apply to test code")
         .expect("body must be present");
-    let rules_at = suffix.find("## Rules").expect("rules header must be present");
+    let rules_at = suffix
+        .find("## Rules")
+        .expect("rules header must be present");
     assert!(
         mandate_at < body_at,
         "the body must come AFTER the mandate: {suffix}"
@@ -549,12 +543,11 @@ fn validator_suffix_emits_the_manifest_body_after_mandate_before_rules() {
 /// depends on the render being a pure function of its inputs).
 #[test]
 fn validator_suffix_omits_guidance_when_body_is_empty() {
-    let rs = ruleset(
+    let rs = ruleset("duplication", "mandate", &[("no-copy-paste", "RULE_BODY")]);
+    let vw = validator_work(
         "duplication",
-        "mandate",
-        &[("no-copy-paste", "RULE_BODY")],
+        vec![file_work("src/a.rs", "alpha", "src/x.rs")],
     );
-    let vw = validator_work("duplication", vec![file_work("src/a.rs", "alpha", "src/x.rs")]);
 
     let suffix = render_validator_suffix(&vw, &rs);
     assert!(
@@ -1124,7 +1117,10 @@ async fn empty_first_pass_spends_no_followup_sweeps() {
     // The first pass finds nothing; the sweep header still has a (would-be)
     // entry so a stray sweep would be observable — it must not fire.
     let agent = forking_agent(vec![
-        (RESCAN_NEEDLE.to_string(), ScriptedReply::Text("[]".to_string())),
+        (
+            RESCAN_NEEDLE.to_string(),
+            ScriptedReply::Text("[]".to_string()),
+        ),
         first_pass_entry("[]".to_string()),
     ]);
     let probe = Arc::clone(&agent);
@@ -1641,7 +1637,8 @@ async fn forked_task_with_claude_cache_usage_logs_warm_cache() {
 
     assert_eq!(outcome.attempted(), 1);
     assert_eq!(
-        outcome.failed(), 0,
+        outcome.failed(),
+        0,
         "the forked task resolved through collect_forked_task without error"
     );
     assert_eq!(outcome.findings.len(), 1);
@@ -1681,7 +1678,8 @@ async fn prefix_session_is_unpinned_even_when_a_validator_task_errors() {
 
     assert_eq!(outcome.attempted(), 2, "two validator tasks");
     assert_eq!(
-        outcome.failed(), 1,
+        outcome.failed(),
+        1,
         "the erroring validator task is a failed task"
     );
     assert_eq!(
@@ -1809,7 +1807,11 @@ async fn one_failing_task_yields_zero_findings_without_aborting_the_rest() {
     assert_eq!(outcome.findings[0].validator, "val-good");
     // The tally records both tasks attempted and exactly the one that failed.
     assert_eq!(outcome.attempted(), 2, "two validator tasks attempted");
-    assert_eq!(outcome.failed(), 1, "the erroring task is counted as failed");
+    assert_eq!(
+        outcome.failed(),
+        1,
+        "the erroring task is counted as failed"
+    );
 }
 
 #[tokio::test]
@@ -1872,7 +1874,8 @@ async fn validator_missing_from_loader_is_skipped_not_panicked() {
         "an unknown validator yields no findings"
     );
     assert_eq!(
-        outcome.attempted(), 0,
+        outcome.attempted(),
+        0,
         "no task is attempted for a validator missing from the loader"
     );
     assert_eq!(outcome.failed(), 0);

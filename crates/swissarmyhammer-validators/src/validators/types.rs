@@ -21,21 +21,9 @@ pub const DEFAULT_VALIDATOR_TIMEOUT_SECONDS: u32 = 30;
 /// Both `tools` and `files` support pattern matching:
 /// - `tools`: Regex patterns matched against tool names (case-insensitive)
 /// - `files`: Glob patterns matched against file paths (case-insensitive)
-/// - `exclude`: Glob patterns that *subtract* from `files` — a path matching
-///   any `exclude` glob never matches this criteria, even if it matches `files`
 ///
-/// If both `tools` and `files` are specified, both must match for the validator
-/// to run. If neither is specified (empty), the validator matches everything.
-///
-/// # Why `exclude` is structural
-///
-/// `exclude` is the engine-level carve-out that prose in a validator body cannot
-/// enforce: the finder model flags whatever file content it is shown, so a
-/// "does not apply to test code" sentence in the body is routinely ignored. By
-/// dropping excluded paths *before* the finder ever sees them, the model cannot
-/// override the carve-out — it isn't shown the file. The `data-driven` and
-/// `duplication` validators use `exclude: ["@file_groups/test_files"]` so test
-/// code is never a candidate for those two concerns.
+/// If both are specified, both must match for the validator to run.
+/// If neither is specified (empty), the validator matches everything.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ValidatorMatch {
     /// Tool names to match (e.g., ["Write", "Edit"]).
@@ -45,21 +33,10 @@ pub struct ValidatorMatch {
     /// File glob patterns to match (e.g., ["*.ts", "src/**/*.rs"]).
     #[serde(default)]
     pub files: Vec<String>,
-
-    /// File glob patterns to *exclude*: a path matching any of these never
-    /// matches this criteria, even when it matches `files`. Authored in
-    /// frontmatter as e.g. `["@file_groups/test_files"]`, expanded the same way
-    /// `files` is. Empty (the default) excludes nothing.
-    #[serde(default)]
-    pub exclude: Vec<String>,
 }
 
 impl ValidatorMatch {
     /// Check if this match criteria is empty (matches everything).
-    ///
-    /// `exclude` alone does not make the criteria non-empty: with no `tools` and
-    /// no `files`, the validator still matches everything (there is nothing to
-    /// subtract from). It only narrows a non-empty `files` set.
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty() && self.files.is_empty()
     }
@@ -238,7 +215,6 @@ impl ValidatorFrontmatter {
                 self.match_criteria = Some(ValidatorMatch {
                     tools: vec![],
                     files: patterns.to_vec(),
-                    exclude: vec![],
                 });
             }
         }
@@ -387,38 +363,27 @@ fn matches_tools(match_criteria: &ValidatorMatch, ctx: &MatchContext) -> bool {
     })
 }
 
-/// Check if a file matches any of the file glob patterns, honoring `exclude`.
+/// Check if a file matches any of the file glob patterns.
 ///
-/// Empty `files` matches everything (an `exclude` with no `files` to narrow is a
-/// no-op — there is no candidate set to subtract from). When `files` is set, a
-/// path matches only if it matches `files` AND matches none of `exclude`. When
-/// `changed_files` is present, the patterns match against any of those paths;
-/// otherwise they match against the single `file_path`. If file patterns are
-/// specified but there is nothing to match against, the criteria does not match.
-///
-/// The `exclude` subtraction is the structural test-code carve-out: dropping an
-/// excluded path here keeps it out of the per-validator work-list (and therefore
-/// out of the finder's prompt) on every review path, since both the whole-file
-/// and diff-scoped scopes resolve their files through this one matcher.
+/// Empty `files` matches everything. When `changed_files` is present, the
+/// patterns match against any of those paths; otherwise they match against the
+/// single `file_path`. If file patterns are specified but there is nothing to
+/// match against, the criteria does not match.
 fn matches_files(match_criteria: &ValidatorMatch, ctx: &MatchContext) -> bool {
     if match_criteria.files.is_empty() {
         return true;
     }
 
-    let included = compile_glob_patterns(&match_criteria.files);
-    let excluded = compile_glob_patterns(&match_criteria.exclude);
-    let is_match = |path: &str| {
-        matches_any_pattern(path, &included) && !matches_any_pattern(path, &excluded)
-    };
+    let compiled = compile_glob_patterns(&match_criteria.files);
 
     if let Some(files) = &ctx.changed_files {
-        return files.iter().any(|f| is_match(f));
+        return files.iter().any(|f| matches_any_pattern(f, &compiled));
     }
 
     let Some(path) = &ctx.file_path else {
         return false;
     };
-    is_match(path)
+    matches_any_pattern(path, &compiled)
 }
 
 /// Result of running a validator.
@@ -800,7 +765,6 @@ mod tests {
         let with_tools = ValidatorMatch {
             tools: vec!["Write".to_string()],
             files: vec![],
-            exclude: vec![],
         };
         assert!(!with_tools.is_empty());
     }
@@ -818,7 +782,6 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec!["Write".to_string(), "Edit".to_string()],
                 files: vec![],
-                exclude: vec![],
             }),
             None,
         );
@@ -840,7 +803,6 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec!["Write|Edit".to_string(), "Bash.*".to_string()],
                 files: vec![],
-                exclude: vec![],
             }),
             None,
         );
@@ -860,7 +822,6 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec![],
                 files: vec!["*.ts".to_string(), "src/**/*.rs".to_string()],
-                exclude: vec![],
             }),
             None,
         );
@@ -881,7 +842,6 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec![],
                 files: vec!["*.rs".to_string()],
-                exclude: vec![],
             }),
             None,
         );
@@ -899,58 +859,12 @@ mod tests {
     }
 
     #[test]
-    fn test_validator_exclude_subtracts_from_files_single_path() {
-        // `*.rs` matches, but `*_test.rs` is excluded — the structural test-code
-        // carve-out, on the single-`file_path` branch the review scope uses.
-        let validator = make_validator(
-            Some(ValidatorMatch {
-                tools: vec![],
-                files: vec!["*.rs".to_string()],
-                exclude: vec!["*_test.rs".to_string()],
-            }),
-            None,
-        );
-
-        assert!(validator.matches(&MatchContext::new().with_file("src/config.rs")));
-        assert!(!validator.matches(&MatchContext::new().with_file("src/config_test.rs")));
-        // Case-insensitive, like every other glob match here.
-        assert!(!validator.matches(&MatchContext::new().with_file("src/CONFIG_TEST.RS")));
-    }
-
-    #[test]
-    fn test_validator_exclude_subtracts_from_files_changed_files() {
-        // The same subtraction on the `changed_files` branch: an excluded path
-        // does not count as a match even though it matches `files`.
-        let validator = make_validator(
-            Some(ValidatorMatch {
-                tools: vec![],
-                files: vec!["*.rs".to_string()],
-                exclude: vec!["*_test.rs".to_string()],
-            }),
-            None,
-        );
-
-        // A lone excluded changed file does not match.
-        assert!(!validator
-            .matches(&MatchContext::new().with_changed_files(vec!["src/config_test.rs".to_string()])));
-        // A non-excluded changed file still matches.
-        assert!(validator
-            .matches(&MatchContext::new().with_changed_files(vec!["src/config.rs".to_string()])));
-        // Mixed: the non-excluded file carries the match.
-        assert!(validator.matches(&MatchContext::new().with_changed_files(vec![
-            "src/config_test.rs".to_string(),
-            "src/config.rs".to_string(),
-        ])));
-    }
-
-    #[test]
     fn test_validator_empty_files_matches_with_changed_files() {
         // Empty files matches everything regardless of changed files.
         let validator = make_validator(
             Some(ValidatorMatch {
                 tools: vec![],
                 files: vec![],
-                exclude: vec![],
             }),
             None,
         );
@@ -1015,7 +929,6 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec!["Bash".to_string()],
                 files: vec![],
-                exclude: vec![],
             }),
             Some("deploy_.*".to_string()),
         );
@@ -1133,7 +1046,6 @@ mod tests {
             match_criteria: Some(ValidatorMatch {
                 tools: vec!["Bash".to_string()],
                 files: vec!["*.sh".to_string()],
-                exclude: vec![],
             }),
             trigger_matcher: None,
             tags: vec!["custom".to_string()],
@@ -1205,7 +1117,6 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec!["Write".to_string(), "Edit".to_string()],
                 files: vec![],
-                exclude: vec![],
             }),
             None,
         );
@@ -1221,7 +1132,6 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec![],
                 files: vec!["*.ts".to_string(), "src/**/*.rs".to_string()],
-                exclude: vec![],
             }),
             None,
         );
@@ -1251,7 +1161,6 @@ mod tests {
             Some(ValidatorMatch {
                 tools: vec![],
                 files: vec!["*.ts".to_string()],
-                exclude: vec![],
             }),
             None,
         );

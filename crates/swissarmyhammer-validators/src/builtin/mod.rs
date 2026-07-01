@@ -747,57 +747,6 @@ mod tests {
     }
 
     #[test]
-    fn test_data_driven_and_duplication_exclude_test_files_structurally() {
-        use crate::validators::types::MatchContext;
-
-        let mut loader = ValidatorLoader::new();
-        load_builtins(&mut loader);
-
-        // The two validators whose "does not apply to test code" prose was
-        // ineffective now carry a structural `match.exclude` of
-        // `@file_groups/test_files`. Assert through the REAL builtin load path
-        // (the same one the MCP review op uses) that each:
-        //   1. has its `exclude` expanded from the `@` reference (no `@` left), and
-        //   2. matches a non-test source file but NOT a test file.
-        for name in ["data-driven", "duplication"] {
-            let ruleset = loader
-                .get_ruleset(name)
-                .unwrap_or_else(|| panic!("{name} should be loaded"));
-            let match_criteria = ruleset
-                .manifest
-                .match_criteria
-                .as_ref()
-                .unwrap_or_else(|| panic!("{name} should have match criteria"));
-
-            assert!(
-                !match_criteria.exclude.is_empty(),
-                "{name} must carry an expanded exclude set, got: {:?}",
-                match_criteria.exclude
-            );
-            assert!(
-                !match_criteria.exclude.iter().any(|e| e.starts_with('@')),
-                "{name} exclude @references must be expanded, got: {:?}",
-                match_criteria.exclude
-            );
-
-            // A non-test source file is in scope; a test file is excluded
-            // before the finder ever sees it.
-            assert!(
-                ruleset.matches(&MatchContext::new().with_file("src/config.rs")),
-                "{name} should match a non-test source file"
-            );
-            assert!(
-                !ruleset.matches(&MatchContext::new().with_file("src/config_test.rs")),
-                "{name} must NOT match a Rust test file (structural exclusion)"
-            );
-            assert!(
-                !ruleset.matches(&MatchContext::new().with_file("src/widget.test.ts")),
-                "{name} must NOT match a TS test file (structural exclusion)"
-            );
-        }
-    }
-
-    #[test]
     fn test_review_reference_files_are_removed() {
         // The language guidance was migrated into builtin/validators/<lang>; the
         // source reference files must no longer exist.

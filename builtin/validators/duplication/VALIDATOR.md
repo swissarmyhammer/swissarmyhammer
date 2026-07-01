@@ -10,8 +10,6 @@ metadata:
 match:
   files:
     - "@file_groups/source_code"
-  exclude:
-    - "@file_groups/test_files"
 probes:
   - duplicates
 ---
@@ -28,6 +26,4 @@ plus a changed-set comparison) and injects the matching blocks as ground-truth
 evidence — you do not have to ask the agent to go look for duplicates, the
 evidence is already on the finding.
 
-Test files are excluded structurally by this validator's `match.exclude`
-(`@file_groups/test_files`), so test code never reaches the finder here — the
-exclusion is enforced by the engine, not by this prose.
+** IMPORTANT ** This rule does not apply to test code.

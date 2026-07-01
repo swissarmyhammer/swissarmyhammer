@@ -428,9 +428,9 @@ mod tests {
     use crate::review::fleet::FleetConfig;
     use crate::review::scope::Scope;
     use crate::review::test_support::{
-        findings_json as shared_findings_json, index_conn, loader_with, loader_with_exclude,
-        prompt_text, ruleset, seeded_dup_repo, seeded_two_file_dup_repo, verdict_json,
-        ScriptedAdapter, ScriptedAgent, ScriptedAgentConfig, ScriptedReply, TestRepo, DIM,
+        findings_json as shared_findings_json, loader_with, prompt_text, ruleset, seeded_dup_repo,
+        seeded_two_file_dup_repo, verdict_json, ScriptedAdapter, ScriptedAgent,
+        ScriptedAgentConfig, ScriptedReply,
     };
 
     /// How long a wedged pipeline may run before a test fails instead of
@@ -594,136 +594,6 @@ mod tests {
         assert_eq!(report.counts.confirmed, 1);
     }
 
-    // ---- structural test-file exclusion (data-driven / duplication) -------
-
-    /// A validator with `exclude: ["*_test.rs"]` must never have a test file
-    /// reach the finder, while a non-test file with the SAME flaggable pattern
-    /// still does — proving the carve-out is structural (the model can't flag
-    /// what it isn't shown) and scoped (not a blanket disable).
-    ///
-    /// This drives the REAL `run_review_over_agent` pipeline — the same path the
-    /// MCP `review` op uses — over a repo holding both a non-test source file
-    /// (`src/config.rs`) and a test file (`src/config_test.rs`), each carrying a
-    /// hardcoded literal a `data-driven`-style validator would flag.
-    ///
-    /// The scripted agent's reply is keyed on the file's OWN source marker (the
-    /// per-file source is inlined into the fan-out prompt only when the file is
-    /// in scope). The test-file entry is listed FIRST: before the exclusion
-    /// existed, the test file was in scope, its marker was in the prompt, that
-    /// entry fired, and a `src/config_test.rs` finding appeared (the RED state).
-    /// With the exclusion, the test file's source never enters the prompt, the
-    /// test-file entry never matches, and the non-test entry fires instead —
-    /// yielding exactly one finding, for `src/config.rs`.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn review_excludes_test_files_for_an_excluding_validator() {
-        const NONTEST_MARKER: &str = "NONTEST_TIMEOUT_LITERAL_30";
-        const TESTFILE_MARKER: &str = "TESTFILE_TIMEOUT_LITERAL_30";
-
-        let repo = TestRepo::new();
-        repo.write("README.md", "# base\n");
-        repo.commit("initial");
-        // Two untracked source files (Working scope includes untracked). Both
-        // carry a hardcoded `30` literal a data-driven validator would flag; the
-        // unique markers let the scripted agent tell which file's source it was
-        // shown.
-        repo.write(
-            "src/config.rs",
-            &format!("pub fn make() -> u32 {{ let {NONTEST_MARKER} = 30; {NONTEST_MARKER} }}\n"),
-        );
-        repo.write(
-            "src/config_test.rs",
-            &format!("fn helper() -> u32 {{ let {TESTFILE_MARKER} = 30; {TESTFILE_MARKER} }}\n"),
-        );
-
-        let conn = index_conn();
-        let embedder = model_embedding::mock::MockEmbedder::new(DIM);
-
-        // The `data-driven`-shaped validator matches `*.rs` but EXCLUDES
-        // `*_test.rs` — the structural carve-out under test.
-        let loader =
-            loader_with_exclude("data-driven", "*.rs", &["*_test.rs"], &[]);
-
-        // Entry order matters: the test-file entry is first, so before the
-        // exclusion (when the test file's marker was in the prompt) it would
-        // fire and surface a test-file finding.
-        let script: Vec<(Vec<String>, ScriptedReply)> = vec![
-            (
-                vec!["testfile-claim".to_string()],
-                ScriptedReply::Text(verdict_json(true, "the test-file literal is real")),
-            ),
-            (
-                vec!["nontest-claim".to_string()],
-                ScriptedReply::Text(verdict_json(true, "the non-test literal is real")),
-            ),
-            (
-                vec![TESTFILE_MARKER.to_string()],
-                ScriptedReply::Text(shared_findings_json(
-                    "src/config_test.rs",
-                    1,
-                    "data-driven-rule",
-                    "testfile-claim",
-                )),
-            ),
-            (
-                vec![NONTEST_MARKER.to_string()],
-                ScriptedReply::Text(shared_findings_json(
-                    "src/config.rs",
-                    1,
-                    "data-driven-rule",
-                    "nontest-claim",
-                )),
-            ),
-        ];
-
-        let (notify_tx, notification_rx) = broadcast::channel(BACKEND_BROADCAST_CAPACITY);
-        let agent = ScriptedAgent::with_script(
-            script,
-            ScriptedAgentConfig {
-                broadcast: Some(notify_tx),
-                bridge_to_connection: true,
-                ..ScriptedAgentConfig::default()
-            },
-        );
-        let dyn_agent = DynConnectTo::new(ScriptedAdapter::new(agent));
-
-        let report = run_review_over_agent(
-            dyn_agent,
-            notification_rx,
-            Scope::Working,
-            repo.path(),
-            &loader,
-            &conn,
-            &embedder,
-            PoolConfig::remote(TEST_POOL_WORKERS),
-            FleetConfig::default(),
-            TEST_NOW,
-        )
-        .await
-        .expect("pipeline should produce a report");
-
-        // The test file is excluded structurally: NO finding may reference it.
-        assert!(
-            !report.markdown.contains("src/config_test.rs"),
-            "a test file matched by an excluding validator must never reach the finder, \
-             so no finding may reference it: {}",
-            report.markdown
-        );
-        // The non-test file with the SAME pattern is still flagged — the
-        // exclusion is scoped, not a blanket disable.
-        assert!(
-            report.markdown.contains("- [ ] `src/config.rs:1`"),
-            "the non-test file with the same pattern must still be flagged: {}",
-            report.markdown
-        );
-        assert_eq!(
-            report.counts.findings, 1,
-            "exactly one finding (the non-test file) — the test file is dropped \
-             before the finder: {}",
-            report.markdown
-        );
-        assert_eq!(report.counts.confirmed, 1);
-    }
-
     // ---- content-budgeted batching: a large diff fans out as several batches --
 
     /// A diff too large for one shared prime is split into content-budgeted
@@ -795,7 +665,9 @@ mod tests {
             &conn,
             &embedder,
             PoolConfig::remote(TEST_POOL_WORKERS),
-            FleetConfig { batch_size: TEST_BATCH_SIZE_BYTES },
+            FleetConfig {
+                batch_size: TEST_BATCH_SIZE_BYTES,
+            },
             TEST_NOW,
         )
         .await
