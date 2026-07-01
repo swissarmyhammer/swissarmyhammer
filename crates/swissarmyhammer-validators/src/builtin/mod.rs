@@ -112,7 +112,11 @@ mod tests {
         ("python", "src/app.py", "src/app.rs"),
         ("js-ts", "src/index.ts", "src/index.rs"),
         ("dart", "lib/widget.dart", "lib/widget.rs"),
-        ("swift", "Sources/App/Feature.swift", "Sources/App/Feature.rs"),
+        (
+            "swift",
+            "Sources/App/Feature.swift",
+            "Sources/App/Feature.rs",
+        ),
     ];
 
     #[test]
