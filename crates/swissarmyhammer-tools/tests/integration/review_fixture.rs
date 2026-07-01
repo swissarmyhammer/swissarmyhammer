@@ -402,8 +402,7 @@ pub fn scripted_factory(agent: Arc<ScriptedAgent>) -> AgentFactory {
     Arc::new(move || {
         let agent = Arc::clone(&agent);
         Box::pin(async move {
-            let (notify_tx, notification_rx) =
-                broadcast::channel(FIXTURE_AGENT_NOTIFY_BUFFER_SIZE);
+            let (notify_tx, notification_rx) = broadcast::channel(FIXTURE_AGENT_NOTIFY_BUFFER_SIZE);
             let agent = ScriptedAgent::rebind_broadcast(&agent, notify_tx, true);
             let dyn_agent = DynConnectTo::new(ScriptedAdapter::new(agent));
             Ok(AgentHandle {

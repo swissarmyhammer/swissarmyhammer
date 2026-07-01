@@ -283,8 +283,8 @@ pub fn ruleset(name: &str, file_glob: &str, probes: &[&str]) -> RuleSet {
             }),
             trigger_matcher: None,
             tags: vec![],
-                probes: probes.iter().map(|p| p.to_string()).collect(),
-                timeout: RULESET_TIMEOUT_SECS,
+            probes: probes.iter().map(|p| p.to_string()).collect(),
+            timeout: RULESET_TIMEOUT_SECS,
             once: false,
         },
         rules: vec![Rule {

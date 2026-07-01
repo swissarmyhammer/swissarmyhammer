@@ -89,7 +89,6 @@ mod tests {
         "data-driven",
         "complexity",
         "function-length",
-        "naming",
         "no-commented-code",
         "missing-docs",
     ];

@@ -1286,12 +1286,7 @@ mod tests {
 
     /// Like [`ruleset`] but with a distinctive VALIDATOR.md prose `body` so the
     /// rendered prompt can be asserted against the validator-wide guidance block.
-    fn ruleset_with_body(
-        name: &str,
-        mandate: &str,
-        body: &str,
-        rules: &[(&str, &str)],
-    ) -> RuleSet {
+    fn ruleset_with_body(name: &str, mandate: &str, body: &str, rules: &[(&str, &str)]) -> RuleSet {
         RuleSet {
             manifest: RuleSetManifest {
                 name: name.to_string(),
@@ -1771,7 +1766,9 @@ mod tests {
         let body_at = suffix
             .find("does not apply to test code")
             .expect("body must be present");
-        let rules_at = suffix.find("## Rules").expect("rules header must be present");
+        let rules_at = suffix
+            .find("## Rules")
+            .expect("rules header must be present");
         assert!(
             mandate_at < body_at,
             "the body must come AFTER the mandate: {suffix}"
@@ -1787,12 +1784,11 @@ mod tests {
     /// depends on the render being a pure function of its inputs).
     #[test]
     fn validator_suffix_omits_guidance_when_body_is_empty() {
-        let rs = ruleset(
+        let rs = ruleset("duplication", "mandate", &[("no-copy-paste", "RULE_BODY")]);
+        let vw = validator_work(
             "duplication",
-            "mandate",
-            &[("no-copy-paste", "RULE_BODY")],
+            vec![file_work("src/a.rs", "alpha", "src/x.rs")],
         );
-        let vw = validator_work("duplication", vec![file_work("src/a.rs", "alpha", "src/x.rs")]);
 
         let suffix = render_validator_suffix(&vw, &rs);
         assert!(
@@ -2362,7 +2358,10 @@ mod tests {
         // The first pass finds nothing; the sweep header still has a (would-be)
         // entry so a stray sweep would be observable — it must not fire.
         let agent = forking_agent(vec![
-            (RESCAN_NEEDLE.to_string(), ScriptedReply::Text("[]".to_string())),
+            (
+                RESCAN_NEEDLE.to_string(),
+                ScriptedReply::Text("[]".to_string()),
+            ),
             first_pass_entry("[]".to_string()),
         ]);
         let probe = Arc::clone(&agent);
@@ -2879,7 +2878,8 @@ mod tests {
 
         assert_eq!(outcome.attempted(), 1);
         assert_eq!(
-            outcome.failed(), 0,
+            outcome.failed(),
+            0,
             "the forked task resolved through collect_forked_task without error"
         );
         assert_eq!(outcome.findings.len(), 1);
@@ -2919,7 +2919,8 @@ mod tests {
 
         assert_eq!(outcome.attempted(), 2, "two validator tasks");
         assert_eq!(
-            outcome.failed(), 1,
+            outcome.failed(),
+            1,
             "the erroring validator task is a failed task"
         );
         assert_eq!(
@@ -3047,7 +3048,11 @@ mod tests {
         assert_eq!(outcome.findings[0].validator, "val-good");
         // The tally records both tasks attempted and exactly the one that failed.
         assert_eq!(outcome.attempted(), 2, "two validator tasks attempted");
-        assert_eq!(outcome.failed(), 1, "the erroring task is counted as failed");
+        assert_eq!(
+            outcome.failed(),
+            1,
+            "the erroring task is counted as failed"
+        );
     }
 
     #[tokio::test]
@@ -3110,7 +3115,8 @@ mod tests {
             "an unknown validator yields no findings"
         );
         assert_eq!(
-            outcome.attempted(), 0,
+            outcome.attempted(),
+            0,
             "no task is attempted for a validator missing from the loader"
         );
         assert_eq!(outcome.failed(), 0);

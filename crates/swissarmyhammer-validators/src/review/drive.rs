@@ -665,7 +665,9 @@ mod tests {
             &conn,
             &embedder,
             PoolConfig::remote(TEST_POOL_WORKERS),
-            FleetConfig { batch_size: TEST_BATCH_SIZE_BYTES },
+            FleetConfig {
+                batch_size: TEST_BATCH_SIZE_BYTES,
+            },
             TEST_NOW,
         )
         .await
