@@ -1137,7 +1137,15 @@ fn install_profile_skills(
         let (instructions, metadata) = render_profile_skill(&library, &ctx, skill);
         let content =
             swissarmyhammer_skills::deploy::format_skill_md(skill, &instructions, &metadata);
-        let deployed = stage_and_deploy_rendered(&name, &content, "SKILL.md", scope, root, true)?;
+        let deployed = stage_and_deploy_rendered(
+            &name,
+            &content,
+            "SKILL.md",
+            &skill.resources.files,
+            scope,
+            root,
+            true,
+        )?;
         merge_targets(&mut targets, deployed);
     }
 
@@ -1208,7 +1216,15 @@ fn install_profile_agents(
             }
         }
         let content = rendered_agent.to_agent_md(&rendered_body);
-        let deployed = stage_and_deploy_rendered(&name, &content, "AGENT.md", scope, root, false)?;
+        let deployed = stage_and_deploy_rendered(
+            &name,
+            &content,
+            "AGENT.md",
+            &std::collections::HashMap::new(),
+            scope,
+            root,
+            false,
+        )?;
         merge_targets(&mut targets, deployed);
     }
 
@@ -1402,11 +1418,17 @@ fn deinit_profile_validators(
 /// symlink mechanism, rooting at `root` when supplied so deployment never reads
 /// `current_dir()`.
 ///
+/// `extra_files` are progressive-disclosure resources (e.g.
+/// `references/RUST_COVERAGE.md`) staged beside the manifest under their
+/// relative paths — the rendered body links to them relatively, so a store
+/// entry without them is broken.
+///
 /// `is_skill` selects the skill store/dirs vs. the agent store/dirs.
 fn stage_and_deploy_rendered(
     name: &str,
     content: &str,
     file_name: &str,
+    extra_files: &std::collections::HashMap<String, String>,
     scope: InitScope,
     root: Option<&Path>,
     is_skill: bool,
@@ -1421,6 +1443,23 @@ fn stage_and_deploy_rendered(
         .map_err(|e| RegistryError::Validation(format!("failed to create temp dir: {e}")))?;
     std::fs::write(item_dir.join(file_name), content)
         .map_err(|e| RegistryError::Validation(format!("failed to write {file_name}: {e}")))?;
+
+    for (rel_path, file_content) in extra_files {
+        if !store::is_safe_relative_path(rel_path) {
+            return Err(RegistryError::Validation(format!(
+                "unsafe resource path in {name}: {rel_path:?}"
+            )));
+        }
+        let dest = item_dir.join(rel_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                RegistryError::Validation(format!("failed to create resource dir: {e}"))
+            })?;
+        }
+        std::fs::write(&dest, file_content).map_err(|e| {
+            RegistryError::Validation(format!("failed to write resource {rel_path}: {e}"))
+        })?;
+    }
 
     let global = scope_is_global(scope);
     if is_skill {
@@ -3443,6 +3482,42 @@ mod applier_tests {
         assert!(
             project.join(".skills/commit/SKILL.md").is_file(),
             "a real builtin skill must deploy beside the README"
+        );
+    }
+
+    /// Builtin skills with progressive-disclosure resources (`references/*.md`)
+    /// must deploy those files beside the rendered SKILL.md — the skill body
+    /// links to them relatively, so a store entry without them is broken.
+    #[test]
+    #[serial]
+    fn init_profile_deploys_skill_reference_resources() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().canonicalize().unwrap();
+        let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(&project).unwrap();
+        let config_path = write_generic_agents_config(&project);
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let profile = Profile {
+            skills: Some(Selector::All),
+            ..Profile::default()
+        };
+        let reporter = NullReporter;
+        let results = init_profile(&profile, InitScope::Project, Some(&project), &reporter);
+        assert!(
+            results
+                .iter()
+                .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+            "init_profile must not error: {results:?}"
+        );
+
+        let reference = project.join(".skills/coverage/references/SWIFT_COVERAGE.md");
+        assert!(
+            reference.is_file(),
+            "skill references must deploy beside SKILL.md: {reference:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&reference).unwrap(),
+            include_str!("../../../builtin/skills/coverage/references/SWIFT_COVERAGE.md"),
         );
     }
 }
