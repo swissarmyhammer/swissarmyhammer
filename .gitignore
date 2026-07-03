@@ -179,5 +179,9 @@ ane-embedding/convert/output/
 # Isolated CARGO_TARGET_DIR scratch dirs used by implement/verify runs
 target-implement-verify/
 
-# Generated skill deploy targets (source of truth lives in builtin/skills/)
+# Generated skill/agent deploy targets (source of truth lives in builtin/)
 /.skills/
+/.agents/
+/.claude/skills/
+/.claude/agents/
+/.zed/skills/
