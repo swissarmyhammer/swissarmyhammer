@@ -3,7 +3,7 @@ name: coverage
 description: Run tests with coverage instrumentation, identify uncovered code, and produce kanban tasks for coverage gaps. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests.
 agent: tester
 license: MIT OR Apache-2.0
-compatibility: Requires the `code_context` MCP tool for project detection and the `kanban` MCP tool for creating coverage-gap tasks. Also requires a language-appropriate coverage tool on the system PATH (e.g. cargo-llvm-cov for Rust, pytest-cov for Python, go test -cover for Go).
+compatibility: Requires the `code_context` MCP tool for project detection and the `kanban` MCP tool for creating coverage-gap tasks. Also requires a language-appropriate coverage tool on the system PATH (e.g. cargo-llvm-cov for Rust, pytest-cov for Python, go test -cover for Go, swift test --enable-code-coverage plus llvm-cov for Swift).
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
@@ -30,6 +30,7 @@ Poor coverage means inherited code lacks proper TDD. Goal: backfill the tests th
    | JS/TS (npm/pnpm) | [JS_TS_COVERAGE.md](./references/JS_TS_COVERAGE.md) |
    | Python (pytest) | [PYTHON_COVERAGE.md](./references/PYTHON_COVERAGE.md) |
    | Dart/Flutter | [DART_FLUTTER_COVERAGE.md](./references/DART_FLUTTER_COVERAGE.md) |
+   | Swift (SwiftPM/Xcode) | [SWIFT_COVERAGE.md](./references/SWIFT_COVERAGE.md) |
 
    The guide is authoritative — don't guess commands.
 
@@ -96,6 +97,7 @@ Tests didn't exercise the files — filtered out, not compiled into the test bin
 
 - Rust: `cargo llvm-cov clean --workspace && cargo llvm-cov --lcov --output-path lcov.info`
 - Python: `coverage erase && pytest --cov=<pkg> --cov-report=lcov:lcov.info`
+- Swift: `rm -rf .build && swift test --enable-code-coverage`
 
 Then `grep -c '^SF:' lcov.info` — non-zero confirms instrumentation. If zero, verify tests actually ran (look for the pass/fail summary).
 
@@ -105,3 +107,8 @@ Stale instrumented build cache — common after switching between `cargo test` a
 
 - Rust: `cargo llvm-cov clean --workspace`
 - Python: `coverage erase`
+- Swift: `rm -rf .build/*/debug/codecov` then rerun `swift test --enable-code-coverage` (a plain `swift test` run leaves a profdata that no longer matches the binary)
+
+### Swift: `llvm-cov: command not found` or `Failed to load coverage: unsupported instrumentation profile format version`
+
+Use the llvm-cov that matches the Swift toolchain, not a Homebrew LLVM: on macOS always invoke it as `xcrun llvm-cov`; on Linux use the one in the Swift toolchain's `usr/bin`. A version-mismatch error means a foreign llvm-cov read the profdata — same fix.
