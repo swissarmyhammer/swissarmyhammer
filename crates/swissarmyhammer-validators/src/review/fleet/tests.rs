@@ -297,12 +297,12 @@ async fn run_fleet_and_unpin(
 // ---- config tests ----------------------------------------------------
 
 #[test]
-fn default_batch_size_is_128_kib() {
+fn default_batch_size_is_256_kib() {
     // The default budget clears the largest single source file in a typical
     // change (~95 KB) so an ordinary commit reviews without tripping the
     // oversize-file error; only genuinely huge multi-file diffs still split.
-    assert_eq!(DEFAULT_BATCH_SIZE, 128 * 1024);
-    assert_eq!(DEFAULT_BATCH_SIZE, 131072);
+    assert_eq!(DEFAULT_BATCH_SIZE, 256 * 1024);
+    assert_eq!(DEFAULT_BATCH_SIZE, 262144);
     assert_eq!(FleetConfig::default().batch_size, DEFAULT_BATCH_SIZE);
 }
 

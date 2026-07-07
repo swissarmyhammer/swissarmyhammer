@@ -79,7 +79,7 @@ use crate::validators::{
 use agent_client_protocol::schema::SessionId;
 use agent_client_protocol_extras::SessionStateStatusResponse;
 
-/// The default review `batch_size` in **bytes** (128 KiB).
+/// The default review `batch_size` in **bytes** (256 KiB).
 ///
 /// Cramming every changed file's full source into one shared prime overflows the
 /// review model's context on a large diff (every fan-out validator then fails
@@ -90,9 +90,10 @@ use agent_client_protocol_extras::SessionStateStatusResponse;
 /// It is sized to clear the largest single source file in a typical change
 /// (~95 KB) so an ordinary commit reviews in one or a few batches instead of
 /// tripping the oversize-file error, while a genuinely large multi-file diff
-/// still splits across batches. (32 KiB — the previous default — was smaller
-/// than many real source files, so default reviews of normal commits errored.)
-pub const DEFAULT_BATCH_SIZE: usize = 128 * 1024;
+/// still splits across batches. (32 KiB, then 128 KiB — the previous defaults —
+/// were smaller than many real source files, so default reviews of normal
+/// commits errored.)
+pub const DEFAULT_BATCH_SIZE: usize = 256 * 1024;
 
 /// Configuration for a fan-out run.
 ///
