@@ -22,9 +22,6 @@ Using those candidates and your reading of the diff, flag:
 2. **Near-match not extended**: an existing function is *almost* what is needed,
    and the right move was to generalize it (parameterize the difference) rather
    than write a parallel copy.
-3. **Needless helper**: a new helper that wraps exactly one call site and adds no
-   meaningful abstraction — inline it; a wrapper with a single caller is
-   indirection without payoff.
 
 ## Why This Matters
 
