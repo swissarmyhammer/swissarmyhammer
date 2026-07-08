@@ -1,8 +1,7 @@
 ---
 name: function-length
 description: >-
-  Flag functions longer than ~50 lines of actual code. Keep functions small and
-  focused; long functions are hard to read, test, and reuse.
+  Keep functions small and focused; long functions are hard to read, test, and reuse.
 metadata:
   version: "{{version}}"
 match:
