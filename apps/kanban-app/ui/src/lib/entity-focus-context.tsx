@@ -36,16 +36,8 @@ import {
   type ReactNode,
   type MutableRefObject,
 } from "react";
-import type {
-  CommandDef,
-  CommandScope,
-  DispatchOptions,
-} from "./command-scope";
-import {
-  CommandScopeProvider,
-  useDispatchCommand,
-  FocusedScopeContext,
-} from "./command-scope";
+import type { CommandScope, DispatchOptions } from "./command-scope";
+import { useDispatchCommand, FocusedScopeContext } from "./command-scope";
 import {
   useOptionalSpatialFocusActions,
   type SpatialFocusActions,
@@ -57,6 +49,7 @@ import {
   type SegmentMoniker,
 } from "@/types/spatial";
 import { useOptionalFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
+import { registerUiResponder } from "@/lib/ui-request-responder";
 
 /** Pre-bound dispatch callable for a specific command — the shape returned by `useDispatchCommand(presetCmd)`. */
 type PreboundDispatch = (opts?: DispatchOptions) => Promise<unknown>;
@@ -86,6 +79,14 @@ type FocusSubscriber = () => void;
 export class FocusStore {
   private current: string | null = null;
   private perMoniker = new Map<string, Set<FocusSubscriber>>();
+  /**
+   * Subtree subscriptions keyed by the subtree-root moniker. A subscriber
+   * here is woken whenever focus enters or leaves the keyed moniker's
+   * subtree (the focused FQM equals the key or extends it path-wise) —
+   * see `subscribeWithin`. Kept separate from `perMoniker` so direct-focus
+   * subscribers never pay for subtree notifications, and vice versa.
+   */
+  private withinMoniker = new Map<string, Set<FocusSubscriber>>();
   private anyListeners = new Set<FocusSubscriber>();
 
   /**
@@ -148,6 +149,47 @@ export class FocusStore {
   }
 
   /**
+   * Subscribe to a moniker's SUBTREE focus slot.
+   *
+   * Notified whenever focus moves into, out of, or within the given
+   * moniker's subtree — i.e. whenever the previous or next focused FQM
+   * equals `moniker` or extends it path-wise (`"<moniker>/…"`). Focus
+   * moves that touch neither side of the subtree do not wake this
+   * subscriber, preserving the per-moniker scaling property: a move from
+   * A to B wakes only the subtree subscribers along A's and B's ancestor
+   * paths (O(path depth)), never every mounted subscriber.
+   *
+   * @returns an unsubscribe function.
+   */
+  subscribeWithin(moniker: string, cb: FocusSubscriber): () => void {
+    let set = this.withinMoniker.get(moniker);
+    if (!set) {
+      set = new Set();
+      this.withinMoniker.set(moniker, set);
+    }
+    set.add(cb);
+    return () => {
+      set!.delete(cb);
+      if (set!.size === 0) this.withinMoniker.delete(moniker);
+    };
+  }
+
+  /**
+   * Collect every subtree-root key that contains `fq` into `into`: each
+   * `/`-bounded ancestor prefix plus `fq` itself (`"/a/b/c"` → `"/a"`,
+   * `"/a/b"`, `"/a/b/c"`). A moniker with no separator (segment-form
+   * test fallbacks) contributes only itself. The separator mirrors
+   * `FQ_SEPARATOR` in `types/spatial.ts`.
+   */
+  private collectSubtreeRoots(fq: string | null, into: Set<string>): void {
+    if (fq === null) return;
+    for (let i = fq.indexOf("/", 1); i !== -1; i = fq.indexOf("/", i + 1)) {
+      into.add(fq.slice(0, i));
+    }
+    into.add(fq);
+  }
+
+  /**
    * Subscribe to every focus change. Use only for consumers that truly
    * need to observe every move.
    *
@@ -196,6 +238,19 @@ export class FocusStore {
     }
     if (prev !== null) this.perMoniker.get(prev)?.forEach((cb) => cb());
     if (next !== null) this.perMoniker.get(next)?.forEach((cb) => cb());
+    // Subtree subscribers along the previous and next focus paths: a
+    // containment flip can only happen at a subtree root that is an
+    // ancestor (or equal) of one of the two endpoints, so notifying the
+    // union of both ancestor paths covers every possible flip while
+    // leaving unrelated subtree subscribers asleep.
+    if (this.withinMoniker.size > 0) {
+      const roots = new Set<string>();
+      this.collectSubtreeRoots(prev, roots);
+      this.collectSubtreeRoots(next, roots);
+      for (const root of roots) {
+        this.withinMoniker.get(root)?.forEach((cb) => cb());
+      }
+    }
     this.anyListeners.forEach((cb) => cb());
   }
 }
@@ -281,7 +336,7 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
   if (storeRef.current === null) storeRef.current = new FocusStore();
   const store = storeRef.current;
 
-  const dispatch = useDispatchCommand("ui.setFocus");
+  const dispatch = useDispatchCommand("app.setFocus");
 
   // Scope registry: ref so registrations don't cause re-renders
   const registryRef = useRef<Map<string, CommandScope>>(new Map());
@@ -320,11 +375,26 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
       dispatchRef
         .current({ args: { scope_chain: chain } })
         .catch((error) =>
-          console.error("ui.setFocus (window focus) failed:", error),
+          console.error("app.setFocus (window focus) failed:", error),
         );
     };
     window.addEventListener("focus", handleWindowFocus);
     return () => window.removeEventListener("focus", handleWindowFocus);
+  }, [store]);
+
+  // Register the `focus.scopeChain` host→UI responder (Card F2). The focus
+  // kernel PULLS the current focus scope chain from the webview on demand
+  // over the F1 channel; this provider is the natural source because it owns
+  // the focused moniker (`store`) and the scope registry (`registryRef`) the
+  // chain is composed from — the same `buildScopeChain` the `app.setFocus`
+  // bridge forwards on every focus change. Built ON DEMAND at request time,
+  // never cached. (`focus.geometry` / `focus.current` are registered by
+  // `SpatialFocusProvider`, which owns the live geometry + focused FQM.)
+  useEffect(() => {
+    return registerUiResponder("focus.scopeChain", () => {
+      const moniker = store.getSnapshot();
+      return moniker ? buildScopeChain(moniker, registryRef.current) : [];
+    });
   }, [store]);
 
   // Bridge spatial-focus → entity-focus: the kernel is the single
@@ -361,7 +431,7 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
       dispatchRef
         .current({ args: { scope_chain: chain } })
         .catch((error) =>
-          console.error("ui.setFocus (kernel bridge) failed:", error),
+          console.error("app.setFocus (kernel bridge) failed:", error),
         );
     });
   }, [spatialFocus, store]);
@@ -377,88 +447,24 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
     ? (registryRef.current.get(focusedMoniker) ?? null)
     : null;
 
-  // Build the `nav.focus` command — the single auditable choke point
-  // through which every non-null focus claim flows. Registered in a
-  // `<CommandScopeProvider>` that wraps the provider's children so the
-  // command sits next to the primitive it wraps (`setFocus`).
-  //
-  // Design rationale: `<FocusScope>` and `useFocusActions` are routinely
-  // mounted in tests that do not include `<AppShell>`. Registering
-  // `nav.focus` only in `<AppShell>` made click dispatches in those
-  // tests fall through to the backend `dispatch_command` IPC, which the
-  // test mocks don't intercept as `spatial_focus`. Colocating the
-  // command with `setFocus` here makes the focus subsystem
-  // self-contained: any tree that mounts `<EntityFocusProvider>` gets
-  // `nav.focus` for free, and `<FocusScope>`'s click handler resolves
-  // the command through the same scope chain in production and tests.
-  //
-  // The inner `<CommandScopeProvider>` chains under whatever outer
-  // scope is mounted (e.g. `<AppShell>`'s global commands in
-  // production), so global commands remain visible to descendants and
-  // `nav.focus` shadows nothing because no outer scope registers it.
-  const navFocusCommands = useMemo<readonly CommandDef[]>(
-    () => [buildNavFocusCommand(actions.setFocus)],
-    [actions.setFocus],
-  );
-
+  // `nav.focus` is NOT registered here (Card G). The command is DEFINED
+  // once, in the `nav-commands` builtin plugin
+  // (`builtin/plugins/nav-commands/index.ts`), and its single webview
+  // execution leg is the webview-bus handler `<SpatialFocusProvider>`
+  // registers — the snapshot-bearing `actions.focus(fq)` commit. This
+  // provider's `setFocus` stays the kernel-facing primitive that the
+  // bus handler's `spatial.focus` is identity-equal to in production;
+  // trees that need click-to-focus resolution must mount
+  // `<SpatialFocusProvider>` (the production shape).
   return (
     <FocusActionsContext.Provider value={actions}>
       <FocusStoreContext.Provider value={store}>
         <FocusedScopeContext.Provider value={focusedScope}>
-          <CommandScopeProvider commands={navFocusCommands}>
-            {children}
-          </CommandScopeProvider>
+          {children}
         </FocusedScopeContext.Provider>
       </FocusStoreContext.Provider>
     </FocusActionsContext.Provider>
   );
-}
-
-/**
- * Build the `nav.focus` command — the single auditable choke point
- * through which every non-null focus claim flows.
- *
- * Args (via `DispatchOptions.args`):
- *   - `fq: FullyQualifiedMoniker` — the scope to focus.
- *
- * Execute calls the entity-focus `setFocus(fq)` action against the
- * passed FQM. `setFocus` is the kernel-facing primitive (it composes a
- * snapshot and dispatches `spatial_focus` IPC); routing every non-null
- * focus claim through this single command means cross-cutting concerns
- * (telemetry, animations, scroll-on-focus) can hang off this one
- * closure rather than off N call sites.
- *
- * Per the modal-layer model (card `01KR7CDEFWWVF4WH0BCHE8Y21J`):
- * components that previously called `setFocus(fq)` directly now
- * dispatch `nav.focus` with `{ args: { fq } }`. The kernel-facing
- * `setFocus` itself stays as the primitive; only this execute closure
- * calls it.
- *
- * Registered in a `<CommandScopeProvider>` wrapping
- * `<EntityFocusProvider>`'s children — colocated with the primitive
- * the command wraps so any tree that mounts the focus provider gets
- * `nav.focus` resolution. This keeps test harnesses and production
- * tree both seeing the same command.
- */
-function buildNavFocusCommand(
-  setFocus: (fq: FullyQualifiedMoniker | null) => void,
-): CommandDef {
-  return {
-    id: "nav.focus",
-    name: "Focus Scope",
-    execute: (opts) => {
-      const fq = opts?.args?.fq;
-      if (typeof fq !== "string") {
-        // Defensive: a dispatch without `args.fq` is a programming
-        // error, not a user-visible state. Log so dev mode catches the
-        // missing arg, then no-op so the rest of the command pipeline
-        // keeps running.
-        console.error("[nav.focus] missing or non-string args.fq", opts?.args);
-        return;
-      }
-      setFocus(fq as FullyQualifiedMoniker);
-    },
-  };
 }
 
 /** Inputs for `buildFocusActions`. Grouped to keep the helper signature small. */
@@ -516,12 +522,12 @@ function buildFocusActions(deps: FocusActionsDeps): FocusActions {
     }
 
     // Test-harness fallback: no kernel available, so write the store
-    // directly and dispatch `ui.setFocus` like the pre-refactor flow.
+    // directly and dispatch `app.setFocus` like the pre-refactor flow.
     store.set(fq);
     const chain = fq ? buildScopeChain(fq, registryRef.current) : [];
     dispatchRef
       .current({ args: { scope_chain: chain } })
-      .catch((error) => console.error("ui.setFocus failed:", error));
+      .catch((error) => console.error("app.setFocus failed:", error));
   };
 
   const registerScope = (moniker: string, scope: CommandScope): void => {
@@ -672,6 +678,46 @@ export function useOptionalIsDirectFocus(moniker: string): boolean {
 
   const current = useSyncExternalStore(subscribe, getSnapshot);
   return current === moniker;
+}
+
+/**
+ * Subtree focus subscription that tolerates a missing
+ * `EntityFocusProvider`.
+ *
+ * Returns `true` while the focused FQM is anywhere WITHIN `moniker`'s
+ * subtree — the focused value equals `moniker` or extends it path-wise
+ * (`"<moniker>/…"`). This is the focus-side counterpart of the keymap
+ * layer's chain walk (`extractChainBindings`), which binds a scope-gated
+ * command whenever its marker scope appears anywhere in the focused
+ * chain: a consumer gating behavior on "my zone or any of its
+ * descendants is focused" must use this, not `useOptionalIsDirectFocus`
+ * (which flips false the moment focus drills into a child).
+ *
+ * Re-renders only when containment flips (the snapshot is the boolean),
+ * and the underlying `subscribeWithin` wakes it only for focus moves
+ * touching the subtree's ancestor paths. Returns `false` permanently
+ * when no `EntityFocusProvider` ancestor is mounted, or when `moniker`
+ * is the empty string (the degenerate no-spatial-stack key).
+ */
+export function useOptionalIsFocusWithin(moniker: string): boolean {
+  const store = useContext(FocusStoreContext);
+
+  const subscribe = useCallback(
+    (cb: () => void) =>
+      store && moniker !== "" ? store.subscribeWithin(moniker, cb) : () => {},
+    [store, moniker],
+  );
+
+  const getSnapshot = useCallback(() => {
+    if (!store || moniker === "") return false;
+    const current = store.getSnapshot();
+    return (
+      current !== null &&
+      (current === moniker || current.startsWith(`${moniker}/`))
+    );
+  }, [store, moniker]);
+
+  return useSyncExternalStore(subscribe, getSnapshot);
 }
 
 /**

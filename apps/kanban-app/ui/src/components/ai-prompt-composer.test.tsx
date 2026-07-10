@@ -15,6 +15,12 @@
  *
  * Browser project (`*.test.tsx`) — CM6 mounts in real Chromium.
  */
+// The real app stylesheet — pulls in the generated Tailwind utilities so the
+// footer-truncation test's layout assertions (`flex`, `min-w-0`,
+// `line-clamp-1`) actually apply in the Chromium test DOM. The browser test
+// project runs the `tailwindcss()` Vite plugin (see `vite.config.ts`) so this
+// import expands to the full utility CSS rather than a bare `@import`.
+import "@/index.css";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, screen, within } from "@testing-library/react";
 import { userEvent } from "vitest/browser";
@@ -597,6 +603,66 @@ describe("AiPromptComposer — footer model select", () => {
     expect(options).toHaveLength(2);
     expect(options[0].textContent).toContain("Claude Code");
     expect(options[1].textContent).toContain("Qwen Coder");
+  });
+
+  it("truncates a long model label instead of overflowing the narrow footer", async () => {
+    // A pathologically long label, in a model fixture mirroring the footer
+    // select's shape, plus the composer constrained to the dock width
+    // (320px). Real Chromium applies Tailwind here, so layout is real.
+    const longModels: AiModel[] = [
+      {
+        id: "claude-code",
+        label:
+          "claude-opus-4-8[1m] Anthropic Claude Code CLI — very long model display name",
+        kind: "claude-code",
+        available: true,
+        hint: "Claude Code CLI: /usr/local/bin/claude",
+      },
+    ];
+
+    const { container } = await renderInAct(
+      <div style={{ width: 320 }}>
+        <AiPromptComposer
+          disabled={false}
+          placeholder="Ask the AI agent..."
+          streaming={false}
+          onSend={() => {}}
+          onCancel={() => {}}
+          models={longModels}
+          selectedModel={longModels[0]}
+          onSelectModel={() => {}}
+        />
+      </div>,
+    );
+
+    // The footer toolbar is the combobox trigger's parent flex row. With the
+    // selector pinned to its content width, a long label pushes this past
+    // the 320px container; the fix lets the trigger shrink so it does not.
+    const trigger = screen.getByRole("combobox");
+    const toolbar = trigger.parentElement as HTMLElement;
+    expect(toolbar, "the model select trigger must sit in the footer toolbar")
+      .toBeTruthy();
+    expect(
+      toolbar.scrollWidth,
+      "the footer toolbar must not overflow its 320px container horizontally",
+    ).toBeLessThanOrEqual(toolbar.clientWidth);
+
+    // The label must be clamped — the value slot's content is wider than the
+    // (now bounded) box, i.e. it is truncated rather than shown in full.
+    const valueEl = trigger.querySelector(
+      "[data-slot='select-value']",
+    ) as HTMLElement | null;
+    expect(valueEl, "the trigger must render a select-value slot").toBeTruthy();
+    expect(
+      valueEl!.scrollWidth,
+      "the long model label must be clamped (truncated) inside the trigger",
+    ).toBeGreaterThan(valueEl!.clientWidth);
+
+    // The composer itself must not overflow the 320px wrapper either.
+    const composer = container.querySelector(
+      "[data-slot='ai-prompt-composer']",
+    ) as HTMLElement;
+    expect(composer.scrollWidth).toBeLessThanOrEqual(composer.clientWidth);
   });
 
   it("disables an unavailable model and surfaces its hint", async () => {

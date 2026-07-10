@@ -2,21 +2,21 @@ import { describe, it, expect, vi } from "vitest";
 import { screen, fireEvent } from "@testing-library/react";
 import { act } from "react";
 import { renderInAct } from "@/test/act-render";
+import { makeActor } from "@/test/entity-fixtures";
 
-vi.mock("@tauri-apps/api/core", () => ({
+// Spread the real module and override only the parts the test controls.
+// @tauri-apps/api >=2.11 pulls submodules that import named exports from core
+// (SERIALIZE_TO_IPC_FN, Resource, Channel, …); a hand-listed stub drops them
+// and breaks module loading.
+vi.mock("@tauri-apps/api/core", async (importActual) => ({
+  ...(await importActual<typeof import("@tauri-apps/api/core")>()),
   invoke: vi.fn(() => Promise.resolve("ok")),
 }));
-vi.mock("@tauri-apps/api/event", () => ({
+vi.mock("@tauri-apps/api/event", async (importActual) => ({
+  ...(await importActual<typeof import("@tauri-apps/api/event")>()),
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
-vi.mock("@tauri-apps/plugin-log", () => ({
-  error: vi.fn(),
-  warn: vi.fn(),
-  info: vi.fn(),
-  debug: vi.fn(),
-  trace: vi.fn(),
-  attachConsole: vi.fn(() => Promise.resolve()),
-}));
+// `@tauri-apps/plugin-log` is mocked globally in `src/test/setup.ts`.
 
 import { Avatar } from "./avatar";
 import { SchemaProvider } from "@/lib/schema-context";
@@ -58,24 +58,10 @@ async function renderAvatar(
   );
 }
 
-/** Create a minimal actor entity. */
-function makeActor(
-  id: string,
-  name: string,
-  overrides: Record<string, unknown> = {},
-): Entity {
-  return {
-    entity_type: "actor",
-    id,
-    moniker: `actor:${id}`,
-    fields: {
-      name,
-      ...overrides,
-    },
-  };
-}
-
 const DATA_URI = "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=";
+
+/** Time to let the Radix tooltip open animation settle before asserting. */
+const TOOLTIP_ANIMATION_WAIT_MS = 100;
 
 describe("Avatar", () => {
   it("renders an <img> when actor has a data:image avatar", async () => {
@@ -186,7 +172,7 @@ describe("Avatar", () => {
     await act(async () => {
       fireEvent.pointerMove(trigger, { clientX: 10, clientY: 10 });
       fireEvent.mouseEnter(trigger);
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, TOOLTIP_ANIMATION_WAIT_MS));
     });
 
     expect(screen.getByRole("tooltip")).toBeTruthy();

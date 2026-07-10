@@ -13,9 +13,13 @@ description = "Generic file-backed store with changelog, undo/redo, and change d
 async-trait = { workspace = true }
 chrono = { workspace = true }
 diffy = { workspace = true }
+rmcp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
+swissarmyhammer-operations = { workspace = true }
+swissarmyhammer-operations-macros = { workspace = true }
+swissarmyhammer-plugin = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

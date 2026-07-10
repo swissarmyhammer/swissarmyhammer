@@ -25,7 +25,6 @@ pub mod filter;
 pub mod id_types;
 pub mod io;
 pub mod store;
-pub mod undo_commands;
 pub mod watcher;
 
 pub use cache::{CachedEntity, EntityCache};
@@ -40,8 +39,7 @@ pub use io::{
     trash_entity_files, write_entity,
 };
 pub use store::EntityTypeStore;
-pub use undo_commands::{RedoCmd, UndoCmd};
-pub use watcher::EntityWatcher;
+pub use watcher::{EntityWatcher, PerspectiveReloader};
 
 /// Test utilities shared between unit tests and integration tests.
 ///

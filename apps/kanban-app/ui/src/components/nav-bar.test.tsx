@@ -57,13 +57,21 @@ const mockIsBusy = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("@/lib/command-scope", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/command-scope")>();
+  const { strictUseDispatchCommand } =
+    await import("@/test/strict-dispatch-mock");
   return {
     ...actual,
-    useDispatchCommand: (cmd: string) => {
-      if (cmd === "ui.inspect") return mockDispatchInspect;
-      if (cmd === "app.search") return mockDispatchSearch;
-      return vi.fn(() => Promise.resolve());
-    },
+    // Strict mock: any command id outside this map (retired, renamed,
+    // typo'd) throws instead of silently no-opping.
+    useDispatchCommand: strictUseDispatchCommand({
+      "app.inspect": mockDispatchInspect,
+      "app.search": mockDispatchSearch,
+      // Requested by the tree but not asserted on here: the focus-claim
+      // choke point `<FocusScope>` pre-binds and the board selector's
+      // tear-off command.
+      "nav.focus": () => Promise.resolve(),
+      "window.new": () => Promise.resolve(),
+    }),
     useCommandBusy: () => ({ isBusy: mockIsBusy() }),
   };
 });
@@ -207,7 +215,7 @@ describe("NavBar", () => {
     expect(screen.queryByLabelText("Inspect board")).toBeNull();
   });
 
-  it("dispatches ui.inspect on inspect button click", () => {
+  it("dispatches app.inspect on inspect button click", () => {
     mockBoardData.mockReturnValue(MOCK_BOARD);
 
     renderNavBar();

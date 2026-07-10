@@ -15,8 +15,10 @@
  * peer zone with its own leaves.
  */
 
-import { useState } from "react";
-import { ExternalLink } from "lucide-react";
+import { useCallback, useState } from "react";
+import { ExternalLink, Share2, type LucideIcon } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { useDispatchCommand } from "@/lib/command-scope";
 import {
   Tooltip,
@@ -37,6 +39,17 @@ import { useFieldValue } from "@/lib/entity-store-context";
 import { asSegment } from "@/types/spatial";
 import type { Entity, OpenBoard } from "@/types/kanban";
 
+/**
+ * Per-agent result of exposing the board, returned by the
+ * `expose_board_to_agents` Tauri command. `ok` distinguishes a successful
+ * registration from a failure; `message` is a human-readable line that already
+ * names the agent.
+ */
+interface AgentExposeResult {
+  ok: boolean;
+  message: string;
+}
+
 /** Extract the last meaningful path segment (parent of .kanban). */
 export function pathStem(path: string): string {
   const parts = path.split("/").filter(Boolean);
@@ -44,6 +57,62 @@ export function pathStem(path: string): string {
   return last === ".kanban" && parts.length > 1
     ? parts[parts.length - 2]
     : last || path;
+}
+
+/**
+ * Label for the "expose board to your agent" action, shared by the button's
+ * aria-label, its tooltip, and the test assertion so the three never drift.
+ */
+export const EXPOSE_BOARD_LABEL = "Expose this board to your agent";
+
+interface BoardToolbarButtonProps {
+  /** Spatial-nav moniker leaf for this button's `<Pressable>`. */
+  moniker: string;
+  /** Accessible name; also used as the visible tooltip when none is given. */
+  ariaLabel: string;
+  /** Lucide icon rendered inside the button. */
+  icon: LucideIcon;
+  /** Activation handler. */
+  onPress: () => void;
+  /** Tooltip text shown on hover/focus. */
+  tooltip: string;
+}
+
+/**
+ * A single icon button in the board toolbar (tear-off, expose, …).
+ *
+ * Every board-toolbar button shares the same `Pressable` + `Tooltip` + styled
+ * `<button>` shell and differs only by its moniker, aria-label, icon, press
+ * handler, and tooltip text — so they all render through this one component
+ * rather than copy-pasted blocks.
+ */
+function BoardToolbarButton({
+  moniker,
+  ariaLabel,
+  icon: Icon,
+  onPress,
+  tooltip,
+}: BoardToolbarButtonProps) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Pressable
+          asChild
+          moniker={asSegment(moniker)}
+          ariaLabel={ariaLabel}
+          onPress={onPress}
+        >
+          <button
+            type="button"
+            className="inline-flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground/40 hover:bg-accent hover:text-accent-foreground transition-colors"
+          >
+            <Icon className="h-3.5 w-3.5" />
+          </button>
+        </Pressable>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{tooltip}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 interface BoardSelectorProps {
@@ -79,6 +148,31 @@ export function BoardSelector({
     boardEntity?.id ?? "",
     displayFieldName,
   );
+
+  // Register this board's MCP server into every detected agent's config so an
+  // external coding agent (Claude Code, Codex, …) can talk to it. This is an
+  // OS-level filesystem operation, so it invokes the plain Tauri command
+  // directly (not a dispatched board command); per-agent results are surfaced
+  // as toasts.
+  const handleExpose = useCallback(async () => {
+    if (!selectedPath) return;
+    try {
+      const results = await invoke<AgentExposeResult[]>(
+        "expose_board_to_agents",
+        { boardPath: selectedPath },
+      );
+      if (results.length === 0) {
+        toast.info("No agents detected to expose this board to.");
+        return;
+      }
+      for (const result of results) {
+        if (result.ok) toast.success(result.message);
+        else toast.error(result.message);
+      }
+    } catch (e) {
+      toast.error(`Failed to expose board to your agent: ${String(e)}`);
+    }
+  }, [selectedPath]);
 
   if (boards.length === 0) return null;
 
@@ -144,28 +238,29 @@ export function BoardSelector({
       </FocusScope>
 
       {showTearOff && selectedPath && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Pressable
-              asChild
-              moniker={asSegment("board-selector.tear-off")}
-              ariaLabel="Open in new window"
-              onPress={() => {
-                dispatchNewWindow({ args: { board_path: selectedPath } }).catch(
-                  console.error,
-                );
-              }}
-            >
-              <button
-                type="button"
-                className="inline-flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground/40 hover:bg-accent hover:text-accent-foreground transition-colors"
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-              </button>
-            </Pressable>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Open in new window</TooltipContent>
-        </Tooltip>
+        <BoardToolbarButton
+          moniker="board-selector.tear-off"
+          ariaLabel="Open in new window"
+          tooltip="Open in new window"
+          icon={ExternalLink}
+          onPress={() => {
+            dispatchNewWindow({ args: { board_path: selectedPath } }).catch(
+              console.error,
+            );
+          }}
+        />
+      )}
+
+      {showTearOff && selectedPath && (
+        <BoardToolbarButton
+          moniker="board-selector.expose"
+          ariaLabel={EXPOSE_BOARD_LABEL}
+          tooltip={EXPOSE_BOARD_LABEL}
+          icon={Share2}
+          onPress={() => {
+            handleExpose().catch(console.error);
+          }}
+        />
       )}
     </div>
   );

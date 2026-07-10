@@ -10,13 +10,13 @@
 //! - `view.kinds` — via
 //!   [`swissarmyhammer_views::register_view_resolvers`]
 //! - `sort.directions` — via
-//!   [`swissarmyhammer_commands::register_command_resolvers`]
+//!   [`crate::commands_core::register_command_resolvers`]
 //!
 //! In addition, kanban owns the `ai.models` resolver — the AI panel
-//! command scope (`ai.*` commands, declared in `builtin/commands/ai.yaml`)
-//! is a kanban-domain concept, so the resolver that backs the
-//! `ai.model` command's model picker lives here. It is registered via
-//! [`register_kanban_resolvers`].
+//! command scope (the `ai.*` commands, now provided by the `ai-commands`
+//! builtin command plugin) is a kanban-domain concept, so the resolver
+//! that backs the `ai.model` command's model picker lives here. It is
+//! registered via [`register_kanban_resolvers`].
 //!
 //! [`default_options_registry`] returns a fresh [`OptionsRegistry`]
 //! with every built-in pre-registered. Consumers (the kanban-app GUI,
@@ -24,14 +24,14 @@
 //! and thread the registry into every
 //! [`crate::scope_commands::commands_for_scope`] invocation.
 //!
-//! [`OptionsRegistry`]: swissarmyhammer_commands::OptionsRegistry
-//! [`OptionsResolver`]: swissarmyhammer_commands::OptionsResolver
+//! [`OptionsRegistry`]: crate::commands_core::OptionsRegistry
+//! [`OptionsResolver`]: crate::commands_core::OptionsResolver
 
-use serde::{Deserialize, Serialize};
-use swissarmyhammer_commands::{
+use crate::commands_core::{
     register_command_resolvers, OptionsContext, OptionsRegistry, OptionsResolver, OptionsSources,
     ParamOption,
 };
+use serde::{Deserialize, Serialize};
 use swissarmyhammer_perspectives::register_perspective_resolvers;
 use swissarmyhammer_views::register_view_resolvers;
 
@@ -150,7 +150,7 @@ pub fn register_kanban_resolvers(registry: &mut OptionsRegistry) {
 /// Downstream consumers can further [`OptionsRegistry::register`]
 /// additional resolvers on top of the returned registry.
 ///
-/// [`OptionsRegistry`]: swissarmyhammer_commands::OptionsRegistry
+/// [`OptionsRegistry`]: crate::commands_core::OptionsRegistry
 pub fn default_options_registry() -> OptionsRegistry {
     let mut registry = OptionsRegistry::new();
     register_perspective_resolvers(&mut registry);

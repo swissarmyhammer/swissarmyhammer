@@ -83,6 +83,7 @@ import {
   type SegmentMoniker,
   type WindowLabel,
 } from "@/types/spatial";
+import { FOCUS_CHANGED_EVENT } from "@/lib/mcp-notifications";
 
 // Re-export `asFq` directly from `@/types/spatial` so test files can build
 // FQM literals without importing from `@/types/spatial`. This pass-through
@@ -177,10 +178,28 @@ export interface ShadowEntry {
   layerFq: FullyQualifiedMoniker;
   parentZone: FullyQualifiedMoniker | null;
   overrides: Record<string, unknown>;
+  /** Whether this scope is a real focus target (`<FocusScope showFocus>`).
+   * Non-focusable structural zones are skipped as cardinal-nav candidates,
+   * mirroring `SnapshotScope.focusable`. Defaults to `true` when a register
+   * payload omits it. */
+  focusable: boolean;
 }
 
 /** Cardinal direction the JS port handles. */
 export type Direction = "up" | "down" | "left" | "right";
+
+/**
+ * `nav.*` command id → cardinal direction, mirroring the host-side
+ * `nav-commands` builtin plugin (`builtin/plugins/nav-commands/index.ts`).
+ * The plugin also owns `nav.first` / `nav.last`, but the JS port models
+ * cardinal moves only — those ids fall through untranslated.
+ */
+const NAV_COMMAND_DIRECTIONS: Record<string, Direction> = {
+  "nav.up": "up",
+  "nav.down": "down",
+  "nav.left": "left",
+  "nav.right": "right",
+};
 
 // ---------------------------------------------------------------------------
 // Wire-payload helpers
@@ -209,49 +228,39 @@ export function rectFromWire(r: unknown): RectLike {
 }
 
 // ---------------------------------------------------------------------------
-// JS port of `BeamNavStrategy::next` — cardinal directions only.
+// JS port of the kernel's `pick_target` / `geometric_pick` — cardinal
+// directions only.
 //
-// Mirrors the unified cascade implemented in
-// `swissarmyhammer-focus/src/navigate.rs`:
+// A faithful mirror of `swissarmyhammer-focus/src/navigate.rs` (NOT the old
+// sibling-scoped cascade, which had drifted out of sync with the rewritten
+// kernel). The pick is geometric over the candidate set with structural
+// gates:
 //
-//   1. Iter 0 — ANY-KIND beam search among scopes sharing `from.parentZone`
-//      (excluding `from` itself), filtered by layer. Both zones and
-//      leaves are siblings under the same parent zone, so iter 0
-//      considers them peers.
-//   2. Escalate to `from.parentZone` (with a layer-boundary guard).
-//      If the focused entry has no `parentZone`, return `null`.
-//   3. Iter 1 — same-kind beam search among ZONES sharing the parent's
-//      `parentZone` (excluding the parent itself). The parent IS a
-//      zone, so its peers are zones by construction — this is
-//      structural, not a kind policy.
-//   4. Drill-out fallback — when neither iter finds a peer, return
-//      the parent zone itself.
+//   1. Per-direction override (`check_override`): `null` is a wall
+//      (stay-put); a target FQM redirects when it resolves in-layer.
+//   2. Candidate gate: same layer, not the focused scope, **focusable**
+//      (structural zones with `focusable: false` — columns, board well,
+//      panel & view-area wrappers — are skipped), and in the **same
+//      navigation tier** (sharing the focused scope's nearest focusable
+//      ancestor — see `nearestFocusableAncestor`), then the strict
+//      half-plane + in-beam test (`scoreCandidate`). The tier gate is the
+//      general rule that keeps arrows gliding item→item and out of a card's
+//      inner fields; it subsumes the old ancestor-of-focused exclusion.
+//   3. Lowest beam score wins; an exact tie prefers leaf-over-container —
+//      see `betterCandidate`.
+//
+// Keeping this in lock-step with the Rust kernel is the whole point — the
+// authoritative coverage lives in `navigate.rs` unit tests; this port
+// exists so full-App UI tests reproduce the same answers.
 // ---------------------------------------------------------------------------
 
 /**
- * In-test JS port of the Rust `BeamNavStrategy::next` for cardinal
- * directions, mirroring the unified cascade from
- * `swissarmyhammer-focus/src/navigate.rs`.
+ * In-test JS port of `pick_target` for cardinal directions, mirroring
+ * `geometric_pick` in `swissarmyhammer-focus/src/navigate.rs`.
  *
- * The cascade has three observable outcomes:
- *
- *   1. **Iter 0** — peer match at the focused scope's level. All
- *      registered scopes sharing a `parent_zone` are siblings.
- *   2. **Iter 1** — peer match at the parent scope's level (after
- *      escalation, with a layer-boundary guard).
- *   3. **Drill-out** — return the parent scope itself when neither
- *      iter finds a peer. Returns `null` only when the focused entry
- *      sits at the very root of its layer with no parent scope.
- *
- * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
- * split primitives into a single `<FocusScope>`, the cascade no longer
- * filters on a kind discriminator — every registered entry is a scope,
- * and structural shape (container vs leaf) is determined by whether the
- * scope has child scopes. See `swissarmyhammer-focus/README.md` for
- * the prose contract.
- *
- * Returns the FQM of the next focus target, or `null` when the
- * navigator declines to navigate.
+ * Returns the FQM of the next focus target, or `null` when the navigator
+ * declines to move (no in-direction candidate, an override wall, or a
+ * missing focused entry — the no-silent-dropout "stay put").
  */
 export function navigateInShadow(
   registry: Map<FullyQualifiedMoniker, ShadowEntry>,
@@ -261,136 +270,97 @@ export function navigateInShadow(
   const from = registry.get(fromFq);
   if (!from) return null;
 
-  // Iter 0: peers sharing from.parentZone — under the unified primitive
-  // every registered entry is a scope, so any sibling under the same
-  // parent counts.
-  const iter0 = beamAmongInZoneAnyKind(
-    registry,
-    from.layerFq,
-    from.rect,
-    from.parentZone,
-    from.fq,
-    direction,
-  );
-  if (iter0) return iter0;
-
-  // Escalate. The layer-boundary guard refuses to cross layer FQMs —
-  // an inspector layer's panel scope never lifts focus into the window
-  // layer that hosts ui:board.
-  if (from.parentZone === null) return null;
-  const parent = registry.get(from.parentZone);
-  if (!parent) return null;
-  if (parent.layerFq !== from.layerFq) return null;
-
-  // Iter 1: peers of the parent scope sharing its parent_zone. After
-  // the single-primitive collapse there is no kind filter — every
-  // registered entry is a scope, so any sibling of the parent is a
-  // valid candidate.
-  const iter1 = beamAmongSiblings(
-    registry,
-    parent.layerFq,
-    parent.rect,
-    parent.parentZone,
-    parent.fq,
-    direction,
-  );
-  if (iter1) return iter1;
-
-  // Drill-out fallback: return the parent scope itself.
-  return { nextFq: parent.fq, nextSegment: parent.segment };
-}
-
-/**
- * Beam-search candidates sharing `fromParent` (excluding `fromFq`),
- * filtered by `layer`. Matches `beam_among_in_zone_any_kind` in the
- * Rust kernel — this is the iter-0 helper.
- *
- * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
- * split primitives into a single `<FocusScope>`, every registered
- * entry is a scope; the kernel and this simulator filter only by
- * layer membership and shared `parentZone`.
- */
-function beamAmongInZoneAnyKind(
-  registry: Map<FullyQualifiedMoniker, ShadowEntry>,
-  layer: FullyQualifiedMoniker,
-  fromRect: RectLike,
-  fromParent: FullyQualifiedMoniker | null,
-  fromFq: FullyQualifiedMoniker,
-  direction: Direction,
-): { nextFq: FullyQualifiedMoniker; nextSegment: SegmentMoniker } | null {
-  const candidates: ShadowEntry[] = [];
-  for (const e of registry.values()) {
-    if (e.layerFq === layer && e.parentZone === fromParent && e.fq !== fromFq) {
-      candidates.push(e);
+  // Per-direction override (mirrors `check_override`): an explicit wall
+  // (`null`) blocks the move; a target FQM redirects when it resolves
+  // in-layer; anything unresolved falls through to the geometric pick.
+  const override = from.overrides?.[direction] as
+    | FullyQualifiedMoniker
+    | null
+    | undefined;
+  if (override !== undefined) {
+    if (override === null) return null;
+    const target = registry.get(override);
+    if (target && target.layerFq === from.layerFq) {
+      return { nextFq: target.fq, nextSegment: target.segment };
     }
   }
-  return pickBestRect(fromRect, candidates, direction);
-}
 
-/**
- * Beam-search candidates sharing `fromParent` (excluding `fromFq`),
- * filtered by `layer`. Matches `beam_among_siblings` in the Rust
- * kernel — used by iter 1.
- *
- * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
- * split primitives into a single `<FocusScope>`, the kind filter was
- * removed: every registered entry is a scope, so any sibling of the
- * parent is a valid candidate.
- */
-function beamAmongSiblings(
-  registry: Map<FullyQualifiedMoniker, ShadowEntry>,
-  layer: FullyQualifiedMoniker,
-  fromRect: RectLike,
-  fromParent: FullyQualifiedMoniker | null,
-  fromFq: FullyQualifiedMoniker,
-  direction: Direction,
-): { nextFq: FullyQualifiedMoniker; nextSegment: SegmentMoniker } | null {
-  const candidates: ShadowEntry[] = [];
+  // Single geometric pass over the focused scope's layer, mirroring
+  // `geometric_pick` in navigate.rs: skip the focused scope and non-focusable
+  // structural zones (columns / board well / panel & view-area wrappers —
+  // never cardinal targets), and **tier-lock** to the focused scope's nearest
+  // focusable ancestor so arrow keys glide item→item without diving into a
+  // card's inner fields (a field's tier is its card; a card's tier is `None`).
+  // Require the strict half-plane + in-beam test. Lowest beam score wins, ties
+  // via `betterCandidate` (leaf over container).
+  const focusedTier = nearestFocusableAncestor(registry, from.fq);
+  const parentFqs = new Set<FullyQualifiedMoniker>();
   for (const e of registry.values()) {
-    if (e.layerFq === layer && e.parentZone === fromParent && e.fq !== fromFq) {
-      candidates.push(e);
-    }
+    if (e.parentZone !== null) parentFqs.add(e.parentZone);
   }
-  return pickBestRect(fromRect, candidates, direction);
-}
-
-/**
- * Mirror of `pick_best_candidate` in the Rust kernel. The cross-axis
- * beam test is a hard filter: out-of-beam candidates are dropped before
- * scoring runs. Among in-beam candidates the lowest-scored one wins.
- *
- * The hard-filter behavior was tightened from a soft tier preference in
- * the directional-nav supersession card `01KQ7STZN3G5N2WB3FF4PM4DKX` —
- * out-of-beam fallbacks were letting visually disconnected scopes
- * (e.g. a navbar leaf above a card grid) win cardinal-direction nav
- * from cards in the rightmost column. See `pick_best_candidate` in
- * `swissarmyhammer-focus/src/navigate.rs` for the canonical rationale.
- *
- * Takes a `RectLike` rather than a `ShadowEntry` for `from` so the
- * cascade's iter-1 step can pass the parent zone's rect (the parent
- * is identified by FQM, not by the focused entry's `ShadowEntry`).
- */
-function pickBestRect(
-  fromRect: RectLike,
-  candidates: ShadowEntry[],
-  direction: Direction,
-): { nextFq: FullyQualifiedMoniker; nextSegment: SegmentMoniker } | null {
-  let bestEntry: ShadowEntry | null = null;
-  let bestScore = Infinity;
-
-  for (const cand of candidates) {
-    const scored = scoreCandidate(fromRect, cand.rect, direction);
+  let best: {
+    entry: ShadowEntry;
+    score: number;
+    hasChildren: boolean;
+  } | null = null;
+  for (const e of registry.values()) {
+    if (e.layerFq !== from.layerFq) continue;
+    if (e.fq === from.fq) continue;
+    if (e.focusable === false) continue;
+    if (nearestFocusableAncestor(registry, e.fq) !== focusedTier) continue;
+    const scored = scoreCandidate(from.rect, e.rect, direction);
     if (!scored) continue;
     const [inBeam, score] = scored;
-    // Hard in-beam filter — see function docs.
     if (!inBeam) continue;
-    if (bestEntry === null || score < bestScore) {
-      bestEntry = cand;
-      bestScore = score;
-    }
+    const cand = {
+      entry: e,
+      score,
+      hasChildren: parentFqs.has(e.fq),
+    };
+    if (betterCandidate(best, cand)) best = cand;
   }
-  if (!bestEntry) return null;
-  return { nextFq: bestEntry.fq, nextSegment: bestEntry.segment };
+  if (!best) return null;
+  return { nextFq: best.entry.fq, nextSegment: best.entry.segment };
+}
+
+/**
+ * The nearest **focusable** ancestor of `fq` by walking its `parentZone`
+ * chain, or `null` when none is focusable (a top-tier unit). Mirrors
+ * `nearest_focusable_ancestor` in navigate.rs and defines a scope's
+ * navigation tier: cardinal nav is locked to scopes that share it.
+ * Cycle-guarded.
+ */
+function nearestFocusableAncestor(
+  registry: Map<FullyQualifiedMoniker, ShadowEntry>,
+  fq: FullyQualifiedMoniker,
+): FullyQualifiedMoniker | null {
+  const seen = new Set<FullyQualifiedMoniker>();
+  let current = registry.get(fq)?.parentZone ?? null;
+  while (current !== null) {
+    const entry = registry.get(current);
+    if (entry && entry.focusable !== false) return current;
+    if (seen.has(current)) break;
+    seen.add(current);
+    current = registry.get(current)?.parentZone ?? null;
+  }
+  return null;
+}
+
+/**
+ * Mirror of `better_candidate` in navigate.rs. Lower beam score wins; an
+ * exact tie prefers the leaf over a container. No ancestry tie-break is
+ * needed — candidates are tier-locked to the focused scope's nearest
+ * focusable ancestor, so two same-tier candidates can never be
+ * ancestor/descendant of each other.
+ */
+function betterCandidate(
+  current: { entry: ShadowEntry; score: number; hasChildren: boolean } | null,
+  cand: { entry: ShadowEntry; score: number; hasChildren: boolean },
+): boolean {
+  if (current === null) return true;
+  if (cand.score < current.score) return true;
+  if (cand.score > current.score) return false;
+  return !cand.hasChildren && current.hasChildren;
 }
 
 /**
@@ -465,8 +435,22 @@ function scoreCandidate(
 // ---------------------------------------------------------------------------
 
 /**
+ * The currently-installed harness's kernel focus slot.
+ *
+ * `fireFocusChanged` mimics the Rust kernel emitting a focus-changed
+ * event — and the real kernel only emits after committing the focus to
+ * its own per-window slot. The host-driven `nav.*` commands (see the
+ * `dispatch_command` handler in `installShadowNavigator`) resolve the
+ * move's origin from that slot, so the harness must mirror the commit
+ * here or a seeded focus would be invisible to host-driven navigation.
+ */
+let activeCurrentFocus: { fq: FullyQualifiedMoniker | null } | null = null;
+
+/**
  * Drive a `focus-changed` event into the React tree, mimicking the Rust
- * kernel emitting one for the active window.
+ * kernel emitting one for the active window. Also commits `next_fq` to
+ * the installed harness's kernel focus slot (the kernel emits only after
+ * committing), so host-driven `nav.*` dispatches resolve their origin.
  *
  * Wraps the dispatch in `act()` from `@testing-library/react` so React
  * state updates flush before the caller asserts on post-update DOM.
@@ -480,13 +464,14 @@ export async function fireFocusChanged({
   next_fq?: FullyQualifiedMoniker | null;
   next_segment?: SegmentMoniker | null;
 }): Promise<void> {
+  if (activeCurrentFocus) activeCurrentFocus.fq = next_fq;
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
     prev_fq,
     next_fq,
     next_segment,
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get(FOCUS_CHANGED_EVENT) ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();
@@ -515,6 +500,17 @@ export interface ShadowHarness {
    * live entry.
    */
   getRegisteredFqBySegment(segment: string): FullyQualifiedMoniker | null;
+  /**
+   * Commit focus to a registered scope through the production `set focus`
+   * wire shape (the terminal action of a `nav.focus` dispatch:
+   * `focus-mcp.ts::setFocus` with `{ fq, snapshot, window }`). The
+   * snapshot is derived from the shadow registry so the harness's
+   * kernel-drop modeling accepts the commit and emits `focus-changed`.
+   *
+   * Rejects when `fq` is not currently registered — jumping to an
+   * unregistered scope is a test bug, not a silent no-op.
+   */
+  commitFocus(fq: FullyQualifiedMoniker): Promise<void>;
 }
 
 /**
@@ -553,8 +549,155 @@ export function installShadowNavigator(
 ): ShadowHarness {
   const registry = new Map<FullyQualifiedMoniker, ShadowEntry>();
   const currentFocus: { fq: FullyQualifiedMoniker | null } = { fq: null };
+  // Share the kernel focus slot with `fireFocusChanged` so a test-seeded
+  // focus is visible to the host-driven `nav.*` dispatch handler below.
+  activeCurrentFocus = currentFocus;
+  // Layers the React tree has pushed and not yet popped. Tracked so
+  // `spatial_focus` can mirror the real kernel's drop conditions instead
+  // of accepting every commit. Previously this harness ignored
+  // `spatial_push_layer` entirely and `spatial_focus` emitted
+  // unconditionally — which is exactly why a window-root focus drop
+  // (board / toolbar clicks committing against a `/window` layer the
+  // kernel can't resolve) passed this umbrella e2e green. See
+  // `state.rs::SpatialState::focus` for the production drop logic.
+  const pushedLayers = new Set<FullyQualifiedMoniker>();
 
-  mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+  /**
+   * Translate the post-Stage-3 MCP transport shape
+   * (`invoke("command_tool_call", { tool, op, params, ... })`) back to
+   * the legacy `(cmd, args)` the rest of this dispatcher matches on, so
+   * existing tests keep asserting against `mockInvoke.mock.calls` of
+   * the old shape without per-test rewrites.
+   *
+   * Recognised translations:
+   *   - `tool: "focus"` — maps every op verb to its old `spatial_*`
+   *     command name (e.g. `"set focus"` → `"spatial_focus"`,
+   *     `"navigate focus"` → `"spatial_navigate"`,
+   *     `"drill_in layer"` → `"spatial_drill_in"`).
+   *   - `tool: "entity"` with `op: "get entity"` — maps to the old
+   *     `get_entity` command name. Today no in-test shadow handler
+   *     consumes it, but the fallback `defaultInvokeImpl` can.
+   *
+   * Any unrecognised `{ tool, op }` pair falls through to the bare
+   * `command_tool_call` cmd so the default handler can intercept it.
+   */
+  const FOCUS_OP_TO_LEGACY_CMD: Record<string, string> = {
+    "set focus": "spatial_focus",
+    "clear focus": "spatial_clear_focus",
+    "navigate focus": "spatial_navigate",
+    "lose focus": "spatial_focus_lost",
+    "push layer": "spatial_push_layer",
+    "pop layer": "spatial_pop_layer",
+    "drill_in layer": "spatial_drill_in",
+    "drill_out layer": "spatial_drill_out",
+    "generate sneak_codes": "generate_jump_codes",
+  };
+  const translateMcpCall = (
+    bag: Record<string, unknown> | undefined,
+  ): { cmd: string; args: unknown } | null => {
+    if (!bag) return null;
+    const tool = bag.tool as string | undefined;
+    const op = bag.op as string | undefined;
+    const params = (bag.params ?? {}) as Record<string, unknown>;
+    if (tool === "focus" && op && FOCUS_OP_TO_LEGACY_CMD[op]) {
+      // The kernel wire renames `focusedFq` → `focused_fq` for the focus
+      // server. Map it back so the legacy handlers below find the field
+      // under its original name.
+      const remapped: Record<string, unknown> = { ...params };
+      if ("focused_fq" in remapped && !("focusedFq" in remapped)) {
+        remapped.focusedFq = remapped.focused_fq;
+      }
+      return { cmd: FOCUS_OP_TO_LEGACY_CMD[op], args: remapped };
+    }
+    if (tool === "entity" && op === "get entity") {
+      return {
+        cmd: "get_entity",
+        args: {
+          entityType: (params as Record<string, unknown>).type,
+          id: (params as Record<string, unknown>).id,
+        },
+      };
+    }
+    if (tool === "window" && op === "list open boards") {
+      return { cmd: "list_open_boards", args: {} };
+    }
+    if (tool === "window" && op === "get board data") {
+      // The window server wire uses `board_path`; the legacy `get_board_data`
+      // fallback keys off `boardPath`. Map it back so `defaultInvokeImpl`
+      // serves the right board.
+      const boardArgs: Record<string, unknown> = {};
+      if ((params as Record<string, unknown>).board_path !== undefined) {
+        boardArgs.boardPath = (params as Record<string, unknown>).board_path;
+      }
+      return { cmd: "get_board_data", args: boardArgs };
+    }
+    return null;
+  };
+
+  const dispatch = async (cmd: string, args?: unknown): Promise<unknown> => {
+    // Post-Stage-3 frontend reaches the focus / entity kernels through
+    // the generic MCP transport. Translate the wrapping shape back to
+    // the legacy `(cmd, args)` pair so the rest of this dispatcher
+    // matches without changes. The translated call recurses through the
+    // same dispatch function so every shadow handler below sees the
+    // legacy argument shape it was written for.
+    if (cmd === "command_tool_call") {
+      const translated = translateMcpCall(
+        args as Record<string, unknown> | undefined,
+      );
+      if (translated) {
+        // Surface the translated legacy call shape in `mockInvoke.mock.calls`
+        // so existing assertions of the form
+        // `mockInvoke.mock.calls.filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))`
+        // keep working without per-test rewrites. The MCP envelope call
+        // is ALSO recorded by Vitest (we are inside its mockImplementation),
+        // so both shapes appear in the call log; existing tests filter by
+        // the legacy name and naturally ignore the wrapper entry.
+        mockInvoke.mock.calls.push([translated.cmd, translated.args]);
+        const result = await dispatch(translated.cmd, translated.args);
+        // The focus server wraps its result in `{ ok, event, ... }`;
+        // the legacy commands returned the raw value (or `undefined`).
+        // Re-wrap so the production `focus-mcp.ts` / `entity-mcp.ts`
+        // wrappers can unwrap the envelope into the legacy return
+        // shape their callers depend on.
+        const tool = (args as Record<string, unknown>).tool;
+        const op = (args as Record<string, unknown>).op;
+        if (tool === "focus") {
+          if (
+            op === "pop layer" ||
+            op === "drill_in layer" ||
+            op === "drill_out layer"
+          ) {
+            return { ok: true, next_fq: result ?? null };
+          }
+          if (op === "generate sneak_codes") {
+            return { ok: true, codes: result ?? [] };
+          }
+          return { ok: true, event: null };
+        }
+        if (tool === "entity" && op === "get entity") {
+          return { ok: true, entity: result ?? {} };
+        }
+        if (tool === "window" && op === "list open boards") {
+          // `listOpenBoards` unwraps `result.boards`; the legacy fallback
+          // returns the raw `OpenBoard[]`, so wrap it in the server envelope.
+          return { ok: true, boards: result ?? [] };
+        }
+        if (tool === "window" && op === "get board data") {
+          // `getBoardData` returns the projection object directly, so pass the
+          // legacy `BoardDataResponse` through unchanged.
+          return result;
+        }
+        return result;
+      }
+    }
+    return innerDispatch(cmd, args);
+  };
+
+  const innerDispatch = async (
+    cmd: string,
+    args?: unknown,
+  ): Promise<unknown> => {
     if (cmd === "spatial_register_scope") {
       const a = (args ?? {}) as Record<string, unknown>;
       const entry: ShadowEntry = {
@@ -565,6 +708,7 @@ export function installShadowNavigator(
         layerFq: a.layerFq as FullyQualifiedMoniker,
         parentZone: (a.parentZone ?? null) as FullyQualifiedMoniker | null,
         overrides: (a.overrides ?? {}) as Record<string, unknown>,
+        focusable: (a.focusable ?? true) as boolean,
       };
       registry.set(entry.fq, entry);
       return undefined;
@@ -585,6 +729,7 @@ export function installShadowNavigator(
           layerFq: e.layer_fq as FullyQualifiedMoniker,
           parentZone: (e.parent_zone ?? null) as FullyQualifiedMoniker | null,
           overrides: (e.overrides ?? {}) as Record<string, unknown>,
+          focusable: (e.focusable ?? true) as boolean,
         };
         registry.set(entry.fq, entry);
       }
@@ -604,8 +749,31 @@ export function installShadowNavigator(
     if (cmd === "spatial_focus") {
       const a = (args ?? {}) as Record<string, unknown>;
       const nextFq = a.fq as FullyQualifiedMoniker;
+      // Mirror the real kernel's three silent-drop conditions
+      // (`swissarmyhammer-focus/src/state.rs::SpatialState::focus`): a
+      // commit produces NO `focus-changed` event when the snapshot is
+      // absent, names a layer the kernel never pushed, or omits the
+      // target fq. Without this the harness accepted every commit and
+      // hand-emitted focus-changed, masking window-layer focus drops.
+      const snapshot = a.snapshot as
+        | {
+            layer_fq?: FullyQualifiedMoniker;
+            scopes?: Array<{ fq?: FullyQualifiedMoniker }>;
+          }
+        | undefined
+        | null;
+      if (!snapshot) return undefined;
+      const snapshotLayerFq = snapshot.layer_fq;
+      if (!snapshotLayerFq || !pushedLayers.has(snapshotLayerFq)) {
+        return undefined;
+      }
+      const inSnapshot = (snapshot.scopes ?? []).some((s) => s.fq === nextFq);
+      if (!inSnapshot) return undefined;
       const entry = registry.get(nextFq);
       const prev = currentFocus.fq;
+      // Already focused → no event, mirroring the real kernel's
+      // "already focused" short-circuit in `SpatialState::focus`.
+      if (prev === nextFq) return undefined;
       currentFocus.fq = nextFq;
       // Emit focus-changed asynchronously so the kernel's emit-after-write
       // ordering is preserved. Listeners run synchronously inside `act()`
@@ -617,7 +785,7 @@ export function installShadowNavigator(
         next_segment: entry?.segment ?? null,
       };
       queueMicrotask(() => {
-        const handlers = listeners.get("focus-changed") ?? [];
+        const handlers = listeners.get("notifications/focus/changed") ?? [];
         for (const h of handlers) h({ payload });
       });
       return undefined;
@@ -633,7 +801,7 @@ export function installShadowNavigator(
         next_segment: null,
       };
       queueMicrotask(() => {
-        const handlers = listeners.get("focus-changed") ?? [];
+        const handlers = listeners.get("notifications/focus/changed") ?? [];
         for (const h of handlers) h({ payload });
       });
       return undefined;
@@ -659,7 +827,7 @@ export function installShadowNavigator(
         next_segment: result.nextSegment,
       };
       queueMicrotask(() => {
-        const handlers = listeners.get("focus-changed") ?? [];
+        const handlers = listeners.get("notifications/focus/changed") ?? [];
         for (const h of handlers) h({ payload });
       });
       return undefined;
@@ -672,14 +840,56 @@ export function installShadowNavigator(
       const a = (args ?? {}) as Record<string, unknown>;
       return (a.focusedFq ?? "") as FullyQualifiedMoniker;
     }
-    if (cmd === "spatial_push_layer" || cmd === "spatial_pop_layer") {
-      // Layer push/pop are kernel bookkeeping operations — accept and
-      // record nothing; tests audit `spatial_push_layer` calls separately
-      // via `mockInvoke.mock.calls`.
+    if (cmd === "spatial_push_layer") {
+      // Track the pushed layer so `spatial_focus` can validate that a
+      // commit's `snapshot.layer_fq` references a live layer — mirroring
+      // the real kernel, which drops commits against unregistered layers.
+      const a = (args ?? {}) as Record<string, unknown>;
+      pushedLayers.add(a.fq as FullyQualifiedMoniker);
       return undefined;
     }
+    if (cmd === "spatial_pop_layer") {
+      const a = (args ?? {}) as Record<string, unknown>;
+      pushedLayers.delete(a.fq as FullyQualifiedMoniker);
+      return undefined;
+    }
+    if (cmd === "dispatch_command") {
+      // Host-driven navigation: the cardinal `nav.*` commands execute in
+      // the `nav-commands` builtin plugin on the host — the webview only
+      // routes the command id to the backend. Mirror the plugin here:
+      // resolve the move's origin from the kernel focus slot, run the
+      // BeamNavStrategy port, and emit `focus-changed` with the result —
+      // the same end-to-end loop the legacy client-side
+      // `spatial_navigate` handler above modeled.
+      const a = (args ?? {}) as { cmd?: string };
+      const direction = NAV_COMMAND_DIRECTIONS[a.cmd ?? ""];
+      if (direction !== undefined) {
+        const fromFq = currentFocus.fq;
+        // No resolvable focus → the kernel op drops silently
+        // (window-unknown / focus-unknown contract).
+        if (fromFq === null) return undefined;
+        const result = navigateInShadow(registry, fromFq, direction);
+        if (!result) return undefined;
+        currentFocus.fq = result.nextFq;
+        const payload: FocusChangedPayload = {
+          window_label: "main" as WindowLabel,
+          prev_fq: fromFq,
+          next_fq: result.nextFq,
+          next_segment: result.nextSegment,
+        };
+        queueMicrotask(() => {
+          const handlers = listeners.get("notifications/focus/changed") ?? [];
+          for (const h of handlers) h({ payload });
+        });
+        return undefined;
+      }
+      // Non-directional commands fall through to the consumer's
+      // defaultInvokeImpl (e.g. tests asserting their own dispatches).
+    }
     return defaultInvokeImpl(cmd, args);
-  });
+  };
+
+  mockInvoke.mockImplementation(dispatch);
 
   return {
     registry,
@@ -709,6 +919,27 @@ export function installShadowNavigator(
         }
       }
       return null;
+    },
+    async commitFocus(fq: FullyQualifiedMoniker): Promise<void> {
+      const entry = registry.get(fq);
+      if (!entry) {
+        throw new Error(`commitFocus: ${String(fq)} is not registered`);
+      }
+      await mockInvoke("command_tool_call", {
+        module: "focus",
+        tool: "focus",
+        op: "set focus",
+        params: {
+          fq,
+          snapshot: {
+            layer_fq: entry.layerFq,
+            scopes: [...registry.values()]
+              .filter((e) => e.layerFq === entry.layerFq)
+              .map((e) => ({ fq: e.fq })),
+          },
+          window: "main",
+        },
+      });
     },
   };
 }

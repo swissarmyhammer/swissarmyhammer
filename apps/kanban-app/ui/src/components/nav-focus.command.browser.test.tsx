@@ -3,21 +3,28 @@
  * focus-claim choke point introduced by card
  * `01KR7CDEFWWVF4WH0BCHE8Y21J`.
  *
- * Three guarantees:
+ * Four guarantees (Card G single-source shape):
  *
- *   1. `nav.focus` is registered in the command-scope chain whenever a
- *      `<SpatialFocusProvider>` and / or `<EntityFocusProvider>` is
- *      mounted, with `args.fq` as the focus target.
+ *   1. `nav.focus` is DEFINED only by the `nav-commands` builtin plugin;
+ *      the webview's execution leg is a webview-bus handler registered by
+ *      `<SpatialFocusProvider>` (`registerWebviewCommandHandler`), NOT a
+ *      scope-chain `CommandDef`.
  *   2. Dispatching `nav.focus({ args: { fq } })` from a descendant
- *      claims focus on the kernel via `spatial_focus(fq, snapshot)`.
+ *      claims focus on the kernel via `spatial_focus(fq, snapshot)` —
+ *      and the commit CARRIES the snapshot (the kernel silently drops a
+ *      snapshot-less commit, so losing the snapshot breaks click-to-focus
+ *      everywhere).
  *   3. `<FocusScope>`'s click handler dispatches `nav.focus` (not
  *      `setFocus(fq)` or `spatial.focus(fq)` directly), so every
  *      focus claim flows through that one closure.
+ *   4. The bus handler is live whenever `<SpatialFocusProvider>` is
+ *      mounted — spatial-only harnesses (no `<EntityFocusProvider>`)
+ *      keep clicks routed through `spatial_focus`.
  *
- * The fourth (source-level) guarantee — that no production component
- * file other than the `nav.focus` execute closure calls
- * `setFocus(<non-null>)` directly — runs as a static text scan over
- * the relevant `.tsx` files, not as a browser-mode assertion.
+ * The source-level guarantee — that no production component file calls
+ * `setFocus(<non-null>)` directly — runs as a static text scan in
+ * `nav-focus.source-guard.node.test.ts`; the no-CommandDef guarantee is
+ * `inspect-and-focus-commands.plugin-owned.node.test.ts`.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -29,28 +36,9 @@ import { render, fireEvent, act } from "@testing-library/react";
 // kernel IPC calls are observable as `mockInvoke.mock.calls`.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -86,6 +74,10 @@ import { FocusLayer } from "@/components/focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { useDispatchCommand } from "@/lib/command-scope";
+import {
+  hasWebviewCommandHandler,
+  resetWebviewCommandBusForTest,
+} from "@/lib/webview-command-bus";
 import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -104,8 +96,22 @@ async function flush() {
 /** Collect every `spatial_focus` invocation, in order. */
 function spatialFocusCalls() {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { fq: string });
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as {
+        fq: string;
+        snapshot?: { layer_fq?: string; scopes?: Array<{ fq?: string }> };
+        window?: string;
+      };
+      return args;
+    });
 }
 
 /** Collect every `dispatch_command` invocation, in order. */
@@ -117,8 +123,8 @@ function backendDispatchCalls() {
 
 /**
  * Render `<FocusScope>` inside the production-shaped provider stack
- * (Spatial > Entity > Layer). The default `nav.focus` registrations
- * (one in each provider) are exactly what production would mount.
+ * (Spatial > Entity > Layer). The spatial provider's `nav.focus`
+ * webview-bus handler is exactly what production would mount.
  */
 function renderProductionShape(child: React.ReactElement) {
   return render(
@@ -139,10 +145,38 @@ describe("nav.focus command", () => {
     mockInvoke.mockClear();
     mockListen.mockClear();
     listeners.clear();
+    resetWebviewCommandBusForTest();
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    resetWebviewCommandBusForTest();
+  });
+
+  it("mounting <SpatialFocusProvider> registers the nav.focus webview-bus handler (single execution source)", async () => {
+    // Card G: `nav.focus` is DEFINED once, in the `nav-commands` plugin.
+    // The webview's execution leg is a bus handler registered by
+    // `<SpatialFocusProvider>` — not a scope-chain `CommandDef` (those two
+    // context-file definitions were the duplication this card removed).
+    expect(hasWebviewCommandHandler("nav.focus")).toBe(false);
+
+    const { unmount } = render(
+      <SpatialFocusProvider>
+        <span />
+      </SpatialFocusProvider>,
+    );
+    await flush();
+
+    expect(
+      hasWebviewCommandHandler("nav.focus"),
+      "SpatialFocusProvider must register the nav.focus webview-bus handler",
+    ).toBe(true);
+
+    unmount();
+    expect(
+      hasWebviewCommandHandler("nav.focus"),
+      "unmount must clear the nav.focus bus handler (ownership-guarded cleanup)",
+    ).toBe(false);
   });
 
   it("dispatching nav.focus({ args: { fq } }) calls spatial_focus(fq) on the kernel", async () => {
@@ -202,14 +236,33 @@ describe("nav.focus command", () => {
     await flush();
 
     // The click must reach the kernel via `spatial_focus` — the
-    // execute closure on `nav.focus` runs client-side and calls into
+    // webview-bus handler for `nav.focus` runs client-side and calls into
     // the spatial provider, which dispatches `spatial_focus` IPC.
     const focusCalls = spatialFocusCalls();
     expect(focusCalls).toHaveLength(1);
     expect(focusCalls[0].fq).toBe("/window/ui:nav-focus-test");
 
+    // LOAD-BEARING: the commit must CARRY the geometry snapshot. The
+    // kernel silently drops a snapshot-less commit (its transient-unmount
+    // contract), so a consolidation that routed clicks to the host-side
+    // plugin execute (which has no geometry) would make every
+    // click-to-focus a silent no-op. The snapshot names the owning layer
+    // and includes the clicked scope.
+    const snapshot = focusCalls[0].snapshot;
+    expect(
+      snapshot,
+      "click-to-focus must commit WITH a snapshot — a snapshot-less commit is dropped by the kernel",
+    ).toBeTruthy();
+    expect(snapshot!.layer_fq).toBe("/window");
+    expect(
+      (snapshot!.scopes ?? []).some(
+        (s) => s.fq === "/window/ui:nav-focus-test",
+      ),
+      "the snapshot must include the clicked scope",
+    ).toBe(true);
+
     // No backend `dispatch_command` IPC for `nav.focus` — that
-    // would mean the execute closure was never registered, or that
+    // would mean the webview handler was never registered, or that
     // someone bypassed the focus subsystem and reached the IPC layer
     // directly.
     const backendCalls = backendDispatchCalls().filter(

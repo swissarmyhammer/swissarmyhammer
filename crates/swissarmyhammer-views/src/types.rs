@@ -97,6 +97,26 @@ pub struct ViewDef {
     pub commands: Vec<ViewCommand>,
 }
 
+impl ViewDef {
+    /// Validate that the definition is structurally usable.
+    ///
+    /// Returns `Err(reason)` when the definition is degenerate — currently
+    /// when `name` is empty or whitespace-only. Degenerate files (e.g.
+    /// `{id, name: '', kind: unknown}`, the on-disk residue of a partial
+    /// `set view` with all-default fields) have been observed clobbering
+    /// builtin view metadata through the builtin → local merge, which
+    /// stripped every grid view of its name/icon/kind. Loaders skip
+    /// definitions that fail this check (so a corrupted local override
+    /// cannot shadow a builtin) and `ViewsContext::write_view` refuses to
+    /// persist them.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("view name must not be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

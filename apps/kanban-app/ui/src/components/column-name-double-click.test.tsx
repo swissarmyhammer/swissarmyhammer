@@ -6,7 +6,7 @@
  * After the refactor, the column-name surface is registered exactly
  * once — by the inner `<Field>` component as a
  * `<FocusScope moniker="field:column:<id>.name">`. `<Field>` always wraps
- * itself in `<Inspectable>` (which dispatches `ui.inspect` on
+ * itself in `<Inspectable>` (which dispatches `app.inspect` on
  * double-click), so the question this test pins is: does double-clicking
  * the column name still enter edit mode without dispatching an inspector
  * command for the field moniker?
@@ -210,7 +210,7 @@ describe("Column name double-click", () => {
     fireEvent.doubleClick(ceHost!);
 
     // The double-click must NOT have dispatched a `dispatch_command`
-    // call for `ui.inspect` against the field moniker — `<Inspectable>`'s
+    // call for `app.inspect` against the field moniker — `<Inspectable>`'s
     // editable-surface skip is the safety net.
     const inspectCalls = mockInvoke.mock.calls.filter(
       (c) =>
@@ -218,11 +218,11 @@ describe("Column name double-click", () => {
         typeof c[1] === "object" &&
         c[1] !== null &&
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (c[1] as any).name === "ui.inspect",
+        (c[1] as any).name === "app.inspect",
     );
     expect(
       inspectCalls,
-      "ui.inspect must not be dispatched on double-click of the column name (the editor takes the gesture)",
+      "app.inspect must not be dispatched on double-click of the column name (the editor takes the gesture)",
     ).toHaveLength(0);
 
     // Edit mode is active — the editor is mounted. The state

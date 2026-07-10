@@ -272,26 +272,16 @@ mod tests {
 
     // -- helper -----------------------------------------------------------
 
+    use crate::test_support::test_spec;
     use crate::types::OwnedLspServerSpec;
 
     /// Startup timeout (seconds) used by test specs — short so failing
     /// handshakes resolve quickly.
     const TEST_STARTUP_TIMEOUT_SECS: u64 = 1;
 
-    /// Build a minimal OwnedLspServerSpec with a nonexistent binary.
-    fn fake_spec(command: &str) -> OwnedLspServerSpec {
-        OwnedLspServerSpec {
-            project_types: vec![],
-            command: command.to_string(),
-            args: vec![],
-            language_ids: vec!["test".to_string()],
-            file_extensions: vec![],
-            startup_timeout_secs: TEST_STARTUP_TIMEOUT_SECS,
-            health_check_interval_secs: 1,
-            install_hint: String::new(),
-            icon: None,
-        }
-    }
+    /// Health-check interval (seconds) used by test specs — short so the
+    /// health/restart path exercises quickly.
+    const TEST_HEALTH_CHECK_INTERVAL_SECS: u64 = 1;
 
     /// Insert an un-started daemon into the supervisor for the given spec.
     fn insert_daemon(mgr: &mut LspSupervisorManager, spec: OwnedLspServerSpec) {
@@ -443,8 +433,8 @@ mod tests {
     #[tokio::test]
     async fn test_shutdown_transitions_daemons_to_not_started() {
         let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
-        insert_daemon(&mut mgr, fake_spec("fake-lsp-a"));
-        insert_daemon(&mut mgr, fake_spec("fake-lsp-b"));
+        insert_daemon(&mut mgr, test_spec("fake-lsp-a"));
+        insert_daemon(&mut mgr, test_spec("fake-lsp-b"));
 
         assert_eq!(mgr.daemon_names().len(), 2);
 
@@ -465,7 +455,7 @@ mod tests {
     #[tokio::test]
     async fn test_shutdown_preserves_daemon_entries() {
         let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
-        insert_daemon(&mut mgr, fake_spec("fake-lsp-a"));
+        insert_daemon(&mut mgr, test_spec("fake-lsp-a"));
 
         mgr.shutdown().await;
 
@@ -486,7 +476,7 @@ mod tests {
     #[tokio::test]
     async fn test_health_check_all_not_started_daemons_no_restart() {
         let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
-        insert_daemon(&mut mgr, fake_spec("fake-lsp-a"));
+        insert_daemon(&mut mgr, test_spec("fake-lsp-a"));
 
         // NotStarted daemons should not trigger a restart attempt
         mgr.health_check_all().await;
@@ -501,7 +491,7 @@ mod tests {
     #[tokio::test]
     async fn test_health_check_all_failed_daemon_attempts_restart() {
         let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
-        insert_daemon(&mut mgr, fake_spec("__nonexistent_binary_xyz__"));
+        insert_daemon(&mut mgr, test_spec("__nonexistent_binary_xyz__"));
 
         // Manually transition the daemon to Failed state so health_check_all
         // will attempt a restart.
@@ -540,8 +530,8 @@ mod tests {
         // only Failed triggers restart_with_backoff, other non-healthy states
         // (NotStarted, NotFound, ShuttingDown) are left alone.
         let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
-        insert_daemon(&mut mgr, fake_spec("not-started-lsp"));
-        insert_daemon(&mut mgr, fake_spec("__also_nonexistent__"));
+        insert_daemon(&mut mgr, test_spec("not-started-lsp"));
+        insert_daemon(&mut mgr, test_spec("__also_nonexistent__"));
 
         // Make one daemon NotFound by attempting start with bad binary
         if let Some(daemon) = mgr.daemons.get_mut("__also_nonexistent__") {
@@ -567,7 +557,7 @@ mod tests {
     #[tokio::test]
     async fn test_force_restart_known_daemon_with_bad_binary() {
         let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
-        insert_daemon(&mut mgr, fake_spec("__nonexistent_force_restart__"));
+        insert_daemon(&mut mgr, test_spec("__nonexistent_force_restart__"));
 
         // force_restart should fail because the binary doesn't exist
         let result = mgr.force_restart("__nonexistent_force_restart__").await;
@@ -591,9 +581,9 @@ mod tests {
     #[tokio::test]
     async fn test_status_reports_all_daemons() {
         let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
-        insert_daemon(&mut mgr, fake_spec("lsp-alpha"));
-        insert_daemon(&mut mgr, fake_spec("lsp-beta"));
-        insert_daemon(&mut mgr, fake_spec("lsp-gamma"));
+        insert_daemon(&mut mgr, test_spec("lsp-alpha"));
+        insert_daemon(&mut mgr, test_spec("lsp-beta"));
+        insert_daemon(&mut mgr, test_spec("lsp-gamma"));
 
         let statuses = mgr.status();
         assert_eq!(statuses.len(), 3);
@@ -608,7 +598,7 @@ mod tests {
     #[test]
     fn test_daemon_mut_returns_mutable_ref() {
         let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
-        insert_daemon(&mut mgr, fake_spec("mutable-lsp"));
+        insert_daemon(&mut mgr, test_spec("mutable-lsp"));
 
         let daemon = mgr.daemon_mut("mutable-lsp");
         assert!(daemon.is_some());
@@ -619,7 +609,7 @@ mod tests {
     #[test]
     fn test_debug_impl() {
         let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
-        insert_daemon(&mut mgr, fake_spec("debug-lsp"));
+        insert_daemon(&mut mgr, test_spec("debug-lsp"));
 
         let debug_str = format!("{:?}", mgr);
         assert!(debug_str.contains("LspSupervisorManager"));
@@ -639,7 +629,7 @@ mod tests {
         let mut mgr = LspSupervisorManager::new(tmp.path().to_path_buf());
 
         // Pre-insert a daemon for rust-analyzer
-        insert_daemon(&mut mgr, fake_spec("rust-analyzer"));
+        insert_daemon(&mut mgr, test_spec("rust-analyzer"));
 
         // start() should detect Rust project and find rust-analyzer server,
         // but skip spawning because it's already in the daemons map
@@ -755,7 +745,7 @@ mod tests {
             language_ids: vec!["test".to_string()],
             file_extensions: vec![],
             startup_timeout_secs: TEST_STARTUP_TIMEOUT_SECS,
-            health_check_interval_secs: 1,
+            health_check_interval_secs: TEST_HEALTH_CHECK_INTERVAL_SECS,
             install_hint: String::new(),
             icon: None,
         };

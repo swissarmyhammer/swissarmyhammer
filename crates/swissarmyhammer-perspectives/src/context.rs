@@ -22,7 +22,9 @@ use crate::events::PerspectiveEvent;
 use crate::store::PerspectiveStore;
 use crate::types::Perspective;
 use crate::PerspectiveId;
-use swissarmyhammer_store::{StoreContext, StoreHandle, StoredItemId, UndoEntryId};
+use swissarmyhammer_store::{
+    EventProvenance, StoreContext, StoreHandle, StoredItemId, UndoEntryId,
+};
 
 /// Default capacity for the perspective event broadcast channel.
 ///
@@ -121,12 +123,15 @@ impl PerspectiveContext {
         let is_create = old.is_none();
         let changed_fields = diff_perspective(old.as_ref(), perspective);
         if !changed_fields.is_empty() {
+            let prov = EventProvenance::user();
             let _ = self
                 .event_sender
                 .send(PerspectiveEvent::PerspectiveChanged {
                     id: perspective.id.clone(),
                     changed_fields,
                     is_create,
+                    txn: prov.txn,
+                    origin: prov.origin,
                 });
         }
 
@@ -223,10 +228,13 @@ impl PerspectiveContext {
         let deleted = self.cache_remove_at(idx);
 
         // Broadcast the deletion event.
+        let prov = EventProvenance::user();
         let _ = self
             .event_sender
             .send(PerspectiveEvent::PerspectiveDeleted {
                 id: deleted.id.clone(),
+                txn: prov.txn,
+                origin: prov.origin,
             });
 
         Ok((deleted, entry_id))
@@ -246,6 +254,17 @@ impl PerspectiveContext {
     /// Can be called through a shared reference (uses `OnceLock`).
     pub fn set_store_context(&self, ctx: Arc<StoreContext>) {
         let _ = self.store_context.set(ctx);
+    }
+
+    /// Return the `Arc<StoreContext>` previously installed via
+    /// [`set_store_context`], if any.
+    ///
+    /// Exposed so substrate-guard tests can verify via `Arc::ptr_eq` that the
+    /// perspective context shares the single app-wide `StoreContext`.
+    /// Production code paths reach the context through the setter side and do
+    /// not need to read it back.
+    pub fn store_context(&self) -> Option<Arc<StoreContext>> {
+        self.store_context.get().cloned()
     }
 
     /// Subscribe to perspective change events.
@@ -283,6 +302,18 @@ impl PerspectiveContext {
     /// Parse failures on an existing file return an error. In-memory cache
     /// state is not mutated when parsing fails.
     pub async fn reload_from_disk(&mut self, id: &str) -> Result<()> {
+        self.reload_from_disk_with(id, EventProvenance::user())
+            .await
+    }
+
+    /// Like [`reload_from_disk`](Self::reload_from_disk) but stamps the
+    /// supplied provenance (`txn` + `origin`) onto the emitted event.
+    ///
+    /// Post-undo/redo reconciliation passes `origin: "undo"`/`"redo"` plus
+    /// the reversed command's transaction id; the plain wrapper stamps
+    /// `origin: "user"`. The event kind is derived from the post-rewrite
+    /// on-disk state, identical across callers.
+    pub async fn reload_from_disk_with(&mut self, id: &str, prov: EventProvenance) -> Result<()> {
         let path = self.perspective_path(id);
         if path.exists() {
             let content = fs::read_to_string(&path).await?;
@@ -296,12 +327,18 @@ impl PerspectiveContext {
                     // treat this as a full refresh."
                     changed_fields: Vec::new(),
                     is_create: false,
+                    txn: prov.txn,
+                    origin: prov.origin,
                 });
         } else if let Some(&idx) = self.id_index.get(id) {
             let _deleted = self.cache_remove_at(idx);
             let _ = self
                 .event_sender
-                .send(PerspectiveEvent::PerspectiveDeleted { id: id.to_string() });
+                .send(PerspectiveEvent::PerspectiveDeleted {
+                    id: id.to_string(),
+                    txn: prov.txn,
+                    origin: prov.origin,
+                });
         }
         Ok(())
     }
@@ -1228,6 +1265,7 @@ mod tests {
                 id,
                 changed_fields,
                 is_create,
+                ..
             } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
                 assert!(is_create, "first write must be flagged as create");
@@ -1263,6 +1301,7 @@ mod tests {
                 id,
                 changed_fields,
                 is_create,
+                ..
             } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
                 assert!(!is_create, "update must not be flagged as create");
@@ -1306,7 +1345,7 @@ mod tests {
 
         let evt = rx.try_recv().unwrap();
         match evt {
-            PerspectiveEvent::PerspectiveDeleted { id } => {
+            PerspectiveEvent::PerspectiveDeleted { id, .. } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
             }
             other => panic!("expected PerspectiveDeleted, got {other:?}"),
@@ -1335,6 +1374,7 @@ mod tests {
                 id,
                 changed_fields,
                 is_create,
+                ..
             } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
                 assert!(!is_create, "rename is an update, not a create");
@@ -1405,6 +1445,7 @@ mod tests {
                 id,
                 changed_fields,
                 is_create,
+                ..
             } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
                 assert!(
@@ -1455,7 +1496,7 @@ mod tests {
 
         let evt = rx.try_recv().expect("reload must emit an event");
         match evt {
-            PerspectiveEvent::PerspectiveDeleted { id } => {
+            PerspectiveEvent::PerspectiveDeleted { id, .. } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
             }
             other => panic!("expected PerspectiveDeleted, got {other:?}"),
@@ -1537,6 +1578,7 @@ mod tests {
                 id,
                 changed_fields,
                 is_create,
+                ..
             } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
                 assert!(

@@ -206,7 +206,15 @@ function useCommitHandlers(
   idToDisplayRef.current = maps.idToDisplay;
 
   const commit = useCallback(() => {
-    const text = editorRef.current?.view?.state.doc.toString().trim() ?? "";
+    const view = editorRef.current?.view;
+    // The blur handler commits on a 100ms timeout. If the editor has already
+    // unmounted by then — ESC to pop out of edit mode, then navigate away —
+    // there is no live view, the doc reads as empty, and we would clobber the
+    // field with `[]`, wiping the user's tags. Bail when the view is gone: an
+    // unmounted editor must never overwrite the field. (A genuinely-empty doc
+    // with a live view still commits `[]`, clearing tags on purpose.)
+    if (!view) return;
+    const text = view.state.doc.toString().trim();
     onCommit(
       computeCommitValue(
         text,

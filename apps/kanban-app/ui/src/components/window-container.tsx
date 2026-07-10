@@ -10,7 +10,8 @@
  * - ActiveBoardPathProvider
  * - AppShell (global keybindings -- must work even with no board loaded)
  * - Window-level state: openBoards, activeBoardPath, board, loading
- * - Board-level Tauri event listeners: board-opened, board-changed
+ * - Board-level MCP bridge listeners: notifications/board/opened (replaces the
+ *   legacy board-opened Tauri emit) + the store-change plane (replaces board-changed)
  * - Board switching logic (handleSwitchBoard)
  * - Calls refreshEntities(boardPath) from RustEngineContainer context on board switch
  *
@@ -34,8 +35,14 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
+import { listOpenBoards } from "@/lib/window-mcp";
+import {
+  subscribeStoreChanged,
+  BOARD_OPENED_EVENT,
+  type BoardLifecycle,
+} from "@/lib/mcp-notifications";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "sonner";
 import { InitProgressListener } from "@/components/init-progress-listener";
@@ -52,6 +59,7 @@ import {
   useEngineSetActiveBoardPath,
 } from "@/components/rust-engine-container";
 import type { BoardData, OpenBoard } from "@/types/kanban";
+import type { RefreshResult } from "@/lib/refresh";
 import { useBoardDataSync } from "@/lib/board-data-sync";
 
 // ---------------------------------------------------------------------------
@@ -215,6 +223,10 @@ function WindowContainerInner({ children }: WindowContainerProps) {
     [refreshEntities, setEntitiesByType, setEngineActiveBoardPath],
   );
 
+  // Bind this window's MCP-notification forwarder before any data-change
+  // listener registers, so the `notifications/*` Tauri-event stream is live.
+  useMcpSubscribeBootstrap();
+
   const refresh = useWindowRefresh(deps);
   useRestoreWindowStateOnMount(deps, refresh);
   useBoardEventListeners(deps);
@@ -286,6 +298,30 @@ async function applyFallbackBoardIfNeeded(
   return true;
 }
 
+/**
+ * If `get_board_data` FAILED for `currentPath` (a malformed / half-open board
+ * — the live incident that blanked the window), recover by adopting another
+ * healthy open board instead of rendering a silent `null`. Returns `true` when
+ * a fallback board was adopted and the caller should exit.
+ *
+ * Only fires on a real board-data error: a `null` board with no error means
+ * "no board requested" and is handled by the normal empty-state path.
+ */
+async function recoverFromBoardErrorIfNeeded(
+  deps: WindowBoardDeps,
+  currentPath: string | undefined,
+  result: RefreshResult,
+): Promise<boolean> {
+  if (!result.boardError) return false;
+  const fallback = result.openBoards.find((b) => b.path !== currentPath);
+  if (!fallback) return false;
+  console.warn(
+    `[window-container] board data failed for ${currentPath ?? "(none)"} (${result.boardError}); falling back to ${fallback.path}`,
+  );
+  await adoptBoard(deps, fallback.path, true);
+  return true;
+}
+
 /** Body of the window `refresh` callback — extracted for line-count limits. */
 async function runWindowRefresh(deps: WindowBoardDeps): Promise<void> {
   deps.setLoading(true);
@@ -305,6 +341,14 @@ async function runWindowRefresh(deps: WindowBoardDeps): Promise<void> {
     clearWindowBoardState(deps);
     return;
   }
+
+  // The current board is still in the open list but its data failed to load
+  // (malformed / half-open board). Fall back to a healthy board rather than
+  // blanking the window with a null board.
+  if (await recoverFromBoardErrorIfNeeded(deps, currentPath, result)) {
+    return;
+  }
+
   deps.setBoard(result.boardData);
   deps.setLoading(false);
 }
@@ -352,6 +396,31 @@ async function applyRestoredWindowState(
   } catch {
     // No saved state — caller falls through to refresh().
   }
+}
+
+/**
+ * Bootstrap the MCP-notification → Tauri-event pump for this window.
+ *
+ * Invokes the backend `mcp_subscribe` command once on mount, which binds this
+ * window's notification forwarder to its board's notification bridge. Until
+ * this runs, the host raises no `notifications/*` Tauri events for the window,
+ * so every `subscribe*` helper in `mcp-notifications.ts` /`mcp-transport.ts`
+ * (`store/changed`, `store/undo_changed`, `commands/changed`, `ui_state/changed`)
+ * would receive nothing. This is the single seam that turns the data-change
+ * plane on for the webview.
+ *
+ * Idempotent backend-side: a window already bound to its current board is a
+ * no-op (binding is keyed per `(label, board)`), so running this on mount is
+ * sufficient for a window that displays a single board for its lifetime.
+ * Failures are logged and swallowed — a transport hiccup must not crash the
+ * window shell.
+ */
+function useMcpSubscribeBootstrap(): void {
+  useEffect(() => {
+    invoke("mcp_subscribe").catch((err) => {
+      console.error("[window-container] mcp_subscribe bootstrap failed:", err);
+    });
+  }, []);
 }
 
 /**
@@ -422,7 +491,7 @@ async function fetchAssignedBoardPath(): Promise<string | undefined> {
 async function runBoardChanged(deps: WindowBoardDeps): Promise<void> {
   let boards: OpenBoard[] = [];
   try {
-    boards = await invoke<OpenBoard[]>("list_open_boards");
+    boards = await listOpenBoards();
   } catch {
     /* ignore */
   }
@@ -455,25 +524,46 @@ async function runBoardChanged(deps: WindowBoardDeps): Promise<void> {
 }
 
 /**
- * Registers board-level Tauri event listeners (`board-opened`, `board-changed`)
- * for the lifetime of the window. Entity-level events are owned by
- * `RustEngineContainer`.
+ * Registers board-level listeners for the lifetime of the window:
+ *
+ * - `notifications/board/opened` — the board-lifecycle event the `window`
+ *   service publishes onto this window's notification bridge when a board is
+ *   opened into it; the host's per-window forwarder re-broadcasts it as the
+ *   Tauri event named by its method, scoped to this window. This replaces the
+ *   former direct `board-opened` Tauri emit — the webview consumes board
+ *   lifecycle as a pure MCP client now. A plugin reads the same stream with
+ *   `this.window.on("board.opened", …)`.
+ * - structural `notifications/store/changed` (board/column) — the MCP
+ *   replacement for the former `board-changed` event; a board rename, column
+ *   add/remove, or board switch triggers a window-level board reconcile.
+ *
+ * Entity-level changes are owned by `RustEngineContainer`'s store reducer.
+ *
+ * The board-opened listener uses a statically-imported `listen()` (not the
+ * lazy `subscribeBoardOpened` seam) so it registers synchronously on mount —
+ * mirroring the spatial-focus provider; a deferred dynamic-import registration
+ * would miss an event the test harness fires immediately.
  */
 function useBoardEventListeners(deps: WindowBoardDeps): void {
   useEffect(() => {
-    const unlisteners = [
-      getCurrentWindow().listen<{ path: string }>(
-        "board-opened",
-        async (event) => {
-          await adoptBoard(deps, event.payload.path, true);
-        },
-      ),
-      listen("board-changed", () => runBoardChanged(deps)),
-    ];
-    return () => {
-      for (const p of unlisteners) {
-        p.then((fn: () => void) => fn());
+    let disposed = false;
+    const openedPromise = listen<BoardLifecycle>(
+      BOARD_OPENED_EVENT,
+      async (event) => {
+        await adoptBoard(deps, event.payload.path, true);
+      },
+    );
+    const storePromise = subscribeStoreChanged((batch) => {
+      if (batch.some((n) => n.store === "board" || n.store === "column")) {
+        runBoardChanged(deps);
       }
+    });
+    return () => {
+      disposed = true;
+      openedPromise.then((fn: () => void) => fn());
+      storePromise.then((unsub) => {
+        if (disposed) unsub();
+      });
     };
   }, [deps]);
 }

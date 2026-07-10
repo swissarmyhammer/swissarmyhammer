@@ -8,6 +8,7 @@ use crate::error_context::IoResultExt;
 use crate::{Result, SwissArmyHammerError};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// File permissions for secure file creation
@@ -546,6 +547,77 @@ impl FileSystem for MockFileSystem {
     fn set_permissions(&self, _path: &Path, _permissions: FilePermissions) -> Result<()> {
         // Mock implementation does nothing - permissions are not stored
         Ok(())
+    }
+}
+
+/// Writes `contents` to `path` atomically, via a temp sibling and a rename.
+///
+/// The bytes are written in full to a uniquely named sibling temp file in the
+/// destination's own directory, which is then renamed over `path`. A rename
+/// within one directory is atomic on every platform the host targets, so a
+/// concurrent reader observes either the old file or the complete new one,
+/// never a partially written one. The temp file is removed on any failure so a
+/// failed write leaves no debris beside the destination.
+///
+/// This is the shared, plain-`std::fs` atomic-write primitive. Callers that
+/// need configurable permissions on the published file should use the
+/// [`FileSystem::write_with_permissions`] trait method instead, which layers
+/// permission handling on top of the same temp-sibling-then-rename strategy.
+///
+/// # Parameters
+///
+/// - `path` — the destination path; its parent directory is created if absent.
+/// - `contents` — the full byte content to write.
+///
+/// # Errors
+///
+/// Returns the underlying [`std::io::Error`] when the parent directory cannot
+/// be created, the temp file cannot be written, or the rename fails.
+pub fn write_atomic(path: impl AsRef<Path>, contents: &str) -> std::io::Result<()> {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    let temp_path = temp_sibling(path);
+
+    if let Err(error) = std::fs::write(&temp_path, contents) {
+        // Best-effort cleanup so a failed write leaves no orphan temp file.
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(error);
+    }
+
+    if let Err(error) = std::fs::rename(&temp_path, path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(error);
+    }
+
+    Ok(())
+}
+
+/// Builds a unique temp-file path that is a sibling of `path`.
+///
+/// The temp file must share a directory with the destination so the rename that
+/// publishes it is a same-directory rename — the only kind guaranteed atomic.
+/// The name carries the writer's process id and a process-wide counter, so two
+/// concurrent writers — or two writers sharing a directory — never collide on
+/// the temp path.
+fn temp_sibling(path: &Path) -> PathBuf {
+    /// A per-process counter making every temp filename unique.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string());
+    let temp_name = format!(".{file_name}.tmp-{}-{seq}", std::process::id());
+
+    match path.parent() {
+        Some(parent) => parent.join(temp_name),
+        None => PathBuf::from(temp_name),
     }
 }
 
@@ -1322,5 +1394,67 @@ pub mod tests {
 
         let result2 = utils.validate_file_path("/home/user/plans/test.md");
         assert!(result2.is_ok());
+    }
+
+    #[test]
+    fn write_atomic_creates_file_with_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.txt");
+
+        write_atomic(&path, "hello").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+    }
+
+    #[test]
+    fn write_atomic_creates_missing_parent_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("deep").join("out.txt");
+
+        write_atomic(&path, "hi").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hi");
+    }
+
+    #[test]
+    fn write_atomic_overwrites_via_rename_leaving_no_temp_litter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.txt");
+
+        write_atomic(&path, "first").unwrap();
+        write_atomic(&path, "second").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
+
+        // The temp sibling is renamed into place, never left behind.
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p != &path)
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_replaces_file_in_place_via_rename() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.txt");
+
+        write_atomic(&path, "first").unwrap();
+        let ino_before = std::fs::metadata(&path).unwrap().ino();
+
+        write_atomic(&path, "second").unwrap();
+        let ino_after = std::fs::metadata(&path).unwrap().ino();
+
+        assert_ne!(
+            ino_before, ino_after,
+            "write_atomic must write a temp file and rename it into place"
+        );
     }
 }

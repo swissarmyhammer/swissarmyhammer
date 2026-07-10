@@ -19,6 +19,15 @@
  * `triggerStartRename` module bus — the established pattern for a
  * window-layer command whose effect lives in a sibling subtree.
  *
+ * This module-bus is the PRECEDENT that the generic webview command bus
+ * (`@/lib/webview-command-bus`) was generalized from: the id-keyed
+ * `registerWebviewCommandHandler` registry copies this module's
+ * ownership-guarded cleanup and test-reset semantics. The AI registry is
+ * intentionally left as-is on its own purpose-keyed map rather than migrated
+ * onto the id-keyed bus — the window-layer `execute` closures call the
+ * `triggerAi*` functions directly, and the registry additionally owns the
+ * turn-status store below, which the generic bus deliberately does not model.
+ *
  * # Turn status — gates `ai.cancel` and feeds the bottom bar
  *
  * The conversation reports its full ACP turn status here via
@@ -26,11 +35,20 @@
  * it back:
  *
  * - `ai.cancel` is available only while the conversation is streaming. The
- *   window-layer command builder reads {@link aiStreaming} (derived from the
- *   status) and re-renders via {@link subscribeAiStreaming} so the command's
- *   `available` flag tracks the live conversation. The same flag is mirrored
- *   into the backend `UIState` so `commands_for_scope` keeps the palette
- *   entry hidden when idle.
+ *   AUTHORITATIVE execution gate is dispatch-time and frontend-side: the
+ *   `ai.cancel` webview bus handler (`app-shell.tsx`'s `useAiCommandBusHandlers`)
+ *   reads {@link aiStreaming} when dispatched and no-ops while idle, so both the
+ *   keybinding and palette dispatch are gated. The REGISTRY palette's
+ *   enabled/disabled rendering is gated separately: the `ai_set_streaming` Tauri
+ *   command (driven by {@link setAiStreaming} below) publishes the streaming
+ *   status onto the plugin host's notification bridge as
+ *   `notifications/ui_state/ai_streaming`, and the `ai-commands` builtin plugin
+ *   subscribes to it (`this.ui_state.on("aiStreaming", …)`), caching the flag
+ *   and returning it from `ai.cancel`'s synchronous `available` callback. So the
+ *   palette shows "Stop AI Generation" greyed-out while idle, matching the
+ *   dispatch behaviour. (Historical note: this flag used to be mirrored into a
+ *   never-read backend `UIState.ai_streaming` cache; that dead plumbing was
+ *   replaced by the notification publish.)
  * - The app's bottom bar (`ModeIndicator`) reads {@link aiStatus} and
  *   re-renders via {@link subscribeAiStatus} to show `idle` / `streaming` /
  *   `error` next to the keymap mode.

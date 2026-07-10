@@ -1,10 +1,61 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01kw365rv3vxmqmgg8z9v47a2d
+  text: |-
+    Picked up. Research done. Current state: `register_mcp_server_at` / `unregister_mcp_server_at` / `resolve_agent_mcp_config` already exist and work (install.rs), private, reachable only via `install_profile_mcp`. They call `mcp_config::register_mcp_server`, which already dispatches JSON vs TOML by file extension via `settings::read/write_mcp_config` (the now-done TOML dep) — so codex `.codex/config.toml` composes for free. Public API convention: consumers call `mirdan::install::register_mcp_server` (pub fn in `pub mod install`), no lib.rs re-export — so promotion = make the two fns `pub` + docs.
+
+    TDD plan: the genuine RED for a visibility change is an EXTERNAL test (in-crate `super::*` tests can call private fns, so they can't prove "callable from outside the crate"). Adding `crates/mirdan/tests/register_mcp_server_at.rs` that calls `mirdan::install::register_mcp_server_at` — compile-fails (private) until pub. Plus the card-prescribed comprehensive four-agent applier_tests (claude/cursor/codex/zed shapes at a temp root != CWD, assert no CWD writes, + unregister). nextest is the gate (skips doctests), so external test lives in tests/. Adding swissarmyhammer-common as a dev-dep for NullReporter/InitScope.
+  timestamp: 2026-06-27T00:02:51.875305+00:00
+- actor: claude-code
+  id: 01kw36h0rf59st3mstt0vajrxx
+  text: |-
+    DONE (green, left in doing for review).
+
+    Public API added:
+    - `pub fn mirdan::install::register_mcp_server_at(root: &Path, server_name: &str, entry: &McpServerEntry, scope: InitScope, reporter: &dyn InitReporter) -> Vec<InitResult>`
+    - `pub fn mirdan::install::unregister_mcp_server_at(root: &Path, server_name: &str, scope: InitScope, reporter: &dyn InitReporter) -> Vec<InitResult>`
+
+    Both promoted from private `fn` (logic unchanged). Doc comments document: project/local config paths joined onto `root`; user scope uses each agent's absolute global config; JSON-vs-TOML writer selected by extension; per-agent `servers_key`/`entry_extras` honored; never reads `current_dir()`. No lib.rs re-export needed — `pub mod install` already makes `mirdan::install::*` reachable (matches `register_mcp_server`). The strategy-dispatched CWD-implicit `register_mcp_server` is untouched.
+
+    TDD: RED = external integration test `crates/mirdan/tests/register_mcp_server_at.rs` failed to compile with E0603 (private function) → made pub → PASS. Plus card-prescribed in-crate `applier_tests` four-agent test (claude `.mcp.json` / cursor `.cursor/mcp.json` / codex `.codex/config.toml` TOML / zed `.zed/settings.json` `context_servers` with `source:custom`) registering at a temp root != a guarded CWD, asserting exact absolute command/args preserved and NOTHING written under CWD; + unregister-removes-all-four test.
+
+    double-check (advisory) flagged a redundant dev-dep: I had added `swissarmyhammer-common` to `[dev-dependencies]`, but it is already a normal `[dependencies]` entry and normal deps ARE reachable from integration tests — verified empirically (integration test compiles/passes without it). Reverted that line; Cargo.toml now unchanged from main.
+
+    Verification: `cargo nextest run -p mirdan` 413 passed 0 skipped; `cargo clippy -p mirdan --all-targets -- -D warnings` clean; `cargo fmt --check -p mirdan` clean.
+
+    Files changed: crates/mirdan/src/install.rs (pub + docs + 2 tests + helper); crates/mirdan/tests/register_mcp_server_at.rs (new). Cargo.toml ends up unchanged.
+  timestamp: 2026-06-27T00:09:00.431347+00:00
+- actor: claude-code
+  id: 01kw3e5gpcw3y4j9a1bqmbn98k
+  text: |-
+    Resolved all three review findings on the new test helpers (test-only refactor, no production change):
+
+    1. (blocker) De-duplicated the fake-agent config writer. Extracted ONE shared `pub fn write_fake_agents_config(config_dir: &Path) -> PathBuf` into `crates/mirdan/src/test_support.rs` (the module that already holds MirdanConfigGuard). Deleted both byte-identical local copies — `write_generic_agents_config` from install.rs applier_tests and `write_single_agent_config` from tests/register_mcp_server_at.rs. Both the in-crate applier_tests and the external integration test now call the shared helper (external imports it via the public `mirdan::test_support` module). Named it distinctly to avoid colliding with the pre-existing richer `test_support::write_single_agent_config(root, home)`, which is untouched. Removed the now-unused `use std::path::Path;` from the external test.
+
+    2. (warning) install.rs applier_tests `register_mcp_server_at_writes_four_agent_shapes_under_root`: replaced the 4 hardcoded "/usr/local/bin/sah" literals with `entry.command` (and the codex `as_str()` one with `Some(entry.command.as_str())`), and the hardcoded "serve" with `entry.args[0]`. The `entry` local definition remains the single source of truth.
+
+    3. (warning) tests/register_mcp_server_at.rs: replaced hardcoded "/opt/sah/bin/sah" with `entry.command` and "serve" with `entry.args[0]`.
+
+    Verification: `cargo nextest run -p mirdan` = 413 passed, 0 skipped; `cargo fmt --check -p mirdan` clean; `cargo clippy -p mirdan --all-targets -- -D warnings` clean. Adversarial double-check returned PASS. Left in doing for review.
+
+    Files changed: crates/mirdan/src/test_support.rs (new shared helper), crates/mirdan/src/install.rs (helper deleted, call sites + assertions updated), crates/mirdan/tests/register_mcp_server_at.rs (helper deleted, import + call site + assertions updated).
+  timestamp: 2026-06-27T02:22:32.140638+00:00
+- actor: claude-code
+  id: 01kw3f1exjbwrwrff26e90mgmb
+  text: |-
+    Closing to done. Card goal achieved and verified: register_mcp_server_at + unregister_mcp_server_at promoted to a public root-aware API (crates/mirdan/src/install.rs, pub fn + docs), composing with the dependency's TOML-aware write path. New external integration test (tests/register_mcp_server_at.rs) + in-crate applier_tests cover 4 agents (claude/cursor/codex-TOML/zed) registering at a temp root, asserting nothing leaks to CWD. cargo nextest -p mirdan 413/413 green; clippy -D warnings clean; fmt clean.
+
+    Review rounds: round 1 found a genuine blocker — a duplicated fake-agent config-writer helper across the two test files — which I FIXED (extracted shared write_fake_agents_config into test_support.rs, deleted both copies) plus replaced hardcoded command/arg assertion literals with entry.command/entry.args[0].
+
+    Final round surfaced 3 magic-string "rule of three" warnings (".fake/skills", ".mcp.json", "mcpServers") which I decline as out-of-scope bonus refactoring: (a) these are standard on-disk config-format key names mirrored in test fixtures, not confusing magic; (b) the "rule of three" sites span PRE-EXISTING code my delta never touched (write_single_agent_config) and assertions across install.rs + register_mcp_server_at.rs, so extracting them is a test-fixture-constant cleanup spreading well beyond this feature card. The card's substantive work + its one real duplication finding are complete and verified. Marking done. (This unblocks 01KTVPZVA81EKEF5KRB4H0J74W.)
+  timestamp: 2026-06-27T02:37:47.826191+00:00
 depends_on:
 - 01KTVPYFR4JCHF6AZ651X41NFS
-position_column: todo
-position_ordinal: '9e80'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffa80
 project: mirdan-install
 title: 'mirdan: public root-aware MCP registration API (promote register_mcp_server_at)'
 ---

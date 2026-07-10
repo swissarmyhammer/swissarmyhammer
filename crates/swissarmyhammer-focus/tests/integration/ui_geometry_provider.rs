@@ -1,0 +1,446 @@
+//! End-to-end tests for the on-demand UI-geometry query path (Card F2).
+//!
+//! These exercise the [`UiGeometryProvider`] injection seam — the kernel's
+//! way to PULL the live geometry / scope-chain / focus from the webview on
+//! demand, instead of receiving them inline on the wire. A fake provider
+//! stands in for the real `request_from_ui`-backed app implementation so the
+//! kernel logic is covered without a Tauri webview.
+//!
+//! The card's load-bearing claim: a host-side `navigate` over a PULLED
+//! snapshot (no caller-supplied `snapshot`, focus resolved from the kernel's
+//! `focus_by_window`) lands on the same target the inline-snapshot path would.
+
+use async_trait::async_trait;
+use serde_json::{json, Value};
+use swissarmyhammer_focus::{
+    FocusServer, FullyQualifiedMoniker, NavSnapshot, UiGeometryProvider, WindowLabel,
+};
+
+use super::common::call_tool;
+
+/// A two-leaf snapshot under the `main` window's root layer: `k1` on top,
+/// `k2` directly below it. The provider hands this back verbatim when the
+/// kernel pulls geometry for the `main` window, so a downward navigate from
+/// `k1` must land on `k2`.
+///
+/// Window-rooted (`/main/window/...`) like production composition: the kernel
+/// derives the owning window from the fq ROOT SEGMENT, and the host-driven
+/// resolution trusts a provider-pulled focus only when it is rooted at the
+/// requested window.
+fn two_leaf_snapshot() -> NavSnapshot {
+    serde_json::from_value(json!({
+        "layer_fq": "/main/window",
+        "scopes": [
+            { "fq": "/main/window/k1", "rect": { "x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0 },
+              "parent_zone": null, "nav_override": {} },
+            { "fq": "/main/window/k2", "rect": { "x": 0.0, "y": 20.0, "width": 10.0, "height": 10.0 },
+              "parent_zone": null, "nav_override": {} }
+        ]
+    }))
+    .expect("snapshot literal should deserialize")
+}
+
+/// A fake provider that answers every pull with fixed, known values — the
+/// test double standing in for the real `request_from_ui`-backed app
+/// implementation.
+struct FakeProvider {
+    snapshot: NavSnapshot,
+    scope_chain: Vec<FullyQualifiedMoniker>,
+    focus: Option<FullyQualifiedMoniker>,
+}
+
+#[async_trait]
+impl UiGeometryProvider for FakeProvider {
+    async fn snapshot(&self, _window: &WindowLabel) -> Option<NavSnapshot> {
+        Some(self.snapshot.clone())
+    }
+
+    async fn scope_chain(&self, _window: &WindowLabel) -> Vec<FullyQualifiedMoniker> {
+        self.scope_chain.clone()
+    }
+
+    async fn focus(&self, _window: &WindowLabel) -> Option<FullyQualifiedMoniker> {
+        self.focus.clone()
+    }
+}
+
+/// Build a server wired to a fake provider returning the two-leaf snapshot,
+/// a known scope chain, and `k1` as the current focus, with `/main/window`
+/// pushed as the `main` window's root layer.
+async fn server_with_fake() -> FocusServer {
+    let provider = FakeProvider {
+        snapshot: two_leaf_snapshot(),
+        scope_chain: vec![
+            FullyQualifiedMoniker::from_string("/main/window"),
+            FullyQualifiedMoniker::from_string("/main/window/k1"),
+        ],
+        focus: Some(FullyQualifiedMoniker::from_string("/main/window/k1")),
+    };
+    let server = FocusServer::new().with_provider(std::sync::Arc::new(provider));
+    let res = call_tool(
+        &server,
+        "push layer",
+        json!({
+            "op": "push layer",
+            "fq": "/main/window",
+            "segment": "window",
+            "name": "window",
+            "parent": null,
+            "window": "main",
+        }),
+    )
+    .await
+    .expect("push layer should succeed");
+    assert_eq!(res["ok"], json!(true));
+    server
+}
+
+/// The `query geometry` op pulls the live snapshot from the provider and
+/// returns it verbatim.
+#[tokio::test]
+async fn query_geometry_returns_provider_snapshot() {
+    let server = server_with_fake().await;
+
+    let res = call_tool(
+        &server,
+        "query geometry",
+        json!({ "op": "query geometry", "window": "main" }),
+    )
+    .await
+    .expect("query geometry should succeed");
+
+    assert_eq!(res["ok"], json!(true));
+    let snapshot: NavSnapshot =
+        serde_json::from_value(res["snapshot"].clone()).expect("snapshot in response");
+    assert_eq!(snapshot, two_leaf_snapshot());
+}
+
+/// The `query scope_chain` op returns the provider's current scope chain.
+#[tokio::test]
+async fn query_scope_chain_returns_provider_chain() {
+    let server = server_with_fake().await;
+
+    let res = call_tool(
+        &server,
+        "query scope_chain",
+        json!({ "op": "query scope_chain", "window": "main" }),
+    )
+    .await
+    .expect("query scope_chain should succeed");
+
+    assert_eq!(res["ok"], json!(true));
+    assert_eq!(
+        res["scope_chain"],
+        json!(["/main/window", "/main/window/k1"])
+    );
+}
+
+/// The `query focus` op returns the provider's current focused FQM.
+#[tokio::test]
+async fn query_focus_returns_provider_focus() {
+    let server = server_with_fake().await;
+
+    let res = call_tool(
+        &server,
+        "query focus",
+        json!({ "op": "query focus", "window": "main" }),
+    )
+    .await
+    .expect("query focus should succeed");
+
+    assert_eq!(res["ok"], json!(true));
+    assert_eq!(res["focus"], json!("/main/window/k1"));
+}
+
+/// The make-or-break claim: a host-driven `navigate focus` that supplies NO
+/// caller snapshot resolves the current focus from the kernel's
+/// `focus_by_window` and PULLS the geometry from the provider — landing on
+/// the same target (`k2`) the inline-snapshot path would.
+#[tokio::test]
+async fn navigate_over_pulled_snapshot_yields_expected_target() {
+    let server = server_with_fake().await;
+
+    // Seed the kernel's per-window focus so the host-driven nav resolves
+    // `focused_fq` from `focus_by_window["main"]` rather than the wire.
+    call_tool(
+        &server,
+        "set focus",
+        json!({ "op": "set focus", "fq": "/main/window/k1", "snapshot": two_leaf_snapshot() }),
+    )
+    .await
+    .expect("seed focus");
+
+    // Navigate down with NO snapshot and NO focused_fq on the wire: the
+    // kernel pulls geometry from the provider and reads focus from its own
+    // per-window slot.
+    let res = call_tool(
+        &server,
+        "navigate focus",
+        json!({ "op": "navigate focus", "window": "main", "direction": "down" }),
+    )
+    .await
+    .expect("navigate focus should succeed");
+
+    assert_eq!(res["ok"], json!(true));
+    assert_eq!(res["event"]["prev_fq"], json!("/main/window/k1"));
+    assert_eq!(res["event"]["next_fq"], json!("/main/window/k2"));
+}
+
+/// Regression for the running-app break (directional nav did nothing): the
+/// kernel's per-window focus slot is EMPTY — in the real app React owns focus
+/// and the kernel's `focus_by_window` is never populated (set-focus commits
+/// drop without a snapshot). A host-driven `navigate focus` with no wire focus
+/// must PULL the authoritative current focus from the provider (the UI), NOT
+/// rely on the empty kernel slot.
+///
+/// This deliberately does NOT seed focus via `set focus` (that masked the bug
+/// in `navigate_over_pulled_snapshot_yields_expected_target`). Before the
+/// provider-focus fallback this dropped with "window has no focused slot" and
+/// returned a null event; now it pulls `/main/window/k1` from the provider and
+/// lands on `/main/window/k2`.
+#[tokio::test]
+async fn navigate_pulls_focus_from_provider_when_kernel_slot_empty() {
+    // provider.focus == /main/window/k1; kernel slot NOT seeded
+    let server = server_with_fake().await;
+
+    let res = call_tool(
+        &server,
+        "navigate focus",
+        json!({ "op": "navigate focus", "window": "main", "direction": "down" }),
+    )
+    .await
+    .expect("navigate focus should succeed");
+
+    assert_eq!(res["ok"], json!(true));
+    assert_eq!(res["event"]["prev_fq"], json!("/main/window/k1"));
+    assert_eq!(res["event"]["next_fq"], json!("/main/window/k2"));
+}
+
+/// A nested snapshot under `/L`: a focusable parent zone `/L/parent` and a
+/// child `/main/window/parent/child` whose `parent_zone` points back at the
+/// parent. A drill-out from the child must land on (and commit focus to) the
+/// parent. Window-rooted (`/main/window/...`) so the owning window "main" is
+/// derived from the fq root segment, matching production composition.
+fn nested_snapshot() -> NavSnapshot {
+    nested_snapshot_rooted("main")
+}
+
+/// The [`nested_snapshot`] shape parameterized by the window-root segment, so
+/// label shapes other than `main` (e.g. the production lowercase-ULID
+/// `board-<ulid>` labels) can be exercised against the same geometry.
+fn nested_snapshot_rooted(label: &str) -> NavSnapshot {
+    let root = format!("/{label}/window");
+    serde_json::from_value(json!({
+        "layer_fq": root,
+        "scopes": [
+            { "fq": format!("{root}/parent"), "rect": { "x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0 },
+              "parent_zone": null, "nav_override": {}, "focusable": true },
+            { "fq": format!("{root}/parent/child"), "rect": { "x": 10.0, "y": 10.0, "width": 20.0, "height": 20.0 },
+              "parent_zone": format!("{root}/parent"), "nav_override": {}, "focusable": true }
+        ]
+    }))
+    .expect("nested snapshot literal should deserialize")
+}
+
+/// Drill-out from a scope WITH a `parent_zone` commits focus to the parent and
+/// emits a `focus-changed` event (card `01KTPDTH772HSEV5F7R1DKYDNJ`). This is
+/// the symmetric counterpart to drill-in: Escape → `nav.drillOut` relies on the
+/// kernel actually MOVING focus to the parent zone (not just returning a
+/// `next_fq`), so the UI follows. The kernel pulls geometry from the provider,
+/// reads the focused child from its `focus_by_window` slot, computes the parent
+/// via `navigate::drill_out`, commits it via `focus_from`, and forwards the
+/// event.
+#[tokio::test]
+async fn drill_out_with_parent_zone_commits_focus_to_parent_and_emits_event() {
+    let provider = FakeProvider {
+        snapshot: nested_snapshot(),
+        scope_chain: vec![
+            FullyQualifiedMoniker::from_string("/main/window"),
+            FullyQualifiedMoniker::from_string("/main/window/parent"),
+            FullyQualifiedMoniker::from_string("/main/window/parent/child"),
+        ],
+        focus: Some(FullyQualifiedMoniker::from_string(
+            "/main/window/parent/child",
+        )),
+    };
+    let server = FocusServer::new().with_provider(std::sync::Arc::new(provider));
+    let state = server.state();
+    call_tool(
+        &server,
+        "push layer",
+        json!({ "op": "push layer", "fq": "/main/window", "segment": "window",
+                "name": "window", "parent": null, "window": "main" }),
+    )
+    .await
+    .expect("push layer should succeed");
+
+    // Seed the kernel's per-window focus on the child (with the nested
+    // snapshot so the kernel records geometry), establishing the drill source.
+    call_tool(
+        &server,
+        "set focus",
+        json!({ "op": "set focus", "fq": "/main/window/parent/child", "snapshot": nested_snapshot() }),
+    )
+    .await
+    .expect("seed focus on the child");
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .focused_in(&WindowLabel::from_string("main"))
+            .map(|fq| fq.to_string()),
+        Some("/main/window/parent/child".to_string()),
+        "precondition: the seeded focus is the child"
+    );
+
+    // Drill out: `fq` is the scope being drilled out OF — the focused child.
+    // No focused_fq on the wire, so the kernel resolves the source from its own
+    // per-window slot and pulls geometry from the provider.
+    let res = call_tool(
+        &server,
+        "drill_out layer",
+        json!({ "op": "drill_out layer", "window": "main",
+                "fq": "/main/window/parent/child", "focused_fq": "/main/window/parent/child" }),
+    )
+    .await
+    .expect("drill_out should succeed");
+
+    assert_eq!(res["ok"], json!(true));
+    // The drill-out target is the child's parent_zone.
+    assert_eq!(
+        res["next_fq"],
+        json!("/main/window/parent"),
+        "drill_out from a scope with a parent_zone must target the parent"
+    );
+
+    // And the kernel must have COMMITTED that focus into its per-window slot —
+    // proving `focus_from` ran (and, with it, the `focus-changed` forward),
+    // not merely a pure-query `next_fq`. This is what makes the UI follow the
+    // Escape → nav.drillOut keystroke.
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .focused_in(&WindowLabel::from_string("main"))
+            .map(|fq| fq.to_string()),
+        Some("/main/window/parent".to_string()),
+        "drill_out must commit focus to the parent zone, not merely return it"
+    );
+}
+
+/// Invariant guard for card `01KTQ6QZNB3VN4MAND7VPASM21`, acceptance
+/// criterion "no window label shape can be wrongly rejected as foreign".
+///
+/// The ownership check (`ui_focus_owned_by_window`) accepts a provider-pulled
+/// focus exactly when the fq's `root_segment()` string-equals the requested
+/// `WindowLabel`, and the webview mints that root as the IDENTITY of the
+/// Tauri label (`fqRoot(asSegment(getCurrentWindow().label))` — `asSegment`
+/// is a lossless brand cast). This test drives a host-driven drill-in with
+/// the EXACT third-window label observed in the live log (a lowercase-ULID
+/// `board-<ulid>` label) and a deliberately EMPTY kernel slot, so the drill
+/// can only succeed through the provider pull + ownership acceptance: a
+/// normalization mismatch at any seam would reject the window's own focus
+/// and the drill would echo with `moved: false`.
+#[tokio::test]
+async fn drill_in_accepts_own_provider_focus_for_ulid_window_label() {
+    const LABEL: &str = "board-01krk5a157r86t9fb23xdy5bmk";
+    let root = format!("/{LABEL}/window");
+    let parent = format!("{root}/parent");
+    let child = format!("{root}/parent/child");
+
+    let provider = FakeProvider {
+        snapshot: nested_snapshot_rooted(LABEL),
+        scope_chain: vec![
+            FullyQualifiedMoniker::from_string(&root),
+            FullyQualifiedMoniker::from_string(&parent),
+        ],
+        focus: Some(FullyQualifiedMoniker::from_string(&parent)),
+    };
+    let server = FocusServer::new().with_provider(std::sync::Arc::new(provider));
+    let state = server.state();
+    call_tool(
+        &server,
+        "push layer",
+        json!({ "op": "push layer", "fq": root, "segment": "window",
+                "name": "window", "parent": null, "window": LABEL }),
+    )
+    .await
+    .expect("push layer should succeed");
+
+    // NO `set focus` — the kernel's per-window slot stays empty, exactly like
+    // the running app where React owns focus. Resolution must go through the
+    // provider pull and pass the window-ownership check.
+    let res = call_tool(
+        &server,
+        "drill_in layer",
+        json!({ "op": "drill_in layer", "window": LABEL }),
+    )
+    .await
+    .expect("drill_in should succeed");
+
+    assert_eq!(res["ok"], json!(true));
+    assert_eq!(
+        res["moved"],
+        json!(true),
+        "the window's own provider focus must be accepted (not rejected as foreign) \
+         so the drill commits a real move; got {res}"
+    );
+    assert_eq!(res["next_fq"], json!(child));
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .focused_in(&WindowLabel::from_string(LABEL))
+            .map(|fq| fq.to_string()),
+        Some(child.clone()),
+        "the drill must commit focus in the requesting window's own slot"
+    );
+}
+
+/// When the provider yields no snapshot (window closed / responder absent),
+/// a host-driven navigate drops silently with a null event — never panics,
+/// never holds a lock across the pull.
+#[tokio::test]
+async fn navigate_drops_when_provider_has_no_geometry() {
+    struct EmptyProvider;
+    #[async_trait]
+    impl UiGeometryProvider for EmptyProvider {
+        async fn snapshot(&self, _window: &WindowLabel) -> Option<NavSnapshot> {
+            None
+        }
+        async fn scope_chain(&self, _window: &WindowLabel) -> Vec<FullyQualifiedMoniker> {
+            Vec::new()
+        }
+        async fn focus(&self, _window: &WindowLabel) -> Option<FullyQualifiedMoniker> {
+            None
+        }
+    }
+
+    let server = FocusServer::new().with_provider(std::sync::Arc::new(EmptyProvider));
+    call_tool(
+        &server,
+        "push layer",
+        json!({ "op": "push layer", "fq": "/main/window", "segment": "window",
+                "name": "window", "parent": null, "window": "main" }),
+    )
+    .await
+    .unwrap();
+    call_tool(
+        &server,
+        "set focus",
+        json!({ "op": "set focus", "fq": "/main/window/k1", "snapshot": two_leaf_snapshot() }),
+    )
+    .await
+    .unwrap();
+
+    let res = call_tool(
+        &server,
+        "navigate focus",
+        json!({ "op": "navigate focus", "window": "main", "direction": "down" }),
+    )
+    .await
+    .expect("navigate focus should succeed");
+
+    assert_eq!(res["ok"], json!(true));
+    assert_eq!(res["event"], Value::Null);
+}

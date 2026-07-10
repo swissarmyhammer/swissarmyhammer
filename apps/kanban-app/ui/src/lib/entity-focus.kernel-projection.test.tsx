@@ -35,28 +35,9 @@ import { type ReactNode } from "react";
 // `inspector.kernel-focus-advance.browser.test.tsx`.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -178,7 +159,7 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
       (c) => c[0] === "spatial_focus_by_moniker",
     );
     const focusByKeyCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_focus",
+      (c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")),
     );
     const totalFocusCalls = focusByMonikerCalls.length + focusByKeyCalls.length;
     expect(
@@ -244,20 +225,38 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       // Mirror the real kernel's rejection of an unregistered moniker by
-      // having the next `spatial_focus` invocation throw. Tauri surfaces
-      // a Rust `Err(_)` as a rejected invoke promise, which the React
+      // having the next `set focus` invocation throw. Tauri surfaces a
+      // Rust `Err(_)` as a rejected invoke promise, which the React
       // adapter catches and logs as `console.error`. The simulator's
-      // default `spatial_focus` handler is permissive (registration
-      // races in real React trees would otherwise produce false
-      // negatives — see the inspector kernel-focus advance tests), so
-      // the rejection is staged just for this case via
-      // `mockImplementationOnce`.
+      // default focus handler is permissive (registration races in real
+      // React trees would otherwise produce false negatives — see the
+      // inspector kernel-focus advance tests), so the rejection is staged
+      // just for this case via `mockImplementationOnce`.
+      //
+      // Production routes `set focus` through the in-process `focus` MCP
+      // server, so the rejection must match the `command_tool_call`
+      // envelope (`{ module: "focus", op: "set focus", params: { fq } }`)
+      // as well as the legacy `spatial_focus` command name.
       const previousImpl = mockInvoke.getMockImplementation();
+      const targetsUnknownMoniker = (cmd: string, args: unknown): boolean => {
+        const a = (args ?? {}) as {
+          fq?: string;
+          module?: string;
+          op?: string;
+          params?: { fq?: string };
+        };
+        if (cmd === "spatial_focus") {
+          return a.fq === "task:does-not-exist";
+        }
+        return (
+          cmd === "command_tool_call" &&
+          a.module === "focus" &&
+          a.op === "set focus" &&
+          a.params?.fq === "task:does-not-exist"
+        );
+      };
       mockInvoke.mockImplementationOnce(async (cmd, args) => {
-        if (
-          cmd === "spatial_focus" &&
-          (args as { fq: string } | undefined)?.fq === "task:does-not-exist"
-        ) {
+        if (targetsUnknownMoniker(cmd, args)) {
           throw new Error(
             "spatial_focus: unknown moniker task:does-not-exist",
           );
@@ -356,8 +355,7 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
     // moniker-shaped clear (`spatial_focus_by_moniker` with a null
     // moniker) for resilience to the implementation choice.
     const clearCalls = mockInvoke.mock.calls.filter(
-      (c) =>
-        c[0] === "spatial_clear_focus" ||
+      (c) => (c[0] === "spatial_clear_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "clear focus")) ||
         (c[0] === "spatial_focus_by_moniker" &&
           (c[1] as { moniker?: unknown })?.moniker === null),
     );

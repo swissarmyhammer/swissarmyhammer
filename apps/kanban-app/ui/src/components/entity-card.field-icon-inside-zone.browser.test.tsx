@@ -23,28 +23,9 @@ import { CheckCircle, AlertTriangle } from "lucide-react";
 // Tauri API mocks — must come before component imports.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -241,8 +222,12 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 /** Collect every `spatial_focus` call's args, in order. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+    .filter((c) => (c[0] === "spatial_focus" || (c[0] === "command_tool_call" && (c[1] as any)?.tool === "focus" && (c[1] as any)?.op === "set focus")))
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as { fq: FullyQualifiedMoniker };
+      return args;
+    })
 }
 
 /**
@@ -434,7 +419,7 @@ describe("EntityCard — field icon lives inside the field's <FocusScope>", () =
     expect(zoneArgs).toBeTruthy();
 
     // Drive a focus claim for the field zone.
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     await act(async () => {
       for (const handler of handlers)
         handler({

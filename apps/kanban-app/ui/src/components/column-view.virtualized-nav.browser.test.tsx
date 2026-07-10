@@ -42,28 +42,9 @@ import type { Entity } from "@/types/kanban";
 // Tauri API mocks — must come before component imports.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -243,15 +224,37 @@ function spatialNavigateCalls(): Array<{
   focusedFq: FullyQualifiedMoniker;
   direction: string;
 }> {
+  // Production routes `navigate focus` through the in-process `focus` MCP
+  // server, so the call surfaces as `command_tool_call` with the args under
+  // `params` (and `focusedFq` renamed `focused_fq` on the kernel wire). Count
+  // both that envelope and the legacy `spatial_navigate` command, normalizing
+  // each onto the `{ focusedFq, direction }` shape the assertions read.
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_navigate")
-    .map(
+    .filter(
       (c) =>
-        c[1] as {
-          focusedFq: FullyQualifiedMoniker;
-          direction: string;
-        },
-    );
+        c[0] === "spatial_navigate" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "navigate focus"),
+    )
+    .map((c) => {
+      const a = (c[1] ?? {}) as {
+        focusedFq?: FullyQualifiedMoniker;
+        direction?: string;
+        params?: {
+          focusedFq?: FullyQualifiedMoniker;
+          focused_fq?: FullyQualifiedMoniker;
+          direction?: string;
+        };
+      };
+      const p = a.params;
+      return {
+        focusedFq: (p?.focusedFq ??
+          p?.focused_fq ??
+          a.focusedFq) as FullyQualifiedMoniker,
+        direction: (p?.direction ?? a.direction) as string,
+      };
+    });
 }
 
 /** Find the test wrapper that owns the outer scroll. */
@@ -669,7 +672,7 @@ describe("<ColumnView> — scroll-on-edge fall-through for virtualized nav", () 
       const a = (args ?? {}) as Record<string, unknown>;
       const fromFq = a.focusedFq as FullyQualifiedMoniker;
       // Stay-put echo — mirrors the kernel's no-silent-dropout emit.
-      const handlers = listeners.get("focus-changed") ?? [];
+      const handlers = listeners.get("notifications/focus/changed") ?? [];
       const segment = rightmostCard.getAttribute("data-segment") ?? null;
       queueMicrotask(() => {
         for (const h of handlers) {
@@ -687,7 +690,29 @@ describe("<ColumnView> — scroll-on-edge fall-through for virtualized nav", () 
     });
     const originalImpl = mockInvoke.getMockImplementation();
     mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      // Post-Stage-3 production sends `navigate focus` through the MCP
+      // envelope `invoke("command_tool_call", { tool: "focus", op: "navigate focus", params: {...} })`.
+      // Intercept both the legacy direct cmd and the wrapping envelope.
       if (cmd === "spatial_navigate") return navHandler(cmd, args);
+      if (cmd === "command_tool_call") {
+        const a = args as
+          | {
+              tool?: string;
+              op?: string;
+              params?: Record<string, unknown>;
+            }
+          | undefined;
+        if (a?.tool === "focus" && a?.op === "navigate focus") {
+          // Remap `focused_fq` (kernel wire) back to `focusedFq` (test
+          // wire) so the navHandler sees the field name it expects.
+          const params = { ...(a.params ?? {}) };
+          if ("focused_fq" in params && !("focusedFq" in params)) {
+            params.focusedFq = params.focused_fq;
+          }
+          await navHandler("spatial_navigate", params);
+          return { ok: true, event: null };
+        }
+      }
       return originalImpl ? originalImpl(cmd, args) : undefined;
     });
 

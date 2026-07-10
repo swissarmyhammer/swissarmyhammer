@@ -29,13 +29,14 @@ import { useEntityStore } from "@/lib/entity-store-context";
 import { asSegment } from "@/types/spatial";
 import { useSchema, type MentionableType } from "@/lib/schema-context";
 import { createMentionDecorations } from "@/lib/cm-mention-decorations";
+import { createMentionTooltips } from "@/lib/cm-mention-tooltip";
 import { buildMentionMetaMap } from "@/hooks/use-mention-extensions";
 import type { MentionMeta } from "@/lib/mention-meta";
 import { moniker as buildMoniker } from "@/lib/moniker";
 import { slugify } from "@/lib/slugify";
 import type { CommandDef } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
-import { getStr } from "@/types/kanban";
+import { getStr, getEntityField } from "@/types/kanban";
 
 /** A single mention reference — either an entity id or an existing slug. */
 export interface MentionItem {
@@ -162,7 +163,7 @@ function slugMatchesEntity(
   config: MentionableType | undefined,
 ): boolean {
   if (config?.slugField) {
-    return getStr(entity, config.slugField) === slug;
+    return getEntityField(entity, config.slugField) === slug;
   }
   const val = getStr(entity, config?.displayField ?? "name");
   return val !== "" && (val === slug || slugify(val) === slug);
@@ -185,7 +186,7 @@ function mentionSlugFor(
 ): string {
   const fallback = item.slug ?? item.id ?? "";
   if (!entity) return fallback;
-  if (slugField) return getStr(entity, slugField) || fallback;
+  if (slugField) return getEntityField(entity, slugField) || fallback;
   const raw = getStr(entity, displayField);
   return raw ? slugify(raw) : fallback;
 }
@@ -229,9 +230,11 @@ function addUnresolvedPlaceholders(
 
 /**
  * Build a minimal scoped CM6 extension array covering only the entity
- * types present in `resolved`. Each type gets its own decoration bundle
- * with a metaMap containing both the resolved entities AND placeholder
- * entries for any unresolved slugs.
+ * types present in `resolved`. Each type gets its own decoration AND tooltip
+ * bundle, both sharing one metaMap containing the resolved entities plus
+ * placeholder entries for any unresolved slugs. The tooltip extension is the
+ * same `createMentionTooltips` editable fields use, so pills hover-show the
+ * entity's rich tooltip (e.g. a task's title behind a `^<short>` ref).
  */
 function buildScopedExtensions(
   resolved: ResolvedMention[],
@@ -246,17 +249,16 @@ function buildScopedExtensions(
     if (seen.has(key) || !r.prefix) continue;
     seen.add(key);
 
-    const cssClass = `cm-${r.entityType}-pill`;
+    const pillClass = `cm-${r.entityType}-pill`;
+    const tooltipClass = `cm-${r.entityType}-tooltip`;
     const colorVar = `--${r.entityType}-color`;
-    const { extension } = createMentionDecorations(
-      r.prefix,
-      cssClass,
-      colorVar,
-    );
+    const deco = createMentionDecorations(r.prefix, pillClass, colorVar);
+    const tooltip = createMentionTooltips(r.prefix, tooltipClass);
     const entities = getEntities(r.entityType);
     const metaMap = buildMentionMetaMap(entities, r.displayField, r.slugField);
     addUnresolvedPlaceholders(metaMap, unresolvedByType.get(r.entityType));
-    exts.push(extension(metaMap));
+    exts.push(deco.extension(metaMap));
+    exts.push(tooltip.extension(metaMap));
   }
 
   return exts;

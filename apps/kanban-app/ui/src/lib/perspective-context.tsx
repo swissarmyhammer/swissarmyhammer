@@ -8,31 +8,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { subscribeStoreChanged } from "@/lib/mcp-notifications";
 import { useDispatchCommand } from "@/lib/command-scope";
-import type { PerspectiveDef } from "@/types/kanban";
+import { perspectiveVisibleInView, type PerspectiveDef } from "@/types/kanban";
 import { useUIState } from "./ui-state-context";
 import { useViews } from "./views-context";
 
 /** This window's label — stable for the lifetime of the window. */
 const WINDOW_LABEL = getCurrentWindow().label;
-
-/**
- * Payload shape for the `entity-field-changed` Tauri event, limited to
- * the keys this listener reads.
- *
- * The backend bridge (`kanban-app/src/watcher.rs::process_perspective_event`)
- * emits `WatchEvent::EntityFieldChanged { entity_type, id, changes }` for
- * perspective field changes, with `value = Value::Null` on every change
- * because the frontend is expected to re-fetch via `perspective.list`
- * rather than trust the wire values. There is no field-delta fast path
- * for perspectives on this channel.
- */
-interface EntityFieldChangedEvent {
-  entity_type: string;
-  id: string;
-}
 
 interface PerspectivesContextValue {
   perspectives: PerspectiveDef[];
@@ -61,7 +45,7 @@ type DispatchFn = (
  * `ref.current` without depending on `dispatch` identity.
  *
  * `useDispatchCommand` returns a new callback whenever the effective scope
- * rotates — which happens on every `ui.setFocus` because `FocusedScopeContext`
+ * rotates — which happens on every `app.setFocus` because `FocusedScopeContext`
  * rotates per-entity focus change. A raw dependency on `dispatch` therefore
  * churns the mount fetch / auto-create / auto-select effects on every
  * keystroke. Reading through a ref decouples those effects from dispatch
@@ -131,31 +115,57 @@ function usePerspectivesFetch(
 }
 
 /**
- * Auto-create a "Default" perspective when none exist for the current view
- * kind. Uses a ref to avoid repeated creation attempts per kind.
+ * Auto-create a "Default" perspective when the active view's tab bar would
+ * render empty. Uses a ref to avoid repeated creation attempts per view.
+ *
+ * Emptiness is judged with [`perspectiveVisibleInView`] — the SAME
+ * view_id-first / kind-fallback predicate the tab bar filters with — not a
+ * kind-only check. A view whose same-kind perspectives are all pinned
+ * (`view_id`) to OTHER views renders an empty bar and must still get its
+ * Default ensured (owner directive: never show zero perspectives). The
+ * backend `if_absent` ensure keeps the dispatch idempotent, so the ref is
+ * keyed per view instance (falling back to kind before views load).
  *
  * `dispatch` is read through `dispatchRef` so the effect does not re-run on
  * every focus change. The only legitimate re-entry signals are `loaded`,
- * `perspectives`, and `viewKind` — they pick up real state changes.
+ * `perspectives`, `activeViewId`, and `viewKind` — they pick up real state
+ * changes.
  */
 function useAutoCreateDefaultPerspective(
   loaded: boolean,
   perspectives: PerspectiveDef[],
+  activeViewId: string | undefined,
   viewKind: string,
   dispatchRef: React.MutableRefObject<DispatchFn>,
 ) {
-  const autoCreatedForKindRef = useRef<string | null>(null);
+  const autoCreatedForViewRef = useRef<string | null>(null);
+  // Per-view-instance re-fire key; before views load there is no instance
+  // id yet, so fall back to the kind.
+  const viewKey = activeViewId ?? viewKind;
   useEffect(() => {
     if (!loaded) return;
-    if (autoCreatedForKindRef.current === viewKind) return;
-    if (perspectives.some((p) => p.view === viewKind)) return;
-    autoCreatedForKindRef.current = viewKind;
+    if (autoCreatedForViewRef.current === viewKey) return;
+    if (
+      perspectives.some((p) =>
+        perspectiveVisibleInView(p, activeViewId, viewKind),
+      )
+    ) {
+      return;
+    }
+    autoCreatedForViewRef.current = viewKey;
     dispatchRef
       .current("perspective.save", {
-        args: { name: "Default", view: viewKind },
+        // `if_absent` makes the seed idempotent against the backend's
+        // authoritative perspective state. The local `perspectives` list can
+        // be transiently empty on a hot-reload / boot race (provider remounts
+        // with an empty list and a reset per-kind ref, firing before the
+        // refetch lands), which otherwise wrote a fresh duplicate "Default"
+        // YAML on every reload. With this flag the backend returns the
+        // existing perspective for the view scope instead of creating another.
+        args: { name: "Default", view: viewKind, if_absent: true },
       })
       .catch(console.error);
-  }, [loaded, perspectives, viewKind, dispatchRef]);
+  }, [loaded, perspectives, viewKey, activeViewId, viewKind, dispatchRef]);
 }
 
 /**
@@ -200,12 +210,22 @@ function useAutoSelectActivePerspective(
   perspectives: PerspectiveDef[],
   active_perspective_id: string,
   filtered_task_ids_defined: boolean,
+  activeViewId: string | undefined,
   viewKind: string,
   dispatchRef: React.MutableRefObject<DispatchFn>,
 ) {
   useEffect(() => {
     if (!loaded) return;
-    const matching = perspectives.filter((p) => p.view === viewKind);
+    // Selection must agree with VISIBILITY: a perspective the active view's
+    // tab bar would hide (pinned via `view_id` to a sibling view) is not a
+    // valid selection here. Build `matching` with the same
+    // `perspectiveVisibleInView` predicate the bar filters with — not a
+    // kind-only check — so all three repair paths (invalid/empty stored id →
+    // `matching[0]`; stale-filter redispatch; validity check) operate on the
+    // tabs the user can actually see and switch between in the active view.
+    const matching = perspectives.filter((p) =>
+      perspectiveVisibleInView(p, activeViewId, viewKind),
+    );
     if (matching.length === 0) {
       // No perspectives for this view kind yet; let
       // useAutoCreateDefaultPerspective create one first.
@@ -240,46 +260,42 @@ function useAutoSelectActivePerspective(
     perspectives,
     active_perspective_id,
     filtered_task_ids_defined,
+    activeViewId,
     viewKind,
     dispatchRef,
   ]);
 }
 
 /**
- * Wire event listeners for perspective entity updates.
+ * Subscribe to MCP store changes for perspective updates.
  *
- * All four events for a perspective — created, field-changed, removed,
- * board-changed — trigger a full `perspective.list` re-fetch. The backend
- * bridge emits `entity-field-changed` with empty/null values (the wire
- * format is `{ entity_type, id, changes }` where each change carries a
- * `Value::Null` placeholder) because perspective values are re-fetched
- * from the canonical YAML, not patched from the event payload. Given that
- * semantic, there is no usable field-delta fast path for perspectives,
- * so every event is a refetch signal.
+ * Every perspective change — and every structural board change — triggers a
+ * full `perspective.list` re-fetch. Perspectives are a reload-item store: the
+ * `notifications/store/changed` notification for `store: "perspective"` omits
+ * `changes` (the values are re-fetched from canonical YAML, not patched from
+ * the wire), so each notification is simply a refetch signal. A structural
+ * board/column change reloads the perspective set for the new board.
  */
 function usePerspectiveEventListeners(refresh: () => Promise<void>) {
   useEffect(() => {
-    const unlisteners = [
-      listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
-        if (event.payload.entity_type !== "perspective") return;
+    let disposed = false;
+    const unsubPromise = subscribeStoreChanged((batch) => {
+      if (
+        batch.some(
+          (n) =>
+            n.store === "perspective" ||
+            n.store === "board" ||
+            n.store === "column",
+        )
+      ) {
         refresh();
-      }),
-      listen<{ entity_type: string }>("entity-created", (event) => {
-        if (event.payload.entity_type === "perspective") {
-          refresh();
-        }
-      }),
-      listen<{ entity_type: string }>("entity-removed", (event) => {
-        if (event.payload.entity_type === "perspective") {
-          refresh();
-        }
-      }),
-      listen("board-changed", () => {
-        refresh();
-      }),
-    ];
+      }
+    });
     return () => {
-      for (const p of unlisteners) p.then((fn) => fn());
+      disposed = true;
+      unsubPromise.then((unsub) => {
+        if (disposed) unsub();
+      });
     };
   }, [refresh]);
 }
@@ -296,6 +312,7 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
   const filtered_task_ids_defined =
     uiState.windows?.[WINDOW_LABEL]?.filtered_task_ids !== undefined;
   const { activeView } = useViews();
+  const activeViewId = activeView?.id;
   const viewKind = activeView?.kind ?? "board";
   const dispatch = useDispatchCommand();
 
@@ -306,12 +323,19 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
   const dispatchRef = useDispatchRef(dispatch);
 
   const { perspectives, loaded, refresh } = usePerspectivesFetch(dispatchRef);
-  useAutoCreateDefaultPerspective(loaded, perspectives, viewKind, dispatchRef);
+  useAutoCreateDefaultPerspective(
+    loaded,
+    perspectives,
+    activeViewId,
+    viewKind,
+    dispatchRef,
+  );
   useAutoSelectActivePerspective(
     loaded,
     perspectives,
     active_perspective_id,
     filtered_task_ids_defined,
+    activeViewId,
     viewKind,
     dispatchRef,
   );
@@ -339,13 +363,20 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
     [dispatchRef],
   );
 
-  const activePerspective = useMemo(
-    () =>
-      perspectives.find((p) => p.id === active_perspective_id) ??
-      perspectives[0] ??
-      null,
-    [perspectives, active_perspective_id],
-  );
+  const activePerspective = useMemo(() => {
+    // Constrain the synchronous fallback to perspectives VISIBLE in the
+    // active view (same `perspectiveVisibleInView` predicate as the tab bar
+    // and auto-select). The stored-id `find` is also visibility-filtered so a
+    // sibling-pinned id can never resolve to a tab the user has no way to see
+    // or switch off — and the `[0]` fallback picks the first visible tab, not
+    // any arbitrary kind/pinned perspective.
+    const visible = perspectives.filter((p) =>
+      perspectiveVisibleInView(p, activeViewId, viewKind),
+    );
+    return (
+      visible.find((p) => p.id === active_perspective_id) ?? visible[0] ?? null
+    );
+  }, [perspectives, active_perspective_id, activeViewId, viewKind]);
 
   const value = useMemo<PerspectivesContextValue>(
     () => ({

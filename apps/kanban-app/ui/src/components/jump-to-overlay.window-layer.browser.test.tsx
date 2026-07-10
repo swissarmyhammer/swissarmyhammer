@@ -21,28 +21,9 @@ import * as React from "react";
 // Hoisted Tauri-API spy triple.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -96,6 +77,23 @@ function installInvokeStub(jumpCodes: string[]) {
   const focusCalls: FullyQualifiedMoniker[] = [];
   mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
     const a = (args ?? {}) as Record<string, unknown>;
+    // The React tree reaches the kernel through the MCP wire
+    // (`command_tool_call` against the `focus` tool); translate the ops
+    // this test consumes onto the recording handlers below and wrap the
+    // result in the `{ ok, ... }` envelope `focus-mcp.ts` unwraps.
+    if (cmd === "command_tool_call" && a.tool === "focus") {
+      const op = String(a.op);
+      const params = (a.params ?? {}) as Record<string, unknown>;
+      if (op === "set focus") {
+        focusCalls.push(params.fq as FullyQualifiedMoniker);
+        return { ok: true, event: null };
+      }
+      if (op === "generate sneak_codes") {
+        const count = (params.count as number) ?? 0;
+        return { ok: true, codes: jumpCodes.slice(0, count) };
+      }
+      return { ok: true, event: null };
+    }
     if (cmd === "spatial_focus") {
       focusCalls.push(a.fq as FullyQualifiedMoniker);
       return undefined;

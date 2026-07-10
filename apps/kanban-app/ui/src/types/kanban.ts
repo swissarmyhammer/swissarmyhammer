@@ -77,6 +77,33 @@ export interface PerspectiveDef {
   readonly sort?: readonly PerspectiveSortEntry[];
 }
 
+/**
+ * The view_id-first / kind-fallback visibility rule documented on
+ * [`PerspectiveDef`]: a perspective pinned via `view_id` is visible only on
+ * that specific view instance; a legacy `view_id`-less perspective is
+ * visible on every view whose kind matches `view`.
+ *
+ * Single source of truth shared by the tab bar's filter
+ * (`perspective-tab-bar.tsx`) and the auto-create-Default guard
+ * (`perspective-context.tsx`) — the guard must agree with the bar on
+ * "would this view render an empty perspective bar?" so a Default is
+ * ensured exactly when the bar would otherwise show zero tabs.
+ *
+ * @param p - the perspective to test
+ * @param activeViewId - id of the active view instance (`undefined` before
+ *   views load — pinned perspectives match nothing then, same as the bar)
+ * @param viewKind - kind of the active view (e.g. "board", "grid")
+ * @returns true when the tab bar would render `p` on the active view
+ */
+export function perspectiveVisibleInView(
+  p: PerspectiveDef,
+  activeViewId: string | undefined,
+  viewKind: string,
+): boolean {
+  if (p.view_id != null) return p.view_id === activeViewId;
+  return p.view === viewKind;
+}
+
 // ---------------------------------------------------------------------------
 // Command schema (YAML-shape mirror)
 //
@@ -361,6 +388,14 @@ export interface Entity {
 export function getStr(entity: Entity, field: string, fallback = ""): string {
   const v = entity.fields[field];
   return typeof v === "string" ? v : fallback;
+}
+
+/** Read a field that may be a top-level identity column (id/entity_type/moniker) rather than a bag field. */
+export function getEntityField(entity: Entity, field: string): string {
+  if (field === "id") return entity.id;
+  if (field === "entity_type") return entity.entity_type;
+  if (field === "moniker") return entity.moniker;
+  return getStr(entity, field);
 }
 
 /** Read a string array field, returning [] if missing/null/wrong type. */

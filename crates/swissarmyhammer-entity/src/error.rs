@@ -42,11 +42,19 @@ pub enum EntityError {
 
     /// A non-string field change is stale: the entity's current value does not
     /// match the expected value from the changelog entry.
+    ///
+    /// The `expected` and `actual` JSON values are boxed to keep `EntityError`
+    /// small: an unboxed `serde_json::Value` is large enough that an inline pair
+    /// would dominate the enum's size and force every `Result<_, EntityError>`
+    /// onto a wide error path.
     #[error("stale change on field '{field}': expected {expected}, found {actual}")]
     StaleChange {
+        /// The changelog field whose value is stale.
         field: String,
-        expected: serde_json::Value,
-        actual: serde_json::Value,
+        /// The value the changelog entry expected the entity to currently hold.
+        expected: Box<serde_json::Value>,
+        /// The value actually found in the entity.
+        actual: Box<serde_json::Value>,
     },
 
     /// An undo or redo was attempted on an unsupported operation type

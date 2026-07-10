@@ -11,8 +11,46 @@
  * the data-flow layer that BoardView delegates to.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
 import { computeDropZones, type DropZoneDescriptor } from "@/lib/drop-zones";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  emit: vi.fn().mockResolvedValue(undefined),
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
+vi.mock("@tauri-apps/plugin-log", () => ({
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+  attachConsole: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("@/lib/mcp-transport", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  callCommandTool: vi.fn().mockResolvedValue({ ok: true }),
+  subscribeCommandsChanged: vi.fn().mockResolvedValue(() => {}),
+}));
+
+import { usePersistTaskMove } from "@/components/board-view";
+import { callCommandTool } from "@/lib/mcp-transport";
+
+const mockCallCommandTool = vi.mocked(callCommandTool);
 
 // ---------------------------------------------------------------------------
 // computeDropZones — zone count and descriptor shape
@@ -140,6 +178,84 @@ describe("cross-column move to non-empty column", () => {
       column: "doing",
       before_id: "X",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// usePersistTaskMove — the REAL drop-dispatch wire shape
+// ---------------------------------------------------------------------------
+
+// These tests pin what the actual drop hook sends over the wire — not a local
+// mirror of it. The `task-commands` plugin's `task.move` accepts exactly this
+// shape (`target: "task:<id>"`, args `{ id, column, before_id | after_id }`);
+// the backend half is pinned by
+// `swissarmyhammer-command-service/tests/integration/builtin_task_commands_e2e.rs`
+// (`task_move_with_drop_dispatch_shape_*`). The two layers drifting apart is
+// the bug that silently broke every internal drag drop.
+describe("usePersistTaskMove dispatch wire shape", () => {
+  beforeEach(() => {
+    mockCallCommandTool.mockClear();
+    mockCallCommandTool.mockResolvedValue({ ok: true });
+  });
+
+  it("same-column reorder dispatches task.move with before_id and target task:<id>", async () => {
+    const { result } = renderHook(() => usePersistTaskMove());
+    // Board has [A, B, C] in "todo"; C is dropped on the before-B zone.
+    const zones = computeDropZones(["A", "B", "C"], "todo");
+    await act(async () => {
+      await result.current(zones[1], "C");
+    });
+
+    expect(mockCallCommandTool).toHaveBeenCalledWith(
+      "execute command",
+      expect.objectContaining({
+        id: "task.move",
+        ctx: expect.objectContaining({
+          target: "task:C",
+          args: { id: "C", column: "todo", before_id: "B" },
+        }),
+      }),
+    );
+  });
+
+  it("cross-column drop dispatches task.move with the target column and after_id", async () => {
+    const { result } = renderHook(() => usePersistTaskMove());
+    // "doing" has [X, Y]; the dragged task A is dropped on the trailing
+    // after-Y zone.
+    const zones = computeDropZones(["X", "Y"], "doing");
+    await act(async () => {
+      await result.current(zones[2], "A");
+    });
+
+    expect(mockCallCommandTool).toHaveBeenCalledWith(
+      "execute command",
+      expect.objectContaining({
+        id: "task.move",
+        ctx: expect.objectContaining({
+          target: "task:A",
+          args: { id: "A", column: "doing", after_id: "Y" },
+        }),
+      }),
+    );
+  });
+
+  it("empty-column drop dispatches task.move with column only (append)", async () => {
+    const { result } = renderHook(() => usePersistTaskMove());
+    const zones = computeDropZones([], "doing");
+    await act(async () => {
+      await result.current(zones[0], "A");
+    });
+
+    expect(mockCallCommandTool).toHaveBeenCalledWith(
+      "execute command",
+      expect.objectContaining({
+        id: "task.move",
+        ctx: expect.objectContaining({
+          target: "task:A",
+          args: { id: "A", column: "doing" },
+        }),
+      }),
+    );
   });
 });
 

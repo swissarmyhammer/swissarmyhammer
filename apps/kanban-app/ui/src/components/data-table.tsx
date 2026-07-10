@@ -753,7 +753,7 @@ interface DataBodyCellProps {
  * Color is the canonical example: the swatch the user sees in display mode
  * is itself the popover trigger, so a single click should drill straight
  * into editing (open the picker), and a double-click should also drill in
- * rather than route to `ui.inspect` (there's nothing to inspect that the
+ * rather than route to `app.inspect` (there's nothing to inspect that the
  * editor doesn't already show).
  *
  * The check is a hardcoded editor-name list today because there's only one
@@ -1085,7 +1085,7 @@ function GridCellFocusable({
   // For leaf editors in display mode, the cell-level dblclick handler
   // must run BEFORE the descendant `<Field>`'s `<Inspectable>` swallows
   // the event (Inspectable's `onDoubleClick` calls `e.stopPropagation()`
-  // after dispatching `ui.inspect` for the field, so a bubble-phase
+  // after dispatching `app.inspect` for the field, so a bubble-phase
   // wrapper handler never sees the gesture). Capture-phase handlers run
   // top-down before the bubble phase reaches the descendant, so they
   // get first crack at the gesture and can call `e.stopPropagation()`
@@ -1185,7 +1185,7 @@ interface EntityRowProps {
  * Table row rendered inside a FocusZone(renderContainer=false).
  *
  * Mirrors FocusZone's behavior on a `<tr>`: right-click opens the
- * context menu, double-click dispatches `ui.inspect` against the row's
+ * context menu, double-click dispatches `app.inspect` against the row's
  * entity moniker. Per-cell click semantics live on the grid-cell
  * `<FocusScope>` leaves; the row itself does not own click → focus.
  *

@@ -74,6 +74,130 @@ impl UpdateEntityField {
     }
 }
 
+impl UpdateEntityField {
+    /// Verify `field_name` is declared on the entity's schema.
+    ///
+    /// Returns [`KanbanError::InvalidValue`] for a field the entity type does
+    /// not define, so an unknown field fails before any read/write.
+    fn validate_field(&self, entity_def: &EntityDef) -> std::result::Result<(), KanbanError> {
+        if entity_def
+            .fields
+            .iter()
+            .any(|f| f.as_str() == self.field_name)
+        {
+            return Ok(());
+        }
+        Err(KanbanError::InvalidValue {
+            field: self.field_name.clone(),
+            message: format!(
+                "field '{}' is not defined for entity type '{}'",
+                self.field_name, self.entity_type
+            ),
+        })
+    }
+
+    /// Update a writable computed field by routing through its `DeriveHandler`.
+    ///
+    /// The handler rewrites the entity's source fields (e.g. editing `tags`
+    /// rewrites `#tag` mentions in `body`); the entity is then written and any
+    /// newly-mentioned tags are auto-created. Errors if no handler is registered
+    /// for `derive` or the handler is read-only.
+    async fn handle_computed_field(
+        &self,
+        ctx: &KanbanContext,
+        ectx: &EntityContext,
+        entity_def: &EntityDef,
+        derive: &str,
+    ) -> std::result::Result<Value, KanbanError> {
+        let handler =
+            ctx.derive_registry()
+                .get(derive)
+                .ok_or_else(|| KanbanError::InvalidValue {
+                    field: self.field_name.clone(),
+                    message: format!("no derive handler registered for '{}'", derive),
+                })?;
+        if !handler.writable() {
+            return Err(KanbanError::InvalidValue {
+                field: self.field_name.clone(),
+                message: "computed field is read-only".into(),
+            });
+        }
+
+        let mut entity = ectx
+            .read(&self.entity_type, &self.id)
+            .await
+            .map_err(KanbanError::from_entity_error)?;
+
+        handler
+            .apply(&mut entity.fields, entity_def, &self.value)
+            .map_err(|e| KanbanError::InvalidValue {
+                field: self.field_name.clone(),
+                message: e.to_string(),
+            })?;
+
+        ectx.write(&entity).await?;
+
+        // Auto-create tag entities for any new tags in the body
+        auto_create_tags(ectx, &entity, entity_def).await?;
+
+        Ok(entity.to_json())
+    }
+
+    /// Update a comment-log field by merging the incoming (possibly stale) UI
+    /// array against the stored log.
+    ///
+    /// Server-assigned ids and authors, explicit tombstone deletes, and
+    /// concurrent appends are all preserved — all comment/actor logic stays in
+    /// this crate via [`crate::comment::normalize_comment_log`].
+    async fn handle_comment_log(
+        &self,
+        ctx: &KanbanContext,
+        ectx: &EntityContext,
+    ) -> std::result::Result<Value, KanbanError> {
+        let mut entity = ectx
+            .read(&self.entity_type, &self.id)
+            .await
+            .map_err(KanbanError::from_entity_error)?;
+
+        let old = entity.get(&self.field_name).cloned().unwrap_or(Value::Null);
+        let normalized = crate::comment::normalize_comment_log(ctx, &old, &self.value).await?;
+        entity.set(&self.field_name, normalized);
+
+        ectx.write(&entity).await?;
+
+        Ok(entity.to_json())
+    }
+
+    /// Update a plain (non-computed, non-comment-log) field with a direct
+    /// read-set-write.
+    ///
+    /// A null value removes the field; otherwise it is set. Tag entities are
+    /// auto-created when a body field is updated directly.
+    async fn handle_normal_field(
+        &self,
+        ectx: &EntityContext,
+        entity_def: &EntityDef,
+    ) -> std::result::Result<Value, KanbanError> {
+        let mut entity = ectx
+            .read(&self.entity_type, &self.id)
+            .await
+            .map_err(KanbanError::from_entity_error)?;
+
+        if self.value.is_null() {
+            entity.remove(&self.field_name);
+        } else {
+            entity.set(&self.field_name, self.value.clone());
+        }
+
+        ectx.write(&entity).await?;
+
+        // Auto-create tag entities when a body field is updated directly
+        auto_create_tags(ectx, &entity, entity_def).await?;
+
+        Ok(entity.to_json())
+    }
+}
+
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
@@ -84,102 +208,29 @@ impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
             let entity_def = ectx
                 .entity_def(&self.entity_type)
                 .map_err(KanbanError::from_entity_error)?;
-            if !entity_def
-                .fields
-                .iter()
-                .any(|f| f.as_str() == self.field_name)
-            {
-                return Err(KanbanError::InvalidValue {
-                    field: self.field_name.clone(),
-                    message: format!(
-                        "field '{}' is not defined for entity type '{}'",
-                        self.field_name, self.entity_type
-                    ),
-                });
-            }
+            self.validate_field(entity_def)?;
 
-            // Check if this is a computed field — route through DeriveHandler
-            let fields_ctx = ectx.fields();
-            let field_def = fields_ctx.get_field_by_name(&self.field_name);
+            // Route computed and comment-log fields through their handlers;
+            // everything else is a plain field update.
+            let field_def = ectx.fields().get_field_by_name(&self.field_name);
             if let Some(field_def) = field_def {
                 if let swissarmyhammer_fields::FieldType::Computed { ref derive, .. } =
                     field_def.type_
                 {
-                    let handler = ctx.derive_registry().get(derive).ok_or_else(|| {
-                        KanbanError::InvalidValue {
-                            field: self.field_name.clone(),
-                            message: format!("no derive handler registered for '{}'", derive),
-                        }
-                    })?;
-                    if !handler.writable() {
-                        return Err(KanbanError::InvalidValue {
-                            field: self.field_name.clone(),
-                            message: "computed field is read-only".into(),
-                        });
-                    }
-
-                    let mut entity = ectx
-                        .read(&self.entity_type, &self.id)
-                        .await
-                        .map_err(KanbanError::from_entity_error)?;
-
-                    handler
-                        .apply(&mut entity.fields, entity_def, &self.value)
-                        .map_err(|e| KanbanError::InvalidValue {
-                            field: self.field_name.clone(),
-                            message: e.to_string(),
-                        })?;
-
-                    ectx.write(&entity).await?;
-
-                    // Auto-create tag entities for any new tags in the body
-                    auto_create_tags(&ectx, &entity, entity_def).await?;
-
-                    return Ok(entity.to_json());
+                    return self
+                        .handle_computed_field(ctx, &ectx, entity_def, derive)
+                        .await;
                 }
 
-                // Comment-log field: merge the incoming (possibly stale) UI
-                // array against the stored log — server-assigned ids and
-                // authors, explicit tombstone deletes, concurrent appends
-                // preserved. All comment/actor logic stays in this crate.
                 if matches!(
                     field_def.type_,
                     swissarmyhammer_fields::FieldType::CommentLog {}
                 ) {
-                    let mut entity = ectx
-                        .read(&self.entity_type, &self.id)
-                        .await
-                        .map_err(KanbanError::from_entity_error)?;
-
-                    let old = entity.get(&self.field_name).cloned().unwrap_or(Value::Null);
-                    let normalized =
-                        crate::comment::normalize_comment_log(ctx, &old, &self.value).await?;
-                    entity.set(&self.field_name, normalized);
-
-                    ectx.write(&entity).await?;
-
-                    return Ok(entity.to_json());
+                    return self.handle_comment_log(ctx, &ectx).await;
                 }
             }
 
-            // Normal field: direct read-set-write
-            let mut entity = ectx
-                .read(&self.entity_type, &self.id)
-                .await
-                .map_err(KanbanError::from_entity_error)?;
-
-            if self.value.is_null() {
-                entity.remove(&self.field_name);
-            } else {
-                entity.set(&self.field_name, self.value.clone());
-            }
-
-            ectx.write(&entity).await?;
-
-            // Auto-create tag entities when a body field is updated directly
-            auto_create_tags(&ectx, &entity, entity_def).await?;
-
-            Ok(entity.to_json())
+            self.handle_normal_field(&ectx, entity_def).await
         }
         .await;
 
@@ -193,25 +244,9 @@ impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::InitBoard;
-    use crate::context::KanbanContext;
     use crate::task::AddTask;
+    use crate::test_support::setup;
     use swissarmyhammer_operations::Execute;
-    use tempfile::TempDir;
-
-    async fn setup() -> (TempDir, KanbanContext) {
-        let temp = TempDir::new().unwrap();
-        let kanban_dir = temp.path().join(".kanban");
-        let ctx = KanbanContext::new(kanban_dir);
-
-        InitBoard::new("Test")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        (temp, ctx)
-    }
 
     #[tokio::test]
     async fn test_update_entity_field_set_value() {
@@ -380,6 +415,187 @@ mod tests {
                 .iter()
                 .any(|t| t.get_str("tag_name") == Some("added")),
             "Tag entity 'added' should have been auto-created"
+        );
+
+        // The user-visible computed `tags` field — read through the real read
+        // path that runs the ComputeEngine — must reflect the body, including
+        // both the preserved and the newly-added tag. The original test only
+        // asserted on the raw body string, so the read-path filter bug (tags
+        // not showing in the field) was invisible to it.
+        let read_back = ectx.read("task", &task_id).await.unwrap();
+        let field_tags = crate::task_helpers::task_tags(&read_back);
+        assert!(
+            field_tags.contains(&"original".to_string()),
+            "computed tags field should include the preserved tag, got {field_tags:?}"
+        );
+        assert!(
+            field_tags.contains(&"added".to_string()),
+            "computed tags field should include the added tag, got {field_tags:?}"
+        );
+    }
+
+    /// Direction B (body → field) through the real read path: a `#tag` typed
+    /// into the body surfaces in the computed `tags` field even when NO `tag`
+    /// entity exists for it. Writing the task entity directly bypasses
+    /// `auto_create_tags`, isolating the read-path derivation. Under the old
+    /// `known.contains(...)` existence filter this yielded an empty `tags`
+    /// field — the user-reported "tags not showing" bug.
+    #[tokio::test]
+    async fn test_body_tag_surfaces_in_field_without_existing_tag_entity() {
+        let (_temp, ctx) = setup().await;
+        let ectx = ctx.entity_context().await.unwrap();
+
+        // Write a task whose body mentions #unregistered, with no tag entities
+        // present at all (direct write skips auto-create).
+        let mut task = Entity::new("task", "01TAGSYNCREAD");
+        task.set("title", json!("Sync test"));
+        task.set("body", json!("Investigate the #unregistered issue"));
+        ectx.write(&task).await.unwrap();
+        assert!(
+            ectx.list("tag").await.unwrap().is_empty(),
+            "precondition: no tag entities exist to validate against"
+        );
+
+        // Reading through the real path runs the ComputeEngine; the body tag
+        // must appear in the computed field regardless of tag-entity existence.
+        let read_back = ectx.read("task", "01TAGSYNCREAD").await.unwrap();
+        let field_tags = crate::task_helpers::task_tags(&read_back);
+        assert_eq!(
+            field_tags,
+            vec!["unregistered".to_string()],
+            "body is the source of truth: the #unregistered tag must surface in the field"
+        );
+    }
+
+    /// Real production write path: the app's `entity.update_field` command
+    /// routes through `EntityContext::update_field` (see the
+    /// `swissarmyhammer-entity-mcp` `handle_update_field`), NOT the kanban
+    /// `UpdateEntityField` op. Editing the computed `tags` field must run the
+    /// `parse-body-tags` derive handler's `apply` — rewriting `#tag` mentions
+    /// in the body — instead of blindly storing the value (which the read-path
+    /// compute would discard, the user-reported "nothing saves" bug). Covers
+    /// BOTH directions through the kanban-wired context that the app shares.
+    #[tokio::test]
+    async fn test_entity_context_update_field_routes_tags_through_body() {
+        let (_temp, ctx) = setup().await;
+        let ectx = ctx.entity_context().await.unwrap();
+
+        let task_result = AddTask::new("Routing test")
+            .with_description("Initial work")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task_result["id"].as_str().unwrap().to_string();
+
+        // Direction A (field → body): set the computed `tags` field via the
+        // shared write path. The derive handler must append the tags to body.
+        let entry_id = ectx
+            .update_field(
+                "task",
+                &task_id,
+                "tags",
+                serde_json::json!(["alpha", "beta"]),
+            )
+            .await
+            .unwrap();
+        assert!(
+            entry_id.is_some(),
+            "setting the computed tag field must edit the body and record a change \
+             (entry_id None means the no-op bug is still present)"
+        );
+
+        let read1 = ectx.read("task", &task_id).await.unwrap();
+        let body1 = read1.get_str("body").unwrap_or("").to_string();
+        let parsed1 = crate::tag_parser::parse_tags(&body1);
+        assert!(
+            parsed1.contains(&"alpha".to_string()) && parsed1.contains(&"beta".to_string()),
+            "body must gain #alpha and #beta, got {body1:?}"
+        );
+        let mut tags1 = crate::task_helpers::task_tags(&read1);
+        tags1.sort();
+        assert_eq!(tags1, vec!["alpha".to_string(), "beta".to_string()]);
+
+        // Removing a tag via the field strips it from the body.
+        ectx.update_field("task", &task_id, "tags", serde_json::json!(["alpha"]))
+            .await
+            .unwrap();
+        let read2 = ectx.read("task", &task_id).await.unwrap();
+        assert_eq!(
+            crate::task_helpers::task_tags(&read2),
+            vec!["alpha".to_string()]
+        );
+        assert!(!read2.get_str("body").unwrap_or("").contains("#beta"));
+
+        // Direction B (body → field): editing the body via the same path
+        // surfaces a brand-new tag in the computed field — no tag entity needed.
+        ectx.update_field(
+            "task",
+            &task_id,
+            "body",
+            serde_json::json!("Reworked #gamma now"),
+        )
+        .await
+        .unwrap();
+        let read3 = ectx.read("task", &task_id).await.unwrap();
+        assert_eq!(
+            crate::task_helpers::task_tags(&read3),
+            vec!["gamma".to_string()]
+        );
+    }
+
+    /// Field-change EVENT coverage for the UI re-render path — the bug the
+    /// user hit: the tag was saved to the body but the card never re-rendered
+    /// (no `tags` field-change event fired). Editing the computed `tags` field
+    /// rewrites the body via the derive handler, so the emitted EntityChanged
+    /// event MUST include a `tags` field-change (recomputed from the new body),
+    /// or the frontend's field-level re-render never happens and the tag
+    /// "doesn't save" from the user's view. Fails without the compute-aware
+    /// diff in EntityCache::write (raw diff only sees `body` change).
+    #[tokio::test]
+    async fn test_update_tags_field_emits_tags_field_change_event() {
+        use swissarmyhammer_entity::EntityEvent;
+
+        let (_temp, ctx) = setup().await;
+        let ectx = ctx.entity_context().await.unwrap();
+        let cache = ctx
+            .entity_cache()
+            .expect("entity_cache initialized by entity_context()");
+        let mut rx = cache.subscribe();
+
+        let task_result = AddTask::new("Event test")
+            .with_description("Some work")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task_result["id"].as_str().unwrap().to_string();
+
+        // Drain the AddTask events so we only inspect the tag update below.
+        while rx.try_recv().is_ok() {}
+
+        ectx.update_field("task", &task_id, "tags", serde_json::json!(["bug"]))
+            .await
+            .unwrap();
+
+        // The EntityChanged event for the task must carry a `tags` field-change
+        // with the recomputed value.
+        let mut saw_tags = None;
+        while let Ok(evt) = rx.try_recv() {
+            if let EntityEvent::EntityChanged { id, changes, .. } = evt {
+                if id == task_id {
+                    for ch in &changes {
+                        if ch.field == "tags" {
+                            saw_tags = Some(ch.value.clone());
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            saw_tags,
+            Some(serde_json::json!(["bug"])),
+            "editing the tags field must emit a `tags` field-change event so the UI re-renders the field"
         );
     }
 

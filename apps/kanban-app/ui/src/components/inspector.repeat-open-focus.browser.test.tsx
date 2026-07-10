@@ -71,28 +71,9 @@ import { render, act, waitFor } from "@testing-library/react";
 // `inspector.close-restores-focus.browser.test.tsx`.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -131,6 +112,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // ---------------------------------------------------------------------------
 
 import "@/components/fields/registrations";
+import { UI_STATE_CHANGED_EVENT } from "@/lib/mcp-notifications";
 import { AppShell } from "./app-shell";
 import { InspectorsContainer } from "./inspectors-container";
 import { FocusLayer } from "./focus-layer";
@@ -242,12 +224,12 @@ function uiStateSnapshot() {
 }
 
 /**
- * Emit a synthetic `ui-state-changed` event so the UIStateProvider
- * picks up the new `inspector_stack`. The `kind` is informational —
- * the React side reacts to the snapshot, not the kind.
+ * Emit a synthetic `notifications/ui_state/changed` bridge event so the
+ * UIStateProvider picks up the new `inspector_stack`. The `kind` is
+ * informational — the React side reacts to the snapshot, not the kind.
  */
 function emitUiStateChanged(kind: string) {
-  const cbs = listeners.get("ui-state-changed") ?? [];
+  const cbs = listeners.get(UI_STATE_CHANGED_EVENT) ?? [];
   for (const cb of cbs) {
     cb({ payload: { kind, state: uiStateSnapshot() } });
   }
@@ -279,9 +261,9 @@ async function defaultInvokeImpl(
   if (cmd === "log_command") return null;
   if (cmd === "dispatch_command") {
     const a = (args ?? {}) as { cmd?: string };
-    if (a.cmd === "ui.inspector.close" || a.cmd === "app.dismiss") {
+    if (a.cmd === "app.inspector.close" || a.cmd === "app.dismiss") {
       backendState.inspector_stack.pop();
-      emitUiStateChanged("InspectorClosed");
+      emitUiStateChanged("inspector_stack");
       return null;
     }
     return null;
@@ -391,14 +373,14 @@ async function flushAsync() {
 }
 
 /**
- * Mutate the backend's `inspector_stack` and emit a `ui-state-changed`
- * so the React tree reacts. Wrapped in `act` so all state work flushes
- * before the assertion.
+ * Mutate the backend's `inspector_stack` and emit a
+ * `notifications/ui_state/changed` so the React tree reacts. Wrapped in `act`
+ * so all state work flushes before the assertion.
  */
 async function setInspectorStack(next: string[]) {
   await act(async () => {
     backendState.inspector_stack = next;
-    emitUiStateChanged("InspectorOpened");
+    emitUiStateChanged("inspector_stack");
     await Promise.resolve();
   });
 }
@@ -439,10 +421,27 @@ describe("Inspector — auto-focus on every inspect (not only the first)", () =>
     });
 
     // Helper: every spatial_focus dispatch in the order it fired.
+    //
+    // Production routes `set focus` through the in-process `focus` MCP
+    // server, so the fq lives at `args.params.fq` for the
+    // `command_tool_call` envelope and at `args.fq` for the legacy
+    // `spatial_focus` command. Read from `params` first, then fall back to
+    // the top-level field.
     const focusCalls = () =>
       mockInvoke.mock.calls
-        .filter((c) => c[0] === "spatial_focus")
-        .map((c) => (c[1] as { fq?: string } | undefined)?.fq ?? "?");
+        .filter(
+          (c) =>
+            c[0] === "spatial_focus" ||
+            (c[0] === "command_tool_call" &&
+              (c[1] as any)?.tool === "focus" &&
+              (c[1] as any)?.op === "set focus"),
+        )
+        .map((c) => {
+          const a = c[1] as
+            | { fq?: string; params?: { fq?: string } }
+            | undefined;
+          return a?.params?.fq ?? a?.fq ?? "?";
+        });
 
     /** Simulate a card click: nav.focus(card_fq) then inspect open. */
     async function clickCardThenInspect(
@@ -454,11 +453,11 @@ describe("Inspector — auto-focus on every inspect (not only the first)", () =>
       await act(async () => {
         await dispatchRef.current!(cardFq);
       });
-      // Step 2: the Inspectable's gesture dispatches `ui.inspect`,
+      // Step 2: the Inspectable's gesture dispatches `app.inspect`,
       // which (in production) round-trips through the backend and
       // mutates `inspector_stack`. The test fakes the backend mutation
       // by pushing the entity moniker onto the stack and emitting
-      // `ui-state-changed`. No flush between focus claim and inspector
+      // `notifications/ui_state/changed`. No flush between focus claim and inspector
       // open — production fires both from the same gesture, so the
       // React commits land back-to-back.
       await setInspectorStack([...backendState.inspector_stack, taskMoniker]);
@@ -468,7 +467,7 @@ describe("Inspector — auto-focus on every inspect (not only the first)", () =>
     async function dismissTop() {
       await act(async () => {
         backendState.inspector_stack.pop();
-        emitUiStateChanged("InspectorClosed");
+        emitUiStateChanged("inspector_stack");
         await Promise.resolve();
       });
     }

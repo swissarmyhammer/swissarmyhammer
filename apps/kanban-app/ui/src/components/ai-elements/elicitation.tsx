@@ -24,8 +24,11 @@
  * segment composed under the panel's `ui:ai-panel` zone:
  * `ui:ai-panel.elicitation.field:{key}` for a field, and
  * `ui:ai-panel.elicitation.field:{key}.option:{value}` for one multiselect
- * option. Text-like inputs register a per-scope Enter "drill-in" command that
- * hands DOM focus to the input, and an Escape "drill-out" keydown handler that
+ * option. Text-like inputs register the live Enter "drill-in" BEHAVIOR on the
+ * webview command bus while focused ({@link useFieldDrillIn} — the
+ * `app.ai-panel.elicitation.field.drillIn` DEFINITION lives in the
+ * `app-shell-commands` builtin plugin, Card E) so Enter hands DOM focus to the
+ * input, and an Escape "drill-out" keydown handler that
  * blurs the input and returns spatial focus to the field leaf so the input
  * stops trapping keys (mirroring the composer's `ComposerEditorDrillOutWiring`);
  * the select / checkbox controls are `AiPanelPressable` leaves whose activation
@@ -59,7 +62,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
+import { CommandScopeProvider, useDispatchCommand } from "@/lib/command-scope";
+import { useFocusedWebviewCommandHandlers } from "@/lib/use-focused-webview-command-handlers";
 import { asSegment } from "@/types/spatial";
 
 /** Props for {@link ElicitationFields}. */
@@ -261,36 +265,55 @@ function fieldSegment(key: string): string {
 }
 
 /**
- * Build the per-scope Enter "drill-in" command for a text-like field.
+ * The constant marker moniker every text-like elicitation field mounts into
+ * the command scope chain, directly above its `<AiPanelFocusScope>`.
  *
- * Landing on a field's `<FocusScope>` only registers it as a nav target; the
- * returned `CommandDef` (keyed to Enter for every keymap) hands DOM focus to
- * the referenced input so the user can start typing — the same drill-in
+ * Field leaves carry dynamic per-key monikers
+ * (`ui:ai-panel.elicitation.field:{key}`), so the plugin-defined
+ * `app.ai-panel.elicitation.field.drillIn` command cannot be scope-gated on a
+ * literal leaf moniker. The marker gives every field leaf one shared literal
+ * moniker; the `app-shell-commands` plugin declares
+ * `scope: ["ui:ai-panel.elicitation.field"]` against it, so its Enter key
+ * binds exactly while a text-like field leaf is in the focused chain — and
+ * nowhere else. Mirrors `FIELD_COMMAND_SCOPE` in `fields/field.tsx` (Card D).
+ */
+export const ELICITATION_FIELD_COMMAND_SCOPE = "ui:ai-panel.elicitation.field";
+
+/**
+ * Register the live Enter "drill-in" BEHAVIOR for a text-like field on the
+ * webview command bus.
+ *
+ * The `app.ai-panel.elicitation.field.drillIn` command DEFINITION (id / name /
+ * keys / scope) lives in the `app-shell-commands` builtin plugin (Card E), gated to
+ * the {@link ELICITATION_FIELD_COMMAND_SCOPE} marker each text-like field
+ * mounts above its `<AiPanelFocusScope>`. ONE base id serves every field:
+ * the per-field variation is carried by THIS focus-gated registration — the
+ * handler closure owns its own field's `inputRef`, and it is registered only
+ * while spatial focus is within that field's leaf (a spatial leaf, so
+ * containment degenerates to direct focus) — not by N minted per-key command
+ * ids. When Enter resolves the id via the keymap's marker-in-chain gate, the
+ * bus slot holds exactly the focused field's closure, which hands DOM focus
+ * to that field's input so the user can start typing — the same drill-in
  * contract the composer's CM6 scope uses. Shared by the text and textarea
  * controls, whose only difference is the focused element type.
  *
- * @param key - The field's key, naming both the command id and (via
- *   {@link fieldSegment}) the scope it shadows Enter for.
+ * @param key - The field's key, naming (via {@link fieldSegment}) the leaf
+ *   scope whose focus gates the registration.
  * @param inputRef - The control to focus on drill-in.
- * @returns A single-entry, memoized `CommandDef` array for `commands`.
  */
 function useFieldDrillIn(
   key: string,
   inputRef: RefObject<HTMLElement | null>,
-): readonly CommandDef[] {
-  return useMemo<readonly CommandDef[]>(
-    () => [
-      {
-        id: `ui.ai-panel.elicitation.field.drillIn:${key}`,
-        name: "Edit Field",
-        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
-        execute: () => {
-          inputRef.current?.focus();
-        },
+): void {
+  const handlers = useMemo(
+    () => ({
+      "app.ai-panel.elicitation.field.drillIn": () => {
+        inputRef.current?.focus();
       },
-    ],
-    [key, inputRef],
+    }),
+    [inputRef],
   );
+  useFocusedWebviewCommandHandlers(asSegment(fieldSegment(key)), handlers);
 }
 
 /**
@@ -379,21 +402,20 @@ function TextInputControl({
   invalid,
 }: TextInputControlProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const drillIn = useFieldDrillIn(field.key, inputRef);
+  useFieldDrillIn(field.key, inputRef);
   return (
-    <AiPanelFocusScope
-      moniker={asSegment(fieldSegment(field.key))}
-      commands={drillIn}
-    >
-      <TextInputControlBody
-        field={field}
-        value={value}
-        onChange={onChange}
-        controlId={controlId}
-        invalid={invalid}
-        inputRef={inputRef}
-      />
-    </AiPanelFocusScope>
+    <CommandScopeProvider moniker={ELICITATION_FIELD_COMMAND_SCOPE}>
+      <AiPanelFocusScope moniker={asSegment(fieldSegment(field.key))}>
+        <TextInputControlBody
+          field={field}
+          value={value}
+          onChange={onChange}
+          controlId={controlId}
+          invalid={invalid}
+          inputRef={inputRef}
+        />
+      </AiPanelFocusScope>
+    </CommandScopeProvider>
   );
 }
 
@@ -460,21 +482,20 @@ function TextareaControl({
   invalid,
 }: TextareaControlProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const drillIn = useFieldDrillIn(field.key, inputRef);
+  useFieldDrillIn(field.key, inputRef);
   return (
-    <AiPanelFocusScope
-      moniker={asSegment(fieldSegment(field.key))}
-      commands={drillIn}
-    >
-      <TextareaControlBody
-        field={field}
-        value={value}
-        onChange={onChange}
-        controlId={controlId}
-        invalid={invalid}
-        inputRef={inputRef}
-      />
-    </AiPanelFocusScope>
+    <CommandScopeProvider moniker={ELICITATION_FIELD_COMMAND_SCOPE}>
+      <AiPanelFocusScope moniker={asSegment(fieldSegment(field.key))}>
+        <TextareaControlBody
+          field={field}
+          value={value}
+          onChange={onChange}
+          controlId={controlId}
+          invalid={invalid}
+          inputRef={inputRef}
+        />
+      </AiPanelFocusScope>
+    </CommandScopeProvider>
   );
 }
 

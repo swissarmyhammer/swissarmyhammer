@@ -1,0 +1,182 @@
+// file-notes — the filesystem-effect example.
+//
+// This plugin demonstrates driving the in-process `files` MCP tool to produce
+// a real, observable effect: it writes a note file, reads it back, and writes
+// the read-back content into a second note. It is the most relatable example
+// for a plugin author — "my plugin touched the disk" — and it proves an
+// in-process Rust tool round-trips its return values back into the isolate.
+//
+// ───────────────────────────────────────────────────────────────────────────
+// The `files` tool and its direct dispatch form
+// ───────────────────────────────────────────────────────────────────────────
+//
+// The in-process `files` tool is an *operation tool*: a single tool that
+// multiplexes many operations behind one entry point, each selected by an `op`
+// string of the form `"<verb> <noun>"` — here `"write file"` and `"read
+// file"`. This example uses the SDK's *direct dispatch form*:
+//
+//     this.fs.files({ op: "write file", file_path: "...", content: "..." })
+//
+// The `op` is already in the arguments object, so the SDK passes it straight
+// through to a real `tools/call("files", { ... })`. (The companion
+// `kanban-tasks` example shows the alternative *path form*, which reads the
+// tool's `_meta` to build the `op` for you.)
+//
+// Note the two operations name their path argument differently — `write file`
+// takes `file_path`, `read file` takes `path`. The argument names are whatever
+// each operation declares; this example uses each as the `files` tool expects.
+//
+// ───────────────────────────────────────────────────────────────────────────
+// The working-directory contract: RELATIVE paths only
+// ───────────────────────────────────────────────────────────────────────────
+//
+// The `files` tool resolves a RELATIVE path against the host's **session
+// working directory** before it touches the disk; an ABSOLUTE path is used
+// verbatim. The session working directory is the `work_dir` the host MCP
+// server was constructed with (its board directory) — NOT the process current
+// directory. Every operation resolves through `ToolContext::session_root`,
+// which returns that `work_dir`; the process CWD is only a last-resort fallback
+// for a stand-alone caller that never set one. This matters because the
+// bundled GUI app launches with a process CWD of `/` (a read-only filesystem
+// root) and a single process hosts many boards, so the process CWD cannot be a
+// per-session root.
+//
+// This example — being committed source that ships in the repository — cannot
+// hard-code an absolute path: there is no temp directory it could name at
+// authoring time, and writing to a fixed absolute path would be unsafe. So it
+// addresses the `files` tool with RELATIVE paths (`notes/hello.txt`,
+// `notes/echo.txt`). Where those files actually land depends entirely on the
+// host server's `work_dir`:
+//
+//   • the end-to-end test (`tests/file_notes_e2e.rs`) builds the host server
+//     against a throwaway temp `work_dir`, so the notes land there and the real
+//     source tree is never written to;
+//   • a plugin you write for real should likewise either use a relative path
+//     and know the host's `work_dir`, or compute an absolute path it controls.
+//
+// The `notes/` parent directory does not need to exist beforehand — the
+// `files` `write file` operation creates parent directories as needed.
+
+import { Plugin } from "@swissarmyhammer/plugin";
+
+// The two note paths this plugin writes, RELATIVE to the host's session
+// working directory (see the working-directory contract above). The end-to-end
+// test that drives this bundle (`tests/file_notes_e2e.rs`) asserts both files
+// land under the host server's `work_dir` with the body below, so the paths and
+// body are a fixed contract.
+const HELLO_NOTE = "notes/hello.txt";
+const ECHO_NOTE = "notes/echo.txt";
+
+// The text written into the first note and then read back into the second.
+// The end-to-end test asserts this exact body in BOTH note files.
+const NOTE_BODY = "a note round-tripped through the in-process files tool";
+
+/**
+ * Extracts the raw file text from a `files` `read file` result.
+ *
+ * A `read file` call returns a `CallToolResult` shape — an object with a
+ * `content` array whose first entry's `text` is the read payload. That payload
+ * is NOT the bare file bytes: `read file` prepends a `#hash:<hex>` freshness-
+ * token line (the whole-file hash that `write file` / `edit files` use to
+ * detect stale edits) and, in its default `"hashline"` form, additionally tags
+ * every body line with an `N:HH|` anchor. This plugin asks for
+ * `format: "plain"` so the body stays untagged, then strips the single leading
+ * `#hash:` line here — what remains is exactly the bytes that were written, so
+ * `load()` can echo them verbatim into a second note.
+ *
+ * @param result - the value returned by `this.fs.files({ op: "read file", ... })`.
+ * @returns the read-back file content, with the `#hash:` metadata line removed.
+ * @throws if the result is not the expected `CallToolResult` shape.
+ */
+function readBackText(result: unknown): string {
+  const content = (result as { content?: Array<{ text?: string }> }).content;
+  if (content === undefined || content.length === 0) {
+    throw new Error("read file result carried no content");
+  }
+  const text = content[0].text;
+  if (typeof text !== "string") {
+    throw new Error("read file content[0].text was not a string");
+  }
+  // Drop the leading `#hash:<hex>` freshness-token line; the file content
+  // follows on the next line. Because the read asked for `format: "plain"`,
+  // that content is untagged, so the remainder is the raw file bytes.
+  const newlineIndex = text.indexOf("\n");
+  return newlineIndex < 0 ? "" : text.slice(newlineIndex + 1);
+}
+
+/**
+ * The file-notes example plugin.
+ *
+ * Its `load()` registers the host-exposed in-process `files` operation tool
+ * and round-trips a note through it — write, read, write — all against
+ * relative paths the `files` tool resolves against the host's session working
+ * directory (the server's `work_dir`).
+ */
+export default class FileNotesPlugin extends Plugin {
+  /** Human-readable name — descriptive metadata only, not plugin identity. */
+  readonly name = "File Notes Example";
+
+  /** Version string — descriptive metadata only. */
+  readonly version = "1.0.0";
+
+  /** One-line description — descriptive metadata only. */
+  readonly description =
+    "Round-trips a note through the in-process files tool using relative paths.";
+
+  /**
+   * Registers the `files` operation tool and round-trips a note through it.
+   *
+   * Steps:
+   *   1. activate the host-exposed `files` Rust module under the name `fs`;
+   *   2. `write file` the first note at the relative path `notes/hello.txt`;
+   *   3. `read file` that note back; the result crosses the dispatcher back
+   *      into the isolate as a `CallToolResult` JSON shape;
+   *   4. `write file` the read-back content into `notes/echo.txt`.
+   *
+   * The host calls this exactly once, when the plugin is discovered.
+   */
+  async load(): Promise<void> {
+    // (1) Activate the host-exposed real `files` operation tool under the
+    //     name `fs`. After this, `this.fs` is the dispatch index for the
+    //     `files` tool.
+    this.register("fs", { rust: "files" });
+
+    // (2) Write the first note through the direct `op` dispatch form. The path
+    //     is RELATIVE — the `files` tool resolves it against the host's session
+    //     working directory. `write file` creates the `notes/` parent dir.
+    await this.fs.files({
+      op: "write file",
+      file_path: HELLO_NOTE,
+      content: NOTE_BODY,
+    });
+
+    // (3) Read the first note back. The return value crosses the dispatcher
+    //     back into the isolate. `read file` names its path argument `path`
+    //     (not `file_path`). A non-trivial check on the read-back value makes
+    //     the plugin fail loudly if return-value marshalling is broken, rather
+    //     than silently writing an empty echo note.
+    const readResult = await this.fs.files({
+      op: "read file",
+      path: HELLO_NOTE,
+      format: "plain",
+    });
+    const readBack = readBackText(readResult);
+    if (readBack !== NOTE_BODY) {
+      throw new Error("read file did not return the written note body");
+    }
+
+    // (4) Write the read-back content into the echo note. The echo note exists
+    //     with the right body only if the read-file return value round-tripped
+    //     back into the isolate.
+    await this.fs.files({
+      op: "write file",
+      file_path: ECHO_NOTE,
+      content: readBack,
+    });
+
+    this.log.info(
+      `file-notes: round-tripped a note through '${HELLO_NOTE}' into '${ECHO_NOTE}'`,
+    );
+  }
+}
+

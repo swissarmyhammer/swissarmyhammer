@@ -26,7 +26,9 @@ use crate::error::{Result, ViewsError};
 use crate::events::ViewEvent;
 use crate::store::ViewStore;
 use crate::types::{ViewDef, ViewId};
-use swissarmyhammer_store::{StoreContext, StoreHandle, StoredItemId, UndoEntryId};
+use swissarmyhammer_store::{
+    EventProvenance, StoreContext, StoreHandle, StoredItemId, UndoEntryId,
+};
 
 /// Default capacity for the view event broadcast channel.
 ///
@@ -129,6 +131,13 @@ impl ViewsContext {
         for (name, yaml) in sources {
             match serde_yaml_ng::from_str::<ViewDef>(yaml) {
                 Ok(def) => {
+                    // Degenerate definitions (empty name) are skipped like
+                    // parse failures so a corrupted local override cannot
+                    // clobber a builtin entry with the same id.
+                    if let Err(reason) = def.validate() {
+                        tracing::warn!(name = %name, id = %def.id, %reason, "skipping degenerate view definition");
+                        continue;
+                    }
                     // Later entries override earlier ones (same id)
                     if let Some(&old_idx) = ctx.id_index.get(&def.id) {
                         let old_name = ctx.views[old_idx].name.clone();
@@ -187,6 +196,16 @@ impl ViewsContext {
     /// Returns `Ok(Some(entry_id))` when a store handle recorded the change,
     /// or `Ok(None)` for idempotent writes or the legacy fallback path.
     pub async fn write_view(&mut self, def: &ViewDef) -> Result<Option<UndoEntryId>> {
+        // Refuse to persist degenerate definitions — a partial `set view`
+        // with all-default fields would otherwise write `{id, name: '',
+        // kind: unknown}` over a real view file.
+        if let Err(reason) = def.validate() {
+            return Err(ViewsError::InvalidViewDef {
+                id: def.id.clone(),
+                reason,
+            });
+        }
+
         // Snapshot the old state for diff computation.
         let old = self.get_by_id(&def.id).cloned();
 
@@ -220,10 +239,13 @@ impl ViewsContext {
         let is_create = old.is_none();
         let changed_fields = diff_view(old.as_ref(), def);
         if !changed_fields.is_empty() {
+            let prov = EventProvenance::user();
             let _ = self.event_sender.send(ViewEvent::ViewChanged {
                 id: def.id.clone(),
                 changed_fields,
                 is_create,
+                txn: prov.txn,
+                origin: prov.origin,
             });
         }
 
@@ -274,9 +296,12 @@ impl ViewsContext {
         let deleted = self.cache_remove_at(idx);
 
         // Broadcast the deletion event.
-        let _ = self
-            .event_sender
-            .send(ViewEvent::ViewDeleted { id: deleted.id });
+        let prov = EventProvenance::user();
+        let _ = self.event_sender.send(ViewEvent::ViewDeleted {
+            id: deleted.id,
+            txn: prov.txn,
+            origin: prov.origin,
+        });
 
         Ok(entry_id)
     }
@@ -296,6 +321,17 @@ impl ViewsContext {
     /// Can be called through a shared reference (uses `OnceLock`).
     pub fn set_store_context(&self, ctx: Arc<StoreContext>) {
         let _ = self.store_context.set(ctx);
+    }
+
+    /// Return the `Arc<StoreContext>` previously installed via
+    /// [`set_store_context`], if any.
+    ///
+    /// Exposed so substrate-guard tests can verify via `Arc::ptr_eq` that the
+    /// views context shares the single app-wide `StoreContext`. Production
+    /// code paths reach the context through the setter side and do not need
+    /// to read it back.
+    pub fn store_context(&self) -> Option<Arc<StoreContext>> {
+        self.store_context.get().cloned()
     }
 
     /// Subscribe to view change events.
@@ -332,6 +368,18 @@ impl ViewsContext {
     /// Parse failures on an existing file return an error. In-memory cache
     /// state is not mutated when parsing fails.
     pub async fn reload_from_disk(&mut self, id: &str) -> Result<()> {
+        self.reload_from_disk_with(id, EventProvenance::user())
+            .await
+    }
+
+    /// Like [`reload_from_disk`](Self::reload_from_disk) but stamps the
+    /// supplied provenance (`txn` + `origin`) onto the emitted event.
+    ///
+    /// Post-undo/redo reconciliation passes `origin: "undo"`/`"redo"` plus
+    /// the reversed command's transaction id; the plain wrapper stamps
+    /// `origin: "user"`. The event kind is derived from the post-rewrite
+    /// on-disk state, identical across callers.
+    pub async fn reload_from_disk_with(&mut self, id: &str, prov: EventProvenance) -> Result<()> {
         let path = self.view_path(id);
         if path.exists() {
             let content = fs::read_to_string(&path).await?;
@@ -343,12 +391,16 @@ impl ViewsContext {
                 // this as a full refresh."
                 changed_fields: Vec::new(),
                 is_create: false,
+                txn: prov.txn,
+                origin: prov.origin,
             });
         } else if let Some(&idx) = self.id_index.get(id) {
             let _deleted = self.cache_remove_at(idx);
-            let _ = self
-                .event_sender
-                .send(ViewEvent::ViewDeleted { id: id.to_string() });
+            let _ = self.event_sender.send(ViewEvent::ViewDeleted {
+                id: id.to_string(),
+                txn: prov.txn,
+                origin: prov.origin,
+            });
         }
         Ok(())
     }
@@ -414,6 +466,13 @@ impl ViewsContext {
             let content = fs::read_to_string(&path).await?;
             match serde_yaml_ng::from_str::<ViewDef>(&content) {
                 Ok(def) => {
+                    // Same degenerate filter as `from_yaml_sources`: an
+                    // empty-name definition is unusable and must not enter
+                    // the registry.
+                    if let Err(reason) = def.validate() {
+                        tracing::warn!(?path, id = %def.id, %reason, "skipping degenerate view definition");
+                        continue;
+                    }
                     let idx = self.views.len();
                     self.id_index.insert(def.id.clone(), idx);
                     self.name_index.insert(def.name.clone(), idx);
@@ -620,6 +679,89 @@ kind: board
         .unwrap();
 
         assert_eq!(ctx.all_views().len(), 1);
+    }
+
+    /// Regression for "all views show the board icon (LayoutGrid)":
+    /// degenerate view files (`name: ''`, `kind: unknown`, no icon) were
+    /// observed on disk overriding the builtin grid views. The builtin →
+    /// local merge gives later (local) entries full authority per id, so the
+    /// degenerate override wiped out the builtin's name/icon/kind and the
+    /// left-nav fell back to the LayoutGrid glyph for every grid view.
+    ///
+    /// A degenerate definition (empty name) must be skipped like a parse
+    /// failure so the builtin metadata survives a corrupted local override.
+    #[test]
+    fn from_yaml_sources_degenerate_override_does_not_clobber_builtin() {
+        let builtin = r#"
+id: "01GRID"
+name: Projects
+icon: folder
+kind: grid
+"#;
+        let degenerate = r#"
+id: "01GRID"
+name: ''
+kind: unknown
+"#;
+        let ctx = ViewsContext::from_yaml_sources(
+            PathBuf::from("/tmp/test"),
+            &[("builtin", builtin), ("local", degenerate)],
+        )
+        .unwrap();
+
+        assert_eq!(ctx.all_views().len(), 1);
+        let view = ctx.get_by_id("01GRID").unwrap();
+        assert_eq!(view.name, "Projects");
+        assert_eq!(view.icon.as_deref(), Some("folder"));
+        assert_eq!(view.kind, ViewKind::Grid);
+    }
+
+    /// The disk loader (`open().build()`) must apply the same degenerate
+    /// filter as `from_yaml_sources`: a `name: ''` file is unusable and
+    /// must not be loaded into the registry.
+    #[tokio::test]
+    async fn load_views_skips_degenerate_definition() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("views");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(
+            dir.join("01GOOD.yaml"),
+            "id: 01GOOD\nname: Board\nkind: board\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            dir.join("01JUNK.yaml"),
+            "id: 01JUNK\nname: ''\nkind: unknown\n",
+        )
+        .await
+        .unwrap();
+
+        let ctx = ViewsContext::open(&dir).build().await.unwrap();
+
+        assert_eq!(ctx.all_views().len(), 1);
+        assert!(ctx.get_by_id("01GOOD").is_some());
+        assert!(ctx.get_by_id("01JUNK").is_none());
+    }
+
+    /// `write_view` must refuse to persist a degenerate definition — this is
+    /// how `name: ''` / `kind: unknown` files got onto disk in the first
+    /// place (a partial `set view` with all-default fields).
+    #[tokio::test]
+    async fn write_view_rejects_empty_name() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("views");
+        let (mut ctx, _handle) = setup_with_store(&dir).await;
+
+        let v = make_test_view("01EMPTY", "");
+        let err = ctx.write_view(&v).await.unwrap_err();
+        assert!(
+            err.to_string().contains("name"),
+            "error should explain the empty name, got: {err}"
+        );
+        // Nothing cached, nothing written.
+        assert!(ctx.get_by_id("01EMPTY").is_none());
+        assert!(!dir.join("01EMPTY.yaml").exists());
     }
 
     #[tokio::test]
@@ -1030,7 +1172,7 @@ kind: board
             .try_recv()
             .expect("undo of create must emit ViewDeleted via reload_from_disk");
         match undo_evt {
-            ViewEvent::ViewDeleted { ref id } => {
+            ViewEvent::ViewDeleted { ref id, .. } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
             }
             other => panic!("expected ViewDeleted from undo of create, got {other:?}"),
@@ -1062,7 +1204,7 @@ kind: board
 
         let delete_evt = rx.try_recv().unwrap();
         match delete_evt {
-            ViewEvent::ViewDeleted { ref id } => {
+            ViewEvent::ViewDeleted { ref id, .. } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
             }
             other => panic!("expected ViewDeleted from delete, got {other:?}"),
@@ -1120,6 +1262,7 @@ kind: board
                 id,
                 changed_fields,
                 is_create,
+                ..
             } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
                 assert!(is_create, "first write must be flagged as create");
@@ -1153,6 +1296,7 @@ kind: board
                 id,
                 changed_fields,
                 is_create,
+                ..
             } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
                 assert!(!is_create, "update must not be flagged as create");
@@ -1176,7 +1320,7 @@ kind: board
 
         let evt = rx.try_recv().unwrap();
         match evt {
-            ViewEvent::ViewDeleted { id } => {
+            ViewEvent::ViewDeleted { id, .. } => {
                 assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
             }
             other => panic!("expected ViewDeleted, got {other:?}"),

@@ -345,6 +345,16 @@ mod tests {
     /// the historical behaviour where the lockfile sits next to the project tree.
     #[test]
     fn test_lockfile_root_for_scope_project() {
+        // Pin the process CWD under `CURRENT_DIR_LOCK` for the whole test. The
+        // assertion compares `current_dir()` against `lockfile_root_for_scope`'s
+        // own internal `current_dir()` read; without the guard a concurrent
+        // CWD-mutating test could change the directory between the two reads and
+        // make them disagree (or leave the CWD pointing at a deleted dir). The
+        // guard both serializes against those tests and gives a stable CWD.
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(dir.path()).unwrap();
+        // Read the live CWD while the guard holds the lock; both this and
+        // `lockfile_root_for_scope`'s internal read observe the same directory.
         let cwd = std::env::current_dir().unwrap();
         let project = lockfile_root_for_scope(&InitScope::Project).unwrap();
         let local = lockfile_root_for_scope(&InitScope::Local).unwrap();

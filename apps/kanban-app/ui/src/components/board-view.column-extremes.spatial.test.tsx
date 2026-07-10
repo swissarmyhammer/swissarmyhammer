@@ -2,25 +2,22 @@
  * Browser-mode test for `<BoardView>`'s column-extreme key bindings —
  * vim `0` / `$` and cua `Mod+Home` / `Mod+End`.
  *
- * Source of truth for the close-out of kanban task
- * `01KQJDKBQ2VNT3SE7AN3VM2KGZ` (audit: remove duplicate scope-local nav
- * commands that shadow global `nav.*` and route through the no-op
- * broadcast).
+ * **Card F behaviour** (this test pins): `board.firstColumn` /
+ * `board.lastColumn` are DEFINED by the `board-commands` builtin plugin
+ * (`builtin/plugins/board-commands/index.ts`), scope-gated to the
+ * `ui:board` marker the board view mounts. Their execution is a real
+ * BACKEND route — the plugin's host execute drives the focus kernel's
+ * `navigate focus` op (first / last) — so a key press resolves the
+ * binding through the registry chain walk and dispatches the command id
+ * to the backend (`invoke("dispatch_command", { cmd: "board.*" })`)
+ * exactly once, with NO client-side `spatial_navigate` kernel IPC (the
+ * retired React `makeNavCommand` defs called
+ * `spatialActions.navigate(focusedFq, direction)` in the webview).
  *
- * **Pre-task behaviour**: `board.firstColumn` and `board.lastColumn`
- * (`makeNavBroadcastCommand` in `board-view.tsx`) bound vim `0` / `$`
- * and cua `Mod+Home` / `Mod+End` and threaded each press through
- * `broadcastRef.current("nav.first" | "nav.last")` — i.e. through
- * `FocusActions.broadcastNavCommand`, which was a no-op stub that
- * always returned `false`. Pressing those keys did nothing.
- *
- * **Post-task behaviour** (this test pins): the same key bindings now
- * call `spatialActions.navigate(focusedFq, "first" | "last")` directly,
- * which dispatches `spatial_navigate` to the Rust kernel exactly once
- * per press. The board's vim `0` / `$` and cua `Mod+Home` / `Mod+End`
- * keys are NOT in the global `NAV_COMMAND_SPEC` (`Home` / `End` are
- * cua there, vim has only `Shift+G` for last) — they fill a gap that
- * the global spec does not cover.
+ * The board's vim `0` / `$` and cua `Mod+Home` / `Mod+End` keys are NOT
+ * among the `nav-commands` plugin's `nav.first` / `nav.last` keys
+ * (`Home` / `End` are cua there, vim has only `Shift+G` for last) —
+ * they fill a gap the plugin does not cover, gated to the board zone.
  *
  * Sister test to `board-view.spatial.test.tsx` — same harness, same
  * mock pattern, same browser project.
@@ -28,34 +25,19 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, fireEvent } from "@testing-library/react";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
 import type { BoardData, Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
 // Tauri API mocks — must come before component imports.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -184,6 +166,16 @@ function makeDefaultInvokeImpl(keymapMode: "cua" | "vim" | "emacs") {
     cmd: string,
     _args?: unknown,
   ): Promise<unknown> {
+    // The board commands are DEFINED by the `board-commands` builtin plugin
+    // (scope ["ui:board"]) — their keys reach the keymap layer only through
+    // the `useCommandList` seam, so answer `list command` with the shared
+    // mock registry.
+    const listAnswer = answerListCommand(
+      cmd,
+      _args,
+      globalCommandsFromBindingTables(),
+    );
+    if (listAnswer) return listAnswer;
     if (cmd === "list_entity_types") return ["task", "column"];
     if (cmd === "get_entity_schema") {
       return {
@@ -233,7 +225,7 @@ async function fireFocusChanged({
     next_fq,
     next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get("notifications/focus/changed") ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();
@@ -276,24 +268,36 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-function spatialNavigateCalls(): Array<{
-  focusedFq: FullyQualifiedMoniker;
-  direction: string;
-}> {
+/** Every CLIENT-SIDE kernel-navigate IPC — the retired React defs' wire
+ * shape. Post-Card-F the webview must never fire one of these for a
+ * column-extreme key: the focus op runs host-side in the plugin. */
+function clientSpatialNavigateCalls(): Array<unknown> {
+  return mockInvoke.mock.calls.filter(
+    (c) =>
+      c[0] === "spatial_navigate" ||
+      (c[0] === "command_tool_call" &&
+        (c[1] as Record<string, unknown>)?.tool === "focus" &&
+        (c[1] as Record<string, unknown>)?.op === "navigate focus"),
+  );
+}
+
+/** Every backend `dispatch_command` whose cmd is a `board.*` id, in order —
+ * the post-Card-F contract: the webview routes the command id to the
+ * backend, where the `board-commands` plugin drives the focus kernel. */
+function boardDispatchCmds(): string[] {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_navigate")
-    .map(
-      (c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string },
-    );
+    .filter((c) => c[0] === "dispatch_command")
+    .map((c) => (c[1] as { cmd?: string } | undefined)?.cmd ?? "")
+    .filter((cmd) => cmd.startsWith("board."));
 }
 
 // ---------------------------------------------------------------------------
 // Tests — one assertion block per key. Each block seeds focus on the
-// middle column, fires the keystroke, and asserts a single
-// `spatial_navigate` invocation with the expected direction.
+// middle column, fires the keystroke, and asserts a single backend
+// dispatch of the expected `board.*` command id.
 // ---------------------------------------------------------------------------
 
-describe("BoardView — column-extreme keys dispatch spatial_navigate", () => {
+describe("BoardView — column-extreme keys dispatch the plugin board.* commands to the backend", () => {
   beforeEach(() => {
     mockInvoke.mockClear();
     mockListen.mockClear();
@@ -305,11 +309,13 @@ describe("BoardView — column-extreme keys dispatch spatial_navigate", () => {
   });
 
   /**
-   * Drive a single keystroke and assert the resulting `spatial_navigate`
-   * call has the expected (focusedFq, direction) shape.
+   * Drive a single keystroke and assert it resolves to exactly one backend
+   * dispatch of the expected `board.*` command id — with no client-side
+   * kernel-navigate IPC (the plugin's host execute owns the focus op).
    *
-   * Seeds focus on the middle column so "first" and "last" map to
-   * distinct monikers. The middle column zone is registered by
+   * Seeds focus on the middle column so the binding resolves through the
+   * focused scope chain (the `ui:board` marker the board mounts gates the
+   * plugin commands' keys). The middle column zone is registered by
    * `<ColumnView>` under the board zone — we look it up by segment from
    * the recorded `spatial_register_scope` IPCs.
    *
@@ -321,29 +327,30 @@ describe("BoardView — column-extreme keys dispatch spatial_navigate", () => {
    *                   shift+4 respectively; cua `Mod+Home` is `Home` with
    *                   `metaKey`).
    * @param eventInit  Extra `KeyboardEvent` init bits (e.g. `metaKey`).
-   * @param direction  Expected `Direction` literal forwarded to
-   *                   `spatial_navigate` — `"first"` or `"last"`.
+   * @param commandId  Expected `board.*` command id dispatched to the
+   *                   backend — `"board.firstColumn"` or
+   *                   `"board.lastColumn"`.
    */
-  async function assertSingleNavigate({
+  async function assertSingleBoardDispatch({
     keymapMode,
     key,
     eventInit = {},
-    direction,
+    commandId,
   }: {
     keymapMode: "vim" | "cua";
     key: string;
     eventInit?: KeyboardEventInit;
-    direction: "first" | "last";
+    commandId: "board.firstColumn" | "board.lastColumn";
   }) {
     mockInvoke.mockImplementation(makeDefaultInvokeImpl(keymapMode));
 
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    // Seed focus on the middle column so the kernel sees a non-null
-    // `focusedFq`. `next_segment` is also seeded so the entity-focus
-    // bridge mirrors the focused moniker into the entity-focus store —
-    // without it the keybinding handler can't resolve scope-level
+    // Seed focus on the middle column so the focused scope chain (column →
+    // board marker → …) is populated. `next_segment` is also seeded so the
+    // entity-focus bridge mirrors the focused moniker into the entity-focus
+    // store — without it the keybinding handler can't resolve scope-level
     // bindings.
     const middleColumn = registerScopeArgs().find(
       (a) => a.segment === "column:col-doing",
@@ -362,57 +369,61 @@ describe("BoardView — column-extreme keys dispatch spatial_navigate", () => {
       await Promise.resolve();
     });
 
-    const navCalls = spatialNavigateCalls();
+    const dispatched = boardDispatchCmds();
     expect(
-      navCalls.length,
-      `key "${key}" (${keymapMode}) should dispatch spatial_navigate exactly once`,
-    ).toBe(1);
-    expect(navCalls[0].focusedFq).toBe(middleColumnFq);
-    expect(navCalls[0].direction).toBe(direction);
+      dispatched,
+      `key "${key}" (${keymapMode}) should dispatch ${commandId} to the backend exactly once`,
+    ).toEqual([commandId]);
+    // The focus op runs HOST-SIDE in the board-commands plugin — the webview
+    // must not fire its own kernel-navigate IPC (the retired React def did).
+    expect(
+      clientSpatialNavigateCalls(),
+      "no client-side spatial_navigate IPC may fire",
+    ).toEqual([]);
 
     unmount();
   }
 
-  it("vim '0' dispatches spatial_navigate first", async () => {
-    await assertSingleNavigate({
+  it("vim '0' dispatches board.firstColumn to the backend", async () => {
+    await assertSingleBoardDispatch({
       keymapMode: "vim",
       key: "0",
-      direction: "first",
+      commandId: "board.firstColumn",
     });
   });
 
-  it("vim '$' dispatches spatial_navigate last", async () => {
+  it("vim '$' dispatches board.lastColumn to the backend", async () => {
     // The keybinding pipeline normalises the canonical key for the
     // `$` glyph; it is produced by Shift+4 on a US layout but the
-    // DOM `key` value is `"$"`. The CommandDef declares `vim: "$"`,
+    // DOM `key` value is `"$"`. The plugin def declares `vim: "$"`,
     // so the matching event is `key: "$", shiftKey: true`.
-    await assertSingleNavigate({
+    await assertSingleBoardDispatch({
       keymapMode: "vim",
       key: "$",
       eventInit: { shiftKey: true },
-      direction: "last",
+      commandId: "board.lastColumn",
     });
   });
 
-  it("cua 'Mod+Home' dispatches spatial_navigate first", async () => {
+  it("cua 'Mod+Home' dispatches board.firstColumn to the backend", async () => {
     // `Mod` is the keybinding registry's portable alias for `Meta` on
     // macOS / `Control` elsewhere. The browser test env runs on
     // Chromium where `Meta` is the canonical modifier — `metaKey: true`
     // matches `Mod`.
-    await assertSingleNavigate({
+    await assertSingleBoardDispatch({
       keymapMode: "cua",
       key: "Home",
       eventInit: { metaKey: true },
-      direction: "first",
+      commandId: "board.firstColumn",
     });
   });
 
-  it("cua 'Mod+End' dispatches spatial_navigate last", async () => {
-    await assertSingleNavigate({
+  it("cua 'Mod+End' dispatches board.lastColumn to the backend", async () => {
+    await assertSingleBoardDispatch({
       keymapMode: "cua",
       key: "End",
       eventInit: { metaKey: true },
-      direction: "last",
+      commandId: "board.lastColumn",
     });
   });
 });

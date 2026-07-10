@@ -88,31 +88,26 @@ pub fn builtin_actor_entities() -> Vec<(&'static str, &'static str)> {
 
 /// Register the parse-body-tags derivation.
 ///
-/// Extracts #tag patterns from the body field, filtered to only include
-/// tags that actually exist as tag entities.
+/// The body is the single source of truth for a task's tags: this returns
+/// every deduplicated `#tag` slug in the body, with no gating on whether a
+/// matching `tag` entity already exists. Delegates to
+/// [`tag_parser::body_tags_value`] — the same helper the write-path derive
+/// handler (`crate::derive_handlers::ParseBodyTags::compute`) uses — so the
+/// displayed value and the tag-field editor's diff baseline can never diverge.
+///
+/// Registered as a simple (non-aggregate) derivation because it reads only the
+/// entity's own `body`; it needs no sibling-entity query, so it computes even
+/// when no entity-query function is supplied.
 fn register_parse_body_tags(engine: &mut ComputeEngine) {
-    engine.register_aggregate(
+    engine.register(
         "parse-body-tags",
-        Box::new(|fields, query| {
+        Box::new(|fields| {
             let body = fields
                 .get("body")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            Box::pin(async move {
-                let parsed = tag_parser::parse_tags(&body);
-                let existing_tags = query("tag").await;
-                let known: std::collections::HashSet<&str> = existing_tags
-                    .iter()
-                    .filter_map(|t| t.get("tag_name").and_then(|v| v.as_str()))
-                    .collect();
-                let filtered: Vec<serde_json::Value> = parsed
-                    .into_iter()
-                    .filter(|slug| known.contains(slug.as_str()))
-                    .map(serde_json::Value::String)
-                    .collect();
-                serde_json::Value::Array(filtered)
-            })
+            Box::pin(async move { tag_parser::body_tags_value(&body) })
         }),
     );
 }
@@ -983,33 +978,6 @@ mod tests {
         assert!(engine.has("derive-status-date"));
     }
 
-    /// Helper: build a query function that returns known tags.
-    fn tag_query(
-        tag_names: Vec<&'static str>,
-    ) -> std::sync::Arc<swissarmyhammer_fields::EntityQueryFn> {
-        std::sync::Arc::new(Box::new(move |entity_type: &str| {
-            let names = tag_names.clone();
-            let entity_type = entity_type.to_string();
-            Box::pin(async move {
-                if entity_type == "tag" {
-                    names
-                        .iter()
-                        .map(|n| {
-                            let mut m = HashMap::new();
-                            m.insert(
-                                "tag_name".to_string(),
-                                serde_json::Value::String(n.to_string()),
-                            );
-                            m
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                }
-            })
-        }))
-    }
-
     #[tokio::test]
     async fn parse_body_tags_derivation() {
         let engine = kanban_compute_engine();
@@ -1041,14 +1009,20 @@ mod tests {
             serde_json::json!("Fix the #bug in #login module"),
         );
 
-        let query = tag_query(vec!["bug", "login"]);
-        let result = engine.derive(&field, &fields, Some(&query)).await.unwrap();
+        // The body is the single source of truth: a simple derivation that
+        // needs no entity-query function (`None`) computes from the body alone.
+        let result = engine.derive(&field, &fields, None).await.unwrap();
         let tags: Vec<String> = serde_json::from_value(result).unwrap();
         assert_eq!(tags, vec!["bug", "login"]);
     }
 
+    /// The body is the single source of truth: the derivation returns every
+    /// deduplicated `#tag` slug in the body, with NO filtering against existing
+    /// `tag` entities. This pins the removed `known.contains(...)` existence
+    /// filter so it can never be reintroduced (the bug that made body tags
+    /// vanish from the field unless a matching tag entity already existed).
     #[tokio::test]
-    async fn parse_body_tags_filters_nonexistent() {
+    async fn parse_body_tags_returns_all_body_slugs_unfiltered() {
         let engine = kanban_compute_engine();
         let field = swissarmyhammer_fields::FieldDef {
             id: swissarmyhammer_fields::FieldDefId::new(),
@@ -1075,15 +1049,14 @@ mod tests {
         let mut fields = HashMap::new();
         fields.insert(
             "body".to_string(),
-            serde_json::json!("Fix #bug, and #tag, not real #valid here"),
+            serde_json::json!("brand #new and repeated #new plus #fresh here"),
         );
 
-        // "bug," and "tag," are parsed as-is (with comma) — neither matches "bug" or "valid".
-        // Only #valid (followed by space) parses cleanly and matches the known tag.
-        let query = tag_query(vec!["valid"]);
-        let result = engine.derive(&field, &fields, Some(&query)).await.unwrap();
+        // No entity query supplied and no tag entities exist: every body slug
+        // still surfaces, deduplicated. Under the old filter this returned `[]`.
+        let result = engine.derive(&field, &fields, None).await.unwrap();
         let tags: Vec<String> = serde_json::from_value(result).unwrap();
-        assert_eq!(tags, vec!["valid"]);
+        assert_eq!(tags, vec!["fresh", "new"]);
     }
 
     #[tokio::test]

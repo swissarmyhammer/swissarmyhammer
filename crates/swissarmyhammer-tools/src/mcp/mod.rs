@@ -65,6 +65,7 @@ pub mod inline_diagnostics;
 pub mod notify_types;
 pub mod op_tool_helpers;
 pub mod plan_notifications;
+pub mod plugin_bridge;
 pub mod progress;
 pub mod responses;
 pub mod server;

@@ -1,0 +1,1 @@
+{"id":"01KSTBR58FPESADE71Z8Q81D3P","timestamp":"2026-05-29T17:15:43.759114Z","op":"create","item_id":"01KSTBR58EERZTFQGM70B0CPC3","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 0e8a16\n+tag_name: needs-decision\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 0e8a16\n-tag_name: needs-decision\n","transaction_id":null}

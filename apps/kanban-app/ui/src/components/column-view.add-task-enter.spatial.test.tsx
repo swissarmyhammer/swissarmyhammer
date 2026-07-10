@@ -21,6 +21,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  answerListCommand,
+  globalCommandsFromBindingTables,
+} from "@/test/mock-command-list";
+import {
+  UNHANDLED,
+  emitToCallbackRecord,
+  makeSpatialKernelMock,
+} from "@/test/mock-spatial-kernel";
 import { render, fireEvent, act } from "@testing-library/react";
 import type { Entity } from "@/types/kanban";
 
@@ -31,9 +40,11 @@ import type { Entity } from "@/types/kanban";
 // scope.
 // ---------------------------------------------------------------------------
 
-const monikerToKey = new Map<string, string>();
-const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
+
+const { currentFocusKey, handleSpatialCommand, reset } = makeSpatialKernelMock({
+  emit: emitToCallbackRecord(listenCallbacks),
+});
 
 const COLUMN_SCHEMA = {
   entity: {
@@ -54,6 +65,18 @@ const COLUMN_SCHEMA = {
 };
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
+  // The pressable activation commands are DEFINED by the `app-shell-commands`
+  // builtin plugin (`pressable.activate` / `pressable.activateSpace`,
+  // scope ["ui:pressable"]) — their Enter / Space keys reach the keymap
+  // layer only through the `useCommandList` seam, so answer `list command`
+  // with the shared mock registry. Non-list `command_tool_call` ops fall
+  // through to the branches below.
+  const listAnswer = answerListCommand(
+    cmd,
+    args,
+    globalCommandsFromBindingTables(),
+  );
+  if (listAnswer) return listAnswer;
   if (cmd === "list_entity_types") return Promise.resolve(["column", "task"]);
   if (cmd === "get_entity_schema") return Promise.resolve(COLUMN_SCHEMA);
   if (cmd === "list_commands_for_scope") return Promise.resolve([]);
@@ -69,56 +92,8 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
-    const a = (args ?? {}) as { fq?: string; segment?: string };
-    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { fq?: string };
-    if (a.fq) {
-      for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.fq) {
-          monikerToKey.delete(m);
-          break;
-        }
-      }
-    }
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
-    const a = (args ?? {}) as { focusedFq?: string };
-    return Promise.resolve(a.focusedFq ?? null);
-  }
-  if (cmd === "spatial_focus") {
-    const a = (args ?? {}) as { fq?: string };
-    const fq = a.fq ?? null;
-    let moniker: string | null = null;
-    for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) {
-        moniker = s;
-        break;
-      }
-    }
-    if (fq) {
-      const prev = currentFocusKey.key;
-      currentFocusKey.key = fq;
-      queueMicrotask(() => {
-        const cb = listenCallbacks["focus-changed"];
-        if (cb) {
-          cb({
-            payload: {
-              window_label: "main",
-              prev_fq: prev,
-              next_fq: fq,
-              next_segment: moniker,
-            },
-          });
-        }
-      });
-    }
-    return Promise.resolve(null);
-  }
+  const spatial = handleSpatialCommand(cmd, args);
+  if (spatial !== UNHANDLED) return Promise.resolve(spatial);
   return Promise.resolve(null);
 }
 
@@ -237,15 +212,25 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 function spatialFocusCalls(): Array<Record<string, unknown>> {
   const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
   return mockInvoke.mock.calls
-    .filter((c: unknown[]) => c[0] === "spatial_focus")
-    .map((c: unknown[]) => c[1] as Record<string, unknown>);
+    .filter(
+      (c: unknown[]) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as Record<string, unknown>)?.tool === "focus" &&
+          (c[1] as Record<string, unknown>)?.op === "set focus"),
+    )
+    .map((c: unknown[]) => {
+      // Unwrap the `command_tool_call` envelope's `params` (legacy calls
+      // carry the args bag directly).
+      const outer = c[1] as Record<string, unknown>;
+      return (outer?.params ?? outer) as Record<string, unknown>;
+    });
 }
 
 describe("ColumnView add-task button — Enter activates onAddTask via Pressable", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    monikerToKey.clear();
-    currentFocusKey.key = null;
+    reset();
     for (const key of Object.keys(listenCallbacks)) {
       delete listenCallbacks[key];
     }
@@ -272,7 +257,7 @@ describe("ColumnView add-task button — Enter activates onAddTask via Pressable
 
     // Drive a focus-changed event for the add-task leaf so the
     // entity-focus bridge populates the focused-scope chain.
-    const cb = listenCallbacks["focus-changed"];
+    const cb = listenCallbacks["notifications/focus/changed"];
     expect(cb).toBeTruthy();
     await act(async () => {
       cb({

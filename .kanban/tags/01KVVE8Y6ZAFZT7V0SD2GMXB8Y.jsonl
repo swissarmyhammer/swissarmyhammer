@@ -1,0 +1,1 @@
+{"id":"01KVVE8Y72BCSVE9AFZS9PGKGA","timestamp":"2026-06-23T23:50:28.834534Z","op":"create","item_id":"01KVVE8Y6ZAFZT7V0SD2GMXB8Y","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: d73a4a\n+tag_name: regression\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: d73a4a\n-tag_name: regression\n","transaction_id":null}

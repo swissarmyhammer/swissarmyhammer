@@ -1,8 +1,8 @@
 //! UI command implementations: inspector, palette, active view.
 
+use crate::commands_core::{Command, CommandContext, CommandError};
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_commands::{Command, CommandContext, CommandError};
 
 /// Open the inspector for a target entity.
 ///
@@ -16,7 +16,7 @@ const INSPECTABLE_TYPES: &[&str] = &["task", "tag", "column", "board", "actor"];
 /// Find the first inspectable moniker in the scope chain.
 fn first_inspectable(scope_chain: &[String]) -> Option<&str> {
     scope_chain.iter().find_map(|m| {
-        let (entity_type, _) = swissarmyhammer_commands::parse_moniker(m)?;
+        let (entity_type, _) = crate::commands_core::parse_moniker(m)?;
         if INSPECTABLE_TYPES.contains(&entity_type) {
             Some(m.as_str())
         } else {
@@ -31,11 +31,11 @@ impl Command for InspectCmd {
         ctx.target.is_some() || first_inspectable(&ctx.scope_chain).is_some()
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         let moniker = ctx
             .target
@@ -43,7 +43,7 @@ impl Command for InspectCmd {
             .or_else(|| first_inspectable(&ctx.scope_chain))
             .ok_or_else(|| CommandError::MissingArg("target".into()))?;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.inspect(window_label, moniker);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -60,13 +60,13 @@ impl Command for InspectorCloseCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.inspector_close(window_label);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -83,13 +83,13 @@ impl Command for InspectorCloseAllCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.inspector_close_all(window_label);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -125,11 +125,11 @@ impl Command for InspectorSetWidthCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         // Distinguish "missing" from "present but not coercible" so the
         // error label matches reality. `as_i64` accepts negative integers
@@ -158,7 +158,7 @@ impl Command for InspectorSetWidthCmd {
         // value, so the cast can never lose information.
         let width = clamped as u32;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.set_inspector_width(window_label, width);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -175,13 +175,13 @@ impl Command for PaletteOpenCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.set_palette_open(window_label, true);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -198,13 +198,13 @@ impl Command for PaletteCloseCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.set_palette_open(window_label, false);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -223,11 +223,11 @@ impl Command for SetFocusCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         let scope_chain: Vec<String> = ctx
             .args
@@ -251,14 +251,14 @@ impl Command for SetAppModeCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         let mode = ctx.require_arg_str("mode")?;
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.set_app_mode(window_label, mode);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -279,16 +279,21 @@ pub struct StartRenamePerspectiveCmd;
 #[async_trait]
 impl Command for StartRenamePerspectiveCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        // No UIState means we cannot check — fail closed (unavailable) to
+        // No UiState means we cannot check — fail closed (unavailable) to
         // avoid showing a non-functional palette entry.
         let Some(ui) = ctx.ui_state.as_ref() else {
             return false;
         };
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        // Per-window availability check: no `window:` moniker means we cannot
+        // resolve which window's perspective to inspect — fail closed rather
+        // than assume "main".
+        let Some(window_label) = ctx.window_label_from_scope() else {
+            return false;
+        };
         !ui.active_perspective_id(window_label).is_empty()
     }
 
-    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, _ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         // Intentional no-op — the frontend intercepts this command before it
         // reaches the backend.  Return null so the caller sees success.
         Ok(Value::Null)
@@ -306,20 +311,20 @@ impl Command for SetActiveViewCmd {
         true
     }
 
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+    async fn execute(&self, ctx: &CommandContext) -> crate::commands_core::Result<Value> {
         let ui = ctx
             .ui_state
             .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+            .ok_or_else(|| CommandError::ExecutionFailed("UiState not available".into()))?;
 
         let view_id = ctx.require_arg_str("view_id")?;
-        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let window_label = ctx.window_label_required()?;
         let change = ui.set_active_view(window_label, view_id);
 
         // Keep the backend scope_chain consistent with the newly active view.
         //
         // The command palette and right-click menu both read `scope_chain` from
-        // UIState to ask the backend which commands are available. Dynamic
+        // UiState to ask the backend which commands are available. Dynamic
         // commands like `entity.add:{type}` fan out from the `view:{id}` moniker
         // in that chain. If we only update `active_view` here without touching
         // `scope_chain`, the palette keeps emitting commands for whichever view
@@ -329,7 +334,7 @@ impl Command for SetActiveViewCmd {
         //
         // Rewrite every `view:*` element in the current chain to point at the
         // new active view. When the user later focuses a FocusScope inside the
-        // new view, `ui.setFocus` will rebuild the full chain from scratch —
+        // new view, `app.setFocus` will rebuild the full chain from scratch —
         // this bridge makes the palette work in the interim.
         let mut chain = ui.scope_chain();
         let mut mutated = false;
@@ -353,16 +358,17 @@ impl Command for SetActiveViewCmd {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands_core::CommandContext;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::{CommandContext, UIState};
+    use swissarmyhammer_ui_state::UiState;
 
-    /// Helper to build a CommandContext with UIState and a window scope chain.
+    /// Helper to build a CommandContext with UiState and a window scope chain.
     fn ctx_with_mode_arg(mode: &str) -> CommandContext {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("mode".to_string(), serde_json::json!(mode));
-        CommandContext::new("ui.mode.set", vec!["window:main".to_string()], None, args)
+        CommandContext::new("app.mode.set", vec!["window:main".to_string()], None, args)
             .with_ui_state(ui)
     }
 
@@ -397,9 +403,9 @@ mod tests {
     /// "New Task" instead of "New Tag" / "New Project".
     #[tokio::test]
     async fn set_active_view_rewrites_view_moniker_in_scope_chain() {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         // Simulate the user having focused a task card on the board, which
-        // landed this chain in UIState via a prior ui.setFocus dispatch.
+        // landed this chain in UiState via a prior app.setFocus dispatch.
         ui.set_scope_chain(vec![
             "task:01ABC".to_string(),
             "column:todo".to_string(),
@@ -432,11 +438,11 @@ mod tests {
 
     /// If no `view:*` moniker is in the current scope_chain, changing the
     /// active view must not synthesise one — the scope_chain stays untouched
-    /// and the next ui.setFocus rebuild populates it. This guards against
+    /// and the next app.setFocus rebuild populates it. This guards against
     /// spurious scope changes when the user hasn't focused anything yet.
     #[tokio::test]
     async fn set_active_view_leaves_scope_chain_alone_when_no_view_moniker() {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.set_scope_chain(vec!["window:main".to_string(), "engine".to_string()]);
 
         let mut args = HashMap::new();
@@ -484,11 +490,11 @@ mod tests {
 
     #[tokio::test]
     async fn set_app_mode_uses_window_from_scope() {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("mode".to_string(), serde_json::json!("search"));
         let ctx = CommandContext::new(
-            "ui.mode.set",
+            "app.mode.set",
             vec!["window:secondary".to_string()],
             None,
             args,
@@ -507,9 +513,9 @@ mod tests {
     fn start_rename_perspective_available_requires_active_perspective() {
         // With no active perspective set for the window, the command should
         // not be available — it has nothing to rename.
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let ctx = CommandContext::new(
-            "ui.entity.startRename",
+            "app.entity.startRename",
             vec!["window:main".to_string()],
             None,
             HashMap::new(),
@@ -531,17 +537,17 @@ mod tests {
         );
     }
 
-    /// Helper: build a CommandContext for `ui.inspector.set_width` with the
+    /// Helper: build a CommandContext for `app.inspector.set_width` with the
     /// given `width` arg. The arg is stored as a `serde_json::Value`, so
     /// passing `serde_json::json!(540)` produces a number, while
     /// `serde_json::json!(-5)` produces a negative number that exercises
     /// the `as_i64` / out-of-range branch.
     fn ctx_with_width_arg(width: serde_json::Value) -> CommandContext {
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("width".to_string(), width);
         CommandContext::new(
-            "ui.inspector.set_width",
+            "app.inspector.set_width",
             vec!["window:main".to_string()],
             None,
             args,
@@ -583,9 +589,9 @@ mod tests {
     #[tokio::test]
     async fn set_inspector_width_missing_arg() {
         // No `width` key in args at all → MissingArg.
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let ctx = CommandContext::new(
-            "ui.inspector.set_width",
+            "app.inspector.set_width",
             vec!["window:main".to_string()],
             None,
             HashMap::new(),
@@ -670,11 +676,11 @@ mod tests {
         // The window label is resolved from the scope chain, not hard-
         // coded to "main". A dispatch under window:secondary must persist
         // there and leave window:main untouched.
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         let mut args = HashMap::new();
         args.insert("width".to_string(), serde_json::json!(540));
         let ctx = CommandContext::new(
-            "ui.inspector.set_width",
+            "app.inspector.set_width",
             vec!["window:secondary".to_string()],
             None,
             args,
@@ -692,11 +698,11 @@ mod tests {
         // The availability check is scoped to the window label resolved from
         // the scope chain — an active perspective on window A must not make
         // the command available for window B.
-        let ui = Arc::new(UIState::new());
+        let ui = Arc::new(UiState::new());
         ui.set_active_perspective("main", "p1");
 
         let ctx_secondary = CommandContext::new(
-            "ui.entity.startRename",
+            "app.entity.startRename",
             vec!["window:secondary".to_string()],
             None,
             HashMap::new(),

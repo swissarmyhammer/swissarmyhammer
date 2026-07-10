@@ -454,16 +454,22 @@ describe("Field save behavior", () => {
             if (target) {
               if (exit === "blur") {
                 // In a real browser, ensure the element is focused first so
-                // .blur() actually fires a blur event. Then unmount to flush
-                // the debounced save (1000ms debounce would be too slow to wait).
+                // .blur() actually fires a blur event.
                 await act(async () => {
                   target.focus();
                 });
                 await act(async () => {
                   target.blur();
-                  await new Promise((r) => setTimeout(r, 50));
+                  // Two distinct blur-save mechanisms must both be allowed to
+                  // fire here. The MultiSelectEditor commits on a 100ms timeout
+                  // and deliberately bails if its CM6 view has already
+                  // unmounted (so an unmounted editor never clobbers tags with
+                  // []), so we must wait past that timeout WHILE still mounted.
+                  // CM6 text editors instead use a 1000ms debounce that is
+                  // flushed by unmount below.
+                  await new Promise((r) => setTimeout(r, 150));
                 });
-                // Unmount flushes pending debounced saves immediately
+                // Unmount flushes the still-pending 1000ms-debounced saves.
                 unmount();
                 await settle(50);
               } else {

@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, fireEvent, act } from "@testing-library/react";
 import { renderInAct } from "@/test/act-render";
+import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
+import {
+  UNHANDLED,
+  emitToCallbackRecord,
+  makeSpatialKernelMock,
+} from "@/test/mock-spatial-kernel";
 
 /**
  * Shared default `invoke` stub for tests in this file.
@@ -23,9 +29,6 @@ import { renderInAct } from "@/test/act-render";
  * implementation without preserving the UIState branch will crash the
  * AppShell render.
  */
-const monikerToKey = new Map<string, string>();
-const currentFocusKey: { key: string | null } = { key: null };
-
 /**
  * Captured event listeners keyed by event name.
  *
@@ -34,7 +37,34 @@ const currentFocusKey: { key: string | null } = { key: null };
  */
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
 
+/**
+ * Shared spatial-kernel mock — maintains the moniker → fq projection and
+ * synthesizes the `focus-changed` emit the React-side bridge expects, so
+ * click-driven `setFocus` updates the entity-focus store. Card
+ * `01KQD0WK54G0FRD7SZVZASA9ST` made that store a pure projection of kernel
+ * events.
+ */
+const { handleSpatialCommand, reset: resetSpatialKernel } =
+  makeSpatialKernelMock({ emit: emitToCallbackRecord(listenCallbacks) });
+
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
+  // Post-Stage-3 focus / entity ops route through `command_tool_call`.
+  // Translate the envelope back to the legacy `(cmd, args)` shape so the
+  // rest of this dispatcher (and the test assertions keyed off legacy
+  // names) keep working without changes.
+  if (cmd === "command_tool_call") {
+    const env = args as
+      | { tool?: string; op?: string; params?: Record<string, unknown> }
+      | undefined;
+    if (env?.tool === "focus" || env?.tool === "entity") {
+      const wrapped = wrapMcpDispatch(
+        { mock: { calls: [] } },
+        (legacyCmd: string, legacyArgs?: unknown) =>
+          defaultInvoke(legacyCmd, legacyArgs),
+      );
+      return wrapped(cmd, args) as Promise<unknown>;
+    }
+  }
   if (cmd === "get_ui_state")
     return Promise.resolve({
       palette_open: false,
@@ -45,100 +75,8 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
-    const a = (args ?? {}) as { fq?: string; segment?: string };
-    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { fq?: string };
-    if (a.fq) {
-      for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.fq) {
-          monikerToKey.delete(m);
-          break;
-        }
-      }
-    }
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
-    // Under the no-silent-dropout contract the kernel always returns a
-    // moniker — typically the focused moniker (echoed) when no descent
-    // / drill-out is possible. Tests override this when they want a
-    // specific drill result.
-    const a = (args ?? {}) as { focusedFq?: string };
-    return Promise.resolve(a.focusedFq ?? null);
-  }
-  if (cmd === "spatial_focus") {
-    // Synthesize the kernel's focus-changed emit so the
-    // entity-focus bridge writes the React store. Mirrors the real
-    // kernel behavior under card `01KQD0WK54G0FRD7SZVZASA9ST`: the
-    // kernel resolves the moniker, advances `focus_by_window`, and
-    // emits `focus-changed` with both `next_fq` and `next_segment`.
-    //
-    // The emit is queued via `queueMicrotask` to match the kernel
-    // simulator's timing contract (see `test-helpers/kernel-simulator.ts`):
-    // production `focus-changed` events arrive asynchronously through
-    // Tauri's event channel, so emitting synchronously here would hide
-    // any timing-related defect (e.g. a regression that re-introduces
-    // a synchronous `store.set(moniker)` in `setFocus`). Tests that
-    // need to observe the post-emit state should drain the microtask
-    // queue inside an `act(...)` block.
-    const a = (args ?? {}) as { fq?: string };
-    const fq = a.fq ?? null;
-    let moniker: string | null = null;
-    for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) {
-        moniker = s;
-        break;
-      }
-    }
-
-    if (fq) {
-      const prev = currentFocusKey.key;
-      currentFocusKey.key = fq;
-      queueMicrotask(() => {
-        const cb = listenCallbacks["focus-changed"];
-        if (cb) {
-          cb({
-            payload: {
-              window_label: "main",
-              prev_fq: prev,
-              next_fq: fq,
-              next_segment: moniker,
-            },
-          });
-        }
-      });
-    }
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_clear_focus") {
-    // Explicit-clear counterpart of `spatial_focus_by_moniker`. The
-    // kernel removes the per-window focus slot and emits
-    // `focus-changed { next_fq: null, next_segment: null }`. Mirror
-    // that here so the bridge flips the React store back to `null`.
-    const prev = currentFocusKey.key;
-    if (prev === null) {
-      return Promise.resolve(null);
-    }
-    currentFocusKey.key = null;
-    queueMicrotask(() => {
-      const cb = listenCallbacks["focus-changed"];
-      if (cb) {
-        cb({
-          payload: {
-            window_label: "main",
-            prev_fq: prev,
-            next_fq: null,
-            next_segment: null,
-          },
-        });
-      }
-    });
-    return Promise.resolve(null);
-  }
+  const spatial = handleSpatialCommand(cmd, args);
+  if (spatial !== UNHANDLED) return Promise.resolve(spatial);
   return Promise.resolve(null);
 }
 
@@ -155,6 +93,35 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
+
+// The global keybinding layer is now sourced from the metadata-driven Command
+// registry via `useCommandList` (no hardcoded table in the React path). In
+// production the registry surfaces the global commands; here we synthesize that
+// registry from `BINDING_TABLES` so every keymap's global bindings resolve in
+// the no-focus case these tests exercise.
+vi.mock("@/hooks/use-command-list", async () => {
+  const { BINDING_TABLES } =
+    await vi.importActual<typeof import("@/lib/keybindings")>(
+      "@/lib/keybindings",
+    );
+  // Collapse every keymap's `key → id` mapping into one command per id, each
+  // carrying its per-keymap `keys` map — exactly what `extractKeymapBindings`
+  // reads back out for the active mode.
+  const byId: Record<
+    string,
+    { id: string; name: string; keys: Record<string, string> }
+  > = {};
+  for (const mode of ["vim", "cua", "emacs"] as const) {
+    for (const [key, id] of Object.entries(BINDING_TABLES[mode])) {
+      byId[id] ??= { id, name: id, keys: {} };
+      byId[id].keys[mode] = key;
+    }
+  }
+  const commands = Object.values(byId);
+  return {
+    useCommandList: () => ({ commands, loading: false, refresh: vi.fn() }),
+  };
+});
 
 import { AppShell } from "./app-shell";
 import { FocusScope } from "./focus-scope";
@@ -227,8 +194,7 @@ const MOD_KEY = /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 describe("AppShell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    monikerToKey.clear();
-    currentFocusKey.key = null;
+    resetSpatialKernel();
     for (const key of Object.keys(listenCallbacks)) {
       delete listenCallbacks[key];
     }
@@ -240,18 +206,32 @@ describe("AppShell", () => {
     expect(screen.getByText("Hello")).toBeTruthy();
   });
 
-  it("provides global commands via CommandScope", async () => {
+  it("builds no client-side global CommandDef list — globals resolve from the catalogue", async () => {
+    // Card I deleted `STATIC_GLOBAL_COMMANDS` (and `buildAiCommands`): every
+    // global command is DEFINED by a builtin plugin and surfaces through the
+    // Command service catalogue (`useCommandList` → `extractKeymapBindings`),
+    // never as a client-built `CommandDef`. The window-layer scope keeps only
+    // `app.entity.startRename` (the perspective-rename module-bus fallback).
+    // The keydown tests below prove the catalogue side: global keys resolve
+    // from the (mocked) registry and dispatch to the backend.
     await renderShell();
-    // Check that well-known global commands are available
-    expect(screen.getByTestId("cmd-app.command")).toBeTruthy();
-    expect(screen.getByTestId("cmd-app.dismiss")).toBeTruthy();
-    expect(screen.getByTestId("cmd-app.search")).toBeTruthy();
-    expect(screen.getByTestId("cmd-app.help")).toBeTruthy();
-    // Commands added by Card 10
-    expect(screen.getByTestId("cmd-app.quit")).toBeTruthy();
-    expect(screen.getByTestId("cmd-settings.keymap.vim")).toBeTruthy();
-    expect(screen.getByTestId("cmd-file.newBoard")).toBeTruthy();
-    expect(screen.getByTestId("cmd-file.openBoard")).toBeTruthy();
+    const listed = screen
+      .getAllByTestId(/^cmd-/)
+      .map((el) => el.getAttribute("data-testid")!.slice("cmd-".length));
+    // The one allowed client-built def: the window-layer perspective-rename
+    // scope carrier. Formerly `ui.entity.startRename`; the ui.*→app.* rename
+    // moved it under the `app.` prefix, so it is excluded by id, not prefix.
+    const clientBuiltGlobals = listed.filter(
+      (id) =>
+        (id.startsWith("app.") ||
+          id.startsWith("file.") ||
+          id.startsWith("settings.") ||
+          id.startsWith("window.") ||
+          id.startsWith("ai.")) &&
+        id !== "app.entity.startRename",
+    );
+    expect(clientBuiltGlobals).toEqual([]);
+    expect(listed).toContain("app.entity.startRename");
   });
 
   it("does not render command palette by default", async () => {
@@ -259,12 +239,14 @@ describe("AppShell", () => {
     expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 
-  it("dispatches app.command to backend on Mod+Shift+P in CUA mode", async () => {
+  it("dispatches app.palette.open to backend on Mod+Shift+P in CUA mode", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
     await renderShell();
     mockInvoke.mockClear();
 
-    // CUA mode is the default (mocked invoke returns "cua")
+    // CUA mode is the default (mocked invoke returns "cua"). The palette
+    // opener was reconciled to the unified `app.palette.open` id (folded
+    // ui.*→app.* rename); the static `Mod+Shift+P` binding now points at it.
     await act(async () => {
       fireEvent.keyDown(document, {
         key: "P",
@@ -275,22 +257,25 @@ describe("AppShell", () => {
     });
 
     // Palette opening is now driven by backend UIState, so we verify
-    // that the keybinding dispatches to the backend.
+    // that the keybinding dispatches the unified id to the backend.
     const cmdCall = mockInvoke.mock.calls.find(
       (c: unknown[]) =>
         c[0] === "dispatch_command" &&
-        ((c[1] as Record<string, unknown>)?.cmd === "app.command" ||
-          (c[1] as Record<string, unknown>)?.cmd === "app.palette"),
+        (c[1] as Record<string, unknown>)?.cmd === "app.palette.open",
     );
     expect(cmdCall).toBeTruthy();
   });
 
-  it("dispatches app.dismiss to backend on Escape", async () => {
+  it("dispatches nav.drillOut to backend on Escape", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
     await renderShell();
     mockInvoke.mockClear();
 
-    // Press Escape to dismiss
+    // Escape is bound to `nav.drillOut` in the static keymap. nav.drillOut
+    // is now a plugin command (the `nav-commands` bundle) — it executes
+    // host-side through the focus kernel, so the keystroke dispatches the id
+    // to the backend rather than running a React closure. The kernel's
+    // drill-out → dismiss fall-through is the backend plugin's concern.
     await act(async () => {
       fireEvent.keyDown(document, {
         key: "Escape",
@@ -298,12 +283,12 @@ describe("AppShell", () => {
       });
     });
 
-    const dismissCall = mockInvoke.mock.calls.find(
+    const drillOutCall = mockInvoke.mock.calls.find(
       (c: unknown[]) =>
         c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
+        (c[1] as Record<string, unknown>)?.cmd === "nav.drillOut",
     );
-    expect(dismissCall).toBeTruthy();
+    expect(drillOutCall).toBeTruthy();
   });
 
   it("keyboard dispatch includes scopeChain with window moniker", async () => {
@@ -328,20 +313,25 @@ describe("AppShell", () => {
 
     mockInvoke.mockClear();
 
-    // Press Escape — this dispatches app.dismiss through the focused scope
+    // Press Escape — this now dispatches `nav.drillOut` (card
+    // `01KTPDTH772HSEV5F7R1DKYDNJ`): the legacy `app.dismiss` Escape
+    // scope binding was removed from `STATIC_GLOBAL_COMMANDS`, so the
+    // root scope no longer shadows the global `nav.drillOut`. The
+    // dismiss-at-root still happens, but as `nav.drillOut`'s backend
+    // fall-through, not a direct `app.dismiss` dispatch.
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
     });
 
-    const dismissCall = mockInvoke.mock.calls.find(
+    const drillOutCall = mockInvoke.mock.calls.find(
       (c: unknown[]) =>
         c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
+        (c[1] as Record<string, unknown>)?.cmd === "nav.drillOut",
     );
-    expect(dismissCall).toBeTruthy();
+    expect(drillOutCall).toBeTruthy();
 
     // The scopeChain must be present and include the window moniker
-    const params = dismissCall![1] as Record<string, unknown>;
+    const params = drillOutCall![1] as Record<string, unknown>;
     expect(params.scopeChain).toBeTruthy();
     expect(Array.isArray(params.scopeChain)).toBe(true);
     const chain = params.scopeChain as string[];
@@ -351,13 +341,72 @@ describe("AppShell", () => {
     expect(chain.length).toBeGreaterThan(0);
   });
 
+  it("Escape resolves to nav.drillOut, not app.dismiss, from a focused card scope", async () => {
+    // Regression for card `01KTPDTH772HSEV5F7R1DKYDNJ`: with a scope
+    // focused, the root command scope (`STATIC_GLOBAL_COMMANDS`) used to
+    // surface an `app.dismiss` Escape binding that — because scope wins
+    // over global in `createKeyHandler` — shadowed the global
+    // `nav.drillOut`. The trace showed Escape resolving to `app.dismiss`,
+    // so drill-out never fired. After removing the legacy `app.dismiss`
+    // Escape binding (and the registry `app.dismiss` / `app.inspector.close`
+    // Escape keys), `nav.drillOut` is the sole Escape owner. The focused
+    // card claims no Escape of its own, so Escape falls through to the
+    // global `nav.drillOut`.
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+
+    function FocusedCard() {
+      const { setFocus } = useEntityFocus();
+      return (
+        <FocusScope moniker={asSegment("task:drill")} commands={[]}>
+          <button onClick={() => setFocus(asFq("task:drill"))}>
+            Focus Drill Card
+          </button>
+        </FocusScope>
+      );
+    }
+
+    await renderShell(<FocusedCard />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Focus Drill Card"));
+    });
+
+    mockInvoke.mockClear();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    });
+
+    const drillOutCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "nav.drillOut",
+    );
+    expect(drillOutCall, "Escape must dispatch nav.drillOut").toBeTruthy();
+
+    // And it must NOT dispatch the legacy app.dismiss directly — the
+    // dismiss-at-root is nav.drillOut's backend concern now.
+    const dismissCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
+    );
+    expect(
+      dismissCall,
+      "Escape must NOT dispatch app.dismiss anymore",
+    ).toBeFalsy();
+  });
+
   it("keybinding handler resolves commands from focused scope", async () => {
     const focusedFn = vi.fn();
 
     /**
-     * A component that sets up a focused scope with a custom app.dismiss
-     * command. When focused, pressing Escape should resolve to this override
-     * instead of the global app.dismiss.
+     * A component that sets up a focused scope claiming Escape via a
+     * `dialog.cancel`-style command — a focused subtree can still claim
+     * Escape back for its own semantics (scope wins over global). The
+     * command declares `keys.cua: Escape` so `extractChainBindings`
+     * surfaces it; pressing Escape resolves to it instead of the global
+     * `nav.drillOut`.
      */
     function FocusedChild() {
       const { setFocus } = useEntityFocus();
@@ -366,8 +415,9 @@ describe("AppShell", () => {
           moniker={asSegment("task:test")}
           commands={[
             {
-              id: "app.dismiss",
-              name: "Focused Dismiss",
+              id: "dialog.cancel",
+              name: "Cancel Dialog",
+              keys: { vim: "Escape", cua: "Escape", emacs: "Escape" },
               execute: focusedFn,
             },
           ]}
@@ -384,8 +434,8 @@ describe("AppShell", () => {
       fireEvent.click(screen.getByText("Focus Me"));
     });
 
-    // Press Escape (which maps to app.dismiss in CUA binding table).
-    // Should resolve from the focused scope's app.dismiss, not the root one.
+    // Press Escape — the focused scope claims Escape via `dialog.cancel`,
+    // shadowing the global `nav.drillOut`, so the scope command fires.
     await act(async () => {
       fireEvent.keyDown(document, {
         key: "Escape",
@@ -403,10 +453,9 @@ describe("AppShell", () => {
 
     mockInvoke.mockClear();
 
-    // Find and execute the file.closeBoard command
-    const closeBoardItem = screen.getByTestId("cmd-file.closeBoard");
-    expect(closeBoardItem).toBeTruthy();
-
+    // `file.closeBoard` is catalogue-defined (the `file-commands` builtin
+    // plugin); its `Mod+w` binding resolves from the mocked registry, not
+    // from any scope-registered CommandDef.
     // Simulate Mod+W (Cmd on Mac, Ctrl elsewhere)
     await act(async () => {
       fireEvent.keyDown(document, {
@@ -542,21 +591,15 @@ describe("AppShell", () => {
   // ─────────────────────────────────────────────────────────────────────────
   // nav.drillIn / nav.drillOut — Enter/Escape command wiring
   //
-  // Drill commands route through the global CommandScope: the closures
-  // read `focusedKey()` from `SpatialFocusProvider`, await the matching
-  // Tauri invoke (`spatial_drill_in` / `spatial_drill_out`), and on a
-  // non-null `SegmentMoniker` result dispatch `setFocus(moniker)` (which the
-  // entity focus provider in turn fans out as `ui.setFocus`).
-  //
-  // The tests below exercise each branch — non-null result, null
-  // result, leading focus state — by:
-  //   1. Setting `focus-changed` payload via the captured `listen`
-  //      callback so the provider's internal `focusedKeyRef` reflects
-  //      a known focused `FullyQualifiedMoniker`.
-  //   2. Stubbing `invoke()` to return a chosen value for the drill
-  //      command under test.
-  //   3. Pressing Enter / Escape and asserting the resulting
-  //      `invoke()` call list.
+  // The drill commands are no longer React closures in AppShell — Card A moved
+  // them into the `nav-commands` builtin plugin, where they execute host-side
+  // through the focus kernel (the kernel pulls the live geometry on demand).
+  // So pressing Enter / Escape dispatches the `nav.drillIn` / `nav.drillOut`
+  // id to the BACKEND (`dispatch_command`), NOT a client-side spatial_drill_in /
+  // spatial_drill_out invoke + setFocus fan-out. The kernel-side mechanics
+  // (drill result, focus move, drill-out → dismiss fall-through) are proven by
+  // the plugin e2e (`builtin_nav_commands_e2e.rs`); these tests pin only that
+  // the keystroke routes the id to the backend.
   // ─────────────────────────────────────────────────────────────────────────
 
   /**
@@ -584,7 +627,7 @@ describe("AppShell", () => {
     nextKey: string | null,
     nextMoniker: string | null = nextKey,
   ): void {
-    const cb = listenCallbacks["focus-changed"];
+    const cb = listenCallbacks["notifications/focus/changed"];
     expect(cb).toBeTruthy();
     cb({
       payload: {
@@ -596,109 +639,38 @@ describe("AppShell", () => {
     });
   }
 
-  it("nav.drillIn invokes spatial_drill_in for the focused FullyQualifiedMoniker on Enter", async () => {
+  it("dispatches nav.drillIn to the backend on Enter", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
     await renderShell();
 
-    // Seed the provider's focusedKeyRef before the keystroke.
+    // Seed a focused FQM (the production keystroke fires regardless, but this
+    // keeps the scenario realistic — there is something focused to drill into).
     await act(async () => {
       emitFocusChanged("k:zone");
     });
 
     mockInvoke.mockClear();
-    // Stub the kernel call so the closure has a non-null moniker to
-    // hand to setFocus. Preserve the `get_ui_state` default (the
-    // module-scope mock returns a populated UIState payload there);
-    // overriding the entire mockImplementation would null it out and
-    // break `useAppShellUIState`'s `uiState.windows?.[label]` read.
-    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-      if (cmd === "spatial_drill_in")
-        return Promise.resolve(asSegment("task:child"));
-      return defaultInvoke(cmd, args);
-    });
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
     });
 
+    // Enter routes the `nav.drillIn` plugin id to the backend — NOT a
+    // client-side spatial_drill_in invoke. The kernel pulls geometry host-side.
     const drillCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) => c[0] === "spatial_drill_in",
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "nav.drillIn",
     );
     expect(drillCall).toBeTruthy();
-    expect((drillCall![1] as Record<string, unknown>).fq).toBe(asFq("k:zone"));
-  });
-
-  it("nav.drillIn dispatches ui.setFocus when the kernel returns a SegmentMoniker", async () => {
-    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    await renderShell();
-
-    await act(async () => {
-      emitFocusChanged("k:zone");
-    });
-
-    mockInvoke.mockClear();
-    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-      if (cmd === "spatial_drill_in")
-        return Promise.resolve(asSegment("task:child"));
-      return defaultInvoke(cmd, args);
-    });
-
-    await act(async () => {
-      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
-    });
-
-    // setFocus fans out to dispatch_command(ui.setFocus, …). The exact
-    // shape carries the entity scope chain, but the cmd alone is
-    // sufficient evidence the drill closure walked into the success
-    // branch.
-    const setFocusCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) =>
-        c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "ui.setFocus",
+    // No client-side spatial_drill_in invoke — that mechanic moved host-side.
+    const legacyInvoke = mockInvoke.mock.calls.find(
+      (c: unknown[]) => c[0] === "spatial_drill_in",
     );
-    expect(setFocusCall).toBeTruthy();
+    expect(legacyInvoke).toBeUndefined();
   });
 
-  it("nav.drillIn is observable as a setFocus(focused) idempotent no-op when the kernel echoes the focused moniker", async () => {
-    // Under the no-silent-dropout contract (card
-    // 01KQAW97R9XTCNR1PJAWYSKBC7) the kernel returns the focused
-    // moniker rather than null when there's nothing to descend into.
-    // The closure dispatches `setFocus(result)` unconditionally; on
-    // equality with the focused moniker this is an idempotent no-op
-    // through the entity-focus store. The user-visible behavior
-    // matches the legacy "null → no-op" path exactly.
-    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    await renderShell();
-
-    await act(async () => {
-      emitFocusChanged("k:leaf", "ui:leaf");
-    });
-
-    mockInvoke.mockClear();
-    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-      // Kernel echoes the focused moniker — semantic "stay put".
-      if (cmd === "spatial_drill_in")
-        return Promise.resolve(asSegment("ui:leaf"));
-      return defaultInvoke(cmd, args);
-    });
-
-    await act(async () => {
-      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
-    });
-
-    // Enter must NOT fall through to app.dismiss — drill-in is not
-    // the dismiss path. setFocus may or may not fire; the user-
-    // observable behavior is that focus stays on the same moniker
-    // (idempotent on the entity-focus store).
-    const dismissCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) =>
-        c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
-    );
-    expect(dismissCall).toBeUndefined();
-  });
-
-  it("nav.drillOut invokes spatial_drill_out for the focused FullyQualifiedMoniker on Escape", async () => {
+  it("dispatches nav.drillOut to the backend on Escape", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
     await renderShell();
 
@@ -707,106 +679,28 @@ describe("AppShell", () => {
     });
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-      if (cmd === "spatial_drill_out")
-        return Promise.resolve(asSegment("ui:zone"));
-      return defaultInvoke(cmd, args);
-    });
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
     });
 
+    // Escape routes the `nav.drillOut` plugin id to the backend — NOT a
+    // client-side spatial_drill_out invoke + app.dismiss fall-through. The
+    // drill-out → dismiss fall-through is now the backend plugin's concern.
     const drillCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) => c[0] === "spatial_drill_out",
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "nav.drillOut",
     );
     expect(drillCall).toBeTruthy();
-    expect((drillCall![1] as Record<string, unknown>).fq).toBe(asFq("k:leaf"));
-
-    // Non-null result → setFocus, no app.dismiss.
-    const setFocusCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) =>
-        c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "ui.setFocus",
-    );
-    expect(setFocusCall).toBeTruthy();
-  });
-
-  it("nav.drillOut falls through to app.dismiss when the kernel echoes the focused moniker", async () => {
-    // Under the no-silent-dropout contract (card
-    // 01KQAW97R9XTCNR1PJAWYSKBC7) the kernel returns the focused
-    // moniker (rather than null) when there's no enclosing zone
-    // (layer root) or torn state. The closure compares the result to
-    // the focused moniker and dispatches `app.dismiss` on equality —
-    // the user-visible Escape chain is unchanged.
-    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    await renderShell();
-
-    await act(async () => {
-      emitFocusChanged("k:rootLeaf", "ui:rootLeaf");
-    });
-
-    mockInvoke.mockClear();
-    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-      // Kernel echoes the focused FQM — layer-root edge. The closure
-      // compares against the focused FQM ("k:rootLeaf") for equality,
-      // so the mock must return the same FQM string the focus state
-      // already holds.
-      if (cmd === "spatial_drill_out")
-        return Promise.resolve(asFq("k:rootLeaf"));
-      return defaultInvoke(cmd, args);
-    });
-
-    await act(async () => {
-      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
-    });
-
-    // Drill-out happened and echoed the focused moniker. Closure
-    // detects equality and dispatches app.dismiss as the fall-through.
-    const drillCall = mockInvoke.mock.calls.find(
+    const legacyInvoke = mockInvoke.mock.calls.find(
       (c: unknown[]) => c[0] === "spatial_drill_out",
     );
-    expect(drillCall).toBeTruthy();
-
-    const dismissCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) =>
-        c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
-    );
-    expect(dismissCall).toBeTruthy();
-  });
-
-  it("nav.drillOut falls through to app.dismiss when no spatial focus is set", async () => {
-    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    await renderShell();
-
-    // Explicitly clear any prior focus state.
-    await act(async () => {
-      emitFocusChanged(null);
-    });
-
-    mockInvoke.mockClear();
-
-    await act(async () => {
-      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
-    });
-
-    // No focused key → no spatial_drill_out call, but app.dismiss
-    // still fires via the closure's early-return fall-through.
-    const drillCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) => c[0] === "spatial_drill_out",
-    );
-    expect(drillCall).toBeUndefined();
-    const dismissCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) =>
-        c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
-    );
-    expect(dismissCall).toBeTruthy();
+    expect(legacyInvoke).toBeUndefined();
   });
 
   // ─────────────────────────────────────────────────────────────────────────
-  // ui.inspect — Space binding
+  // app.inspect — Space binding
   //
   // The CUA `keys.cua: "Space"` binding on the per-Inspectable
   // `entity.inspect` command (inspectable.tsx) requires
@@ -827,7 +721,7 @@ describe("AppShell", () => {
           moniker={asSegment("task:t-space")}
           commands={[
             {
-              id: "ui.inspect",
+              id: "app.inspect",
               name: "Inspect",
               keys: { vim: "Enter", cua: "Space" },
               execute: inspectFn,
@@ -862,10 +756,10 @@ describe("AppShell", () => {
   // and let the kernel emit `focus-changed`. The bridge in
   // `EntityFocusProvider` mirrors `payload.next_segment` into the
   // entity-focus store so `useFocusedScope()` — the data source the
-  // global keymap handler reads via `extractScopeBindings` — stays in
+  // global keymap handler reads via `extractChainBindings` — stays in
   // sync. Without the bridge, Space would look like a no-op because
   // the focused-scope ref would be `null` even though the spatial
-  // kernel had a focused scope, so `extractScopeBindings` would not
+  // kernel had a focused scope, so `extractChainBindings` would not
   // see the per-Inspectable `entity.inspect` binding.
   //
   // The test below drives the spatial-only flow (which is the
@@ -889,7 +783,7 @@ describe("AppShell", () => {
           moniker={asSegment("task:t-bridge")}
           commands={[
             {
-              id: "ui.inspect",
+              id: "app.inspect",
               name: "Inspect",
               keys: { vim: "Enter", cua: "Space" },
               execute: inspectFn,

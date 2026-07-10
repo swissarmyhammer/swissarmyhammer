@@ -1,0 +1,3 @@
+color: 1d76db
+description: 'Tier 0 foundational. The `store` MCP server exposing the shared `StoreContext` over MCP: undo/redo (unified stack), per-item history, and the ambient-transaction grouping mechanism; store-scoped ops take a `store` param. Plus the single-substrate invariant — kanban/views/store/app all share one Arc<StoreContext>. Everything undoable rests here. Uses the already-merged operation_tool! macro. Bottom of the command stack.'
+name: Store Service (foundational)

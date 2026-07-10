@@ -18,7 +18,7 @@
  *
  * The test harness mirrors `app-shell.test.tsx`'s `renderShell` so the
  * focused-scope chain feeds the global keymap handler through
- * `extractScopeBindings` end-to-end. That is the only way to prove
+ * `extractChainBindings` end-to-end. That is the only way to prove
  * Enter/Space pressed on a focused Pressable actually fires the
  * `onPress` callback — anything narrower would skip the integration
  * point that production traverses.
@@ -36,11 +36,19 @@ import type { ReactNode } from "react";
 // the keymap-handler bindings.
 // ---------------------------------------------------------------------------
 
-const monikerToKey = new Map<string, string>();
-const currentFocusKey: { key: string | null } = { key: null };
 const listenCallbacks: Record<string, (event: unknown) => void> = {};
 
+const { currentFocusKey, handleSpatialCommand, reset } = makeSpatialKernelMock({
+  emit: emitToCallbackRecord(listenCallbacks),
+});
+
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
+  // The activation commands are DEFINED by the `app-shell-commands` builtin plugin
+  // (`pressable.activate` / `pressable.activateSpace`, scope
+  // `["ui:pressable"]`) — in production their keys reach the keymap layer
+  // through the CommandService registry, so the harness publishes the same
+  // metadata through the `useCommandList` seam.
+  if (cmd === "command_tool_call") return commandToolCall(args);
   if (cmd === "get_ui_state")
     return Promise.resolve({
       palette_open: false,
@@ -51,56 +59,8 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
-    const a = (args ?? {}) as { fq?: string; segment?: string };
-    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { fq?: string };
-    if (a.fq) {
-      for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.fq) {
-          monikerToKey.delete(m);
-          break;
-        }
-      }
-    }
-    return Promise.resolve(null);
-  }
-  if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
-    const a = (args ?? {}) as { focusedFq?: string };
-    return Promise.resolve(a.focusedFq ?? null);
-  }
-  if (cmd === "spatial_focus") {
-    const a = (args ?? {}) as { fq?: string };
-    const fq = a.fq ?? null;
-    let moniker: string | null = null;
-    for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) {
-        moniker = s;
-        break;
-      }
-    }
-    if (fq) {
-      const prev = currentFocusKey.key;
-      currentFocusKey.key = fq;
-      queueMicrotask(() => {
-        const cb = listenCallbacks["focus-changed"];
-        if (cb) {
-          cb({
-            payload: {
-              window_label: "main",
-              prev_fq: prev,
-              next_fq: fq,
-              next_segment: moniker,
-            },
-          });
-        }
-      });
-    }
-    return Promise.resolve(null);
-  }
+  const spatial = handleSpatialCommand(cmd, args);
+  if (spatial !== UNHANDLED) return Promise.resolve(spatial);
   return Promise.resolve(null);
 }
 
@@ -129,6 +89,17 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // their dependencies.
 import { Pressable } from "./pressable";
 import { AppShell } from "./app-shell";
+import { commandToolCall } from "@/test/mock-command-list";
+import {
+  UNHANDLED,
+  emitToCallbackRecord,
+  makeSpatialKernelMock,
+} from "@/test/mock-spatial-kernel";
+import {
+  getWebviewCommandHandler,
+  hasWebviewCommandHandler,
+  resetWebviewCommandBusForTest,
+} from "@/lib/webview-command-bus";
 import { FocusLayer } from "./focus-layer";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
@@ -148,7 +119,7 @@ const WINDOW_LAYER_NAME = asSegment("window");
 
 /**
  * Render `<Pressable>` inside the production-shaped provider stack so
- * the global keymap handler's `extractScopeBindings(focusedScope)`
+ * the global keymap handler's `extractChainBindings(focusedScope)`
  * sees the Pressable's CommandDefs when its leaf is focused.
  */
 async function renderPressable(children: ReactNode) {
@@ -199,7 +170,7 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
  * in `nav-bar.spatial-nav.test.tsx`.
  */
 async function fireFocusChangedTo(fq: string, segment: string | null) {
-  const cb = listenCallbacks["focus-changed"];
+  const cb = listenCallbacks["notifications/focus/changed"];
   if (!cb) throw new Error("focus-changed listener not registered yet");
   await act(async () => {
     cb({
@@ -218,11 +189,11 @@ async function fireFocusChangedTo(fq: string, segment: string | null) {
 describe("Pressable", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    monikerToKey.clear();
-    currentFocusKey.key = null;
+    reset();
     for (const key of Object.keys(listenCallbacks)) {
       delete listenCallbacks[key];
     }
+    resetWebviewCommandBusForTest();
   });
 
   // -------------------------------------------------------------------------
@@ -387,6 +358,68 @@ describe("Pressable", () => {
     });
 
     expect(onPress).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Test — webview command bus routing (Card D). The activation command
+  // DEFINITIONS live in the `app-shell-commands` plugin; the Pressable only
+  // registers the live `onPress` behavior on the webview bus, and only
+  // WHILE ITS LEAF IS THE SPATIAL FOCUS — so with several pressables
+  // mounted, a dispatched `pressable.activate` always reaches the focused
+  // instance's closure.
+  // -------------------------------------------------------------------------
+  it("registers its bus handlers only while focused, routing dispatch to the focused instance", async () => {
+    const onPressA = vi.fn();
+    const onPressB = vi.fn();
+    await renderPressable(
+      <>
+        <Pressable
+          moniker={asSegment("test:bus-a")}
+          ariaLabel="Bus target A"
+          onPress={onPressA}
+        >
+          <span>A</span>
+        </Pressable>
+        <Pressable
+          moniker={asSegment("test:bus-b")}
+          ariaLabel="Bus target B"
+          onPress={onPressB}
+        >
+          <span>B</span>
+        </Pressable>
+      </>,
+    );
+    await flushSetup();
+
+    // Before any focus: no handler is registered — a dispatch would fall
+    // through to the plugin's inert host execute.
+    expect(hasWebviewCommandHandler("pressable.activate")).toBe(false);
+    expect(hasWebviewCommandHandler("pressable.activateSpace")).toBe(false);
+
+    // Focus A: A's closure owns both activation ids on the bus.
+    const leafA = registerScopeArgs().find((a) => a.segment === "test:bus-a");
+    expect(leafA).toBeDefined();
+    await fireFocusChangedTo(leafA!.fq as string, "test:bus-a");
+
+    expect(hasWebviewCommandHandler("pressable.activate")).toBe(true);
+    expect(hasWebviewCommandHandler("pressable.activateSpace")).toBe(true);
+    await act(async () => {
+      await getWebviewCommandHandler("pressable.activate")!({});
+    });
+    expect(onPressA).toHaveBeenCalledTimes(1);
+    expect(onPressB).not.toHaveBeenCalled();
+
+    // Focus B: the slot moves to B's closure — Enter now activates B.
+    onPressA.mockClear();
+    const leafB = registerScopeArgs().find((a) => a.segment === "test:bus-b");
+    expect(leafB).toBeDefined();
+    await fireFocusChangedTo(leafB!.fq as string, "test:bus-b");
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+    });
+    expect(onPressB).toHaveBeenCalledTimes(1);
+    expect(onPressA).not.toHaveBeenCalled();
   });
 
   // -------------------------------------------------------------------------

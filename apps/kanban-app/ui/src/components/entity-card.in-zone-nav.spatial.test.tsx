@@ -82,6 +82,7 @@ import {
 } from "@/test/spatial-shadow-registry";
 import { EntityCard } from "./entity-card";
 import { AppShell } from "./app-shell";
+import { commandToolCall } from "@/test/mock-command-list";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -141,6 +142,10 @@ async function defaultInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
+  // The global keybinding layer (arrows → `nav.*`) is sourced from the
+  // metadata-driven Command registry via `useCommandList`, fetched
+  // through the `command_tool_call` bridge's `list command` op.
+  if (cmd === "command_tool_call") return commandToolCall(args);
   if (cmd === "list_entity_types") return ["task"];
   if (cmd === "get_entity_schema") {
     const entityType = (args as { entityType?: string })?.entityType;

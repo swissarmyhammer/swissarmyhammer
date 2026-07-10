@@ -20,6 +20,10 @@ pub enum ViewsError {
     #[error("duplicate view id: {id}")]
     DuplicateViewId { id: String },
 
+    /// View definition rejected by [`crate::ViewDef::validate`]
+    #[error("invalid view definition {id}: {reason}")]
+    InvalidViewDef { id: String, reason: String },
+
     /// IO error
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

@@ -691,6 +691,7 @@ pub async fn read_jsonrpc_message<R: AsyncBufReadExt + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::test_spec;
 
     #[test]
     fn test_backoff_sequence() {
@@ -831,23 +832,6 @@ mod tests {
         let daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
         assert_eq!(daemon.state(), LspDaemonState::NotStarted);
         assert_eq!(daemon.command(), "rust-analyzer");
-    }
-
-    // -- helper for lifecycle tests ------------------------------------------
-
-    /// Build a minimal `OwnedLspServerSpec` for testing.
-    fn test_spec(command: &str) -> OwnedLspServerSpec {
-        OwnedLspServerSpec {
-            project_types: vec![],
-            command: command.to_string(),
-            args: vec![],
-            language_ids: vec!["test".to_string()],
-            file_extensions: vec!["txt".to_string()],
-            startup_timeout_secs: 5,
-            health_check_interval_secs: 60,
-            install_hint: format!("install {command}"),
-            icon: None,
-        }
     }
 
     // -- start() tests -------------------------------------------------------

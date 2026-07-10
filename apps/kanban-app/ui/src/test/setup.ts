@@ -30,7 +30,24 @@
  * the mock-invoke history; production code never installs the hook.
  */
 
+import { vi } from "vitest";
 import { installRegistryHook } from "@/lib/layer-scope-registry-context";
+
+// `@tauri-apps/plugin-log` is a pure side-effecting logger with no return
+// values any test asserts on. Every browser-project test that touches code
+// importing the logger needs it stubbed, so the stub is identical everywhere.
+// Declaring it once here (a global `vi.mock` in a setupFile applies to every
+// test in the project) removes the verbatim per-file duplication. Individual
+// files may still re-declare an identical stub locally; the global form makes
+// that redundant rather than required.
+vi.mock("@tauri-apps/plugin-log", () => ({
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+  attachConsole: vi.fn(() => Promise.resolve()),
+}));
 
 if (typeof globalThis.ResizeObserver === "undefined") {
   globalThis.ResizeObserver = class ResizeObserver {
@@ -98,6 +115,7 @@ installRegistryHook({
       layerFq,
       parentZone: entry.parentZone,
       overrides: entry.navOverride ?? {},
+      focusable: entry.showFocus ?? true,
     });
   },
   onDelete(_layerFq, fq, _entry) {

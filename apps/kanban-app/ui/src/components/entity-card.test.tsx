@@ -15,7 +15,7 @@ const TASK_SCHEMA = {
     fields: ["title", "tags", "progress", "body"],
     commands: [
       {
-        id: "ui.inspect",
+        id: "app.inspect",
         name: "Inspect {{entity.type}}",
         context_menu: true,
       },
@@ -79,7 +79,7 @@ const mockInvoke = vi.fn((...args: any[]) => {
   if (args[0] === "list_commands_for_scope")
     return Promise.resolve([
       {
-        id: "ui.inspect",
+        id: "app.inspect",
         name: "Inspect task",
         target: "task:task-1",
         group: "entity",
@@ -88,6 +88,25 @@ const mockInvoke = vi.fn((...args: any[]) => {
       },
     ]);
   if (args[0] === "show_context_menu") return Promise.resolve();
+  // Production right-click flow fetches commands via the `command` MCP tool's
+  // `list command` op (callCommandTool(LIST_COMMAND_OP, …) →
+  // invoke("command_tool_call", { op: "list command", … })). Return an
+  // `entity:task`-scoped `app.inspect` so openContextMenu's filter admits it
+  // for the `task:task-1` chain and pops the menu.
+  if (
+    args[0] === "command_tool_call" &&
+    (args[1] as { op?: string })?.op === "list command"
+  )
+    return Promise.resolve({
+      commands: [
+        {
+          id: "app.inspect",
+          name: "Inspect task",
+          context_menu: true,
+          scope: ["entity:task"],
+        },
+      ],
+    });
   return Promise.resolve("ok");
 });
 
@@ -100,6 +119,22 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
+}));
+// The right-click context menu reads commands from the Command registry via
+// `useCommandList`; an `entity:task`-scoped `app.inspect` so the menu renders.
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: () => ({
+    commands: [
+      {
+        id: "app.inspect",
+        name: "Inspect task",
+        context_menu: true,
+        scope: ["entity:task"],
+      },
+    ],
+    loading: false,
+    refresh: vi.fn(),
+  }),
 }));
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),
@@ -187,7 +222,7 @@ describe("EntityCard", () => {
     expect(screen.getByText("Hello **world**")).toBeTruthy();
   });
 
-  it("(i) button dispatches ui.inspect with explicit target moniker", async () => {
+  it("(i) button dispatches app.inspect with explicit target moniker", async () => {
     currentEntity = makeEntity();
     const { container } = await renderWithProvider(
       <EntityCard entity={currentEntity} />,
@@ -200,7 +235,7 @@ describe("EntityCard", () => {
     const inspectCall = mockInvoke.mock.calls.find(
       (c: unknown[]) =>
         c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+        (c[1] as Record<string, unknown>)?.cmd === "app.inspect",
     );
     expect(inspectCall).toBeTruthy();
     // Target must be passed explicitly so the backend uses ctx.target
@@ -289,21 +324,26 @@ describe("EntityCard", () => {
     const card = container.querySelector("[data-segment='task:task-1']")!;
     await act(async () => {
       fireEvent.contextMenu(card);
-      // Flush the promise chain (list_commands_for_scope → show_context_menu)
+      // Flush the promise chain (registry filter → window `show context menu`)
       await new Promise((r) => setTimeout(r, 50));
     });
-    // Context menu items carry cmd + target as separate fields
+    // The menu now mounts via the `window` server's `show context menu` op,
+    // which lowers onto `invoke("command_tool_call", { tool, op, params })`.
     const ctxCall = mockInvoke.mock.calls.find(
-      (c) => c[0] === "show_context_menu",
+      (c) =>
+        c[0] === "command_tool_call" &&
+        (c[1] as { op?: string })?.op === "show context menu",
     );
     expect(ctxCall).toBeTruthy();
-    const items = ctxCall![1].items as {
-      cmd: string;
-      target?: string;
-      name: string;
-    }[];
+    const items = (
+      ctxCall![1] as {
+        params: {
+          items: { cmd: string; target?: string; name: string }[];
+        };
+      }
+    ).params.items;
     expect(
-      items.find((i) => i.cmd === "ui.inspect" && i.target === "task:task-1"),
+      items.find((i) => i.cmd === "app.inspect" && i.target === "task:task-1"),
     ).toBeTruthy();
   });
 
@@ -315,11 +355,11 @@ describe("EntityCard", () => {
     mockInvoke.mockClear();
     const card = container.querySelector(".rounded-md")!;
     fireEvent.click(card);
-    // Click on card body should not dispatch ui.inspect — only the (i) button does
+    // Click on card body should not dispatch app.inspect — only the (i) button does
     const inspectCall = mockInvoke.mock.calls.find(
       (c: unknown[]) =>
         c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+        (c[1] as Record<string, unknown>)?.cmd === "app.inspect",
     );
     expect(inspectCall).toBeUndefined();
   });
@@ -428,7 +468,7 @@ describe("EntityCard", () => {
         ],
         commands: [
           {
-            id: "ui.inspect",
+            id: "app.inspect",
             name: "Inspect {{entity.type}}",
             context_menu: true,
           },
@@ -733,7 +773,7 @@ describe("EntityCard", () => {
       expect(cardZone!.layerFq).toBeTruthy();
     });
 
-    it("clicking the card body invokes spatial_focus and does not dispatch ui.inspect directly", async () => {
+    it("clicking the card body invokes spatial_focus and does not dispatch app.inspect directly", async () => {
       currentEntity = makeEntity();
       const { container } = await renderWithSpatial(
         <EntityCard entity={currentEntity} />,
@@ -743,15 +783,19 @@ describe("EntityCard", () => {
       fireEvent.click(card);
       // The primitive's click handler routes through `spatial_focus`.
       const focusCall = mockInvoke.mock.calls.find(
-        (c) => c[0] === "spatial_focus",
+        (c) =>
+          c[0] === "spatial_focus" ||
+          (c[0] === "command_tool_call" &&
+            (c[1] as any)?.tool === "focus" &&
+            (c[1] as any)?.op === "set focus"),
       );
       expect(focusCall).toBeTruthy();
       // Inspect is now a separate Space-bound command at app level —
-      // a bare card click must not dispatch ui.inspect.
+      // a bare card click must not dispatch app.inspect.
       const inspectCall = mockInvoke.mock.calls.find(
         (c: unknown[]) =>
           c[0] === "dispatch_command" &&
-          (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+          (c[1] as Record<string, unknown>)?.cmd === "app.inspect",
       );
       expect(inspectCall).toBeUndefined();
     });

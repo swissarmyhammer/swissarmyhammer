@@ -56,18 +56,24 @@ members = [
     "apps/kanban-cli",
     "crates/swissarmyhammer-fields",
     "crates/swissarmyhammer-entity",
+    "crates/swissarmyhammer-entity-mcp",
     "crates/swissarmyhammer-entity-search",
     "crates/swissarmyhammer-views",
     "crates/swissarmyhammer-perspectives",
     "crates/swissarmyhammer-filter-expr",
     "crates/swissarmyhammer-merge",
     "crates/swissarmyhammer-store",
-    "crates/swissarmyhammer-commands",
     "benches/embedding_benchmark",
     "crates/swissarmyhammer-sem",
     "apps/shelltool-cli",
     "apps/code-context-cli",
     "crates/swissarmyhammer-cli-completions",
+    "crates/swissarmyhammer-plugin",
+    "crates/swissarmyhammer-command-service",
+    "crates/swissarmyhammer-app-service",
+    "crates/swissarmyhammer-window-service",
+    "crates/swissarmyhammer-ui-state",
+    "crates/swissarmyhammer-command-options",
     "crates/swissarmyhammer-hashline",
     "crates/swissarmyhammer-edit-match",
 ]
@@ -277,10 +283,12 @@ mirdan = { path = "crates/mirdan" }
 model-context-protocol-extras = { path = "crates/model-context-protocol-extras" }
 swissarmyhammer-agent = { path = "crates/swissarmyhammer-agent" }
 swissarmyhammer-agents = { path = "crates/swissarmyhammer-agents" }
+swissarmyhammer-app-service = { path = "crates/swissarmyhammer-app-service" }
 swissarmyhammer-build = { path = "crates/swissarmyhammer-build" }
 swissarmyhammer-cli-completions = { path = "crates/swissarmyhammer-cli-completions" }
 swissarmyhammer-code-context = { path = "crates/swissarmyhammer-code-context" }
-swissarmyhammer-commands = { path = "crates/swissarmyhammer-commands" }
+swissarmyhammer-command-options = { path = "crates/swissarmyhammer-command-options" }
+swissarmyhammer-command-service = { path = "crates/swissarmyhammer-command-service" }
 swissarmyhammer-common = { path = "crates/swissarmyhammer-common" }
 swissarmyhammer-config = { path = "crates/swissarmyhammer-config" }
 swissarmyhammer-diagnostics = { path = "crates/swissarmyhammer-diagnostics" }
@@ -289,6 +297,7 @@ swissarmyhammer-edit-match = { path = "crates/swissarmyhammer-edit-match" }
 swissarmyhammer-doctor = { path = "crates/swissarmyhammer-doctor" }
 swissarmyhammer-embedding = { path = "crates/swissarmyhammer-embedding" }
 swissarmyhammer-entity = { path = "crates/swissarmyhammer-entity" }
+swissarmyhammer-entity-mcp = { path = "crates/swissarmyhammer-entity-mcp" }
 swissarmyhammer-entity-search = { path = "crates/swissarmyhammer-entity-search" }
 swissarmyhammer-fields = { path = "crates/swissarmyhammer-fields" }
 swissarmyhammer-filter-expr = { path = "crates/swissarmyhammer-filter-expr" }
@@ -301,6 +310,7 @@ swissarmyhammer-mcp-proxy = { path = "crates/swissarmyhammer-mcp-proxy" }
 swissarmyhammer-merge = { path = "crates/swissarmyhammer-merge" }
 swissarmyhammer-search = { path = "crates/swissarmyhammer-search" }
 swissarmyhammer-perspectives = { path = "crates/swissarmyhammer-perspectives" }
+swissarmyhammer-plugin = { path = "crates/swissarmyhammer-plugin" }
 swissarmyhammer-project-detection = { path = "crates/swissarmyhammer-project-detection" }
 swissarmyhammer-shell = { path = "crates/swissarmyhammer-shell" }
 swissarmyhammer-skills = { path = "crates/swissarmyhammer-skills" }
@@ -309,8 +319,10 @@ swissarmyhammer-store = { path = "crates/swissarmyhammer-store" }
 swissarmyhammer-templating = { path = "crates/swissarmyhammer-templating" }
 swissarmyhammer-tools = { path = "crates/swissarmyhammer-tools" }
 swissarmyhammer-treesitter = { path = "crates/swissarmyhammer-treesitter" }
+swissarmyhammer-ui-state = { path = "crates/swissarmyhammer-ui-state" }
 swissarmyhammer-validators = { path = "crates/swissarmyhammer-validators" }
 swissarmyhammer-views = { path = "crates/swissarmyhammer-views" }
+swissarmyhammer-window-service = { path = "crates/swissarmyhammer-window-service" }
 swissarmyhammer-web = { path = "crates/swissarmyhammer-web" }
 swissarmyhammer = { path = "crates/swissarmyhammer" }
 num_cpus = "1.17"
@@ -337,7 +349,14 @@ typed-builder = "0.20"
 nix = { version = "0.29", features = ["signal", "process"] }
 include_dir = "0.7"
 lru = "0.12"
-rquickjs = { version = "0.11", features = ["futures", "loader"] }
+deno_core = "0.400"
+# deno_error supplies JsErrorBox, the error type deno_core's ModuleLoader
+# trait uses (ModuleLoaderError = JsErrorBox). Pinned to deno_core's exact
+# requirement so a single version resolves.
+deno_error = "=0.7.1"
+# deno_ast supplies source-text parsing/transpiling. 0.53 is the line
+# deno_core 0.400 builds against.
+deno_ast = "0.53"
 diffy = "0.4.2"
 similar = "2"
 zstd = "0.13"

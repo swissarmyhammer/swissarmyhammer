@@ -426,26 +426,66 @@ pub async fn ai_start_agent(
     Ok(AgentEndpoint { ws_url, mcp_url })
 }
 
-/// Report the AI conversation's streaming status into `UIState`.
+/// Report the AI conversation's streaming status onto the plugin host's
+/// notification bridge.
 ///
 /// The AI panel's conversation lifecycle lives entirely in the webview
-/// (`useConversation`). This command mirrors that transient turn status into
-/// the backend `UIState.ai_streaming` flag — exactly the role the `can_undo` /
-/// `can_redo` flags play for the undo stack — so the synchronous
-/// `Command::available()` check for `ai.cancel` can gate the palette entry
-/// (cancellable only mid-stream) without reaching into the webview.
+/// (`useConversation` → `aiStreaming()` in `ai/commands.ts`). This command
+/// publishes that transient turn status as a `notifications/ui_state/ai_streaming`
+/// notification on a host's [`NotificationBridge`], so a plugin can subscribe to
+/// it — the `ai-commands` builtin plugin does, caching the flag and returning it
+/// from `ai.cancel`'s synchronous `available` callback to gate the "Stop AI
+/// Generation" palette entry to streaming turns.
 ///
-/// This is transient-UI-state plumbing, not an entity mutation: it flips a
-/// `#[serde(skip)]` availability-cache flag, never persists, and emits no
-/// `ui-state-changed` event. It does not belong in `dispatch_command` for the
-/// same reason `set_undo_redo_state` is a direct backend call.
+/// This replaces the former write-only `UIState.ai_streaming` flag, which had no
+/// backend reader after `ai.cancel` moved to the `ai-commands` plugin. The
+/// notification plane is the one event mechanism plugins already subscribe to
+/// (mirrors how the command service publishes `commands/executed` via the
+/// bridge); there is no second mechanism.
+///
+/// # Publish target — the host that answers the palette for THIS window
+///
+/// The AI panel mounts inside a board window, and the registry palette gates
+/// `ai.cancel` through the `available command` op routed by
+/// [`command_tool_call`](crate::commands::command_tool_call) to the calling
+/// window's PER-BOARD host (each per-board host loads its own `ai-commands`
+/// isolate with its own cached flag). So the publish must land on the bridge of
+/// the host that actually answers the palette for the streaming window — the
+/// per-board host when the window has a board open, the global host for a
+/// boardless window. Resolving the bridge from the calling window's label, the
+/// same way `command_tool_call` resolves the host, keeps the publish and the
+/// availability query on the same isolate. Publishing only to the global host
+/// (the prior behaviour) left the per-board isolate's flag stuck `false`, so
+/// "Stop AI Generation" rendered permanently disabled mid-stream.
+///
+/// Provenance is `user` — the change is a direct, untransacted UI status report.
 #[tauri::command]
-pub fn ai_set_streaming(
+pub async fn ai_set_streaming(
+    window: tauri::Window,
     streaming: bool,
     state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<(), String> {
-    state.ui_state.set_ai_streaming(streaming);
+    publish_ai_streaming(&state, window.label(), streaming).await;
     Ok(())
+}
+
+/// Publish the AI-streaming status onto the bridge of the host that answers the
+/// palette for the window labelled `window_label`.
+///
+/// The testable seam behind [`ai_set_streaming`]: it resolves the window's
+/// effective notification bridge (its per-board host's bridge when the window
+/// has a board open, else the global host's bridge) via
+/// [`crate::commands::resolve_window_bridge`] — the SAME resolution the palette's
+/// `available command` routing uses in `command_tool_call` — and publishes the
+/// `notifications/ui_state/ai_streaming` notification there.
+pub(crate) async fn publish_ai_streaming(
+    state: &crate::state::AppState,
+    window_label: &str,
+    streaming: bool,
+) {
+    let notification = swissarmyhammer_ui_state::ai_streaming_notification(streaming);
+    let (_key, bridge) = crate::commands::resolve_window_bridge(state, window_label).await;
+    bridge.publish(notification);
 }
 
 #[cfg(test)]

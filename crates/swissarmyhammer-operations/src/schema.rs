@@ -7,7 +7,7 @@
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
-use crate::{Operation, ParamType};
+use crate::{Notification, Operation, ParamMeta, ParamType};
 
 /// The protocol discriminator field name shared by every generated schema.
 ///
@@ -254,6 +254,132 @@ fn required_param_names_for_op(op: &dyn Operation) -> Vec<String> {
         .filter(|param| param.required)
         .map(|param| param.name.to_string())
         .collect()
+}
+
+/// Generate the `io.swissarmyhammer/operations` discovery `_meta` tree
+///
+/// Builds a **noun → verb → { op, description, parameters }** JSON tree that
+/// the plugin SDK consumes for operation discovery. This is the value that
+/// belongs under the `_meta` key `io.swissarmyhammer/operations` on a Tool
+/// definition; this function returns only the value — attaching it to a Tool
+/// is the caller's responsibility.
+///
+/// Operations sharing a noun are grouped under one noun key, with each verb as
+/// a nested key. This does not affect [`generate_mcp_schema`] or the wire
+/// format — `op` remains the single selector; this is additive discovery
+/// metadata.
+///
+/// # Arguments
+///
+/// * `operations` - Slice of operation trait objects
+///
+/// # Returns
+///
+/// A JSON object keyed by noun. Each noun maps verbs to a leaf object with:
+/// - `op` - the canonical op string from [`Operation::op_string`]
+/// - `description` - the operation description from [`Operation::description`]
+/// - `parameters` - a map of parameter name → `{ type, required, description }`
+///   derived from [`Operation::parameters`]. Array parameters additionally
+///   carry `items: {type: string}`. Empty parameter descriptions are omitted,
+///   matching the behavior of the wire-schema generator.
+///
+/// # Example
+///
+/// ```ignore
+/// let meta = generate_operations_meta(&MY_OPERATIONS);
+/// // meta["task"]["add"]["op"] == "add task"
+/// ```
+pub fn generate_operations_meta(operations: &[&dyn Operation]) -> Value {
+    let mut tree: Map<String, Value> = Map::new();
+
+    for op in operations {
+        let leaf = json!({
+            "op": op.op_string(),
+            "description": op.description(),
+            "parameters": params_to_meta(op.parameters()),
+        });
+
+        let noun_entry = tree
+            .entry(op.noun().to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+
+        if let Value::Object(verbs) = noun_entry {
+            verbs.insert(op.verb().to_string(), leaf);
+        }
+    }
+
+    Value::Object(tree)
+}
+
+/// Build the `io.swissarmyhammer/notifications` discovery `_meta` value.
+///
+/// The notification-side sibling of [`generate_operations_meta`]. A JSON object
+/// keyed by **event** name (from [`Notification::event`]). Each event maps to a
+/// leaf object with:
+/// - `method` - the full wire method from [`Notification::method`]
+/// - `description` - from [`Notification::description`]
+/// - `parameters` - the same param-name → `{ type, required, description?,
+///   items? }` shape the operations meta uses, from
+///   [`Notification::parameters`].
+///
+/// The SDK reads this tree off a server's tool `_meta` to resolve
+/// `this.<server>.on(event, …)` to the wire method, mirroring how it resolves
+/// `noun.verb` to an `op`.
+///
+/// # Example
+///
+/// ```ignore
+/// let meta = generate_notifications_meta(&MY_NOTIFICATIONS);
+/// // meta["executed"]["method"] == "notifications/commands/executed"
+/// ```
+pub fn generate_notifications_meta(notifications: &[&dyn Notification]) -> Value {
+    let mut tree: Map<String, Value> = Map::new();
+
+    for note in notifications {
+        let leaf = json!({
+            "method": note.method(),
+            "description": note.description(),
+            "parameters": params_to_meta(note.parameters()),
+        });
+        tree.insert(note.event().to_string(), leaf);
+    }
+
+    Value::Object(tree)
+}
+
+/// Build the `parameters` map for an operation's or notification's `_meta` leaf.
+///
+/// Shared by [`generate_operations_meta`] and [`generate_notifications_meta`]:
+/// both describe a param set identically. Takes the raw [`ParamMeta`] slice so
+/// either an [`Operation`] or a [`Notification`] can feed it.
+///
+/// # Returns
+///
+/// A JSON object keyed by parameter name. Each parameter carries `type`,
+/// `required` (bool), and — when non-empty — `description`. Array parameters
+/// additionally carry `items: {type: string}`.
+fn params_to_meta(params: &[ParamMeta]) -> Value {
+    let mut out = Map::new();
+
+    for param in params {
+        let json_type = param_type_to_json_schema_type(param.param_type);
+
+        let mut entry = Map::new();
+        entry.insert("type".to_string(), json!(json_type));
+        entry.insert("required".to_string(), json!(param.required));
+
+        if !param.description.is_empty() {
+            entry.insert("description".to_string(), json!(param.description));
+        }
+
+        if param.param_type == ParamType::Array {
+            entry.insert("items".to_string(), json!({"type": "string"}));
+        }
+
+        out.insert(param.name.to_string(), Value::Object(entry));
+    }
+
+    Value::Object(out)
 }
 
 /// Collect all unique parameters across all operations
@@ -819,6 +945,143 @@ mod tests {
         let alias = generate_mcp_schema(&ops, SchemaConfig::new("Mock operations"));
         let full = generate_mcp_schema_full(&ops, SchemaConfig::new("Mock operations"));
         assert_eq!(alias, full);
+    }
+
+    #[test]
+    fn test_generate_operations_meta_noun_verb_tree() {
+        let ops: Vec<&dyn Operation> = vec![&MockAddTask, &MockGetTask, &MockListTasks];
+        let meta = generate_operations_meta(&ops);
+
+        // Two verbs on the "task" noun land under one noun key
+        assert!(meta["task"].is_object());
+        assert!(meta["task"]["add"].is_object());
+        assert!(meta["task"]["get"].is_object());
+
+        // A separate noun key exists for MockListTasks ("tasks")
+        assert!(meta["tasks"].is_object());
+        assert!(meta["tasks"]["list"].is_object());
+
+        // Leaf carries the op string and description
+        assert_eq!(meta["task"]["add"]["op"], "add task");
+        assert_eq!(meta["task"]["add"]["description"], "Create a new task");
+    }
+
+    #[test]
+    fn test_generate_operations_meta_parameter_required_flags() {
+        let ops: Vec<&dyn Operation> = vec![&MockAddTask];
+        let meta = generate_operations_meta(&ops);
+
+        let params = &meta["task"]["add"]["parameters"];
+
+        // Required parameter
+        assert_eq!(params["title"]["required"], true);
+        assert_eq!(params["title"]["type"], "string");
+        assert_eq!(params["title"]["description"], "Task title");
+
+        // Optional parameter
+        assert_eq!(params["description"]["required"], false);
+        assert_eq!(params["description"]["type"], "string");
+        assert_eq!(params["description"]["description"], "Task description");
+    }
+
+    #[test]
+    fn test_generate_operations_meta_array_param() {
+        let ops: Vec<&dyn Operation> = vec![&MockWithArrayParam];
+        let meta = generate_operations_meta(&ops);
+
+        let tags = &meta["item"]["tag"]["parameters"]["tags"];
+        assert_eq!(tags["type"], "array");
+        assert_eq!(tags["items"]["type"], "string");
+        assert_eq!(tags["required"], true);
+    }
+
+    #[test]
+    fn test_generate_operations_meta_empty_description_omitted() {
+        let ops: Vec<&dyn Operation> = vec![&MockWithArrayParam];
+        let meta = generate_operations_meta(&ops);
+
+        // The "silent" param has an empty description — it should be omitted
+        let silent = meta["item"]["tag"]["parameters"]["silent"]
+            .as_object()
+            .unwrap();
+        assert!(!silent.contains_key("description"));
+        assert_eq!(silent["type"], "boolean");
+        assert_eq!(silent["required"], false);
+    }
+
+    // Mock notification: event derived from the method's last segment.
+    struct MockExecuted;
+
+    static MOCK_EXECUTED_PARAMS: &[ParamMeta] = &[
+        ParamMeta::new("id")
+            .description("The command id that executed")
+            .param_type(ParamType::String)
+            .required(),
+        ParamMeta::new("result")
+            .description("The command's return value")
+            .param_type(ParamType::String),
+    ];
+
+    impl Notification for MockExecuted {
+        fn method(&self) -> &'static str {
+            "notifications/commands/executed"
+        }
+        fn description(&self) -> &'static str {
+            "A command executed."
+        }
+        fn parameters(&self) -> &'static [ParamMeta] {
+            MOCK_EXECUTED_PARAMS
+        }
+    }
+
+    // Mock notification with an explicit event override.
+    struct MockUndo;
+
+    impl Notification for MockUndo {
+        fn method(&self) -> &'static str {
+            "notifications/store/undo_changed"
+        }
+        fn event(&self) -> &'static str {
+            "undo"
+        }
+        fn description(&self) -> &'static str {
+            "Undo stack changed."
+        }
+    }
+
+    #[test]
+    fn test_generate_notifications_meta_event_keyed_tree() {
+        let notes: Vec<&dyn Notification> = vec![&MockExecuted, &MockUndo];
+        let meta = generate_notifications_meta(&notes);
+
+        // Keyed by EVENT name: derived default and explicit override.
+        assert_eq!(
+            meta["executed"]["method"],
+            "notifications/commands/executed"
+        );
+        assert_eq!(meta["executed"]["description"], "A command executed.");
+        assert_eq!(meta["undo"]["method"], "notifications/store/undo_changed");
+        // The default-derived event name is NOT present for the overridden one.
+        assert!(meta.get("undo_changed").is_none());
+    }
+
+    #[test]
+    fn test_generate_notifications_meta_params_shape_matches_operations() {
+        let notes: Vec<&dyn Notification> = vec![&MockExecuted];
+        let meta = generate_notifications_meta(&notes);
+
+        let params = &meta["executed"]["parameters"];
+        assert_eq!(params["id"]["required"], true);
+        assert_eq!(params["id"]["type"], "string");
+        assert_eq!(params["id"]["description"], "The command id that executed");
+        assert_eq!(params["result"]["required"], false);
+    }
+
+    #[test]
+    fn test_generate_notifications_meta_empty_is_empty_object() {
+        let notes: Vec<&dyn Notification> = vec![];
+        let meta = generate_notifications_meta(&notes);
+        assert_eq!(meta, serde_json::json!({}));
     }
 
     #[test]

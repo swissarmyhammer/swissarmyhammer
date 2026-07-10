@@ -7,7 +7,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { callCommandTool } from "@/lib/mcp-transport";
+import { getWebviewCommandHandler } from "./webview-command-bus";
 
 // ---------------------------------------------------------------------------
 // ActiveBoardPath context — per-window board path for multi-window dispatch
@@ -207,9 +208,32 @@ export interface CommandDef {
    * The action to run when the command is executed.
    *
    * Receives the same `DispatchOptions` the dispatcher was called with,
-   * so commands that take per-call arguments (e.g. `nav.focus`'s
-   * `{ args: { fq } }`) can read them from the closure invocation.
-   * The vast majority of commands are parameterless and ignore the arg.
+   * so commands that take per-call arguments can read them from the
+   * closure invocation. Most execute closures are parameterless and
+   * ignore the arg.
+   *
+   * KEPT BY DESIGN (Card I, 01KTED9JYGWM815K2X41N4QDBY): this field and
+   * the `resolveCommand` fast-path in `useDispatchCommand` were slated
+   * for removal once every command definition moved to plugins, but a
+   * class of legitimate SCOPE-LOCAL executes remains that the id-keyed
+   * webview command bus cannot express — positional shadows whose
+   * behavior depends on WHERE in the focused chain they sit, and
+   * per-instance closures over component state:
+   *
+   *   - the jump overlay's `app.dismiss` shadow (`jump-to-overlay.tsx`)
+   *     — must intercept dismiss only while the overlay's own scope is
+   *     innermost, not globally for the id;
+   *   - the perspective tab's scoped rename (`perspective-tab-bar.tsx`)
+   *     — one closure per tab instance, over that tab's state;
+   *   - dialog-cancel-style Escape shadows registered by focused
+   *     subtrees.
+   *
+   * The bus is a module-level singleton keyed by command id alone, so a
+   * bus handler would claim the id app-wide for the lifetime of the
+   * registration — the wrong semantics for all of the above. Catalogue
+   * (global) commands must NEVER use this field: they are plugin-defined,
+   * and a webview-only behavior belongs on the webview command bus
+   * (`webview-command-bus.ts`) instead.
    */
   execute?: (opts?: DispatchOptions) => void | Promise<void>;
   /**
@@ -433,7 +457,8 @@ export interface DispatchOptions {
  *
  * Automatically reads the scope chain and board path from context.
  * Commands registered in scope with an `execute` handler run client-side;
- * all others are forwarded to the Rust backend via `dispatch_command`.
+ * all others are forwarded to the Command MCP service via its
+ * `execute command` verb (see {@link runBackendDispatch}).
  *
  * @overload Ad-hoc dispatch: returns a function that takes a command ID and options.
  */
@@ -503,13 +528,25 @@ export function useDispatchCommand(presetCmd?: string) {
         maybeOpts,
       );
 
-      // Try frontend execute handler first
+      // Scope-local execute fast-path — kept by design (Card I): serves the
+      // positional / per-instance closures documented on `CommandDef.execute`
+      // (dismiss shadows, scoped rename). Global commands never carry an
+      // execute, so they fall through to the bus / backend below.
       const resolved = resolveCommand(effectiveScope, cmdId);
       if (resolved?.execute) {
         return runFrontendExecute(cmdId, opts, resolved);
       }
 
-      // Backend dispatch — Tauri IPC with busy tracking
+      // Webview command bus — a presentation-only behavior may have
+      // registered a live handler for this plugin command id. A registered
+      // handler is the signal that the id is "handled in webview": run it and
+      // skip the backend. See `webview-command-bus.ts`.
+      const webviewHandler = getWebviewCommandHandler(cmdId);
+      if (webviewHandler) {
+        return webviewHandler(opts);
+      }
+
+      // Command service dispatch — `execute command` with busy tracking.
       const chain = opts.scopeChain ?? scopeChainFromScope(effectiveScope);
       return runBackendDispatch(
         cmdId,
@@ -537,18 +574,23 @@ function resolveDispatchArgs(
   return { cmdId: cmdOrOpts as string, opts: maybeOpts ?? {} };
 }
 
-/** Run a client-side `execute` handler, fire-and-forget log for telemetry. */
+/** Run a client-side `execute` handler.
+ *
+ * Telemetry / observability for command execution is now sourced
+ * exclusively from the Command service's `notifications/commands/executed`
+ * notification plane (driven by `swissarmyhammer-command-service`'s
+ * `ActionSink`) — the legacy fire-and-forget `log_command` Tauri command
+ * is gone, so any subscriber that needs per-execution telemetry listens
+ * on the bridge event instead.
+ */
 async function runFrontendExecute(
   cmdId: string,
   opts: DispatchOptions,
   resolved: CommandDef,
 ): Promise<void> {
-  Promise.resolve(
-    invoke("log_command", {
-      cmd: cmdId,
-      target: opts.target ?? resolved.target,
-    }),
-  ).catch(() => {});
+  // Reference `cmdId` so the unused-arg lint stays quiet now that the
+  // log-side-effect that consumed it has been removed.
+  void cmdId;
   // Thread `opts` to the execute closure so commands that need per-call
   // arguments (e.g. `nav.focus`'s `{ args: { fq } }`) can read them.
   // The vast majority of execute closures are parameterless and ignore
@@ -556,7 +598,21 @@ async function runFrontendExecute(
   await resolved.execute!(opts);
 }
 
-/** Dispatch to the Rust backend, wrapping the call in the busy counter. */
+/**
+ * Dispatch a command through the Command MCP service, wrapping the call in
+ * the busy counter.
+ *
+ * The hook captures the scope chain + target + args at CLICK time (see
+ * `useDispatchCommand`) and hands them to the service's `execute command`
+ * verb inside `ctx`, whose shape mirrors the service's `CommandContext`
+ * (`scope_chain` / `target` / `args`). The service forwards `ctx` to the
+ * registered callback unchanged — no command logic runs in React.
+ *
+ * `board_path` is a kanban-app multi-window concern, not part of the
+ * service's `CommandContext`; it rides alongside `id`/`ctx` so the host's
+ * callback dispatcher can route the invocation to the correct window. It is
+ * omitted entirely when no active board path is set.
+ */
 async function runBackendDispatch(
   cmdId: string,
   opts: DispatchOptions,
@@ -566,12 +622,14 @@ async function runBackendDispatch(
 ): Promise<unknown> {
   setInflightCount((c) => c + 1);
   try {
-    return await invoke("dispatch_command", {
-      cmd: cmdId,
-      target: opts.target,
-      args: opts.args,
-      scopeChain: chain,
-      ...(boardPath ? { boardPath } : {}),
+    return await callCommandTool("execute command", {
+      id: cmdId,
+      ctx: {
+        scope_chain: chain,
+        target: opts.target,
+        args: opts.args,
+      },
+      ...(boardPath ? { board_path: boardPath } : {}),
     });
   } finally {
     setInflightCount((c) => c - 1);

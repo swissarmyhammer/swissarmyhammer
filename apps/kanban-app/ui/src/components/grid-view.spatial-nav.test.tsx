@@ -59,33 +59,14 @@ import { render, fireEvent, act, waitFor } from "@testing-library/react";
 // The hoisted bag captures `mockInvoke` (every IPC the providers fire) and
 // `mockListen` (every `listen("event", cb)` callback) plus a `listeners`
 // map keyed by event name. Tests drive `focus-changed` events by reaching
-// into `listeners.get("focus-changed")` and invoking each registered
+// into `listeners.get("notifications/focus/changed")` and invoking each registered
 // callback — the same shape `grid-view.nav-is-eventdriven.test.tsx` and
 // `perspective-bar.spatial.test.tsx` use.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -124,6 +105,10 @@ vi.mock("@/components/perspective-container", () => ({
 // ---------------------------------------------------------------------------
 
 import { GridView } from "./grid-view";
+import {
+  hasWebviewCommandHandler,
+  resetWebviewCommandBusForTest,
+} from "@/lib/webview-command-bus";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -251,8 +236,18 @@ function unregisterScopeCalls(): Array<Record<string, unknown>> {
 /** Collect every `spatial_focus` call payload. */
 function spatialFocusCalls(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as Record<string, unknown>);
+    .filter(
+      (c) =>
+        c[0] === "spatial_focus" ||
+        (c[0] === "command_tool_call" &&
+          (c[1] as any)?.tool === "focus" &&
+          (c[1] as any)?.op === "set focus"),
+    )
+    .map((c) => {
+      const outer = c[1] as Record<string, unknown>;
+      const args = (outer?.params ?? outer) as Record<string, unknown>;
+      return args;
+    });
 }
 
 /**
@@ -291,7 +286,7 @@ async function fireFocusChanged({
     next_fq,
     next_segment: next_segment === null ? null : asSegment(next_segment),
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get("notifications/focus/changed") ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();
@@ -308,10 +303,63 @@ describe("GridView (spatial-nav)", () => {
     mockListen.mockClear();
     listeners.clear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
+    resetWebviewCommandBusForTest();
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // 0. Webview command bus registration (Card C)
+  //
+  // The eleven `grid.*` commands are DEFINED by the `grid-commands` builtin
+  // plugin; the grid view's only role is BEHAVIOR — it registers a live
+  // webview-bus handler per id on mount and the ownership-guarded cleanup
+  // clears every slot on unmount (a stale closure must never linger after
+  // the grid view goes away, or a palette dispatch would mutate a dead grid).
+  // -------------------------------------------------------------------------
+
+  const GRID_COMMAND_IDS = [
+    "grid.moveToRowStart",
+    "grid.moveToRowEnd",
+    "grid.firstCell",
+    "grid.lastCell",
+    "grid.edit",
+    "grid.editEnter",
+    "grid.exitEdit",
+    "grid.toggleVisual",
+    "grid.deleteRow",
+    "grid.newBelow",
+    "grid.newAbove",
+  ];
+
+  it("registers a webview-bus handler for all 11 grid.* ids on mount and clears them on unmount", async () => {
+    const entities = { task: threeTasks() };
+
+    let result!: ReturnType<typeof render>;
+    await act(async () => {
+      result = render(<GridHarness entities={entities} />);
+    });
+    await flushSetup();
+
+    for (const id of GRID_COMMAND_IDS) {
+      expect(
+        hasWebviewCommandHandler(id),
+        `${id} must have a registered webview-bus handler after mount`,
+      ).toBe(true);
+    }
+
+    await act(async () => {
+      result.unmount();
+    });
+
+    for (const id of GRID_COMMAND_IDS) {
+      expect(
+        hasWebviewCommandHandler(id),
+        `${id}'s webview-bus handler must be cleared on unmount`,
+      ).toBe(false);
+    }
   });
 
   // -------------------------------------------------------------------------
@@ -718,7 +766,7 @@ describe("GridView (spatial-nav)", () => {
 
     // Listener slot has at least one entry (the SpatialFocusProvider's
     // global `focus-changed` listener) before unmount.
-    const beforeUnmount = listeners.get("focus-changed")?.length ?? 0;
+    const beforeUnmount = listeners.get("notifications/focus/changed")?.length ?? 0;
     expect(beforeUnmount).toBeGreaterThan(0);
 
     // Tear down. Wrap in act() so React's cleanup-effect chain runs.
@@ -746,7 +794,7 @@ describe("GridView (spatial-nav)", () => {
     // `listeners` map. A non-empty slot here would indicate a leaked
     // listener — every focus change for the rest of the process would
     // call into the now-stale closure references.
-    const afterUnmount = listeners.get("focus-changed")?.length ?? 0;
+    const afterUnmount = listeners.get("notifications/focus/changed")?.length ?? 0;
     expect(afterUnmount).toBe(0);
   });
 

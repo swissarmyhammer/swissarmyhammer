@@ -24,38 +24,58 @@
  *      double-decorated the same focus state. Removed in favour of the
  *      bar so "one decorator, one place" holds across the whole app.
  *
+ * # Harness — shared spatial kernel simulator
+ *
  * The test mounts the real provider stack (schema, entity store, focus,
  * spatial-nav) and the real `useGrid` + real `DataTable` so the
  * focus-moniker -> cursor derivation path is exercised end-to-end.
+ *
+ * Focus mutations reach the kernel over the in-process MCP transport
+ * (`focus-mcp.ts::setFocus` → `invoke("command_tool_call", { tool:
+ * "focus", op: "set focus", params: { fq, snapshot, window } })`), and
+ * the kernel answers by emitting a `focus-changed` Tauri event that the
+ * `SpatialFocusProvider` listener fans out to the `EntityFocusProvider`
+ * bridge (the sole upstream of the entity-focus store the cursor ring
+ * derives from). The shared harness at
+ * `@/test/spatial-shadow-registry` models that whole loop — including
+ * the kernel's silent-drop conditions (no snapshot / unknown layer /
+ * fq missing from the snapshot) — so a focus claim on an UNREGISTERED
+ * moniker is correctly dropped, exactly like production. The harness's
+ * shadow registry is fed by the global `LayerScopeRegistry` hook that
+ * `src/test/setup.ts` installs (mirroring every scope registration as a
+ * legacy `spatial_register_scope` invoke entry).
+ *
+ * Because the kernel only commits focus to registered scopes, the
+ * harness mounts a real `<FocusScope moniker="ui:navbar">` sibling next
+ * to the grid — the "focus moved out of the grid" cases drive focus to
+ * that genuinely-registered scope instead of a synthetic key.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act, fireEvent } from "@testing-library/react";
+import { render, act, fireEvent, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 
 // ---------------------------------------------------------------------------
-// Tauri API mocks -- must come before component imports.
+// Tauri API mocks -- must come before component imports. File-scoped,
+// forwarding to the spies owned by the shared spatial-nav harness module
+// (`@/test/spatial-shadow-registry`); `vi.mock` is hoisted to the top of
+// THIS file, so the `vi.hoisted` factory resolves the helper's exports
+// before the production imports below run.
 // ---------------------------------------------------------------------------
 
-const mockInvoke = vi.hoisted(() =>
-  vi.fn(async (_cmd: string, _args?: unknown): Promise<unknown> => undefined),
-);
-const listenHandlers = vi.hoisted(
-  () => ({}) as Record<string, (event: { payload: unknown }) => void>,
-);
+const { mockInvoke, mockListen } = await vi.hoisted(async () => {
+  const helper = await import("@/test/spatial-shadow-registry");
+  return {
+    mockInvoke: helper.mockInvoke,
+    mockListen: helper.mockListen,
+  };
+});
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...a: unknown[]) => mockInvoke(...(a as [string, unknown?])),
 }));
-// Capture handlers so tests that need to drive `focus-changed` events
-// (e.g. the single-focus-visual guard) can invoke them directly. Other
-// tests in this file don't touch the handler map and just rely on the
-// `listen()` -> Promise<unsubscribe> contract.
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn((event: string, handler: (e: { payload: unknown }) => void) => {
-    listenHandlers[event] = handler;
-    return Promise.resolve(() => {
-      delete listenHandlers[event];
-    });
-  }),
+  emit: vi.fn(() => Promise.resolve()),
+  listen: (...a: Parameters<typeof mockListen>) => mockListen(...a),
 }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
@@ -86,7 +106,13 @@ vi.mock("@/components/perspective-container", () => ({
 // Imports after mocks.
 // ---------------------------------------------------------------------------
 
+import {
+  setupSpatialHarness,
+  type SpatialHarness,
+} from "@/test/spatial-shadow-registry";
+import { commandToolCall } from "@/test/mock-command-list";
 import { GridView } from "./grid-view";
+import { FocusScope } from "./focus-scope";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import {
@@ -94,17 +120,13 @@ import {
   useFocusActions,
 } from "@/lib/entity-focus-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { resetWebviewCommandBusForTest } from "@/lib/webview-command-bus";
 import { FocusLayer } from "@/components/focus-layer";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CommandBusyProvider } from "@/lib/command-scope";
-import {
-  asFq,
-  asSegment,
-  type FocusChangedPayload,
-  type FullyQualifiedMoniker,
-} from "@/types/spatial";
+import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 import { gridCellMoniker } from "@/lib/moniker";
 import type { Entity, EntitySchema } from "@/types/kanban";
 
@@ -152,7 +174,8 @@ function threeTasks(): Entity[] {
  * Probe that captures `setFocus` from the entity-focus context into a
  * test-owned ref. Tests use this to drive focus to specific monikers
  * without simulating the full keybinding pipeline -- the same `setFocus`
- * a click handler would call.
+ * primitive the `nav.focus` webview-bus handler's `actions.focus(fq)` is
+ * identity-equal to in production.
  */
 interface FocusRef {
   setFocus: ((fq: FullyQualifiedMoniker | null) => void) | null;
@@ -171,8 +194,14 @@ function FocusProbe({ focusRef }: { focusRef: FocusRef }) {
 
 /**
  * Mount `GridView` inside the production-shaped provider stack. Mirrors
- * `grid-view.nav-is-eventdriven.test.tsx`'s `GridHarness` -- the providers
- * are the same ones that sit under `RustEngineContainer` in `App.tsx`.
+ * `grid-view.spatial-nav.test.tsx`'s `GridHarness` -- the providers are
+ * the same ones that sit under `RustEngineContainer` in `App.tsx`.
+ *
+ * The `ui:navbar` `<FocusScope>` sibling stands in for the production
+ * navbar: a genuinely-registered out-of-grid focus target. The kernel
+ * (and the shadow harness mirroring its drop conditions) only commits
+ * focus to registered scopes, so "move focus out of the grid" must
+ * target a real registration.
  */
 function GridHarness({
   entities,
@@ -192,6 +221,9 @@ function GridHarness({
                   <FieldUpdateProvider>
                     <UIStateProvider>
                       <FocusProbe focusRef={focusRef} />
+                      <FocusScope moniker={asSegment("ui:navbar")}>
+                        navbar
+                      </FocusScope>
                       <GridView
                         view={{
                           id: "v-cursor",
@@ -212,28 +244,15 @@ function GridHarness({
   );
 }
 
-/**
- * Tracks the moniker → FullyQualifiedMoniker mapping so `spatial_focus_by_moniker`
- * can synthesize the kernel's `focus-changed` emit. Card
- * `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus store a pure
- * projection of kernel events; tests that mock `invoke` without a
- * kernel simulator need this minimal stub so `setFocus(moniker)`
- * still flows through the spatial-focus bridge into the React store.
- *
- * `currentFocusKey` tracks the kernel's current focused key so emitted
- * `focus-changed` payloads carry a correct `prev_fq`. Without this,
- * the previous cell's `useFocusClaim` callback never flips to false
- * and the focus indicator stacks across cells — the bug that produced
- * "expected 1 to be 2" in the single-focus-visual test.
- */
-const monikerToKey = new Map<string, string>();
-const currentFocusKey: { key: string | null } = { key: null };
-
 /** Default invoke responses for the mount-time IPCs the providers fire. */
 async function defaultInvokeImpl(
   cmd: string,
   args?: unknown,
 ): Promise<unknown> {
+  // Non-focus MCP tool calls (the focus tool is translated and handled by
+  // the shadow harness before falling through here). Serves the global
+  // command registry mirror for `list command` / `available command`.
+  if (cmd === "command_tool_call") return commandToolCall(args);
   if (cmd === "list_entity_types") return ["task"];
   if (cmd === "get_entity_schema") return TASK_SCHEMA;
   if (cmd === "get_ui_state")
@@ -249,78 +268,27 @@ async function defaultInvokeImpl(
   if (cmd === "get_undo_state") return { can_undo: false, can_redo: false };
   if (cmd === "dispatch_command") return undefined;
   if (cmd === "list_commands_for_scope") return [];
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
-    const a = (args ?? {}) as { fq?: string; segment?: string };
-    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
-    return undefined;
-  }
-  if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { fq?: string };
-    if (a.fq) {
-      for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.fq) {
-          monikerToKey.delete(m);
-          break;
-        }
-      }
-    }
-    return undefined;
-  }
-  if (cmd === "spatial_focus") {
-    // Queued via `queueMicrotask` so the timing matches the kernel
-    // simulator and real Tauri events. Synchronous emit would hide
-    // regressions where `setFocus` writes the store synchronously.
-    const a = (args ?? {}) as { fq?: string };
-    const fq = a.fq ?? null;
-    let moniker: string | null = null;
-    for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) {
-        moniker = s;
-        break;
-      }
-    }
-
-    if (fq) {
-      const prev = currentFocusKey.key;
-      currentFocusKey.key = fq;
-      queueMicrotask(() => {
-        const handler = listenHandlers["focus-changed"];
-        if (handler) {
-          handler({
-            payload: {
-              window_label: "main",
-              prev_fq: prev,
-              next_fq: fq,
-              next_segment: moniker,
-            },
-          });
-        }
-      });
-    }
-    return undefined;
-  }
-  if (cmd === "spatial_clear_focus") {
-    // Explicit-clear counterpart — emits the `Some(prev) → None`
-    // `focus-changed` event the React-side bridge consumes.
-    const prev = currentFocusKey.key;
-    if (prev === null) return undefined;
-    currentFocusKey.key = null;
-    queueMicrotask(() => {
-      const handler = listenHandlers["focus-changed"];
-      if (handler) {
-        handler({
-          payload: {
-            window_label: "main",
-            prev_fq: prev,
-            next_fq: null,
-            next_segment: null,
-          },
-        });
-      }
-    });
-    return undefined;
-  }
   return undefined;
+}
+
+/** Let mount-effects (scope registration, `useInitialCellFocus`) settle. */
+async function flushSetup(): Promise<void> {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 50));
+  });
+}
+
+/**
+ * Resolve the registered FQM for a segment, failing the test loudly when
+ * the segment never registered (a harness bug, not a production state).
+ */
+function registeredFq(
+  harness: SpatialHarness,
+  segment: string,
+): FullyQualifiedMoniker {
+  const fq = harness.getRegisteredFqBySegment(segment);
+  expect(fq, `expected a registration for segment "${segment}"`).not.toBeNull();
+  return fq!;
 }
 
 // ---------------------------------------------------------------------------
@@ -328,11 +296,11 @@ async function defaultInvokeImpl(
 // ---------------------------------------------------------------------------
 
 describe("GridView -- cursor-ring suppression outside ui:grid", () => {
+  let harness: SpatialHarness;
+
   beforeEach(() => {
-    mockInvoke.mockClear();
-    monikerToKey.clear();
-    currentFocusKey.key = null;
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    resetWebviewCommandBusForTest();
+    harness = setupSpatialHarness({ defaultInvokeImpl });
   });
 
   afterEach(() => {
@@ -347,27 +315,37 @@ describe("GridView -- cursor-ring suppression outside ui:grid", () => {
     await act(async () => {
       result = render(<GridHarness entities={entities} focusRef={focusRef} />);
     });
+    await flushSetup();
 
-    // Let initial mount-effects (including the grid's
-    // `useInitialCellFocus` seed) settle.
+    // Precondition: light the ring by focusing a grid cell through the
+    // kernel. This keeps the suppression assertion below non-vacuous --
+    // the ring must genuinely turn OFF, not merely never turn on.
+    expect(focusRef.setFocus).toBeTruthy();
+    const cellFq = registeredFq(harness, gridCellMoniker(0, "title"));
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
+      focusRef.setFocus?.(cellFq);
+    });
+    await waitFor(() => {
+      expect(
+        result.container.querySelectorAll("[data-cell-cursor]").length,
+      ).toBe(1);
     });
 
-    // Move focus OUT of the grid. `ui:navbar` is a non-grid_cell moniker
-    // shape that mirrors the production navbar focus -- exactly the case
-    // the task description calls out as problematic.
-    expect(focusRef.setFocus).toBeTruthy();
+    // Move focus OUT of the grid onto the registered `ui:navbar` scope --
+    // exactly the case the task description calls out as problematic.
+    const navbarFq = registeredFq(harness, "ui:navbar");
     await act(async () => {
-      focusRef.setFocus?.(asFq("ui:navbar"));
+      focusRef.setFocus?.(navbarFq);
     });
 
     // After focus leaves the grid, no cell should carry the cursor-ring
     // marker. The previous behaviour fell back to the internal `{0, 0}`
     // cursor and painted the ring on the top-left cell.
-    const { container } = result;
-    const ringedCells = container.querySelectorAll("[data-cell-cursor]");
-    expect(ringedCells.length).toBe(0);
+    await waitFor(() => {
+      expect(
+        result.container.querySelectorAll("[data-cell-cursor]").length,
+      ).toBe(0);
+    });
   });
 
   it("renders exactly one [data-cell-cursor] when focus is on a grid_cell moniker", async () => {
@@ -378,28 +356,29 @@ describe("GridView -- cursor-ring suppression outside ui:grid", () => {
     await act(async () => {
       result = render(<GridHarness entities={entities} focusRef={focusRef} />);
     });
-
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
+    await flushSetup();
 
     expect(focusRef.setFocus).toBeTruthy();
 
-    // Focus the cell at row 1 (second row), `title` column.
+    // Focus the cell at row 1 (second row), `title` column, via its
+    // registered FQM -- the same fully-qualified path a production
+    // `nav.focus` dispatch carries.
     const targetMoniker = gridCellMoniker(1, "title");
+    const targetFq = registeredFq(harness, targetMoniker);
     await act(async () => {
-      focusRef.setFocus?.(asFq(targetMoniker));
+      focusRef.setFocus?.(targetFq);
     });
 
-    const { container } = result;
-    const ringedCells = container.querySelectorAll("[data-cell-cursor]");
-    expect(ringedCells.length).toBe(1);
-
-    // The ringed cell should be inside the row whose `data-moniker` is
-    // `task:t2` (the second seeded task). The cell's own
-    // `data-cell-cursor` attribute encodes the row/col it claims to be.
-    const ringedCell = ringedCells[0] as HTMLElement;
-    expect(ringedCell.getAttribute("data-cell-cursor")).toBe("1:title");
+    // Exactly one ringed cell, and its `data-cell-cursor` attribute
+    // encodes the row/col it claims to be.
+    await waitFor(() => {
+      const ringedCells =
+        result.container.querySelectorAll("[data-cell-cursor]");
+      expect(ringedCells.length).toBe(1);
+      expect(
+        (ringedCells[0] as HTMLElement).getAttribute("data-cell-cursor"),
+      ).toBe("1:title");
+    });
   });
 
   it("renders no [data-cell-cursor] when the focused moniker is null", async () => {
@@ -410,50 +389,62 @@ describe("GridView -- cursor-ring suppression outside ui:grid", () => {
     await act(async () => {
       result = render(<GridHarness entities={entities} focusRef={focusRef} />);
     });
+    await flushSetup();
 
+    // Precondition: light the ring by focusing a grid cell through the
+    // kernel, so the explicit clear below genuinely transitions
+    // `Some(prev) -> None` (and the ring 1 -> 0).
+    expect(focusRef.setFocus).toBeTruthy();
+    const cellFq = registeredFq(harness, gridCellMoniker(0, "title"));
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
+      focusRef.setFocus?.(cellFq);
+    });
+    await waitFor(() => {
+      expect(
+        result.container.querySelectorAll("[data-cell-cursor]").length,
+      ).toBe(1);
     });
 
-    // Explicitly clear focus -- a fresh app-mount before any cell is
-    // clicked, or after a defocus action.
-    expect(focusRef.setFocus).toBeTruthy();
+    // Explicitly clear focus -- a defocus action. `setFocus(null)` routes
+    // to the kernel's `clear focus` op, which emits the
+    // `Some(prev) -> None` focus-changed event the bridge consumes.
     await act(async () => {
       focusRef.setFocus?.(null);
     });
 
-    const { container } = result;
-    const ringedCells = container.querySelectorAll("[data-cell-cursor]");
-    expect(ringedCells.length).toBe(0);
+    await waitFor(() => {
+      expect(
+        result.container.querySelectorAll("[data-cell-cursor]").length,
+      ).toBe(0);
+    });
   });
 });
 
 /**
- * Click-to-cursor regression: a left-click on a cell must update the
- * entity-focus moniker in the spatial-stack-mounted production harness.
+ * Click-to-cursor regression: a left-click on a cell must light the
+ * cursor ring on that cell in the spatial-stack-mounted production
+ * harness.
  *
- * This pins the warning from the review of
- * `01KNQXZZ9VQBHFX091P0K4F4YC`: `FocusScope.onClick` calls
- * `e.stopPropagation()` (per the long-standing FocusScope convention so
- * leaf clicks don't re-fire on enclosing zones). Before the fix, the
- * click handler attached to the surrounding `<TableCell>` was swallowed
- * before it could run `setFocus(gridCellMoniker(...))`, so the cursor
- * ring (derived from entity-focus) regressed click-to-move-cursor in
- * production. The fix mounts the click handler INSIDE the `<FocusScope>`
- * via a thin wrapper `<div>`, so the inner handler fires before the
- * primitive's `stopPropagation()` — both spatial focus AND entity
- * focus update on a single click.
+ * The cell's `<FocusScope>` owns the click handler: it dispatches
+ * `nav.focus({ args: { fq } })` (the single auditable focus-claim
+ * command from `01KR7CDEFWWVF4WH0BCHE8Y21J`), whose webview-bus leg runs
+ * `actions.focus(fq)` -- the snapshot-bearing kernel commit. The kernel
+ * emits `focus-changed`, the `EntityFocusProvider` bridge mirrors
+ * `next_fq` into the entity-focus store, and the grid derives the
+ * cursor ring from the focused moniker.
  *
  * The assertion lifts the cursor-ring as the observable proxy for
  * entity-focus: a `data-cell-cursor` attribute appears on exactly the
- * clicked cell when the entity-focus moniker matches.
+ * clicked cell when the focused moniker matches. A regression anywhere
+ * along click -> nav.focus -> kernel commit -> focus-changed -> store
+ * renders zero rings instead.
  */
 describe("GridView -- click-to-cursor regression (spatial path)", () => {
+  let harness: SpatialHarness;
+
   beforeEach(() => {
-    mockInvoke.mockClear();
-    monikerToKey.clear();
-    currentFocusKey.key = null;
-    mockInvoke.mockImplementation(defaultInvokeImpl);
+    resetWebviewCommandBusForTest();
+    harness = setupSpatialHarness({ defaultInvokeImpl });
   });
 
   afterEach(() => {
@@ -468,55 +459,52 @@ describe("GridView -- click-to-cursor regression (spatial path)", () => {
     await act(async () => {
       result = render(<GridHarness entities={entities} focusRef={focusRef} />);
     });
+    await flushSetup();
 
-    // Let mount-effects (including `useInitialCellFocus`) settle so the
-    // initial focus has landed somewhere predictable before we click.
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-
-    // The seed lands on `grid_cell:0:title`. Move focus elsewhere first
-    // so the click has something to change — that way "ring lights up
-    // on the clicked cell" cannot be a false pass from the seed already
-    // matching the click target.
+    // Park focus on the registered navbar scope first so the click has
+    // something to change — that way "ring lights up on the clicked
+    // cell" cannot be a false pass from focus already matching the
+    // click target.
     expect(focusRef.setFocus).toBeTruthy();
+    const navbarFq = registeredFq(harness, "ui:navbar");
     await act(async () => {
-      focusRef.setFocus?.(asFq("ui:navbar"));
+      focusRef.setFocus?.(navbarFq);
     });
 
     // No ring while focus is outside the grid.
-    expect(result.container.querySelectorAll("[data-cell-cursor]").length).toBe(
-      0,
-    );
+    await waitFor(() => {
+      expect(
+        result.container.querySelectorAll("[data-cell-cursor]").length,
+      ).toBe(0);
+    });
 
     // Find the cell at (row=1, col=`status`) — the second row's status
-    // column. We target the inner `<FocusScope>` wrapper (where the new
-    // click handler lives in the spatial path). The data-table renders
-    // `<FocusScope>` with `data-moniker="grid_cell:1:status"`.
+    // column. The data-table renders the cell's `<FocusScope>` with
+    // `data-segment="grid_cell:1:status"`; its click handler dispatches
+    // `nav.focus` for the cell's FQM.
     const targetMoniker = "grid_cell:1:status";
     const focusableEl = result.container.querySelector(
       `[data-segment="${targetMoniker}"]`,
     ) as HTMLElement | null;
     expect(focusableEl).not.toBeNull();
 
-    // Click an element INSIDE the focusable's subtree — that's where the
-    // inner click wrapper is. Bubble order: target → inner div onClick
-    // (legacy entity-focus) → FocusScope's outer onClick (spatial focus
-    // + stopPropagation). Both fire on one click.
+    // Click inside the focusable's subtree — the event bubbles to the
+    // `<FocusScope>`'s own click handler (which stops propagation so the
+    // claim stays local to the leaf).
     await act(async () => {
       fireEvent.click(focusableEl!.firstElementChild ?? focusableEl!);
     });
 
-    // The cursor ring (driven by entity-focus → moniker → grid-cell
-    // cursor → `data-cell-cursor`) must now mark exactly the clicked
-    // cell. If `FocusScope.onClick`'s `stopPropagation()` regressed back
-    // to swallowing the entity-focus update, this assertion catches it
-    // — zero rings would render instead.
-    const ringedCells = result.container.querySelectorAll("[data-cell-cursor]");
-    expect(ringedCells.length).toBe(1);
-    expect(
-      (ringedCells[0] as HTMLElement).getAttribute("data-cell-cursor"),
-    ).toBe("1:status");
+    // The cursor ring (driven by focused moniker → grid-cell cursor →
+    // `data-cell-cursor`) must now mark exactly the clicked cell.
+    await waitFor(() => {
+      const ringedCells =
+        result.container.querySelectorAll("[data-cell-cursor]");
+      expect(ringedCells.length).toBe(1);
+      expect(
+        (ringedCells[0] as HTMLElement).getAttribute("data-cell-cursor"),
+      ).toBe("1:status");
+    });
   });
 });
 
@@ -547,16 +535,19 @@ describe("GridView -- click-to-cursor regression (spatial path)", () => {
  *   2. No element rendered by the grid carries the removed cursor-ring
  *      classes (`ring-2 ring-primary ring-inset`). A regression that
  *      reintroduces the ring on `<TableCell>` would trip this guard.
+ *
+ * A single kernel commit (`setFocus(cellFq)`) drives BOTH focus signals:
+ * the emitted `focus-changed` flips the cell's `useFocusClaim` listener
+ * (mounting the bar) and flows through the entity-focus bridge (stamping
+ * `data-cell-cursor`). The contract holds when both signals point at the
+ * same cell.
  */
 describe("GridView -- single-focus-visual on a focused cell", () => {
+  let harness: SpatialHarness;
+
   beforeEach(() => {
-    mockInvoke.mockClear();
-    mockInvoke.mockImplementation(defaultInvokeImpl);
-    // Clear any captured listeners from prior tests so this suite drives
-    // its own `focus-changed` payload without picking up a stale handler.
-    for (const key of Object.keys(listenHandlers)) {
-      delete listenHandlers[key];
-    }
+    resetWebviewCommandBusForTest();
+    harness = setupSpatialHarness({ defaultInvokeImpl });
   });
 
   afterEach(() => {
@@ -573,47 +564,19 @@ describe("GridView -- single-focus-visual on a focused cell", () => {
     });
 
     // Wait for the spatial-nav stack and `useInitialCellFocus` to settle —
-    // by this point every grid cell has registered via
-    // `spatial_register_scope` and we can recover its `FullyQualifiedMoniker`
-    // from the mocked invoke history.
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
+    // by this point every grid cell has registered in the layer registry
+    // and we can recover its `FullyQualifiedMoniker` from the harness.
+    await flushSetup();
 
-    // Set entity focus first — this drives the `data-cell-cursor` debug
-    // attribute on the matching cell (legacy entity-focus → moniker →
-    // grid-cell cursor pipeline). The single-focus-visual contract holds
-    // even when both focus signals point at the same cell.
+    // Commit focus to the targeted cell through the kernel. The emitted
+    // `focus-changed` drives the cell's `useFocusClaim` callback (the
+    // bar) AND the entity-focus store (the `data-cell-cursor` attribute)
+    // — the production single-source-of-truth loop.
     const targetMoniker = gridCellMoniker(1, "status");
+    const targetFq = registeredFq(harness, targetMoniker);
     expect(focusRef.setFocus).toBeTruthy();
     await act(async () => {
-      focusRef.setFocus?.(asFq(targetMoniker));
-    });
-
-    // Dispatch a `focus-changed` event for the targeted cell's
-    // `FullyQualifiedMoniker`. In production the Rust spatial layer fires this in
-    // response to the click → `spatial_focus` → kernel update path; in
-    // the test we drive it directly off the `spatial_register_scope`
-    // call recorded for the targeted moniker. Without this, the cell's
-    // `useFocusClaim` callback never flips and the bar is never rendered.
-    const registerCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_register_scope",
-    );
-    const targetRegistration = registerCalls.find(
-      (c) => (c[1] as { segment?: string })?.segment === targetMoniker,
-    );
-    expect(targetRegistration).toBeTruthy();
-    const targetKey = (targetRegistration![1] as { fq: FullyQualifiedMoniker })
-      .fq;
-
-    await act(async () => {
-      const payload: FocusChangedPayload = {
-        window_label: "main" as FocusChangedPayload["window_label"],
-        prev_fq: null,
-        next_fq: targetKey,
-        next_segment: asSegment(targetMoniker),
-      };
-      listenHandlers["focus-changed"]?.({ payload });
+      focusRef.setFocus?.(targetFq);
     });
 
     const { container } = result;
@@ -621,10 +584,15 @@ describe("GridView -- single-focus-visual on a focused cell", () => {
     // 1. Exactly one `<FocusIndicator>` is rendered as a descendant of
     //    the focused cell's `<FocusScope>` — and that's the only one in
     //    the grid (no second decorator on a sibling element).
+    await waitFor(() => {
+      const indicators = container.querySelectorAll(
+        "[data-testid='focus-indicator']",
+      );
+      expect(indicators.length).toBe(1);
+    });
     const indicators = container.querySelectorAll(
       "[data-testid='focus-indicator']",
     );
-    expect(indicators.length).toBe(1);
     const focusedFocusable = container.querySelector(
       `[data-segment="${targetMoniker}"]`,
     ) as HTMLElement | null;

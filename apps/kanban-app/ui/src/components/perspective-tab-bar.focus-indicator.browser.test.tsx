@@ -66,7 +66,7 @@
  * `nav-bar.focus-indicator.browser.test.tsx`:
  *   - `vi.hoisted` builds an `invoke` / `listen` mock pair the test
  *     owns.
- *   - `mockListen` records every `listen("focus-changed", cb)` callback
+ *   - `mockListen` records every `listen("notifications/focus/changed", cb)` callback
  *     so `fireFocusChanged(key)` can drive the React tree as if the
  *     Rust kernel had emitted a `focus-changed` event.
  */
@@ -79,28 +79,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 // Tauri API mocks — must come before component imports.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -259,7 +240,7 @@ async function fireFocusChanged({
     next_fq,
     next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
-  const handlers = listeners.get("focus-changed") ?? [];
+  const handlers = listeners.get("notifications/focus/changed") ?? [];
   await act(async () => {
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();
@@ -569,7 +550,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
   // -------------------------------------------------------------------------
   // 4. Indicator returns after rename commit.
   //
-  // The active perspective is p2. Triggering `ui.entity.startRename`
+  // The active perspective is p2. Triggering `app.entity.startRename`
   // mounts the `<InlineRenameEditor>` inside the `TabButton`, replacing
   // the name text with a CM6 editor that takes DOM focus directly.
   // When the rename commits (Enter), the editor unmounts and the

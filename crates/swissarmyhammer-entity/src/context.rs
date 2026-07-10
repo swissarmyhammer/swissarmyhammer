@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use swissarmyhammer_fields::{
-    ComputeEngine, EntityDef, FieldType, FieldsContext, ValidationEngine,
+    ComputeEngine, DeriveRegistry, EntityDef, FieldType, FieldsContext, ValidationEngine,
 };
 use swissarmyhammer_store::{StoreContext, StoreHandle, StoredItemId};
 use tokio::sync::RwLock;
@@ -52,6 +52,16 @@ pub struct EntityContext {
     fields: Arc<FieldsContext>,
     validation: Option<Arc<ValidationEngine>>,
     compute: Option<Arc<ComputeEngine>>,
+    /// Optional derive-handler registry for **writing** computed fields.
+    ///
+    /// The `compute` engine derives computed field values on read; this
+    /// registry is its write-side counterpart. When a computed field is set
+    /// via [`EntityContext::update_field`], the matching writable
+    /// [`swissarmyhammer_fields::DeriveHandler`] translates the desired value
+    /// into mutations of the underlying source field(s) — e.g. editing `tags`
+    /// rewrites `#tag` mentions in the body — instead of blindly storing a
+    /// value the read-path compute would immediately overwrite.
+    derive: Option<Arc<DeriveRegistry>>,
     /// Optional store handles for entity types.
     /// When present, `write()` and `delete()` delegate file I/O to the store handle
     /// instead of using the legacy `io::write_entity` / `io::trash_entity_files` path.
@@ -83,6 +93,7 @@ impl EntityContext {
             fields,
             validation: None,
             compute: None,
+            derive: None,
             store_handles: RwLock::new(HashMap::new()),
             store_context: OnceLock::new(),
             cache: OnceLock::new(),
@@ -124,6 +135,17 @@ impl EntityContext {
         let _ = self.store_context.set(ctx);
     }
 
+    /// Return the `Arc<StoreContext>` previously installed via
+    /// [`set_store_context`], if any.
+    ///
+    /// Exposed so substrate-guard tests can verify via `Arc::ptr_eq` that the
+    /// entity context shares the single app-wide `StoreContext`. Production
+    /// code paths reach the context through the setter side and do not need
+    /// to read it back.
+    pub fn store_context(&self) -> Option<Arc<StoreContext>> {
+        self.store_context.get().cloned()
+    }
+
     /// Attach a validation engine. Enables field validation on write.
     pub fn with_validation(mut self, engine: Arc<ValidationEngine>) -> Self {
         self.validation = Some(engine);
@@ -134,6 +156,88 @@ impl EntityContext {
     pub fn with_compute(mut self, engine: Arc<ComputeEngine>) -> Self {
         self.compute = Some(engine);
         self
+    }
+
+    /// Attach a derive-handler registry. Enables computed-field **writes**
+    /// (the write-side counterpart to [`with_compute`]) via
+    /// [`EntityContext::update_field`].
+    pub fn with_derive(mut self, registry: Arc<DeriveRegistry>) -> Self {
+        self.derive = Some(registry);
+        self
+    }
+
+    /// Set a single field on an entity, routing computed fields through their
+    /// registered derive handler.
+    ///
+    /// This is the **single write path** the generic `entity` MCP face and the
+    /// domain `kanban` op both share, so a field edit behaves identically on
+    /// every surface:
+    ///
+    /// - **Normal field** — the value is stored directly (`Value::Null` removes
+    ///   the field), then the entity is written.
+    /// - **Computed field** — if a writable [`swissarmyhammer_fields::DeriveHandler`]
+    ///   is registered for the field's `derive` rule, the handler's `apply`
+    ///   runs, translating the desired value into mutations of the source
+    ///   field(s) (e.g. `parse-body-tags` rewrites the `#tag` mentions in the
+    ///   body). Blindly storing the value instead would be a no-op: the
+    ///   read-path compute engine recomputes the field from its source on the
+    ///   next read and discards the stored value.
+    ///
+    /// Returns the undo-stack entry id from the write (`None` for an idempotent
+    /// no-op write).
+    ///
+    /// # Errors
+    ///
+    /// - [`EntityError::EntityNotFound`] if the entity does not exist.
+    /// - [`EntityError::ComputeError`] if the field is computed but has no
+    ///   writable derive handler, or the handler rejects the value.
+    pub async fn update_field(
+        &self,
+        entity_type: &str,
+        id: &str,
+        field: &str,
+        value: serde_json::Value,
+    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
+        let mut entity = self.read(entity_type, id).await?;
+
+        // Resolve the field's derive rule (if it is a computed field) before
+        // borrowing anything mutably, so the `fields` borrow is released.
+        let derive_rule = match self.fields.get_field_by_name(field) {
+            Some(fd) => match &fd.type_ {
+                FieldType::Computed { derive, .. } => Some(derive.clone()),
+                _ => None,
+            },
+            None => None,
+        };
+
+        if let Some(rule) = derive_rule {
+            let handler = self
+                .derive
+                .as_ref()
+                .and_then(|reg| reg.get(&rule))
+                .filter(|h| h.writable());
+            let Some(handler) = handler else {
+                return Err(EntityError::ComputeError {
+                    field: field.to_string(),
+                    message: format!(
+                        "computed field '{field}' is read-only: no writable derive handler for rule '{rule}'"
+                    ),
+                });
+            };
+            let schema = self.entity_def(entity_type)?;
+            handler
+                .apply(&mut entity.fields, schema, &value)
+                .map_err(|e| EntityError::ComputeError {
+                    field: field.to_string(),
+                    message: e.to_string(),
+                })?;
+        } else if value.is_null() {
+            entity.remove(field);
+        } else {
+            entity.set(field, value);
+        }
+
+        self.write(&entity).await
     }
 
     /// Register a `StoreHandle` for an entity type.
@@ -656,6 +760,29 @@ impl EntityContext {
     /// [`UndoCmd`]: crate::UndoCmd
     /// [`RedoCmd`]: crate::RedoCmd
     pub async fn sync_entity_cache_from_disk(&self, entity_type: &str, id: &str) {
+        self.sync_entity_cache_from_disk_with(
+            entity_type,
+            id,
+            swissarmyhammer_store::EventProvenance::user(),
+        )
+        .await
+    }
+
+    /// Like [`sync_entity_cache_from_disk`](Self::sync_entity_cache_from_disk)
+    /// but stamps the supplied provenance (`txn` + `origin`) onto the
+    /// reconcile-emitted `EntityChanged`/`EntityDeleted` event.
+    ///
+    /// The post-undo/redo reconcile passes `origin: "undo"`/`"redo"` (plus
+    /// the reversed command's transaction id) so downstream subscribers can
+    /// attribute the change. The byte transition — and therefore which event
+    /// fires — is derived from the post-rewrite on-disk state, identical to
+    /// the plain wrapper; only the provenance differs.
+    pub async fn sync_entity_cache_from_disk_with(
+        &self,
+        entity_type: &str,
+        id: &str,
+        prov: swissarmyhammer_store::EventProvenance,
+    ) {
         let Some(cache) = self.attached_cache() else {
             return;
         };
@@ -672,7 +799,7 @@ impl EntityContext {
             // are non-fatal: `refresh_from_disk` only fails if the file
             // cannot be parsed, which means the cache is the better of
             // two bad options. Log and continue.
-            if let Err(e) = cache.refresh_from_disk(entity_type, id).await {
+            if let Err(e) = cache.refresh_from_disk_with(entity_type, id, prov).await {
                 tracing::warn!(
                     entity_type = entity_type,
                     id = id,
@@ -684,7 +811,7 @@ impl EntityContext {
             // File absent — the undo/redo either trashed it or moved it
             // to `.archive/`. Drop the cache entry so `read`/`list`
             // surface the deletion immediately.
-            cache.evict(entity_type, id).await;
+            cache.evict_with(entity_type, id, prov).await;
         }
     }
 
@@ -1319,6 +1446,77 @@ impl EntityContext {
         let query_fn = self.build_entity_query_fn();
         self.apply_compute_with_query(entity_type, entity, &query_fn)
             .await
+    }
+
+    /// Derive only the computed fields of an entity (no attachment
+    /// enrichment), for the write-path field-change diff.
+    ///
+    /// The field-change event that `EntityCache::write` emits is built from a
+    /// diff of the **raw** on-disk entity, which never contains computed
+    /// fields. As a result a change to a computed field's source — e.g.
+    /// editing the `tags` field rewrites `#tag` mentions in `body`, which the
+    /// `parse-body-tags` derivation turns back into `tags` — would emit a
+    /// field-change event for `body` only, and the UI would never re-render
+    /// the dependent `tags` field. Computing the computed fields on both the
+    /// pre- and post-write entity before diffing surfaces those derived
+    /// changes in the event. Returns `Ok(())` (a no-op) when no compute engine
+    /// is attached.
+    /// Compute field-change events for computed fields whose declared
+    /// dependency changed in a write, for the write-path diff.
+    ///
+    /// The field-change event `EntityCache::write` emits is a diff of the
+    /// **raw** on-disk entity, which never contains computed fields. So a
+    /// change to a computed field's source — e.g. editing `tags` rewrites the
+    /// `#tag` mentions in `body`, which `parse-body-tags` turns back into
+    /// `tags` — would emit a `body`-only event and the UI would never
+    /// re-render the dependent `tags` field. This recomputes each computed
+    /// field whose `depends_on` intersects `changed_fields` (the raw fields
+    /// that actually changed) on both the pre- and post-write entity, and
+    /// returns a [`crate::events::FieldChange`] for every one whose value
+    /// moved. Gating on `depends_on` keeps writes that touch unrelated fields
+    /// (e.g. `title`, `position_*`) from re-running any derivation.
+    ///
+    /// Values are derived directly via [`swissarmyhammer_fields::ComputeEngine::derive`]
+    /// — NOT through `derive_compute_fields`, whose per-id memoization would
+    /// cross-poison the two sides (same id, different body) and report no
+    /// change.
+    pub(crate) async fn computed_field_changes(
+        &self,
+        entity_type: &str,
+        changed_fields: &std::collections::HashSet<String>,
+        old: Option<&Entity>,
+        new: &Entity,
+    ) -> Vec<crate::events::FieldChange> {
+        let Some(compute) = self.compute.as_ref() else {
+            return Vec::new();
+        };
+        let query_fn = self.build_entity_query_fn();
+        let mut out = Vec::new();
+        for fd in self.fields.fields_for_entity(entity_type) {
+            let FieldType::Computed { depends_on, .. } = &fd.type_ else {
+                continue;
+            };
+            if !depends_on
+                .iter()
+                .any(|d| changed_fields.contains(d.as_str()))
+            {
+                continue;
+            }
+            let new_val = compute.derive(fd, &new.fields, Some(&query_fn)).await.ok();
+            let old_val = match old {
+                Some(o) => compute.derive(fd, &o.fields, Some(&query_fn)).await.ok(),
+                None => None,
+            };
+            if new_val != old_val {
+                if let Some(value) = new_val {
+                    out.push(crate::events::FieldChange {
+                        field: fd.name.to_string(),
+                        value,
+                    });
+                }
+            }
+        }
+        out
     }
 
     /// Derive computed fields using a pre-built query function.

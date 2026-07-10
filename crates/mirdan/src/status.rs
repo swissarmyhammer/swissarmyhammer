@@ -636,16 +636,7 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
 /// reports `Missing` rather than panicking on malformed user config.
 fn read_config_doc(path: &Path) -> Option<serde_json::Value> {
     let content = std::fs::read_to_string(path).ok()?;
-    let is_toml = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"));
-    if is_toml {
-        let value: toml::Value = toml::from_str(&content).ok()?;
-        serde_json::to_value(value).ok()
-    } else {
-        crate::parse_jsonc(&content).ok()
-    }
+    crate::settings::dispatch_read_config(path, &content).ok()
 }
 
 #[cfg(test)]

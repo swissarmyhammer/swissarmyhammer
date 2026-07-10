@@ -10,10 +10,16 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: (...args: unknown[]) => mockOpen(...args),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({
+// Spread the real module and override only the parts the test controls.
+// @tauri-apps/api >=2.11 pulls submodules that import named exports from core
+// (SERIALIZE_TO_IPC_FN, Resource, Channel, …); a hand-listed stub drops them
+// and breaks module loading.
+vi.mock("@tauri-apps/api/core", async (importActual) => ({
+  ...(await importActual<typeof import("@tauri-apps/api/core")>()),
   invoke: vi.fn(() => Promise.resolve(null)),
 }));
-vi.mock("@tauri-apps/api/event", () => ({
+vi.mock("@tauri-apps/api/event", async (importActual) => ({
+  ...(await importActual<typeof import("@tauri-apps/api/event")>()),
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 vi.mock("@tauri-apps/api/webview", () => ({
@@ -21,14 +27,7 @@ vi.mock("@tauri-apps/api/webview", () => ({
     onDragDropEvent: vi.fn(() => Promise.resolve(() => {})),
   }),
 }));
-vi.mock("@tauri-apps/plugin-log", () => ({
-  error: vi.fn(),
-  warn: vi.fn(),
-  info: vi.fn(),
-  debug: vi.fn(),
-  trace: vi.fn(),
-  attachConsole: vi.fn(() => Promise.resolve()),
-}));
+// `@tauri-apps/plugin-log` is mocked globally in `src/test/setup.ts`.
 
 // ---------------------------------------------------------------------------
 // Imports — after mocks
@@ -82,6 +81,10 @@ const SAMPLE_ATTACHMENTS: AttachmentMeta[] = [
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Wrap AttachmentEditor in required providers. The `props` object supplies the
+ * `field` def, current `value`, and the `onCommit`/`onCancel`/`onChange` callbacks.
+ */
 function renderEditor(props: {
   field?: FieldDef;
   value?: unknown;

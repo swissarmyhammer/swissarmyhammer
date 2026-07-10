@@ -4,14 +4,28 @@ import { GroupSection } from "./group-section";
 import type { GroupBucket } from "@/lib/group-utils";
 import type { BoardData, Entity } from "@/types/kanban";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve()),
-}));
+// `<GroupSection>` now imports the spatial-focus context (for the per-group
+// `<FocusScope>` frame); that chain transitively loads `@tauri-apps/api/window`,
+// which re-exports `SERIALIZE_TO_IPC_FN` from `core`. Preserve the real core
+// exports and override only `invoke` so the re-export resolves (a hand-listed
+// stub drops it and the import fails at load).
+vi.mock("@tauri-apps/api/core", async () => {
+  const actual = await vi.importActual<typeof import("@tauri-apps/api/core")>(
+    "@tauri-apps/api/core",
+  );
+  return { ...actual, invoke: vi.fn(() => Promise.resolve()) };
+});
 
-vi.mock("@tauri-apps/api/event", () => ({
-  emit: vi.fn(() => Promise.resolve()),
-  listen: vi.fn(() => Promise.resolve(() => {})),
-}));
+vi.mock("@tauri-apps/api/event", async () => {
+  const actual = await vi.importActual<typeof import("@tauri-apps/api/event")>(
+    "@tauri-apps/api/event",
+  );
+  return {
+    ...actual,
+    emit: vi.fn(() => Promise.resolve()),
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  };
+});
 
 vi.mock("@/components/board-view", () => ({
   BoardView: ({ tasks }: { board: BoardData; tasks: Entity[] }) => (

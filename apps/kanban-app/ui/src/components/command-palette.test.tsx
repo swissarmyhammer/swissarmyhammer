@@ -79,6 +79,27 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main", setFocus: vi.fn() }),
 }));
 
+// The palette sources its command rows from the metadata-driven Command
+// registry via `useCommandList`. Tests drive that seam by setting
+// `mockRegistry`; availability defaults to available unless overridden.
+import type {
+  CommandMetadata,
+  UseCommandListOptions,
+} from "@/hooks/use-command-list";
+let mockRegistry: CommandMetadata[] = [];
+/** Records the options each `useCommandList` call received (scope forwarding). */
+let useCommandListCalls: UseCommandListOptions[] = [];
+vi.mock("@/hooks/use-command-list", () => ({
+  useCommandList: (options: UseCommandListOptions = {}) => {
+    useCommandListCalls.push(options);
+    return {
+      commands: mockRegistry,
+      loading: false,
+      refresh: vi.fn(),
+    };
+  },
+}));
+
 // Mock codemirror-vim: getCM returns a cm object, Vim.handleKey is the spy
 vi.mock("@replit/codemirror-vim", async () => {
   const actual = await vi.importActual<typeof import("@replit/codemirror-vim")>(
@@ -127,11 +148,20 @@ const TEST_COMMANDS: CommandDef[] = [
   },
 ];
 
+/** Registry rows mirroring TEST_COMMANDS (id/name/keys) for command-mode tests. */
+const TEST_REGISTRY: CommandMetadata[] = [
+  { id: "open-file", name: "Open File", keys: { vim: ":e", cua: "Ctrl+O" } },
+  { id: "save-file", name: "Save File", keys: { vim: ":w", cua: "Ctrl+S" } },
+  { id: "close-tab", name: "Close Tab", keys: { cua: "Ctrl+W" } },
+];
+
 beforeEach(() => {
   handleKeyMock.mockClear();
   getCMMock.mockClear();
   // Restore default getCM behavior
   getCMMock.mockReturnValue({ state: { vim: {} } } as any);
+  mockRegistry = TEST_REGISTRY;
+  useCommandListCalls = [];
 });
 
 async function renderPalette(open: boolean, onClose = vi.fn()) {
@@ -203,6 +233,22 @@ describe("CommandPalette", () => {
     await renderPalette(true);
     const list = screen.getByTestId("command-palette-list");
     expect(list.getAttribute("role")).toBe("listbox");
+  });
+
+  it("renders Rust-emitted 'Switch to <ViewName>' rows from the registry source", async () => {
+    // The palette's per-view rows are produced backend-side by
+    // `swissarmyhammer_kanban::scope_commands::emit_view_switch`: each row
+    // carries the canonical `view.set` id with the display name already
+    // rendered ("Switch to <ViewName>") and `view_id` pre-filled in args.
+    // No client-minted `view.switch:*` id is involved (card
+    // 01KTED8XDX4728QR4WT9EZ0WRF) — the row reaches the palette purely
+    // through the registry seam (`useCommandList`).
+    mockRegistry = [
+      ...TEST_REGISTRY,
+      { id: "view.set", name: "Switch to Board" },
+    ];
+    await renderPalette(true);
+    expect(screen.getByText("Switch to Board")).toBeTruthy();
   });
 
   it("dispatches to backend when command has no execute handler", async () => {
@@ -821,47 +867,13 @@ function mockBackendForView(opts: {
   entityAddId: string;
   entityAddName: string;
 }) {
-  vi.mocked(invoke).mockImplementation((cmd: string, args?: any) => {
-    if (cmd === "get_ui_state")
-      return Promise.resolve({
-        palette_open: false,
-        palette_mode: "command",
-        keymap_mode: "cua",
-        scope_chain: [],
-        open_boards: [],
-        windows: {},
-        recent_boards: [],
-      });
-    if (cmd === "list_commands_for_scope") {
-      // Sanity — the palette must forward exactly the scope chain we
-      // expect. If the frontend ever diverges from FocusedScopeContext
-      // this throws, catching the regression class "palette sent an empty
-      // scope chain".
-      if (
-        JSON.stringify(args?.scopeChain) !== JSON.stringify(opts.expectedScope)
-      ) {
-        return Promise.resolve([]);
-      }
-      return Promise.resolve([
-        {
-          id: opts.entityAddId,
-          name: opts.entityAddName,
-          group: "entity",
-          context_menu: true,
-          available: true,
-        },
-        {
-          id: "app.quit",
-          name: "Quit",
-          group: "global",
-          context_menu: false,
-          available: true,
-        },
-      ]);
-    }
-    if (cmd === "log_command") return Promise.resolve(null);
-    return Promise.resolve(null);
-  });
+  // The palette now sources rows from `useCommandList` (mocked via
+  // `mockRegistry`) rather than `list_commands_for_scope`. The registry
+  // returns the entity-add command for the active scope plus a global command.
+  mockRegistry = [
+    { id: opts.entityAddId, name: opts.entityAddName, scope: ["entity:task"] },
+    { id: "app.quit", name: "Quit" },
+  ];
 }
 
 /**
@@ -961,12 +973,153 @@ describe("CommandPalette per-entity-type rendering", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Pre-open scope-chain capture (kanban card 01KTY6XTJQFCG9ENKTAMC6N3JV).
+//
+// The palette is an overlay: between open and pick, the live focused scope
+// chain can move off the entity the captions were rendered against (the
+// palette mounts its own `<FocusLayer>`, search rows mount `FocusScope`s).
+// The palette therefore CAPTURES the chain once, at open, and uses it for
+// everything — the `useCommandList` caption ctx, availability, and the
+// dispatch (passed explicitly, the context-menu pattern) — so a row's
+// caption ("Inspect Task") and what picking it executes against can never
+// disagree.
+// ---------------------------------------------------------------------------
+
+describe("CommandPalette pre-open scope-chain capture", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** Render the palette open inside the given focused scope. */
+  function renderOpenPalette(focusedScope: CommandScope | null) {
+    return render(
+      <EntityFocusProvider>
+        <UIStateProvider>
+          <FocusedScopeContext.Provider value={focusedScope}>
+            <CommandScopeProvider commands={[]}>
+              <CommandPalette open={true} onClose={vi.fn()} />
+            </CommandScopeProvider>
+          </FocusedScopeContext.Provider>
+        </UIStateProvider>
+      </EntityFocusProvider>,
+    );
+  }
+
+  /** Rerender the same palette under a different focused scope. */
+  function rerenderWithScope(
+    result: ReturnType<typeof render>,
+    focusedScope: CommandScope | null,
+  ) {
+    result.rerender(
+      <EntityFocusProvider>
+        <UIStateProvider>
+          <FocusedScopeContext.Provider value={focusedScope}>
+            <CommandScopeProvider commands={[]}>
+              <CommandPalette open={true} onClose={vi.fn()} />
+            </CommandScopeProvider>
+          </FocusedScopeContext.Provider>
+        </UIStateProvider>
+      </EntityFocusProvider>,
+    );
+  }
+
+  it("dispatches with the chain captured at open, not the live post-open chain", async () => {
+    // The row the user picks — a backend command (no client-side execute),
+    // captioned against the pre-open entity chain.
+    mockRegistry = [{ id: "app.inspect", name: "Inspect Task" }];
+
+    const entityScope = buildFocusedScope([
+      "task:AAA",
+      "column:todo",
+      "board:my-board",
+    ]);
+    // The overlay's own chain after the palette stole focus — no entity.
+    const paletteScope = buildFocusedScope(["ui:palette", "board:my-board"]);
+
+    let result: ReturnType<typeof render>;
+    await act(async () => {
+      result = renderOpenPalette(entityScope);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Focus moves off the entity while the palette is open (the overlay's
+    // FocusLayer / a search row takes spatial focus).
+    await act(async () => {
+      rerenderWithScope(result!, paletteScope);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockClear();
+    fireEvent.click(screen.getByText("Inspect Task"));
+
+    const dispatchCall = invokeMock.mock.calls.find(
+      ([cmd]) => cmd === "dispatch_command",
+    );
+    expect(dispatchCall).toBeDefined();
+    const [, args] = dispatchCall!;
+    expect((args as Record<string, unknown>).cmd).toBe("app.inspect");
+    // The dispatch must carry the entity chain the caption was rendered
+    // against — never the palette's own live chain.
+    expect((args as Record<string, unknown>).scopeChain).toEqual([
+      "task:AAA",
+      "column:todo",
+      "board:my-board",
+    ]);
+  });
+
+  it("keeps listing captions against the captured chain while open", async () => {
+    mockRegistry = [{ id: "app.inspect", name: "Inspect Task" }];
+
+    const entityScope = buildFocusedScope(["task:AAA", "board:my-board"]);
+    const paletteScope = buildFocusedScope(["ui:palette", "board:my-board"]);
+
+    let result: ReturnType<typeof render>;
+    await act(async () => {
+      result = renderOpenPalette(entityScope);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(useCommandListCalls).toContainEqual({
+      scope: "task:AAA",
+      scopeChain: ["task:AAA", "board:my-board"],
+    });
+
+    useCommandListCalls = [];
+    await act(async () => {
+      rerenderWithScope(result!, paletteScope);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The list ctx stays the CAPTURED chain — captions never re-render
+    // against the overlay's own chain, so they cannot disagree with the
+    // dispatch (which carries the same captured chain).
+    expect(useCommandListCalls.length).toBeGreaterThan(0);
+    for (const call of useCommandListCalls) {
+      expect(call).toEqual({
+        scope: "task:AAA",
+        scopeChain: ["task:AAA", "board:my-board"],
+      });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Scope-chain sourcing tests.
 //
 // Regression guard for 01KPZREKCQXN5AX0SMEE2X0ZWR: the palette must source
 // its scope chain from `FocusedScopeContext`, not from `useUIState()`. The
-// backend suppresses the `scope_chain` echo on every `ui.setFocus`, so the
+// backend suppresses the `scope_chain` echo on every `app.setFocus`, so the
 // palette would break if it still read from UIState.
+//
+// Card 01KTY6XTJQFCG9ENKTAMC6N3JV refined the contract: the chain is read
+// from `FocusedScopeContext` ONCE, at palette open, and frozen for the
+// session (the capture tests above pin the freeze and the dispatch side) —
+// so this guard asserts the open-time sourcing only.
 // ---------------------------------------------------------------------------
 
 describe("CommandPalette scope chain sourcing", () => {
@@ -974,35 +1127,14 @@ describe("CommandPalette scope chain sourcing", () => {
     vi.clearAllMocks();
   });
 
-  it("palette refetches commands when focused scope changes while open", async () => {
-    // Track what scope chain each `list_commands_for_scope` call saw, so we
-    // can assert the palette re-requested for the new chain on rerender.
-    const seenChains: unknown[] = [];
-    vi.mocked(invoke).mockImplementation((cmd: string, args?: any) => {
-      if (cmd === "get_ui_state")
-        return Promise.resolve({
-          palette_open: false,
-          palette_mode: "command",
-          keymap_mode: "cua",
-          scope_chain: [],
-          open_boards: [],
-          windows: {},
-          recent_boards: [],
-        });
-      if (cmd === "list_commands_for_scope") {
-        seenChains.push(args?.scopeChain);
-        return Promise.resolve([]);
-      }
-      if (cmd === "log_command") return Promise.resolve(null);
-      return Promise.resolve(null);
-    });
-
+  it("palette forwards the innermost focused-scope moniker to useCommandList", async () => {
+    // The palette filters `useCommandList` by the innermost moniker of the
+    // scope chain captured from `FocusedScopeContext` at open, and forwards
+    // the full chain as the caption-render context.
     const scopeA = buildFocusedScope(["task:AAA", "board:my-board"]);
-    const scopeB = buildFocusedScope(["task:BBB", "board:my-board"]);
 
-    let result: ReturnType<typeof render>;
     await act(async () => {
-      result = render(
+      render(
         <EntityFocusProvider>
           <UIStateProvider>
             <FocusedScopeContext.Provider value={scopeA}>
@@ -1017,28 +1149,9 @@ describe("CommandPalette scope chain sourcing", () => {
       await Promise.resolve();
     });
 
-    // Scope A: palette asked for A's chain.
-    expect(seenChains).toContainEqual(["task:AAA", "board:my-board"]);
-
-    // Simulate focus moving to scope B while the palette is still open.
-    await act(async () => {
-      result!.rerender(
-        <EntityFocusProvider>
-          <UIStateProvider>
-            <FocusedScopeContext.Provider value={scopeB}>
-              <CommandScopeProvider commands={[]}>
-                <CommandPalette open={true} onClose={vi.fn()} />
-              </CommandScopeProvider>
-            </FocusedScopeContext.Provider>
-          </UIStateProvider>
-        </EntityFocusProvider>,
-      );
-      await Promise.resolve();
-      await Promise.resolve();
+    expect(useCommandListCalls).toContainEqual({
+      scope: "task:AAA",
+      scopeChain: ["task:AAA", "board:my-board"],
     });
-
-    // Scope B: palette re-asked for B's chain. The identical-prefix board
-    // moniker is retained; only the innermost scope changed.
-    expect(seenChains).toContainEqual(["task:BBB", "board:my-board"]);
   });
 });

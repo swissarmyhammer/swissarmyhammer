@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    FocusLayer, FullyQualifiedMoniker, LayerName, NavSnapshot, Pixels, Rect, SegmentMoniker,
-    SnapshotScope, SpatialRegistry, SpatialState, WindowLabel,
+    FocusLayer, FullyQualifiedMoniker, LayerName, LostScope, NavSnapshot, Pixels, Rect,
+    SegmentMoniker, SnapshotScope, SpatialRegistry, SpatialState, WindowLabel,
 };
 
 fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
@@ -42,6 +42,7 @@ fn snap(fq_str: &str, parent_zone: Option<&str>, r: Rect) -> SnapshotScope {
         rect: r,
         parent_zone: parent_zone.map(fq),
         nav_override: HashMap::new(),
+        focusable: true,
     }
 }
 
@@ -68,7 +69,7 @@ fn focus_lost_picks_sibling_in_zone() {
     };
 
     state
-        .focus(&mut reg, &pre_unmount, fq("/L/zone/lost"))
+        .focus(&mut reg, &pre_unmount, fq("/L/zone/lost"), None)
         .expect("focus lost initially");
 
     // Post-unmount snapshot: lost scope removed.
@@ -88,10 +89,13 @@ fn focus_lost_picks_sibling_in_zone() {
         .focus_lost(
             &mut reg,
             &post_unmount,
-            &fq("/L/zone/lost"),
-            Some(&fq("/L/zone")),
-            &fq("/L"),
-            rect(0.0, 0.0, 10.0, 10.0),
+            LostScope {
+                fq: &fq("/L/zone/lost"),
+                parent_zone: Some(&fq("/L/zone")),
+                layer_fq: &fq("/L"),
+                rect: rect(0.0, 0.0, 10.0, 10.0),
+            },
+            None,
         )
         .expect("focus_lost emits");
 
@@ -132,10 +136,10 @@ fn focus_lost_picks_parent_zone_last_focused() {
 
     // Stake the map: focus remembered first, then focus the lost FQM.
     state
-        .focus(&mut reg, &pre_unmount, fq("/L/outer/remembered"))
+        .focus(&mut reg, &pre_unmount, fq("/L/outer/remembered"), None)
         .expect("focus remembered seeds last_focused_by_fq[outer]");
     state
-        .focus(&mut reg, &pre_unmount, fq("/L/outer/inner/lost"))
+        .focus(&mut reg, &pre_unmount, fq("/L/outer/inner/lost"), None)
         .expect("focus lost overwrites last_focused_by_fq for outer");
 
     // Re-stake the map by focusing remembered then lost so that
@@ -167,10 +171,13 @@ fn focus_lost_picks_parent_zone_last_focused() {
         .focus_lost(
             &mut reg,
             &post_unmount,
-            &fq("/L/outer/inner/lost"),
-            Some(&fq("/L/outer/inner")),
-            &fq("/L"),
-            rect(0.0, 0.0, 10.0, 10.0),
+            LostScope {
+                fq: &fq("/L/outer/inner/lost"),
+                parent_zone: Some(&fq("/L/outer/inner")),
+                layer_fq: &fq("/L"),
+                rect: rect(0.0, 0.0, 10.0, 10.0),
+            },
+            None,
         )
         .expect("focus_lost emits");
 
@@ -191,7 +198,7 @@ fn focus_lost_emits_none_when_layer_is_empty() {
         scopes: vec![snap("/L/lost", None, rect(0.0, 0.0, 10.0, 10.0))],
     };
     state
-        .focus(&mut reg, &pre, fq("/L/lost"))
+        .focus(&mut reg, &pre, fq("/L/lost"), None)
         .expect("focus seed");
 
     // Post-unmount: the layer is empty.
@@ -203,10 +210,13 @@ fn focus_lost_emits_none_when_layer_is_empty() {
         .focus_lost(
             &mut reg,
             &post,
-            &fq("/L/lost"),
+            LostScope {
+                fq: &fq("/L/lost"),
+                parent_zone: None,
+                layer_fq: &fq("/L"),
+                rect: rect(0.0, 0.0, 10.0, 10.0),
+            },
             None,
-            &fq("/L"),
-            rect(0.0, 0.0, 10.0, 10.0),
         )
         .expect("focus_lost emits");
 
@@ -218,40 +228,49 @@ fn focus_lost_emits_none_when_layer_is_empty() {
 }
 
 /// `focus_lost` on a non-focused FQM is a no-op.
+///
+/// Window-rooted fixtures (`/main/window/...`): the owning window "main" is
+/// the fq root segment, so the focus slot for `/main/window/a` lands under
+/// "main" — the path-derivation rule the kernel applies on every commit.
 #[test]
 fn focus_lost_on_unfocused_fq_is_noop() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer_node("/L", "main", None));
+    reg.push_layer(layer_node("/main/window", "main", None));
     let mut state = SpatialState::new();
 
     let pre = NavSnapshot {
-        layer_fq: fq("/L"),
+        layer_fq: fq("/main/window"),
         scopes: vec![
-            snap("/L/a", None, rect(0.0, 0.0, 10.0, 10.0)),
-            snap("/L/b", None, rect(20.0, 0.0, 10.0, 10.0)),
+            snap("/main/window/a", None, rect(0.0, 0.0, 10.0, 10.0)),
+            snap("/main/window/b", None, rect(20.0, 0.0, 10.0, 10.0)),
         ],
     };
-    state.focus(&mut reg, &pre, fq("/L/a")).expect("focus a");
+    state
+        .focus(&mut reg, &pre, fq("/main/window/a"), None)
+        .expect("focus a");
 
     let post = NavSnapshot {
-        layer_fq: fq("/L"),
-        scopes: vec![snap("/L/a", None, rect(0.0, 0.0, 10.0, 10.0))],
+        layer_fq: fq("/main/window"),
+        scopes: vec![snap("/main/window/a", None, rect(0.0, 0.0, 10.0, 10.0))],
     };
 
-    // `/L/b` was never focused — focus_lost should be a no-op.
+    // `/main/window/b` was never focused — focus_lost should be a no-op.
     let event = state.focus_lost(
         &mut reg,
         &post,
-        &fq("/L/b"),
+        LostScope {
+            fq: &fq("/main/window/b"),
+            parent_zone: None,
+            layer_fq: &fq("/main/window"),
+            rect: rect(20.0, 0.0, 10.0, 10.0),
+        },
         None,
-        &fq("/L"),
-        rect(20.0, 0.0, 10.0, 10.0),
     );
 
     assert!(event.is_none());
     assert_eq!(
         state.focused_in(&WindowLabel::from_string("main")),
-        Some(&fq("/L/a")),
+        Some(&fq("/main/window/a")),
         "unrelated focus must not be perturbed",
     );
 }

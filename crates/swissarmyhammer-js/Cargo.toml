@@ -5,11 +5,12 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "JavaScript expression engine for SwissArmyHammer using rquickjs (QuickJS-NG)"
+description = "JavaScript expression engine for SwissArmyHammer using deno_core (V8)"
 
 [dependencies]
 # JS engine
-rquickjs = { workspace = true }
+deno_core = { workspace = true }
+deno_error = { workspace = true }
 
 # Workspace dependencies
 serde = { workspace = true }

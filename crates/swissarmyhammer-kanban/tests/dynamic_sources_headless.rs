@@ -7,7 +7,7 @@
 //!
 //! This file proves the relocated entry point produces the exact same
 //! `DynamicSources` shape the GUI crate used to assemble inline: views,
-//! boards, and perspectives computed from a bare `UIState` + one or more
+//! boards, and perspectives computed from a bare `UiState` + one or more
 //! `KanbanContext`s, with `WindowInfo` supplied by the caller (since live
 //! window titles/focus states can only come from the GUI runtime).
 //!
@@ -25,12 +25,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::json;
-use swissarmyhammer_commands::{compose_registry, UIState, WindowInfo};
+use swissarmyhammer_common::WindowInfo;
+use swissarmyhammer_kanban::compose_registry;
 use swissarmyhammer_kanban::dynamic_sources::{build_dynamic_sources, DynamicSourcesInputs};
 use swissarmyhammer_kanban::scope_commands::{commands_for_scope, DynamicSources};
 use swissarmyhammer_kanban::{
     board::InitBoard, dispatch::execute_operation, parse::parse_input, Execute, KanbanContext,
 };
+use swissarmyhammer_ui_state::UiState;
 use tempfile::TempDir;
 
 /// Open a fresh board under a temp dir and return the context and its
@@ -104,7 +106,7 @@ async fn add_perspective_inner(
 /// board's views registry. Returns nothing — the id is the caller's input.
 ///
 /// Used by the per-`view_id` perspective scoping tests, which need to flip
-/// `UIState`'s active view between two grid views sharing the same kind
+/// `UiState`'s active view between two grid views sharing the same kind
 /// to prove `view_id` resolves to different perspectives.
 async fn register_grid_view(ctx: &KanbanContext, id: &str, name: &str) {
     use swissarmyhammer_views::{ViewDef, ViewKind};
@@ -125,7 +127,7 @@ async fn register_grid_view(ctx: &KanbanContext, id: &str, name: &str) {
         .expect("write_view must succeed");
 }
 
-/// End-to-end headless assembly: seed a board + a perspective, point UIState
+/// End-to-end headless assembly: seed a board + a perspective, point UiState
 /// at that board + an active view, then call `build_dynamic_sources` and
 /// assert every emitted dynamic command matches what the GUI path would
 /// produce. No Tauri crate is in scope.
@@ -137,9 +139,9 @@ async fn build_dynamic_sources_assembles_views_boards_perspectives_headless() {
     // has something to return.
     let persp_id = add_perspective(&ctx, "Active Sprint", "board").await;
 
-    // Bare UIState: marks the board as open and selects a real view id so
+    // Bare UiState: marks the board as open and selects a real view id so
     // `resolve_active_view` has something to return.
-    let ui = UIState::new();
+    let ui = UiState::new();
     let board_path_str = board_path.display().to_string();
     ui.add_open_board(&board_path_str);
     // Use the ULID id of the built-in `board` view (kind=board). ViewsContext
@@ -213,8 +215,9 @@ async fn build_dynamic_sources_assembles_views_boards_perspectives_headless() {
     // Now pipe through `commands_for_scope` and verify the headless
     // DynamicSources drives the same dynamic-command emission the GUI
     // path exercises.
-    let registry = compose_registry![swissarmyhammer_commands, swissarmyhammer_kanban];
-    let impls: HashMap<String, Arc<dyn swissarmyhammer_commands::Command>> = HashMap::new();
+    let registry = compose_registry![swissarmyhammer_kanban];
+    let impls: HashMap<String, Arc<dyn swissarmyhammer_kanban::commands_core::Command>> =
+        HashMap::new();
     let ui_arc = Arc::new(ui);
     let scope = vec![
         format!("view:{}", BUILTIN_BOARD_VIEW_ID),
@@ -271,7 +274,7 @@ async fn build_dynamic_sources_assembles_views_boards_perspectives_headless() {
 /// `None` (no board focused).
 #[tokio::test]
 async fn build_dynamic_sources_handles_no_active_context() {
-    let ui = UIState::new();
+    let ui = UiState::new();
     let open_boards: HashMap<PathBuf, Arc<KanbanContext>> = HashMap::new();
 
     let inputs = DynamicSourcesInputs {
@@ -300,7 +303,7 @@ async fn build_dynamic_sources_emits_every_open_board_and_window() {
     let (_tmp_a, ctx_a, path_a) = open_board("Board Alpha").await;
     let (_tmp_b, ctx_b, path_b) = open_board("Board Beta").await;
 
-    let ui = UIState::new();
+    let ui = UiState::new();
     let path_a_str = path_a.display().to_string();
     let path_b_str = path_b.display().to_string();
     ui.add_open_board(&path_a_str);
@@ -337,7 +340,7 @@ async fn build_dynamic_sources_emits_every_open_board_and_window() {
     let dynamic: DynamicSources = build_dynamic_sources(inputs).await;
 
     // Both boards must be present with the entity names we initialised them
-    // under — order is unspecified because it follows `UIState::open_boards`.
+    // under — order is unspecified because it follows `UiState::open_boards`.
     assert_eq!(dynamic.boards.len(), 2, "both open boards must be emitted");
     let paths: Vec<&str> = dynamic.boards.iter().map(|b| b.path.as_str()).collect();
     assert!(paths.contains(&path_a_str.as_str()));
@@ -375,8 +378,9 @@ async fn build_dynamic_sources_emits_every_open_board_and_window() {
 
     // Pipe through `commands_for_scope` and verify both `board.switch:*` and
     // both `window.focus:*` commands are emitted.
-    let registry = compose_registry![swissarmyhammer_commands, swissarmyhammer_kanban];
-    let impls: HashMap<String, Arc<dyn swissarmyhammer_commands::Command>> = HashMap::new();
+    let registry = compose_registry![swissarmyhammer_kanban];
+    let impls: HashMap<String, Arc<dyn swissarmyhammer_kanban::commands_core::Command>> =
+        HashMap::new();
     let ui_arc = Arc::new(ui);
     let scope = vec![
         format!("view:{}", BUILTIN_BOARD_VIEW_ID),
@@ -422,7 +426,7 @@ async fn build_dynamic_sources_emits_every_open_board_and_window() {
 /// parent directory basename for both `entity_name` and `context_name`.
 ///
 /// This branch is load-bearing on the live-app splash/welcome path,
-/// where UIState lists recent boards the user has not opened yet — there
+/// where UiState lists recent boards the user has not opened yet — there
 /// is no `KanbanContext` for them, but they still need to render in the
 /// board-switcher menu as something humans can read.
 #[tokio::test]
@@ -433,7 +437,7 @@ async fn build_dynamic_sources_falls_back_to_basename_when_ctx_missing() {
     let recent_path = PathBuf::from("/tmp/swissarmyhammer-headless/recents-fixture/.kanban");
     let recent_str = recent_path.display().to_string();
 
-    let ui = UIState::new();
+    let ui = UiState::new();
     ui.add_open_board(&recent_str);
 
     // Intentionally empty: the path is in `open_boards` but we have no
@@ -482,7 +486,7 @@ async fn build_dynamic_sources_filters_perspectives_by_active_view_kind() {
     let board_persp_id = add_perspective(&ctx, "Board Sprint", "board").await;
     let grid_persp_id = add_perspective(&ctx, "Grid Backlog", "grid").await;
 
-    let ui = UIState::new();
+    let ui = UiState::new();
     let board_path_str = board_path.display().to_string();
     ui.add_open_board(&board_path_str);
     // Active view kind is "board" — so grid perspectives must be filtered out.
@@ -535,6 +539,12 @@ async fn build_dynamic_sources_filters_perspectives_by_active_view_kind() {
 const GRID_VIEW_A_ID: &str = "01JMVIEW0000000000TGRID0";
 const GRID_VIEW_B_ID: &str = "01JMVIEW0000000000PGRID0";
 
+// View ids for the context-menu view-switch scoping tests. Hoisted to module
+// level (matching the `GRID_VIEW_*_ID` convention above) so the same two ULIDs
+// are shared across every test that exercises `switch_rows_for_scope`.
+const VIEW_X_ID: &str = "01JMVIEW0000000000XGRID0";
+const VIEW_Y_ID: &str = "01JMVIEW0000000000YGRID0";
+
 /// Per-`view_id` scoping: a perspective pinned to view A's id must appear
 /// only when view A is active and must NOT appear when view B (a sibling
 /// of the same kind) is active.
@@ -558,7 +568,7 @@ async fn perspectives_are_scoped_by_view_id_when_set() {
     open_boards.insert(board_path.clone(), Arc::clone(&ctx));
 
     // With view B active, the scoped perspective must be filtered out.
-    let ui_b = UIState::new();
+    let ui_b = UiState::new();
     ui_b.add_open_board(&board_path_str);
     ui_b.set_active_view("main", GRID_VIEW_B_ID);
     let dynamic_b = build_dynamic_sources(DynamicSourcesInputs {
@@ -581,7 +591,7 @@ async fn perspectives_are_scoped_by_view_id_when_set() {
     );
 
     // With view A active, the scoped perspective must be present.
-    let ui_a = UIState::new();
+    let ui_a = UiState::new();
     ui_a.add_open_board(&board_path_str);
     ui_a.set_active_view("main", GRID_VIEW_A_ID);
     let dynamic_a = build_dynamic_sources(DynamicSourcesInputs {
@@ -624,7 +634,7 @@ async fn legacy_kind_perspectives_remain_shared_by_kind() {
     open_boards.insert(board_path.clone(), Arc::clone(&ctx));
 
     for view_id in [GRID_VIEW_A_ID, GRID_VIEW_B_ID] {
-        let ui = UIState::new();
+        let ui = UiState::new();
         ui.add_open_board(&board_path_str);
         ui.set_active_view("main", view_id);
         let dynamic = build_dynamic_sources(DynamicSourcesInputs {
@@ -649,7 +659,7 @@ async fn legacy_kind_perspectives_remain_shared_by_kind() {
     }
 
     // Board-kind view: legacy grid perspective must NOT appear.
-    let ui_board = UIState::new();
+    let ui_board = UiState::new();
     ui_board.add_open_board(&board_path_str);
     const BUILTIN_BOARD_VIEW_ID: &str = "01JMVIEW0000000000BOARD0";
     ui_board.set_active_view("main", BUILTIN_BOARD_VIEW_ID);
@@ -673,5 +683,324 @@ async fn legacy_kind_perspectives_remain_shared_by_kind() {
             .iter()
             .map(|p| (&p.id, &p.view))
             .collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Per-view "Switch to View «name»" context-menu coverage
+// (card 01KV5K29FFQJTBER6HYA4J2DW6).
+//
+// View switching stays palette-only (`context_menu: false`) for EVERY view so
+// the palette can switch to any view from anywhere. Additionally, the view
+// whose `view:{id}` moniker is present in the scope chain gets ITS OWN row
+// flagged `context_menu: true` — so right-clicking view X surfaces exactly
+// "Switch to View «X»" and nothing for sibling views.
+// ---------------------------------------------------------------------------
+
+/// Build a minimal grid-kind [`ViewInfo`] for the switch-row tests.
+fn view_info(id: &str, name: &str) -> swissarmyhammer_views::ViewInfo {
+    swissarmyhammer_views::ViewInfo {
+        id: id.into(),
+        name: name.into(),
+        entity_type: Some("task".into()),
+        kind: "grid".into(),
+    }
+}
+
+/// Run `commands_for_scope` over a fixed two-view `DynamicSources` and the
+/// supplied scope chain, returning every emitted command. Uses an empty UiState
+/// and the composed kanban registry — the same plumbing the other tests use.
+fn switch_rows_for_scope(
+    views: &[swissarmyhammer_views::ViewInfo],
+    scope: &[String],
+) -> Vec<swissarmyhammer_kanban::scope_commands::ResolvedCommand> {
+    let dynamic = DynamicSources {
+        views: views.to_vec(),
+        ..Default::default()
+    };
+    let registry = compose_registry![swissarmyhammer_kanban];
+    let impls: HashMap<String, Arc<dyn swissarmyhammer_kanban::commands_core::Command>> =
+        HashMap::new();
+    let ui_arc = Arc::new(UiState::new());
+    commands_for_scope(
+        scope,
+        &registry,
+        &impls,
+        None,
+        &ui_arc,
+        false,
+        Some(&dynamic),
+        None,
+    )
+}
+
+/// Pull the `view_id` from a `view.set` row's args, if present.
+fn view_set_view_id(
+    cmd: &swissarmyhammer_kanban::scope_commands::ResolvedCommand,
+) -> Option<String> {
+    if cmd.id != "view.set" {
+        return None;
+    }
+    cmd.args
+        .as_ref()
+        .and_then(|v| v.get("view_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// With `view:{X}` in the scope chain, exactly ONE `view.set` row is flagged
+/// `context_menu: true`, it carries view X's `view_id`, and no sibling view's
+/// id appears as a context-menu row. The palette (`context_menu: false`) rows
+/// for ALL views remain.
+#[test]
+fn context_menu_view_switch_is_scoped_to_the_view_in_scope() {
+    let views = vec![
+        view_info(VIEW_X_ID, "Board"),
+        view_info(VIEW_Y_ID, "Backlog"),
+    ];
+
+    let cmds = switch_rows_for_scope(&views, &[format!("view:{VIEW_X_ID}")]);
+
+    // Exactly one context_menu:true view.set row, and it is view X's.
+    let ctx_menu_view_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| c.context_menu)
+        .filter_map(view_set_view_id)
+        .collect();
+    assert_eq!(
+        ctx_menu_view_ids,
+        vec![VIEW_X_ID.to_string()],
+        "exactly one context-menu view.set row, scoped to the view in the chain; got {:?}",
+        cmds.iter()
+            .map(|c| (&c.id, c.context_menu, &c.args))
+            .collect::<Vec<_>>()
+    );
+
+    // Sibling view Y must NOT have a context-menu row.
+    assert!(
+        !ctx_menu_view_ids.iter().any(|id| id == VIEW_Y_ID),
+        "sibling view Y must not surface a context-menu switch row"
+    );
+
+    // The context-menu row's caption reads "Switch to View «Board»" — names
+    // that don't already contain "View" get the "View" word.
+    let x_ctx_row = cmds
+        .iter()
+        .find(|c| c.context_menu && view_set_view_id(c).as_deref() == Some(VIEW_X_ID))
+        .expect("view X context-menu row exists");
+    assert_eq!(x_ctx_row.name, "Switch to View Board");
+
+    // Palette rows (context_menu:false) for BOTH views remain — every view is
+    // palette-switchable from anywhere.
+    let palette_view_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| !c.context_menu)
+        .filter_map(view_set_view_id)
+        .collect();
+    assert!(
+        palette_view_ids.iter().any(|id| id == VIEW_Y_ID),
+        "view Y must still have a palette (context_menu:false) switch row; got {palette_view_ids:?}"
+    );
+}
+
+/// A view whose stored name already contains "View" must not be double-named:
+/// the caption reads "Switch to Board View", never "Switch to View Board View".
+#[test]
+fn context_menu_view_switch_caption_avoids_double_view_word() {
+    let views = vec![view_info(VIEW_X_ID, "Board View")];
+
+    let cmds = switch_rows_for_scope(&views, &[format!("view:{VIEW_X_ID}")]);
+
+    let x_ctx_row = cmds
+        .iter()
+        .find(|c| c.context_menu && view_set_view_id(c).as_deref() == Some(VIEW_X_ID))
+        .expect("view X context-menu row exists");
+    assert_eq!(
+        x_ctx_row.name, "Switch to Board View",
+        "a view name already containing 'View' must not get a second 'View' word"
+    );
+}
+
+/// With NO `view:` moniker in the scope chain (e.g. a global/board/task
+/// context menu), no `view.set` row is flagged `context_menu: true` — view
+/// switching does not leak into unrelated context menus. The palette rows
+/// (context_menu:false) still exist for every view.
+#[test]
+fn no_context_menu_view_switch_row_without_a_view_in_scope() {
+    let views = vec![
+        view_info(VIEW_X_ID, "Board"),
+        view_info(VIEW_Y_ID, "Backlog"),
+    ];
+
+    // A scope chain with only a board moniker — no view in scope.
+    let cmds = switch_rows_for_scope(&views, &["board:/tmp/sample/.kanban".into()]);
+
+    let ctx_menu_view_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| c.context_menu)
+        .filter_map(view_set_view_id)
+        .collect();
+    assert!(
+        ctx_menu_view_ids.is_empty(),
+        "no context-menu view.set row may appear without a view:{{id}} in scope; got {ctx_menu_view_ids:?}"
+    );
+
+    // Palette rows still present for both views.
+    let palette_view_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| !c.context_menu)
+        .filter_map(view_set_view_id)
+        .collect();
+    assert!(
+        palette_view_ids.iter().any(|id| id == VIEW_X_ID)
+            && palette_view_ids.iter().any(|id| id == VIEW_Y_ID),
+        "both views must still have palette switch rows; got {palette_view_ids:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Per-perspective "Switch to Perspective «name»" context-menu coverage
+// (card 01KV8SQR5VYH3B9GDK8QSMK7Z7).
+//
+// Perspective switching mirrors view switching exactly: every perspective gets
+// a palette-only (`context_menu: false`) switch row so the palette can switch
+// to any perspective from anywhere, and additionally the perspective whose
+// `perspective:{id}` moniker is present in the scope chain gets ITS OWN row
+// flagged `context_menu: true` — so right-clicking perspective X surfaces
+// exactly "Switch to Perspective «X»" and nothing for sibling perspectives.
+// ---------------------------------------------------------------------------
+
+const PERSP_X_ID: &str = "01JMPERS0000000000XBOARD";
+const PERSP_Y_ID: &str = "01JMPERS0000000000YBOARD";
+
+/// Build a minimal board-kind [`PerspectiveInfo`] for the switch-row tests.
+fn persp_info(id: &str, name: &str) -> swissarmyhammer_perspectives::PerspectiveInfo {
+    swissarmyhammer_perspectives::PerspectiveInfo {
+        id: id.into(),
+        name: name.into(),
+        view: "board".into(),
+        fields: Vec::new(),
+    }
+}
+
+/// Run `commands_for_scope` over a fixed two-perspective `DynamicSources` and
+/// the supplied scope chain, returning every emitted command.
+fn persp_switch_rows_for_scope(
+    perspectives: &[swissarmyhammer_perspectives::PerspectiveInfo],
+    scope: &[String],
+) -> Vec<swissarmyhammer_kanban::scope_commands::ResolvedCommand> {
+    let dynamic = DynamicSources {
+        perspectives: perspectives.to_vec(),
+        ..Default::default()
+    };
+    let registry = compose_registry![swissarmyhammer_kanban];
+    let impls: HashMap<String, Arc<dyn swissarmyhammer_kanban::commands_core::Command>> =
+        HashMap::new();
+    let ui_arc = Arc::new(UiState::new());
+    commands_for_scope(
+        scope,
+        &registry,
+        &impls,
+        None,
+        &ui_arc,
+        false,
+        Some(&dynamic),
+        None,
+    )
+}
+
+/// Pull the `perspective_id` from a `perspective.switch` row's args, if present.
+fn persp_switch_id(
+    cmd: &swissarmyhammer_kanban::scope_commands::ResolvedCommand,
+) -> Option<String> {
+    if cmd.id != "perspective.switch" {
+        return None;
+    }
+    cmd.args
+        .as_ref()
+        .and_then(|v| v.get("perspective_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// With `perspective:{X}` in the scope chain, exactly ONE `perspective.switch`
+/// row is flagged `context_menu: true`, it carries perspective X's
+/// `perspective_id`, and no sibling perspective's id appears as a context-menu
+/// row. The palette (`context_menu: false`) rows for ALL perspectives remain.
+#[test]
+fn context_menu_perspective_switch_is_scoped_to_the_perspective_in_scope() {
+    let perspectives = vec![
+        persp_info(PERSP_X_ID, "Sprint"),
+        persp_info(PERSP_Y_ID, "Backlog"),
+    ];
+
+    let cmds = persp_switch_rows_for_scope(&perspectives, &[format!("perspective:{PERSP_X_ID}")]);
+
+    // Exactly one context_menu:true perspective.switch row, and it is X's.
+    let ctx_menu_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| c.context_menu)
+        .filter_map(persp_switch_id)
+        .collect();
+    assert_eq!(
+        ctx_menu_ids,
+        vec![PERSP_X_ID.to_string()],
+        "exactly one context-menu perspective.switch row, scoped to the perspective in the chain; got {:?}",
+        cmds.iter()
+            .map(|c| (&c.id, c.context_menu, &c.args))
+            .collect::<Vec<_>>()
+    );
+
+    // The context-menu row's caption reads "Switch to Perspective «Sprint»".
+    let x_ctx_row = cmds
+        .iter()
+        .find(|c| c.context_menu && persp_switch_id(c).as_deref() == Some(PERSP_X_ID))
+        .expect("perspective X context-menu row exists");
+    assert_eq!(x_ctx_row.name, "Switch to Perspective Sprint");
+
+    // Palette rows (context_menu:false) for BOTH perspectives remain.
+    let palette_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| !c.context_menu)
+        .filter_map(persp_switch_id)
+        .collect();
+    assert!(
+        palette_ids.iter().any(|id| id == PERSP_Y_ID),
+        "perspective Y must still have a palette (context_menu:false) switch row; got {palette_ids:?}"
+    );
+}
+
+/// With NO `perspective:` moniker in the scope chain (e.g. a global/board/task
+/// context menu), no `perspective.switch` row is flagged `context_menu: true`.
+/// The palette rows still exist for every perspective.
+#[test]
+fn no_context_menu_perspective_switch_row_without_a_perspective_in_scope() {
+    let perspectives = vec![
+        persp_info(PERSP_X_ID, "Sprint"),
+        persp_info(PERSP_Y_ID, "Backlog"),
+    ];
+
+    let cmds = persp_switch_rows_for_scope(&perspectives, &["board:/tmp/sample/.kanban".into()]);
+
+    let ctx_menu_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| c.context_menu)
+        .filter_map(persp_switch_id)
+        .collect();
+    assert!(
+        ctx_menu_ids.is_empty(),
+        "no context-menu perspective.switch row may appear without a perspective:{{id}} in scope; got {ctx_menu_ids:?}"
+    );
+
+    // Palette rows still present for both perspectives.
+    let palette_ids: Vec<String> = cmds
+        .iter()
+        .filter(|c| !c.context_menu)
+        .filter_map(persp_switch_id)
+        .collect();
+    assert!(
+        palette_ids.iter().any(|id| id == PERSP_X_ID)
+            && palette_ids.iter().any(|id| id == PERSP_Y_ID),
+        "both perspectives must still have palette switch rows; got {palette_ids:?}"
     );
 }

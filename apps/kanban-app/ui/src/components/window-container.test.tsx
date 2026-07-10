@@ -15,6 +15,15 @@ const { mockInvoke, mockListen, mockWindowListen, listeners, windowListeners } =
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mockInvoke = vi.fn((..._args: any[]): Promise<any> => {
       const cmd = _args[0] as string;
+      // The board reads ride the `window` MCP server now, so the default impl
+      // answers the `list open boards` envelope with an empty set.
+      if (cmd === "command_tool_call") {
+        const bag = (_args[1] ?? {}) as Record<string, any>;
+        if (bag.tool === "window" && bag.op === "list open boards")
+          return Promise.resolve({ ok: true, boards: [] });
+        if (bag.tool === "window" && bag.op === "get board data")
+          return Promise.resolve(null);
+      }
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
@@ -96,6 +105,11 @@ vi.mock("@/lib/views-context", () => ({
 // Import after mocks
 import { RustEngineContainer } from "./rust-engine-container";
 import {
+  STORE_CHANGED_EVENT,
+  UI_STATE_CHANGED_EVENT,
+  BOARD_OPENED_EVENT,
+} from "@/lib/mcp-notifications";
+import {
   WindowContainer,
   useOpenBoards,
   useActiveBoardPath,
@@ -107,9 +121,27 @@ import { PerspectiveProvider } from "@/lib/perspective-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import { asSegment } from "@/types/spatial";
+import { wrapMcpDispatch } from "@/test/mcp-invoke-translator";
 
 /** Identity-stable layer name for the test window root, matches App.tsx. */
 const WINDOW_LAYER_NAME = asSegment("window");
+
+/**
+ * Install a legacy `(cmd, args?) => …` invoke impl behind the MCP translator.
+ *
+ * `WindowContainer` reaches `list_open_boards` / `get_board_data` through the
+ * `app` MCP server (`invoke("command_tool_call", …)`), so the legacy verb
+ * branches below run only once the translator unwraps the envelope. Direct
+ * natives (`get_ui_state`, `dispatch_command`, `list_entities`) pass straight
+ * through.
+ */
+function installInvoke(
+  legacy: (cmd: string, args?: unknown) => Promise<unknown>,
+): void {
+  mockInvoke.mockImplementation(
+    wrapMcpDispatch(mockInvoke, legacy) as (...args: unknown[]) => Promise<unknown>,
+  );
+}
 
 /**
  * Wrap children in the spatial-focus + window-root layer providers that
@@ -141,13 +173,6 @@ function emitTauriEvent(eventName: string, payload: unknown) {
   }
 }
 
-/** Emit a window-scoped Tauri event to registered listeners. */
-function emitWindowEvent(eventName: string, payload: unknown) {
-  const cbs = windowListeners.get(eventName) ?? [];
-  for (const cb of cbs) {
-    cb({ payload });
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Probe components
@@ -251,7 +276,7 @@ describe("WindowContainer", () => {
     expect(screen.getByTestId("open-boards-count").textContent).toBe("0");
   });
 
-  it("registers board-opened window listener on mount", async () => {
+  it("registers the board-opened bridge listener on mount (not the legacy window event)", async () => {
     await act(async () => {
       render(
         withSpatialFocus(
@@ -264,13 +289,20 @@ describe("WindowContainer", () => {
       );
     });
 
+    // Board lifecycle now rides the MCP bridge: the container `listen`s for the
+    // `notifications/board/opened` Tauri event the host forwards, NOT the legacy
+    // direct `board-opened` window event.
+    await waitFor(() => {
+      const calls = mockListen.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calls).toContain(BOARD_OPENED_EVENT);
+    });
     const windowListenCalls = mockWindowListen.mock.calls.map(
       (c: unknown[]) => c[0],
     ) as string[];
-    expect(windowListenCalls).toContain("board-opened");
+    expect(windowListenCalls).not.toContain("board-opened");
   });
 
-  it("registers board-changed global listener on mount", async () => {
+  it("subscribes to the MCP store-change plane on mount (not board-changed)", async () => {
     await act(async () => {
       render(
         withSpatialFocus(
@@ -281,17 +313,22 @@ describe("WindowContainer", () => {
           </RustEngineContainer>,
         ),
       );
+    });
+    // Wait for the lazy `subscribeStoreChanged` import to register.
+    await waitFor(() => {
+      const calls = mockListen.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calls).toContain(STORE_CHANGED_EVENT);
     });
 
     const listenCalls = mockListen.mock.calls.map(
       (c: unknown[]) => c[0],
     ) as string[];
-    expect(listenCalls).toContain("board-changed");
+    expect(listenCalls).not.toContain("board-changed");
   });
 
-  it("board-opened event updates activeBoardPath", async () => {
+  it("board-opened bridge event updates activeBoardPath", async () => {
     // Mock refreshEntities to return board data
-    mockInvoke.mockImplementation((cmd: string) => {
+    installInvoke((cmd: string) => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
@@ -339,9 +376,14 @@ describe("WindowContainer", () => {
       );
     });
 
-    // Emit board-opened window event
+    // Wait for the container's bridge listener to register, then emit the
+    // `notifications/board/opened` Tauri event the host forwards.
+    await waitFor(() => {
+      const calls = mockListen.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calls).toContain(BOARD_OPENED_EVENT);
+    });
     await act(async () => {
-      emitWindowEvent("board-opened", { path: "/new/board" });
+      emitTauriEvent(BOARD_OPENED_EVENT, { path: "/new/board" });
     });
 
     await waitFor(() => {
@@ -351,8 +393,8 @@ describe("WindowContainer", () => {
     });
   });
 
-  it("board-changed event refreshes open boards list", async () => {
-    mockInvoke.mockImplementation((cmd: string) => {
+  it("a structural store/changed refreshes the open boards list", async () => {
+    installInvoke((cmd: string) => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
@@ -400,9 +442,22 @@ describe("WindowContainer", () => {
       );
     });
 
-    // Emit board-changed global event
+    // Let the lazy subscribeStoreChanged import register its listener.
+    await waitFor(() => {
+      const calls = mockListen.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calls).toContain(STORE_CHANGED_EVENT);
+    });
+
+    // Emit a structural store/changed (the MCP replacement for board-changed).
     await act(async () => {
-      emitTauriEvent("board-changed", {});
+      emitTauriEvent(STORE_CHANGED_EVENT, {
+        store: "board",
+        item: "b1",
+        op: "updated",
+        changes: [{ field: "name", value: "Board A" }],
+        txn: null,
+        origin: "user",
+      });
     });
 
     await waitFor(() => {
@@ -411,7 +466,7 @@ describe("WindowContainer", () => {
   });
 
   it("handleSwitchBoard updates activeBoardPath and dispatches file.switchBoard", async () => {
-    mockInvoke.mockImplementation((cmd: string) => {
+    installInvoke((cmd: string) => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
@@ -507,7 +562,7 @@ describe("WindowContainer", () => {
       resolveDispatch = resolve;
     });
 
-    mockInvoke.mockImplementation((cmd: string) => {
+    installInvoke((cmd: string) => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
@@ -580,7 +635,7 @@ describe("WindowContainer", () => {
    *      `file.switchBoard` and the backend writes `board_path` for the
    *      window. The backend reset (in `UIState::set_window_board`) clears
    *      `active_perspective_id` and `filtered_task_ids` when the path
-   *      differs, then emits `ui-state-changed { kind: "board_switch" }`
+   *      differs, then emits `notifications/ui_state/changed { kind: "board_switch" }`
    *      carrying the new snapshot.
    *   2. `UIStateProvider` applies the new snapshot. With the new board's
    *      perspectives loaded and `active_perspective_id === ""`,
@@ -607,7 +662,7 @@ describe("WindowContainer", () => {
       if (cmd === "get_ui_state") {
         // Initial snapshot: window has a board with a stale perspective
         // — this is the pre-switch state that should be replaced by the
-        // ui-state-changed event below.
+        // notifications/ui_state/changed event below.
         return Promise.resolve({
           palette_open: false,
           palette_mode: "command",
@@ -690,7 +745,7 @@ describe("WindowContainer", () => {
     // forward, active_perspective_id cleared to "", filtered_task_ids
     // gone (None on the wire → key omitted).
     await act(async () => {
-      emitTauriEvent("ui-state-changed", {
+      emitTauriEvent(UI_STATE_CHANGED_EVENT, {
         kind: "board_switch",
         state: {
           palette_open: false,

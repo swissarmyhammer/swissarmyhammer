@@ -38,28 +38,9 @@ import { render, fireEvent, act } from "@testing-library/react";
 // Hoisted Tauri-API spy triple.
 // ---------------------------------------------------------------------------
 
-type ListenCallback = (event: { payload: unknown }) => void;
-
-const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
-  const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn(
-    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
-  );
-  const mockListen = vi.fn(
-    (eventName: string, cb: ListenCallback): Promise<() => void> => {
-      const cbs = listeners.get(eventName) ?? [];
-      cbs.push(cb);
-      listeners.set(eventName, cbs);
-      return Promise.resolve(() => {
-        const arr = listeners.get(eventName);
-        if (arr) {
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-      });
-    },
-  );
-  return { mockInvoke, mockListen, listeners };
+const { mockInvoke, mockListen, listeners } = await vi.hoisted(async () => {
+  const { setupSpatialMocks } = await import("@/test/spatial-nav-harness");
+  return setupSpatialMocks();
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -333,7 +314,7 @@ describe("Inspector entity-zone barrier — boundary navigation", () => {
     expect(last, "body field zone must register").toBeDefined();
 
     // Seed focus on the last field via a focus-changed event.
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     await act(async () => {
       for (const h of handlers) {
         h({
@@ -389,7 +370,7 @@ describe("Inspector entity-zone barrier — boundary navigation", () => {
     const first = sim.findBySegment("field:task:T1.title");
     expect(first, "title field zone must register").toBeDefined();
 
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     await act(async () => {
       for (const h of handlers) {
         h({
@@ -436,7 +417,7 @@ describe("Inspector entity-zone barrier — boundary navigation", () => {
 
     const last = sim.findBySegment("field:task:T1.body");
     expect(last).toBeDefined();
-    const handlers = listeners.get("focus-changed") ?? [];
+    const handlers = listeners.get("notifications/focus/changed") ?? [];
     await act(async () => {
       for (const h of handlers) {
         h({
