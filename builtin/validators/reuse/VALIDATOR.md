@@ -1,8 +1,7 @@
 ---
 name: reuse
 description: >-
-  Flag code that reimplements an existing shared function or library instead of
-  calling it, and needless helpers that wrap a single call site. Before writing a
+  Before writing a
   new function, the author should have searched for one that already does it; a
   near-match they can extend beats a fresh copy.
 metadata:
@@ -16,8 +15,7 @@ probes:
 
 # Reuse Validator
 
-Split out from `duplication`: where duplication catches a block copied from
-*itself*, this validator catches a block that reinvents something that *already
+This validator catches a block that reinvents something that *already
 exists elsewhere* — a shared utility, a standard-library function, an existing
 abstraction — instead of calling it. It also catches the needless helper that
 wraps a single call site, adding indirection without removing duplication.

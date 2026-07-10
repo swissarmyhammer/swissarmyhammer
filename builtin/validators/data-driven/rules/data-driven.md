@@ -35,13 +35,6 @@ Examine the changed code for hardcoding that should be data:
 
 ## Carve-outs (Don't Flag)
 
-- **Rule of three.** Two occurrences is coincidence, three is a pattern. Two
-  arms or two copies of a literal do not yet justify a table or a constant — wait
-  for the third before pushing the abstraction.
-- **No speculative abstraction.** Warranted generalization removes *existing*
-  duplication or serves a *real* variation axis. Do not build a data-driven
-  framework for a single case that may never grow; the wrong abstraction is worse
-  than a couple of literals.
 - Arms that differ in *behavior*, not just constants, are genuinely different
   code paths — a table does not capture them.
 - `0`, `1`, `-1`, and conventional values (a `<< 8`, `100` for percent) read

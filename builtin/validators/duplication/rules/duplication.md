@@ -32,9 +32,6 @@ the changed-set comparison). Confirm and report each real duplicate:
 
 ## Carve-outs (Don't Flag)
 
-- **Rule of three.** Two occurrences is coincidence, three is a pattern. Do not
-  demand an abstraction for the *second* occurrence alone — but verbatim copies
-  that the probe surfaces as matching existing code are still duplication.
 - Generated code, macro expansions, and vendored/third-party code.
 - Structurally similar but semantically distinct code that genuinely does
   different things (similar shape, different intent) — similarity of form is not

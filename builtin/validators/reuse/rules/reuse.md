@@ -32,14 +32,6 @@ Using those candidates and your reading of the diff, flag:
 
 ## Carve-outs (Don't Flag)
 
-- **Rule of three.** Two occurrences is coincidence, three is a pattern. A helper
-  introduced for a *real* second (or third) call site is warranted; one with a
-  single call site is not — unless it exists to name a genuinely confusing
-  expression.
-- **No speculative abstraction.** Warranted generalization removes *existing*
-  duplication or serves a *real* variation axis. No second caller → no parameter.
-  Do not push the author to reuse-by-abstracting something that has exactly one
-  user; the wrong abstraction is worse than a little duplication.
 - A `similar` candidate that only *looks* alike (same shape, different domain or
   contract) is not a reuse miss — `similar` is a candidate signal, not proof.
 - FFI/compatibility shims and intentional forks where the existing function's
