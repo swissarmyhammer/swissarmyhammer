@@ -7,7 +7,7 @@ description: ESM modules, exports field, explicit .js extensions, no require/mod
 
 - `"type": "module"` in `package.json`. No exceptions.
 - `"exports"` field, not `"main"`.
-- All imports use full relative paths with explicit `.js` extensions: `import x from './utils.js'` — not `'./utils'` or `'.'`.
+- All imports use full relative paths with explicit `.js` extensions: `import x from './utils.js'` — not `'./utils'` or `'.'`. **Exception — never flag, and never suggest swapping `.ts`→`.js`, when the project runs TypeScript sources directly with no build step that emits `.js` at the import path:** `tsconfig.json` sets `allowImportingTsExtensions: true`, or the runtime is `tsx`/`ts-node`/`bun`/`deno`/Node's native TypeScript support. There, `.js` resolves to a file that is never produced, breaking the import at runtime — match the project's actual module resolution; correctness wins over stylistic convention.
 - No `require()`, no `module.exports`. Hard disqualifiers.
 - No `'use strict'` — implicit in ESM.
 - Built-in Node.js modules use the `node:` protocol prefix: `import fs from 'node:fs'` — not `'fs'`.
