@@ -1527,6 +1527,10 @@ mod tests {
         tokio::io::AsyncWriteExt::write_all(&mut file, line.as_bytes())
             .await
             .unwrap();
+        // tokio::fs::File buffers writes and does NOT flush on drop, so without
+        // an explicit flush a concurrent read can race ahead of the buffered
+        // bytes and lose this line under load.
+        tokio::io::AsyncWriteExt::flush(&mut file).await.unwrap();
     }
 
     /// Append a one-off changelog entry to the `.jsonl` file backing an
