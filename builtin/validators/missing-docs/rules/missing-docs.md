@@ -25,4 +25,10 @@ Examine the file content for public items lacking documentation:
 - Simple getters/setters with self-explanatory names
 - Items with #[doc(hidden)] or equivalent
 
+Note: These exemptions yield to stricter language-specific documentation rules.
+Where a language validator requires documentation on every public item (e.g. the
+Swift and Rust documentation rules), that rule wins and the "obvious
+implementation" / "simple getter" carve-outs above do not apply — never cite
+them against a language-rule finding.
+
 Note: Identify test items from the structural marker on the item itself (attribute, decorator, or framework-specific function-name convention applied at the definition), not from the file name or path. A function named `process_user` in a file called `foo_test.rs` is still a public API that needs documentation.

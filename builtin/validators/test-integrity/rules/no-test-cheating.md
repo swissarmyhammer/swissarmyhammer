@@ -43,7 +43,7 @@ Examine the file content for these problematic patterns:
 - Tests marked as `skip` with a linked issue number (e.g., `// TODO(#123): flaky on CI`)
 - Platform-specific skips with clear conditions (e.g., `skipIf(process.platform === 'win32')`)
 - Tests in a dedicated "pending" or "wip" file clearly marked as work-in-progress
-- Legitimate mocking of external dependencies (databases, APIs, file systems)
+- Legitimate mocking of external dependencies (databases, APIs, file systems) — via an owned facade or seam wrapping the dependency; this allowance does not sanction mocking a third-party library directly (e.g. `requests.get`, `boto3.client`) where a language rule requires mocking the owned wrapper instead
 - Tests can be deleted entirely if they are no longer relevant or valid
 
 
