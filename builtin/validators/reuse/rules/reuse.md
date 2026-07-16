@@ -1,6 +1,6 @@
 ---
 name: reuse
-description: Detect reimplementations of existing shared code and needless one-call-site helpers
+description: Detect reimplementations of existing shared code
 ---
 
 # Reuse Validator
@@ -28,7 +28,6 @@ Using those candidates and your reading of the diff, flag:
 - Reusing before re-implementing keeps one canonical implementation that gets
   fixed and improved once.
 - A near-match the author extends beats a fresh copy that immediately diverges.
-- Indirection with no second caller is cost without benefit.
 
 ## Carve-outs (Don't Flag)
 
@@ -36,3 +35,8 @@ Using those candidates and your reading of the diff, flag:
   contract) is not a reuse miss — `similar` is a candidate signal, not proof.
 - FFI/compatibility shims and intentional forks where the existing function's
   contract genuinely does not fit.
+- Single-call-site helpers are not a reuse concern. A helper extracted to keep a
+  function under the length/complexity limits is warranted even with exactly one
+  caller — never flag toward inlining it; inlining would recreate the over-long
+  function, and flip-flopping between extract and inline across review rounds is
+  always a validator error.

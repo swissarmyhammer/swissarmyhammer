@@ -17,8 +17,7 @@ probes:
 
 This validator catches a block that reinvents something that *already
 exists elsewhere* — a shared utility, a standard-library function, an existing
-abstraction — instead of calling it. It also catches the needless helper that
-wraps a single call site, adding indirection without removing duplication.
+abstraction — instead of calling it.
 
 The engine runs the `similar` probe (`search code`, semantic) against each added
 function body and attaches the most similar existing code as **reuse
