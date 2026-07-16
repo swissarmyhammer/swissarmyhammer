@@ -73,7 +73,8 @@ pub struct ReviewFile;
 static REVIEW_FILE_PARAMS: &[ParamMeta] = &[
     ParamMeta::new("path")
         .description("A file path or glob to review (reviewed whole when there is no diff).")
-        .param_type(ParamType::String),
+        .param_type(ParamType::String)
+        .required(),
     VALIDATORS_PARAM,
     BACKEND_PARAM,
     BATCH_SIZE_PARAM,

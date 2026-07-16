@@ -5,8 +5,10 @@ includes the files you asked about, and of their one-hop dependents it folds in
 only the ones that actually broke (never a project-wide dump):
 
 - `check working` — diagnose files changed vs `HEAD` (the everyday op).
-- `check file` — diagnose an explicit file path or glob.
-- `check sha` — diagnose the files touched in/since a commit or range.
+- `check file` — diagnose an explicit file path or glob, given as `path`:
+  `{"op": "check file", "path": "src/auth.rs"}`.
+- `check sha` — diagnose the files touched in/since a commit or range, given as
+  `sha`: `{"op": "check sha", "sha": "HEAD~3..HEAD"}`.
 
 Each returns a `DiagnosticsReport { diagnostics, counts }`. Shared modifiers:
 `severity` (minimum severity floor: `error`|`warning`|`info`|`hint`, default
@@ -16,4 +18,4 @@ dependents, default true).
 The introspection ops read the LSP supervisor with no analysis:
 
 - `list servers` — one status row per managed language server.
-- `get server` — one server's status, by command name.
+- `get server` — one server's status, by `command` name.

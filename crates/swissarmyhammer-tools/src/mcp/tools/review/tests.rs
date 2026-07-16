@@ -114,6 +114,23 @@ fn review_full_schema_carries_heavy_keys_wire_omits_them() {
     }
 }
 
+/// The wire schema carries no per-op parameter metadata (only the `op` enum),
+/// so the model-facing description is the ONLY channel that names each op's
+/// arguments — it is what tells a model that `review sha` takes `sha`. Every
+/// required parameter must therefore be named, backtick-quoted, in
+/// `description.md`.
+#[test]
+fn review_description_names_every_required_param() {
+    let missing = swissarmyhammer_operations::required_params_missing_from_description(
+        ReviewTool::new().description(),
+        &REVIEW_OPERATIONS,
+    );
+    assert!(
+        missing.is_empty(),
+        "model-facing description omits required params: {missing:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // CLI command tree coverage
 // ---------------------------------------------------------------------------

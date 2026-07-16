@@ -242,6 +242,33 @@ pub fn generate_mcp_schema_wire(operations: &[&dyn Operation], config: SchemaCon
     })
 }
 
+/// The required parameters of each operation that a tool description fails to
+/// name.
+///
+/// The slim WIRE schema ([`generate_mcp_schema_wire`]) deliberately carries no
+/// per-op parameter metadata, so the model-facing tool DESCRIPTION is the only
+/// channel that tells a model which arguments an op takes. This check keeps the
+/// two in lockstep: every `required()` parameter of every op must appear
+/// backtick-quoted in the description. Returns one ``"<op>: `<param>`"`` entry
+/// per miss; empty means the description names every required parameter.
+/// Wire-description tests across the workspace call this instead of
+/// re-deriving the rule, mirroring the [`WIRE_DROPPED_KEYS`] contract.
+pub fn required_params_missing_from_description(
+    description: &str,
+    operations: &[&dyn Operation],
+) -> Vec<String> {
+    let mut missing = Vec::new();
+    for op in operations {
+        for name in required_param_names_for_op(*op) {
+            let quoted = format!("`{name}`");
+            if !description.contains(&quoted) {
+                missing.push(format!("{}: {quoted}", op.op_string()));
+            }
+        }
+    }
+    missing
+}
+
 /// The required parameter names of a single operation, in declaration order.
 ///
 /// Excludes the synthetic `op` field. Shared by [`operation_to_schema`] (the

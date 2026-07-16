@@ -40,8 +40,8 @@ pub use operation::{Execute, Operation};
 pub use parameter::{ParamMeta, ParamType};
 pub use processor::OperationProcessor;
 pub use schema::{
-    generate_mcp_schema, generate_mcp_schema_full, generate_mcp_schema_wire, SchemaConfig,
-    WIRE_DROPPED_KEYS,
+    generate_mcp_schema, generate_mcp_schema_full, generate_mcp_schema_wire,
+    required_params_missing_from_description, SchemaConfig, WIRE_DROPPED_KEYS,
 };
 
 // Re-export proc macros
