@@ -36,8 +36,20 @@ the changed-set comparison). Confirm and report each real duplicate:
 - Structurally similar but semantically distinct code that genuinely does
   different things (similar shape, different intent) — similarity of form is not
   duplication of behavior.
-- Trivial boilerplate the language forces (e.g. derive stubs, simple `Display`
-  impls) where extraction would not remove real maintenance burden.
+- Trivial boilerplate the language forces (derive stubs, simple formatting
+  impls, override/interface-conformance forwarding one-liners) where extraction
+  would not remove real maintenance burden.
+- **Dispatch-forced delegation shims**: identical one-line overrides or
+  interface stubs whose body only forwards to an already-extracted shared
+  implementation (via `super` or a shared helper), kept per-site because the
+  language's dispatch rules prevent hosting them anywhere else. If the shared
+  logic is already extracted and only the forwarding line repeats, the
+  duplication is resolved — do not flag the shim. Copies that contain no logic
+  cannot drift.
+
+The language-specific rules in this validator give concrete per-language shapes
+of forced boilerplate. When a file in scope is in one of those languages, apply
+that rule's carve-outs alongside this rule before reporting a finding in it.
 
 The fix is always the same: extract a shared function and parameterize the
 difference. Do not flag a need for a *speculative* abstraction with no real
