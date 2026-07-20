@@ -176,6 +176,63 @@ impl std::fmt::Debug for FleetOutcome {
     }
 }
 
+/// One progress event from the fan-out fleet.
+///
+/// The fan-out unit is one task per validator covering that validator's files,
+/// so the finest real evaluation grain is the **(validator, file) pair**. The
+/// fleet emits [`Planned`](ReviewProgressEvent::Planned) once per batch after
+/// planning, one [`PairStarted`](ReviewProgressEvent::PairStarted) per pair at
+/// submission, and one [`PairDone`](ReviewProgressEvent::PairDone) per pair as
+/// each task resolves — including failed and monolithic-fallback tasks, so a
+/// consumer counting `PairDone` events always reaches the planned total.
+///
+/// The type is deliberately MCP-free: the engine emits plain events on a tokio
+/// mpsc channel and the MCP tool boundary maps them to `notifications/progress`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewProgressEvent {
+    /// One batch's fan-out plan is ready: `total_pairs` (validator, file)
+    /// pairs will be reviewed. Emitted once per non-empty batch; a consumer
+    /// sums the totals across batches.
+    Planned {
+        /// How many (validator, file) pairs this batch plans to review.
+        total_pairs: usize,
+    },
+    /// One (validator, file) pair was submitted to the pool.
+    PairStarted {
+        /// The validator (RuleSet) name the file is reviewed against.
+        validator: String,
+        /// The full path of the file under review — never truncated.
+        file: String,
+    },
+    /// One (validator, file) pair resolved — successfully, degraded to the
+    /// monolithic fallback, or failed. Always emitted, so progress reaches
+    /// the planned total even when tasks fail.
+    PairDone {
+        /// The validator (RuleSet) name the file was reviewed against.
+        validator: String,
+        /// The full path of the reviewed file — never truncated.
+        file: String,
+    },
+}
+
+/// The sender half review progress events are emitted on.
+///
+/// Threaded as an `Option` from [`run_review_over_agent`] down to [`run_fleet`]:
+/// `None` emits nothing (the pre-progress behavior). `UnboundedSender::send` is
+/// synchronous, so emission works inside the tool's nested current-thread
+/// runtime without blocking the fan-out.
+///
+/// [`run_review_over_agent`]: crate::review::run_review_over_agent
+pub type ReviewProgressSender = tokio::sync::mpsc::UnboundedSender<ReviewProgressEvent>;
+
+/// Send `event` when a progress channel is wired. A `None` sender or a closed
+/// receiver is a no-op — progress is advisory, never load-bearing.
+fn emit_progress(progress: Option<&ReviewProgressSender>, event: ReviewProgressEvent) {
+    if let Some(tx) = progress {
+        let _ = tx.send(event);
+    }
+}
+
 /// Fan a [`WorkList`] out across the shared [`AgentPool`] and collect the merged,
 /// validator-tagged findings.
 ///
@@ -213,6 +270,7 @@ pub async fn run_fleet(
     work: &WorkList,
     loader: &ValidatorLoader,
     pool: &AgentPool,
+    progress: Option<&ReviewProgressSender>,
 ) -> FleetOutcome {
     // Plan the fan-out BEFORE priming so an empty plan (no matching ruleset)
     // skips the prime entirely — an empty run never prompts the agent.
@@ -221,13 +279,22 @@ pub async fn run_fleet(
         return FleetOutcome::default();
     }
 
+    // Announce the batch's plan before any agent work so a progress consumer
+    // knows the pair total up front (it sums totals across batches).
+    emit_progress(
+        progress,
+        ReviewProgressEvent::Planned {
+            total_pairs: plan.iter().map(|task| task.validator.files.len()).sum(),
+        },
+    );
+
     // Prime the run's shared prefix (change + all diffs) ONCE, then submit one
     // fork (or monolithic fallback) per planned validator and collect them all.
     // `None` from priming → every task degrades to a self-contained monolithic
     // prompt.
     let prime = prime_run_prefix(work, pool).await;
-    let pending = submit_fan_out(plan, work, pool, &prime);
-    let (findings, attempted, failed) = collect_fan_out(pending, work, pool).await;
+    let pending = submit_fan_out(plan, work, pool, &prime, progress);
+    let (findings, attempted, failed) = collect_fan_out(pending, work, pool, progress).await;
 
     FleetOutcome {
         findings,
@@ -276,6 +343,7 @@ fn submit_fan_out<'w>(
     work: &WorkList,
     pool: &AgentPool,
     prime: &Option<SessionPinGuard>,
+    progress: Option<&ReviewProgressSender>,
 ) -> Vec<PendingValidator<'w>> {
     plan.into_iter()
         .map(|task| {
@@ -284,6 +352,17 @@ fn submit_fan_out<'w>(
                 warm = prime.is_some(),
                 "fleet fan-out: submitting validator task"
             );
+            // One PairStarted per (validator, file): the task covers every one
+            // of the validator's files, so each pair is announced at submission.
+            for file in &task.validator.files {
+                emit_progress(
+                    progress,
+                    ReviewProgressEvent::PairStarted {
+                        validator: task.validator.validator_name.clone(),
+                        file: file.path.clone(),
+                    },
+                );
+            }
             let suffix = render_validator_suffix(task.validator, task.ruleset);
             let rx = match prime {
                 Some(guard) => Submitted::Forked(pool.submit_forked(guard.session_id(), suffix)),
@@ -311,6 +390,7 @@ async fn collect_fan_out(
     pending: Vec<PendingValidator<'_>>,
     work: &WorkList,
     pool: &AgentPool,
+    progress: Option<&ReviewProgressSender>,
 ) -> (Vec<Finding>, usize, usize) {
     let attempted = pending.len();
     let mut findings: Vec<Finding> = Vec::new();
@@ -341,6 +421,18 @@ async fn collect_fan_out(
         match collected {
             Ok(parsed) => findings.extend(parsed),
             Err(()) => failed += 1,
+        }
+        // One PairDone per (validator, file) regardless of how the task
+        // resolved — success, monolithic fallback, or failure — so a consumer
+        // counting PairDone always reaches the planned total.
+        for file in &files {
+            emit_progress(
+                progress,
+                ReviewProgressEvent::PairDone {
+                    validator: name.to_string(),
+                    file: file.clone(),
+                },
+            );
         }
     }
     (findings, attempted, failed)

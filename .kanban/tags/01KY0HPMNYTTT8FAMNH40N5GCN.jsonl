@@ -1,0 +1,1 @@
+{"id":"01KY0HPMP69JW52WCT8DDSJJZA","timestamp":"2026-07-20T19:57:59.366918Z","op":"create","item_id":"01KY0HPMNYTTT8FAMNH40N5GCN","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: '5319e7'\n+tag_name: progress\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: '5319e7'\n-tag_name: progress\n","transaction_id":null}

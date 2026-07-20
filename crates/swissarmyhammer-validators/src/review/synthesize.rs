@@ -34,7 +34,7 @@ use model_embedding::TextEmbedder;
 use rusqlite::Connection;
 
 use crate::error::AvpError;
-use crate::review::fleet::{run_fleet, FleetConfig, FleetOutcome};
+use crate::review::fleet::{run_fleet, FleetConfig, FleetOutcome, ReviewProgressSender};
 use crate::review::scope::{batch_work_list, scope_review, Scope, WorkList};
 use crate::review::types::{Finding, VerifiedFinding};
 use crate::review::verify::{verify_findings, Candidate};
@@ -283,6 +283,7 @@ pub async fn run_review(
     embedder: &dyn TextEmbedder,
     pool: &AgentPool,
     fleet_config: FleetConfig,
+    progress: Option<&ReviewProgressSender>,
     now: &str,
 ) -> Result<ReviewReport, AvpError> {
     // Stage 1: scope → work-list (deterministic, LLM-free).
@@ -316,7 +317,7 @@ pub async fn run_review(
 
         // Fan out this batch: one shared prime over its files, forked per
         // validator. The outcome carries the tally and the batch's prime pin.
-        let fleet = run_fleet(batch, loader, pool).await;
+        let fleet = run_fleet(batch, loader, pool, progress).await;
         attempted += fleet.attempted();
         failed += fleet.failed();
         let FleetOutcome {

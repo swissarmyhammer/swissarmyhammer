@@ -336,16 +336,37 @@ impl ReviewTool {
             .unwrap_or_else(review_op::default_embedder_factory);
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
 
-        let report = review_op::run_review_request(
+        // Progress bridge (one per call, only when the client opted in with a
+        // progressToken / in-process sink): spawned HERE on the outer runtime,
+        // BEFORE `run_review_request` enters its spawn_blocking + nested
+        // current-thread runtime — only the sync UnboundedSender crosses in.
+        // No token and no sink → None → zero notifications (unchanged behavior).
+        let (progress, drain) = match review_op::spawn_review_progress_bridge(context) {
+            Some(bridge) => (Some(bridge.sender), Some(bridge.drain)),
+            None => (None, None),
+        };
+
+        let result = review_op::run_review_request(
             request,
             repo_path,
             embedder_factory,
             factory.clone(),
             now,
+            progress,
         )
-        .await
-        .map_err(|e| rmcp::ErrorData::internal_error(e, None))?;
+        .await;
 
+        // The pipeline dropped its sender when it finished, so the bridge
+        // drains to completion; await it so every buffered notification is
+        // flushed to the client before the final result returns. Progress is
+        // advisory — a drain that did not join cleanly is logged, never fatal.
+        if let Some(drain) = drain {
+            if let Err(err) = drain.await {
+                tracing::warn!(error = ?err, "review: progress drain task did not join cleanly");
+            }
+        }
+
+        let report = result.map_err(|e| rmcp::ErrorData::internal_error(e, None))?;
         json_result(&ReviewResponse::from(report))
     }
 }

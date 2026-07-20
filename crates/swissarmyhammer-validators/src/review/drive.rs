@@ -50,7 +50,7 @@ use rusqlite::Connection;
 use tokio::sync::broadcast;
 
 use crate::error::AvpError;
-use crate::review::fleet::FleetConfig;
+use crate::review::fleet::{FleetConfig, ReviewProgressSender};
 use crate::review::scope::Scope;
 use crate::review::synthesize::{run_review, ReviewReport};
 use crate::validators::{AgentPool, PoolConfig, ValidatorLoader};
@@ -96,6 +96,7 @@ pub async fn run_review_over_agent(
     embedder: &dyn TextEmbedder,
     pool_config: PoolConfig,
     fleet_config: FleetConfig,
+    progress: Option<ReviewProgressSender>,
     now: &str,
 ) -> Result<ReviewReport, AvpError> {
     // A fresh notifier whose broadcast the pool's workers subscribe to, fed by a
@@ -146,6 +147,7 @@ pub async fn run_review_over_agent(
                     conn,
                     embedder,
                     fleet_config,
+                    progress,
                     now,
                 )
             }
@@ -369,6 +371,7 @@ async fn run_pipeline_in_connection(
     conn: &Connection,
     embedder: &dyn TextEmbedder,
     fleet_config: FleetConfig,
+    progress: Option<ReviewProgressSender>,
     now: &str,
 ) -> agent_client_protocol::Result<Result<ReviewReport, AvpError>> {
     // ACP `initialize` is a ONCE-per-connection handshake. Do it here, before
@@ -402,6 +405,7 @@ async fn run_pipeline_in_connection(
         embedder,
         &pool,
         fleet_config,
+        progress.as_ref(),
         now,
     )
     .await;
@@ -568,6 +572,7 @@ mod tests {
             &embedder,
             PoolConfig::remote(TEST_POOL_WORKERS),
             FleetConfig::default(),
+            None,
             TEST_NOW,
         )
         .await;
@@ -668,6 +673,7 @@ mod tests {
             FleetConfig {
                 batch_size: TEST_BATCH_SIZE_BYTES,
             },
+            None,
             TEST_NOW,
         )
         .await
@@ -746,6 +752,7 @@ mod tests {
                 &embedder,
                 PoolConfig::remote(TEST_POOL_WORKERS),
                 FleetConfig::default(),
+                None,
                 TEST_NOW,
             ),
         )
@@ -801,6 +808,7 @@ mod tests {
                 &embedder,
                 PoolConfig::remote(TEST_POOL_WORKERS),
                 FleetConfig::default(),
+                None,
                 TEST_NOW,
             ),
         )
@@ -1196,6 +1204,7 @@ mod tests {
                 PoolConfig::remote(TEST_POOL_WORKERS)
                     .with_idle_timeout(Duration::from_millis(ABANDON_IDLE_WINDOW_MS)),
                 FleetConfig::default(),
+                None,
                 TEST_NOW,
             ),
         )

@@ -744,6 +744,7 @@ async fn review_pipelines_run_one_at_a_time_process_wide() {
             Arc::clone(&embedder),
             Arc::clone(&factory),
             "2026-06-07 12:00".to_string(),
+            None,
         )
     };
 

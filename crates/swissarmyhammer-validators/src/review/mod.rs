@@ -22,7 +22,7 @@ pub mod verify;
 pub use drive::run_review_over_agent;
 pub use fleet::{
     render_file_payload, render_fleet_prompt, render_run_prime, render_validator_suffix, run_fleet,
-    unpin_prefix_session, FleetConfig, FleetOutcome,
+    unpin_prefix_session, FleetConfig, FleetOutcome, ReviewProgressEvent, ReviewProgressSender,
 };
 pub use probes::{
     probe_exists, run_probes, ChangeEntry, FileChange, ProbeCatalogEntry, ProbeKind, ProbeOp,

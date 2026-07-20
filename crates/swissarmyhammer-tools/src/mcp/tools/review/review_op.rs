@@ -15,12 +15,19 @@ use std::sync::Arc;
 
 use agent_client_protocol::schema::SessionNotification;
 use agent_client_protocol::{Client, DynConnectTo};
+use rmcp::model::{ProgressNotificationParam, ProgressToken};
 use rusqlite::Connection;
 use serde::Serialize;
 use tokio::sync::{broadcast, OnceCell, Semaphore};
 
-use swissarmyhammer_validators::review::{run_review_over_agent, FleetConfig, ReviewReport, Scope};
+use swissarmyhammer_validators::review::{
+    run_review_over_agent, FleetConfig, ReviewProgressEvent, ReviewProgressSender, ReviewReport,
+    Scope,
+};
 use swissarmyhammer_validators::{load_rules, PoolConfig};
+
+use crate::mcp::progress::{spawn_drain_task, spawn_in_process_drain_task};
+use crate::mcp::tool_registry::ToolContext;
 
 /// The two halves of a ready-to-drive ACP agent handle: its
 /// [`DynConnectTo<Client>`] component and the broadcast receiver of its streamed
@@ -190,6 +197,7 @@ pub async fn run_review_request(
     embedder_factory: EmbedderFactory,
     agent_factory: AgentFactory,
     now: String,
+    progress: Option<ReviewProgressSender>,
 ) -> Result<ReviewReport, String> {
     // Carry the current span across the thread boundary so the engine's
     // observability lines stay correlated with the originating `tool_call{...}`
@@ -210,6 +218,9 @@ pub async fn run_review_request(
         .map_err(|e| format!("review pipeline gate closed: {e}"))?;
 
     let span = tracing::Span::current();
+    // Only the synchronous `UnboundedSender` crosses into the blocking thread
+    // and its nested current-thread runtime; the async drain task consuming
+    // the mapped notifications was spawned by the caller on the OUTER runtime.
     tokio::task::spawn_blocking(move || {
         let _entered = span.enter();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -222,6 +233,7 @@ pub async fn run_review_request(
             embedder_factory,
             agent_factory,
             now,
+            progress,
         ))
     })
     .await
@@ -235,6 +247,7 @@ async fn run_review_request_inner(
     embedder_factory: EmbedderFactory,
     agent_factory: AgentFactory,
     now: String,
+    progress: Option<ReviewProgressSender>,
 ) -> Result<ReviewReport, String> {
     let mut loader = load_rules().map_err(|e| format!("failed to load validators: {e}"))?;
     // Honor the `validators` subset modifier: when the caller named a subset,
@@ -263,6 +276,7 @@ async fn run_review_request_inner(
         embedder.as_ref(),
         pool_config_for(request.backend.as_deref(), request.concurrency),
         fleet_config,
+        progress,
         &now,
     )
     .await
@@ -275,6 +289,113 @@ async fn run_review_request_inner(
     // mistake for "nothing wrong".
     check_review_completeness(&report)?;
     Ok(report)
+}
+
+/// Cumulative pair counters threaded across [`ReviewProgressEvent`]s so the
+/// emitted wire `progress` value is monotonic.
+///
+/// `planned` sums every batch's `Planned { total_pairs }` (a multi-batch run
+/// announces each batch as it plans it, so the wire `total` grows — the MCP
+/// spec permits a growing total); `completed` counts `PairDone` events and
+/// only ever increases, which is what keeps `progress` monotonic.
+#[derive(Debug, Default)]
+struct ReviewProgressState {
+    /// Planned (validator, file) pairs summed across every batch.
+    planned: u64,
+    /// Completed pairs (`PairDone` count) — monotonically non-decreasing.
+    completed: u64,
+}
+
+/// Map one engine [`ReviewProgressEvent`] to the wire
+/// [`ProgressNotificationParam`], updating the cumulative counters.
+///
+/// The wire contract: `progress` = completed pairs, `total` = planned pairs
+/// (floored at `progress` so `total >= progress` always holds), the request's
+/// `token` echoed on every notification, and a human `message` naming the
+/// validator and the FULL file path — never truncated.
+fn review_progress_param(
+    state: &mut ReviewProgressState,
+    token: &ProgressToken,
+    event: &ReviewProgressEvent,
+) -> ProgressNotificationParam {
+    let message = match event {
+        ReviewProgressEvent::Planned { total_pairs } => {
+            state.planned += *total_pairs as u64;
+            format!("Planned {total_pairs} (validator, file) review pairs")
+        }
+        ReviewProgressEvent::PairStarted { validator, file } => {
+            format!("Reviewing {file} against {validator}")
+        }
+        ReviewProgressEvent::PairDone { validator, file } => {
+            state.completed += 1;
+            format!("Reviewed {file} against {validator}")
+        }
+    };
+    let progress = state.completed;
+    let total = state.planned.max(progress);
+    ProgressNotificationParam {
+        progress_token: token.clone(),
+        progress: progress as f64,
+        total: Some(total as f64),
+        message: Some(message),
+    }
+}
+
+/// The two live halves of a review progress bridge: the engine-facing sender
+/// and the drain task flushing mapped notifications to the client.
+pub struct ReviewProgressBridge {
+    /// The sender to thread into [`run_review_request`]; dropping it (when the
+    /// pipeline finishes) winds the whole bridge down.
+    pub sender: ReviewProgressSender,
+    /// The drain task forwarding mapped `notifications/progress` params to the
+    /// MCP peer or in-process sink. Await it after the run so buffered
+    /// notifications flush before the final result returns.
+    pub drain: tokio::task::JoinHandle<()>,
+}
+
+/// Wire the review progress bridge for one tool call, when the caller opted in.
+///
+/// Precedence matches `code_context`'s `rebuild index`: `progress_token` plus
+/// `progress_sink` (the explicit in-process opt-in) wins over `progress_token`
+/// plus `peer` (the stdio/HTTP MCP client); no token — or a token with neither
+/// transport (logged) — returns `None` and the review emits zero notifications.
+///
+/// Must be called on the OUTER runtime (it spawns the mapping and drain
+/// tasks there) BEFORE [`run_review_request`] enters its `spawn_blocking`;
+/// only the returned synchronous sender crosses into the nested runtime.
+pub fn spawn_review_progress_bridge(context: &ToolContext) -> Option<ReviewProgressBridge> {
+    let token = context.progress_token.clone()?;
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<ReviewProgressEvent>();
+    let (param_tx, param_rx) = tokio::sync::mpsc::unbounded_channel::<ProgressNotificationParam>();
+
+    let drain = if let Some(sink) = context.progress_sink.clone() {
+        tracing::debug!(?token, "review: wiring progress bridge to in-process sink");
+        spawn_in_process_drain_task(sink, param_rx)
+    } else if let Some(peer) = context.peer.clone() {
+        tracing::debug!(?token, "review: wiring progress bridge to MCP peer");
+        spawn_drain_task(peer, param_rx)
+    } else {
+        tracing::warn!(
+            "review: progressToken present but no MCP peer or progress sink — emitting no progress"
+        );
+        return None;
+    };
+
+    // The mapping task owns the cumulative counters. It ends when the engine
+    // drops its sender; dropping `param_tx` then closes the drain's source so
+    // the drain flushes and exits.
+    tokio::spawn(async move {
+        let mut state = ReviewProgressState::default();
+        while let Some(event) = event_rx.recv().await {
+            let _ = param_tx.send(review_progress_param(&mut state, &token, &event));
+        }
+    });
+
+    Some(ReviewProgressBridge {
+        sender: event_tx,
+        drain,
+    })
 }
 
 /// The fraction of attempted fan-out tasks that must fail before a review is
@@ -395,6 +516,182 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use swissarmyhammer_validators::review::{ReviewCounts, ReviewReport};
+
+    /// Build a string-typed progress token for tests.
+    fn token(s: &str) -> ProgressToken {
+        ProgressToken(rmcp::model::NumberOrString::String(s.into()))
+    }
+
+    /// One event per state transition through a two-pair run: the wire params
+    /// must echo the token, stay monotonic, name the validator and the FULL
+    /// untruncated file path, and close with `progress == total`.
+    #[test]
+    fn review_progress_params_are_monotonic_and_close_at_the_planned_total() {
+        let mut state = ReviewProgressState::default();
+        let tok = token("review-tok");
+        let long_path = "src/a/very/deeply/nested/module/path/payments_processing.rs";
+        let events = [
+            ReviewProgressEvent::Planned { total_pairs: 2 },
+            ReviewProgressEvent::PairStarted {
+                validator: "duplication".to_string(),
+                file: long_path.to_string(),
+            },
+            ReviewProgressEvent::PairStarted {
+                validator: "reuse".to_string(),
+                file: "src/util.rs".to_string(),
+            },
+            ReviewProgressEvent::PairDone {
+                validator: "duplication".to_string(),
+                file: long_path.to_string(),
+            },
+            ReviewProgressEvent::PairDone {
+                validator: "reuse".to_string(),
+                file: "src/util.rs".to_string(),
+            },
+        ];
+        let params: Vec<_> = events
+            .iter()
+            .map(|event| review_progress_param(&mut state, &tok, event))
+            .collect();
+
+        // Every notification echoes the request's token.
+        assert!(params.iter().all(|p| p.progress_token == tok));
+
+        // `progress` is monotonically non-decreasing and never exceeds `total`.
+        for w in params.windows(2) {
+            assert!(
+                w[1].progress >= w[0].progress,
+                "progress regressed: {:?} -> {:?}",
+                w[0],
+                w[1]
+            );
+        }
+        assert!(params.iter().all(|p| p.total.unwrap() >= p.progress));
+
+        // The plan announces the pair total before any pair completes.
+        assert_eq!(params[0].progress, 0.0);
+        assert_eq!(params[0].total, Some(2.0));
+
+        // Messages name the validator and the full untruncated file path.
+        let started = params[1].message.as_deref().unwrap();
+        assert!(
+            started.contains("duplication") && started.contains(long_path),
+            "message must name validator + full path: {started}"
+        );
+        let done = params[3].message.as_deref().unwrap();
+        assert!(
+            done.contains("duplication") && done.contains(long_path),
+            "message must name validator + full path: {done}"
+        );
+
+        // The final PairDone closes the bar: progress == total == planned pairs.
+        let last = params.last().unwrap();
+        assert_eq!(Some(last.progress), last.total);
+        assert_eq!(last.progress, 2.0);
+    }
+
+    /// A bare `ToolContext` (no token, no sink, no peer).
+    fn bare_context() -> ToolContext {
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new());
+        let agent_config = Arc::new(swissarmyhammer_config::ModelConfig::default());
+        ToolContext::new(tool_handlers, git_ops, agent_config)
+    }
+
+    /// No `progressToken` (and no sink) → no bridge → the review threads a
+    /// `None` sender and emits zero notifications — the pre-progress behavior.
+    #[tokio::test]
+    async fn no_progress_token_means_no_bridge() {
+        assert!(spawn_review_progress_bridge(&bare_context()).is_none());
+    }
+
+    /// A token with neither transport (no peer, no sink) cannot ship
+    /// notifications anywhere — the bridge is skipped, not half-built.
+    #[tokio::test]
+    async fn a_token_without_peer_or_sink_means_no_bridge() {
+        let context = bare_context().with_progress_token(token("t"));
+        assert!(spawn_review_progress_bridge(&context).is_none());
+    }
+
+    /// Token + in-process sink wires the bridge: engine events are mapped to
+    /// wire params carrying the token, and dropping the engine sender flushes
+    /// the drain to completion.
+    #[tokio::test]
+    async fn a_token_with_a_sink_bridges_engine_events_to_the_sink() {
+        let (sink_tx, mut sink_rx) = tokio::sync::mpsc::unbounded_channel();
+        let context = bare_context()
+            .with_progress_token(token("bridge-tok"))
+            .with_progress_sink(sink_tx);
+        let bridge = spawn_review_progress_bridge(&context).expect("bridge wired");
+
+        bridge
+            .sender
+            .send(ReviewProgressEvent::Planned { total_pairs: 1 })
+            .unwrap();
+        bridge
+            .sender
+            .send(ReviewProgressEvent::PairDone {
+                validator: "v".to_string(),
+                file: "src/a.rs".to_string(),
+            })
+            .unwrap();
+
+        // Dropping the engine's sender winds the bridge down; awaiting the
+        // drain proves every buffered notification flushed first.
+        drop(bridge.sender);
+        bridge.drain.await.expect("drain joins cleanly");
+
+        let mut got = Vec::new();
+        while let Ok(param) = sink_rx.try_recv() {
+            got.push(param);
+        }
+        assert_eq!(got.len(), 2, "both events reach the sink: {got:#?}");
+        assert!(got.iter().all(|p| p.progress_token == token("bridge-tok")));
+        let last = got.last().unwrap();
+        assert_eq!(
+            Some(last.progress),
+            last.total,
+            "the single planned pair completed, closing the bar"
+        );
+    }
+
+    /// A multi-batch run emits one `Planned` per batch; the wire `total` is the
+    /// running sum so progress still closes at the whole run's pair count.
+    #[test]
+    fn review_progress_totals_accumulate_across_batches() {
+        let mut state = ReviewProgressState::default();
+        let tok = token("t");
+
+        let first = review_progress_param(
+            &mut state,
+            &tok,
+            &ReviewProgressEvent::Planned { total_pairs: 2 },
+        );
+        assert_eq!(first.total, Some(2.0));
+
+        for file in ["src/a.rs", "src/b.rs"] {
+            review_progress_param(
+                &mut state,
+                &tok,
+                &ReviewProgressEvent::PairDone {
+                    validator: "v".to_string(),
+                    file: file.to_string(),
+                },
+            );
+        }
+
+        let second_plan = review_progress_param(
+            &mut state,
+            &tok,
+            &ReviewProgressEvent::Planned { total_pairs: 3 },
+        );
+        assert_eq!(
+            second_plan.total,
+            Some(5.0),
+            "totals accumulate across batches"
+        );
+        assert_eq!(second_plan.progress, 2.0, "completed pairs carry over");
+    }
 
     /// A report carrying the given fan-out task tally and no findings.
     fn report_with_tally(attempted: usize, failed: usize) -> ReviewReport {

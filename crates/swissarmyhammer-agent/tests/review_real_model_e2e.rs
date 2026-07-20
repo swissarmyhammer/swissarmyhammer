@@ -179,6 +179,7 @@ async fn review_runs_over_acp_against_a_real_local_model() {
         embedder_factory,
         agent_factory,
         "2026-06-08 12:00".to_string(),
+        None,
     )
     .await;
 
