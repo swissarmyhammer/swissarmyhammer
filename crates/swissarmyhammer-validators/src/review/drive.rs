@@ -80,6 +80,14 @@ use crate::validators::{AgentPool, PoolConfig, ValidatorLoader};
 /// caller from the MCP session/work-dir (never `current_dir()`); `now` is the
 /// caller-formatted local timestamp rendered verbatim into the report header.
 ///
+/// `progress` is the optional [`ReviewProgressSender`] the engine emits
+/// [`ReviewProgressEvent`](crate::review::ReviewProgressEvent)s on — one
+/// `Planned` per batch and a `PairStarted`/`PairDone` per (validator, file)
+/// pair — so a caller (e.g. the MCP tool bridging to `notifications/progress`)
+/// can report live progress. Pass `Some` when the caller wants those events;
+/// `None` (the default for callers without a progress channel) emits nothing
+/// and leaves the run's behavior byte-identical to the pre-progress path.
+///
 /// # Errors
 ///
 /// Returns the [`AvpError`] from [`run_review`](crate::review::run_review) on a
@@ -580,23 +588,23 @@ mod tests {
         let report = report.expect("pipeline should produce a report");
         assert!(
             report
-                .markdown
+                .markdown()
                 .contains(&format!("## Review Findings ({TEST_NOW})")),
             "report header must render: {}",
-            report.markdown
+            report.markdown()
         );
         assert!(
-            report.markdown.contains("- [ ] `src/lib.rs:1`"),
+            report.markdown().contains("- [ ] `src/lib.rs:1`"),
             "the confirmed blocker finding must be rendered: {}",
-            report.markdown
+            report.markdown()
         );
         assert!(
-            report.markdown.contains("src/lib.rs:1"),
+            report.markdown().contains("src/lib.rs:1"),
             "the finding's file:line must appear: {}",
-            report.markdown
+            report.markdown()
         );
-        assert_eq!(report.counts.findings, 1);
-        assert_eq!(report.counts.confirmed, 1);
+        assert_eq!(report.counts().findings(), 1);
+        assert_eq!(report.counts().confirmed(), 1);
     }
 
     // ---- content-budgeted batching: a large diff fans out as several batches --
@@ -681,21 +689,22 @@ mod tests {
 
         // Both batches' confirmed findings are merged into the one report.
         assert!(
-            report.markdown.contains("- [ ] `src/lib.rs:3`"),
+            report.markdown().contains("- [ ] `src/lib.rs:3`"),
             "batch 1's finding must be rendered: {}",
-            report.markdown
+            report.markdown()
         );
         assert!(
-            report.markdown.contains("- [ ] `src/other.rs:3`"),
+            report.markdown().contains("- [ ] `src/other.rs:3`"),
             "batch 2's finding must be rendered: {}",
-            report.markdown
+            report.markdown()
         );
         assert_eq!(
-            report.counts.findings, 2,
+            report.counts().findings(),
+            2,
             "findings from both batches are merged: {}",
-            report.markdown
+            report.markdown()
         );
-        assert_eq!(report.counts.confirmed, 2);
+        assert_eq!(report.counts().confirmed(), 2);
     }
 
     // ---- agent↔client permission deadlock reproduction (the keystone) ------
@@ -765,12 +774,12 @@ mod tests {
 
         let report = report.expect("pipeline should produce a report");
         assert!(
-            report.markdown.contains("- [ ] `src/lib.rs:1`"),
+            report.markdown().contains("- [ ] `src/lib.rs:1`"),
             "the confirmed blocker finding must be rendered after the permission round-trips: {}",
-            report.markdown
+            report.markdown()
         );
-        assert_eq!(report.counts.findings, 1);
-        assert_eq!(report.counts.confirmed, 1);
+        assert_eq!(report.counts().findings(), 1);
+        assert_eq!(report.counts().confirmed(), 1);
     }
 
     /// Companion to the deadlock reproduction: the agent demands an
@@ -1216,11 +1225,11 @@ mod tests {
              not the whole review connection",
         );
         assert!(
-            report.markdown.contains("- [ ] `src/lib.rs:1`"),
+            report.markdown().contains("- [ ] `src/lib.rs:1`"),
             "the live validator's confirmed blocker must still be rendered: {}",
-            report.markdown
+            report.markdown()
         );
-        assert_eq!(report.counts.findings, 1);
-        assert_eq!(report.counts.confirmed, 1);
+        assert_eq!(report.counts().findings(), 1);
+        assert_eq!(report.counts().confirmed(), 1);
     }
 }

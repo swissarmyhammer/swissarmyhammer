@@ -50,9 +50,9 @@ use crate::validators::{AgentPool, ValidatorLoader};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FleetTally {
     /// How many fan-out tasks were attempted.
-    pub attempted: usize,
+    attempted: usize,
     /// How many fan-out tasks failed (and degraded to zero findings).
-    pub failed: usize,
+    failed: usize,
 }
 
 impl FleetTally {
@@ -60,14 +60,21 @@ impl FleetTally {
     pub fn new(attempted: usize, failed: usize) -> Self {
         Self { attempted, failed }
     }
+
+    /// How many fan-out tasks were attempted.
+    pub fn attempted(&self) -> usize {
+        self.attempted
+    }
+
+    /// How many fan-out tasks failed (and degraded to zero findings).
+    pub fn failed(&self) -> usize {
+        self.failed
+    }
 }
 
 impl From<&FleetOutcome> for FleetTally {
     fn from(outcome: &FleetOutcome) -> Self {
-        Self {
-            attempted: outcome.attempted(),
-            failed: outcome.failed(),
-        }
+        Self::new(outcome.attempted(), outcome.failed())
     }
 }
 
@@ -78,26 +85,76 @@ impl From<&FleetOutcome> for FleetTally {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ReviewCounts {
     /// Confirmed findings rendered into the checklist (post-dedup).
-    pub findings: usize,
+    findings: usize,
     /// Findings the verifier confirmed (across every input, pre-dedup).
-    pub confirmed: usize,
+    confirmed: usize,
     /// Findings the verifier refuted (across every input).
-    pub refuted: usize,
+    refuted: usize,
     /// How many fan-out tasks were attempted (see [`FleetTally`]).
-    pub tasks_attempted: usize,
+    tasks_attempted: usize,
     /// How many fan-out tasks failed and degraded to zero findings. A non-zero
     /// value means the rendered findings are INCOMPLETE.
-    pub tasks_failed: usize,
+    tasks_failed: usize,
+}
+
+impl ReviewCounts {
+    /// Confirmed findings rendered into the checklist (post-dedup).
+    pub fn findings(&self) -> usize {
+        self.findings
+    }
+
+    /// Findings the verifier confirmed (across every input, pre-dedup).
+    pub fn confirmed(&self) -> usize {
+        self.confirmed
+    }
+
+    /// Findings the verifier refuted (across every input).
+    pub fn refuted(&self) -> usize {
+        self.refuted
+    }
+
+    /// How many fan-out tasks were attempted (see [`FleetTally`]).
+    pub fn tasks_attempted(&self) -> usize {
+        self.tasks_attempted
+    }
+
+    /// How many fan-out tasks failed and degraded to zero findings. A non-zero
+    /// value means the rendered findings are INCOMPLETE.
+    pub fn tasks_failed(&self) -> usize {
+        self.tasks_failed
+    }
 }
 
 /// The synthesized review report: the rendered markdown plus its tallies.
+///
+/// Constructed only by [`synthesize`]; consumers read it through the getters
+/// (and [`ReviewReport::into_markdown`] when they need to own the rendered
+/// section without cloning it).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewReport {
     /// The dated GFM `## Review Findings (...)` section, ready to append to a
     /// kanban task's description verbatim.
-    pub markdown: String,
+    markdown: String,
     /// The per-verdict counts for the tool/skill summary.
-    pub counts: ReviewCounts,
+    counts: ReviewCounts,
+}
+
+impl ReviewReport {
+    /// The dated GFM `## Review Findings (...)` section, ready to append to a
+    /// kanban task's description verbatim.
+    pub fn markdown(&self) -> &str {
+        &self.markdown
+    }
+
+    /// The per-verdict counts for the tool/skill summary.
+    pub fn counts(&self) -> &ReviewCounts {
+        &self.counts
+    }
+
+    /// Consume the report, yielding its rendered markdown without a clone.
+    pub fn into_markdown(self) -> String {
+        self.markdown
+    }
 }
 
 /// Synthesize verified findings into the dated, deduped, ordered report.
@@ -266,6 +323,10 @@ fn sentence(text: &str) -> String {
 /// fan-out → verify path. The engine never reads the clock: `now` is the
 /// caller-supplied, already-formatted local timestamp (`YYYY-MM-DD HH:MM`)
 /// rendered verbatim into the report header.
+///
+/// `progress` is the optional [`ReviewProgressSender`] handed through to
+/// [`run_fleet`] so each batch emits its `Planned`/`PairStarted`/`PairDone`
+/// events; `None` emits nothing.
 ///
 /// # Errors
 ///

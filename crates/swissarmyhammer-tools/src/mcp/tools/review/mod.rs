@@ -258,6 +258,24 @@ pub struct ReviewTool {
     concurrency: Option<usize>,
 }
 
+impl std::fmt::Debug for ReviewTool {
+    /// Manual impl: the two factory fields are trait objects (closures) with no
+    /// `Debug` of their own, so they render by presence/absence instead.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReviewTool")
+            .field(
+                "agent_factory",
+                &self.agent_factory.as_ref().map(|_| "AgentFactory"),
+            )
+            .field(
+                "embedder_factory",
+                &self.embedder_factory.as_ref().map(|_| "EmbedderFactory"),
+            )
+            .field("concurrency", &self.concurrency)
+            .finish()
+    }
+}
+
 impl ReviewTool {
     /// A tool with no agent factory — loader-read ops only.
     pub fn new() -> Self {

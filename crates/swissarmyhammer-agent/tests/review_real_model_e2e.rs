@@ -217,10 +217,10 @@ async fn review_runs_over_acp_against_a_real_local_model() {
     // Structure, not content: the dated GFM section header always renders, even
     // for an empty findings set. A 0.6B model's actual findings are not asserted.
     assert!(
-        report.markdown.contains("## Review Findings ("),
+        report.markdown().contains("## Review Findings ("),
         "the report must render the dated GFM section header (well-formed, \
          non-error markdown), got: {}",
-        report.markdown
+        report.markdown()
     );
 
     // The counts must be internally consistent: the rendered-findings count is
@@ -230,9 +230,9 @@ async fn review_runs_over_acp_against_a_real_local_model() {
     // nondeterministic 0.6B model can emit identical confirmed findings on a tiny
     // diff, so the kept (deduped) findings never exceed the confirmed count —
     // they may be strictly fewer.
-    let counts = &report.counts;
+    let counts = report.counts();
     assert!(
-        counts.findings <= counts.confirmed,
+        counts.findings() <= counts.confirmed(),
         "the rendered findings count must not exceed the confirmed findings: {counts:?}"
     );
 }

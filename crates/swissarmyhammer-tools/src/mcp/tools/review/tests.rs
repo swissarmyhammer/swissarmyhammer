@@ -74,6 +74,28 @@ fn review_tool_is_registered_with_its_ops() {
     }
 }
 
+/// The manual `Debug` impl renders the trait-object factory fields by
+/// presence/absence (closures are unprintable) alongside the plain fields.
+#[test]
+fn review_tool_debug_summarizes_factory_presence() {
+    let bare = format!("{:?}", ReviewTool::new());
+    assert!(bare.contains("agent_factory: None"), "{bare}");
+    assert!(bare.contains("embedder_factory: None"), "{bare}");
+    assert!(bare.contains("concurrency: None"), "{bare}");
+
+    let factory: AgentFactory = Arc::new(|| Box::pin(async { Err("unused".to_string()) }));
+    let wired = format!(
+        "{:?}",
+        ReviewTool::new()
+            .with_agent_factory(factory)
+            .with_embedder_factory(mock_embedder_factory())
+            .with_concurrency(Some(3))
+    );
+    assert!(wired.contains("agent_factory: Some"), "{wired}");
+    assert!(wired.contains("embedder_factory: Some"), "{wired}");
+    assert!(wired.contains("concurrency: Some(3)"), "{wired}");
+}
+
 // ---------------------------------------------------------------------------
 // wire / full schema split
 // ---------------------------------------------------------------------------

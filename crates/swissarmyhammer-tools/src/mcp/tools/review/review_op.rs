@@ -343,6 +343,7 @@ fn review_progress_param(
 
 /// The two live halves of a review progress bridge: the engine-facing sender
 /// and the drain task flushing mapped notifications to the client.
+#[derive(Debug)]
 pub struct ReviewProgressBridge {
     /// The sender to thread into [`run_review_request`]; dropping it (when the
     /// pipeline finishes) winds the whole bridge down.
@@ -418,8 +419,8 @@ const INCOMPLETE_REVIEW_FAILURE_RATE: f64 = 0.5;
 /// empty clean report. A run that attempted no tasks (an empty diff) has no
 /// failure rate and is always trustworthy.
 fn check_review_completeness(report: &ReviewReport) -> Result<(), String> {
-    let attempted = report.counts.tasks_attempted;
-    let failed = report.counts.tasks_failed;
+    let attempted = report.counts().tasks_attempted();
+    let failed = report.counts().tasks_failed();
     if attempted == 0 {
         return Ok(());
     }
@@ -498,14 +499,15 @@ pub struct ReviewCountsView {
 
 impl From<ReviewReport> for ReviewResponse {
     fn from(report: ReviewReport) -> Self {
+        let counts = *report.counts();
         ReviewResponse {
-            markdown: report.markdown,
+            markdown: report.into_markdown(),
             counts: ReviewCountsView {
-                findings: report.counts.findings,
-                confirmed: report.counts.confirmed,
-                refuted: report.counts.refuted,
-                attempted: report.counts.tasks_attempted,
-                failed: report.counts.tasks_failed,
+                findings: counts.findings(),
+                confirmed: counts.confirmed(),
+                refuted: counts.refuted(),
+                attempted: counts.tasks_attempted(),
+                failed: counts.tasks_failed(),
             },
         }
     }
@@ -515,7 +517,7 @@ impl From<ReviewReport> for ReviewResponse {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use swissarmyhammer_validators::review::{ReviewCounts, ReviewReport};
+    use swissarmyhammer_validators::review::{synthesize, FleetTally, ReviewReport};
 
     /// Build a string-typed progress token for tests.
     fn token(s: &str) -> ProgressToken {
@@ -693,16 +695,11 @@ mod tests {
         assert_eq!(second_plan.progress, 2.0, "completed pairs carry over");
     }
 
-    /// A report carrying the given fan-out task tally and no findings.
+    /// A report carrying the given fan-out task tally and no findings, built
+    /// through the engine's own `synthesize` (the one construction path a
+    /// `ReviewReport` has now that its fields are encapsulated).
     fn report_with_tally(attempted: usize, failed: usize) -> ReviewReport {
-        ReviewReport {
-            markdown: "## Review Findings (now)\n".to_string(),
-            counts: ReviewCounts {
-                tasks_attempted: attempted,
-                tasks_failed: failed,
-                ..ReviewCounts::default()
-            },
-        }
+        synthesize(vec![], &FleetTally::new(attempted, failed), "now")
     }
 
     /// Parity guard: the `backend` modifier influences ONLY the pool's worker

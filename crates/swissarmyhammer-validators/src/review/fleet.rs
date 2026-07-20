@@ -1003,6 +1003,12 @@ fn parse_task_response(
     }
 }
 
+/// The header that opens both fan-out prompt renderings — the monolithic
+/// fallback ([`render_fleet_prompt`]) and the shared run prime
+/// ([`render_run_prime`]) — so the two prompt shapes stay byte-identical on
+/// this section and a wording change lands in one place.
+const CHANGE_PURPOSE_HEADER: &str = "# Change purpose\n\n";
+
 /// Tag every finding with its source `validator` name, overriding whatever the
 /// agent emitted so the validator attribution is always authoritative.
 fn tag_findings(mut findings: Vec<Finding>, validator: &str) -> Vec<Finding> {
@@ -1037,7 +1043,7 @@ pub fn render_fleet_prompt(
     ruleset: &RuleSet,
 ) -> String {
     let mut out = String::new();
-    out.push_str("# Change purpose\n\n");
+    out.push_str(CHANGE_PURPOSE_HEADER);
     out.push_str(change_purpose.trim());
     out.push_str("\n\n");
     out.push_str(&render_file_payload(&validator.files));
@@ -1070,7 +1076,7 @@ pub(crate) const PRIME_HANDOFF: &str =
 /// parent decoded, and the fork's first decode reuses the full saved state.
 pub fn render_run_prime(work: &WorkList) -> String {
     let mut out = String::new();
-    out.push_str("# Change purpose\n\n");
+    out.push_str(CHANGE_PURPOSE_HEADER);
     out.push_str(work.change_purpose.trim());
     out.push_str("\n\n");
     let distinct: Vec<FileWork> = work.distinct_files().cloned().collect();
