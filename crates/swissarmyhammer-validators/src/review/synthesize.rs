@@ -352,13 +352,13 @@ pub async fn run_review(
 
     // Stage 2: split the work-list into content-budgeted batches (whole-file
     // granularity). A single file over `batch_size` is a hard error here.
-    let batches = batch_work_list(&work, fleet_config.batch_size)?;
+    let batches = batch_work_list(&work, fleet_config.batch_size())?;
 
     tracing::info!(
         validators = work.validators.len(),
         files = work.distinct_files().count(),
         batches = batches.len(),
-        batch_size = fleet_config.batch_size,
+        batch_size = fleet_config.batch_size(),
         "review run: scoped work-list ready, batched, fanning out"
     );
 
@@ -381,11 +381,7 @@ pub async fn run_review(
         let fleet = run_fleet(batch, loader, pool, progress).await;
         attempted += fleet.attempted();
         failed += fleet.failed();
-        let FleetOutcome {
-            findings: fleet_findings,
-            prime,
-            ..
-        } = fleet;
+        let (fleet_findings, prime) = fleet.into_parts();
 
         // Verify this batch on the SAME pool — each verify task FORKS the batch's
         // shared prime while it stays pinned. Awaiting drains every verify task.

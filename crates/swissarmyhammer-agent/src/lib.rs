@@ -439,10 +439,7 @@ pub fn review_agent_factory(
             let handle = create_agent(&config, None)
                 .await
                 .map_err(|e| format!("failed to create review agent: {e}"))?;
-            Ok(AgentHandle {
-                agent: handle.agent,
-                notification_rx: handle.notification_rx,
-            })
+            Ok(AgentHandle::new(handle.agent, handle.notification_rx))
         })
     })
 }

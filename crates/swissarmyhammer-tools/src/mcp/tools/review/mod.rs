@@ -340,13 +340,11 @@ impl ReviewTool {
         })?;
 
         let repo_path = self.resolve_repo_path(context)?;
-        let request = ReviewRequest {
-            scope,
-            backend: string_arg(args, "backend"),
-            validators: string_array_arg(args, "validators"),
-            concurrency: self.concurrency,
-            batch_size: usize_arg(args, "batch_size"),
-        };
+        let request = ReviewRequest::new(scope)
+            .with_backend(string_arg(args, "backend"))
+            .with_validators(string_array_arg(args, "validators"))
+            .with_concurrency(self.concurrency)
+            .with_batch_size(usize_arg(args, "batch_size"));
 
         let embedder_factory = self
             .embedder_factory
@@ -360,16 +358,19 @@ impl ReviewTool {
         // current-thread runtime — only the sync UnboundedSender crosses in.
         // No token and no sink → None → zero notifications (unchanged behavior).
         let (progress, drain) = match review_op::spawn_review_progress_bridge(context) {
-            Some(bridge) => (Some(bridge.sender), Some(bridge.drain)),
+            Some(bridge) => {
+                let (sender, drain) = bridge.into_parts();
+                (Some(sender), Some(drain))
+            }
             None => (None, None),
         };
 
         let result = review_op::run_review_request(
             request,
-            repo_path,
+            &repo_path,
             embedder_factory,
             factory.clone(),
-            now,
+            &now,
             progress,
         )
         .await;
@@ -384,7 +385,7 @@ impl ReviewTool {
             }
         }
 
-        let report = result.map_err(|e| rmcp::ErrorData::internal_error(e, None))?;
+        let report = result.map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         json_result(&ReviewResponse::from(report))
     }
 }

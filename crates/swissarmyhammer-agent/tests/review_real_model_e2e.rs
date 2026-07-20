@@ -162,30 +162,27 @@ async fn review_runs_over_acp_against_a_real_local_model() {
     // in production (loaded once, cached).
     let embedder_factory = default_embedder_factory();
 
-    let request = ReviewRequest {
-        scope: Scope::Working,
-        backend: Some("local".to_string()),
+    let request = ReviewRequest::new(Scope::Working)
+        .with_backend(Some("local".to_string()))
         // Exactly one validator → exactly one fan-out generation. Every other
         // builtin validator is dropped by `retain_rulesets` with no model call,
         // keeping this the minimum real end-to-end (see the module doc).
-        validators: vec!["function-length".to_string()],
-        concurrency: None,
-        batch_size: None,
-    };
+        .with_validators(vec!["function-length".to_string()]);
 
     let outcome = run_review_request(
         request,
-        repo.path().to_path_buf(),
+        repo.path(),
         embedder_factory,
         agent_factory,
-        "2026-06-08 12:00".to_string(),
+        "2026-06-08 12:00",
         None,
     )
     .await;
 
     let report = match outcome {
         Ok(report) => report,
-        Err(e) => {
+        Err(err) => {
+            let e = err.to_string();
             if is_model_unavailable(&e) {
                 tracing::warn!("skipping: qwen-0.6b-test model unavailable ({e})");
                 return;

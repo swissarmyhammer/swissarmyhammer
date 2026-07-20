@@ -752,28 +752,19 @@ async fn review_pipelines_run_one_at_a_time_process_wide() {
     let peak = Arc::new(AtomicUsize::new(0));
     let embedder = concurrency_probe_embedder_factory(Arc::clone(&active), Arc::clone(&peak));
 
-    let request = || ReviewRequest {
-        scope: Scope::Working,
-        backend: Some("local".to_string()),
-        validators: Vec::new(),
-        concurrency: None,
-        batch_size: None,
-    };
-    let run = |path: std::path::PathBuf| {
+    let request = || ReviewRequest::new(Scope::Working).with_backend(Some("local".to_string()));
+    let run = || {
         run_review_request(
             request(),
-            path,
+            repo.path(),
             Arc::clone(&embedder),
             Arc::clone(&factory),
-            "2026-06-07 12:00".to_string(),
+            "2026-06-07 12:00",
             None,
         )
     };
 
-    let (a, b) = tokio::join!(
-        run(repo.path().to_path_buf()),
-        run(repo.path().to_path_buf())
-    );
+    let (a, b) = tokio::join!(run(), run());
     a.expect("first review run");
     b.expect("second review run");
 
@@ -894,10 +885,7 @@ fn scripted_factory(agent: Arc<ScriptedAgent>) -> AgentFactory {
             // driver must collect once).
             let agent = ScriptedAgent::rebind_broadcast(&agent, notify_tx, true);
             let dyn_agent = DynConnectTo::new(ScriptedAdapter::new(agent));
-            Ok(AgentHandle {
-                agent: dyn_agent,
-                notification_rx,
-            })
+            Ok(AgentHandle::new(dyn_agent, notification_rx))
         })
     })
 }

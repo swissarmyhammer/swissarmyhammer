@@ -24,7 +24,7 @@ use swissarmyhammer_validators::review::{
     run_review_over_agent, FleetConfig, ReviewProgressEvent, ReviewProgressSender, ReviewReport,
     Scope,
 };
-use swissarmyhammer_validators::{load_rules, PoolConfig};
+use swissarmyhammer_validators::{load_rules, AvpError, PoolConfig};
 
 use crate::mcp::progress::{spawn_drain_task, spawn_in_process_drain_task};
 use crate::mcp::tool_registry::ToolContext;
@@ -35,10 +35,53 @@ use crate::mcp::tool_registry::ToolContext;
 /// `swissarmyhammer_agent::AcpAgentHandle`, supplied to the tool so this crate
 /// (which `swissarmyhammer-agent` depends on) never constructs an agent itself.
 pub struct AgentHandle {
-    /// The agent component the driver runs as the ACP server side.
-    pub agent: DynConnectTo<Client>,
-    /// The receiver of the agent's streamed notifications.
-    pub notification_rx: broadcast::Receiver<SessionNotification>,
+    /// The agent component the driver runs as the ACP server side. Consumed by
+    /// value through [`into_parts`](Self::into_parts); private so the handle's
+    /// layout is not a field-level API commitment.
+    agent: DynConnectTo<Client>,
+    /// The receiver of the agent's streamed notifications. Consumed through
+    /// [`into_parts`](Self::into_parts); private for the same reason as
+    /// [`agent`](Self::into_parts).
+    notification_rx: broadcast::Receiver<SessionNotification>,
+}
+
+impl AgentHandle {
+    /// Assemble a handle from its two halves (the shape a factory mints).
+    pub fn new(
+        agent: DynConnectTo<Client>,
+        notification_rx: broadcast::Receiver<SessionNotification>,
+    ) -> Self {
+        Self {
+            agent,
+            notification_rx,
+        }
+    }
+
+    /// Consume the handle into its two halves.
+    ///
+    /// The engine driver ([`run_review_over_agent`]) takes both by value — the
+    /// agent component to run as the ACP server side and the notification
+    /// receiver to collect from — so the honest accessor is a by-value split,
+    /// not borrowing getters.
+    pub fn into_parts(
+        self,
+    ) -> (
+        DynConnectTo<Client>,
+        broadcast::Receiver<SessionNotification>,
+    ) {
+        (self.agent, self.notification_rx)
+    }
+}
+
+impl std::fmt::Debug for AgentHandle {
+    /// Manual impl: the agent component is a type-erased connector with no
+    /// `Debug` of its own, so it renders by type name instead.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentHandle")
+            .field("agent", &"DynConnectTo<Client>")
+            .field("notification_rx", &self.notification_rx)
+            .finish()
+    }
 }
 
 /// A factory that mints a fresh [`AgentHandle`] for one review run.
@@ -60,10 +103,91 @@ pub type AgentFactory = Arc<
 /// so the pipeline runs without a 600 MB model load.
 pub type EmbedderFactory = Arc<
     dyn Fn() -> Pin<
-            Box<dyn Future<Output = Result<Arc<dyn model_embedding::TextEmbedder>, String>> + Send>,
+            Box<
+                dyn Future<Output = Result<Arc<dyn model_embedding::TextEmbedder>, EmbedderError>>
+                    + Send,
+            >,
         > + Send
         + Sync,
 >;
+
+/// Errors from resolving the review embedder through an [`EmbedderFactory`].
+///
+/// The factory is a type-erased seam implemented by heterogeneous backends (the
+/// platform embedder in production, mocks in tests), so each variant carries the
+/// backend's rendered message rather than a concrete source type.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum EmbedderError {
+    /// The configured embedder model could not be resolved.
+    #[error("failed to resolve embedder: {0}")]
+    Resolve(String),
+    /// The resolved embedder failed to load its weights.
+    #[error("failed to load embedder: {0}")]
+    Load(String),
+}
+
+/// Errors from driving one resolved review request end to end.
+///
+/// Each variant names one failure point of [`run_review_request`]: resolving the
+/// engine inputs (validators, index, embedder, agent), hosting the pipeline on
+/// its dedicated runtime, the pipeline itself, or the completeness gate refusing
+/// an untrustworthy run.
+#[derive(Debug, thiserror::Error)]
+pub enum ReviewError {
+    /// The process-wide [`REVIEW_PIPELINE_GATE`] semaphore closed (process
+    /// shutdown) while this request waited for its permit.
+    #[error("review pipeline gate closed: {0}")]
+    GateClosed(#[from] tokio::sync::AcquireError),
+    /// The dedicated current-thread runtime hosting the pipeline failed to
+    /// build.
+    #[error("failed to build review runtime: {0}")]
+    Runtime(#[source] std::io::Error),
+    /// The blocking task hosting the pipeline panicked or was cancelled.
+    #[error("review task join error: {0}")]
+    Join(#[from] tokio::task::JoinError),
+    /// The validator loader failed to load the RuleSet stack.
+    #[error("failed to load validators: {0}")]
+    ValidatorLoad(#[source] AvpError),
+    /// No code_context index exists at the expected workspace path.
+    #[error("no code_context index at {} — run `code_context rebuild index` first", .0.display())]
+    IndexMissing(PathBuf),
+    /// The index database exists but could not be opened read-only.
+    #[error("failed to open code_context index: {0}")]
+    IndexOpen(#[source] rusqlite::Error),
+    /// The opened index connection could not be configured.
+    #[error("failed to configure code_context index connection: {0}")]
+    IndexConfigure(#[source] rusqlite::Error),
+    /// The embedder factory failed to resolve or load the embedder.
+    #[error(transparent)]
+    Embedder(#[from] EmbedderError),
+    /// The agent factory failed to build the review agent. Factory errors cross
+    /// the type-erased [`AgentFactory`] seam as rendered strings, passed through
+    /// verbatim.
+    #[error("{0}")]
+    Agent(String),
+    /// The engine pipeline itself failed.
+    #[error("review pipeline failed: {0}")]
+    Pipeline(#[source] AvpError),
+    /// The run finished but a majority of its fan-out tasks failed, so the
+    /// (empty) findings are untrustworthy and refused (see
+    /// [`INCOMPLETE_REVIEW_FAILURE_RATE`]).
+    #[error(
+        "incomplete review: {failed}/{attempted} fan-out tasks failed \
+         (over {:.0}%) — the review did not actually run, so the empty findings are not a \
+         clean pass and were not returned. This is a genuine fan-out failure (the review \
+         agent/backend erroring or timing out per task), NOT the diff being too large: a \
+         large diff is reviewed in content-budgeted batches, and a single file over \
+         `batch_size` fails fast with its own distinct error. Check the agent/backend health \
+         (and `review.concurrency`), then retry.",
+        INCOMPLETE_REVIEW_FAILURE_RATE * 100.0
+    )]
+    Incomplete {
+        /// How many fan-out tasks failed.
+        failed: usize,
+        /// How many fan-out tasks were attempted.
+        attempted: usize,
+    },
+}
 
 /// Process-global cache of the loaded default embedder.
 ///
@@ -85,10 +209,10 @@ static DEFAULT_EMBEDDER: OnceCell<Arc<dyn model_embedding::TextEmbedder>> = Once
 async fn shared_embedder<F, Fut>(
     cell: &OnceCell<Arc<dyn model_embedding::TextEmbedder>>,
     init: F,
-) -> Result<Arc<dyn model_embedding::TextEmbedder>, String>
+) -> Result<Arc<dyn model_embedding::TextEmbedder>, EmbedderError>
 where
     F: FnOnce() -> Fut,
-    Fut: Future<Output = Result<Arc<dyn model_embedding::TextEmbedder>, String>>,
+    Fut: Future<Output = Result<Arc<dyn model_embedding::TextEmbedder>, EmbedderError>>,
 {
     let embedder = cell.get_or_try_init(init).await?;
     Ok(Arc::clone(embedder))
@@ -107,11 +231,11 @@ pub fn default_embedder_factory() -> EmbedderFactory {
             use model_embedding::TextEmbedder as _;
             let embedder = swissarmyhammer_embedding::Embedder::default()
                 .await
-                .map_err(|e| format!("failed to resolve embedder: {e}"))?;
+                .map_err(|e| EmbedderError::Resolve(e.to_string()))?;
             embedder
                 .load()
                 .await
-                .map_err(|e| format!("failed to load embedder: {e}"))?;
+                .map_err(|e| EmbedderError::Load(e.to_string()))?;
             Ok(Arc::new(embedder) as Arc<dyn model_embedding::TextEmbedder>)
         }))
     })
@@ -158,21 +282,93 @@ const CONTEXT_DIR: &str = ".code-context";
 const DB_NAME: &str = "index.db";
 
 /// A run-review request resolved from one of the three `review` ops.
+///
+/// Built with [`ReviewRequest::new`] plus the `with_*` modifiers (the same
+/// builder shape as `ReviewTool`); read through the getters. All fields are
+/// private so the request can evolve without a field-level API commitment.
 pub struct ReviewRequest {
     /// The resolved scope (working / sha / file / glob).
-    pub scope: Scope,
+    scope: Scope,
     /// The `backend` modifier (`session` | `local`), if supplied.
-    pub backend: Option<String>,
+    backend: Option<String>,
     /// The optional validator-subset modifier. When non-empty, the fan-out is
     /// scoped to just these validators (via `retain_rulesets`); empty means
     /// every matching validator.
-    pub validators: Vec<String>,
+    validators: Vec<String>,
     /// The pinned pool worker count from `review.concurrency`, applied by the
     /// server at the wiring layer. `None` defers to the coarse `backend` policy.
-    pub concurrency: Option<usize>,
+    concurrency: Option<usize>,
     /// The content-budgeted batch size in BYTES, from the `batch_size` modifier.
     /// `None` defers to [`FleetConfig`]'s default (256 KiB). Applies to every scope.
-    pub batch_size: Option<usize>,
+    batch_size: Option<usize>,
+}
+
+impl ReviewRequest {
+    /// A request over `scope` with every modifier at its default: no `backend`
+    /// choice, all matching validators, no pinned concurrency, and the default
+    /// batch size.
+    pub fn new(scope: Scope) -> Self {
+        Self {
+            scope,
+            backend: None,
+            validators: Vec::new(),
+            concurrency: None,
+            batch_size: None,
+        }
+    }
+
+    /// Set the `backend` modifier (`session` | `local`); `None` keeps the
+    /// default policy.
+    pub fn with_backend(mut self, backend: Option<String>) -> Self {
+        self.backend = backend;
+        self
+    }
+
+    /// Scope the fan-out to just these validators; empty means every matching
+    /// validator.
+    pub fn with_validators(mut self, validators: Vec<String>) -> Self {
+        self.validators = validators;
+        self
+    }
+
+    /// Pin the pool worker count (`review.concurrency`); `None` defers to the
+    /// coarse `backend` policy.
+    pub fn with_concurrency(mut self, concurrency: Option<usize>) -> Self {
+        self.concurrency = concurrency;
+        self
+    }
+
+    /// Set the content-budgeted batch size in BYTES; `None` keeps
+    /// [`FleetConfig`]'s default.
+    pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    /// The resolved scope (working / sha / file / glob).
+    pub fn scope(&self) -> &Scope {
+        &self.scope
+    }
+
+    /// The `backend` modifier (`session` | `local`), if supplied.
+    pub fn backend(&self) -> Option<&str> {
+        self.backend.as_deref()
+    }
+
+    /// The validator-subset modifier; empty means every matching validator.
+    pub fn validators(&self) -> &[String] {
+        &self.validators
+    }
+
+    /// The pinned pool worker count, if any.
+    pub fn concurrency(&self) -> Option<usize> {
+        self.concurrency
+    }
+
+    /// The content-budgeted batch size in BYTES, if overridden.
+    pub fn batch_size(&self) -> Option<usize> {
+        self.batch_size
+    }
 }
 
 /// Run a resolved review request end to end and return the report.
@@ -189,16 +385,17 @@ pub struct ReviewRequest {
 ///
 /// # Errors
 ///
-/// Returns a message on loader failure, a missing/locked index, embedder load
-/// failure, agent-construction failure, or a pipeline error.
+/// Returns a [`ReviewError`] on loader failure, a missing/locked index, embedder
+/// load failure, agent-construction failure, a pipeline error, or the
+/// completeness gate refusing an untrustworthy run.
 pub async fn run_review_request(
     request: ReviewRequest,
-    repo_path: PathBuf,
+    repo_path: &Path,
     embedder_factory: EmbedderFactory,
     agent_factory: AgentFactory,
-    now: String,
+    now: &str,
     progress: Option<ReviewProgressSender>,
-) -> Result<ReviewReport, String> {
+) -> Result<ReviewReport, ReviewError> {
     // Carry the current span across the thread boundary so the engine's
     // observability lines stay correlated with the originating `tool_call{...}`
     // request span. The *subscriber* needs no carry: `sah serve` installs its
@@ -212,12 +409,12 @@ pub async fn run_review_request(
     // only one corpus + embedder + agent set is resident at a time (see
     // `REVIEW_PIPELINE_GATE`). Acquired here, *outside* the `spawn_blocking`, so a
     // second concurrent request waits before it builds any of those resources.
-    let _permit = REVIEW_PIPELINE_GATE
-        .acquire()
-        .await
-        .map_err(|e| format!("review pipeline gate closed: {e}"))?;
+    let _permit = REVIEW_PIPELINE_GATE.acquire().await?;
 
     let span = tracing::Span::current();
+    // The blocking closure needs owned copies of the borrowed inputs ('static).
+    let repo_path = repo_path.to_path_buf();
+    let now = now.to_string();
     // Only the synchronous `UnboundedSender` crosses into the blocking thread
     // and its nested current-thread runtime; the async drain task consuming
     // the mapped notifications was spawned by the caller on the OUTER runtime.
@@ -226,7 +423,7 @@ pub async fn run_review_request(
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|e| format!("failed to build review runtime: {e}"))?;
+            .map_err(ReviewError::Runtime)?;
         rt.block_on(run_review_request_inner(
             request,
             repo_path,
@@ -236,8 +433,7 @@ pub async fn run_review_request(
             progress,
         ))
     })
-    .await
-    .map_err(|e| format!("review task join error: {e}"))?
+    .await?
 }
 
 /// The pipeline body, run inside the dedicated current-thread runtime.
@@ -248,27 +444,26 @@ async fn run_review_request_inner(
     agent_factory: AgentFactory,
     now: String,
     progress: Option<ReviewProgressSender>,
-) -> Result<ReviewReport, String> {
-    let mut loader = load_rules().map_err(|e| format!("failed to load validators: {e}"))?;
+) -> Result<ReviewReport, ReviewError> {
+    let mut loader = load_rules().map_err(ReviewError::ValidatorLoad)?;
     // Honor the `validators` subset modifier: when the caller named a subset,
     // scope the fan-out to just those validators. Empty means "all matching".
     loader.retain_rulesets(&request.validators);
     let conn = open_index_connection(&repo_path)?;
     let embedder = embedder_factory().await?;
 
-    let handle = agent_factory().await?;
+    let (agent, notification_rx) = agent_factory()
+        .await
+        .map_err(ReviewError::Agent)?
+        .into_parts();
 
     // Thread the `batch_size` modifier into the engine config; `None` keeps the
     // FleetConfig default (256 KiB).
-    let fleet_config = FleetConfig {
-        batch_size: request
-            .batch_size
-            .unwrap_or_else(|| FleetConfig::default().batch_size),
-    };
+    let fleet_config = request.batch_size.map(FleetConfig::new).unwrap_or_default();
 
     let report = run_review_over_agent(
-        handle.agent,
-        handle.notification_rx,
+        agent,
+        notification_rx,
         request.scope,
         &repo_path,
         &loader,
@@ -280,7 +475,7 @@ async fn run_review_request_inner(
         &now,
     )
     .await
-    .map_err(|e| format!("review pipeline failed: {e}"))?;
+    .map_err(ReviewError::Pipeline)?;
 
     // The engine is a pure data barrier: it always returns a report, carrying the
     // fan-out task tally rather than erroring on it. Error policy lives here, at
@@ -346,12 +541,29 @@ fn review_progress_param(
 #[derive(Debug)]
 pub struct ReviewProgressBridge {
     /// The sender to thread into [`run_review_request`]; dropping it (when the
-    /// pipeline finishes) winds the whole bridge down.
-    pub sender: ReviewProgressSender,
+    /// pipeline finishes) winds the whole bridge down. Consumed through
+    /// [`into_parts`](Self::into_parts); private so the bridge's layout is not
+    /// a field-level API commitment.
+    sender: ReviewProgressSender,
     /// The drain task forwarding mapped `notifications/progress` params to the
     /// MCP peer or in-process sink. Await it after the run so buffered
-    /// notifications flush before the final result returns.
-    pub drain: tokio::task::JoinHandle<()>,
+    /// notifications flush before the final result returns. Consumed through
+    /// [`into_parts`](Self::into_parts); private for the same reason as
+    /// [`sender`](Self::into_parts).
+    drain: tokio::task::JoinHandle<()>,
+}
+
+impl ReviewProgressBridge {
+    /// Consume the bridge into its two halves: the engine-facing sender and the
+    /// drain task.
+    ///
+    /// The caller hands the sender into [`run_review_request`] (which drops it
+    /// when the pipeline finishes) and awaits the drain afterwards so buffered
+    /// notifications flush before the final result returns — both halves are
+    /// used by value, so the honest accessor is a by-value split.
+    pub fn into_parts(self) -> (ReviewProgressSender, tokio::task::JoinHandle<()>) {
+        (self.sender, self.drain)
+    }
 }
 
 /// Wire the review progress bridge for one tool call, when the caller opted in.
@@ -413,28 +625,19 @@ const INCOMPLETE_REVIEW_FAILURE_RATE: f64 = 0.5;
 
 /// Decide whether a finished review is trustworthy enough to return.
 ///
-/// Returns `Err` with an incomplete-review message naming the failed/attempted
-/// task counts when more than [`INCOMPLETE_REVIEW_FAILURE_RATE`] of the attempted
-/// fan-out tasks failed, so a wedged run surfaces as a tool error instead of an
-/// empty clean report. A run that attempted no tasks (an empty diff) has no
-/// failure rate and is always trustworthy.
-fn check_review_completeness(report: &ReviewReport) -> Result<(), String> {
+/// Returns [`ReviewError::Incomplete`] naming the failed/attempted task counts
+/// when more than [`INCOMPLETE_REVIEW_FAILURE_RATE`] of the attempted fan-out
+/// tasks failed, so a wedged run surfaces as a tool error instead of an empty
+/// clean report. A run that attempted no tasks (an empty diff) has no failure
+/// rate and is always trustworthy.
+fn check_review_completeness(report: &ReviewReport) -> Result<(), ReviewError> {
     let attempted = report.counts().tasks_attempted();
     let failed = report.counts().tasks_failed();
     if attempted == 0 {
         return Ok(());
     }
     if failed as f64 > attempted as f64 * INCOMPLETE_REVIEW_FAILURE_RATE {
-        return Err(format!(
-            "incomplete review: {failed}/{attempted} fan-out tasks failed \
-             (over {:.0}%) — the review did not actually run, so the empty findings are not a \
-             clean pass and were not returned. This is a genuine fan-out failure (the review \
-             agent/backend erroring or timing out per task), NOT the diff being too large: a \
-             large diff is reviewed in content-budgeted batches, and a single file over \
-             `batch_size` fails fast with its own distinct error. Check the agent/backend health \
-             (and `review.concurrency`), then retry.",
-            INCOMPLETE_REVIEW_FAILURE_RATE * 100.0
-        ));
+        return Err(ReviewError::Incomplete { failed, attempted });
     }
     Ok(())
 }
@@ -447,54 +650,96 @@ fn check_review_completeness(report: &ReviewReport) -> Result<(), String> {
 ///
 /// # Errors
 ///
-/// Returns a message when the index database is absent (the workspace was never
-/// indexed) or cannot be opened read-only.
-fn open_index_connection(repo_path: &Path) -> Result<Connection, String> {
+/// Returns [`ReviewError::IndexMissing`] when the index database is absent (the
+/// workspace was never indexed), or an open/configure variant when it cannot be
+/// opened read-only.
+fn open_index_connection(repo_path: &Path) -> Result<Connection, ReviewError> {
     let db_path: PathBuf = repo_path.join(CONTEXT_DIR).join(DB_NAME);
     if !db_path.exists() {
-        return Err(format!(
-            "no code_context index at {} — run `code_context rebuild index` first",
-            db_path.display()
-        ));
+        return Err(ReviewError::IndexMissing(db_path));
     }
     // Mirror the workspace follower: a read-only connection (WAL lets it read
     // while the leader writes), then the shared connection configuration.
     let flags =
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let conn = Connection::open_with_flags(&db_path, flags)
-        .map_err(|e| format!("failed to open code_context index: {e}"))?;
+    let conn = Connection::open_with_flags(&db_path, flags).map_err(ReviewError::IndexOpen)?;
     swissarmyhammer_code_context::db::configure_connection(&conn)
-        .map_err(|e| format!("failed to configure code_context index connection: {e}"))?;
+        .map_err(ReviewError::IndexConfigure)?;
     Ok(conn)
 }
 
 /// The JSON shape returned for a `review file/working/sha` op: the rendered
 /// markdown plus the per-verdict counts.
+///
+/// The fields are private (read through the getters); serde serializes them by
+/// their field names, so the wire shape is unchanged by the encapsulation.
 #[derive(Debug, Serialize)]
 pub struct ReviewResponse {
     /// The dated GFM `## Review Findings (...)` section.
-    pub markdown: String,
+    markdown: String,
     /// The per-verdict tallies.
-    pub counts: ReviewCountsView,
+    counts: ReviewCountsView,
+}
+
+impl ReviewResponse {
+    /// The dated GFM `## Review Findings (...)` section.
+    pub fn markdown(&self) -> &str {
+        &self.markdown
+    }
+
+    /// The per-verdict tallies.
+    pub fn counts(&self) -> &ReviewCountsView {
+        &self.counts
+    }
 }
 
 /// The serializable view of the engine's review counts.
 ///
 /// Review is binary pass/fail — there is no graded severity — so the rendered
-/// failures are a single `findings` count, not a per-tier breakdown.
-#[derive(Debug, Serialize)]
+/// failures are a single `findings` count, not a per-tier breakdown. The fields
+/// are private (read through the getters); serde serializes them by their field
+/// names, so the wire shape is unchanged by the encapsulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ReviewCountsView {
     /// Confirmed findings rendered into the checklist (post-dedup).
-    pub findings: usize,
+    findings: usize,
     /// Findings the verifier confirmed.
-    pub confirmed: usize,
+    confirmed: usize,
     /// Findings the verifier refuted.
-    pub refuted: usize,
+    refuted: usize,
     /// How many fan-out review tasks were attempted.
-    pub attempted: usize,
+    attempted: usize,
     /// How many fan-out review tasks failed and degraded to zero findings. A
     /// non-zero value means the rendered findings are INCOMPLETE.
-    pub failed: usize,
+    failed: usize,
+}
+
+impl ReviewCountsView {
+    /// Confirmed findings rendered into the checklist (post-dedup).
+    pub fn findings(&self) -> usize {
+        self.findings
+    }
+
+    /// Findings the verifier confirmed.
+    pub fn confirmed(&self) -> usize {
+        self.confirmed
+    }
+
+    /// Findings the verifier refuted.
+    pub fn refuted(&self) -> usize {
+        self.refuted
+    }
+
+    /// How many fan-out review tasks were attempted.
+    pub fn attempted(&self) -> usize {
+        self.attempted
+    }
+
+    /// How many fan-out review tasks failed and degraded to zero findings. A
+    /// non-zero value means the rendered findings are INCOMPLETE.
+    pub fn failed(&self) -> usize {
+        self.failed
+    }
 }
 
 impl From<ReviewReport> for ReviewResponse {
@@ -625,13 +870,12 @@ mod tests {
             .with_progress_token(token("bridge-tok"))
             .with_progress_sink(sink_tx);
         let bridge = spawn_review_progress_bridge(&context).expect("bridge wired");
+        let (sender, drain) = bridge.into_parts();
 
-        bridge
-            .sender
+        sender
             .send(ReviewProgressEvent::Planned { total_pairs: 1 })
             .unwrap();
-        bridge
-            .sender
+        sender
             .send(ReviewProgressEvent::PairDone {
                 validator: "v".to_string(),
                 file: "src/a.rs".to_string(),
@@ -640,8 +884,8 @@ mod tests {
 
         // Dropping the engine's sender winds the bridge down; awaiting the
         // drain proves every buffered notification flushed first.
-        drop(bridge.sender);
-        bridge.drain.await.expect("drain joins cleanly");
+        drop(sender);
+        drain.await.expect("drain joins cleanly");
 
         let mut got = Vec::new();
         while let Ok(param) = sink_rx.try_recv() {
@@ -741,7 +985,8 @@ mod tests {
         // empty clean section. The tool boundary must refuse it as an error.
         let report = report_with_tally(60, 60);
         let err = check_review_completeness(&report)
-            .expect_err("an all-failed review must surface as an error");
+            .expect_err("an all-failed review must surface as an error")
+            .to_string();
         assert!(err.contains("60"), "the error names the tally: {err}");
         assert!(
             err.to_lowercase().contains("incomplete"),
@@ -822,7 +1067,9 @@ mod tests {
         let cell = OnceCell::new();
 
         let failed = shared_embedder(&cell, || async {
-            Err::<Arc<dyn model_embedding::TextEmbedder>, String>("load failed".to_string())
+            Err::<Arc<dyn model_embedding::TextEmbedder>, EmbedderError>(EmbedderError::Load(
+                "load failed".to_string(),
+            ))
         })
         .await;
         assert!(failed.is_err(), "the failed init surfaces as an error");
@@ -832,5 +1079,31 @@ mod tests {
             retried.is_ok(),
             "a failed init must not poison the cache; a later init succeeds"
         );
+    }
+
+    /// Encapsulating `ReviewResponse`/`ReviewCountsView` must not change the
+    /// serialized wire shape: the same top-level keys and count keys as the
+    /// public-field era, values readable back through the getters.
+    #[test]
+    fn review_response_wire_shape_and_getters_survive_encapsulation() {
+        let response = ReviewResponse::from(report_with_tally(10, 1));
+
+        let json = serde_json::to_value(&response).expect("serializes");
+        assert!(json["markdown"].is_string(), "markdown key present: {json}");
+        for key in ["findings", "confirmed", "refuted", "attempted", "failed"] {
+            assert!(json["counts"][key].is_u64(), "counts.{key} present: {json}");
+        }
+        assert_eq!(json["counts"]["attempted"], serde_json::json!(10));
+        assert_eq!(json["counts"]["failed"], serde_json::json!(1));
+
+        // Getters read the same values the wire carries.
+        assert!(response.markdown().starts_with("## Review Findings"));
+        assert_eq!(response.counts().attempted(), 10);
+        assert_eq!(response.counts().failed(), 1);
+        assert_eq!(response.counts().findings(), 0);
+
+        // The counts view is a value type: Copy + Eq hold.
+        let copied = *response.counts();
+        assert_eq!(copied, *response.counts());
     }
 }

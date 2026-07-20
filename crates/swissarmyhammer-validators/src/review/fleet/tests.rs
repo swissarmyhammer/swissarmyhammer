@@ -303,7 +303,7 @@ fn default_batch_size_is_256_kib() {
     // oversize-file error; only genuinely huge multi-file diffs still split.
     assert_eq!(DEFAULT_BATCH_SIZE, 256 * 1024);
     assert_eq!(DEFAULT_BATCH_SIZE, 262144);
-    assert_eq!(FleetConfig::default().batch_size, DEFAULT_BATCH_SIZE);
+    assert_eq!(FleetConfig::default().batch_size(), DEFAULT_BATCH_SIZE);
 }
 
 // ---- renderer tests (pure) -------------------------------------------

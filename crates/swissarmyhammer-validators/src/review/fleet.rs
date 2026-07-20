@@ -107,15 +107,29 @@ pub const DEFAULT_BATCH_SIZE: usize = 256 * 1024;
 pub struct FleetConfig {
     /// The maximum inlined file content, in bytes, one batch's shared prime may
     /// carry. Whole files are packed greedily up to this budget; a single file
-    /// larger than it is a hard error (never split, never sliced).
-    pub batch_size: usize,
+    /// larger than it is a hard error (never split, never sliced). Read through
+    /// [`batch_size`](Self::batch_size); private so the config can evolve
+    /// without a field-level API commitment.
+    batch_size: usize,
+}
+
+impl FleetConfig {
+    /// Build a config with an explicit batch budget (bytes of inlined file
+    /// content per batch). [`FleetConfig::default`] uses [`DEFAULT_BATCH_SIZE`].
+    pub fn new(batch_size: usize) -> Self {
+        Self { batch_size }
+    }
+
+    /// The maximum inlined file content, in bytes, one batch's shared prime may
+    /// carry.
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
 }
 
 impl Default for FleetConfig {
     fn default() -> Self {
-        Self {
-            batch_size: DEFAULT_BATCH_SIZE,
-        }
+        Self::new(DEFAULT_BATCH_SIZE)
     }
 }
 
@@ -130,7 +144,10 @@ impl Default for FleetConfig {
 #[derive(Default)]
 pub struct FleetOutcome {
     /// The merged, validator-tagged findings from every task that succeeded.
-    pub findings: Vec<Finding>,
+    /// Read through [`findings`](Self::findings) or moved out via
+    /// [`into_parts`](Self::into_parts); private so the outcome can evolve
+    /// without a field-level API commitment.
+    findings: Vec<Finding>,
     /// How many validator tasks were submitted. Read through
     /// [`attempted`](Self::attempted); private so the tally can evolve without a
     /// field-level API commitment.
@@ -146,11 +163,37 @@ pub struct FleetOutcome {
     /// fan-out — it is handed back for [`run_review`](crate::review::run_review)
     /// to keep alive across verify and release at the end. `None` when priming
     /// failed (every task ran the monolithic fallback) so there is nothing to
-    /// release.
-    pub prime: Option<SessionPinGuard>,
+    /// release. Read through [`prime`](Self::prime) or moved out via
+    /// [`into_parts`](Self::into_parts); private for the same reason as
+    /// [`findings`](Self::findings).
+    prime: Option<SessionPinGuard>,
 }
 
 impl FleetOutcome {
+    /// The merged, validator-tagged findings from every task that succeeded.
+    pub fn findings(&self) -> &[Finding] {
+        &self.findings
+    }
+
+    /// The run's shared primed-prefix pin guard, when priming succeeded.
+    /// `None` means every task ran the monolithic fallback, so there is no pin
+    /// to reuse or release.
+    pub fn prime(&self) -> Option<&SessionPinGuard> {
+        self.prime.as_ref()
+    }
+
+    /// Consume the outcome into its movable halves: the merged findings and the
+    /// prime pin guard.
+    ///
+    /// The verify stage takes the findings by value ([`build_candidates`] in
+    /// `synthesize.rs`) and the caller keeps the prime alive across verify,
+    /// releasing it via [`unpin_prefix_session`] once the batch drains. Read the
+    /// task tally ([`attempted`](Self::attempted) / [`failed`](Self::failed))
+    /// before consuming.
+    pub fn into_parts(self) -> (Vec<Finding>, Option<SessionPinGuard>) {
+        (self.findings, self.prime)
+    }
+
     /// How many validator tasks were submitted in this run.
     pub fn attempted(&self) -> usize {
         self.attempted
