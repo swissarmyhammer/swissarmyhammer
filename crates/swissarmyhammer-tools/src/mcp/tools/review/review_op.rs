@@ -363,8 +363,11 @@ impl ReviewRequest {
 
     /// Scope the fan-out to just these validators; empty means every matching
     /// validator.
-    pub fn with_validators(mut self, validators: Vec<String>) -> Self {
-        self.validators = validators;
+    pub fn with_validators(
+        mut self,
+        validators: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.validators = validators.into_iter().map(Into::into).collect();
         self
     }
 
