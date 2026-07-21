@@ -47,6 +47,39 @@ comments:
     2. TEST_KEEP_ALIVE claimed to be "distinct from the production constant" but was also 10s. Now 7s, so the paused-time tests genuinely pin the schedule's shape rather than the production value.
     Final gate results: validators review 142/142; tools -E 'test(review)' 44/44 (HTTP e2e + stdio e2e); rebuild_index_progress_notifications_test 1/1; clippy -D warnings clean (both crates); cargo check --workspace --all-targets green; cargo fmt --check clean. Leaving in doing for /review.
   timestamp: 2026-07-21T02:49:01.949475+00:00
+- actor: claude-code
+  id: 01ky1b65qdrn3j7cy82t4x3dzn
+  text: 'BINDING FIELD CHECK: PASS. Fresh binary (just sah), real `sah serve` child process, real JSON-RPC stdio client (/tmp/sah_progress_probe.py), real review sha HEAD~1..HEAD with progressToken. Client-received results: first notification +1.61s (scope phase, "Scoping ..."), 394 notifications total, max gap 10.02s across the entire 1632.65s (27 min) run incl. start→first and last→result, final result isError=false, probe exit 0. Keep-alive visibly firing at 10.00–10.02s cadence through silent engine stretches (e.g. +1439.69→+1589.73 identical re-sends). Full 405-line transcript preserved in session tool-results. Bonus: the run''s own review output surfaced a real path-traversal finding in resolve_file (scope.rs) — filing as a separate card. Proceeding to /review gate.'
+  timestamp: 2026-07-21T03:23:22.733987+00:00
+- actor: claude-code
+  id: 01ky1ckgf4n78hr0j0ystgkdrj
+  text: 'Picked up review finding (2026-07-20 22:23): encapsulate WorkList public fields (change_purpose, validators) behind getters; sweeping scope.rs for sibling public-field structs (ValidatorWork, FileWork, ResolvedScope) per root-cause instruction.'
+  timestamp: 2026-07-21T03:48:08.292112+00:00
+- actor: claude-code
+  id: 01ky1d9tfn95fa9c7yy7mfxc47
+  text: |-
+    Rework of review finding (WorkList public fields) done at root-cause breadth per orchestrator direction — encapsulated EVERY public-field struct in scope.rs in one pass, not just the cited one:
+
+    - WorkList, ValidatorWork, FileWork: all fields private; each gained a public `new(...)` constructor plus reference/slice getters (`change_purpose() -> &str`, `validators() -> &[ValidatorWork]`, `validator_name()`, `rules()`, `probes()`, `files()`, `path()`, `semantic_diff()`, `changed_symbols()`, `source_slice()`, `probe_results()`). No `into_`-style accessors added: grep + compiler confirmed every consumer (fleet.rs render/plan/collect, synthesize.rs batching + build_candidates, verify.rs) reads by reference — nothing consumes the fields by value, so per rule-of-three no speculative ownership API.
+    - ScopeSpec: fields deliberately kept public with a justification doc comment tied to its construction contract — it is a forgiving-input builder surface where the exactly-one invariant is enforced by `resolve()` at resolution time, so private fields would protect no invariant.
+    - Call sites updated: fleet.rs (~20 accessor conversions incl. render_run_prime/render_fleet_prompt/render_validator_suffix/render_file_payload — output bytes unchanged, only accessor plumbing), synthesize.rs (build_candidates, logging, test fixtures), fleet/tests.rs (19 WorkList literals -> WorkList::new via scripted transform + fixtures -> constructors; the one field-mutation site became a `file_work_with_slice` fixture variant). swissarmyhammer-tools had zero usages (grep matches were `.validators` dirs and ReviewRequest's own field).
+    - Note: a hook-injected round-trip test in scope.rs presumed a positional `ScopeSpec::new(true, None, None, None)`; changed those two lines to the documented struct-literal + Default form instead of adding a 4-positional-arg constructor that contradicts the forgiving-input contract.
+
+    Gates (fresh): cargo nextest -p swissarmyhammer-validators 308/308; -p swissarmyhammer-tools 1427/1427; cargo fmt --check clean; cargo clippy -p validators -p tools --all-targets -D warnings clean; cargo check --workspace --all-targets green. Review finding flipped to [x]; task left in doing. Adversarial double-check verdict to follow.
+  timestamp: 2026-07-21T04:00:19.445152+00:00
+- actor: claude-code
+  id: 01ky1dcgyy5byy7ptf8m8jprxk
+  text: 'Review finding fixed at root. WorkList fields change_purpose/validators are now private with getters change_purpose() -> &str and validators() -> &[ValidatorWork]. Root-cause sweep: ValidatorWork and FileWork (the other public structs in scope.rs) encapsulated identically (private fields, new(...) constructors, &str/slice getters); ScopeSpec deliberately keeps public fields as a forgiving-input DTO (invariant enforced by resolve(), rationale documented on the struct). All cross-module call sites migrated: fleet.rs (plan_fan_out, submit/collect_fan_out, prime_run_prefix, render_run_prime, render helpers), synthesize.rs (run_review logging, build_candidates + test helpers), fleet/tests.rs (helpers + all WorkList literals). New round-trip unit test work_list_getters_and_constructors_round_trip_the_private_fields in scope.rs covers every new constructor/getter. Note: a concurrent worker on this card landed part of the same migration; the combined diff was verified whole. Gates: cargo nextest -p swissarmyhammer-validators -p swissarmyhammer-tools 1735/1735 passed; cargo fmt clean; clippy both crates --all-targets -D warnings clean; cargo check --workspace --all-targets clean. Task left green in doing for /review.'
+  timestamp: 2026-07-21T04:01:47.998955+00:00
+- actor: claude-code
+  id: 01ky1de9f79c125q0gmkkg0khr
+  text: |-
+    Adversarial double-check verdict: PASS. It independently confirmed: (1) diff touches only the 4 expected files; (2) every fleet.rs/synthesize.rs production hunk is a pure accessor substitution (field -> field(), String.clone() -> &str.to_string(), Vec.clone() -> &[T].to_vec()) — value-identical, with trim/iteration-order/header constants untouched and #[derive(Serialize)] output unchanged (field names unchanged), verified by the 20 render/prime/build_candidates tests incl. the byte-stability assertion; (3) zero WorkList/ValidatorWork/FileWork struct literals or field accesses remain outside scope.rs (the .probe_results/.source_slice hits in verify.rs/synthesize.rs are the separate Candidate struct); (4) the 19 fleet/tests.rs conversions + file_work_with_slice are faithful; (5) swissarmyhammer-tools has zero usages.
+
+    Rustdoc note (agent flagged, I verified): grepped `RUSTDOCFLAGS="-D warnings" cargo doc -p swissarmyhammer-validators --no-deps --document-private-items` — ZERO warnings reference any changed link (source_slice/change_purpose/semantic_diff/validators/validator_name/probe_results/changed_symbols); my method-form intra-doc links all resolve. The crate's rustdoc baseline is already dirty (pre-existing private-item links auto_purpose/build_candidates/PRIME_HANDOFF etc. on untouched lines), and rustdoc is not one of this project's gates. No regression introduced.
+
+    Task is green and left in doing for /review.
+  timestamp: 2026-07-21T04:02:45.863088+00:00
 position_column: doing
 position_ordinal: '8280'
 title: 'Review keep-alive: emit progress across ALL phases (scope/probes included), log every send, prove delivery over stdio'
@@ -88,3 +121,12 @@ Subtasks:
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass. #review #mcp #progress
+
+## Review Findings (2026-07-20 22:23)
+
+- [x] `crates/swissarmyhammer-validators/src/review/scope.rs:82` — Public struct fields on WorkList violate the future-proofing rule; two public fields (change_purpose, validators) lock the struct's internal representation. Make both fields private and provide getter methods: `pub fn change_purpose(&self) -> &str` and `pub fn validators(&self) -> &[ValidatorWork]`, allowing the internal representation to evolve without breaking downstream code.
+
+### Root-cause sweep (2026-07-20)
+
+- [x] Sibling public-field structs in scope.rs — `ValidatorWork` and `FileWork` — encapsulated the same way (private fields + `new(...)` constructors + `&str`/slice getters); all cross-module call sites in fleet.rs, fleet/tests.rs, and synthesize.rs migrated from field access to getters/constructors, so the next review round finds zero recurrences of this rule in scope.rs.
+- [x] Judgment call: `ScopeSpec` deliberately keeps public fields — it is a forgiving-input DTO whose exactly-one-selector invariant is enforced by `resolve()` at resolution time, never at construction; private fields would protect no invariant while costing the struct-literal (`..Default::default()`) ergonomics the type exists for. Rationale documented on the struct itself; nothing outside the crate constructs it today.

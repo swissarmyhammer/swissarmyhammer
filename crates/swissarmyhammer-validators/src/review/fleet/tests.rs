@@ -90,9 +90,20 @@ fn loader_with(rulesets: Vec<RuleSet>) -> ValidatorLoader {
 /// A `FileWork` carrying a distinctive added entity, a source slice tagged
 /// with the path, and one `duplicates` probe row.
 fn file_work(path: &str, symbol: &str, dup_at: &str) -> FileWork {
-    FileWork {
-        path: path.to_string(),
-        semantic_diff: vec![SemanticChange {
+    file_work_with_slice(
+        path,
+        symbol,
+        dup_at,
+        format!("// slice for {path}\nfn {symbol}() {{}}"),
+    )
+}
+
+/// [`file_work`] with a caller-chosen source slice, for tests that assert on
+/// how a specific slice renders.
+fn file_work_with_slice(path: &str, symbol: &str, dup_at: &str, source_slice: String) -> FileWork {
+    FileWork::new(
+        path.to_string(),
+        vec![SemanticChange {
             id: format!("{path}:{symbol}"),
             entity_id: symbol.to_string(),
             change_type: ChangeType::Added,
@@ -107,9 +118,9 @@ fn file_work(path: &str, symbol: &str, dup_at: &str) -> FileWork {
             timestamp: None,
             structural_change: None,
         }],
-        changed_symbols: vec![symbol.to_string()],
-        source_slice: format!("// slice for {path}\nfn {symbol}() {{}}"),
-        probe_results: vec![ProbeResult {
+        vec![symbol.to_string()],
+        source_slice,
+        vec![ProbeResult {
             name: "duplicates".to_string(),
             kind: ProbeKind::Fact,
             target: path.to_string(),
@@ -121,16 +132,16 @@ fn file_work(path: &str, symbol: &str, dup_at: &str) -> FileWork {
                 detail: None,
             }],
         }],
-    }
+    )
 }
 
 fn validator_work(name: &str, files: Vec<FileWork>) -> ValidatorWork {
-    ValidatorWork {
-        validator_name: name.to_string(),
-        rules: vec![format!("{name}-rule")],
-        probes: vec!["duplicates".to_string()],
+    ValidatorWork::new(
+        name.to_string(),
+        vec![format!("{name}-rule")],
+        vec!["duplicates".to_string()],
         files,
-    }
+    )
 }
 
 // ---- scripted mock agent (shared harness) ------------------------------
@@ -413,10 +424,10 @@ fn run_prime_holds_change_and_diffs_only_and_validator_suffix_holds_the_full_rul
         "deduplicate",
         vec![file_work("src/a.rs", "alpha", "src/x.rs")],
     );
-    let work = WorkList {
-        change_purpose: "PURPOSE: scaffolding the parser.".to_string(),
-        validators: vec![vw.clone()],
-    };
+    let work = WorkList::new(
+        "PURPOSE: scaffolding the parser.".to_string(),
+        vec![vw.clone()],
+    );
 
     // Byte-stable: two renders of the same inputs are identical, so every
     // validator fork shares the exact prefix the prime turn decoded.
@@ -482,7 +493,7 @@ fn run_prime_holds_change_and_diffs_only_and_validator_suffix_holds_the_full_rul
     // The monolithic fallback for the validator is self-contained: change +
     // validator's files + the validator suffix (path-scoped, contract, all
     // rules).
-    let monolithic = render_fleet_prompt(&work.change_purpose, &vw, &rs);
+    let monolithic = render_fleet_prompt(work.change_purpose(), &vw, &rs);
     assert!(
         monolithic.contains("PURPOSE: scaffolding the parser."),
         "{monolithic}"
@@ -582,13 +593,13 @@ fn monolithic_prompt_contains_the_manifest_body_guidance() {
 /// in two validators' work appears ONCE in the cached prefix.
 #[test]
 fn run_prime_dedups_files_shared_across_validators() {
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![
             validator_work("val-a", vec![file_work("src/shared.rs", "s", "src/x.rs")]),
             validator_work("val-b", vec![file_work("src/shared.rs", "s", "src/x.rs")]),
         ],
-    };
+    );
 
     let prime = render_run_prime(&work);
     assert_eq!(
@@ -606,9 +617,12 @@ fn run_prime_dedups_files_shared_across_validators() {
 fn full_inline_payload_carries_complete_source_and_no_reread_framing() {
     // A FileWork whose source_slice is the WHOLE file, including a marker line
     // the old bounded slice would have trimmed.
-    let mut file = file_work("src/a.rs", "alpha", "src/x.rs");
-    file.source_slice =
-        "use std::fmt;\n// distant_marker_kept_in_full\npub fn alpha() {}".to_string();
+    let file = file_work_with_slice(
+        "src/a.rs",
+        "alpha",
+        "src/x.rs",
+        "use std::fmt;\n// distant_marker_kept_in_full\npub fn alpha() {}".to_string(),
+    );
 
     let payload = render_file_payload(std::slice::from_ref(&file));
 
@@ -722,9 +736,9 @@ async fn fan_out_two_validators_two_files_submits_one_prime_and_one_fork_per_val
     let rs_b = ruleset("val-b", "mandate b", &[("rb", "body b")]);
     let loader = loader_with(vec![rs_a, rs_b]);
 
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![
             validator_work(
                 "val-a",
                 vec![
@@ -740,7 +754,7 @@ async fn fan_out_two_validators_two_files_submits_one_prime_and_one_fork_per_val
                 ],
             ),
         ],
-    };
+    );
 
     // Script: a finding for each validator. The fork inherits the shared
     // prime (all files) and appends the validator suffix carrying the
@@ -832,13 +846,13 @@ async fn one_rule_with_many_instances_reports_them_all_on_the_first_pass() {
         &[("no-magic", "name your constants")],
     );
     let loader = loader_with(vec![rs]);
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![validator_work(
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![validator_work(
             "magic-numbers",
             vec![file_work("src/a.rs", "alpha", "src/x.rs")],
         )],
-    };
+    );
 
     // The agent reports several instances of the one rule across the whole
     // file in a single reply; its completeness re-scan then finds nothing
@@ -906,13 +920,13 @@ fn magic_numbers_work() -> (ValidatorLoader, WorkList) {
         &[("no-magic", "name your constants")],
     );
     let loader = loader_with(vec![rs]);
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![validator_work(
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![validator_work(
             "magic-numbers",
             vec![file_work("src/a.rs", "alpha", "src/x.rs")],
         )],
-    };
+    );
     (loader, work)
 }
 
@@ -1166,10 +1180,7 @@ async fn multi_rule_validator_forks_one_task_carrying_all_rules_against_one_prim
     let files: Vec<FileWork> = (0..10)
         .map(|i| file_work(&format!("src/f{i}.rs"), &format!("sym{i}"), "src/x.rs"))
         .collect();
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![validator_work("val", files)],
-    };
+    let work = WorkList::new("purpose".to_string(), vec![validator_work("val", files)]);
 
     let agent = forking_agent(vec![]);
     let agent_probe = Arc::clone(&agent);
@@ -1233,10 +1244,10 @@ async fn fan_out_logs_the_rule_names_being_applied_per_validator() {
     let loader = loader_with(vec![rs]);
 
     let files: Vec<FileWork> = vec![file_work("src/a.rs", "alpha", "src/x.rs")];
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![validator_work("deduplicate", files)],
-    };
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![validator_work("deduplicate", files)],
+    );
 
     let agent = forking_agent(vec![]);
     let _findings = with_pool(agent, PoolConfig::remote(1), move |pool| async move {
@@ -1270,10 +1281,7 @@ async fn prefix_is_primed_once_per_run_and_validators_fork_suffix_only() {
     let files: Vec<FileWork> = (0..4)
         .map(|i| file_work(&format!("src/f{i}.rs"), &format!("sym{i}"), "src/x.rs"))
         .collect();
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![validator_work("val", files)],
-    };
+    let work = WorkList::new("purpose".to_string(), vec![validator_work("val", files)]);
 
     // The validator's fork emits a finding. The fork inherits the shared
     // prime (all files) and appends the validator suffix (which carries the
@@ -1393,10 +1401,7 @@ async fn primed_prefix_is_born_pinned_through_the_production_path() {
     let files: Vec<FileWork> = (0..2)
         .map(|i| file_work(&format!("src/f{i}.rs"), &format!("sym{i}"), "src/x.rs"))
         .collect();
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![validator_work("val", files)],
-    };
+    let work = WorkList::new("purpose".to_string(), vec![validator_work("val", files)]);
 
     let agent = forking_agent(vec![]);
     let agent_probe = Arc::clone(&agent);
@@ -1423,16 +1428,16 @@ async fn primed_prefix_is_born_pinned_through_the_production_path() {
 async fn fork_failure_falls_back_to_monolithic_without_losing_tasks() {
     let rs = ruleset("val", "mandate", &[("r", "body")]);
     let loader = loader_with(vec![rs]);
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![validator_work(
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![validator_work(
             "val",
             vec![
                 file_work("src/a.rs", "alpha", "src/x.rs"),
                 file_work("src/b.rs", "beta", "src/y.rs"),
             ],
         )],
-    };
+    );
 
     // Every `session/fork` is rejected; the validator task must fall back to
     // a fresh-session monolithic prompt and still deliver its findings.
@@ -1484,16 +1489,16 @@ async fn fork_failure_falls_back_to_monolithic_without_losing_tasks() {
 async fn unsupported_fork_extension_degrades_to_monolithic_prompts() {
     let rs = ruleset("val", "mandate", &[("r", "body")]);
     let loader = loader_with(vec![rs]);
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![validator_work(
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![validator_work(
             "val",
             vec![
                 file_work("src/a.rs", "alpha", "src/x.rs"),
                 file_work("src/b.rs", "beta", "src/y.rs"),
             ],
         )],
-    };
+    );
 
     // The backend implements NO extension methods: the prime turn runs but
     // its state can never be confirmed, so the whole run degrades to
@@ -1545,13 +1550,13 @@ async fn unsupported_fork_extension_degrades_to_monolithic_prompts() {
 async fn degraded_fork_runs_cold_but_still_parses_findings() {
     let rs = ruleset("val", "mandate", &[("r", "body")]);
     let loader = loader_with(vec![rs]);
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![validator_work(
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![validator_work(
             "val",
             vec![file_work("src/a.rs", "alpha", "src/x.rs")],
         )],
-    };
+    );
 
     // Forks succeed but attach no parent state — the task proceeds on the
     // forked session (history is intact, just cold) and is logged.
@@ -1594,13 +1599,13 @@ async fn degraded_fork_runs_cold_but_still_parses_findings() {
 async fn forked_task_with_claude_cache_usage_logs_warm_cache() {
     let rs = ruleset("val", "mandate", &[("r", "body")]);
     let loader = loader_with(vec![rs]);
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![validator_work(
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![validator_work(
             "val",
             vec![file_work("src/a.rs", "alpha", "src/x.rs")],
         )],
-    };
+    );
 
     // Forks succeed but attach no native parent state (claude shape:
     // `prefix_tokens == None`); the turn's `_meta` reports a warm cache read,
@@ -1657,13 +1662,13 @@ async fn prefix_session_is_unpinned_even_when_a_validator_task_errors() {
     let rs_ok = ruleset("val-ok", "mandate ok", &[("ok-rule", "OK_BODY")]);
     let rs_bad = ruleset("val-bad", "mandate bad", &[("bad-rule", "BAD_BODY")]);
     let loader = loader_with(vec![rs_ok, rs_bad]);
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![
             validator_work("val-ok", vec![file_work("src/a.rs", "alpha", "src/x.rs")]),
             validator_work("val-bad", vec![file_work("src/b.rs", "beta", "src/y.rs")]),
         ],
-    };
+    );
 
     // The `val-bad` fork carries the `bad-rule` body and errors; the `val-ok`
     // one is empty. One forked validator task errors → the unpin must still
@@ -1711,9 +1716,9 @@ async fn fleet_emits_progress_events_per_validator_file_pair_including_failed_ta
     let rs_ok = ruleset("val-ok", "mandate ok", &[("ok-rule", "OK_BODY")]);
     let rs_bad = ruleset("val-bad", "mandate bad", &[("bad-rule", "BAD_BODY")]);
     let loader = loader_with(vec![rs_ok, rs_bad]);
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![
             validator_work(
                 "val-ok",
                 vec![
@@ -1723,7 +1728,7 @@ async fn fleet_emits_progress_events_per_validator_file_pair_including_failed_ta
             ),
             validator_work("val-bad", vec![file_work("src/c.rs", "gamma", "src/z.rs")]),
         ],
-    };
+    );
 
     // The `val-bad` fork errors; `val-ok` resolves with the default (empty)
     // findings reply. Both must still emit a PairDone for every file.
@@ -1811,13 +1816,13 @@ async fn wait_for(what: &str, condition: impl Fn() -> bool) {
 async fn prefix_pin_is_released_when_the_fanout_future_is_dropped_mid_collect() {
     let rs = ruleset("val", "mandate", &[("r", "WEDGE_BODY")]);
     let loader = loader_with(vec![rs]);
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![validator_work(
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![validator_work(
             "val",
             vec![file_work("src/a.rs", "alpha", "src/x.rs")],
         )],
-    };
+    );
 
     // The validator fork turn wedges forever (its suffix carries the rule
     // body), holding the fan-out mid-collect AFTER the prime has been pinned.
@@ -1864,13 +1869,13 @@ async fn one_failing_task_yields_zero_findings_without_aborting_the_rest() {
     let rs_bad = ruleset("val-bad", "mandate bad", &[("bad-rule", "BAD_BODY")]);
     let loader = loader_with(vec![rs_good, rs_bad]);
 
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![
             validator_work("val-good", vec![file_work("src/a.rs", "alpha", "src/x.rs")]),
             validator_work("val-bad", vec![file_work("src/b.rs", "beta", "src/y.rs")]),
         ],
-    };
+    );
 
     // The fork carrying `BAD_BODY` errors; the `GOOD_BODY` one returns a
     // finding. Both keys appear only in their own validator's suffix.
@@ -1921,14 +1926,14 @@ async fn all_tasks_failing_yields_zero_findings_and_a_full_failure_tally() {
         ruleset("val-c", "mandate c", &[("r3", "body 3")]),
     ]);
 
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![
             validator_work("val-a", vec![file_work("src/a.rs", "a", "src/x.rs")]),
             validator_work("val-b", vec![file_work("src/b.rs", "b", "src/y.rs")]),
             validator_work("val-c", vec![file_work("src/c.rs", "c", "src/z.rs")]),
         ],
-    };
+    );
 
     // Every validator fork errors (every validator suffix carries the
     // validator header).
@@ -1951,13 +1956,13 @@ async fn all_tasks_failing_yields_zero_findings_and_a_full_failure_tally() {
 async fn validator_missing_from_loader_is_skipped_not_panicked() {
     // The work-list names a validator the loader does not know.
     let loader = loader_with(vec![ruleset("known", "mandate", &[("r", "body")])]);
-    let work = WorkList {
-        change_purpose: "purpose".to_string(),
-        validators: vec![validator_work(
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![validator_work(
             "unknown",
             vec![file_work("src/a.rs", "alpha", "src/x.rs")],
         )],
-    };
+    );
 
     let agent = forking_agent(vec![]);
     let agent_probe = Arc::clone(&agent);

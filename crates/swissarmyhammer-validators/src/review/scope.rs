@@ -2,10 +2,10 @@
 //!
 //! This is the first, deterministic, LLM-free stage of the review pipeline. Given
 //! a [`Scope`] (exactly one of `working` / `sha` / `file` / `glob`) it produces a
-//! [`WorkList`]: the review-level [change purpose](WorkList::change_purpose) plus,
+//! [`WorkList`]: the review-level [change purpose](WorkList::change_purpose()) plus,
 //! per matched validator, the files to review. The **validator is the shard; the
 //! file is the grain** — each [`FileWork`] carries that file's structured semantic
-//! diff, the changed symbols, a *bounded* [`source_slice`](FileWork::source_slice)
+//! diff, the changed symbols, a *bounded* [`source_slice`](FileWork::source_slice())
 //! (header + changed entities + hunk windows, never the whole file), and the
 //! engine-run probe evidence for the validator's declared probes.
 //!
@@ -68,6 +68,13 @@ pub enum Scope {
 }
 
 /// A forgiving scope input that enforces "exactly one of file/glob/working/sha".
+///
+/// Fields are deliberately public: this is a forgiving-input builder surface —
+/// callers set any subset of selectors on a [`Default`] value via a struct
+/// literal, and the exactly-one invariant is enforced by
+/// [`resolve`](ScopeSpec::resolve) at resolution time, never at construction.
+/// Private fields would protect no invariant here while costing the
+/// struct-literal ergonomics this input type exists for.
 #[derive(Debug, Clone, Default)]
 pub struct ScopeSpec {
     /// Resolve the working tree.
@@ -124,12 +131,31 @@ impl ScopeSpec {
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkList {
     /// The review-level intent.
-    pub change_purpose: String,
+    change_purpose: String,
     /// One entry per validator that matched at least one changed file.
-    pub validators: Vec<ValidatorWork>,
+    validators: Vec<ValidatorWork>,
 }
 
 impl WorkList {
+    /// Assemble a work-list from the review-level intent and the per-validator
+    /// work entries.
+    pub fn new(change_purpose: String, validators: Vec<ValidatorWork>) -> Self {
+        Self {
+            change_purpose,
+            validators,
+        }
+    }
+
+    /// The review-level intent.
+    pub fn change_purpose(&self) -> &str {
+        &self.change_purpose
+    }
+
+    /// One entry per validator that matched at least one changed file.
+    pub fn validators(&self) -> &[ValidatorWork] {
+        &self.validators
+    }
+
     /// The distinct files under review across every validator, in first-seen
     /// order, de-duplicated by path.
     ///
@@ -151,36 +177,119 @@ impl WorkList {
 #[derive(Debug, Clone, Serialize)]
 pub struct ValidatorWork {
     /// The validator (RuleSet) name.
-    pub validator_name: String,
+    validator_name: String,
     /// The rule names inside the validator.
-    pub rules: Vec<String>,
+    rules: Vec<String>,
     /// The probe names the validator declared.
-    pub probes: Vec<String>,
+    probes: Vec<String>,
     /// The files this validator must review.
-    pub files: Vec<FileWork>,
+    files: Vec<FileWork>,
+}
+
+impl ValidatorWork {
+    /// Assemble one validator's slice of the work-list.
+    pub fn new(
+        validator_name: String,
+        rules: Vec<String>,
+        probes: Vec<String>,
+        files: Vec<FileWork>,
+    ) -> Self {
+        Self {
+            validator_name,
+            rules,
+            probes,
+            files,
+        }
+    }
+
+    /// The validator (RuleSet) name.
+    pub fn validator_name(&self) -> &str {
+        &self.validator_name
+    }
+
+    /// The rule names inside the validator.
+    pub fn rules(&self) -> &[String] {
+        &self.rules
+    }
+
+    /// The probe names the validator declared.
+    pub fn probes(&self) -> &[String] {
+        &self.probes
+    }
+
+    /// The files this validator must review.
+    pub fn files(&self) -> &[FileWork] {
+        &self.files
+    }
 }
 
 /// One file's worth of work for one validator.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileWork {
     /// The file path.
-    pub path: String,
+    path: String,
     /// The changed entities from the semantic diff.
-    pub semantic_diff: Vec<SemanticChange>,
+    semantic_diff: Vec<SemanticChange>,
     /// The names of the changed symbols.
-    pub changed_symbols: Vec<String>,
+    changed_symbols: Vec<String>,
     /// The file's **complete** current source, inlined in full into the review
     /// payload so the model never needs to `read_file` the changed file.
     ///
     /// A changed file is always inlined whole: it is the file's complete current
     /// contents (empty only for a deletion, which has no current content — the
-    /// removal is carried by [`semantic_diff`](FileWork::semantic_diff)). A file
+    /// removal is carried by [`semantic_diff`](FileWork::semantic_diff())). A file
     /// whose source would exceed the review `batch_size` is never trimmed to a
     /// slice; [`batch_work_list`] rejects it with a hard error instead, so this is
     /// never a partial view.
-    pub source_slice: String,
+    source_slice: String,
     /// The shared `(file, probe)` results.
-    pub probe_results: Vec<ProbeResult>,
+    probe_results: Vec<ProbeResult>,
+}
+
+impl FileWork {
+    /// Assemble one file's worth of work for one validator.
+    pub fn new(
+        path: String,
+        semantic_diff: Vec<SemanticChange>,
+        changed_symbols: Vec<String>,
+        source_slice: String,
+        probe_results: Vec<ProbeResult>,
+    ) -> Self {
+        Self {
+            path,
+            semantic_diff,
+            changed_symbols,
+            source_slice,
+            probe_results,
+        }
+    }
+
+    /// The file path.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// The changed entities from the semantic diff.
+    pub fn semantic_diff(&self) -> &[SemanticChange] {
+        &self.semantic_diff
+    }
+
+    /// The names of the changed symbols.
+    pub fn changed_symbols(&self) -> &[String] {
+        &self.changed_symbols
+    }
+
+    /// The file's **complete** current source, inlined in full into the review
+    /// payload so the model never needs to `read_file` the changed file (see
+    /// the field's invariants on wholeness and the `batch_size` hard error).
+    pub fn source_slice(&self) -> &str {
+        &self.source_slice
+    }
+
+    /// The shared `(file, probe)` results.
+    pub fn probe_results(&self) -> &[ProbeResult] {
+        &self.probe_results
+    }
 }
 
 /// Resolve a review scope into a per-validator [`WorkList`].
@@ -201,7 +310,7 @@ pub struct FileWork {
 ///
 /// # Change purpose
 ///
-/// [`WorkList::change_purpose`] is the commit message(s) under [`Scope::Sha`] and
+/// [`WorkList::change_purpose()`] is the commit message(s) under [`Scope::Sha`] and
 /// a one-line [`auto_purpose`] summary otherwise. The "kanban task title+body
 /// when invoked task-mode" half of the change-purpose spec is not reachable from
 /// this signature: task context is plumbed in a later wiring stage that wraps
@@ -1218,6 +1327,43 @@ mod tests {
     /// The file paths a batch carries (distinct, prime order).
     fn batch_paths(batch: &WorkList) -> Vec<String> {
         batch.distinct_files().map(|f| f.path.clone()).collect()
+    }
+
+    #[test]
+    fn work_list_getters_and_constructors_round_trip_the_private_fields() {
+        let file = FileWork::new(
+            "src/a.rs".to_string(),
+            vec![],
+            vec!["alpha".to_string()],
+            "fn alpha() {}".to_string(),
+            vec![],
+        );
+        assert_eq!(file.path(), "src/a.rs");
+        assert!(file.semantic_diff().is_empty());
+        assert_eq!(file.changed_symbols(), ["alpha".to_string()]);
+        assert_eq!(file.source_slice(), "fn alpha() {}");
+        assert!(file.probe_results().is_empty());
+
+        let validator = ValidatorWork::new(
+            "dedup".to_string(),
+            vec!["dedup-rule".to_string()],
+            vec!["similar".to_string()],
+            vec![file],
+        );
+        assert_eq!(validator.validator_name(), "dedup");
+        assert_eq!(validator.rules(), ["dedup-rule".to_string()]);
+        assert_eq!(validator.probes(), ["similar".to_string()]);
+        assert_eq!(validator.files().len(), 1);
+
+        let work = WorkList::new("purpose".to_string(), vec![validator]);
+        assert_eq!(work.change_purpose(), "purpose");
+        assert_eq!(work.validators().len(), 1);
+
+        let spec = ScopeSpec {
+            working: true,
+            ..Default::default()
+        };
+        assert_eq!(spec.resolve().unwrap(), Scope::Working);
     }
 
     #[test]

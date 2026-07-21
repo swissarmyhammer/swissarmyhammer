@@ -1,0 +1,1 @@
+{"id":"01KY1B7R8N9VM53PP42YNPVEBV","timestamp":"2026-07-21T03:24:14.485933Z","op":"create","item_id":"01KY1B7R8MCYCJ26Z8QAEAADT3","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: '008672'\n+tag_name: security\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: '008672'\n-tag_name: security\n","transaction_id":null}

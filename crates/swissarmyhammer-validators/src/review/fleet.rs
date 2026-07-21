@@ -341,7 +341,7 @@ pub async fn run_fleet(
     emit_progress(
         progress,
         ReviewProgressEvent::Planned {
-            total_pairs: plan.iter().map(|task| task.validator.files.len()).sum(),
+            total_pairs: plan.iter().map(|task| task.validator.files().len()).sum(),
         },
     );
 
@@ -367,18 +367,18 @@ pub async fn run_fleet(
 /// validator's rule names are logged so the fan-out shows exactly what ran.
 fn plan_fan_out<'w>(work: &'w WorkList, loader: &'w ValidatorLoader) -> Vec<ValidatorTask<'w>> {
     let mut plan: Vec<ValidatorTask<'w>> = Vec::new();
-    for validator in &work.validators {
-        let Some(ruleset) = loader.get_ruleset(&validator.validator_name) else {
+    for validator in work.validators() {
+        let Some(ruleset) = loader.get_ruleset(validator.validator_name()) else {
             tracing::warn!(
-                validator = %validator.validator_name,
+                validator = %validator.validator_name(),
                 "fleet fan-out: no RuleSet for validator in loader; skipping it"
             );
             continue;
         };
         let rule_names: Vec<&str> = ruleset.rules.iter().map(|r| r.name.as_str()).collect();
         tracing::info!(
-            validator = %validator.validator_name,
-            files = validator.files.len(),
+            validator = %validator.validator_name(),
+            files = validator.files().len(),
             rules = ?rule_names,
             "fleet fan-out: forking one task per validator against the shared prime"
         );
@@ -405,18 +405,18 @@ fn submit_fan_out<'w>(
     plan.into_iter()
         .map(|task| {
             tracing::debug!(
-                validator = %task.validator.validator_name,
+                validator = %task.validator.validator_name(),
                 warm = prime.is_some(),
                 "fleet fan-out: submitting validator task"
             );
             // One PairStarted per (validator, file): the task covers every one
             // of the validator's files, so each pair is announced at submission.
-            for file in &task.validator.files {
+            for file in task.validator.files() {
                 emit_progress(
                     progress,
                     ReviewProgressEvent::PairStarted {
-                        validator: task.validator.validator_name.clone(),
-                        file: file.path.clone(),
+                        validator: task.validator.validator_name().to_string(),
+                        file: file.path().to_string(),
                     },
                 );
             }
@@ -424,7 +424,7 @@ fn submit_fan_out<'w>(
             let rx = match prime {
                 Some(guard) => Submitted::Forked(pool.submit_forked(guard.session_id(), suffix)),
                 None => Submitted::Monolithic(pool.submit(render_fleet_prompt(
-                    &work.change_purpose,
+                    work.change_purpose(),
                     task.validator,
                     task.ruleset,
                 ))),
@@ -453,20 +453,20 @@ async fn collect_fan_out(
     let mut findings: Vec<Finding> = Vec::new();
     let mut failed = 0usize;
     for pending in pending {
-        let name = pending.task.validator.validator_name.as_str();
+        let name = pending.task.validator.validator_name();
         let files: Vec<String> = pending
             .task
             .validator
-            .files
+            .files()
             .iter()
-            .map(|f| f.path.clone())
+            .map(|f| f.path().to_string())
             .collect();
         let collected = match pending.rx {
             Submitted::Monolithic(rx) => collect_task(rx.await, name, &files),
             Submitted::Forked(rx) => {
                 collect_forked_task(
                     rx.await,
-                    &work.change_purpose,
+                    work.change_purpose(),
                     pending.task.validator,
                     pending.task.ruleset,
                     &files,
@@ -781,7 +781,7 @@ async fn collect_forked_task(
     files: &[String],
     pool: &AgentPool,
 ) -> Result<Vec<Finding>, ()> {
-    let name = validator.validator_name.as_str();
+    let name = validator.validator_name();
     match delivered {
         Ok(Ok(turn)) => handle_fork_success(turn, name, files, pool).await,
         Ok(Err(PoolError::ForkFailed {
@@ -864,7 +864,7 @@ async fn handle_fork_failed(
     files: &[String],
     pool: &AgentPool,
 ) -> Result<Vec<Finding>, ()> {
-    let name = validator.validator_name.as_str();
+    let name = validator.validator_name();
     tracing::warn!(
         validator = %name,
         files = ?files,
@@ -1103,7 +1103,7 @@ pub fn render_fleet_prompt(
     out.push_str(CHANGE_PURPOSE_HEADER);
     out.push_str(change_purpose.trim());
     out.push_str("\n\n");
-    out.push_str(&render_file_payload(&validator.files));
+    out.push_str(&render_file_payload(validator.files()));
     out.push_str(&render_validator_suffix(validator, ruleset));
     out
 }
@@ -1134,7 +1134,7 @@ pub(crate) const PRIME_HANDOFF: &str =
 pub fn render_run_prime(work: &WorkList) -> String {
     let mut out = String::new();
     out.push_str(CHANGE_PURPOSE_HEADER);
-    out.push_str(work.change_purpose.trim());
+    out.push_str(work.change_purpose().trim());
     out.push_str("\n\n");
     let distinct: Vec<FileWork> = work.distinct_files().cloned().collect();
     out.push_str(&render_file_payload(&distinct));
@@ -1164,14 +1164,14 @@ pub(crate) const MANDATE_HEADER: &str = "## Mandate\n\n";
 /// so a fork turn never degenerates to a full reprocess (`lcp == new_len`).
 pub fn render_validator_suffix(validator: &ValidatorWork, ruleset: &RuleSet) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "{VALIDATOR_HEADER}{}\n", validator.validator_name);
+    let _ = writeln!(out, "{VALIDATOR_HEADER}{}\n", validator.validator_name());
     out.push_str(MANDATE_HEADER);
     out.push_str(ruleset.description().trim());
     out.push_str("\n\n");
 
     render_validator_guidance(&mut out, ruleset.manifest_body());
 
-    render_focus_files(&mut out, &validator.files);
+    render_focus_files(&mut out, validator.files());
 
     out.push_str("## Rules\n\n");
     for rule in &ruleset.rules {
@@ -1216,7 +1216,7 @@ fn render_focus_files(out: &mut String, files: &[FileWork]) {
          anywhere in one of these files is in scope and must be reported now.\n\n",
     );
     for file in files {
-        let _ = writeln!(out, "- `{}`", file.path);
+        let _ = writeln!(out, "- `{}`", file.path());
     }
     out.push('\n');
 }
@@ -1348,7 +1348,7 @@ with an empty array `[]`.
 /// the review `batch_size` never reaches here as a partial view: the scope stage
 /// rejects it with a hard error rather than trimming it to a slice.
 fn render_file_block(out: &mut String, file: &FileWork) {
-    let _ = writeln!(out, "## File: {}\n", file.path);
+    let _ = writeln!(out, "## File: {}\n", file.path());
 
     out.push_str(
         "### Full current contents\n\n\
@@ -1358,7 +1358,7 @@ fn render_file_block(out: &mut String, file: &FileWork) {
          pre-existing instances that sit outside the change described below.\n\n",
     );
     out.push_str("```\n");
-    out.push_str(file.source_slice.trim_end());
+    out.push_str(file.source_slice().trim_end());
     out.push_str("\n```\n\n");
 
     out.push_str(
@@ -1372,16 +1372,16 @@ fn render_file_block(out: &mut String, file: &FileWork) {
     render_semantic_diff(out, file);
 
     out.push_str("### Probe evidence\n\n");
-    render_probe_evidence(out, &file.probe_results, false);
+    render_probe_evidence(out, file.probe_results(), false);
 }
 
 /// Append the structured semantic diff for a file as a list of changed entities.
 fn render_semantic_diff(out: &mut String, file: &FileWork) {
-    if file.semantic_diff.is_empty() {
+    if file.semantic_diff().is_empty() {
         out.push_str("_No structured entity changes._\n\n");
         return;
     }
-    for change in &file.semantic_diff {
+    for change in file.semantic_diff() {
         let _ = writeln!(
             out,
             "- {} {} `{}`",

@@ -357,7 +357,7 @@ pub async fn run_review(
     let batches = batch_work_list(&work, fleet_config.batch_size())?;
 
     tracing::info!(
-        validators = work.validators.len(),
+        validators = work.validators().len(),
         files = work.distinct_files().count(),
         batches = batches.len(),
         batch_size = fleet_config.batch_size(),
@@ -426,12 +426,15 @@ fn build_candidates(work: &WorkList, findings: Vec<Finding>) -> Vec<Candidate> {
         .into_iter()
         .map(|finding| {
             let context = work
-                .validators
+                .validators()
                 .iter()
-                .find(|v| v.validator_name == finding.validator)
-                .and_then(|v| v.files.iter().find(|f| f.path == finding.file));
+                .find(|v| v.validator_name() == finding.validator)
+                .and_then(|v| v.files().iter().find(|f| f.path() == finding.file));
             let (source_slice, probe_results) = match context {
-                Some(file) => (file.source_slice.clone(), file.probe_results.clone()),
+                Some(file) => (
+                    file.source_slice().to_string(),
+                    file.probe_results().to_vec(),
+                ),
                 None => (String::new(), Vec::new()),
             };
             Candidate {
@@ -862,31 +865,26 @@ mod tests {
 
     /// A `FileWork` carrying a distinctive source slice tagged with its path.
     fn file_work(path: &str) -> FileWork {
-        FileWork {
-            path: path.to_string(),
-            semantic_diff: vec![],
-            changed_symbols: vec![],
-            source_slice: format!("// slice for {path}"),
-            probe_results: vec![],
-        }
+        FileWork::new(
+            path.to_string(),
+            vec![],
+            vec![],
+            format!("// slice for {path}"),
+            vec![],
+        )
     }
 
     /// A `ValidatorWork` carrying the given files for one validator.
     fn validator_work(name: &str, files: Vec<FileWork>) -> ValidatorWork {
-        ValidatorWork {
-            validator_name: name.to_string(),
-            rules: vec![],
-            probes: vec![],
-            files,
-        }
+        ValidatorWork::new(name.to_string(), vec![], vec![], files)
     }
 
     #[test]
     fn build_candidates_pairs_each_finding_with_its_files_context() {
-        let work = WorkList {
-            change_purpose: "p".to_string(),
-            validators: vec![validator_work("dedup", vec![file_work("src/a.rs")])],
-        };
+        let work = WorkList::new(
+            "p".to_string(),
+            vec![validator_work("dedup", vec![file_work("src/a.rs")])],
+        );
         let candidates = build_candidates(&work, vec![finding("src/a.rs", 42, "dedup", "dup")]);
 
         assert_eq!(candidates.len(), 1);
@@ -898,13 +896,13 @@ mod tests {
     fn build_candidates_resolves_each_finding_to_its_own_validators_context() {
         // Two validators flag the SAME file:line — each candidate must pick up its
         // own validator's file context, not the other's.
-        let work = WorkList {
-            change_purpose: "p".to_string(),
-            validators: vec![
+        let work = WorkList::new(
+            "p".to_string(),
+            vec![
                 validator_work("dead-code", vec![file_work("src/a.rs")]),
                 validator_work("duplication", vec![file_work("src/a.rs")]),
             ],
-        };
+        );
         let candidates = build_candidates(
             &work,
             vec![
@@ -930,10 +928,10 @@ mod tests {
     fn build_candidates_yields_empty_context_for_an_unknown_validator_or_file() {
         // A finding whose (validator, file) is not in the work-list still becomes
         // a candidate (empty context) so it reaches the verifier and refutes there.
-        let work = WorkList {
-            change_purpose: "p".to_string(),
-            validators: vec![validator_work("dedup", vec![file_work("src/a.rs")])],
-        };
+        let work = WorkList::new(
+            "p".to_string(),
+            vec![validator_work("dedup", vec![file_work("src/a.rs")])],
+        );
         let candidates = build_candidates(
             &work,
             vec![finding("src/invented.rs", 1, "ghost-validator", "made up")],
