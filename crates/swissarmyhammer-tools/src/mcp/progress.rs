@@ -162,6 +162,18 @@ impl McpProgressReporter {
         let mut state = self.cumulative.lock().unwrap_or_else(|p| p.into_inner());
 
         let message = match event {
+            IndexProgress::DownloadingModel {
+                file,
+                downloaded_bytes,
+                total_bytes,
+            } => {
+                // The model download precedes all indexing work, so it advances
+                // neither the file nor the batch counter: the wire `progress`
+                // stays at its current value (0 before the first Chunking) and
+                // cannot regress when indexing begins. The byte detail rides in
+                // the message with the full, untruncated filename.
+                format!("Downloading {file}: {downloaded_bytes}/{total_bytes} bytes")
+            }
             IndexProgress::Discovering { found } => {
                 // Discovery refines the file total but does not advance
                 // either "done" counter. Track the maximum so a late
@@ -376,6 +388,101 @@ mod tests {
         assert_eq!(params[0].total, Some(42.0));
         assert_eq!(params[0].message.as_deref(), Some("Discovering (42 files)"));
         assert_eq!(params[0].progress_token, token("tok"));
+    }
+
+    #[test]
+    fn report_downloading_model_carries_bytes_in_message_at_zero_progress() {
+        let McpProgressReporterBuild { reporter, receiver } =
+            McpProgressReporter::build(token("tok"));
+        reporter.report(IndexProgress::DownloadingModel {
+            file: "models/qwen3-embedding-0.6b/model.safetensors".to_string(),
+            downloaded_bytes: 1_048_576,
+            total_bytes: 620_000_000,
+        });
+        let params = take_buffered(receiver);
+        assert_eq!(params.len(), 1);
+        // A model download precedes all indexing work — no file or batch has
+        // been done, so the wire progress is still zero.
+        assert_eq!(params[0].progress, 0.0);
+        let msg = params[0].message.as_deref().unwrap();
+        // The full, untruncated filename and both byte counts ride in the
+        // message verbatim.
+        assert!(
+            msg.contains("models/qwen3-embedding-0.6b/model.safetensors"),
+            "message must carry the full untruncated filename: {msg}"
+        );
+        assert!(
+            msg.contains("1048576"),
+            "message must carry the downloaded byte count: {msg}"
+        );
+        assert!(
+            msg.contains("620000000"),
+            "message must carry the total byte count: {msg}"
+        );
+        assert_eq!(params[0].progress_token, token("tok"));
+    }
+
+    #[test]
+    fn downloading_model_events_precede_and_never_regress_indexing_progress() {
+        // The realistic first-run stream: two download chunks of the model
+        // file, then the ordinary Discovering → interleaved Chunking/Embedding
+        // → Done indexing sequence. The download events must sit at zero
+        // progress (before any Chunking) so the wire never regresses when
+        // indexing begins.
+        let McpProgressReporterBuild { reporter, receiver } =
+            McpProgressReporter::build(token("tok"));
+        reporter.report(IndexProgress::DownloadingModel {
+            file: "model.safetensors".to_string(),
+            downloaded_bytes: 0,
+            total_bytes: 100,
+        });
+        reporter.report(IndexProgress::DownloadingModel {
+            file: "model.safetensors".to_string(),
+            downloaded_bytes: 100,
+            total_bytes: 100,
+        });
+        reporter.report(IndexProgress::Discovering { found: 2 });
+        reporter.report(IndexProgress::Chunking {
+            file: PathBuf::from("a.rs"),
+            done: 1,
+            total: 2,
+        });
+        reporter.report(IndexProgress::Embedding {
+            batch: 1,
+            batches: 2,
+            chunks_in_batch: 4,
+        });
+        reporter.report(IndexProgress::Chunking {
+            file: PathBuf::from("b.rs"),
+            done: 2,
+            total: 2,
+        });
+        reporter.report(IndexProgress::Embedding {
+            batch: 2,
+            batches: 2,
+            chunks_in_batch: 4,
+        });
+        reporter.report(IndexProgress::Done {
+            files: 2,
+            chunks: 8,
+            elapsed: Duration::from_millis(5),
+        });
+        let params = take_buffered(receiver);
+        // The two download events lead the stream at zero progress.
+        assert_eq!(params[0].progress, 0.0);
+        assert_eq!(params[1].progress, 0.0);
+        for w in params.windows(2) {
+            assert!(
+                w[1].progress >= w[0].progress,
+                "progress regressed: {:?} -> {:?}",
+                w[0],
+                w[1]
+            );
+            assert!(w[1].total.unwrap() >= w[1].progress);
+        }
+        // The terminal event still closes the bar cleanly.
+        let last = params.last().unwrap();
+        assert_eq!(last.progress, last.total.unwrap());
     }
 
     #[test]

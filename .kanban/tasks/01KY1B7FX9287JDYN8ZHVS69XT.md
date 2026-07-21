@@ -28,8 +28,8 @@ comments:
 
     Applied the one advisory hardening it flagged: confine_to_repo now returns the canonicalized `resolved` path instead of the raw join, so read_working does not re-walk symlinks — closes the theoretical check-then-read TOCTOU window at no cost. Re-ran: scope tests 33/33 green, clippy -D warnings clean, cargo fmt clean.
   timestamp: 2026-07-21T05:03:09.533832+00:00
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff380
 title: 'Review scope: reject paths escaping the repo root in resolve_file/read_working'
 ---
 ## What

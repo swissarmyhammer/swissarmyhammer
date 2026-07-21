@@ -332,15 +332,12 @@ async fn reconcile_workspace(
     db: &SharedDb,
     shutdown: &swissarmyhammer_code_context::ShutdownFlag,
 ) {
-    let embedder = super::build_default_embedder().await;
-    reconcile_workspace_with_embedder(
-        workspace_root,
-        db,
-        embedder,
-        swissarmyhammer_code_context::noop_reporter(),
-        shutdown,
-    )
-    .await;
+    // The periodic reconcile has no JSON-RPC progress channel: a no-op reporter
+    // drives both the model-download observer (whose events are discarded) and
+    // the indexing pass, mirroring the watcher's own re-index path.
+    let reporter = swissarmyhammer_code_context::noop_reporter();
+    let embedder = super::build_default_embedder(&reporter).await;
+    reconcile_workspace_with_embedder(workspace_root, db, embedder, reporter, shutdown).await;
 }
 
 /// Drive [`reconcile_workspace`] forever on a [`RECONCILE_INTERVAL`] timer.

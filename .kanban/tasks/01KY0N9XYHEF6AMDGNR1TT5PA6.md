@@ -1,10 +1,26 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01ky1hnz02qmq3pzj394ktbh4g
+  text: 'Unblocked by ^sqmq62v (done). Batch picked this next. Still genuinely needed after ^1wdaqqy: the keep-alive bridge stays DISARMED until the first param exists, and the first-run model download happens before scope_review emits anything — so that window is still silent without this card''s DownloadingModel events. The DownloadObserver seam it consumes is the one ^sqmq62v built. Iteration 1: /implement.'
+  timestamp: 2026-07-21T05:16:51.586442+00:00
+- actor: claude-code
+  id: 01ky1jm7e2bbqtq2t3wa6d74bh
+  text: |-
+    Implemented DownloadingModel progress for both entry points (TDD; watched a genuine compile-red for the missing build_param arm and a message-format red for the review param mapping before green).
+
+    code_context: added `IndexProgress::DownloadingModel { file, downloaded_bytes, total_bytes }` (progress.rs). `build_param` maps it to `"Downloading <file>: <d>/<t> bytes"` at UNCHANGED cumulative progress (advances no file/batch counter) so the wire stays monotonic when Chunking follows. Extracted `download_observer_for(reporter)` in code_context/mod.rs mapping DownloadEvent->reporter.report(DownloadingModel); `build_default_embedder(&reporter)` now uses `Embedder::with_download_observer(DEFAULT_MODEL_NAME, ..)` (needed because ANE downloads at construction). No cache on this path, so the observer drops with the per-run embedder before drop(reporter) — channel closes cleanly. Also threaded the reporter through the periodic-reconcile caller (watcher.rs) using noop_reporter.
+
+    review: added `ReviewProgressEvent::DownloadingModel {..}` (fleet.rs). Chose the widen-the-factory route (checked the shape first): `EmbedderFactory` is now `Fn(Option<DownloadObserver>)`; `default_embedder_factory` attaches the observer on the OnceCell init that populates DEFAULT_EMBEDDER (warm runs never run init -> naturally first-run-only), mocks ignore the arg. `run_review_request_inner` builds the observer from a clone of the run's progress sender and passes it in. CRITICAL: the llama backend RETAINS the observer inside the process-global embedder cache forever, so a captured sender would hold the review progress channel open and wedge the bridge drain. Fixed with a disarmable `Arc<Mutex<Option<ReviewProgressSender>>>` slot the observer reads, disarmed (set None) the instant the embedder load returns (all downloads happen during that await). `review_progress_param` maps DownloadingModel at unchanged pair progress. Confirmed via a paused-time bridge test that one DownloadingModel event emits a real param AND arms the keep-alive (fills the pre-scope silent window ^1wdaqqy left).
+
+    Tests: progress.rs (message/bytes/monotonic-interleaved), review_op.rs (param mapping + bridge keep-alive arming), code_context/mod.rs (observer forwards synthetic DownloadEvents as DownloadingModel — no network/model). Gates all green: nextest -p tools/validators/code-context (2414 passed), rebuild_index_progress_notifications_test + review_progress_stdio_test, clippy -D warnings, cargo check --workspace --all-targets, cargo fmt. Left in `doing`. really-done double-check running.
+  timestamp: 2026-07-21T05:33:23.266374+00:00
 depends_on:
 - 01KY0N94MJ938XTK2K5SQMQ62V
-position_column: todo
-position_ordinal: a680
+position_column: doing
+position_ordinal: '8280'
 title: Surface model-download progress as MCP notifications/progress (code_context + review)
 ---
 ## What

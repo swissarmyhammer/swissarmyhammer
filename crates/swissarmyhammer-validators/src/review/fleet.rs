@@ -233,6 +233,23 @@ impl std::fmt::Debug for FleetOutcome {
 /// mpsc channel and the MCP tool boundary maps them to `notifications/progress`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewProgressEvent {
+    /// The review embedder is downloading its model before the scope stage can
+    /// run. Emitted (via the embedder's download observer) on the FIRST review
+    /// run of a process — the process-global embedder cache means only the cold
+    /// run downloads — BEFORE any [`FileScoped`](ReviewProgressEvent::FileScoped)
+    /// or [`Planned`](ReviewProgressEvent::Planned) event, so the pre-scope
+    /// model-download window is no longer silent (an MCP client's tool-call
+    /// inactivity timeout would otherwise fire during it). Advisory: it advances
+    /// no pair counter. `file` is the full, untruncated filename; the byte
+    /// counts are the running and final sizes reported by the hub.
+    DownloadingModel {
+        /// The full, untruncated filename being downloaded.
+        file: String,
+        /// Bytes of `file` received so far.
+        downloaded_bytes: u64,
+        /// Total size of `file` in bytes as reported by the hub.
+        total_bytes: u64,
+    },
     /// One file entered the scope stage (semantic diff + probes). Emitted per
     /// resolved file by [`scope_review`](crate::review::scope_review) BEFORE
     /// any fleet work, so a progress consumer sees its first event within

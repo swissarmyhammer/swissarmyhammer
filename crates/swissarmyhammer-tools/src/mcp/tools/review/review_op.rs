@@ -20,6 +20,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 use tokio::sync::{broadcast, OnceCell, Semaphore};
 
+use swissarmyhammer_embedding::{DownloadEvent, DownloadObserver};
 use swissarmyhammer_validators::review::{
     run_review_over_agent, FleetConfig, ReviewProgressEvent, ReviewProgressSender, ReviewReport,
     Scope,
@@ -101,8 +102,17 @@ pub type AgentFactory = Arc<
 /// Injected for the same reason as [`AgentFactory`]: the production server
 /// resolves the loaded platform embedder, while tests inject a deterministic mock
 /// so the pipeline runs without a 600 MB model load.
+///
+/// The factory takes an optional [`DownloadObserver`]: the caller wires one when
+/// the run has a `progressToken` so a FIRST-run review's model download streams
+/// [`ReviewProgressEvent::DownloadingModel`] progress instead of minutes of
+/// silence. The default factory attaches it to the load that populates the
+/// process-global embedder cache; the mock factories ignore it (they download
+/// nothing).
 pub type EmbedderFactory = Arc<
-    dyn Fn() -> Pin<
+    dyn Fn(
+            Option<DownloadObserver>,
+        ) -> Pin<
             Box<
                 dyn Future<Output = Result<Arc<dyn model_embedding::TextEmbedder>, EmbedderError>>
                     + Send,
@@ -226,18 +236,57 @@ where
 /// review runs rather than reloaded per run. Tests inject their own
 /// [`EmbedderFactory`] (a mock), which never touches this cache.
 pub fn default_embedder_factory() -> EmbedderFactory {
-    Arc::new(|| {
-        Box::pin(shared_embedder(&DEFAULT_EMBEDDER, || async {
+    Arc::new(|observer: Option<DownloadObserver>| {
+        Box::pin(shared_embedder(&DEFAULT_EMBEDDER, move || async move {
             use model_embedding::TextEmbedder as _;
-            let embedder = swissarmyhammer_embedding::Embedder::default()
-                .await
-                .map_err(|e| EmbedderError::Resolve(e.to_string()))?;
+            // Attach the download observer (when the run wired one) to the load
+            // that actually populates the cache, so a cold first run streams
+            // DownloadingModel progress. On a warm cache `shared_embedder` never
+            // runs this init and the observer is simply dropped — events are
+            // naturally first-run-only.
+            let embedder = match observer {
+                Some(observer) => {
+                    swissarmyhammer_embedding::Embedder::with_download_observer(
+                        swissarmyhammer_embedding::DEFAULT_MODEL_NAME,
+                        observer,
+                    )
+                    .await
+                }
+                None => swissarmyhammer_embedding::Embedder::default().await,
+            }
+            .map_err(|e| EmbedderError::Resolve(e.to_string()))?;
             embedder
                 .load()
                 .await
                 .map_err(|e| EmbedderError::Load(e.to_string()))?;
             Ok(Arc::new(embedder) as Arc<dyn model_embedding::TextEmbedder>)
         }))
+    })
+}
+
+/// Build a [`DownloadObserver`] that forwards each model-download
+/// [`DownloadEvent`] as a [`ReviewProgressEvent::DownloadingModel`] on the run's
+/// progress channel, while the shared `armed` slot still holds the sender.
+///
+/// The slot is a disarmable indirection rather than a captured sender because the
+/// llama embedder backend retains the observer inside the process-global
+/// [`DEFAULT_EMBEDDER`] cache for its whole lifetime. A directly-captured
+/// [`ReviewProgressSender`] would therefore outlive the run and hold the review
+/// progress channel open forever, wedging the bridge drain. The caller clears the
+/// slot (`None`) the moment the embedder load returns — after which this observer
+/// holds no sender and the channel closes normally. A closed receiver on the send
+/// is a no-op; progress is advisory.
+fn review_download_observer(
+    armed: Arc<std::sync::Mutex<Option<ReviewProgressSender>>>,
+) -> DownloadObserver {
+    Arc::new(move |event: DownloadEvent| {
+        if let Some(tx) = armed.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+            let _ = tx.send(ReviewProgressEvent::DownloadingModel {
+                file: event.file().to_string(),
+                downloaded_bytes: event.downloaded_bytes(),
+                total_bytes: event.total_bytes(),
+            });
+        }
     })
 }
 
@@ -450,7 +499,27 @@ async fn run_review_request_inner(
     // scope the fan-out to just those validators. Empty means "all matching".
     loader.retain_rulesets(&request.validators);
     let conn = open_index_connection(&repo_path)?;
-    let embedder = embedder_factory().await?;
+
+    // Wire a download observer so a FIRST-run review's pre-scope model download
+    // streams `DownloadingModel` progress instead of silence. The observer reads
+    // a disarmable slot rather than capturing the sender directly: the llama
+    // backend RETAINS the observer inside the process-global embedder cache for
+    // its whole lifetime, so a captured `ReviewProgressSender` would outlive the
+    // run and hold the progress channel open forever — the drain would never
+    // finish. We disarm the slot the instant the load returns (all downloads
+    // happen during that load), after which the retained observer holds no
+    // sender and the channel closes normally. No `progressToken` → no observer →
+    // unchanged behavior.
+    let download_slot = progress
+        .as_ref()
+        .map(|tx| Arc::new(std::sync::Mutex::new(Some(tx.clone()))));
+    let observer = download_slot
+        .as_ref()
+        .map(|slot| review_download_observer(Arc::clone(slot)));
+    let embedder = embedder_factory(observer).await?;
+    if let Some(slot) = &download_slot {
+        *slot.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
 
     let (agent, notification_rx) = agent_factory()
         .await
@@ -514,6 +583,17 @@ fn review_progress_param(
     event: &ReviewProgressEvent,
 ) -> ProgressNotificationParam {
     let message = match event {
+        ReviewProgressEvent::DownloadingModel {
+            file,
+            downloaded_bytes,
+            total_bytes,
+        } => {
+            // Model download precedes planning: no pair counters exist yet, so
+            // the wire values stay at their current (zero) state and cannot
+            // regress when planning begins. The byte detail and the full,
+            // untruncated filename ride in the message.
+            format!("Downloading {file}: {downloaded_bytes}/{total_bytes} bytes")
+        }
         ReviewProgressEvent::FileScoped { file } => {
             // Scope-phase announcement: no pair counters exist yet, so the
             // wire values stay at their current (zero) state — the event's
@@ -896,6 +976,114 @@ mod tests {
         let last = params.last().unwrap();
         assert_eq!(Some(last.progress), last.total);
         assert_eq!(last.progress, 2.0);
+    }
+
+    /// `DownloadingModel` events map to zero-progress params that name the full
+    /// file and both byte counts, and never regress the wire progress when the
+    /// plan/pair events that follow move the counters.
+    #[test]
+    fn downloading_model_events_map_to_zero_progress_params_naming_file_and_bytes() {
+        let mut state = ReviewProgressState::default();
+        let tok = token("dl-tok");
+        let file = "models/qwen3-embedding/model-00001-of-00002.safetensors";
+        let events = [
+            ReviewProgressEvent::DownloadingModel {
+                file: file.to_string(),
+                downloaded_bytes: 0,
+                total_bytes: 500,
+            },
+            ReviewProgressEvent::DownloadingModel {
+                file: file.to_string(),
+                downloaded_bytes: 500,
+                total_bytes: 500,
+            },
+            ReviewProgressEvent::Planned { total_pairs: 1 },
+            ReviewProgressEvent::PairDone {
+                validator: "duplication".to_string(),
+                file: "src/a.rs".to_string(),
+            },
+        ];
+        let params: Vec<_> = events
+            .iter()
+            .map(|event| review_progress_param(&mut state, &tok, event))
+            .collect();
+
+        // Every param echoes the request's token.
+        assert!(params.iter().all(|p| p.progress_token == tok));
+
+        // Downloads precede planning: their params sit at zero progress.
+        assert_eq!(params[0].progress, 0.0);
+        assert_eq!(params[1].progress, 0.0);
+
+        // The message names the FULL untruncated path and both byte counts.
+        let msg = params[1].message.as_deref().unwrap();
+        assert!(msg.contains(file), "message must name the full file: {msg}");
+        assert!(
+            msg.contains("500"),
+            "message must carry the byte counts: {msg}"
+        );
+
+        // Wire progress never regresses across download → plan → done.
+        for w in params.windows(2) {
+            assert!(
+                w[1].progress >= w[0].progress,
+                "progress regressed: {:?} -> {:?}",
+                w[0],
+                w[1]
+            );
+            assert!(w[1].total.unwrap() >= w[1].progress);
+        }
+
+        // The one planned pair completing closes the bar.
+        let last = params.last().unwrap();
+        assert_eq!(Some(last.progress), last.total);
+        assert_eq!(last.progress, 1.0);
+    }
+
+    /// A single `DownloadingModel` event through the real bridge mapping must
+    /// emit ONE token-echoing param (proving it is not a no-op) AND arm the
+    /// keep-alive — the pre-scope model download is exactly what fills the
+    /// otherwise-silent window before `scope_review` emits its first event, so
+    /// its param must both reach the wire and re-send during continued silence.
+    #[tokio::test(start_paused = true)]
+    async fn a_downloading_model_event_emits_a_param_and_arms_the_keep_alive() {
+        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (param_tx, mut param_rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(run_review_progress_mapping(
+            event_rx,
+            param_tx,
+            token("dl"),
+            TEST_KEEP_ALIVE,
+        ));
+
+        event_tx
+            .send(ReviewProgressEvent::DownloadingModel {
+                file: "models/qwen3-embedding/model.safetensors".to_string(),
+                downloaded_bytes: 10,
+                total_bytes: 100,
+            })
+            .unwrap();
+        advance(std::time::Duration::ZERO).await;
+        let mapped = take_buffered(&mut param_rx);
+        assert_eq!(
+            mapped.len(),
+            1,
+            "the download event maps to one real param, not a no-op"
+        );
+        assert_eq!(mapped[0].progress_token, token("dl"));
+        let msg = mapped[0].message.as_deref().unwrap();
+        assert!(
+            msg.contains("models/qwen3-embedding/model.safetensors") && msg.contains("100"),
+            "the param names the file and byte counts: {msg}"
+        );
+
+        // The emitted param armed the keep-alive: continued silence re-sends it
+        // verbatim, holding the client's timeout through the download window.
+        advance(TEST_KEEP_ALIVE + std::time::Duration::from_millis(1)).await;
+        let tick = take_buffered(&mut param_rx);
+        assert_eq!(tick.len(), 1, "the download param armed the keep-alive");
+        assert_eq!(tick[0].message, mapped[0].message);
+        assert_eq!(tick[0].progress, mapped[0].progress);
     }
 
     /// A scope-phase event names the file with no counter movement: progress

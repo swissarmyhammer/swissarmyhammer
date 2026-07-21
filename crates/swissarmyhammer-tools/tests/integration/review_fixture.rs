@@ -434,7 +434,9 @@ pub fn scripted_factory(agent: Arc<ScriptedAgent>) -> AgentFactory {
 
 /// An [`EmbedderFactory`] yielding the deterministic mock embedder (no model load).
 pub fn mock_embedder_factory() -> EmbedderFactory {
-    Arc::new(|| {
+    // The `_observer` arg is the download-progress hook; a mock downloads
+    // nothing, so it is ignored.
+    Arc::new(|_observer| {
         Box::pin(async {
             Ok(Arc::new(model_embedding::mock::MockEmbedder::new(DIM))
                 as Arc<dyn model_embedding::TextEmbedder>)

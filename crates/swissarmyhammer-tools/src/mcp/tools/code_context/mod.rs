@@ -1821,8 +1821,31 @@ pub async fn index_discovered_files_async(
     reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
     shutdown: swissarmyhammer_code_context::ShutdownFlag,
 ) -> swissarmyhammer_code_context::IndexRunStats {
-    let embedder = build_default_embedder().await;
+    let embedder = build_default_embedder(&reporter).await;
     index_discovered_files_with_embedder(workspace_root, db, embedder, reporter, shutdown).await
+}
+
+/// Build a download observer that forwards each model-download
+/// [`DownloadEvent`](swissarmyhammer_embedding::DownloadEvent) to `reporter` as an
+/// [`IndexProgress::DownloadingModel`](swissarmyhammer_code_context::IndexProgress::DownloadingModel)
+/// event, so a first-run index's embedding-model download surfaces as
+/// `notifications/progress` before the first `Discovering` event instead of
+/// minutes of silence.
+///
+/// The full untruncated filename and the running/total byte counts pass through
+/// verbatim; the reporter's wire mapping keeps `progress` monotonic (a download
+/// advances neither the file nor the batch counter).
+fn download_observer_for(
+    reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
+) -> swissarmyhammer_embedding::DownloadObserver {
+    use swissarmyhammer_code_context::IndexProgress;
+    std::sync::Arc::new(move |event: swissarmyhammer_embedding::DownloadEvent| {
+        reporter.report(IndexProgress::DownloadingModel {
+            file: event.file().to_string(),
+            downloaded_bytes: event.downloaded_bytes(),
+            total_bytes: event.total_bytes(),
+        });
+    })
 }
 
 /// Construct the default embedder and load it.
@@ -1859,7 +1882,9 @@ fn env_flag_enabled(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-async fn build_default_embedder() -> Option<std::sync::Arc<dyn model_embedding::TextEmbedder>> {
+async fn build_default_embedder(
+    reporter: &std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter>,
+) -> Option<std::sync::Arc<dyn model_embedding::TextEmbedder>> {
     use model_embedding::TextEmbedder as _;
 
     // Escape hatch: skip chunk embeddings entirely when `SAH_DISABLE_EMBEDDING`
@@ -1878,7 +1903,18 @@ async fn build_default_embedder() -> Option<std::sync::Arc<dyn model_embedding::
         return None;
     }
 
-    let embedder = match swissarmyhammer_embedding::Embedder::default().await {
+    // Attach a download observer so a first-run model download streams
+    // DownloadingModel progress through `reporter` — before the first
+    // Discovering event — instead of minutes of silence. Use
+    // `with_download_observer` (not `default`) because on the ANE backend the
+    // model resolves and downloads during construction, so an observer attached
+    // afterwards could never see it.
+    let embedder = match swissarmyhammer_embedding::Embedder::with_download_observer(
+        swissarmyhammer_embedding::DEFAULT_MODEL_NAME,
+        download_observer_for(std::sync::Arc::clone(reporter)),
+    )
+    .await
+    {
         Ok(e) => e,
         Err(err) => {
             tracing::warn!(
@@ -4244,6 +4280,60 @@ impl Calculator {
         fn report(&self, event: swissarmyhammer_code_context::IndexProgress) {
             self.events.lock().unwrap().push(event);
         }
+    }
+
+    /// The download observer the rebuild-index path attaches to the embedder
+    /// must forward each synthetic `DownloadEvent` to the reporter as an
+    /// `IndexProgress::DownloadingModel` carrying the full, untruncated filename
+    /// and the exact byte counts — no network, no real model, just the mapping
+    /// seam. This is the unit the rebuild-index path relies on to stream
+    /// model-download progress before the first `Discovering` event.
+    #[tokio::test]
+    async fn download_observer_forwards_events_as_downloading_model_progress() {
+        use swissarmyhammer_code_context::IndexProgress;
+
+        let reporter = std::sync::Arc::new(VecReporter::new());
+        let dyn_reporter: std::sync::Arc<dyn swissarmyhammer_code_context::ProgressReporter> =
+            reporter.clone();
+        let observer = download_observer_for(dyn_reporter);
+
+        // Synthetic download events, exactly as the model loader emits them —
+        // a first chunk and the final full-size event. No download happens.
+        let file = "models/qwen3-embedding-0.6b/model.safetensors";
+        observer(swissarmyhammer_embedding::DownloadEvent::new(
+            file,
+            0,
+            620_000_000,
+        ));
+        observer(swissarmyhammer_embedding::DownloadEvent::new(
+            file,
+            620_000_000,
+            620_000_000,
+        ));
+
+        let events = reporter.snapshot();
+        assert_eq!(events.len(), 2, "each DownloadEvent maps to one event");
+        match &events[0] {
+            IndexProgress::DownloadingModel {
+                file: f,
+                downloaded_bytes,
+                total_bytes,
+            } => {
+                assert_eq!(f, file, "the full untruncated filename is forwarded");
+                assert_eq!(*downloaded_bytes, 0);
+                assert_eq!(*total_bytes, 620_000_000);
+            }
+            other => panic!("expected DownloadingModel, got {other:?}"),
+        }
+        assert!(
+            matches!(
+                &events[1],
+                IndexProgress::DownloadingModel { downloaded_bytes, total_bytes, .. }
+                    if *downloaded_bytes == 620_000_000 && *total_bytes == 620_000_000
+            ),
+            "the final event reports the complete download, got {:?}",
+            events[1]
+        );
     }
 
     /// The end-to-end event sequence must:

@@ -832,7 +832,9 @@ fn concurrency_probe_embedder_factory(
     active: Arc<AtomicUsize>,
     peak: Arc<AtomicUsize>,
 ) -> EmbedderFactory {
-    Arc::new(move || {
+    // The `_observer` arg is the download-progress hook; a mock downloads
+    // nothing, so it is ignored.
+    Arc::new(move |_observer| {
         let active = Arc::clone(&active);
         let peak = Arc::clone(&peak);
         Box::pin(async move {
@@ -908,7 +910,9 @@ fn findings_json_escapes_embedded_quotes() {
 
 /// An [`EmbedderFactory`] yielding a deterministic mock embedder (no model load).
 fn mock_embedder_factory() -> EmbedderFactory {
-    Arc::new(|| {
+    // The `_observer` arg is the download-progress hook; a mock downloads
+    // nothing, so it is ignored.
+    Arc::new(|_observer| {
         Box::pin(async {
             Ok(Arc::new(model_embedding::mock::MockEmbedder::new(DIM))
                 as Arc<dyn model_embedding::TextEmbedder>)

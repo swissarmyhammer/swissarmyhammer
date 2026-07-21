@@ -49,6 +49,24 @@ pub struct IndexRunStats {
 /// match without parsing strings.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IndexProgress {
+    /// The embedding model is downloading before indexing can begin. Emitted
+    /// (via the embedder's download observer) once per received chunk of each
+    /// model file, BEFORE any [`Discovering`](IndexProgress::Discovering) or
+    /// [`Chunking`](IndexProgress::Chunking) event — a first-run index downloads
+    /// the multi-hundred-MB embedding model, which would otherwise be minutes of
+    /// silence. `file` is the full, untruncated filename; `downloaded_bytes` and
+    /// `total_bytes` are the running and final sizes reported by the hub. The
+    /// event advances no indexing counter, so a consumer keeping a monotonic
+    /// wire `progress` value leaves it unchanged (downloads precede all indexing
+    /// work).
+    DownloadingModel {
+        /// The full, untruncated filename being downloaded.
+        file: String,
+        /// Bytes of `file` received so far.
+        downloaded_bytes: u64,
+        /// Total size of `file` in bytes as reported by the hub.
+        total_bytes: u64,
+    },
     /// File discovery is in progress. `found` is the running count of files
     /// added to the dirty set so far. The first event is typically
     /// `Discovering { found: 0 }` (before discovery starts); a second
