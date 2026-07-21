@@ -389,7 +389,7 @@ pub async fn run_review(
         // shared prime while it stays pinned. Awaiting drains every verify task.
         let candidates = build_candidates(batch, fleet_findings);
         let prime_session = prime.as_ref().map(|g| g.session_id());
-        let outcome = verify_findings(candidates, pool, prime_session).await;
+        let outcome = verify_findings(candidates, pool, prime_session, progress).await;
 
         // The batch (fan-out AND verify) has drained: release its prime pin so the
         // pinned cache entry does not outlive the batch. A run future dropped

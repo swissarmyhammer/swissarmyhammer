@@ -284,6 +284,36 @@ pub enum ReviewProgressEvent {
         /// The full path of the reviewed file — never truncated.
         file: String,
     },
+    /// One validator task's parsed findings, emitted as that task resolves in
+    /// [`collect_fan_out`]. Unlike the pair-count ticks this carries CONTENT: a
+    /// client can start resolving these findings while the run is still going.
+    ///
+    /// The findings are already validator-tagged (via
+    /// [`parse_task_response`](crate::review::types)). An empty vec means the
+    /// validator came back clean; a failed task emits no `Findings` event at all
+    /// (the [`PairDone`](ReviewProgressEvent::PairDone) accounting still fires).
+    /// It advances no pair counter — it is content, not progress, so the MCP
+    /// boundary routes it to `notifications/message`, not `notifications/progress`.
+    Findings {
+        /// The validator (RuleSet) the findings were produced against.
+        validator: String,
+        /// Every finding the task parsed, in emission order — never truncated.
+        findings: Vec<Finding>,
+    },
+    /// One candidate finding's verdict, emitted as it resolves in the verify
+    /// stage — a deterministic guard refutation or an adversarial agent verdict.
+    /// Like [`Findings`](ReviewProgressEvent::Findings) this carries CONTENT: a
+    /// client learns each confirmed/refuted decision the moment the verify task
+    /// resolves, not at the end. It advances no pair counter and routes to
+    /// `notifications/message`.
+    Verdict {
+        /// The candidate finding the verdict decided.
+        finding: Finding,
+        /// Whether the finding was confirmed (`true`) or refuted (`false`).
+        confirmed: bool,
+        /// One sentence — what confirmed or refuted the finding.
+        reason: String,
+    },
 }
 
 /// The sender half review progress events are emitted on.
@@ -493,7 +523,21 @@ async fn collect_fan_out(
             }
         };
         match collected {
-            Ok(parsed) => findings.extend(parsed),
+            Ok(parsed) => {
+                // Stream this task's parsed, validator-tagged findings as CONTENT
+                // the moment the task resolves — a client can start resolving
+                // them while the rest of the fleet is still running. An empty vec
+                // is a clean validator; a failed task takes the `Err` arm below
+                // and emits no `Findings` event.
+                emit_progress(
+                    progress,
+                    ReviewProgressEvent::Findings {
+                        validator: name.to_string(),
+                        findings: parsed.clone(),
+                    },
+                );
+                findings.extend(parsed);
+            }
             Err(()) => failed += 1,
         }
         // One PairDone per (validator, file) regardless of how the task

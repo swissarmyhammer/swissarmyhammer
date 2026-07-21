@@ -15,7 +15,11 @@ use std::sync::Arc;
 
 use agent_client_protocol::schema::SessionNotification;
 use agent_client_protocol::{Client, DynConnectTo};
-use rmcp::model::{ProgressNotificationParam, ProgressToken};
+use rmcp::model::{
+    LoggingLevel, LoggingMessageNotification, LoggingMessageNotificationParam,
+    ProgressNotificationParam, ProgressToken,
+};
+use rmcp::{Peer, RoleServer};
 use rusqlite::Connection;
 use serde::Serialize;
 use tokio::sync::{broadcast, OnceCell, Semaphore};
@@ -577,11 +581,17 @@ struct ReviewProgressState {
 /// (floored at `progress` so `total >= progress` always holds), the request's
 /// `token` echoed on every notification, and a human `message` naming the
 /// validator and the FULL file path — never truncated.
+///
+/// Returns `None` for the content-carrying variants
+/// ([`Findings`](ReviewProgressEvent::Findings) /
+/// [`Verdict`](ReviewProgressEvent::Verdict)): they carry content, not progress,
+/// and route to `notifications/message` via [`review_content_log_param`] — they
+/// must never move the wire counter.
 fn review_progress_param(
     state: &mut ReviewProgressState,
     token: &ProgressToken,
     event: &ReviewProgressEvent,
-) -> ProgressNotificationParam {
+) -> Option<ProgressNotificationParam> {
     let message = match event {
         ReviewProgressEvent::DownloadingModel {
             file,
@@ -611,14 +621,93 @@ fn review_progress_param(
             state.completed += 1;
             format!("Reviewed {file} against {validator}")
         }
+        // Content-carrying variants have no progress param — they route to
+        // notifications/message and must not touch the wire counters.
+        ReviewProgressEvent::Findings { .. } | ReviewProgressEvent::Verdict { .. } => {
+            return None;
+        }
     };
     let progress = state.completed;
     let total = state.planned.max(progress);
-    ProgressNotificationParam {
+    Some(ProgressNotificationParam {
         progress_token: token.clone(),
         progress: progress as f64,
         total: Some(total as f64),
         message: Some(message),
+    })
+}
+
+/// The MCP logger name every review content notification carries.
+const REVIEW_LOG_LOGGER: &str = "review";
+/// The `kind` tag on a streamed findings payload.
+const REVIEW_FINDINGS_KIND: &str = "review.findings";
+/// The `kind` tag on a streamed verdict payload.
+const REVIEW_VERDICT_KIND: &str = "review.verdict";
+
+/// Map a content-carrying [`ReviewProgressEvent`] to its `notifications/message`
+/// [`LoggingMessageNotificationParam`], or `None` for the progress-tick variants
+/// (which route to `notifications/progress` via [`review_progress_param`]).
+///
+/// The two content shapes carry the FULL structured payload — never a summary,
+/// never truncated (a finding is streamed as complete `Finding` JSON):
+///
+/// - [`Findings`](ReviewProgressEvent::Findings) →
+///   `{"kind": "review.findings", "validator": …, "findings": [Finding…]}`
+/// - [`Verdict`](ReviewProgressEvent::Verdict) →
+///   `{"kind": "review.verdict", "finding": Finding, "confirmed": …, "reason": …}`
+///
+/// Logger `"review"`, level [`Info`](LoggingLevel::Info). Serialization of a
+/// `Finding`/`Vec<Finding>` is infallible (plain data), so `serde_json::json!`
+/// never panics here.
+fn review_content_log_param(
+    event: &ReviewProgressEvent,
+) -> Option<LoggingMessageNotificationParam> {
+    let data = match event {
+        ReviewProgressEvent::Findings {
+            validator,
+            findings,
+        } => serde_json::json!({
+            "kind": REVIEW_FINDINGS_KIND,
+            "validator": validator,
+            "findings": findings,
+        }),
+        ReviewProgressEvent::Verdict {
+            finding,
+            confirmed,
+            reason,
+        } => serde_json::json!({
+            "kind": REVIEW_VERDICT_KIND,
+            "finding": finding,
+            "confirmed": confirmed,
+            "reason": reason,
+        }),
+        _ => return None,
+    };
+    Some(LoggingMessageNotificationParam {
+        level: LoggingLevel::Info,
+        logger: Some(REVIEW_LOG_LOGGER.to_string()),
+        data,
+    })
+}
+
+/// Send one review content notification to the MCP peer as a
+/// `notifications/message`, logging the full payload first (never truncated) so
+/// the send path is provable from the log. A failed send is logged at WARN and
+/// swallowed — content streaming is advisory, never load-bearing.
+async fn send_review_content_log(peer: &Peer<RoleServer>, param: LoggingMessageNotificationParam) {
+    tracing::info!(
+        logger = param.logger.as_deref().unwrap_or(""),
+        data = %param.data,
+        "sending review content notifications/message to MCP peer"
+    );
+    if let Err(err) = peer
+        .send_notification(LoggingMessageNotification::new(param).into())
+        .await
+    {
+        tracing::warn!(
+            error = %err,
+            "failed to send MCP review content notification — peer may have disconnected"
+        );
     }
 }
 
@@ -681,12 +770,29 @@ pub fn spawn_review_progress_bridge(context: &ToolContext) -> Option<ReviewProgr
         return None;
     };
 
-    // The mapping task owns the cumulative counters. It ends when the engine
-    // drops its sender; dropping `param_tx` then closes the drain's source so
-    // the drain flushes and exits.
+    // The content channel (findings/verdicts → `notifications/message`) honors
+    // the same sink-takes-priority rule as the progress drain above: when a
+    // `progress_sink` is the chosen transport, the sink contract is progress
+    // params ONLY, so no content is emitted — it is neither carried on the sink
+    // (which is typed for progress params) nor leaked to the peer. Content
+    // therefore reaches the peer only on the peer transport path (no sink), which
+    // subsumes the no-peer-and-no-sink case (already returned above). Gate the
+    // content peer on sink absence to make that contract explicit.
+    let content_peer = if context.progress_sink.is_some() {
+        None
+    } else {
+        context.peer.clone()
+    };
+
+    // The mapping task owns the cumulative counters and the content channel: it
+    // maps progress-tick variants to `param_tx` (drained to sink or peer) and
+    // sends content variants straight to `content_peer` as `notifications/message`.
+    // It ends when the engine drops its sender; dropping `param_tx` then closes
+    // the drain's source so the drain flushes and exits.
     tokio::spawn(run_review_progress_mapping(
         event_rx,
         param_tx,
+        content_peer,
         token,
         REVIEW_PROGRESS_KEEP_ALIVE_INTERVAL,
     ));
@@ -724,6 +830,7 @@ const REVIEW_PROGRESS_KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Dura
 async fn run_review_progress_mapping(
     mut event_rx: tokio::sync::mpsc::UnboundedReceiver<ReviewProgressEvent>,
     param_tx: tokio::sync::mpsc::UnboundedSender<ProgressNotificationParam>,
+    peer: Option<Arc<Peer<RoleServer>>>,
     token: ProgressToken,
     keep_alive: std::time::Duration,
 ) {
@@ -733,7 +840,21 @@ async fn run_review_progress_mapping(
         tokio::select! {
             event = event_rx.recv() => {
                 let Some(event) = event else { break };
-                let param = review_progress_param(&mut state, &token, &event);
+                // Content-carrying events (findings, verdicts) go to
+                // notifications/message via the peer only — they carry no
+                // progress, so they never move the wire counter nor arm the
+                // keep-alive. With no peer (the in-process sink path), they are
+                // skipped: the sink contract is progress params.
+                if let Some(log_param) = review_content_log_param(&event) {
+                    if let Some(peer) = &peer {
+                        send_review_content_log(peer, log_param).await;
+                    }
+                    continue;
+                }
+                // Progress-tick variants map to notifications/progress as before.
+                let Some(param) = review_progress_param(&mut state, &token, &event) else {
+                    continue;
+                };
                 latest = Some(param.clone());
                 if param_tx.send(param).is_err() {
                     break;
@@ -939,7 +1060,7 @@ mod tests {
         ];
         let params: Vec<_> = events
             .iter()
-            .map(|event| review_progress_param(&mut state, &tok, event))
+            .map(|event| review_progress_param(&mut state, &tok, event).expect("progress variant"))
             .collect();
 
         // Every notification echoes the request's token.
@@ -1005,7 +1126,7 @@ mod tests {
         ];
         let params: Vec<_> = events
             .iter()
-            .map(|event| review_progress_param(&mut state, &tok, event))
+            .map(|event| review_progress_param(&mut state, &tok, event).expect("progress variant"))
             .collect();
 
         // Every param echoes the request's token.
@@ -1052,6 +1173,7 @@ mod tests {
         tokio::spawn(run_review_progress_mapping(
             event_rx,
             param_tx,
+            None,
             token("dl"),
             TEST_KEEP_ALIVE,
         ));
@@ -1099,7 +1221,8 @@ mod tests {
             &ReviewProgressEvent::FileScoped {
                 file: "src/a/very/deep/path.rs".to_string(),
             },
-        );
+        )
+        .expect("a FileScoped event maps to a progress param");
         assert_eq!(param.progress, 0.0);
         assert_eq!(param.total, Some(0.0));
         assert_eq!(
@@ -1108,6 +1231,97 @@ mod tests {
             "the message names the full untruncated path"
         );
         assert_eq!(param.progress_token, tok);
+    }
+
+    /// A sample validator-tagged finding whose fields are all distinctive so a
+    /// streamed payload can be asserted field-by-field.
+    fn sample_finding() -> swissarmyhammer_validators::review::Finding {
+        swissarmyhammer_validators::review::Finding {
+            file: "src/payments.rs".to_string(),
+            line: 8,
+            validator: "duplication".to_string(),
+            rule: Some("no-copy-paste".to_string()),
+            claim: "copy-pasted block duplicates existing_total".to_string(),
+            evidence: "`find_duplicates`: 0.94 match".to_string(),
+            suggestion: Some("extract a shared helper".to_string()),
+        }
+    }
+
+    /// A `Findings` event maps to a `notifications/message` log param carrying the
+    /// FULL `Finding` JSON — never a progress param, and never truncated.
+    #[test]
+    fn findings_events_map_to_a_content_log_param_with_full_finding_json() {
+        let event = ReviewProgressEvent::Findings {
+            validator: "duplication".to_string(),
+            findings: vec![sample_finding()],
+        };
+
+        // Content never produces a progress param — the wire counter must not move.
+        let mut state = ReviewProgressState::default();
+        assert!(
+            review_progress_param(&mut state, &token("t"), &event).is_none(),
+            "a Findings event must not map to a progress param"
+        );
+
+        let param = review_content_log_param(&event).expect("a Findings event maps to a log param");
+        assert_eq!(param.logger.as_deref(), Some("review"));
+        assert!(matches!(param.level, LoggingLevel::Info));
+        assert_eq!(param.data["kind"], "review.findings");
+        assert_eq!(param.data["validator"], "duplication");
+        // The full Finding JSON is present — every load-bearing field, untruncated.
+        let f = &param.data["findings"][0];
+        assert_eq!(f["file"], "src/payments.rs");
+        assert_eq!(f["line"], 8);
+        assert_eq!(f["validator"], "duplication");
+        assert_eq!(f["rule"], "no-copy-paste");
+        assert_eq!(f["claim"], "copy-pasted block duplicates existing_total");
+        assert_eq!(f["evidence"], "`find_duplicates`: 0.94 match");
+    }
+
+    /// A `Verdict` event maps to a `notifications/message` log param carrying the
+    /// full finding, the confirmed flag, and the reason — never a progress param.
+    #[test]
+    fn verdict_events_map_to_a_content_log_param_with_full_finding_and_reason() {
+        let event = ReviewProgressEvent::Verdict {
+            finding: sample_finding(),
+            confirmed: true,
+            reason: "substantiated by the evidence".to_string(),
+        };
+
+        let mut state = ReviewProgressState::default();
+        assert!(
+            review_progress_param(&mut state, &token("t"), &event).is_none(),
+            "a Verdict event must not map to a progress param"
+        );
+
+        let param = review_content_log_param(&event).expect("a Verdict event maps to a log param");
+        assert_eq!(param.data["kind"], "review.verdict");
+        assert_eq!(param.data["confirmed"], true);
+        assert_eq!(param.data["reason"], "substantiated by the evidence");
+        assert_eq!(
+            param.data["finding"]["claim"],
+            "copy-pasted block duplicates existing_total"
+        );
+        assert_eq!(param.data["finding"]["file"], "src/payments.rs");
+    }
+
+    /// The progress-tick variants carry no content — they route to
+    /// notifications/progress, never notifications/message.
+    #[test]
+    fn progress_tick_events_have_no_content_log_param() {
+        assert!(
+            review_content_log_param(&ReviewProgressEvent::Planned { total_pairs: 1 }).is_none()
+        );
+        assert!(review_content_log_param(&ReviewProgressEvent::PairStarted {
+            validator: "v".to_string(),
+            file: "a.rs".to_string(),
+        })
+        .is_none());
+        assert!(review_content_log_param(&ReviewProgressEvent::PairDone {
+            validator: "v".to_string(),
+            file: "a.rs".to_string(),
+        })
+        .is_none());
     }
 
     /// Drain everything currently buffered on `rx` without waiting.
@@ -1151,6 +1365,7 @@ mod tests {
         tokio::spawn(run_review_progress_mapping(
             event_rx,
             param_tx,
+            None,
             token("ka"),
             TEST_KEEP_ALIVE,
         ));
@@ -1187,6 +1402,7 @@ mod tests {
         tokio::spawn(run_review_progress_mapping(
             event_rx,
             param_tx,
+            None,
             token("disarmed"),
             TEST_KEEP_ALIVE,
         ));
@@ -1207,6 +1423,7 @@ mod tests {
         tokio::spawn(run_review_progress_mapping(
             event_rx,
             param_tx,
+            None,
             token("reset"),
             TEST_KEEP_ALIVE,
         ));
@@ -1245,6 +1462,7 @@ mod tests {
         let mapping = tokio::spawn(run_review_progress_mapping(
             event_rx,
             param_tx,
+            None,
             token("done"),
             TEST_KEEP_ALIVE,
         ));
@@ -1299,6 +1517,15 @@ mod tests {
         sender
             .send(ReviewProgressEvent::Planned { total_pairs: 1 })
             .unwrap();
+        // A content event on the sink path must NOT reach the progress sink — the
+        // sink contract is progress params only. It is dropped (no peer here), so
+        // it neither becomes a sink param nor moves the wire counter.
+        sender
+            .send(ReviewProgressEvent::Findings {
+                validator: "v".to_string(),
+                findings: vec![],
+            })
+            .unwrap();
         sender
             .send(ReviewProgressEvent::PairDone {
                 validator: "v".to_string(),
@@ -1315,7 +1542,11 @@ mod tests {
         while let Ok(param) = sink_rx.try_recv() {
             got.push(param);
         }
-        assert_eq!(got.len(), 2, "both events reach the sink: {got:#?}");
+        assert_eq!(
+            got.len(),
+            2,
+            "only the two progress events reach the sink; the content event does not: {got:#?}"
+        );
         assert!(got.iter().all(|p| p.progress_token == token("bridge-tok")));
         let last = got.last().unwrap();
         assert_eq!(
@@ -1336,11 +1567,12 @@ mod tests {
             &mut state,
             &tok,
             &ReviewProgressEvent::Planned { total_pairs: 2 },
-        );
+        )
+        .expect("a Planned event maps to a progress param");
         assert_eq!(first.total, Some(2.0));
 
         for file in ["src/a.rs", "src/b.rs"] {
-            review_progress_param(
+            let _ = review_progress_param(
                 &mut state,
                 &tok,
                 &ReviewProgressEvent::PairDone {
@@ -1354,7 +1586,8 @@ mod tests {
             &mut state,
             &tok,
             &ReviewProgressEvent::Planned { total_pairs: 3 },
-        );
+        )
+        .expect("a Planned event maps to a progress param");
         assert_eq!(
             second_plan.total,
             Some(5.0),

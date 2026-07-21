@@ -53,7 +53,9 @@ use std::fmt::Write as _;
 use agent_client_protocol::schema::SessionId;
 use serde::Deserialize;
 
-use crate::review::fleet::{classify_reuse, PrefixReuse};
+use crate::review::fleet::{
+    classify_reuse, emit_progress, PrefixReuse, ReviewProgressEvent, ReviewProgressSender,
+};
 use crate::review::probes::{render_probe_evidence, ProbeKind, ProbeResult};
 use crate::review::types::{extract_json_value, Finding, RefutingLayer, VerifiedFinding};
 use crate::validators::{AgentPool, PoolError};
@@ -268,12 +270,33 @@ impl VerifyOutcome {
 /// when fan-out primed one. Each verify task forks it and sends only its
 /// per-candidate tail, reusing the cached change/diff prefix; a verify task with
 /// no prime — or one whose fork fails — falls back to a fresh-session prompt.
+///
+/// `progress` is the optional [`ReviewProgressSender`] each candidate's verdict
+/// streams over as a [`Verdict`](ReviewProgressEvent::Verdict) event the moment
+/// it resolves — guard refutations up front, agent verdicts as their tasks
+/// drain. `None` (the default for callers without a progress channel) emits
+/// nothing and leaves behavior byte-identical to the pre-streaming path.
 pub async fn verify_findings(
     candidates: Vec<Candidate>,
     pool: &AgentPool,
     prime: Option<&SessionId>,
+    progress: Option<&ReviewProgressSender>,
 ) -> VerifyOutcome {
     let GuardOutcome { survivors, refuted } = run_guard(&candidates);
+
+    // Stream each guard refutation as its verdict resolves — the guard decides
+    // these inline as fan-out returns, so they are final the moment `run_guard`
+    // reports them.
+    for verified in &refuted {
+        emit_progress(
+            progress,
+            ReviewProgressEvent::Verdict {
+                finding: verified.finding.clone(),
+                confirmed: verified.confirmed,
+                reason: verified.reason.clone(),
+            },
+        );
+    }
 
     // Submit every guard survivor to the shared pool up front, so the verify
     // tasks pipeline (they queue alongside any fan-out tasks still in flight).
@@ -310,6 +333,16 @@ pub async fn verify_findings(
             rule = ?finding.rule,
             confirmed = verdict.confirmed,
             "verify: agent verdict"
+        );
+        // Stream the agent verdict as this verify task resolves — final at this
+        // moment, so a client learns each confirmed/refuted decision live.
+        emit_progress(
+            progress,
+            ReviewProgressEvent::Verdict {
+                finding: finding.clone(),
+                confirmed: verdict.confirmed,
+                reason: verdict.reason.clone(),
+            },
         );
         verified.push(VerifiedFinding {
             finding,
@@ -893,7 +926,7 @@ mod tests {
         ]);
 
         let outcome = with_pool(agent, PoolConfig::remote(4), move |pool| async move {
-            verify_findings(candidates, &pool, None).await
+            verify_findings(candidates, &pool, None, None).await
         })
         .await;
 
@@ -921,6 +954,91 @@ mod tests {
         assert_eq!(verdict("delta").decided_by, Some(RefutingLayer::Agent));
     }
 
+    /// Every candidate's verdict streams a `Verdict` progress event the moment it
+    /// resolves: a guard refutation up front, then the agent confirm/refute
+    /// verdicts as their tasks drain. Each event carries the full finding, the
+    /// confirmed flag, and the deciding reason.
+    #[tokio::test]
+    async fn verify_streams_a_verdict_event_per_candidate_guard_and_agent() {
+        use crate::review::fleet::ReviewProgressEvent;
+
+        // A guard-refuted candidate: the `callers` fact shows inbound callers, so
+        // the dead-code claim is refuted deterministically and never reaches the
+        // agent.
+        let guard_refuted = Candidate {
+            finding: dead_code_finding("src/live.rs", "called"),
+            source_slice: "fn called() {}".to_string(),
+            probe_results: vec![callers_probe("called", &["a_caller"])],
+        };
+        // One agent-confirmed and one agent-refuted survivor.
+        let confirmed = survivor("confirmed");
+        let refuted = survivor("refuted");
+
+        let agent = verifier_agent(vec![
+            (
+                "CLAIM[confirmed]".to_string(),
+                ScriptedReply::Text(verdict_json(true, "substantiated")),
+            ),
+            (
+                "CLAIM[refuted]".to_string(),
+                ScriptedReply::Text(verdict_json(false, "disproven")),
+            ),
+        ]);
+
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        with_pool(agent, PoolConfig::remote(3), move |pool| async move {
+            verify_findings(
+                vec![guard_refuted, confirmed, refuted],
+                &pool,
+                None,
+                Some(&progress_tx),
+            )
+            .await
+        })
+        .await;
+
+        let mut verdicts: Vec<(Finding, bool, String)> = Vec::new();
+        while let Ok(event) = progress_rx.try_recv() {
+            if let ReviewProgressEvent::Verdict {
+                finding,
+                confirmed,
+                reason,
+            } = event
+            {
+                verdicts.push((finding, confirmed, reason));
+            }
+        }
+
+        // The guard refutation streamed: the dead-code finding, confirmed = false,
+        // with the fact-citing reason.
+        let guard = verdicts
+            .iter()
+            .find(|(f, _, _)| f.file == "src/live.rs")
+            .expect("a Verdict event for the guard-refuted finding");
+        assert!(!guard.1, "the guard refuted the dead-code claim");
+        assert!(
+            guard.2.contains("callers"),
+            "the guard reason cites the deciding fact: {}",
+            guard.2
+        );
+
+        // The agent confirmation streamed.
+        let ok = verdicts
+            .iter()
+            .find(|(f, _, _)| f.claim.contains("CLAIM[confirmed]"))
+            .expect("a Verdict event for the agent-confirmed finding");
+        assert!(ok.1, "the agent confirmed the finding");
+        assert_eq!(ok.2, "substantiated");
+
+        // The agent refutation streamed.
+        let no = verdicts
+            .iter()
+            .find(|(f, _, _)| f.claim.contains("CLAIM[refuted]"))
+            .expect("a Verdict event for the agent-refuted finding");
+        assert!(!no.1, "the agent refuted the finding");
+        assert_eq!(no.2, "disproven");
+    }
+
     #[tokio::test]
     async fn verify_tasks_pipeline_on_the_same_pool_as_in_flight_fanout() {
         // One shared single-worker pool. A "fan-out" task is submitted directly
@@ -946,7 +1064,7 @@ mod tests {
             let fanout_rx = pool.submit("FANOUT_MARKER: a still-running fan-out task");
             // Verify submits to the SAME pool; its task queues behind the fan-out
             // one and is drained by the same single worker.
-            let outcome = verify_findings(vec![candidate], &pool, None).await;
+            let outcome = verify_findings(vec![candidate], &pool, None, None).await;
             // The fan-out task also completed on the shared pool.
             let fanout = fanout_rx
                 .await
@@ -1012,7 +1130,7 @@ mod tests {
                 .expect("prime ok");
             let prime_session: SessionId = prime.session_id;
 
-            verify_findings(vec![candidate], &pool, Some(&prime_session)).await
+            verify_findings(vec![candidate], &pool, Some(&prime_session), None).await
         })
         .await;
 

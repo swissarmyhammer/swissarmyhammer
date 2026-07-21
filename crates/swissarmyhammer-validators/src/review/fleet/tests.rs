@@ -1792,6 +1792,99 @@ async fn fleet_emits_progress_events_per_validator_file_pair_including_failed_ta
     );
 }
 
+/// Each COMPLETED validator task emits one `Findings` event carrying that
+/// task's parsed, validator-tagged findings — a validator that came back clean
+/// emits an EMPTY vec (clean, not silence), while a FAILED task emits no
+/// `Findings` event at all (its `PairDone` accounting still fires).
+#[tokio::test]
+async fn fleet_emits_findings_events_per_completed_validator_task() {
+    let rs_hit = ruleset("val-hit", "mandate hit", &[("hit-rule", "HIT_BODY")]);
+    let rs_clean = ruleset(
+        "val-clean",
+        "mandate clean",
+        &[("clean-rule", "CLEAN_BODY")],
+    );
+    let rs_bad = ruleset("val-bad", "mandate bad", &[("bad-rule", "BAD_BODY")]);
+    let loader = loader_with(vec![rs_hit, rs_clean, rs_bad]);
+    let work = WorkList::new(
+        "purpose".to_string(),
+        vec![
+            validator_work("val-hit", vec![file_work("src/a.rs", "alpha", "src/x.rs")]),
+            validator_work("val-clean", vec![file_work("src/b.rs", "beta", "src/y.rs")]),
+            validator_work("val-bad", vec![file_work("src/c.rs", "gamma", "src/z.rs")]),
+        ],
+    );
+
+    // val-hit returns one finding; val-clean returns an empty array (clean);
+    // val-bad's fork errors — a failed task that must emit NO Findings event.
+    let agent = forking_agent(vec![
+        rescan_finds_nothing(),
+        (
+            format!("{VALIDATOR_HEADER}val-hit\n\n{MANDATE_HEADER}"),
+            ScriptedReply::Text(findings_json(
+                "src/a.rs",
+                TEST_FINDING_LINE,
+                "hit-rule",
+                "real issue in a",
+            )),
+        ),
+        (
+            format!("{VALIDATOR_HEADER}val-clean\n\n{MANDATE_HEADER}"),
+            ScriptedReply::Text("[]".to_string()),
+        ),
+        ("BAD_BODY".to_string(), ScriptedReply::Error),
+    ]);
+
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+    with_pool(agent, PoolConfig::remote(3), move |pool| async move {
+        let mut outcome = run_fleet(&work, &loader, &pool, Some(&progress_tx)).await;
+        if let Some(guard) = outcome.prime.take() {
+            unpin_prefix_session(guard).await;
+        }
+    })
+    .await;
+
+    let events = drain_progress(&mut progress_rx);
+    let findings_events: Vec<(&str, &Vec<Finding>)> = events
+        .iter()
+        .filter_map(|e| match e {
+            ReviewProgressEvent::Findings {
+                validator,
+                findings,
+            } => Some((validator.as_str(), findings)),
+            _ => None,
+        })
+        .collect();
+
+    // val-hit emitted its one validator-tagged finding as its task resolved.
+    let hit = findings_events
+        .iter()
+        .find(|(v, _)| *v == "val-hit")
+        .expect("a Findings event for val-hit");
+    assert_eq!(hit.1.len(), 1, "val-hit streamed its single finding");
+    assert_eq!(
+        hit.1[0].validator, "val-hit",
+        "the streamed finding is validator-tagged, not the agent's self-report"
+    );
+    assert_eq!(hit.1[0].claim, "real issue in a");
+
+    // val-clean emitted an EMPTY Findings event — clean, not silent.
+    let clean = findings_events
+        .iter()
+        .find(|(v, _)| *v == "val-clean")
+        .expect("a Findings event for the clean validator");
+    assert!(
+        clean.1.is_empty(),
+        "a clean validator emits an empty Findings vec: {clean:#?}"
+    );
+
+    // val-bad FAILED → no Findings event (PairDone still fires for it).
+    assert!(
+        !findings_events.iter().any(|(v, _)| *v == "val-bad"),
+        "a failed validator task must emit no Findings event: {findings_events:#?}"
+    );
+}
+
 /// Poll `condition` every [`POLL_INTERVAL`] until it holds, panicking after
 /// [`POLL_TIMEOUT`]. The retry count is derived from the two so the wait
 /// budget is expressed once, not as a product of two coupled literals.

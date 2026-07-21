@@ -44,8 +44,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rmcp::model::{
-    CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation, NumberOrString,
-    ProgressNotificationParam, ProgressToken, RequestParamsMeta,
+    CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation,
+    LoggingMessageNotificationParam, NumberOrString, ProgressNotificationParam, ProgressToken,
+    RequestParamsMeta,
 };
 use rmcp::service::NotificationContext;
 use rmcp::{serve_server, ClientHandler, RoleClient, ServiceExt};
@@ -62,7 +63,7 @@ mod review_fixture;
 
 use review_fixture::{
     gated_planted_agent, mock_embedder_factory, plant_diff, scripted_factory, seed_on_disk_index,
-    TestRepo,
+    TestRepo, CLAIM_DUP, CLAIM_GUARD_HERRING, CLAIM_RED_HERRING, CLAIM_SECRET,
 };
 
 /// Byte capacity of the in-memory duplex pipe both peers read/write through.
@@ -77,7 +78,10 @@ const WAIT_DEADLINE: Duration = Duration::from_secs(60);
 /// this long — used to snapshot a stable baseline before the injected stall.
 const QUIESCE_WINDOW: Duration = Duration::from_millis(1500);
 
-/// Client handler that captures every `notifications/progress` it sees.
+/// Client handler that captures every `notifications/progress` AND every
+/// `notifications/message` it sees. The progress channel carries the pair-count
+/// ticks; the message channel carries the streamed review CONTENT (findings and
+/// verdicts) this test asserts on.
 ///
 /// This deliberately mirrors the capturing client in
 /// `review_progress_notifications_test.rs` — separate integration test
@@ -86,6 +90,7 @@ const QUIESCE_WINDOW: Duration = Duration::from_millis(1500);
 struct CapturingClient {
     info: ClientInfo,
     captured: Arc<Mutex<Vec<ProgressNotificationParam>>>,
+    captured_logs: Arc<Mutex<Vec<LoggingMessageNotificationParam>>>,
 }
 
 impl CapturingClient {
@@ -96,6 +101,7 @@ impl CapturingClient {
                 Implementation::new("review-progress-stdio-capturing-client", "1.0.0"),
             ),
             captured: Arc::new(Mutex::new(Vec::new())),
+            captured_logs: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -105,6 +111,11 @@ impl CapturingClient {
 
     fn count(&self) -> usize {
         self.captured.lock().unwrap().len()
+    }
+
+    /// Every `notifications/message` (review content) the client has received.
+    fn snapshot_logs(&self) -> Vec<LoggingMessageNotificationParam> {
+        self.captured_logs.lock().unwrap().clone()
     }
 }
 
@@ -119,6 +130,14 @@ impl ClientHandler for CapturingClient {
         _context: NotificationContext<RoleClient>,
     ) {
         self.captured.lock().unwrap().push(params);
+    }
+
+    async fn on_logging_message(
+        &self,
+        params: LoggingMessageNotificationParam,
+        _context: NotificationContext<RoleClient>,
+    ) {
+        self.captured_logs.lock().unwrap().push(params);
     }
 }
 
@@ -311,6 +330,54 @@ async fn review_progress_is_received_by_a_real_client_over_a_byte_stream_transpo
     tokio::time::sleep(Duration::from_millis(100)).await;
     let captured = handler.snapshot();
 
+    // The streamed review CONTENT — findings + verdicts — is delivered over
+    // notifications/message on the SAME transport. Wait for the client to
+    // receive the three shapes this test pins (a findings payload, a confirmed
+    // verdict, and a refuted verdict), then snapshot the content capture before
+    // shutting the client down. Receipt at the client's `on_logging_message` is
+    // the only admissible evidence the new channel crosses the wire.
+    let has_findings_with = |logs: &[LoggingMessageNotificationParam], claim: &str| {
+        logs.iter().any(|m| {
+            m.data["kind"] == "review.findings"
+                && m.data["findings"]
+                    .as_array()
+                    .is_some_and(|fs| fs.iter().any(|f| f["claim"] == claim))
+        })
+    };
+    let has_verdict = |logs: &[LoggingMessageNotificationParam], claim: &str, confirmed: bool| {
+        logs.iter().any(|m| {
+            m.data["kind"] == "review.verdict"
+                && m.data["confirmed"] == confirmed
+                && m.data["finding"]["claim"] == claim
+        })
+    };
+    wait_until(
+        "streamed review findings + verdicts received by the client",
+        || {
+            let logs = handler.snapshot_logs();
+            // A full findings payload, plus one confirmed and one refuted verdict.
+            // These outcomes are probe-independent (they ride the scripted agent's
+            // verify rules, not the seeded index), so they hold in this hermetic
+            // run. The guard-vs-agent deciding-layer split is pinned by the
+            // engine-level unit test, not here.
+            has_findings_with(&logs, CLAIM_DUP)
+                && has_verdict(&logs, CLAIM_SECRET, true)
+                && has_verdict(&logs, CLAIM_RED_HERRING, false)
+        },
+    )
+    .await;
+    let logs = handler.snapshot_logs();
+
+    // The final report the tool returned, for the streamed-vs-final cross-check.
+    let report_markdown = match &result.content[0].raw {
+        rmcp::model::RawContent::Text(t) => {
+            let body: serde_json::Value =
+                serde_json::from_str(&t.text).expect("review response is JSON");
+            body["markdown"].as_str().unwrap_or_default().to_string()
+        }
+        other => panic!("expected text content, got: {other:?}"),
+    };
+
     // 9. Shut everything down cleanly before the whole-capture assertions.
     client.cancel().await.ok();
     running_server.cancel().await.ok();
@@ -388,5 +455,104 @@ async fn review_progress_is_received_by_a_real_client_over_a_byte_stream_transpo
             .any(|n| n.progress == final_total && n.total == Some(final_total)),
         "a closing notification with progress == total == {final_total} must \
          be received; got: {captured:#?}"
+    );
+
+    // ---- streamed review CONTENT (notifications/message) --------------------
+    //
+    // The new channel: the client received the engine's ACTUAL findings and
+    // verdicts as they resolved, on the SAME transport, in FULL — not a summary
+    // and not truncated. Every assertion below reads what the client's
+    // `on_logging_message` captured, never a server-side channel.
+
+    // A) A findings payload carries the COMPLETE Finding JSON — every
+    //    load-bearing field, untruncated, and validator-tagged by the engine.
+    let dup_msg = logs
+        .iter()
+        .find(|m| {
+            m.data["kind"] == "review.findings"
+                && m.data["findings"]
+                    .as_array()
+                    .is_some_and(|fs| fs.iter().any(|f| f["claim"] == CLAIM_DUP))
+        })
+        .expect("a review.findings message carrying the duplication finding");
+    assert_eq!(
+        dup_msg.logger.as_deref(),
+        Some("review"),
+        "content notifications carry the review logger name: {dup_msg:#?}"
+    );
+    assert_eq!(dup_msg.data["validator"], "duplication");
+    let dup_finding = dup_msg.data["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["claim"] == CLAIM_DUP)
+        .unwrap();
+    assert!(
+        dup_finding["file"].as_str().is_some_and(|s| !s.is_empty()),
+        "the streamed finding carries its file path: {dup_finding:#?}"
+    );
+    assert_eq!(
+        dup_finding["validator"], "duplication",
+        "the streamed finding is authoritatively validator-tagged"
+    );
+    assert!(
+        dup_finding["rule"].is_string() && dup_finding["line"].is_number(),
+        "the full Finding shape is present (rule + line), not a summary: {dup_finding:#?}"
+    );
+    assert!(
+        dup_finding["evidence"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()),
+        "the streamed finding carries its evidence untruncated: {dup_finding:#?}"
+    );
+
+    // B) Both verdict polarities stream as they resolve: a CONFIRMED finding
+    //    (the hardcoded secret, confirmed by the scripted verifier) and a
+    //    REFUTED one (the correct-but-looks-buggy red herring the verifier
+    //    disproves). These ride the agent's verify rules, so they are robust in
+    //    this hermetic run regardless of which deciding layer the probes select.
+    assert!(
+        has_verdict(&logs, CLAIM_SECRET, true),
+        "a confirmed verdict must stream as it resolves: {logs:#?}"
+    );
+    assert!(
+        has_verdict(&logs, CLAIM_RED_HERRING, false),
+        "a refuted verdict must stream as it resolves: {logs:#?}"
+    );
+
+    // C) The stream matches the final report modulo synthesize's file:line dedup.
+    //    The report is the deduped subset of the confirmed stream, so the correct
+    //    direction is: every claim rendered in the report was streamed as a
+    //    CONFIRMED verdict (report ⊆ confirmed-stream). Asserting the inverse
+    //    (every confirmed claim appears verbatim) would wrongly fail on two
+    //    confirmed findings sharing a file:line — exactly what dedup collapses.
+    let confirmed_claims: std::collections::HashSet<String> = logs
+        .iter()
+        .filter(|m| m.data["kind"] == "review.verdict" && m.data["confirmed"] == true)
+        .filter_map(|m| m.data["finding"]["claim"].as_str().map(String::from))
+        .collect();
+    assert!(
+        !confirmed_claims.is_empty(),
+        "at least one confirmed verdict must have streamed"
+    );
+    // A representative confirmed finding with a unique file:line (so dedup keeps
+    // it) is streamed confirmed AND rendered in the report.
+    assert!(
+        confirmed_claims.contains(CLAIM_SECRET),
+        "the secret finding must have streamed a confirmed verdict"
+    );
+    assert!(
+        report_markdown.contains(CLAIM_SECRET),
+        "a streamed confirmed finding must appear in the final report: {report_markdown}"
+    );
+    // No refuted claim leaks into the report: the streamed refutations (agent and
+    // guard/default) are absent from the returned findings.
+    assert!(
+        !report_markdown.contains(CLAIM_RED_HERRING),
+        "an agent-refuted claim must not appear in the final report"
+    );
+    assert!(
+        !report_markdown.contains(CLAIM_GUARD_HERRING),
+        "a refuted red-herring claim must not appear in the final report"
     );
 }
