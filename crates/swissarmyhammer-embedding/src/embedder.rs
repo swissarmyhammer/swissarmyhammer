@@ -202,7 +202,9 @@ impl Embedder {
 
         let (backend, max_seq, normalize) = match executor {
             ModelExecutorConfig::LlamaEmbedding(cfg) => {
-                let max_seq = cfg.max_sequence_length.unwrap_or(512);
+                let max_seq = cfg
+                    .max_sequence_length
+                    .unwrap_or(LLAMA_DEFAULT_MAX_SEQUENCE_LENGTH);
                 let normalize = cfg.normalize;
                 (
                     EmbedderBackend::Llama(Box::new(build_llama_model(cfg, observer).await?)),
@@ -276,6 +278,12 @@ impl model_embedding::private::Sealed for Embedder {}
 
 #[async_trait::async_trait]
 impl TextEmbedder for Embedder {
+    /// Load the selected backend's model, downloading it first if necessary.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any [`EmbeddingError`] the backend raises while resolving,
+    /// downloading, or initializing the model.
     async fn load(&self) -> Result<(), EmbeddingError> {
         match &self.inner {
             EmbedderBackend::Llama(m) => m.load().await,
@@ -284,6 +292,14 @@ impl TextEmbedder for Embedder {
         }
     }
 
+    /// Embed `text` into a dense vector, chunk-pooling inputs that exceed the
+    /// model's sequence limit. Inference is serialized process-wide so at most
+    /// one embedding runs at a time.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any [`EmbeddingError`] the backend raises while embedding a
+    /// chunk of the input.
     async fn embed_text(&self, text: &str) -> Result<EmbeddingResult, EmbeddingError> {
         // Serialize inference process-wide: at most one embedding runs at a time
         // across all callers and `Embedder` instances (see `EMBEDDING_GATE`). The
@@ -302,6 +318,8 @@ impl TextEmbedder for Embedder {
         .await
     }
 
+    /// Embedding dimension of the selected backend, or `None` before the model
+    /// is loaded.
     fn embedding_dimension(&self) -> Option<usize> {
         match &self.inner {
             EmbedderBackend::Llama(m) => m.embedding_dimension(),
@@ -310,6 +328,7 @@ impl TextEmbedder for Embedder {
         }
     }
 
+    /// Whether the selected backend's model is loaded and ready for inference.
     fn is_loaded(&self) -> bool {
         match &self.inner {
             EmbedderBackend::Llama(m) => m.is_loaded(),
@@ -411,10 +430,7 @@ pub(crate) fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<&
                 search_start += 1;
             }
             // Ensure end is also at a valid char boundary for slicing.
-            let mut search_end = end;
-            while search_end < text.len() && !text.is_char_boundary(search_end) {
-                search_end += 1;
-            }
+            let search_end = advance_to_char_boundary(text, end);
             text[search_start..search_end]
                 .rfind(char::is_whitespace)
                 .map(|pos| search_start + pos + 1)
@@ -424,15 +440,7 @@ pub(crate) fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<&
         };
 
         // Ensure we're at a valid char boundary
-        let actual_end = if actual_end < text.len() {
-            let mut e = actual_end;
-            while e < text.len() && !text.is_char_boundary(e) {
-                e += 1;
-            }
-            e
-        } else {
-            text.len()
-        };
+        let actual_end = advance_to_char_boundary(text, actual_end);
 
         chunks.push(&text[start..actual_end]);
 
@@ -445,12 +453,23 @@ pub(crate) fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<&
         start += advance.max(1);
 
         // Ensure start is at a char boundary
-        while start < text.len() && !text.is_char_boundary(start) {
-            start += 1;
-        }
+        start = advance_to_char_boundary(text, start);
     }
 
     chunks
+}
+
+/// Advance `pos` forward to the next UTF-8 character boundary in `s`.
+///
+/// Returns `pos` unchanged when it already sits on a boundary, and `s.len()`
+/// when no boundary is reached before the end of the string. Keeps the slice
+/// offsets in [`chunk_text`] on valid char boundaries.
+fn advance_to_char_boundary(s: &str, pos: usize) -> usize {
+    let mut pos = pos;
+    while pos < s.len() && !s.is_char_boundary(pos) {
+        pos += 1;
+    }
+    pos
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +528,10 @@ const MLPACKAGE_EXTENSION: &str = "mlpackage";
 /// does not specify one.
 #[cfg(target_os = "macos")]
 const ANE_DEFAULT_MAX_SEQUENCE_LENGTH: usize = 256;
+
+/// Default maximum sequence length for the Llama backend when the model config
+/// does not specify one.
+const LLAMA_DEFAULT_MAX_SEQUENCE_LENGTH: usize = 512;
 
 /// Build the CoreML/ANE backend. Model resolution (and download) happens
 /// here, during construction, so `observer` must be provided up front;
@@ -736,6 +759,17 @@ mod tests {
             // If this panics, the slice was not at a char boundary
             let _ = chunk.chars().count();
         }
+    }
+
+    /// A byte offset landing in the middle of a multi-byte char advances to the
+    /// next char boundary; on-boundary and end offsets are returned unchanged.
+    #[test]
+    fn advance_to_char_boundary_moves_past_mid_char_position() {
+        // "héllo": 'é' (U+00E9) occupies bytes 1..3, so byte 2 is mid-character.
+        let text = "héllo";
+        assert_eq!(advance_to_char_boundary(text, 2), 3);
+        assert_eq!(advance_to_char_boundary(text, 1), 1);
+        assert_eq!(advance_to_char_boundary(text, text.len()), text.len());
     }
 
     // -------------------------------------------------------------------------

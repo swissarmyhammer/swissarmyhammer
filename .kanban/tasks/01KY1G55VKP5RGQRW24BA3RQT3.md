@@ -1,8 +1,25 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ab80
+comments:
+- actor: claude-code
+  id: 01ky1w2tbc7wtrrsh8z5a5twqg
+  text: 'Last card in the #review batch. Iteration 1: /implement. This is the pre-existing embedder.rs/retry.rs debt split out of ^sqmq62v''s round-5 churn (trait docs, LLAMA_DEFAULT_MAX_SEQUENCE_LENGTH const, advance_to_char_boundary helper, classify_hf_error extraction). Line numbers in the card are from the round-5 review of commit 61c9ea5 — but several later commits have touched embedder.rs/retry.rs since (^1tt5pa6 added DownloadingModel handling), so LOCATE BY SYMBOL not line number.'
+  timestamp: 2026-07-21T08:18:38.572507+00:00
+- actor: claude-code
+  id: 01ky1wnxbq4eyp6rft2wrkbabp
+  text: |-
+    Implemented all four items (TDD for the two new helpers, RED watched for both). Located everything by symbol per the stale-line-number warning.
+
+    1. Trait docs: added /// docs to the four methods in `impl TextEmbedder for Embedder` in embedder.rs (load, embed_text, embedding_dimension, is_loaded), with # Errors sections on the two Result-returning ones to match the crate's existing convention. NOTE: the TextEmbedder trait *definition* lives in model-embedding/src/lib.rs and was already fully documented; the card's line numbers (~303-337) map to the impl block, which is what lacked docs.
+    2. Const: added `const LLAMA_DEFAULT_MAX_SEQUENCE_LENGTH: usize = 512;` beside ANE_DEFAULT_MAX_SEQUENCE_LENGTH (NOT macos-gated, since the Llama path is cross-platform) and used it at the Llama backend construction default (was `unwrap_or(512)`).
+    3. Extraction: added `fn advance_to_char_boundary(s: &str, pos: usize) -> usize` (hand-rolled; str::floor/ceil_char_boundary are still unstable on edition 2021, and the needed semantics is ceil/forward, not floor). Used it to replace the THREE `while X < text.len() && !is_char_boundary(X)` loops (search_end, actual_end, start) in chunk_text; the actual_end `if/else` collapsed to a single call. Intentionally LEFT the fourth loop (search_start) unchanged: it is bounded by `end`, not `text.len()`, and the `chunk_text_unicode_boundaries` test (chunk_size=15 -> chunk_size/10=1, tiny search window) exercises exactly the path where the `end` cap vs `s.len()` cap would diverge, so replacing it could change edge-case behavior. New unit test advance_to_char_boundary_moves_past_mid_char_position (héllo, byte 2 mid-char -> 3).
+    4. Extraction: added `fn classify_hf_error(error_msg: &str) -> ModelError` in retry.rs from the retry closure's Err arm; closure body now `Err(classify_hf_error(&e.to_string()))` (was ~5 levels deep). Kept retry.rs's exact behavior (lowercase matching + lowercase "huggingface..." messages) rather than reusing the existing `From<ApiError>` impl in error.rs, which matches case-sensitively and emits "HuggingFace..." (capital) — reuse would have changed behavior. New unit test classify_hf_error_maps_messages_to_variants.
+
+    Gates all green: `cargo nextest run -p model-loader -p swissarmyhammer-embedding -p llama-embedding` = 281 passed 0 failed; both new tests pass; `cargo fmt` clean; `cargo clippy -p model-loader -p swissarmyhammer-embedding -p llama-embedding --all-targets -- -D warnings` clean; `cargo check --workspace --all-targets` clean. Diff scoped to retry.rs + embedder.rs only. Leaving in doing for review.
+  timestamp: 2026-07-21T08:29:04.247420+00:00
+position_column: doing
+position_ordinal: '8280'
 title: 'Cleanup: pre-existing quality debt in embedder.rs / retry.rs (trait docs, 512 const, nesting)'
 ---
 ## What

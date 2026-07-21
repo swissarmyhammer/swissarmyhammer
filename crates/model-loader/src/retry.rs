@@ -164,21 +164,8 @@ async fn download_with_retry_internal(
             async move {
                 match fetch_file(repo_api, filename, repo, observer).await {
                     Ok(path) => Ok(path),
-                    Err(e) => {
-                        // Convert HuggingFace error to ModelError for retry logic
-                        if e.to_string()
-                            .to_lowercase()
-                            .contains(NOT_FOUND_ERROR_PATTERN)
-                            || e.to_string().contains(NOT_FOUND_HTTP_CODE)
-                        {
-                            Err(ModelError::NotFound(format!(
-                                "huggingface resource not found: {}",
-                                e
-                            )))
-                        } else {
-                            Err(ModelError::Network(format!("huggingface API error: {}", e)))
-                        }
-                    }
+                    // Convert HuggingFace error to ModelError for retry logic
+                    Err(e) => Err(classify_hf_error(&e.to_string())),
                 }
             }
         })
@@ -221,6 +208,21 @@ const NOT_FOUND_HTTP_CODE: &str = "404";
 ///
 /// Shared with [`NOT_FOUND_HTTP_CODE`] across the same two sites.
 const NOT_FOUND_ERROR_PATTERN: &str = "not found";
+
+/// Classify a raw hf-hub error message into the corresponding [`ModelError`].
+///
+/// A message naming the not-found pattern (case-insensitive) or the 404 status
+/// maps to [`ModelError::NotFound`]; everything else is treated as a transient
+/// [`ModelError::Network`] failure, leaving the retry decision to the caller.
+fn classify_hf_error(error_msg: &str) -> ModelError {
+    if error_msg.to_lowercase().contains(NOT_FOUND_ERROR_PATTERN)
+        || error_msg.contains(NOT_FOUND_HTTP_CODE)
+    {
+        ModelError::NotFound(format!("huggingface resource not found: {}", error_msg))
+    } else {
+        ModelError::Network(format!("huggingface API error: {}", error_msg))
+    }
+}
 
 /// Predicate over a lowercased error message: does the message belong to a
 /// given failure class?
@@ -375,6 +377,25 @@ mod tests {
         assert!(result.contains("test/repo"));
         assert!(result.contains("3 retries"));
         assert!(result.contains("📁")); // Should contain file not found guidance
+    }
+
+    /// Raw hf-hub error messages classify into the matching [`ModelError`]:
+    /// not-found signals (case-insensitive "not found" or a 404) map to
+    /// `NotFound`, everything else falls through to `Network`.
+    #[test]
+    fn classify_hf_error_maps_messages_to_variants() {
+        assert!(matches!(
+            classify_hf_error("404 Not Found"),
+            ModelError::NotFound(_)
+        ));
+        assert!(matches!(
+            classify_hf_error("Repository Not Found for url"),
+            ModelError::NotFound(_)
+        ));
+        assert!(matches!(
+            classify_hf_error("connection refused"),
+            ModelError::Network(_)
+        ));
     }
 
     #[test]
