@@ -1,15 +1,26 @@
 use crate::error::ModelError;
+use crate::observer::DownloadObserver;
 use crate::retry::download_with_retry;
 use crate::types::RetryConfig;
 use std::path::PathBuf;
 use tracing::info;
 
 /// Downloads all parts of a multi-part model
+///
+/// # Arguments
+///
+/// * `repo_api` - hf-hub repo handle to download through
+/// * `parts` - filenames of every part, in order
+/// * `repo` - repository identifier (e.g. `org/repo`)
+/// * `retry_config` - retry/backoff behavior
+/// * `observer` - optional progress callback, invoked for each part; `None`
+///   is byte-identical to the pre-observer behavior
 pub async fn download_multi_part_model(
     repo_api: &hf_hub::api::tokio::ApiRepo,
     parts: &[String],
     repo: &str,
     retry_config: &RetryConfig,
+    observer: Option<&DownloadObserver>,
 ) -> Result<PathBuf, ModelError> {
     info!(
         "Starting download of {} parts for multi-part model",
@@ -27,7 +38,7 @@ pub async fn download_multi_part_model(
             part
         );
 
-        let path = download_with_retry(repo_api, part, repo, retry_config).await?;
+        let path = download_with_retry(repo_api, part, repo, retry_config, observer).await?;
 
         downloaded_paths.push(path);
     }
@@ -39,11 +50,21 @@ pub async fn download_multi_part_model(
 }
 
 /// Downloads all files from a folder (for folder-based chunked models)
+///
+/// # Arguments
+///
+/// * `repo_api` - hf-hub repo handle to download through
+/// * `files` - repository-relative paths of every file in the folder
+/// * `repo` - repository identifier (e.g. `org/repo`)
+/// * `retry_config` - retry/backoff behavior
+/// * `observer` - optional progress callback, invoked for each file; `None`
+///   is byte-identical to the pre-observer behavior
 pub async fn download_folder_model(
     repo_api: &hf_hub::api::tokio::ApiRepo,
     files: &[String],
     repo: &str,
     retry_config: &RetryConfig,
+    observer: Option<&DownloadObserver>,
 ) -> Result<PathBuf, ModelError> {
     info!(
         "Starting download of {} files from folder-based model",
@@ -61,7 +82,7 @@ pub async fn download_folder_model(
             file
         );
 
-        let path = download_with_retry(repo_api, file, repo, retry_config).await?;
+        let path = download_with_retry(repo_api, file, repo, retry_config, observer).await?;
 
         downloaded_paths.push(path);
     }

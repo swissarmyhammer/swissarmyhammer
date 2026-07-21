@@ -14,6 +14,7 @@ pub mod error;
 pub mod huggingface;
 pub mod loader;
 pub mod multipart;
+pub mod observer;
 pub mod retry;
 pub mod types;
 
@@ -28,6 +29,7 @@ pub use huggingface::{
 };
 pub use loader::ModelResolver;
 pub use multipart::{download_folder_model, download_multi_part_model};
+pub use observer::{DownloadEvent, DownloadObserver};
 pub use types::{
     ModelConfig, ModelMetadata, ModelSource, ResolvedModel, RetryConfig, MODEL_EXTENSIONS,
 };

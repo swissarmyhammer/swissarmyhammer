@@ -65,8 +65,12 @@ comments:
 
     Gates: cargo nextest run -p swissarmyhammer-validators -p swissarmyhammer-tools → 1727/1727 passed; cargo fmt applied; cargo clippy (both crates, --all-targets, -D warnings) clean; cargo check --workspace --all-targets clean.
   timestamp: 2026-07-20T23:17:09.823410+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01ky107q118c0rkesad6twst5c
+  text: 'Closed to done by user direction: "skip the review on this first task and just get it to pass, we can catch it on the next passes." State at close: 3 green checkpoints on main (5a176d4 feature, c6e9dda 14 findings fixed, 6ec7511 13 findings fixed), 1727/1727 nextest on validators+tools, fmt/clippy clean, workspace check clean, both prior findings sections fully checked. The iteration-3 re-review of 6ec7511 was stopped mid-run (its engine call had also wedged silent for 1800s — the very failure mode this feature''s notifications address); any residue it would have flagged will be caught by reviews of subsequent cards in the #review batch. Run paused after this so the user can rebuild sah with progress indication.'
+  timestamp: 2026-07-21T00:11:58.881122+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff080
 title: 'Review MCP tool: emit notifications/progress per validator×file pair during the fan-out'
 ---
 ## What

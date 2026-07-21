@@ -1,8 +1,75 @@
 use crate::download_lock::DownloadCoordinator;
 use crate::error::ModelError;
+use crate::observer::{DownloadEvent, DownloadObserver};
 use llama_common::retry::RetryManager;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use tracing::debug;
+
+/// Progress state shared between all clones of an [`ObserverProgress`].
+///
+/// hf-hub clones its `Progress` handle into every parallel chunk task, so the
+/// accumulated byte count lives behind a shared mutex. Events are emitted
+/// while holding the lock, which serializes concurrent chunk updates and
+/// guarantees observers see monotonically non-decreasing byte counts.
+struct ObserverProgressState {
+    downloaded_bytes: u64,
+    total_bytes: u64,
+}
+
+/// Adapts a [`DownloadObserver`] callback to hf-hub's
+/// [`hf_hub::api::tokio::Progress`] trait.
+///
+/// `init` emits the start event (0 of the total reported by the hub),
+/// `update` accumulates per-chunk deltas, and `finish` forces the final event
+/// to `downloaded_bytes == total_bytes` so it can never be lost.
+#[derive(Clone)]
+struct ObserverProgress {
+    observer: DownloadObserver,
+    /// Full, untruncated filename carried on every event.
+    file: Arc<str>,
+    state: Arc<Mutex<ObserverProgressState>>,
+}
+
+impl ObserverProgress {
+    /// Create an adapter for `file` (the full filename) reporting to `observer`.
+    fn new(file: &str, observer: DownloadObserver) -> Self {
+        Self {
+            observer,
+            file: Arc::from(file),
+            state: Arc::new(Mutex::new(ObserverProgressState {
+                downloaded_bytes: 0,
+                total_bytes: 0,
+            })),
+        }
+    }
+
+    /// Mutate the shared state and emit the resulting event while still
+    /// holding the lock (keeps concurrent chunk updates monotonic).
+    fn emit_with<F: FnOnce(&mut ObserverProgressState)>(&self, mutate: F) {
+        let mut state = self.state.lock().expect("progress state lock poisoned");
+        mutate(&mut state);
+        (self.observer)(DownloadEvent::new(
+            &self.file,
+            state.downloaded_bytes,
+            state.total_bytes,
+        ));
+    }
+}
+
+impl hf_hub::api::tokio::Progress for ObserverProgress {
+    async fn init(&mut self, size: usize, _filename: &str) {
+        self.emit_with(|state| state.total_bytes = size as u64);
+    }
+
+    async fn update(&mut self, size: usize) {
+        self.emit_with(|state| state.downloaded_bytes += size as u64);
+    }
+
+    async fn finish(&mut self) {
+        self.emit_with(|state| state.downloaded_bytes = state.total_bytes);
+    }
+}
 
 /// Downloads a model file with retry logic, exponential backoff, and cross-process coordination
 ///
@@ -10,11 +77,21 @@ use tracing::debug;
 /// 1. Uses cross-process locking to prevent duplicate downloads
 /// 2. Uses the unified retry manager for consistent behavior
 /// 3. Waits for other processes if they're already downloading the same file
+///
+/// # Arguments
+///
+/// * `repo_api` - hf-hub repo handle to download through
+/// * `filename` - name of the file within the repository
+/// * `repo` - repository identifier (e.g. `org/repo`), used for locking and errors
+/// * `retry_config` - retry/backoff behavior
+/// * `observer` - optional progress callback; `None` is byte-identical to the
+///   pre-observer behavior (zero callbacks, same cache-first download)
 pub async fn download_with_retry(
     repo_api: &hf_hub::api::tokio::ApiRepo,
     filename: &str,
     repo: &str,
     retry_config: &crate::types::RetryConfig,
+    observer: Option<&DownloadObserver>,
 ) -> Result<PathBuf, ModelError> {
     // Create coordinator for cross-process download synchronization
     let coordinator = DownloadCoordinator::new()?;
@@ -22,9 +99,39 @@ pub async fn download_with_retry(
     // Coordinate the download - if another process is downloading, we'll wait
     coordinator
         .coordinate_download(repo, filename, || {
-            download_with_retry_internal(repo_api, filename, repo, retry_config)
+            download_with_retry_internal(repo_api, filename, repo, retry_config, observer)
         })
         .await
+}
+
+/// Fetch `filename` once, observed or not.
+///
+/// Without an observer this is exactly `ApiRepo::get` (cache-first, then
+/// download). With an observer it mirrors `get`'s cache-first contract by
+/// hand — `download_with_progress` always re-downloads, so a cached file is
+/// returned directly (a cache hit downloads nothing and emits nothing) and
+/// only a real download streams events through [`ObserverProgress`].
+async fn fetch_file(
+    repo_api: &hf_hub::api::tokio::ApiRepo,
+    filename: &str,
+    repo: &str,
+    observer: Option<DownloadObserver>,
+) -> Result<PathBuf, hf_hub::api::tokio::ApiError> {
+    let Some(observer) = observer else {
+        return repo_api.get(filename).await;
+    };
+
+    let cached = hf_hub::Cache::from_env()
+        .repo(hf_hub::Repo::model(repo.to_string()))
+        .get(filename);
+    match cached {
+        Some(path) => Ok(path),
+        None => {
+            repo_api
+                .download_with_progress(filename, ObserverProgress::new(filename, observer))
+                .await
+        }
+    }
 }
 
 /// Internal download function that handles retries (called by coordinator)
@@ -34,6 +141,7 @@ async fn download_with_retry_internal(
     filename: &str,
     repo: &str,
     retry_config: &crate::types::RetryConfig,
+    observer: Option<&DownloadObserver>,
 ) -> Result<PathBuf, ModelError> {
     debug!("Starting download for {}/{}", repo, filename);
 
@@ -42,9 +150,11 @@ async fn download_with_retry_internal(
 
     retry_manager
         .retry(&operation_name, || {
-            let _repo = repo;
+            // Fresh observer handle per attempt: a retried attempt restarts
+            // its progress accounting from the resumed offset.
+            let observer = observer.cloned();
             async move {
-                match repo_api.get(filename).await {
+                match fetch_file(repo_api, filename, repo, observer).await {
                     Ok(path) => Ok(path),
                     Err(e) => {
                         // Convert HuggingFace error to ModelError for retry logic
@@ -167,7 +277,80 @@ pub fn format_download_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::observer::{DownloadEvent, DownloadObserver};
     use crate::types::RetryConfig;
+    use hf_hub::api::tokio::Progress as _;
+    use std::sync::{Arc, Mutex};
+
+    /// Build an observer that records every event into the returned sink.
+    fn recording_observer() -> (DownloadObserver, Arc<Mutex<Vec<DownloadEvent>>>) {
+        let events: Arc<Mutex<Vec<DownloadEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        let observer: DownloadObserver = Arc::new(move |event| sink.lock().unwrap().push(event));
+        (observer, events)
+    }
+
+    /// init/update/finish map to a start event (0 of total), accumulated
+    /// per-chunk events, and a final event with downloaded == total.
+    #[tokio::test]
+    async fn observer_progress_maps_init_update_finish_to_events() {
+        let (observer, events) = recording_observer();
+        let mut adapter = ObserverProgress::new("full-model-name-q8_0.gguf", observer);
+
+        adapter.init(1000, "full-model-name-q8_0.gguf").await;
+        adapter.update(400).await;
+        adapter.update(600).await;
+        adapter.finish().await;
+
+        let events = events.lock().unwrap();
+        let bytes: Vec<(u64, u64)> = events
+            .iter()
+            .map(|e| (e.downloaded_bytes(), e.total_bytes()))
+            .collect();
+        assert_eq!(
+            bytes,
+            vec![(0, 1000), (400, 1000), (1000, 1000), (1000, 1000)],
+            "init emits the start event, updates accumulate, finish lands on total"
+        );
+        for event in events.iter() {
+            assert_eq!(event.file(), "full-model-name-q8_0.gguf");
+        }
+    }
+
+    /// finish always forces the final event to downloaded == total, even when
+    /// per-chunk updates did not account for every byte.
+    #[tokio::test]
+    async fn observer_progress_finish_forces_final_event_to_total() {
+        let (observer, events) = recording_observer();
+        let mut adapter = ObserverProgress::new("model.gguf", observer);
+
+        adapter.init(1000, "model.gguf").await;
+        adapter.update(250).await;
+        adapter.finish().await;
+
+        let events = events.lock().unwrap();
+        let last = events.last().unwrap();
+        assert_eq!(last.downloaded_bytes(), 1000);
+        assert_eq!(last.total_bytes(), 1000);
+    }
+
+    /// hf-hub clones the progress handle into parallel chunk tasks; clones
+    /// must share accumulated state so byte counts stay global and monotonic.
+    #[tokio::test]
+    async fn observer_progress_clones_share_accumulated_state() {
+        let (observer, events) = recording_observer();
+        let mut adapter = ObserverProgress::new("model.gguf", observer);
+        let mut clone = adapter.clone();
+
+        adapter.init(1000, "model.gguf").await;
+        adapter.update(300).await;
+        clone.update(700).await;
+        clone.finish().await;
+
+        let events = events.lock().unwrap();
+        let downloaded: Vec<u64> = events.iter().map(|e| e.downloaded_bytes()).collect();
+        assert_eq!(downloaded, vec![0, 300, 1000, 1000]);
+    }
 
     #[test]
     fn test_is_retriable_error_server_errors() {

@@ -6,7 +6,7 @@ use llama_embedding::{EmbeddingConfig, EmbeddingModel};
 use model_embedding::{EmbeddingError, EmbeddingResult, TextEmbedder};
 use std::future::Future;
 
-use model_loader::ModelSource;
+use model_loader::{DownloadObserver, ModelSource};
 use swissarmyhammer_config::model::{
     EmbeddingModelConfig, ModelExecutorConfig, ModelExecutorType, ModelManager,
 };
@@ -103,6 +103,34 @@ impl Embedder {
     /// backend. The model is **not** loaded yet — call [`TextEmbedder::load`]
     /// before embedding.
     pub async fn from_model_name(name: &str) -> Result<Self, EmbedderError> {
+        Self::build(name, None).await
+    }
+
+    /// Create an embedder like [`Embedder::from_model_name`], with a download
+    /// progress observer attached.
+    ///
+    /// The observer receives a [`model_loader::DownloadEvent`] for every file
+    /// the load path downloads (the model file(s) and `tokenizer.json`).
+    ///
+    /// This is a constructor variant rather than an instance builder because
+    /// on macOS the ANE backend resolves (and downloads) its model during
+    /// construction — an observer attached after construction could never see
+    /// those downloads.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - builtin or user model name (e.g. [`DEFAULT_MODEL_NAME`])
+    /// * `observer` - callback invoked with progress events during downloads
+    pub async fn with_download_observer(
+        name: &str,
+        observer: DownloadObserver,
+    ) -> Result<Self, EmbedderError> {
+        Self::build(name, Some(observer)).await
+    }
+
+    /// Shared constructor: resolve the model config, pick a backend, and
+    /// thread the optional download observer into it.
+    async fn build(name: &str, observer: Option<DownloadObserver>) -> Result<Self, EmbedderError> {
         let model_info = ModelManager::find_agent_by_name(name)
             .map_err(|_| EmbedderError::ModelNotFound(name.to_string()))?;
 
@@ -118,7 +146,7 @@ impl Embedder {
                 let max_seq = cfg.max_sequence_length.unwrap_or(512);
                 let normalize = cfg.normalize;
                 (
-                    EmbedderBackend::Llama(Box::new(build_llama_model(cfg).await?)),
+                    EmbedderBackend::Llama(Box::new(build_llama_model(cfg, observer).await?)),
                     max_seq,
                     normalize,
                 )
@@ -128,7 +156,7 @@ impl Embedder {
                 let max_seq = cfg.max_sequence_length.unwrap_or(256);
                 let normalize = cfg.normalize;
                 (
-                    EmbedderBackend::Ane(Box::new(build_ane_model(cfg).await?)),
+                    EmbedderBackend::Ane(Box::new(build_ane_model(cfg, observer.as_ref()).await?)),
                     max_seq,
                     normalize,
                 )
@@ -395,20 +423,39 @@ fn convert_source(src: &swissarmyhammer_config::ModelSource) -> ModelSource {
     }
 }
 
-async fn build_llama_model(cfg: &EmbeddingModelConfig) -> Result<EmbeddingModel, EmbeddingError> {
+/// Build the llama.cpp backend, attaching `observer` so the model download
+/// that happens at load time reports progress. `None` leaves downloads silent.
+async fn build_llama_model(
+    cfg: &EmbeddingModelConfig,
+    observer: Option<DownloadObserver>,
+) -> Result<EmbeddingModel, EmbeddingError> {
     let config = EmbeddingConfig {
         model_source: convert_source(&cfg.source),
         normalize_embeddings: cfg.normalize,
         max_sequence_length: cfg.max_sequence_length,
         debug: false,
     };
-    EmbeddingModel::new(config)
+    let mut model = EmbeddingModel::new(config)
         .await
-        .map_err(|e| EmbeddingError::model(e.to_string()))
+        .map_err(|e| EmbeddingError::model(e.to_string()))?;
+    if let Some(observer) = observer {
+        model = model.with_download_observer(observer);
+    }
+    Ok(model)
 }
 
+/// Tokenizer file downloaded alongside the model on the ANE path.
 #[cfg(target_os = "macos")]
-async fn build_ane_model(cfg: &EmbeddingModelConfig) -> Result<AneEmbeddingModel, EmbeddingError> {
+const TOKENIZER_FILENAME: &str = "tokenizer.json";
+
+/// Build the CoreML/ANE backend. Model resolution (and download) happens
+/// here, during construction, so `observer` must be provided up front;
+/// `None` leaves downloads silent.
+#[cfg(target_os = "macos")]
+async fn build_ane_model(
+    cfg: &EmbeddingModelConfig,
+    observer: Option<&DownloadObserver>,
+) -> Result<AneEmbeddingModel, EmbeddingError> {
     let seq_length = cfg.max_sequence_length.unwrap_or(256);
 
     // Derive model prefix from source.
@@ -441,7 +488,10 @@ async fn build_ane_model(cfg: &EmbeddingModelConfig) -> Result<AneEmbeddingModel
         }
     };
 
-    let resolver = model_loader::ModelResolver::new();
+    let mut resolver = model_loader::ModelResolver::new();
+    if let Some(observer) = observer {
+        resolver = resolver.with_download_observer(observer.clone());
+    }
     let model_config = model_loader::ModelConfig {
         source: loader_source,
         retry_config: model_loader::RetryConfig::default(),
@@ -469,12 +519,13 @@ async fn build_ane_model(cfg: &EmbeddingModelConfig) -> Result<AneEmbeddingModel
     // Also download tokenizer.json from the repo root (not inside .mlpackage).
     // ANE embedding needs the tokenizer alongside the model.
     if let swissarmyhammer_config::ModelSource::HuggingFace { repo, .. } = &cfg.source {
-        let tok_path = model_dir.join("tokenizer.json");
+        let tok_path = model_dir.join(TOKENIZER_FILENAME);
         if !tok_path.exists() {
             model_loader::download_hf_file(
                 repo,
-                "tokenizer.json",
+                TOKENIZER_FILENAME,
                 &model_loader::RetryConfig::default(),
+                observer,
             )
             .await
             .map_err(|e| EmbeddingError::model(format!("Failed to download tokenizer: {e}")))?;

@@ -1,6 +1,7 @@
 use crate::detection::{auto_detect_hf_model_file_with_folder, get_folder_files};
 use crate::error::ModelError;
 use crate::multipart::{download_folder_model, download_multi_part_model};
+use crate::observer::DownloadObserver;
 use crate::retry::download_with_retry;
 use crate::types::RetryConfig;
 use hf_hub::api::tokio::ApiBuilder;
@@ -11,38 +12,69 @@ use tracing::{info, warn};
 ///
 /// Use this for companion files like `tokenizer.json` that live alongside model files.
 /// Returns the cached file path.
+///
+/// # Arguments
+///
+/// * `repo` - repository identifier (e.g. `org/repo`)
+/// * `filename` - name of the file within the repository
+/// * `retry_config` - retry/backoff behavior
+/// * `observer` - optional progress callback; `None` is byte-identical to the
+///   pre-observer behavior
 pub async fn download_hf_file(
     repo: &str,
     filename: &str,
     retry_config: &RetryConfig,
+    observer: Option<&DownloadObserver>,
 ) -> Result<PathBuf, ModelError> {
-    let api = ApiBuilder::new()
+    // `from_env` honors HF_ENDPOINT/HF_HOME, which also keeps the observer
+    // path's cache-first check (see `retry::fetch_file`) in agreement with
+    // the cache directory this Api actually uses.
+    let api = ApiBuilder::from_env()
         .build()
         .map_err(|e| ModelError::Network(format!("Failed to create HF API: {e}")))?;
     let repo_api = api.model(repo.to_string());
-    download_with_retry(&repo_api, filename, repo, retry_config).await
+    download_with_retry(&repo_api, filename, repo, retry_config, observer).await
 }
 
 /// Loads a model from HuggingFace and returns path info for caching
+///
+/// # Arguments
+///
+/// * `repo` - repository identifier (e.g. `org/repo`)
+/// * `filename` - specific file to download, or `None` to auto-detect
+/// * `retry_config` - retry/backoff behavior
+/// * `observer` - optional progress callback; `None` is byte-identical to the
+///   pre-observer behavior
 pub async fn load_huggingface_model_with_path(
     repo: &str,
     filename: Option<&str>,
     retry_config: &RetryConfig,
+    observer: Option<&DownloadObserver>,
 ) -> Result<(PathBuf, String), ModelError> {
-    load_huggingface_model_with_path_and_folder(repo, filename, None, retry_config).await
+    load_huggingface_model_with_path_and_folder(repo, filename, None, retry_config, observer).await
 }
 
 /// Loads a model from HuggingFace with folder support and returns path info for caching
+///
+/// # Arguments
+///
+/// * `repo` - repository identifier (e.g. `org/repo`)
+/// * `filename` - specific file to download, or `None` to auto-detect
+/// * `folder` - repository folder holding a chunked model, if any
+/// * `retry_config` - retry/backoff behavior
+/// * `observer` - optional progress callback invoked for every downloaded
+///   file; `None` is byte-identical to the pre-observer behavior
 pub async fn load_huggingface_model_with_path_and_folder(
     repo: &str,
     filename: Option<&str>,
     folder: Option<&str>,
     retry_config: &RetryConfig,
+    observer: Option<&DownloadObserver>,
 ) -> Result<(PathBuf, String), ModelError> {
     info!("Loading HuggingFace model: {}", repo);
 
-    // Create HuggingFace API client
-    let api = match ApiBuilder::new()
+    // Create HuggingFace API client (`from_env` honors HF_ENDPOINT/HF_HOME)
+    let api = match ApiBuilder::from_env()
         .with_chunk_size(Some(100 * 1024 * 1024))
         .with_max_files(2)
         .build()
@@ -63,7 +95,7 @@ pub async fn load_huggingface_model_with_path_and_folder(
         info!("Downloading all files from folder: {}", folder_name);
         let folder_files = get_folder_files(&repo_api, folder_name).await?;
         let model_path =
-            download_folder_model(&repo_api, &folder_files, repo, retry_config).await?;
+            download_folder_model(&repo_api, &folder_files, repo, retry_config, observer).await?;
         info!("Folder-based model downloaded to: {}", model_path.display());
 
         // HF cache uses symlinks (snapshot → blobs). Some frameworks like CoreML
@@ -103,9 +135,9 @@ pub async fn load_huggingface_model_with_path_and_folder(
     // Download the model file(s) with retry logic
     let model_path = if let Some(parts) = get_all_parts(&target_filename) {
         info!("Downloading multi-part model with {} parts", parts.len());
-        download_multi_part_model(&repo_api, &parts, repo, retry_config).await?
+        download_multi_part_model(&repo_api, &parts, repo, retry_config, observer).await?
     } else {
-        download_with_retry(&repo_api, &target_filename, repo, retry_config).await?
+        download_with_retry(&repo_api, &target_filename, repo, retry_config, observer).await?
     };
 
     info!("Model downloaded to: {}", model_path.display());

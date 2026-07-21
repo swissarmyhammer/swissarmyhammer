@@ -1,5 +1,6 @@
 use crate::error::ModelError;
 use crate::huggingface::load_huggingface_model_with_path_and_folder;
+use crate::observer::DownloadObserver;
 use crate::types::{
     ModelConfig, ModelMetadata, ModelSource, ResolvedModel, RetryConfig, MODEL_EXTENSIONS,
 };
@@ -14,12 +15,35 @@ use tracing::info;
 /// from HuggingFace if needed, or finding them locally) and returns a
 /// [`ResolvedModel`] with the file path and metadata. Consumers (llama-agent,
 /// ane-embedding, etc.) then load the file into their own backend.
-pub struct ModelResolver;
+#[derive(Default)]
+pub struct ModelResolver {
+    /// Optional progress callback forwarded to every download this resolver
+    /// performs. `None` (the default) is byte-identical to the pre-observer
+    /// behavior.
+    download_observer: Option<DownloadObserver>,
+}
+
+impl std::fmt::Debug for ModelResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModelResolver")
+            .field("download_observer", &self.download_observer.is_some())
+            .finish()
+    }
+}
 
 impl ModelResolver {
     /// Create a new ModelResolver
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Attach a download progress observer (builder style).
+    ///
+    /// The observer receives a [`crate::observer::DownloadEvent`] for every
+    /// file this resolver downloads.
+    pub fn with_download_observer(mut self, observer: DownloadObserver) -> Self {
+        self.download_observer = Some(observer);
+        self
     }
 
     /// Resolve a model from the specified configuration.
@@ -72,9 +96,14 @@ impl ModelResolver {
         }
 
         // Download/locate from HuggingFace (hf-hub handles caching internally)
-        let (model_path, actual_filename) =
-            load_huggingface_model_with_path_and_folder(repo, filename, folder, retry_config)
-                .await?;
+        let (model_path, actual_filename) = load_huggingface_model_with_path_and_folder(
+            repo,
+            filename,
+            folder,
+            retry_config,
+            self.download_observer.as_ref(),
+        )
+        .await?;
 
         // Get file metadata
         let file_metadata = tokio::fs::metadata(&model_path).await?;
@@ -309,12 +338,6 @@ impl ModelResolver {
     }
 }
 
-impl Default for ModelResolver {
-    fn default() -> Self {
-        Self
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,7 +345,7 @@ mod tests {
     #[test]
     fn test_model_resolver_creation() {
         let _resolver = ModelResolver::new();
-        let _resolver2 = ModelResolver;
+        let _resolver2 = ModelResolver::default();
     }
 
     #[test]
@@ -338,7 +361,7 @@ mod tests {
     #[test]
     fn test_model_resolver_default() {
         // Verify default() and new() both work without panicking
-        let _resolver = ModelResolver;
+        let _resolver = ModelResolver::default();
         let _resolver2 = ModelResolver::new();
     }
 

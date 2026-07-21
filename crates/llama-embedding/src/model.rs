@@ -8,7 +8,7 @@ use llama_cpp_2::{
     send_logs_to_tracing, LogOptions,
 };
 use model_embedding::TextEmbedder;
-use model_loader::{ModelConfig, ModelMetadata, ModelResolver, RetryConfig};
+use model_loader::{DownloadObserver, ModelConfig, ModelMetadata, ModelResolver, RetryConfig};
 use std::num::NonZeroU32;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -101,6 +101,9 @@ pub struct EmbeddingModel {
     backend: Arc<LlamaBackend>,
     inner: tokio::sync::Mutex<Inner>,
     config: EmbeddingConfig,
+    /// Optional progress callback forwarded to model downloads at load time.
+    /// `None` (the default) keeps download behavior unchanged.
+    download_observer: Option<DownloadObserver>,
 }
 
 impl model_embedding::private::Sealed for EmbeddingModel {}
@@ -126,7 +129,17 @@ impl EmbeddingModel {
                 context_size: 0,
             }),
             config,
+            download_observer: None,
         })
+    }
+
+    /// Attach a download progress observer (builder style).
+    ///
+    /// The observer receives a [`model_loader::DownloadEvent`] for every file
+    /// the model download fetches when [`TextEmbedder::load`] runs.
+    pub fn with_download_observer(mut self, observer: DownloadObserver) -> Self {
+        self.download_observer = Some(observer);
+        self
     }
 
     /// Creates default model parameters optimized for GPU offloading
@@ -185,7 +198,10 @@ impl EmbeddingModel {
         };
 
         // Resolve model source to local path
-        let resolver = ModelResolver::new();
+        let mut resolver = ModelResolver::new();
+        if let Some(observer) = &self.download_observer {
+            resolver = resolver.with_download_observer(observer.clone());
+        }
         let resolved = resolver
             .resolve(&model_config)
             .await

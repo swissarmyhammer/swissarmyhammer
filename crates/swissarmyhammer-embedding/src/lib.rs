@@ -28,4 +28,5 @@ pub use embedder::{Embedder, DEFAULT_MODEL_NAME};
 pub use model_embedding::{
     BatchConfig, BatchProcessor, BatchStats, EmbeddingError, EmbeddingResult, TextEmbedder,
 };
+pub use model_loader::{DownloadEvent, DownloadObserver};
 pub use swissarmyhammer_config::ModelExecutorType;
