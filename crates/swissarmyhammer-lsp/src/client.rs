@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{ChildStdin, ChildStdout};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tracing::{debug, trace, warn};
 
@@ -22,12 +22,50 @@ use lsp_types::{DocumentSymbol, DocumentSymbolResponse, SymbolInformation};
 
 use crate::error::LspError;
 
+/// Environment variable that overrides the LSP request timeout, in whole seconds.
+///
+/// See [`lsp_request_timeout`] for how it is read and applied.
+const LSP_REQUEST_TIMEOUT_ENV: &str = "SAH_LSP_REQUEST_TIMEOUT_SECS";
+
+/// Default LSP request timeout, in seconds, when the env override is absent.
+///
+/// This is the value the shipped production binary uses — it is only overridden
+/// when [`LSP_REQUEST_TIMEOUT_ENV`] is set to a valid whole number of seconds.
+const DEFAULT_LSP_REQUEST_TIMEOUT_SECS: u64 = 30;
+
+/// Resolve the raw env value into a request timeout `Duration`.
+///
+/// Whitespace is trimmed before parsing. An absent (`None`), empty, or
+/// unparseable value falls back to [`DEFAULT_LSP_REQUEST_TIMEOUT_SECS`] — the
+/// override never fails loudly, it only widens (or restores) the budget.
+///
+/// Split out from [`lsp_request_timeout`] so the parse/fallback behavior is unit
+/// testable without mutating process-global environment state.
+fn parse_lsp_request_timeout(raw: Option<String>) -> Duration {
+    let secs = raw
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_LSP_REQUEST_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+}
+
 /// Timeout for a single LSP request/response round-trip.
 ///
 /// If the LSP server does not produce a matching response within this window
-/// (e.g., it silently ignores the request), `send_request` returns an error
-/// instead of blocking the worker forever.
-const LSP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// (e.g., it silently ignores the request), the bounded read returns an
+/// `LspError` instead of blocking the worker forever.
+///
+/// Defaults to [`DEFAULT_LSP_REQUEST_TIMEOUT_SECS`] seconds and can be raised by
+/// setting the `SAH_LSP_REQUEST_TIMEOUT_SECS` environment variable to a whole
+/// number of seconds. This exists because a cold `rust-analyzer` on a slow or
+/// heavily-loaded host legitimately needs more than the default to answer a
+/// `rename`/`definition` request; the operator can grant a larger budget without
+/// changing the shipped default. The env var is read exactly once and cached for
+/// the process lifetime via [`OnceLock`]; an unset or unparseable value falls
+/// back to the default (see [`parse_lsp_request_timeout`]).
+fn lsp_request_timeout() -> Duration {
+    static TIMEOUT: OnceLock<Duration> = OnceLock::new();
+    *TIMEOUT.get_or_init(|| parse_lsp_request_timeout(std::env::var(LSP_REQUEST_TIMEOUT_ENV).ok()))
+}
 
 /// Abstraction over the LSP JSON-RPC wire protocol.
 ///
@@ -110,9 +148,14 @@ impl LspJsonRpcClient {
     /// Send a JSON-RPC request and read the response.
     ///
     /// Uses Content-Length framing per the LSP specification. The response
-    /// read is bounded by [`LSP_REQUEST_TIMEOUT`] — if no matching response
+    /// read is bounded by [`lsp_request_timeout`] — if no matching response
     /// arrives within that window an `LspError` is returned instead of
     /// blocking indefinitely.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`LspError::JsonRpc`] if the write fails or no matching
+    /// response arrives within the request timeout.
     pub fn send_request(&mut self, method: &str, params: Value) -> Result<Value, LspError> {
         let expected_id = self.request_id;
         self.request_id += 1;
@@ -153,13 +196,14 @@ impl LspJsonRpcClient {
     /// Read JSON-RPC messages until one with a matching `id` arrives.
     ///
     /// Notifications (no `id`) and responses with mismatched IDs are skipped.
-    /// The entire read loop is bounded by [`LSP_REQUEST_TIMEOUT`].
+    /// The entire read loop is bounded by [`lsp_request_timeout`].
     fn read_matching_response(
         &mut self,
         method: &str,
         expected_id: u32,
     ) -> Result<Value, LspError> {
-        let deadline = Instant::now() + LSP_REQUEST_TIMEOUT;
+        let timeout = lsp_request_timeout();
+        let deadline = Instant::now() + timeout;
 
         loop {
             self.wait_for_readable(deadline).map_err(|_| {
@@ -167,7 +211,7 @@ impl LspJsonRpcClient {
                     "LSP request '{}' (id={}) timed out after {}s",
                     method,
                     expected_id,
-                    LSP_REQUEST_TIMEOUT.as_secs()
+                    timeout.as_secs()
                 ))
             })?;
 
@@ -211,13 +255,14 @@ impl LspJsonRpcClient {
     /// Unlike [`send_request`](Self::send_request), this does not filter by id —
     /// it returns whatever the server sends next, which lets callers drain
     /// server-initiated notifications. The read is bounded by
-    /// [`LSP_REQUEST_TIMEOUT`].
+    /// [`lsp_request_timeout`].
     pub fn read_message(&mut self) -> Result<Value, LspError> {
-        let deadline = Instant::now() + LSP_REQUEST_TIMEOUT;
+        let timeout = lsp_request_timeout();
+        let deadline = Instant::now() + timeout;
         self.wait_for_readable(deadline).map_err(|_| {
             LspError::JsonRpc(format!(
                 "LSP read_message timed out after {}s",
-                LSP_REQUEST_TIMEOUT.as_secs()
+                timeout.as_secs()
             ))
         })?;
         read_jsonrpc_response(&mut self.reader)
@@ -708,5 +753,37 @@ mod tests {
         let symbols = parse_document_symbols(&response).expect("should parse symbols");
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "MyStruct");
+    }
+
+    #[test]
+    fn parse_lsp_request_timeout_defaults_when_env_absent() {
+        assert_eq!(
+            parse_lsp_request_timeout(None),
+            Duration::from_secs(DEFAULT_LSP_REQUEST_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn parse_lsp_request_timeout_honors_valid_override() {
+        assert_eq!(
+            parse_lsp_request_timeout(Some("120".to_string())),
+            Duration::from_secs(120)
+        );
+    }
+
+    #[test]
+    fn parse_lsp_request_timeout_trims_whitespace() {
+        assert_eq!(
+            parse_lsp_request_timeout(Some("  90 \n".to_string())),
+            Duration::from_secs(90)
+        );
+    }
+
+    #[test]
+    fn parse_lsp_request_timeout_falls_back_when_unparseable() {
+        assert_eq!(
+            parse_lsp_request_timeout(Some("not-a-number".to_string())),
+            Duration::from_secs(DEFAULT_LSP_REQUEST_TIMEOUT_SECS)
+        );
     }
 }

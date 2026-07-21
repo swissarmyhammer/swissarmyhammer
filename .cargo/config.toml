@@ -3,3 +3,16 @@
 
 # sccache: set via RUSTC_WRAPPER=sccache in your shell environment
 # (not hardcoded here — CI runners don't have it installed)
+
+[env]
+# Grant a load-tolerant LSP request timeout to test runs (both local `cargo
+# nextest` and CI `cargo nextest`) WITHOUT changing the shipped production
+# default. The swissarmyhammer-lsp client reads `SAH_LSP_REQUEST_TIMEOUT_SECS`
+# once (defaulting to 30s when unset), so the production binary — which is not
+# launched via cargo — still uses the 30s default. The real-rust-analyzer
+# diagnostics IPC tests (`leader_follower_request_ipc` and siblings) drive real
+# `textDocument/rename`/`definition` round-trips through a cold analyzer; under
+# heavy machine load a hard 30s ceiling is too tight and the request times out
+# even though the analyzer is answering. 120s gives those real round-trips room
+# to complete while still bounding a genuinely hung request.
+SAH_LSP_REQUEST_TIMEOUT_SECS = "120"

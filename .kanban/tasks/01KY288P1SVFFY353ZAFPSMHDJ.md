@@ -1,0 +1,32 @@
+---
+assignees:
+- claude-code
+position_column: todo
+position_ordinal: b080
+title: 'serve: create .reviewignore at server start instead of waiting for the first review'
+---
+## What
+
+**Context.** `.reviewignore` is currently created lazily: `resolve_scope_files` (`crates/swissarmyhammer-validators/src/review/scope.rs:613`) calls `ensure_reviewignore` on the first review of a repo. That means the file doesn't exist to edit until a review has already run once. Requested: create it at **server start**, so it's on disk (and editable — e.g. to exclude upstream files in a fork) the moment `sah serve` comes up in a workspace.
+
+**Changes** (all in `crates/swissarmyhammer-tools/src/mcp/server.rs`):
+
+- [ ] Add a small helper `fn ensure_workspace_review_files(workspace_root: &std::path::Path)` that calls `swissarmyhammer_validators::review::ignore::ensure_reviewignore(workspace_root)` and downgrades any `Err` to a `tracing::warn!` — server start must never fail over an unwritable ignore file.
+- [ ] Call it from `do_initialize_code_context` (~line 361) immediately after `resolve_workspace_root(work_dir)` succeeds and before the leadership/LSP work — every `sah serve` (leader or follower) runs it. The existing `std::sync::Once` in `initialize_code_context` (~line 355) already makes this once-per-process; `ensure_reviewignore` itself is idempotent and never overwrites, so concurrent sibling servers racing at startup at worst both write the identical default template. A non-git/non-workspace cwd resolves no root and creates nothing, unchanged.
+- [ ] Keep the existing lazy `ensure_reviewignore` call in `resolve_scope_files` as the backstop for any review entry point that doesn't pass through this server init.
+
+## Acceptance Criteria
+
+- [ ] Starting the MCP server in a workspace with no `.reviewignore` leaves `<workspace_root>/.reviewignore` on disk containing the default template (header comment + `.kanban/`), before any review op has run.
+- [ ] A pre-existing `.reviewignore` is byte-identical after server start (user edits are never clobbered).
+- [ ] A failure to write the file (e.g. read-only root) logs a warning and server startup proceeds normally.
+- [ ] First-review creation still works when the file is absent (backstop path unchanged).
+
+## Tests
+
+- [ ] Unit tests for `ensure_workspace_review_files` in `crates/swissarmyhammer-tools/src/mcp/server.rs` `#[cfg(test)]`: (a) temp dir without the file → file created with the default template content; (b) temp dir with a custom `.reviewignore` → content unchanged after the call; (c) unwritable dir → returns without panicking.
+- [ ] Existing `ensure_reviewignore` tests in `crates/swissarmyhammer-validators/src/review/ignore.rs` (~lines 142/164) continue to pass, covering the backstop.
+- [ ] `cargo test -p swissarmyhammer-tools` and `cargo test -p swissarmyhammer-validators ignore` — green; new tests are milliseconds (temp dirs only, no server spawn).
+
+## Workflow
+- Use `/tdd` — write failing tests first, then implement to make them pass.

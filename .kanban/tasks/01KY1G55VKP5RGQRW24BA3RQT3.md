@@ -18,8 +18,8 @@ comments:
 
     Gates all green: `cargo nextest run -p model-loader -p swissarmyhammer-embedding -p llama-embedding` = 281 passed 0 failed; both new tests pass; `cargo fmt` clean; `cargo clippy -p model-loader -p swissarmyhammer-embedding -p llama-embedding --all-targets -- -D warnings` clean; `cargo check --workspace --all-targets` clean. Diff scoped to retry.rs + embedder.rs only. Leaving in doing for review.
   timestamp: 2026-07-21T08:29:04.247420+00:00
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff780
 title: 'Cleanup: pre-existing quality debt in embedder.rs / retry.rs (trait docs, 512 const, nesting)'
 ---
 ## What

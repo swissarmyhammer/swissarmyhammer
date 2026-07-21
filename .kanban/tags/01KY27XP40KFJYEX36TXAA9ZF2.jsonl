@@ -1,0 +1,1 @@
+{"id":"01KY27XP40JMP3B910DYWW9N3R","timestamp":"2026-07-21T11:45:33.312524Z","op":"create","item_id":"01KY27XP40KFJYEX36TXAA9ZF2","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: e36209\n+tag_name: ci\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: e36209\n-tag_name: ci\n","transaction_id":null}

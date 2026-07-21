@@ -85,6 +85,34 @@ filter = "package(swissarmyhammer-tools) and (binary(code_context_mcp_e2e_test) 
 test-group = "treesitter-embedding"
 slow-timeout = { period = "60s", terminate-after = 6 }
 
+# The swissarmyhammer-diagnostics IPC/integration test binaries each spawn a REAL
+# `rust-analyzer` (via `LspDaemon`) and drive real `textDocument/rename`,
+# `textDocument/definition`, and `textDocument/diagnostic` requests through the
+# real leader/follower socket. Each such request is bounded by the client's LSP
+# request timeout. Under full --workspace parallelism (~16 cores busy compiling +
+# running the whole suite) a cold rust-analyzer is CPU-starved and the timed
+# request misses its budget — the `leader_follower_request_ipc` rename/definition
+# tests time out and fail, intermittently and load-dependently, while all pass in
+# isolation. This is the SAME class solved above for fsevents-watcher and
+# treesitter-embedding: cap concurrency so at most ONE real rust-analyzer drives
+# these tests at a time, which keeps the real leader/follower routing and real
+# edits under test without contending for CPU. (Local runs also inherit a
+# load-tolerant `SAH_LSP_REQUEST_TIMEOUT_SECS` from `.cargo/config.toml [env]`.)
+#
+# This MUST be a nextest test-group, not `#[serial]`: the contention spans four
+# separate test binaries (= four processes), and `#[serial]` only coordinates
+# within a single process, whereas a test-group caps concurrency across the whole
+# run.
+[test-groups.lsp-ipc-serial]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = "package(swissarmyhammer-diagnostics) and (binary(leader_follower_request_ipc) or binary(ra_pull_readiness) or binary(leader_watcher) or binary(diagnose_rust_analyzer))"
+test-group = "lsp-ipc-serial"
+# Real rust-analyzer round-trips are not sub-second: warn every 60s, hard-kill
+# after 5 periods (5 minutes) so a cold analyzer has room to answer.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
 # The kanban-app AI-panel E2E tests each spin up an in-process llama-agent and
 # load the qwen-0.6B model, then run several real agentic generation rounds.
 # These run on the GPU in CI (the Test job no longer forces CPU), where the Metal
