@@ -20,6 +20,12 @@ use tracing::{info, warn};
 /// * `retry_config` - retry/backoff behavior
 /// * `observer` - optional progress callback; `None` is byte-identical to the
 ///   pre-observer behavior
+///
+/// # Errors
+///
+/// * [`ModelError::Network`] — the HuggingFace API client could not be built
+/// * [`ModelError::LoadingFailed`] — the download failed after exhausting
+///   retries (wrapping the underlying not-found or network cause)
 pub async fn download_hf_file(
     repo: &str,
     filename: &str,
@@ -45,6 +51,11 @@ pub async fn download_hf_file(
 /// * `retry_config` - retry/backoff behavior
 /// * `observer` - optional progress callback; `None` is byte-identical to the
 ///   pre-observer behavior
+///
+/// # Errors
+///
+/// Same as [`load_huggingface_model_with_path_and_folder`], to which this
+/// delegates with no folder.
 pub async fn load_huggingface_model_with_path(
     repo: &str,
     filename: Option<&str>,
@@ -64,6 +75,14 @@ pub async fn load_huggingface_model_with_path(
 /// * `retry_config` - retry/backoff behavior
 /// * `observer` - optional progress callback invoked for every downloaded
 ///   file; `None` is byte-identical to the pre-observer behavior
+///
+/// # Errors
+///
+/// * [`ModelError::Network`] — the HuggingFace API client could not be built
+/// * [`ModelError::NotFound`] — no `filename` was given and no model file
+///   could be auto-detected in the repository (or folder)
+/// * [`ModelError::LoadingFailed`] — a file download failed after exhausting
+///   retries, or dereferencing symlinks inside a downloaded folder failed
 pub async fn load_huggingface_model_with_path_and_folder(
     repo: &str,
     filename: Option<&str>,

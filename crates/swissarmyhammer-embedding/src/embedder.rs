@@ -49,16 +49,26 @@ where
     op().await
 }
 
+/// Typed error for embedder construction and configuration failures.
+///
+/// Covers every way [`Embedder::from_model_name`] (and friends) can fail:
+/// resolving the named model config, selecting a platform-compatible
+/// embedding executor, and building the backend.
 #[derive(Error, Debug)]
 pub enum EmbedderError {
+    /// The model name matched no builtin or user model config.
     #[error("model '{0}' not found in builtin or user configs")]
     ModelNotFound(String),
+    /// The model config has no executor that runs on this platform.
     #[error("model '{0}' has no embedding executor for this platform")]
     NoCompatibleExecutor(String),
+    /// The model resolved, but its executor is not an embedding executor.
     #[error("model '{0}' is not an embedding model (executor type: {1:?})")]
     NotAnEmbeddingModel(String, ModelExecutorType),
+    /// The model config file failed to parse.
     #[error("config parse error: {0}")]
     ConfigParse(String),
+    /// Backend construction or embedding inference failed.
     #[error("embedding error: {0}")]
     Embedding(#[from] EmbeddingError),
 }
@@ -83,8 +93,37 @@ enum EmbedderBackend {
     Ane(Box<AneEmbeddingModel>),
 }
 
+impl EmbedderBackend {
+    /// Stable backend identifier — the single mapping from backend variant to
+    /// name, shared by [`Embedder::backend_name`], logging, and Debug output.
+    fn name(&self) -> &'static str {
+        match self {
+            EmbedderBackend::Llama(_) => "llama",
+            #[cfg(target_os = "macos")]
+            EmbedderBackend::Ane(_) => "ane",
+        }
+    }
+}
+
+// Manual impl: EmbedderBackend holds model handles without Debug, so print
+// the backend name and the plain configuration fields.
+impl std::fmt::Debug for Embedder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Embedder")
+            .field("backend", &self.inner.name())
+            .field("model_name", &self.model_name)
+            .field("max_sequence_length", &self.max_sequence_length)
+            .field("normalize", &self.normalize)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Default model name used by `Embedder::default()`.
 pub const DEFAULT_MODEL_NAME: &str = "qwen-embedding";
+
+/// Conservative chars-per-token estimate (English text), used both to decide
+/// when a text needs chunking and to size each chunk.
+const CHARS_PER_TOKEN: usize = 3;
 
 impl Embedder {
     /// Create an embedder using the default model (`qwen-embedding`).
@@ -92,6 +131,10 @@ impl Embedder {
     /// Equivalent to `Embedder::from_model_name("qwen-embedding")`.
     /// The model is **not** loaded yet — call [`TextEmbedder::load`]
     /// before embedding.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Embedder::from_model_name`], for [`DEFAULT_MODEL_NAME`].
     pub async fn default() -> Result<Self, EmbedderError> {
         Self::from_model_name(DEFAULT_MODEL_NAME).await
     }
@@ -102,6 +145,18 @@ impl Embedder {
     /// compatible with the current platform, and constructs the appropriate
     /// backend. The model is **not** loaded yet — call [`TextEmbedder::load`]
     /// before embedding.
+    ///
+    /// # Errors
+    ///
+    /// * [`EmbedderError::ModelNotFound`] — `name` matches no builtin or
+    ///   user model config
+    /// * [`EmbedderError::ConfigParse`] — the model config failed to parse
+    /// * [`EmbedderError::NoCompatibleExecutor`] — no executor in the config
+    ///   runs on this platform
+    /// * [`EmbedderError::NotAnEmbeddingModel`] — the model's executor is
+    ///   not an embedding executor
+    /// * [`EmbedderError::Embedding`] — backend construction (model
+    ///   resolution/download) failed
     pub async fn from_model_name(name: &str) -> Result<Self, EmbedderError> {
         Self::build(name, None).await
     }
@@ -121,6 +176,10 @@ impl Embedder {
     ///
     /// * `name` - builtin or user model name (e.g. [`DEFAULT_MODEL_NAME`])
     /// * `observer` - callback invoked with progress events during downloads
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Embedder::from_model_name`].
     pub async fn with_download_observer(
         name: &str,
         observer: DownloadObserver,
@@ -180,11 +239,7 @@ impl Embedder {
 
         tracing::info!(
             "Created {} embedder for model '{}' (max_seq={}, normalize={})",
-            match &backend {
-                EmbedderBackend::Llama(_) => "llama",
-                #[cfg(target_os = "macos")]
-                EmbedderBackend::Ane(_) => "ane",
-            },
+            backend.name(),
             name,
             max_seq,
             normalize,
@@ -200,11 +255,7 @@ impl Embedder {
 
     /// Which backend was selected.
     pub fn backend_name(&self) -> &'static str {
-        match &self.inner {
-            EmbedderBackend::Llama(_) => "llama",
-            #[cfg(target_os = "macos")]
-            EmbedderBackend::Ane(_) => "ane",
-        }
+        self.inner.name()
     }
 
     /// The resolved model config name.
@@ -236,9 +287,9 @@ impl TextEmbedder for Embedder {
         // across all callers and `Embedder` instances (see `EMBEDDING_GATE`). The
         // permit is held for the whole call, including the chunk-pool loop below.
         with_embedding_permit(|| async {
-            // Estimate token count (~4 chars per token is conservative for
-            // English). If the text likely fits in one model call, skip chunking.
-            let approx_tokens = text.len() / 3;
+            // Estimate token count via CHARS_PER_TOKEN. If the text likely
+            // fits in one model call, skip chunking.
+            let approx_tokens = text.len() / CHARS_PER_TOKEN;
             if approx_tokens <= self.max_sequence_length {
                 self.embed_single(text).await
             } else {
@@ -280,9 +331,9 @@ impl Embedder {
     async fn embed_chunked(&self, text: &str) -> Result<EmbeddingResult, EmbeddingError> {
         let start = std::time::Instant::now();
 
-        // Approximate chars per chunk. Use ~3 chars/token (conservative)
+        // Approximate chars per chunk via CHARS_PER_TOKEN (conservative)
         // to avoid exceeding the token limit after tokenization.
-        let chars_per_chunk = self.max_sequence_length * 3;
+        let chars_per_chunk = self.max_sequence_length * CHARS_PER_TOKEN;
         let overlap_chars = chars_per_chunk / 4; // 25% overlap
 
         let chunks = chunk_text(text, chars_per_chunk, overlap_chars);
@@ -448,6 +499,10 @@ async fn build_llama_model(
 #[cfg(target_os = "macos")]
 const TOKENIZER_FILENAME: &str = "tokenizer.json";
 
+/// Extension of the CoreML model package directory on the ANE path.
+#[cfg(target_os = "macos")]
+const MLPACKAGE_EXTENSION: &str = "mlpackage";
+
 /// Build the CoreML/ANE backend. Model resolution (and download) happens
 /// here, during construction, so `observer` must be provided up front;
 /// `None` leaves downloads silent.
@@ -472,7 +527,7 @@ async fn build_ane_model(
 
     // .mlpackage is a directory on HuggingFace containing multiple files.
     // Use folder-based download to fetch all files inside it.
-    let mlpackage_name = format!("{model_prefix}-seq{seq_length}.mlpackage");
+    let mlpackage_name = format!("{model_prefix}-seq{seq_length}.{MLPACKAGE_EXTENSION}");
     let loader_source = match &cfg.source {
         swissarmyhammer_config::ModelSource::HuggingFace { repo, .. } => ModelSource::HuggingFace {
             repo: repo.clone(),
@@ -506,7 +561,7 @@ async fn build_ane_model(
     // The resolved path points to a file inside the .mlpackage directory.
     // Walk up until we find the .mlpackage directory, then its parent is model_dir.
     let mut mlpackage_dir = resolved.path.clone();
-    while mlpackage_dir.extension().and_then(|e| e.to_str()) != Some("mlpackage") {
+    while mlpackage_dir.extension().and_then(|e| e.to_str()) != Some(MLPACKAGE_EXTENSION) {
         if !mlpackage_dir.pop() {
             break;
         }

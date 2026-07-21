@@ -5,6 +5,52 @@ use crate::types::RetryConfig;
 use std::path::PathBuf;
 use tracing::info;
 
+/// Downloads every item in `items`, returning the path of the first.
+///
+/// Shared download-and-collect loop behind [`download_multi_part_model`] and
+/// [`download_folder_model`]; `item_label` and `collection_label` only vary
+/// the log messages. The first item's path is returned because llama.cpp
+/// loads multi-file models from the first file and locates the rest beside
+/// it.
+async fn download_all(
+    repo_api: &hf_hub::api::tokio::ApiRepo,
+    items: &[String],
+    item_label: &str,
+    collection_label: &str,
+    repo: &str,
+    retry_config: &RetryConfig,
+    observer: Option<&DownloadObserver>,
+) -> Result<PathBuf, ModelError> {
+    info!(
+        "Starting download of {} {}s for {}",
+        items.len(),
+        item_label,
+        collection_label
+    );
+
+    let mut downloaded_paths = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        info!(
+            "Downloading {} {} of {}: {}",
+            item_label,
+            index + 1,
+            items.len(),
+            item
+        );
+
+        let path = download_with_retry(repo_api, item, repo, retry_config, observer).await?;
+        downloaded_paths.push(path);
+    }
+
+    info!(
+        "Successfully downloaded all {} {}s",
+        items.len(),
+        item_label
+    );
+
+    Ok(downloaded_paths[0].clone())
+}
+
 /// Downloads all parts of a multi-part model
 ///
 /// # Arguments
@@ -15,6 +61,12 @@ use tracing::info;
 /// * `retry_config` - retry/backoff behavior
 /// * `observer` - optional progress callback, invoked for each part; `None`
 ///   is byte-identical to the pre-observer behavior
+///
+/// # Errors
+///
+/// Propagates the first [`download_with_retry`] failure — typically
+/// [`ModelError::LoadingFailed`] once retries for a part are exhausted
+/// (wrapping the underlying not-found or network cause).
 pub async fn download_multi_part_model(
     repo_api: &hf_hub::api::tokio::ApiRepo,
     parts: &[String],
@@ -22,31 +74,16 @@ pub async fn download_multi_part_model(
     retry_config: &RetryConfig,
     observer: Option<&DownloadObserver>,
 ) -> Result<PathBuf, ModelError> {
-    info!(
-        "Starting download of {} parts for multi-part model",
-        parts.len()
-    );
-
-    let mut downloaded_paths = Vec::new();
-
-    // Download each part
-    for (index, part) in parts.iter().enumerate() {
-        info!(
-            "Downloading part {} of {}: {}",
-            index + 1,
-            parts.len(),
-            part
-        );
-
-        let path = download_with_retry(repo_api, part, repo, retry_config, observer).await?;
-
-        downloaded_paths.push(path);
-    }
-
-    info!("Successfully downloaded all {} parts", parts.len());
-
-    // Return the path to the first part (which llama.cpp uses to load multi-part files)
-    Ok(downloaded_paths[0].clone())
+    download_all(
+        repo_api,
+        parts,
+        "part",
+        "multi-part model",
+        repo,
+        retry_config,
+        observer,
+    )
+    .await
 }
 
 /// Downloads all files from a folder (for folder-based chunked models)
@@ -59,6 +96,12 @@ pub async fn download_multi_part_model(
 /// * `retry_config` - retry/backoff behavior
 /// * `observer` - optional progress callback, invoked for each file; `None`
 ///   is byte-identical to the pre-observer behavior
+///
+/// # Errors
+///
+/// Propagates the first [`download_with_retry`] failure — typically
+/// [`ModelError::LoadingFailed`] once retries for a file are exhausted
+/// (wrapping the underlying not-found or network cause).
 pub async fn download_folder_model(
     repo_api: &hf_hub::api::tokio::ApiRepo,
     files: &[String],
@@ -66,38 +109,24 @@ pub async fn download_folder_model(
     retry_config: &RetryConfig,
     observer: Option<&DownloadObserver>,
 ) -> Result<PathBuf, ModelError> {
-    info!(
-        "Starting download of {} files from folder-based model",
-        files.len()
-    );
-
-    let mut downloaded_paths = Vec::new();
-
-    // Download each file
-    for (index, file) in files.iter().enumerate() {
-        info!(
-            "Downloading file {} of {}: {}",
-            index + 1,
-            files.len(),
-            file
-        );
-
-        let path = download_with_retry(repo_api, file, repo, retry_config, observer).await?;
-
-        downloaded_paths.push(path);
-    }
-
-    info!(
-        "Successfully downloaded all {} files from folder",
-        files.len()
-    );
-
-    // Return the path to the first file (llama.cpp loads from first part and finds others)
-    Ok(downloaded_paths[0].clone())
+    download_all(
+        repo_api,
+        files,
+        "file",
+        "folder-based model",
+        repo,
+        retry_config,
+        observer,
+    )
+    .await
 }
 
 /// Detects if a filename is part of a multi-part GGUF file and returns the base filename (first part)
-pub fn detect_multi_part_base(filename: &str) -> Option<String> {
+///
+/// Crate-internal: used by auto-detection (`crate::detection`) to map any
+/// part of a multi-part model back to its first part, which is what gets
+/// downloaded.
+pub(crate) fn detect_multi_part_base(filename: &str) -> Option<String> {
     // Check for pattern like "model-00001-of-00002.gguf"
     use regex::Regex;
     let re = Regex::new(r"^(.+)-(\d{5})-of-(\d{5})\.gguf$").ok()?;

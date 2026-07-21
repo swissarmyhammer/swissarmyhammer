@@ -86,6 +86,14 @@ impl hf_hub::api::tokio::Progress for ObserverProgress {
 /// * `retry_config` - retry/backoff behavior
 /// * `observer` - optional progress callback; `None` is byte-identical to the
 ///   pre-observer behavior (zero callbacks, same cache-first download)
+///
+/// # Errors
+///
+/// * [`ModelError::LoadingFailed`] — the download failed after exhausting
+///   `retry_config.max_retries` retries; the message wraps the underlying
+///   not-found or network cause with remediation guidance
+/// * Any [`ModelError`] from [`DownloadCoordinator::new`] when cross-process
+///   download coordination cannot be initialized
 pub async fn download_with_retry(
     repo_api: &hf_hub::api::tokio::ApiRepo,
     filename: &str,
@@ -193,50 +201,13 @@ async fn download_with_retry_internal(
         })
 }
 
-/// Determines if an error is retriable based on the error message
-pub fn is_retriable_error(error: &dyn std::error::Error) -> bool {
-    let error_msg = error.to_string().to_lowercase();
-
-    // Check for specific HTTP status codes or error patterns
-    if error_msg.contains("500") || error_msg.contains("internal server error") {
-        return true;
-    }
-    if error_msg.contains("502") || error_msg.contains("bad gateway") {
-        return true;
-    }
-    if error_msg.contains("503") || error_msg.contains("service unavailable") {
-        return true;
-    }
-    if error_msg.contains("504") || error_msg.contains("gateway timeout") {
-        return true;
-    }
-    // 429 errors should not be retried - HuggingFace explicitly asks us to wait
-    if error_msg.contains("429") || error_msg.contains("too many requests") {
-        return false;
-    }
-
-    // Network-level errors are retriable
-    if error_msg.contains("connection")
-        || error_msg.contains("timeout")
-        || error_msg.contains("network")
-    {
-        return true;
-    }
-
-    // Client errors (4xx) are generally not retriable
-    if error_msg.contains("404") || error_msg.contains("not found") {
-        return false;
-    }
-    if error_msg.contains("403") || error_msg.contains("forbidden") {
-        return false;
-    }
-    if error_msg.contains("401") || error_msg.contains("unauthorized") {
-        return false;
-    }
-
-    // Default to retriable for unknown errors
-    true
-}
+/// HTTP status codes treated as temporary server errors worth retrying.
+///
+/// Single source of truth for the retriable-code set used when classifying
+/// download failures for user-facing guidance. (Actual retry decisions flow
+/// through [`ModelError::is_retriable`] / `should_stop_retrying`, consulted
+/// by `RetryManager`.)
+const RETRIABLE_HTTP_CODES: &[&str] = &["500", "502", "503", "504"];
 
 /// Formats a comprehensive error message for download failures
 pub fn format_download_error(
@@ -259,10 +230,9 @@ pub fn format_download_error(
         "🔒 Access forbidden. Check if the repository is private and if you need authentication."
     } else if error_msg.contains("429") || error_msg.contains("too many requests") {
         "⏱️ Rate limited by HuggingFace. Wait 5-10 minutes before trying again to respect their API limits."
-    } else if error_msg.contains("500")
-        || error_msg.contains("502")
-        || error_msg.contains("503")
-        || error_msg.contains("504")
+    } else if RETRIABLE_HTTP_CODES
+        .iter()
+        .any(|code| error_msg.contains(code))
     {
         "🏥 Server error on HuggingFace. This is temporary - try again in a few minutes."
     } else {
@@ -353,77 +323,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_retriable_error_server_errors() {
-        #[derive(Debug)]
-        struct TestError(String);
-        impl std::fmt::Display for TestError {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "{}", self.0)
-            }
-        }
-        impl std::error::Error for TestError {}
-
-        // Server errors should be retriable
-        assert!(is_retriable_error(&TestError(
-            "500 Internal Server Error".to_string()
-        )));
-        assert!(is_retriable_error(&TestError(
-            "502 Bad Gateway".to_string()
-        )));
-        assert!(is_retriable_error(&TestError(
-            "503 Service Unavailable".to_string()
-        )));
-        assert!(is_retriable_error(&TestError(
-            "504 Gateway Timeout".to_string()
-        )));
-        assert!(!is_retriable_error(&TestError(
-            "429 Too Many Requests".to_string()
-        )));
-    }
-
-    #[test]
-    fn test_is_retriable_error_client_errors() {
-        #[derive(Debug)]
-        struct TestError(String);
-        impl std::fmt::Display for TestError {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "{}", self.0)
-            }
-        }
-        impl std::error::Error for TestError {}
-
-        // Client errors should not be retriable
-        assert!(!is_retriable_error(&TestError("404 Not Found".to_string())));
-        assert!(!is_retriable_error(&TestError("403 Forbidden".to_string())));
-        assert!(!is_retriable_error(&TestError(
-            "401 Unauthorized".to_string()
-        )));
-    }
-
-    #[test]
-    fn test_is_retriable_error_network_errors() {
-        #[derive(Debug)]
-        struct TestError(String);
-        impl std::fmt::Display for TestError {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "{}", self.0)
-            }
-        }
-        impl std::error::Error for TestError {}
-
-        // Network errors should be retriable
-        assert!(is_retriable_error(&TestError(
-            "Connection timeout".to_string()
-        )));
-        assert!(is_retriable_error(&TestError(
-            "Network unreachable".to_string()
-        )));
-        assert!(is_retriable_error(&TestError(
-            "Connection refused".to_string()
-        )));
-    }
-
-    #[test]
     fn test_format_download_error() {
         #[derive(Debug)]
         struct TestError(String);
@@ -481,77 +380,6 @@ mod tests {
     // Note: download_with_retry and download_with_retry_internal require network access
     // to HuggingFace and are tested via integration tests. The coordinator logic
     // is tested in download_lock.rs unit tests.
-
-    #[test]
-    fn test_is_retriable_error_unknown_defaults_to_retriable() {
-        #[derive(Debug)]
-        struct TestError(String);
-        impl std::fmt::Display for TestError {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "{}", self.0)
-            }
-        }
-        impl std::error::Error for TestError {}
-
-        // Unknown errors default to retriable
-        assert!(is_retriable_error(&TestError(
-            "something weird happened".to_string()
-        )));
-        assert!(is_retriable_error(&TestError("".to_string())));
-    }
-
-    #[test]
-    fn test_is_retriable_error_case_insensitive() {
-        #[derive(Debug)]
-        struct TestError(String);
-        impl std::fmt::Display for TestError {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "{}", self.0)
-            }
-        }
-        impl std::error::Error for TestError {}
-
-        // Case insensitive matching
-        assert!(is_retriable_error(&TestError(
-            "INTERNAL SERVER ERROR".to_string()
-        )));
-        assert!(is_retriable_error(&TestError("Bad Gateway".to_string())));
-        assert!(is_retriable_error(&TestError(
-            "SERVICE UNAVAILABLE".to_string()
-        )));
-        assert!(is_retriable_error(&TestError(
-            "GATEWAY TIMEOUT".to_string()
-        )));
-        assert!(!is_retriable_error(&TestError("NOT FOUND".to_string())));
-        assert!(!is_retriable_error(&TestError("FORBIDDEN".to_string())));
-        assert!(!is_retriable_error(&TestError("UNAUTHORIZED".to_string())));
-        assert!(!is_retriable_error(&TestError(
-            "TOO MANY REQUESTS".to_string()
-        )));
-    }
-
-    #[test]
-    fn test_is_retriable_error_mixed_messages() {
-        #[derive(Debug)]
-        struct TestError(String);
-        impl std::fmt::Display for TestError {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "{}", self.0)
-            }
-        }
-        impl std::error::Error for TestError {}
-
-        // Connection-related errors
-        assert!(is_retriable_error(&TestError(
-            "Connection reset by peer".to_string()
-        )));
-        assert!(is_retriable_error(&TestError(
-            "Request timeout after 30s".to_string()
-        )));
-        assert!(is_retriable_error(&TestError(
-            "Network is unreachable (os error 101)".to_string()
-        )));
-    }
 
     #[test]
     fn test_format_download_error_forbidden() {

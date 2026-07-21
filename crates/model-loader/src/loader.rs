@@ -50,6 +50,16 @@ impl ModelResolver {
     ///
     /// Downloads from HuggingFace or locates on disk, returning the path
     /// and metadata. Does NOT load the model into any runtime.
+    ///
+    /// # Errors
+    ///
+    /// * [`ModelError::InvalidConfig`] — `config` fails validation
+    /// * [`ModelError::NotFound`] — a local model file does not exist, no
+    ///   model file could be auto-detected, or the HuggingFace resource is
+    ///   missing
+    /// * [`ModelError::Network`] / [`ModelError::LoadingFailed`] — the
+    ///   HuggingFace download failed (client construction, exhausted retries)
+    /// * [`ModelError::Io`] — reading resolved file metadata failed
     pub async fn resolve(&self, config: &ModelConfig) -> Result<ResolvedModel, ModelError> {
         config.validate()?;
 
@@ -205,16 +215,18 @@ impl ModelResolver {
             .map_err(|e| ModelError::LoadingFailed(e.to_string()))?
         {
             let path = entry.path();
-            if let Some(extension) = path.extension() {
-                let ext = extension.to_string_lossy().to_lowercase();
-                if MODEL_EXTENSIONS.contains(&ext.as_str()) {
-                    let filename = path.file_name().unwrap().to_string_lossy().to_lowercase();
-                    if filename.contains("bf16") {
-                        bf16_files.push(path);
-                    } else {
-                        model_files.push(path);
-                    }
-                }
+            let Some(extension) = path.extension() else {
+                continue;
+            };
+            let ext = extension.to_string_lossy().to_lowercase();
+            if !MODEL_EXTENSIONS.contains(&ext.as_str()) {
+                continue;
+            }
+            let filename = path.file_name().unwrap().to_string_lossy().to_lowercase();
+            if filename.contains("bf16") {
+                bf16_files.push(path);
+            } else {
+                model_files.push(path);
             }
         }
 
@@ -243,52 +255,23 @@ impl ModelResolver {
         filename: Option<&str>,
         folder: Option<&str>,
     ) -> bool {
-        use hf_hub::api::tokio::ApiBuilder;
-
-        // Create HuggingFace API client
-        let api = match ApiBuilder::new().build() {
-            Ok(api) => api,
-            Err(_) => return false,
-        };
-
-        let _repo_api = api.model(repo.to_string());
-
-        // Determine the target filename
-        let target_filename = if let Some(filename) = filename {
-            filename.to_string()
-        } else {
-            String::new() // Will be handled below
-        };
-
-        // Try to get the file - this will only succeed if it's already in cache
-        match std::env::var("HF_HOME")
+        // Resolve the HF cache root the same way hf-hub does: HF_HOME, then
+        // XDG_CACHE_HOME/huggingface, then ~/.cache/huggingface.
+        let cache_root = match std::env::var("HF_HOME")
             .or_else(|_| std::env::var("XDG_CACHE_HOME").map(|p| format!("{}/huggingface", p)))
         {
-            Ok(cache_dir) => {
-                let cache_path = std::path::PathBuf::from(cache_dir)
-                    .join("hub")
-                    .join(format!("models--{}", repo.replace('/', "--")))
-                    .join("snapshots");
+            Ok(dir) => PathBuf::from(dir),
+            Err(_) => match dirs::home_dir() {
+                Some(home) => home.join(".cache").join("huggingface"),
+                None => return false,
+            },
+        };
 
-                self.check_cache_snapshots(&cache_path, &target_filename, folder)
-                    .await
-            }
-            Err(_) => {
-                if let Some(home) = dirs::home_dir() {
-                    let default_cache = home
-                        .join(".cache")
-                        .join("huggingface")
-                        .join("hub")
-                        .join(format!("models--{}", repo.replace('/', "--")))
-                        .join("snapshots");
+        // Empty target means "auto-detect any model file" in the snapshot scan.
+        let target_filename = filename.unwrap_or_default();
 
-                    self.check_cache_snapshots(&default_cache, &target_filename, folder)
-                        .await
-                } else {
-                    false
-                }
-            }
-        }
+        self.check_cache_snapshots(&hf_snapshots_dir(cache_root, repo), target_filename, folder)
+            .await
     }
 
     /// Check snapshot directories for cached model files
@@ -298,44 +281,75 @@ impl ModelResolver {
         target_filename: &str,
         folder: Option<&str>,
     ) -> bool {
-        if let Ok(mut entries) = tokio::fs::read_dir(cache_path).await {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
-                    if target_filename.is_empty() {
-                        // Auto-detection case - check for any model files
-                        let search_dir = if let Some(folder_name) = folder {
-                            entry.path().join(folder_name)
-                        } else {
-                            entry.path()
-                        };
-
-                        if let Ok(mut files) = tokio::fs::read_dir(&search_dir).await {
-                            while let Ok(Some(file_entry)) = files.next_entry().await {
-                                if let Some(ext) = file_entry.path().extension() {
-                                    let ext_str = ext.to_string_lossy().to_lowercase();
-                                    if MODEL_EXTENSIONS.contains(&ext_str.as_str()) {
-                                        return true;
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // Specific filename case
-                        let file_path = if let Some(folder_name) = folder {
-                            entry.path().join(folder_name).join(target_filename)
-                        } else {
-                            entry.path().join(target_filename)
-                        };
-
-                        if file_path.exists() {
-                            return true;
-                        }
-                    }
-                }
+        let Ok(mut entries) = tokio::fs::read_dir(cache_path).await else {
+            return false;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if !entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let found = if target_filename.is_empty() {
+                snapshot_has_any_model_file(&entry.path(), folder).await
+            } else {
+                snapshot_has_named_file(&entry.path(), target_filename, folder)
+            };
+            if found {
+                return true;
             }
         }
         false
     }
+}
+
+/// HuggingFace cache layout: `<root>/hub/models--<org>--<repo>/snapshots`.
+/// Single definition of the directory-name components, used everywhere the
+/// cache path is constructed.
+const HF_CACHE_HUB_DIR: &str = "hub";
+const HF_CACHE_MODELS_PREFIX: &str = "models--";
+const HF_CACHE_SNAPSHOTS_DIR: &str = "snapshots";
+
+/// Build the snapshots directory for `repo` under an HF cache root.
+fn hf_snapshots_dir(cache_root: PathBuf, repo: &str) -> PathBuf {
+    cache_root
+        .join(HF_CACHE_HUB_DIR)
+        .join(format!(
+            "{HF_CACHE_MODELS_PREFIX}{}",
+            repo.replace('/', "--")
+        ))
+        .join(HF_CACHE_SNAPSHOTS_DIR)
+}
+
+/// Auto-detection case: does the snapshot dir (or its `folder` subdir)
+/// contain any file with a model extension?
+async fn snapshot_has_any_model_file(snapshot: &Path, folder: Option<&str>) -> bool {
+    let search_dir = match folder {
+        Some(folder_name) => snapshot.join(folder_name),
+        None => snapshot.to_path_buf(),
+    };
+    let Ok(mut files) = tokio::fs::read_dir(&search_dir).await else {
+        return false;
+    };
+    while let Ok(Some(file_entry)) = files.next_entry().await {
+        let path = file_entry.path();
+        let Some(ext) = path.extension() else {
+            continue;
+        };
+        let ext_str = ext.to_string_lossy().to_lowercase();
+        if MODEL_EXTENSIONS.contains(&ext_str.as_str()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Specific-filename case: does the snapshot dir (or its `folder` subdir)
+/// contain `target_filename`?
+fn snapshot_has_named_file(snapshot: &Path, target_filename: &str, folder: Option<&str>) -> bool {
+    let file_path = match folder {
+        Some(folder_name) => snapshot.join(folder_name).join(target_filename),
+        None => snapshot.join(target_filename),
+    };
+    file_path.exists()
 }
 
 #[cfg(test)]

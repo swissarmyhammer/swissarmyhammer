@@ -108,8 +108,26 @@ pub struct EmbeddingModel {
 
 impl model_embedding::private::Sealed for EmbeddingModel {}
 
+// Manual impl: `backend` and `inner` hold llama.cpp handles without Debug,
+// so print the config and whether an observer is attached (like
+// ModelResolver's Debug in model-loader).
+impl std::fmt::Debug for EmbeddingModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbeddingModel")
+            .field("config", &self.config)
+            .field("download_observer", &self.download_observer.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl EmbeddingModel {
     /// Create a new EmbeddingModel (nothing loaded yet)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the process-global llama.cpp backend failed to
+    /// initialize. Initialization runs once per process; a failure is cached,
+    /// so every subsequent call returns the same error.
     pub async fn new(config: EmbeddingConfig) -> Result<Self> {
         if config.debug {
             send_logs_to_tracing(LogOptions::default());
