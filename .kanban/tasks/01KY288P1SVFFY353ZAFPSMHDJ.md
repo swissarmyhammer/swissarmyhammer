@@ -1,8 +1,13 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b080
+comments:
+- actor: claude-code
+  id: 01ky2wz7pz4g8z4n0evn9byyjk
+  text: 'Implemented via TDD:\n- Added `McpServer::ensure_workspace_review_files(workspace_root)` in crates/swissarmyhammer-tools/src/mcp/server.rs, calling `swissarmyhammer_validators::review::ignore::ensure_reviewignore` and downgrading Err to `tracing::warn!`.\n- Wired into `do_initialize_code_context` immediately after `resolve_workspace_root` succeeds, before leadership/LSP work.\n- Kept the existing lazy `ensure_reviewignore` call in `resolve_scope_files` (scope.rs) unchanged as backstop.\n- Added 3 unit tests (RED verified first — compile error `ensure_workspace_review_files` not found — then GREEN after implementing): creates default when absent, preserves existing file byte-for-byte, does not panic on unwritable dir.\n\nTest results: `cargo nextest run -p swissarmyhammer-tools` — 1440/1440 passed. `cargo nextest run -p swissarmyhammer-validators ignore` — 11/11 passed. `cargo fmt` clean. `cargo clippy -p swissarmyhammer-tools -p swissarmyhammer-validators --all-targets -- -D warnings` — clean, no warnings.'
+  timestamp: 2026-07-21T17:53:24.191295+00:00
+position_column: doing
+position_ordinal: '8280'
 title: 'serve: create .reviewignore at server start instead of waiting for the first review'
 ---
 ## What

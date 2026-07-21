@@ -367,6 +367,14 @@ impl McpServer {
             workspace_root.display()
         );
 
+        // Create `.reviewignore` at server start rather than waiting for the
+        // first review, so it's on disk (and editable — e.g. to exclude
+        // upstream files in a fork) the moment `sah serve` comes up. Runs for
+        // both leader and follower, before the leadership/LSP work below; the
+        // enclosing `Once` in `initialize_code_context` already makes this
+        // once-per-process, and `ensure_reviewignore` itself is idempotent.
+        Self::ensure_workspace_review_files(&workspace_root);
+
         // Decide leadership FIRST. The LSP server (rust-analyzer, sourcekit-lsp,
         // clangd) speaks stdio only — one client, no listener — so only the
         // elected leader may spawn it. Spawning the supervisor before leadership
@@ -426,6 +434,31 @@ impl McpServer {
                 let sub_cancel = Self::spawn_follower_diagnostics_subscriber(&ws);
                 Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone(), sub_cancel);
             }
+        }
+    }
+
+    /// Ensure `<workspace_root>/.reviewignore` exists at server start, rather
+    /// than waiting for the first review to create it lazily.
+    ///
+    /// Runs once per process for every `sah serve` (leader or follower alike),
+    /// immediately after the workspace root resolves and before any
+    /// leadership/LSP work. [`ensure_reviewignore`](swissarmyhammer_validators::review::ignore::ensure_reviewignore)
+    /// is idempotent — it never overwrites an existing file — so concurrent
+    /// sibling servers racing at startup at worst both write the identical
+    /// default template.
+    ///
+    /// A failure to write the file (e.g. a read-only workspace root) is
+    /// downgraded to a warning: server startup must never fail over an
+    /// unwritable ignore file.
+    fn ensure_workspace_review_files(workspace_root: &std::path::Path) {
+        if let Err(e) =
+            swissarmyhammer_validators::review::ignore::ensure_reviewignore(workspace_root)
+        {
+            tracing::warn!(
+                "code-context: failed to create .reviewignore in {}: {}",
+                workspace_root.display(),
+                e
+            );
         }
     }
 
@@ -2539,6 +2572,59 @@ mod tests {
         );
         // Drive the spawned task to completion so it does not outlive the test.
         let _ = leader_handle.unwrap().await;
+    }
+
+    /// Server start must leave `.reviewignore` on disk before any review runs,
+    /// so it can be edited immediately (e.g. to exclude upstream files in a
+    /// fork) rather than waiting for the first review's lazy creation.
+    #[test]
+    fn test_ensure_workspace_review_files_creates_default_when_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        McpServer::ensure_workspace_review_files(tmp.path());
+
+        let path = tmp.path().join(".reviewignore");
+        assert!(path.exists(), "server start must create .reviewignore");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains(".kanban/"),
+            "the default must ignore the kanban board directory, got:\n{content}"
+        );
+    }
+
+    /// A pre-existing `.reviewignore` (user edits) is authoritative — server
+    /// start must never clobber it.
+    #[test]
+    fn test_ensure_workspace_review_files_preserves_existing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let edited = "# my rules\ntarget/\n!target/keep.rs\n";
+        std::fs::write(tmp.path().join(".reviewignore"), edited).unwrap();
+
+        McpServer::ensure_workspace_review_files(tmp.path());
+
+        let content = std::fs::read_to_string(tmp.path().join(".reviewignore")).unwrap();
+        assert_eq!(
+            content, edited,
+            "an existing .reviewignore must be preserved byte-for-byte"
+        );
+    }
+
+    /// A write failure (e.g. an unwritable workspace root) must never panic —
+    /// server startup proceeds regardless, only logging a warning.
+    #[test]
+    fn test_ensure_workspace_review_files_does_not_panic_on_unwritable_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let unwritable = tmp.path().join("no-such-parent").join("nested");
+
+        // Does not exist and its parent is never created, so the write inside
+        // `ensure_reviewignore` fails with an I/O error; this call must swallow
+        // it (as a warning) rather than propagate or panic.
+        McpServer::ensure_workspace_review_files(&unwritable);
+
+        assert!(
+            !unwritable.join(".reviewignore").exists(),
+            "no file should exist when the target directory itself is absent"
+        );
     }
 
     #[test]
