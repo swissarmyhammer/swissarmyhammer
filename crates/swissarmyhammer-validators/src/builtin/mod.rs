@@ -250,6 +250,43 @@ mod tests {
     }
 
     #[test]
+    fn test_swift_casing_accepts_both_acronym_spellings() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("swift")
+            .expect("swift validator should be loaded");
+
+        let casing_rule = ruleset
+            .rules
+            .iter()
+            .find(|r| r.name == "casing")
+            .expect("swift validator should carry a casing rule");
+
+        assert!(
+            casing_rule.body.contains("BOTH accepted"),
+            "casing rule should state both acronym spellings are accepted, got: {}",
+            casing_rule.body
+        );
+        assert!(
+            !casing_rule.body.contains("are all wrong"),
+            "casing rule should no longer flag Url/Json spellings as wrong, got: {}",
+            casing_rule.body
+        );
+        assert!(
+            !casing_rule.body.contains("DON'T: `entryId`"),
+            "casing rule should no longer retain the retired entryId DON'T bullet, got: {}",
+            casing_rule.body
+        );
+        assert!(
+            !casing_rule.body.contains("flag toward the uniform form"),
+            "casing rule should no longer retain the flag-toward-uniform tiebreaker, got: {}",
+            casing_rule.body
+        );
+    }
+
+    #[test]
     fn test_old_multi_rule_safety_sets_are_rehomed() {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);

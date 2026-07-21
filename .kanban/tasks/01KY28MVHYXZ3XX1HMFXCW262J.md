@@ -1,8 +1,13 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b180
+comments:
+- actor: claude-code
+  id: 01ky2yanrgrztwex7t0bw7tqhy
+  text: 'TDD: added test_swift_casing_accepts_both_acronym_spellings in crates/swissarmyhammer-validators/src/builtin/mod.rs, watched it fail RED against the old casing.md content (assertion on "BOTH accepted" missing). Then rewrote the line-10 uniform-acronym bullet in builtin/validators/swift/rules/casing.md and removed the line-12 ID bullet + line-13 prevalence-tiebreaker bullet, replacing all three with the flexible both-spellings-accepted rule plus its two sub-bullets (position rule, single-declaration no-mixing rule). LoRA/OAuth/GraphQL canonical bullet and radarDetector ordinary-word bullet left byte-identical. `cargo nextest run -p swissarmyhammer-validators builtin` — all 28 tests pass (GREEN). cargo fmt + cargo clippy -p swissarmyhammer-validators --all-targets -- -D warnings clean.'
+  timestamp: 2026-07-21T18:17:07.600889+00:00
+position_column: doing
+position_ordinal: '8280'
 title: 'validators: swift casing — accept both acronym spellings (URL/Url, ID/Id), never flag conversions between them'
 ---
 ## What
