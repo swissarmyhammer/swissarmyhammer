@@ -233,6 +233,17 @@ impl std::fmt::Debug for FleetOutcome {
 /// mpsc channel and the MCP tool boundary maps them to `notifications/progress`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewProgressEvent {
+    /// One file entered the scope stage (semantic diff + probes). Emitted per
+    /// resolved file by [`scope_review`](crate::review::scope_review) BEFORE
+    /// any fleet work, so a progress consumer sees its first event within
+    /// seconds of the call starting — the scope stage alone can outlast a
+    /// client's silence timeout, and these events (plus the consumer's
+    /// keep-alive) are what carry it through. Advisory only: it advances no
+    /// counter.
+    FileScoped {
+        /// The full path of the file being scoped — never truncated.
+        file: String,
+    },
     /// One batch's fan-out plan is ready: `total_pairs` (validator, file)
     /// pairs will be reviewed. Emitted once per non-empty batch; a consumer
     /// sums the totals across batches.
@@ -270,7 +281,10 @@ pub type ReviewProgressSender = tokio::sync::mpsc::UnboundedSender<ReviewProgres
 
 /// Send `event` when a progress channel is wired. A `None` sender or a closed
 /// receiver is a no-op — progress is advisory, never load-bearing.
-fn emit_progress(progress: Option<&ReviewProgressSender>, event: ReviewProgressEvent) {
+///
+/// `pub(crate)` so the scope stage ([`scope_review`](crate::review::scope_review))
+/// emits through the same helper instead of a copy.
+pub(crate) fn emit_progress(progress: Option<&ReviewProgressSender>, event: ReviewProgressEvent) {
     if let Some(tx) = progress {
         let _ = tx.send(event);
     }

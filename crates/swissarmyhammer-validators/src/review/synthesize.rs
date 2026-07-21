@@ -347,8 +347,10 @@ pub async fn run_review(
     progress: Option<&ReviewProgressSender>,
     now: &str,
 ) -> Result<ReviewReport, AvpError> {
-    // Stage 1: scope → work-list (deterministic, LLM-free).
-    let work = scope_review(scope, repo_path, loader, conn, embedder).await?;
+    // Stage 1: scope → work-list (deterministic, LLM-free). The progress
+    // sender rides along so the stage announces each file as it scopes it —
+    // the run's FIRST events, emitted long before any fleet work exists.
+    let work = scope_review(scope, repo_path, loader, conn, embedder, progress).await?;
 
     // Stage 2: split the work-list into content-budgeted batches (whole-file
     // granularity). A single file over `batch_size` is a hard error here.

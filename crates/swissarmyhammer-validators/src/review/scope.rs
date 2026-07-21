@@ -44,6 +44,7 @@ use swissarmyhammer_sem::parser::plugins::code::is_code_file;
 use swissarmyhammer_sem::parser::plugins::create_default_registry;
 
 use crate::error::AvpError;
+use crate::review::fleet::{emit_progress, ReviewProgressEvent, ReviewProgressSender};
 use crate::review::probes::{run_probes, ChangeEntry, FileChange as ProbeChange, ProbeResult};
 use crate::validators::{MatchContext, RuleSet, ValidatorLoader};
 
@@ -192,7 +193,11 @@ pub struct FileWork {
 /// `repo_path` is the repository root; `loader` is a fully-loaded
 /// [`ValidatorLoader`] (built once via [`crate::load_rules`]); `conn` is the
 /// caller-resolved code_context index connection (never `current_dir()`);
-/// `embedder` embeds probe query bodies.
+/// `embedder` embeds probe query bodies. `progress` is the optional review
+/// progress sender: when wired, one
+/// [`ReviewProgressEvent::FileScoped`] is emitted per resolved file BEFORE the
+/// semantic-diff + probe pass, so a consumer sees the run's first events within
+/// seconds of the call starting; `None` emits nothing.
 ///
 /// # Change purpose
 ///
@@ -212,8 +217,22 @@ pub async fn scope_review(
     loader: &ValidatorLoader,
     conn: &Connection,
     embedder: &dyn TextEmbedder,
+    progress: Option<&ReviewProgressSender>,
 ) -> Result<WorkList, AvpError> {
     let resolved = resolve_scope_files(&scope, repo_path)?;
+
+    // Announce every resolved file BEFORE the semantic-diff + probe pass —
+    // these are the run's FIRST progress events, emitted within seconds of the
+    // call starting. The diff and probes below run over the whole set in one
+    // pass, which on a large scope can be silent for a long time; a progress
+    // consumer keeps the client alive through that stretch by re-sending its
+    // latest param, and these events are what give it one.
+    for file in &resolved.files {
+        emit_progress(
+            progress,
+            ReviewProgressEvent::FileScoped { file: file.clone() },
+        );
+    }
 
     // The single semantic-diff pass: one `FileChange` per resolved file fed to
     // the sem differ once. Whole-content files (glob / unchanged single file)
@@ -920,6 +939,52 @@ mod tests {
         }
     }
 
+    // ---- scope_review: scope-phase progress events -------------------------
+
+    #[tokio::test]
+    async fn scope_review_emits_one_file_scoped_event_per_resolved_file() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "pub fn base() {}\n");
+        repo.commit("initial");
+        // Two changed files in the working tree — the multi-file scope.
+        repo.write("src/alpha.rs", &format!("{}\n", body("alpha")));
+        repo.write("src/beta.rs", &format!("{}\n", body("beta")));
+
+        let conn = index_conn();
+        let loader = loader_with("scoped", "*.rs", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        scope_review(
+            Scope::Working,
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            Some(&tx),
+        )
+        .await
+        .unwrap();
+        drop(tx);
+
+        // The scope stage announces each resolved file exactly once — its
+        // events are the run's FIRST progress (they exist before any fleet
+        // work), so their emission from `scope_review` itself is the contract.
+        let mut scoped_files = Vec::new();
+        while let Some(event) = rx.recv().await {
+            match event {
+                ReviewProgressEvent::FileScoped { file } => scoped_files.push(file),
+                other => panic!("the scope stage emits only FileScoped events, got: {other:?}"),
+            }
+        }
+        scoped_files.sort();
+        assert_eq!(
+            scoped_files,
+            vec!["src/alpha.rs".to_string(), "src/beta.rs".to_string()],
+            "one FileScoped event per resolved file"
+        );
+    }
+
     // ---- scope_review: working scope, duplicate function ------------------
 
     #[tokio::test]
@@ -948,7 +1013,7 @@ mod tests {
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
             .await
             .unwrap();
 
@@ -1018,7 +1083,7 @@ mod tests {
         let loader = loader_with("rust", "*.rs", &[]);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
             .await
             .unwrap();
 
@@ -1053,7 +1118,7 @@ mod tests {
         let loader = loader_with("everything", "*", &[]);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
             .await
             .unwrap();
 
@@ -1081,7 +1146,7 @@ mod tests {
         let loader = loader_with("everything", "*", &[]);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
             .await
             .unwrap();
 
@@ -1306,7 +1371,7 @@ mod tests {
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
-        let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+        let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
             .await
             .unwrap();
 
@@ -1332,7 +1397,7 @@ mod tests {
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
-        let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+        let _work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
             .await
             .unwrap();
 
@@ -1368,6 +1433,7 @@ mod tests {
             &single,
             &conn,
             &baseline_embedder,
+            None,
         )
         .await
         .unwrap();
@@ -1380,7 +1446,7 @@ mod tests {
         loader.add_builtin_ruleset(ruleset("dedupe-b", "*.rs", &["duplicates"]));
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
             .await
             .unwrap();
 
@@ -1438,7 +1504,7 @@ mod tests {
         let loader = loader_with("reuse", "*.rs", &["callers", "similar"]);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
             .await
             .unwrap();
 
@@ -1507,6 +1573,7 @@ mod tests {
             &loader,
             &conn,
             &embedder,
+            None,
         )
         .await
         .unwrap();
@@ -1537,6 +1604,7 @@ mod tests {
             &loader,
             &conn,
             &embedder,
+            None,
         )
         .await
         .unwrap();
@@ -1578,7 +1646,7 @@ mod tests {
         let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
         let embedder = MockEmbedder::new(DIM);
 
-        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder)
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
             .await
             .unwrap();
 

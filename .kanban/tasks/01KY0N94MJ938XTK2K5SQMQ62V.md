@@ -72,7 +72,7 @@ comments:
 
     Gates (all fresh, after the final edit): cargo fmt applied; cargo clippy -p model-loader -p swissarmyhammer-embedding -p llama-embedding --all-targets -- -D warnings clean; cargo nextest run (same 3 packages) 279/279 passed; cargo check --workspace --all-targets clean. Tags mcp/progress/review re-applied after the description update. Adversarial double-check agent dispatched; task stays in doing for /review.
   timestamp: 2026-07-21T01:52:08.839851+00:00
-position_column: doing
+position_column: review
 position_ordinal: '8280'
 title: 'model-loader: download-progress observer seam, threaded through the embedding loader'
 ---
@@ -161,3 +161,11 @@ Note: one engine finding (`crates/llama-embedding/src/model.rs:344`, empty test 
 Sweep note: per the root-cause instruction, EVERY error-path message in the five cited files was lowercased, not just the cited lines — in model.rs additionally "input text cannot be empty", "context creation failed", "tokenize failed", "no tokens", "batch failed", "decode failed", "extract failed", "dimension mismatch". Emoji-prefixed guidance strings and tracing log messages were left untouched (they do not start with a capital letter / are not Display messages), and no test outside loader.rs asserted on any changed substring (workspace-wide grep verified).
 
 Note: one engine finding (`crates/llama-embedding/src/model.rs:331`, empty test function) was dropped per the review skill's blanket exception — it is the same pre-existing empty test dropped last round at `model.rs:344` (line shifted by this commit's doc/Debug edits); git diff HEAD~1..HEAD confirms no test lines were added to model.rs.
+
+## Review Findings (2026-07-20 20:56)
+
+- [ ] `crates/model-loader/src/huggingface.rs:110` — Error message ends with trailing punctuation (period), violating the 'no trailing punctuation' rule for Display error messages. Remove the trailing period: change `"...instead."` to `"...instead"`.
+- [ ] `crates/model-loader/src/retry.rs:99` — Error detection strings "404" and "not found" are repeated in multiple locations (lines 99–100 and lines 130–131 in the ERROR_GUIDANCE table predicates), creating duplication that can drift if one location is updated without the other. These should be extracted to named constants to be defined once and used everywhere. Extract named constants at module level: `const NOT_FOUND_ERROR_PATTERN: &str = "not found";` and `const NOT_FOUND_HTTP_CODE: &str = "404";`. Use them consistently in both the error classification condition (lines 99–100) and the first predicate in the ERROR_GUIDANCE table (line 130).
+- [ ] `crates/swissarmyhammer-embedding/src/embedder.rs:177` — The value 256 is used as the default max_sequence_length for ANE configuration in two separate locations (lines 177 and 434), creating duplication that risks drift if the ANE default sequence length ever needs to change. This repeated literal should be extracted to a named constant. Extract a named constant at module level: `const ANE_DEFAULT_MAX_SEQUENCE_LENGTH: usize = 256;` and use it in both locations (lines 177 and 434).
+
+Note: one engine finding (`crates/llama-embedding/src/model.rs:391`, empty test body) was dropped per the review skill's blanket exception — it is the same pre-existing empty test dropped in round 1 at `model.rs:344` and round 2 at `model.rs:331` (line shifted again by this commit's edits); no test lines were added to model.rs in this commit. Not counted as a repeat for the stuck guardrail since it is dropped, not relayed.

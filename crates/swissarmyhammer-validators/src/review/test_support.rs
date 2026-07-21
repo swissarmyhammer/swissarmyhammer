@@ -483,6 +483,82 @@ impl ScriptedReply {
     }
 }
 
+/// The agent-held half of a prompt gate: every prompt turn first announces
+/// itself ("entered") and then blocks until the test-held
+/// [`PromptGateController`] releases it.
+///
+/// Built with [`PromptGate::new`] and installed via
+/// [`ScriptedAgentConfig::prompt_gate`]. The gate exists so a delivery test can
+/// hold the review pipeline deterministically at its FIRST agent prompt: while
+/// the gate is closed, everything that must happen *before* any agent work —
+/// scope-phase progress notifications, keep-alive re-sends — can be observed in
+/// a window that cannot race the agent's reply. Once released, every current
+/// and future prompt proceeds immediately (the release is latched).
+///
+/// Cloning shares the underlying gate state (the config is cloned per
+/// connection rebind), so one controller governs every rebound agent.
+#[derive(Debug, Clone)]
+pub struct PromptGate {
+    /// Latched "a prompt turn has reached the gate" flag, set by the agent side.
+    entered_tx: tokio::sync::watch::Sender<bool>,
+    /// Latched release flag, observed by the agent side.
+    release_rx: tokio::sync::watch::Receiver<bool>,
+}
+
+/// The test-held half of a [`PromptGate`]: await the first prompt's arrival
+/// with [`entered`](Self::entered), then open the gate with
+/// [`release`](Self::release).
+#[derive(Debug)]
+pub struct PromptGateController {
+    /// Observes the agent side's latched "entered" flag.
+    entered_rx: tokio::sync::watch::Receiver<bool>,
+    /// Sets the latched release flag the agent side blocks on.
+    release_tx: tokio::sync::watch::Sender<bool>,
+}
+
+impl PromptGate {
+    /// Build a closed gate, returning the agent half and the test half.
+    pub fn new() -> (PromptGate, PromptGateController) {
+        let (entered_tx, entered_rx) = tokio::sync::watch::channel(false);
+        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+        (
+            PromptGate {
+                entered_tx,
+                release_rx,
+            },
+            PromptGateController {
+                entered_rx,
+                release_tx,
+            },
+        )
+    }
+
+    /// Agent side: latch "entered", then wait until the controller releases.
+    ///
+    /// A dropped controller counts as released so an aborted test can never
+    /// wedge the agent forever.
+    pub async fn pass(&self) {
+        let _ = self.entered_tx.send(true);
+        let mut release = self.release_rx.clone();
+        // `wait_for` errors only when the sender (the controller) is dropped;
+        // treat that as an open gate rather than blocking forever.
+        let _ = release.wait_for(|released| *released).await;
+    }
+}
+
+impl PromptGateController {
+    /// Wait until some prompt turn has reached the gate (latched — returns
+    /// immediately once any turn has entered).
+    pub async fn entered(&mut self) {
+        let _ = self.entered_rx.wait_for(|entered| *entered).await;
+    }
+
+    /// Open the gate: every blocked and future prompt proceeds immediately.
+    pub fn release(&self) {
+        let _ = self.release_tx.send(true);
+    }
+}
+
 /// How the mock agent answers the session-fork extension surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ForkMode {
@@ -539,6 +615,11 @@ pub struct ScriptedAgentConfig {
     /// agent does), so a fleet test can exercise the warm/cold cache-usage log
     /// path without a live Anthropic backend.
     pub cache_usage: Option<claude_agent::protocol_translator::CacheUsage>,
+    /// When set, every prompt turn first passes this gate: it latches
+    /// "entered" and blocks until the test-held [`PromptGateController`]
+    /// releases it. Lets a delivery test hold the pipeline deterministically at
+    /// its first agent prompt (see [`PromptGate`]).
+    pub prompt_gate: Option<PromptGate>,
 }
 
 impl Default for ScriptedAgentConfig {
@@ -551,6 +632,7 @@ impl Default for ScriptedAgentConfig {
             demand_permission: false,
             read_file: None,
             cache_usage: None,
+            prompt_gate: None,
         }
     }
 }
@@ -881,6 +963,12 @@ async fn handle_prompt(
     responder: agent_client_protocol::Responder<serde_json::Value>,
     cx: &ConnectionTo<Client>,
 ) -> agent_client_protocol::Result<()> {
+    // Hold the turn at the gate first, before any round-trips or scripted
+    // matching: the gate models "the agent got a prompt but has produced
+    // nothing yet", the window a delivery test observes progress in.
+    if let Some(gate) = &mock.config.prompt_gate {
+        gate.pass().await;
+    }
     // Mid-turn, a real claude agent asks the client for tool consent via
     // `session/request_permission` and blocks on the answer before finishing
     // the turn. If the client registers no `on_receive_request` handler, this

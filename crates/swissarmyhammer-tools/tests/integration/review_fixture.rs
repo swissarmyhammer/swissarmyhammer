@@ -364,17 +364,39 @@ fn verify_rules() -> Vec<Rule> {
 /// validator's planted finding(s) and the verify rules adjudicate them; the two
 /// red herrings are refuted (item 6 by the agent here, item 7 by the guard).
 pub fn planted_agent() -> Arc<ScriptedAgent> {
+    planted_agent_with(planted_config())
+}
+
+/// [`planted_agent`] with its prompt turns held behind `gate`: every prompt
+/// first latches "entered" on the gate and blocks until the test-held
+/// controller releases it. Used by delivery e2e tests to observe client-side
+/// progress in a window that cannot race the agent's first reply.
+pub fn gated_planted_agent(
+    gate: swissarmyhammer_validators::review::test_support::PromptGate,
+) -> Arc<ScriptedAgent> {
     use swissarmyhammer_validators::review::test_support::ScriptedAgentConfig;
+    planted_agent_with(ScriptedAgentConfig {
+        prompt_gate: Some(gate),
+        ..planted_config()
+    })
+}
+
+/// The planted-diff script over a caller-chosen config.
+fn planted_agent_with(
+    config: swissarmyhammer_validators::review::test_support::ScriptedAgentConfig,
+) -> Arc<ScriptedAgent> {
     let script: Vec<Rule> = fanout_rules().into_iter().chain(verify_rules()).collect();
-    ScriptedAgent::with_script(
-        script,
-        ScriptedAgentConfig {
-            // No rule matched: an empty findings array for fan-out, which also
-            // parses as "no verdict" for verify → refute by default.
-            default_response: "```json\n[]\n```".to_string(),
-            ..Default::default()
-        },
-    )
+    ScriptedAgent::with_script(script, config)
+}
+
+/// The planted agent's baseline config.
+fn planted_config() -> swissarmyhammer_validators::review::test_support::ScriptedAgentConfig {
+    swissarmyhammer_validators::review::test_support::ScriptedAgentConfig {
+        // No rule matched: an empty findings array for fan-out, which also
+        // parses as "no verdict" for verify → refute by default.
+        default_response: "```json\n[]\n```".to_string(),
+        ..Default::default()
+    }
 }
 
 /// Capacity of the per-connection backend broadcast each minted agent streams

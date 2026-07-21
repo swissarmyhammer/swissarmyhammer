@@ -242,10 +242,12 @@ impl ProgressReporter for McpProgressReporter {
 /// Spawn the async drain task that forwards buffered progress params to
 /// the MCP peer as `notifications/progress` messages.
 ///
-/// The task runs until the channel closes, then exits. Errors sending an
-/// individual notification (peer dropped, transport error) are logged at
-/// debug level and the task continues — progress is advisory, never
-/// load-bearing.
+/// The task runs until the channel closes, then exits. Every outgoing
+/// notification is logged at INFO with its token, progress, total, and full
+/// untruncated message; a failed send (peer dropped, transport error) is
+/// logged at WARN with the full error and the task continues — progress is
+/// advisory, never load-bearing, but its send path must be provable from the
+/// log.
 ///
 /// # Arguments
 ///
@@ -264,11 +266,26 @@ pub fn spawn_drain_task(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(param) = rx.recv().await {
+            // One INFO line per outgoing notification, carrying the token,
+            // the structured progress/total pair, and the FULL message —
+            // never truncated. This makes the send path provable from the
+            // log: a log with no such line means nothing was handed to the
+            // transport. Diagnostics only — client-side receipt is proven by
+            // the transport-level e2e tests, never by these lines.
+            tracing::info!(
+                token = ?param.progress_token,
+                progress = param.progress,
+                total = ?param.total,
+                message = param.message.as_deref().unwrap_or(""),
+                "sending notifications/progress to MCP peer"
+            );
             if let Err(err) = peer
                 .send_notification(ProgressNotification::new(param).into())
                 .await
             {
-                tracing::debug!(
+                // WARN with the full error: a silent drop here is exactly the
+                // field failure mode this path exists to make diagnosable.
+                tracing::warn!(
                     error = %err,
                     "failed to send MCP progress notification — peer may have disconnected"
                 );

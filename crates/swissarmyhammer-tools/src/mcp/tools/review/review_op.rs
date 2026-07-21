@@ -514,6 +514,12 @@ fn review_progress_param(
     event: &ReviewProgressEvent,
 ) -> ProgressNotificationParam {
     let message = match event {
+        ReviewProgressEvent::FileScoped { file } => {
+            // Scope-phase announcement: no pair counters exist yet, so the
+            // wire values stay at their current (zero) state — the event's
+            // job is existence, not arithmetic.
+            format!("Scoping {file}")
+        }
         ReviewProgressEvent::Planned { total_pairs } => {
             state.planned += *total_pairs as u64;
             format!("Planned {total_pairs} (validator, file) review pairs")
@@ -579,7 +585,7 @@ impl ReviewProgressBridge {
 pub fn spawn_review_progress_bridge(context: &ToolContext) -> Option<ReviewProgressBridge> {
     let token = context.progress_token.clone()?;
 
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<ReviewProgressEvent>();
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<ReviewProgressEvent>();
     let (param_tx, param_rx) = tokio::sync::mpsc::unbounded_channel::<ProgressNotificationParam>();
 
     let drain = if let Some(sink) = context.progress_sink.clone() {
@@ -598,17 +604,72 @@ pub fn spawn_review_progress_bridge(context: &ToolContext) -> Option<ReviewProgr
     // The mapping task owns the cumulative counters. It ends when the engine
     // drops its sender; dropping `param_tx` then closes the drain's source so
     // the drain flushes and exits.
-    tokio::spawn(async move {
-        let mut state = ReviewProgressState::default();
-        while let Some(event) = event_rx.recv().await {
-            let _ = param_tx.send(review_progress_param(&mut state, &token, &event));
-        }
-    });
+    tokio::spawn(run_review_progress_mapping(
+        event_rx,
+        param_tx,
+        token,
+        REVIEW_PROGRESS_KEEP_ALIVE_INTERVAL,
+    ));
 
     Some(ReviewProgressBridge {
         sender: event_tx,
         drain,
     })
+}
+
+/// How long the bridge tolerates engine silence before re-sending the latest
+/// wire param as a keep-alive.
+///
+/// Clients (Claude Code among them) reset their MCP tool timeout on every
+/// `notifications/progress` they receive, so a long silent stretch — the scope
+/// stage's whole-set diff + probe pass, one long agent turn, the verify stage —
+/// must still produce periodic notifications or the call is aborted as dead.
+/// Ten seconds is frequent enough to hold any realistic client timeout and far
+/// too infrequent to matter as traffic.
+const REVIEW_PROGRESS_KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The bridge's mapping loop: map engine events to wire params, and re-send
+/// the latest param as a keep-alive whenever the engine stays silent for
+/// `keep_alive`.
+///
+/// The keep-alive re-send carries the exact latest param — identical
+/// `progress`/`total`/`message` — so wire monotonicity is preserved by
+/// construction. Before the first event there is nothing to re-send, so the
+/// timer stays disarmed. The loop ends when the engine drops its sender (or
+/// the drain side closes); dropping `param_tx` then closes the drain's source
+/// so the drain flushes and exits.
+///
+/// Extracted from [`spawn_review_progress_bridge`] so the keep-alive schedule
+/// is unit-testable under paused time.
+async fn run_review_progress_mapping(
+    mut event_rx: tokio::sync::mpsc::UnboundedReceiver<ReviewProgressEvent>,
+    param_tx: tokio::sync::mpsc::UnboundedSender<ProgressNotificationParam>,
+    token: ProgressToken,
+    keep_alive: std::time::Duration,
+) {
+    let mut state = ReviewProgressState::default();
+    let mut latest: Option<ProgressNotificationParam> = None;
+    loop {
+        tokio::select! {
+            event = event_rx.recv() => {
+                let Some(event) = event else { break };
+                let param = review_progress_param(&mut state, &token, &event);
+                latest = Some(param.clone());
+                if param_tx.send(param).is_err() {
+                    break;
+                }
+            }
+            // Re-armed on every loop iteration, so any event (or a prior
+            // keep-alive tick) restarts the silence window. Disarmed until
+            // the first event exists.
+            _ = tokio::time::sleep(keep_alive), if latest.is_some() => {
+                let param = latest.clone().expect("guarded by latest.is_some()");
+                if param_tx.send(param).is_err() {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 /// The fraction of attempted fan-out tasks that must fail before a review is
@@ -835,6 +896,181 @@ mod tests {
         let last = params.last().unwrap();
         assert_eq!(Some(last.progress), last.total);
         assert_eq!(last.progress, 2.0);
+    }
+
+    /// A scope-phase event names the file with no counter movement: progress
+    /// and total stay at their current values (zero at the start of a run),
+    /// so the run's first notifications are valid and monotonic.
+    #[test]
+    fn file_scoped_events_carry_a_scoping_message_without_moving_counters() {
+        let mut state = ReviewProgressState::default();
+        let tok = token("scope-tok");
+        let param = review_progress_param(
+            &mut state,
+            &tok,
+            &ReviewProgressEvent::FileScoped {
+                file: "src/a/very/deep/path.rs".to_string(),
+            },
+        );
+        assert_eq!(param.progress, 0.0);
+        assert_eq!(param.total, Some(0.0));
+        assert_eq!(
+            param.message.as_deref(),
+            Some("Scoping src/a/very/deep/path.rs"),
+            "the message names the full untruncated path"
+        );
+        assert_eq!(param.progress_token, tok);
+    }
+
+    /// Drain everything currently buffered on `rx` without waiting.
+    fn take_buffered(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<ProgressNotificationParam>,
+    ) -> Vec<ProgressNotificationParam> {
+        let mut out = Vec::new();
+        while let Ok(param) = rx.try_recv() {
+            out.push(param);
+        }
+        out
+    }
+
+    /// The keep-alive test's silence window. Chosen distinct from the
+    /// production [`REVIEW_PROGRESS_KEEP_ALIVE_INTERVAL`] (10s) so the tests
+    /// pin the schedule's *shape* (re-send after `keep_alive` of silence), not
+    /// the production constant's value.
+    const TEST_KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(7);
+
+    /// Let the paused-time runtime run every ready task, then advance the
+    /// clock by `dur` and let timers fire.
+    async fn advance(dur: std::time::Duration) {
+        // Yield first so the mapping task processes any just-sent events
+        // before the clock moves (paused time only advances when idle).
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(dur).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// With no engine event for longer than the keep-alive interval, the
+    /// mapping re-sends the latest param verbatim — and keeps re-sending it
+    /// every interval while the silence lasts.
+    #[tokio::test(start_paused = true)]
+    async fn keep_alive_resends_the_latest_param_during_engine_silence() {
+        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (param_tx, mut param_rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(run_review_progress_mapping(
+            event_rx,
+            param_tx,
+            token("ka"),
+            TEST_KEEP_ALIVE,
+        ));
+
+        event_tx
+            .send(ReviewProgressEvent::Planned { total_pairs: 3 })
+            .unwrap();
+        advance(std::time::Duration::ZERO).await;
+        let initial = take_buffered(&mut param_rx);
+        assert_eq!(initial.len(), 1, "the event maps to one param");
+
+        // One full silence window: the latest param is re-sent unchanged.
+        advance(TEST_KEEP_ALIVE + std::time::Duration::from_millis(1)).await;
+        let first_tick = take_buffered(&mut param_rx);
+        assert_eq!(first_tick.len(), 1, "one keep-alive per silence window");
+        assert_eq!(first_tick[0].progress, initial[0].progress);
+        assert_eq!(first_tick[0].total, initial[0].total);
+        assert_eq!(first_tick[0].message, initial[0].message);
+
+        // The silence continues: another window, another identical re-send.
+        advance(TEST_KEEP_ALIVE + std::time::Duration::from_millis(1)).await;
+        let second_tick = take_buffered(&mut param_rx);
+        assert_eq!(second_tick.len(), 1, "keep-alives repeat while silent");
+        assert_eq!(second_tick[0].progress, initial[0].progress);
+    }
+
+    /// Before any engine event exists there is nothing to re-send: the timer
+    /// stays disarmed no matter how long the run takes to produce its first
+    /// event.
+    #[tokio::test(start_paused = true)]
+    async fn keep_alive_stays_disarmed_before_the_first_event() {
+        let (_event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (param_tx, mut param_rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(run_review_progress_mapping(
+            event_rx,
+            param_tx,
+            token("disarmed"),
+            TEST_KEEP_ALIVE,
+        ));
+
+        advance(TEST_KEEP_ALIVE * 6).await;
+        assert!(
+            take_buffered(&mut param_rx).is_empty(),
+            "no event yet means nothing to re-send"
+        );
+    }
+
+    /// Every engine event restarts the silence window — a steadily streaming
+    /// run never produces keep-alive duplicates.
+    #[tokio::test(start_paused = true)]
+    async fn keep_alive_window_resets_on_every_event() {
+        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (param_tx, mut param_rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(run_review_progress_mapping(
+            event_rx,
+            param_tx,
+            token("reset"),
+            TEST_KEEP_ALIVE,
+        ));
+
+        // Three events spaced just under the window: no tick ever fires.
+        let just_under = TEST_KEEP_ALIVE - std::time::Duration::from_secs(1);
+        for _ in 0..3 {
+            event_tx
+                .send(ReviewProgressEvent::FileScoped {
+                    file: "src/streaming.rs".to_string(),
+                })
+                .unwrap();
+            advance(just_under).await;
+        }
+        assert_eq!(
+            take_buffered(&mut param_rx).len(),
+            3,
+            "steady streaming maps 1:1 with no keep-alive duplicates"
+        );
+
+        // Then real silence: the tick fires once the full window elapses.
+        advance(TEST_KEEP_ALIVE).await;
+        assert_eq!(
+            take_buffered(&mut param_rx).len(),
+            1,
+            "the window re-arms from the last event"
+        );
+    }
+
+    /// Dropping the engine sender ends the mapping (and with it the ticks):
+    /// a finished run cannot keep emitting keep-alives forever.
+    #[tokio::test(start_paused = true)]
+    async fn keep_alive_stops_when_the_engine_sender_drops() {
+        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (param_tx, mut param_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mapping = tokio::spawn(run_review_progress_mapping(
+            event_rx,
+            param_tx,
+            token("done"),
+            TEST_KEEP_ALIVE,
+        ));
+
+        event_tx
+            .send(ReviewProgressEvent::Planned { total_pairs: 1 })
+            .unwrap();
+        advance(std::time::Duration::ZERO).await;
+        drop(event_tx);
+        advance(TEST_KEEP_ALIVE * 3).await;
+
+        assert!(mapping.is_finished(), "the mapping ends with the engine");
+        // Only the one mapped event ever reached the wire side.
+        assert_eq!(take_buffered(&mut param_rx).len(), 1);
     }
 
     /// A bare `ToolContext` (no token, no sink, no peer).
