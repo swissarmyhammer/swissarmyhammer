@@ -168,12 +168,7 @@ impl TestRunner {
 
     fn format_argument_prompt(&self, arg: &swissarmyhammer::Parameter) -> String {
         let requirement = if arg.required { "required" } else { "optional" };
-        format!(
-            "{} ({}): {}",
-            arg.name.bold(),
-            requirement,
-            &arg.description
-        )
+        format!("{} ({}): {}", arg.name.bold(), requirement, arg.description)
     }
 
     fn create_input_prompt<'a>(

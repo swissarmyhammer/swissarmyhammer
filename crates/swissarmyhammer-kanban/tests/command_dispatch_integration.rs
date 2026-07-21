@@ -1385,7 +1385,7 @@ async fn task_move_writes_new_ordinal_to_disk() {
 
     // Read C's ordinal before move
     let task_dir = engine.kanban.root().join("tasks");
-    let c_md_path = task_dir.join(format!("{}.md", &ids[2]));
+    let c_md_path = task_dir.join(format!("{}.md", ids[2]));
     let before_content = std::fs::read_to_string(&c_md_path).expect("should read task C .md");
     let before_ordinal = before_content
         .lines()

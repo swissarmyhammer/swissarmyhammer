@@ -1097,16 +1097,11 @@ impl DefaultParameterResolver {
                             let temp_params = vec![param.clone()];
                             let temp_resolved = HashMap::new(); // Start fresh for prompting
 
-                            match interactive_prompts
-                                .prompt_for_parameters(&temp_params, &temp_resolved)
-                            {
-                                Ok(prompted_values) => {
-                                    if let Some(value) = prompted_values.get(&param.name) {
-                                        resolved.insert(param.name.clone(), value.clone());
-                                        changed = true;
-                                    }
-                                }
-                                Err(e) => return Err(e),
+                            let prompted_values = interactive_prompts
+                                .prompt_for_parameters(&temp_params, &temp_resolved)?;
+                            if let Some(value) = prompted_values.get(&param.name) {
+                                resolved.insert(param.name.clone(), value.clone());
+                                changed = true;
                             }
                         } else {
                             // Return appropriate error based on whether parameter has a condition

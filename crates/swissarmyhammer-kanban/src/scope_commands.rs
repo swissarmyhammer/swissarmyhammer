@@ -175,7 +175,7 @@ pub fn resolve_name_template(name: &str, params: &TemplateParams<'_>) -> String 
         let capitalized = if entity_type.is_empty() {
             String::new()
         } else {
-            format!("{}{}", &entity_type[..1].to_uppercase(), &entity_type[1..])
+            format!("{}{}", entity_type[..1].to_uppercase(), &entity_type[1..])
         };
         result = result.replace("{{entity.type}}", &capitalized);
     }
