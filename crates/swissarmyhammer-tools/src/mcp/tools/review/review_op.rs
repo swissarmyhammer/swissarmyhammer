@@ -144,8 +144,10 @@ pub enum EmbedderError {
 ///
 /// Each variant names one failure point of [`run_review_request`]: resolving the
 /// engine inputs (validators, index, embedder, agent), hosting the pipeline on
-/// its dedicated runtime, the pipeline itself, or the completeness gate refusing
-/// an untrustworthy run.
+/// its dedicated runtime, or the pipeline itself. A run where fan-out tasks
+/// failed is *not* an error case here — it returns a `ReviewReport` whose
+/// markdown carries the INCOMPLETE banner and whose counts carry the failure
+/// tally (see [`run_review_request`]'s `# Errors` section).
 #[derive(Debug, thiserror::Error)]
 pub enum ReviewError {
     /// The process-wide [`REVIEW_PIPELINE_GATE`] semaphore closed (process
@@ -420,8 +422,11 @@ impl ReviewRequest {
 /// # Errors
 ///
 /// Returns a [`ReviewError`] on loader failure, a missing/locked index, embedder
-/// load failure, agent-construction failure, a pipeline error, or the
-/// completeness gate refusing an untrustworthy run.
+/// load failure, agent-construction failure, or a pipeline error. A run where
+/// some (even all) fan-out tasks failed is *not* an error: it returns
+/// `Ok(ReviewReport)` whose markdown carries the `results are INCOMPLETE`
+/// banner and whose counts expose `tasks_failed`/`tasks_attempted` — there is
+/// no completeness gate refusing the run.
 pub async fn run_review_request(
     request: ReviewRequest,
     repo_path: &Path,
