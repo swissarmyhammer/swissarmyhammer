@@ -978,6 +978,9 @@ impl ReviewCountsView {
     }
 }
 
+/// Maps the engine's internal [`ReviewReport`] onto the tool-boundary wire
+/// type [`ReviewResponse`]: the report's rendered markdown is taken as-is, and
+/// its counts are re-shaped into the serializable [`ReviewCountsView`].
 impl From<ReviewReport> for ReviewResponse {
     fn from(report: ReviewReport) -> Self {
         let counts = *report.counts();
