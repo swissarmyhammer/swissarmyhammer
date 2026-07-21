@@ -13,8 +13,12 @@ comments:
     3. Grant a load-tolerant timeout to CI+local test runs (e.g. .cargo/config.toml [env] or CI workflow env) without changing the 30s production default.
     Reproduce the diagnostics IPC tests locally to confirm green before pushing.
   timestamp: 2026-07-21T12:10:52.602340+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01ky2fk4bbjqn7d3jh4836czc0
+  text: 'RESOLVED — CI fully green for 87afaedca (run 29833771183), first green in 2 weeks. All 8 jobs pass: Test, Clippy, Rustfmt, Docs Guard, Run all examples, Tauri Apps, Frontend (kanban-app), Frontend (mirdan-app). Three fixes landed: (1) diagnostics real-RA IPC tests made reliable via env-tunable LSP timeout + nextest serialization (320e952ab) — the persistent 2-week failure; (2) bounded retries on the 3 nondeterministic real-model chat tests under GPU contention (c71aa2bd6); (3) five clippy question_mark/useless_borrows_in_formatting lints that CI''s floated stable 1.97.1 promotes to errors (87afaedca). Follow-up recommendation for durability: pin the toolchain (rust-toolchain.toml + workflow) so a future stable bump can''t silently break clippy again — the root cause of item 3.'
+  timestamp: 2026-07-21T13:59:36.043621+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff880
 title: 'CI red ~2 weeks: real-rust-analyzer LSP request timeouts (rename/definition) + real-model e2e >600s on the self-hosted runner'
 ---
 ## What
