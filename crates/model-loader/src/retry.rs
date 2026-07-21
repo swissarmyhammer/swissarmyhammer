@@ -170,11 +170,11 @@ async fn download_with_retry_internal(
                             || e.to_string().contains("404")
                         {
                             Err(ModelError::NotFound(format!(
-                                "HuggingFace resource not found: {}",
+                                "huggingface resource not found: {}",
                                 e
                             )))
                         } else {
-                            Err(ModelError::Network(format!("HuggingFace API error: {}", e)))
+                            Err(ModelError::Network(format!("huggingface API error: {}", e)))
                         }
                     }
                 }
@@ -209,6 +209,37 @@ async fn download_with_retry_internal(
 /// by `RetryManager`.)
 const RETRIABLE_HTTP_CODES: &[&str] = &["500", "502", "503", "504"];
 
+/// Predicate over a lowercased error message: does the message belong to a
+/// given failure class?
+type ErrorMatcher = fn(&str) -> bool;
+
+/// Error-classification table mapping a lowercased error-message predicate to
+/// the user-facing guidance for that failure class. The first matching row
+/// wins; [`DEFAULT_GUIDANCE`] covers everything else. Data-driven like
+/// [`RETRIABLE_HTTP_CODES`], so adding a failure class is a new row, not a
+/// new branch.
+const ERROR_GUIDANCE: &[(ErrorMatcher, &str)] = &[
+    (
+        |msg| msg.contains("404") || msg.contains("not found"),
+        "📁 File not found. Verify the filename exists in the repository. You can browse the repo at https://huggingface.co/",
+    ),
+    (
+        |msg| msg.contains("403") || msg.contains("forbidden"),
+        "🔒 Access forbidden. Check if the repository is private and if you need authentication.",
+    ),
+    (
+        |msg| msg.contains("429") || msg.contains("too many requests"),
+        "⏱️ Rate limited by HuggingFace. Wait 5-10 minutes before trying again to respect their API limits.",
+    ),
+    (
+        |msg| RETRIABLE_HTTP_CODES.iter().any(|code| msg.contains(code)),
+        "🏥 Server error on HuggingFace. This is temporary - try again in a few minutes.",
+    ),
+];
+
+/// Guidance used when no [`ERROR_GUIDANCE`] row matches.
+const DEFAULT_GUIDANCE: &str = "🌐 Network error. Check your internet connection and try again.";
+
 /// Formats a comprehensive error message for download failures
 pub fn format_download_error(
     filename: &str,
@@ -217,27 +248,18 @@ pub fn format_download_error(
     retries_attempted: u32,
 ) -> String {
     let base_message = format!(
-        "Failed to download model file '{}' from repository '{}' after {} retries: {}",
+        "failed to download model file '{}' from repository '{}' after {} retries: {}",
         filename, repo, retries_attempted, error
     );
 
     let error_msg = error.to_string().to_lowercase();
 
-    // Add specific guidance based on error type
-    let guidance = if error_msg.contains("404") || error_msg.contains("not found") {
-        "📁 File not found. Verify the filename exists in the repository. You can browse the repo at https://huggingface.co/"
-    } else if error_msg.contains("403") || error_msg.contains("forbidden") {
-        "🔒 Access forbidden. Check if the repository is private and if you need authentication."
-    } else if error_msg.contains("429") || error_msg.contains("too many requests") {
-        "⏱️ Rate limited by HuggingFace. Wait 5-10 minutes before trying again to respect their API limits."
-    } else if RETRIABLE_HTTP_CODES
+    // Look up guidance for the error class in the data table
+    let guidance = ERROR_GUIDANCE
         .iter()
-        .any(|code| error_msg.contains(code))
-    {
-        "🏥 Server error on HuggingFace. This is temporary - try again in a few minutes."
-    } else {
-        "🌐 Network error. Check your internet connection and try again."
-    };
+        .find(|(matches, _)| matches(&error_msg))
+        .map(|(_, guidance)| *guidance)
+        .unwrap_or(DEFAULT_GUIDANCE);
 
     let additional_help = "💡 Check model file exists, is valid GGUF format, and sufficient memory is available\n🔧 You can increase retry attempts by configuring retry_config.max_retries";
 

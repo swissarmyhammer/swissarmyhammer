@@ -37,7 +37,7 @@ pub async fn download_hf_file(
     // the cache directory this Api actually uses.
     let api = ApiBuilder::from_env()
         .build()
-        .map_err(|e| ModelError::Network(format!("Failed to create HF API: {e}")))?;
+        .map_err(|e| ModelError::Network(format!("failed to create HF API: {e}")))?;
     let repo_api = api.model(repo.to_string());
     download_with_retry(&repo_api, filename, repo, retry_config, observer).await
 }
@@ -101,7 +101,7 @@ pub async fn load_huggingface_model_with_path_and_folder(
         Ok(api) => api,
         Err(e) => {
             return Err(ModelError::Network(format!(
-                "Failed to create HuggingFace API client for {}: {}. Use ModelSource::Local to load from local path instead.",
+                "failed to create HuggingFace API client for {}: {}. Use ModelSource::Local to load from local path instead.",
                 repo, e
             )));
         }
@@ -141,7 +141,7 @@ pub async fn load_huggingface_model_with_path_and_folder(
             Err(e) => {
                 warn!("Failed to auto-detect model file: {}", e);
                 return Err(ModelError::NotFound(format!(
-                    "Could not auto-detect model file in repository: {}. Please specify --filename{}",
+                    "could not auto-detect model file in repository: {}. Please specify --filename{}",
                     repo,
                     if let Some(f) = folder { format!(" or check folder {}", f) } else { String::new() }
                 )));

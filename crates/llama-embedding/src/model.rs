@@ -36,7 +36,7 @@ fn get_global_backend() -> Result<Arc<LlamaBackend>> {
     let result = GLOBAL_BACKEND.get_or_init(|| {
         LlamaBackend::init()
             .map(Arc::new)
-            .map_err(|e| format!("Backend init failed: {}", e))
+            .map_err(|e| format!("backend init failed: {}", e))
     });
 
     match result {
@@ -47,6 +47,10 @@ fn get_global_backend() -> Result<Arc<LlamaBackend>> {
 
 /// Default embedding dimension fallback when model reports invalid value
 const DEFAULT_EMBEDDING_DIMENSION: usize = 384;
+
+/// Metadata context-size values at or below this threshold are ignored in
+/// favor of the model's trained context length (`n_ctx_train`).
+const MIN_METADATA_CONTEXT_SIZE: usize = 8192;
 
 /// Returns the embedding dimension from a LlamaModel.
 ///
@@ -175,23 +179,26 @@ impl EmbeddingModel {
         llama_cpp_2::model::params::LlamaModelParams::default().with_n_gpu_layers(gpu_layers)
     }
 
-    /// Extract context length from model metadata
+    /// Extract context length from model metadata.
+    ///
+    /// Returns the first metadata context size above
+    /// [`MIN_METADATA_CONTEXT_SIZE`], falling back to the model's trained
+    /// context length when no metadata entry qualifies.
     fn extract_context_size(model: &LlamaModel) -> usize {
-        let meta_count = model.meta_count();
-        for i in 0..meta_count {
-            if let (Ok(key), Ok(value)) =
-                (model.meta_key_by_index(i), model.meta_val_str_by_index(i))
-            {
-                if key.contains("max_position_embeddings") || key.contains("context_length") {
-                    if let Ok(ctx_val) = value.parse::<usize>() {
-                        if ctx_val > 8192 {
-                            return ctx_val;
-                        }
-                    }
-                }
-            }
+        (0..model.meta_count())
+            .find_map(|i| Self::context_size_from_metadata(model, i))
+            .unwrap_or(model.n_ctx_train() as usize)
+    }
+
+    /// Read metadata entry `i` and return its value when it is a
+    /// context-length key parsing to a size above the threshold.
+    fn context_size_from_metadata(model: &LlamaModel, i: i32) -> Option<usize> {
+        let key = model.meta_key_by_index(i).ok()?;
+        if !key.contains("max_position_embeddings") && !key.contains("context_length") {
+            return None;
         }
-        model.n_ctx_train() as usize
+        let ctx_val = model.meta_val_str_by_index(i).ok()?.parse::<usize>().ok()?;
+        (ctx_val > MIN_METADATA_CONTEXT_SIZE).then_some(ctx_val)
     }
 
     /// Load the model (crate-internal; external callers use `TextEmbedder::load`)
@@ -238,7 +245,7 @@ impl EmbeddingModel {
         let model = LlamaModel::load_from_file(&self.backend, &resolved.path, &model_params)
             .map_err(|e| {
                 EmbeddingError::model(format!(
-                    "Failed to load model from {}: {}",
+                    "failed to load model from {}: {}",
                     resolved.path.display(),
                     e
                 ))
@@ -261,7 +268,7 @@ impl EmbeddingModel {
     async fn embed_impl(&self, text: &str) -> Result<EmbeddingResult> {
         if text.is_empty() {
             return Err(EmbeddingError::text_processing(
-                "Input text cannot be empty",
+                "input text cannot be empty",
             ));
         }
 
@@ -373,7 +380,7 @@ fn ensure_context(
 
     let ctx = model
         .new_context(backend, params)
-        .map_err(|e| EmbeddingError::model(format!("Context creation failed: {}", e)))?;
+        .map_err(|e| EmbeddingError::model(format!("context creation failed: {}", e)))?;
 
     // SAFETY: We own the model and it won't be dropped before context
     let ctx: LlamaContext<'static> = unsafe { std::mem::transmute(ctx) };
@@ -398,10 +405,10 @@ fn embed_single(
     let tokens = ctx
         .model
         .str_to_token(text, AddBos::Never)
-        .map_err(|e| EmbeddingError::text_encoding(format!("Tokenize failed: {}", e)))?;
+        .map_err(|e| EmbeddingError::text_encoding(format!("tokenize failed: {}", e)))?;
 
     if tokens.is_empty() {
-        return Err(EmbeddingError::text_encoding("No tokens"));
+        return Err(EmbeddingError::text_encoding("no tokens"));
     }
 
     let tokens = if tokens.len() > max_seq_len {
@@ -416,18 +423,18 @@ fn embed_single(
     let mut batch = LlamaBatch::new(tokens.len(), 1);
     batch
         .add_sequence(&tokens, 0, false)
-        .map_err(|e| EmbeddingError::text_processing(format!("Batch failed: {}", e)))?;
+        .map_err(|e| EmbeddingError::text_processing(format!("batch failed: {}", e)))?;
 
     ctx.decode(&mut batch)
-        .map_err(|e| EmbeddingError::text_processing(format!("Decode failed: {}", e)))?;
+        .map_err(|e| EmbeddingError::text_processing(format!("decode failed: {}", e)))?;
 
     let emb = ctx
         .embeddings_seq_ith(0)
-        .map_err(|e| EmbeddingError::text_processing(format!("Extract failed: {}", e)))?;
+        .map_err(|e| EmbeddingError::text_processing(format!("extract failed: {}", e)))?;
 
     if emb.len() != dim {
         return Err(EmbeddingError::text_processing(format!(
-            "Dimension mismatch: {} vs {}",
+            "dimension mismatch: {} vs {}",
             dim,
             emb.len()
         )));

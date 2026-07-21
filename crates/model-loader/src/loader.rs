@@ -15,7 +15,7 @@ use tracing::info;
 /// from HuggingFace if needed, or finding them locally) and returns a
 /// [`ResolvedModel`] with the file path and metadata. Consumers (llama-agent,
 /// ane-embedding, etc.) then load the file into their own backend.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ModelResolver {
     /// Optional progress callback forwarded to every download this resolver
     /// performs. `None` (the default) is byte-identical to the pre-observer
@@ -152,7 +152,7 @@ impl ModelResolver {
             let path = folder.join(filename);
             if !path.exists() {
                 return Err(ModelError::NotFound(format!(
-                    "Model file does not exist: {}",
+                    "model file does not exist: {}",
                     path.display()
                 )));
             }
@@ -202,7 +202,7 @@ impl ModelResolver {
             Ok(entries) => entries,
             Err(e) => {
                 return Err(ModelError::LoadingFailed(format!(
-                    "Cannot read directory {}: {}",
+                    "cannot read directory {}: {}",
                     folder.display(),
                     e
                 )))
@@ -243,7 +243,7 @@ impl ModelResolver {
         }
 
         Err(ModelError::NotFound(format!(
-            "No model files found in {}",
+            "no model files found in {}",
             folder.display()
         )))
     }
@@ -491,7 +491,7 @@ mod tests {
         let result = resolver.resolve(&config).await;
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("No model files found"));
+        assert!(err_msg.contains("no model files found"));
     }
 
     #[tokio::test]

@@ -556,7 +556,7 @@ async fn build_ane_model(
     let resolved = resolver
         .resolve(&model_config)
         .await
-        .map_err(|e| EmbeddingError::model(format!("Failed to resolve ANE model: {e}")))?;
+        .map_err(|e| EmbeddingError::model(format!("failed to resolve ANE model: {e}")))?;
 
     // The resolved path points to a file inside the .mlpackage directory.
     // Walk up until we find the .mlpackage directory, then its parent is model_dir.
@@ -583,7 +583,7 @@ async fn build_ane_model(
                 observer,
             )
             .await
-            .map_err(|e| EmbeddingError::model(format!("Failed to download tokenizer: {e}")))?;
+            .map_err(|e| EmbeddingError::model(format!("failed to download tokenizer: {e}")))?;
         }
     }
 
