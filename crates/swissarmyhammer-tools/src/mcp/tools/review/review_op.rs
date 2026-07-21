@@ -182,25 +182,6 @@ pub enum ReviewError {
     /// The engine pipeline itself failed.
     #[error("review pipeline failed: {0}")]
     Pipeline(#[source] AvpError),
-    /// The run finished but a majority of its fan-out tasks failed, so the
-    /// (empty) findings are untrustworthy and refused (see
-    /// [`INCOMPLETE_REVIEW_FAILURE_RATE`]).
-    #[error(
-        "incomplete review: {failed}/{attempted} fan-out tasks failed \
-         (over {:.0}%) — the review did not actually run, so the empty findings are not a \
-         clean pass and were not returned. This is a genuine fan-out failure (the review \
-         agent/backend erroring or timing out per task), NOT the diff being too large: a \
-         large diff is reviewed in content-budgeted batches, and a single file over \
-         `batch_size` fails fast with its own distinct error. Check the agent/backend health \
-         (and `review.concurrency`), then retry.",
-        INCOMPLETE_REVIEW_FAILURE_RATE * 100.0
-    )]
-    Incomplete {
-        /// How many fan-out tasks failed.
-        failed: usize,
-        /// How many fan-out tasks were attempted.
-        attempted: usize,
-    },
 }
 
 /// Process-global cache of the loaded default embedder.
@@ -551,11 +532,15 @@ async fn run_review_request_inner(
     .map_err(ReviewError::Pipeline)?;
 
     // The engine is a pure data barrier: it always returns a report, carrying the
-    // fan-out task tally rather than erroring on it. Error policy lives here, at
-    // the tool boundary — a run whose fan-out mostly failed is refused rather than
-    // returned as an empty clean pass that a caller (or a `/finish` loop) would
-    // mistake for "nothing wrong".
-    check_review_completeness(&report)?;
+    // fan-out task tally rather than erroring on it. There is no retry at this
+    // boundary either — a run whose fan-out mostly (or entirely) failed is
+    // returned exactly as-is, never refused as a tool error. `synthesize` already
+    // stamps the loud "results are INCOMPLETE" banner directly under the report
+    // header whenever any task failed, and `ReviewCountsView` carries the
+    // `tasks_failed`/`tasks_attempted` tally to callers — that is the whole
+    // failure signal. Refusing here would only push a driving caller (e.g. a
+    // `/finish` loop) to re-run the ENTIRE review, including the units that will
+    // hit the same underlying failure (e.g. an agentic-loop iteration cap) again.
     Ok(report)
 }
 
@@ -871,37 +856,6 @@ async fn run_review_progress_mapping(
             }
         }
     }
-}
-
-/// The fraction of attempted fan-out tasks that must fail before a review is
-/// refused as incomplete rather than returned.
-///
-/// Set above one-half so a review is failed loudly only when a *majority* of its
-/// fan-out tasks did not run — the calcutron symptom was 60/60 (100%) failing,
-/// returned as a clean empty pass. A minority of failures still produces a
-/// trustworthy report (the rendered markdown flags the gap and the counts carry
-/// the tally), so it is returned, not errored; the threshold draws the line at
-/// the point where the empty findings set no longer means "nothing wrong" but
-/// "the review did not actually run".
-const INCOMPLETE_REVIEW_FAILURE_RATE: f64 = 0.5;
-
-/// Decide whether a finished review is trustworthy enough to return.
-///
-/// Returns [`ReviewError::Incomplete`] naming the failed/attempted task counts
-/// when more than [`INCOMPLETE_REVIEW_FAILURE_RATE`] of the attempted fan-out
-/// tasks failed, so a wedged run surfaces as a tool error instead of an empty
-/// clean report. A run that attempted no tasks (an empty diff) has no failure
-/// rate and is always trustworthy.
-fn check_review_completeness(report: &ReviewReport) -> Result<(), ReviewError> {
-    let attempted = report.counts().tasks_attempted();
-    let failed = report.counts().tasks_failed();
-    if attempted == 0 {
-        return Ok(());
-    }
-    if failed as f64 > attempted as f64 * INCOMPLETE_REVIEW_FAILURE_RATE {
-        return Err(ReviewError::Incomplete { failed, attempted });
-    }
-    Ok(())
 }
 
 /// Open an owned read-only connection to the workspace's code_context index.
@@ -1637,46 +1591,69 @@ mod tests {
     }
 
     #[test]
-    fn a_majority_failed_review_is_an_incomplete_run_error_not_a_pass() {
-        // The calcutron symptom: every fan-out task failed, yet the report is an
-        // empty clean section. The tool boundary must refuse it as an error.
+    fn a_majority_failed_review_is_never_refused_now_returned_with_the_incomplete_banner() {
+        // The calcutron symptom: every fan-out task failed. There is no retry —
+        // the run's report is returned as-is, never refused as a tool error;
+        // `synthesize` already stamps the loud INCOMPLETE banner so an all-failed
+        // run cannot be mistaken for a clean pass.
         let report = report_with_tally(60, 60);
-        let err = check_review_completeness(&report)
-            .expect_err("an all-failed review must surface as an error")
-            .to_string();
-        assert!(err.contains("60"), "the error names the tally: {err}");
         assert!(
-            err.to_lowercase().contains("incomplete"),
-            "the error must flag the run incomplete: {err}"
+            report.markdown().contains("results are INCOMPLETE"),
+            "an all-failed report must render the INCOMPLETE banner: {}",
+            report.markdown()
         );
+        assert_eq!(report.counts().tasks_attempted(), 60);
+        assert_eq!(report.counts().tasks_failed(), 60);
     }
 
     #[test]
-    fn a_run_under_the_failure_threshold_is_not_an_error() {
-        // A minority of tasks failed (1 of 10) — the report is still trustworthy,
-        // so the tool returns it (the rendered markdown already flags the gap).
+    fn a_majority_failed_review_report_carries_the_failure_tally() {
+        // A majority (not all) failing is the same "no retry, return flagged"
+        // contract — the threshold that used to gate the refusal no longer
+        // matters at all: every failure rate is returned.
+        let report = report_with_tally(10, 7);
+        assert!(
+            report.markdown().contains("results are INCOMPLETE"),
+            "a majority-failed report must render the INCOMPLETE banner: {}",
+            report.markdown()
+        );
+        assert_eq!(report.counts().tasks_attempted(), 10);
+        assert_eq!(report.counts().tasks_failed(), 7);
+    }
+
+    #[test]
+    fn a_minority_failed_review_report_still_carries_the_incomplete_banner() {
+        // A minority of tasks failed (1 of 10) — the report is returned with the
+        // gap flagged, exactly as a majority/all-failed run is: there is no
+        // separate threshold behavior left at this boundary.
         let report = report_with_tally(10, 1);
         assert!(
-            check_review_completeness(&report).is_ok(),
-            "a minority of failures must not error the run"
+            report.markdown().contains("results are INCOMPLETE"),
+            "any non-zero failure must render the INCOMPLETE banner: {}",
+            report.markdown()
         );
+        assert_eq!(report.counts().tasks_failed(), 1);
     }
 
     #[test]
-    fn a_fully_successful_run_is_not_an_error() {
+    fn a_fully_successful_review_report_carries_no_incomplete_banner() {
         let report = report_with_tally(8, 0);
-        assert!(check_review_completeness(&report).is_ok());
+        assert!(
+            !report.markdown().contains("INCOMPLETE"),
+            "a clean run must not render the banner: {}",
+            report.markdown()
+        );
+        assert_eq!(report.counts().tasks_failed(), 0);
     }
 
     #[test]
-    fn a_run_that_attempted_no_tasks_is_not_an_error() {
-        // An empty diff attempts no fan-out tasks; with zero attempted there is no
-        // failure rate to exceed, so it is a clean pass, not an incomplete run.
+    fn a_run_that_attempted_no_tasks_carries_no_incomplete_banner() {
+        // An empty diff attempts no fan-out tasks — there is no failure rate to
+        // speak of, so no banner renders.
         let report = report_with_tally(0, 0);
-        assert!(
-            check_review_completeness(&report).is_ok(),
-            "a no-op review must not divide-by-zero into an error"
-        );
+        assert!(!report.markdown().contains("INCOMPLETE"));
+        assert_eq!(report.counts().tasks_attempted(), 0);
+        assert_eq!(report.counts().tasks_failed(), 0);
     }
 
     fn mock() -> Arc<dyn model_embedding::TextEmbedder> {

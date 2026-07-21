@@ -1,0 +1,23 @@
+---
+assignees:
+- claude-code
+position_column: todo
+position_ordinal: b480
+title: llama-agent real-model tests time out deterministically on this machine (10 timeouts in scoped run)
+---
+Full scoped run (`cargo nextest run -E 'rdeps(swissarmyhammer-tools) | rdeps(swissarmyhammer-validators) | rdeps(swissarmyhammer-agent)'`, 2026-07-21) had 10 TIMEOUTs, all real-model tests:
+
+- kanban-app::ai_panel_e2e test_ai_panel_e2e_mcp_tool_reachable_in_session (600s)
+- kanban-app::ai_panel_e2e test_ai_panel_e2e_qwen_generates_tokens_and_second_prompt_succeeds (600s)
+- llama-agent tests::compaction::...::test_auto_compact_sessions_with_candidates (300s)
+- llama-agent tests::compaction::...::test_compaction_with_preserved_messages (300s)
+- llama-agent tests::compaction::...::test_compact_method_would_not_help (300s)
+- llama-agent::agent_tests integration::agent_tools_mount::agent_tools_mount_lists_intrinsic_tools_with_no_external_servers (300s)
+- llama-agent::agent_tests integration::dual_source_shell_dedup::llama_dual_source_aggregation_has_shell_exactly_once (300s)
+- llama-agent::agent_tests integration::mtp_streaming::streaming_mtp_produces_tokens_on_mtp_model (300s)
+- llama-agent::agent_tests integration::mtp_streaming::streaming_mtp_releases_worker_after_turn (300s)
+- swissarmyhammer-agent::review_real_model_e2e review_runs_over_acp_against_a_real_local_model (480s)
+
+What I tried: re-ran a 3-test sample in ISOLATION (`cargo nextest run -p llama-agent -E 'test(test_auto_compact_sessions_with_candidates) | test(test_compact_method_would_not_help) | test(agent_tools_mount_lists_intrinsic_tools_with_no_external_servers)'`) — all 3 timed out on ALL 3 retry attempts (300s each; 0 passed, 3 timed out). So this is NOT full-suite GPU contention: the real-model turn path grinds past its budget even uncontended on this machine. No stdout/stderr progress from the hung tests before the terminate.
+
+Not related to ^s41dsh4 (whose code changes are absent from the tree anyway). Either a recent llama-agent regression (recent commits: 9b83ba371 unified files tool, ae3de36ec KV prefix caching for recurrent Qwen) or an environment/model issue. Next step: run one test with RUST_LOG=debug under an external `timeout` and find where the turn stalls (model load vs generation vs KV-cache). #test-failure

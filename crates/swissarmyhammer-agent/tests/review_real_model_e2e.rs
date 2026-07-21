@@ -48,20 +48,21 @@
 //! ## What it asserts
 //!
 //! Structure, not finding content. A 0.6B model will not reliably produce real
-//! findings — or even parseable output — so this accepts either of the two
-//! DESIGNED pipeline-complete outcomes:
+//! findings — or even parseable output — so this asserts only that the run
+//! completes with a well-formed [`ReviewReport`]: a non-error `markdown`
+//! carrying the dated GFM section header, with counts that are internally
+//! consistent (the per-severity tallies do not exceed the confirmed count).
 //!
-//! - a well-formed [`ReviewReport`]: a non-error `markdown` carrying the dated
-//!   GFM section header, with counts that are internally consistent (the
-//!   per-severity tallies do not exceed the confirmed count); or
-//! - the completeness gate's "incomplete review" refusal
-//!   (`check_review_completeness` in `review_op.rs`), which only fires after
-//!   the fan-out genuinely ran real generations whose output did not parse —
-//!   routine for a 0.6B model that hallucinates tool calls instead of emitting
-//!   the findings JSON.
-//!
-//! Hangs, transport errors, and malformed reports still fail. It does NOT
-//! assert any specific bug was found.
+//! There is no retry and no refusal at the tool boundary (see
+//! `run_review_request_inner` in `review_op.rs`): a fan-out task whose
+//! generation errors or produces unparseable output degrades to zero findings
+//! and is counted as failed, but the run still finishes and returns its
+//! report — `synthesize` stamps the "results are INCOMPLETE" banner and
+//! carries the failure tally when that happens, it does not surface as a
+//! `run_review_request` error. So a 0.6B model hallucinating tool calls
+//! instead of the findings JSON is still a well-formed, non-error report; only
+//! a genuine wiring failure (hang, transport error, malformed report) fails
+//! this test. It does NOT assert any specific bug was found.
 
 use std::sync::Arc;
 
@@ -187,26 +188,13 @@ async fn review_runs_over_acp_against_a_real_local_model() {
                 tracing::warn!("skipping: qwen-0.6b-test model unavailable ({e})");
                 return;
             }
-            // The completeness gate's refusal is a DESIGNED, pipeline-complete
-            // outcome, not a wiring failure: `run_review_request` refuses to
-            // return a clean report when a majority of fan-out tasks yielded no
-            // parseable findings (see `check_review_completeness` in
-            // `review_op.rs`). The gate only fires after attempted > 0 tasks
-            // genuinely ran a real generation, so reaching it proves the exact
-            // structure this test exists to prove: factory → ACP → llama →
-            // queue → fleet → tally → gate, end to end over the real model.
-            // A 0.6B model frequently answers the fan-out prompt with
-            // unparseable output (e.g. hallucinated tool calls), so either a
-            // well-formed report or this specific refusal is a valid run.
-            // Anything else — a hang, a transport error, a malformed report —
-            // still fails.
-            if e.contains("incomplete review:") {
-                tracing::warn!(
-                    "review completed via the incomplete-review refusal (the 0.6B model \
-                     produced unparseable fan-out output): {e}"
-                );
-                return;
-            }
+            // There is no completeness gate/refusal to special-case here anymore:
+            // `run_review_request` never errors on a fan-out failure rate, no
+            // matter how a 0.6B model's unparseable output degrades individual
+            // tasks — it always returns the report (see the module doc). So the
+            // only errors left reaching this branch are genuine wiring failures
+            // (a hang surfacing as a timeout, a transport error, a pipeline
+            // error) — none of which are a valid outcome for this test.
             panic!("review pipeline must complete over the real local model, got error: {e}");
         }
     };

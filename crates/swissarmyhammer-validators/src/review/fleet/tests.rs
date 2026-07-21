@@ -1987,9 +1987,15 @@ async fn one_failing_task_yields_zero_findings_without_aborting_the_rest() {
             )),
         ),
     ]);
+    let agent_probe = Arc::clone(&agent);
 
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
     let outcome = with_pool(agent, PoolConfig::remote(2), move |pool| async move {
-        run_fleet_and_unpin(&work, &loader, &pool).await
+        let mut outcome = run_fleet(&work, &loader, &pool, Some(&progress_tx)).await;
+        if let Some(guard) = outcome.prime.take() {
+            unpin_prefix_session(guard).await;
+        }
+        outcome
     })
     .await;
 
@@ -2008,6 +2014,72 @@ async fn one_failing_task_yields_zero_findings_without_aborting_the_rest() {
         1,
         "the erroring task is counted as failed"
     );
+
+    // No-retry regression guard: the failing validator's prompt reaches the
+    // agent exactly once — no fallback resubmission, no re-queue of the same
+    // (validator, file) unit after it errors. This is the guard against ever
+    // reintroducing the per-unit retry the fleet decided against.
+    let bad_submissions = agent_probe
+        .seen_prompts()
+        .iter()
+        .filter(|p| p.contains("BAD_BODY"))
+        .count();
+    assert_eq!(
+        bad_submissions,
+        1,
+        "a failing fan-out task must be submitted to the agent exactly once, \
+         never retried: {:?}",
+        agent_probe.seen_prompts()
+    );
+
+    // Single-attempt semantics show up in the progress stream too: exactly one
+    // `PairStarted`/`PairDone` per (validator, file) — including the failing
+    // one — and the failure never triggers a re-plan (a second `Planned` event
+    // growing the total, which would signal a re-queue).
+    let events = drain_progress(&mut progress_rx);
+    let planned: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            ReviewProgressEvent::Planned { total_pairs } => Some(*total_pairs),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        planned,
+        vec![2],
+        "the failure must not grow/replan the announced total: {events:#?}"
+    );
+
+    for (validator, file) in [("val-good", "src/a.rs"), ("val-bad", "src/b.rs")] {
+        let started = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    ReviewProgressEvent::PairStarted { validator: v, file: f }
+                        if v == validator && f == file
+                )
+            })
+            .count();
+        assert_eq!(
+            started, 1,
+            "exactly one PairStarted for ({validator}, {file}), no retry: {events:#?}"
+        );
+        let done = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    ReviewProgressEvent::PairDone { validator: v, file: f }
+                        if v == validator && f == file
+                )
+            })
+            .count();
+        assert_eq!(
+            done, 1,
+            "exactly one PairDone for ({validator}, {file}), no retry: {events:#?}"
+        );
+    }
 }
 
 #[tokio::test]
