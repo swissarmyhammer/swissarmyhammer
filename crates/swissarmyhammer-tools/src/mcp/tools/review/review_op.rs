@@ -322,6 +322,7 @@ const DB_NAME: &str = "index.db";
 /// Built with [`ReviewRequest::new`] plus the `with_*` modifiers (the same
 /// builder shape as `ReviewTool`); read through the getters. All fields are
 /// private so the request can evolve without a field-level API commitment.
+#[derive(Debug)]
 pub struct ReviewRequest {
     /// The resolved scope (working / sha / file / glob).
     scope: Scope,
@@ -835,11 +836,13 @@ async fn run_review_progress_mapping(
                 // progress, so they never move the wire counter nor arm the
                 // keep-alive. With no peer (the in-process sink path), they are
                 // skipped: the sink contract is progress params.
-                if let Some(log_param) = review_content_log_param(&event) {
-                    if let Some(peer) = &peer {
-                        send_review_content_log(peer, log_param).await;
+                match (review_content_log_param(&event), peer.as_ref()) {
+                    (Some(log_param), Some(p)) => {
+                        send_review_content_log(p, log_param).await;
+                        continue;
                     }
-                    continue;
+                    (Some(_), None) => continue,
+                    (None, _) => {}
                 }
                 // Progress-tick variants map to notifications/progress as before.
                 let Some(param) = review_progress_param(&mut state, &token, &event) else {
@@ -869,6 +872,18 @@ async fn run_review_progress_mapping(
 /// the tool owns a dedicated connection for the run rather than borrowing the
 /// workspace's shared (std-`Mutex`-guarded) write handle.
 ///
+/// `repo_path` is trusted input here, not request data: it is never a `review`
+/// tool argument (the op only pulls `backend`/`validators`/`batch_size`/scope
+/// out of the call's JSON args — see [`ReviewTool::execute_review`]'s
+/// `resolve_repo_path`), so there is no `..`/absolute-path string arriving
+/// from a caller for this function to validate. It is the server's own
+/// `ToolContext::working_dir` (set once, at MCP-server/session start from the
+/// launch `working_dir` or ACP session cwd — never per-call), walked up to its
+/// git root by `find_git_repository_root_from`. The only join performed below
+/// appends the two hardcoded literal components `CONTEXT_DIR`/`DB_NAME`, so
+/// there is no dynamic path segment for a traversal to smuggle in even if
+/// `repo_path` were hostile.
+///
 /// # Errors
 ///
 /// Returns [`ReviewError::IndexMissing`] when the index database is absent (the
@@ -894,7 +909,7 @@ fn open_index_connection(repo_path: &Path) -> Result<Connection, ReviewError> {
 ///
 /// The fields are private (read through the getters); serde serializes them by
 /// their field names, so the wire shape is unchanged by the encapsulation.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReviewResponse {
     /// The dated GFM `## Review Findings (...)` section.
     markdown: String,
