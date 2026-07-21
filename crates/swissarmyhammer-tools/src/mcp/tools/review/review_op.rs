@@ -356,8 +356,8 @@ impl ReviewRequest {
 
     /// Set the `backend` modifier (`session` | `local`); `None` keeps the
     /// default policy.
-    pub fn with_backend(mut self, backend: Option<String>) -> Self {
-        self.backend = backend;
+    pub fn with_backend<S: Into<String>>(mut self, backend: Option<S>) -> Self {
+        self.backend = backend.map(Into::into);
         self
     }
 
