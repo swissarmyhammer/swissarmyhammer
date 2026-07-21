@@ -591,6 +591,56 @@ async fn review_working_through_the_registered_tool_flags_a_planted_duplicate() 
     assert_eq!(parsed["counts"]["confirmed"], json!(1));
 }
 
+/// A `review file` op whose `path` climbs out of the repo root (`../…`) must be
+/// rejected by the scope-stage containment guard, returning an error result with
+/// no findings — the outside file's content is never read into the review agent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(cwd)]
+async fn review_file_with_a_traversal_path_is_rejected() {
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    // A full, runnable pipeline (seeded index + validators + scripted agent) so
+    // the request reaches scope resolution rather than failing earlier.
+    let repo = TestRepo::new();
+    let factory = planted_duplicate_fixture(&repo);
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    // A secret file just ABOVE the repo dir that a naive join would leak.
+    let marker = format!(
+        "review_escape_{}.txt",
+        repo.path().file_name().unwrap().to_string_lossy()
+    );
+    let outside = repo.path().parent().unwrap().join(&marker);
+    std::fs::write(&outside, "TOP SECRET").unwrap();
+
+    let mut registry = ToolRegistry::new();
+    registry.register(
+        ReviewTool::new()
+            .with_agent_factory(factory)
+            .with_embedder_factory(mock_embedder_factory()),
+    );
+    let tool = registry.get_tool("review").unwrap();
+    let context = context_at(repo.path()).await;
+
+    let mut args = serde_json::Map::new();
+    args.insert("op".to_string(), json!("review file"));
+    args.insert("path".to_string(), json!(format!("../{marker}")));
+    args.insert("backend".to_string(), json!("local"));
+    let result = tool.execute(args, &context).await;
+    let _ = std::fs::remove_file(&outside);
+
+    let err = result.expect_err("a traversal path must be rejected, never reviewed");
+    let rendered = format!("{err:?}");
+    assert!(
+        rendered.contains(&format!("../{marker}")),
+        "the error must carry the full offending path: {rendered}"
+    );
+    assert!(
+        rendered.contains("escapes the repository root"),
+        "the error must explain the escape: {rendered}"
+    );
+}
+
 // The engine's observability lines (`review scope resolved` / `fleet fan-out` /
 // `review synthesis complete`) are asserted to surface on the REAL tool path
 // under a **process-global** subscriber — the kind `sah serve` installs via

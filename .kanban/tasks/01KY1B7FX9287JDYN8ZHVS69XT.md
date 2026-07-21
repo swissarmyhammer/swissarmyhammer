@@ -1,8 +1,35 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: aa80
+comments:
+- actor: claude-code
+  id: 01ky1g6b4g0d91ptpdnzj1ksz0
+  text: 'Batch /finish #review picked this next (security > features; review column empty). Highest-stakes remaining item — real arbitrary-file-read via read_working path join, surfaced by ^1wdaqqy''s field run. Iteration 1: delegating to /implement.'
+  timestamp: 2026-07-21T04:50:51.152553+00:00
+- actor: claude-code
+  id: 01ky1gmxd78d2kn99x1bzqgkyy
+  text: |-
+    Implemented the containment guard at the choke point `read_working` in crates/swissarmyhammer-validators/src/review/scope.rs.
+
+    How containment is enforced:
+    - New `confine_to_repo(repo_path, path)`: (a) rejects absolute input outright (Path::join with an absolute arg replaces the base -> the /etc/passwd escape); (b) canonicalizes the repo root once; (c) for an EXISTING candidate, canonicalizes it (follows symlinks, so a repo-internal symlink whose target is outside the root resolves outside and is rejected); (d) for a NOT-yet-existing candidate, normalizes `.`/`..` lexically (no fs access, preserving the absent-path Ok(None) behavior); (e) rejects any resolved path not `starts_with` the canonical root (component-wise, no prefix false-positives).
+    - Typed error via new `path_escapes_repo_root` helper -> AvpError::Validator{validator: "scope", message: "path '<path>' escapes the repository root"} — lowercase, no trailing punctuation, full untruncated path. Reused for both the absolute and escape cases (no repeated literal).
+    - read_working now routes through confine_to_repo first; Ok(None) for absent, Context error for non-absent read failures unchanged. resolve_glob/resolve_working also read via read_working so the single guard covers them; tracked repo-relative paths are NOT rejected (glob tests green).
+    - Updated docs on read_working and resolve_file to state the containment contract; added # Errors docs.
+
+    TDD: wrote 4 failing scope.rs unit tests first (parent traversal, absolute path, escaping symlink [cfg(unix)], nested relative unchanged) — watched the 3 escape tests leak `Ok(Some("TOP SECRET"))` (RED), then implemented to GREEN. Plus MCP-level test review_file_with_a_traversal_path_is_rejected in tools review/tests.rs (review file `../<marker>` returns an error result naming the path).
+
+    Gates (all green): `cargo nextest run -p swissarmyhammer-validators review::scope` 33/33; `cargo nextest run -p swissarmyhammer-tools -E 'test(review)'` 45/45; `cargo fmt`; `cargo clippy -p swissarmyhammer-validators -p swissarmyhammer-tools --all-targets -- -D warnings` clean; `cargo check --workspace --all-targets` clean. Left in doing for review.
+  timestamp: 2026-07-21T04:58:48.615458+00:00
+- actor: claude-code
+  id: 01ky1gww6xs2jjkxmhg9cqj0kx
+  text: |-
+    Adversarial double-check: VERDICT PASS. Confirmed the fix closes the absolute / `..` / symlink read-outside-root hole completely, including the tricky non-existent-leaf symlink case (canonicalize returns NotFound only when a component is missing, in which case read_to_string also hits NotFound -> Ok(None); leaking outside content requires the target to exist, which forces the canonicalize-succeeds branch that rejects the escape). Error-message contract and legitimate-path behavior verified; blast radius is the 3 in-file callers only.
+
+    Applied the one advisory hardening it flagged: confine_to_repo now returns the canonicalized `resolved` path instead of the raw join, so read_working does not re-walk symlinks — closes the theoretical check-then-read TOCTOU window at no cost. Re-ran: scope tests 33/33 green, clippy -D warnings clean, cargo fmt clean.
+  timestamp: 2026-07-21T05:03:09.533832+00:00
+position_column: doing
+position_ordinal: '8280'
 title: 'Review scope: reject paths escaping the repo root in resolve_file/read_working'
 ---
 ## What

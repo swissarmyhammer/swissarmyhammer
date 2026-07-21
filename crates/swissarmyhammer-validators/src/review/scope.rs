@@ -30,7 +30,7 @@
 //!   declared it — N+M probe calls for a large diff, never N×M.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use model_embedding::TextEmbedder;
 use rusqlite::Connection;
@@ -616,16 +616,106 @@ fn open_repo(repo_path: &Path) -> Result<GitOperations, AvpError> {
         .map_err(|e| AvpError::Context(format!("failed to open git repo: {e}")))
 }
 
-/// Read a path's working-tree content from disk.
+/// The [`AvpError::Validator`] raised for a scope path that resolves outside the
+/// repository root. Carries the FULL, untruncated offending path so the caller
+/// can see exactly what was rejected; the message is lowercase and unpunctuated.
+fn path_escapes_repo_root(path: &str) -> AvpError {
+    AvpError::Validator {
+        validator: SCOPE_VALIDATOR.to_string(),
+        message: format!("path '{path}' escapes the repository root"),
+    }
+}
+
+/// Lexically normalize an absolute path, resolving `.` and `..` components
+/// WITHOUT touching the filesystem.
 ///
-/// Returns `Ok(None)` only when the path is **absent** (the intended
+/// Used to contain a not-yet-existing candidate, which [`Path::canonicalize`]
+/// cannot resolve (it requires every component to exist). A `..` that would
+/// climb above the root pops past it, so the resulting path no longer starts
+/// with the root and the containment check rejects it.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Resolve a repo-relative scope `path` to an on-disk path guaranteed to lie
+/// under `repo_path`, enforcing the review-scope containment contract.
+///
+/// Review paths are repo-relative by contract, so an absolute input is rejected
+/// outright: [`Path::join`] with an absolute argument REPLACES the base
+/// entirely, which would otherwise read an arbitrary file (e.g. `/etc/passwd`).
+/// For a relative input the candidate is joined onto the canonicalized root,
+/// then contained: an existing candidate is canonicalized (following symlinks,
+/// so a link whose target escapes the root is caught), and a not-yet-existing
+/// one is normalized lexically (preserving the absent-path `Ok(None)` behavior
+/// its caller relies on). Any resolved path not under the root is rejected.
+///
+/// # Errors
+///
+/// [`AvpError::Validator`] via [`path_escapes_repo_root`] when `path` is
+/// absolute or resolves outside the repository root; [`AvpError::Context`] when
+/// the root or an existing candidate cannot be canonicalized.
+fn confine_to_repo(repo_path: &Path, path: &str) -> Result<PathBuf, AvpError> {
+    if Path::new(path).is_absolute() {
+        return Err(path_escapes_repo_root(path));
+    }
+    let root = repo_path.canonicalize().map_err(|e| {
+        AvpError::Context(format!(
+            "failed to canonicalize repo root {}: {e}",
+            repo_path.display()
+        ))
+    })?;
+    let candidate = root.join(path);
+    let resolved = match candidate.canonicalize() {
+        Ok(real) => real,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => normalize_lexically(&candidate),
+        Err(e) => {
+            return Err(AvpError::Context(format!(
+                "failed to resolve working-tree file {path}: {e}"
+            )))
+        }
+    };
+    if !resolved.starts_with(&root) {
+        return Err(path_escapes_repo_root(path));
+    }
+    // Return the RESOLVED (canonicalized-when-present) path rather than the raw
+    // join, so the subsequent read does not re-walk symlinks — closing the
+    // check-then-read TOCTOU window against a concurrent filesystem swap.
+    Ok(resolved)
+}
+
+/// Read a path's working-tree content from disk, confined to the repo root.
+///
+/// The `path` is a repo-relative scope target; it is first resolved through
+/// [`confine_to_repo`], which rejects any absolute input or `..`/symlink escape
+/// so a `review file` caller can never make the pipeline read a file outside the
+/// repository into the review agent's context.
+///
+/// Returns `Ok(None)` only when the (contained) path is **absent** (the intended
 /// deletion/added signal — a file gone from the working tree). Any *other*
 /// failure — a permission error, or a binary/non-UTF8 file that
 /// [`read_to_string`](std::fs::read_to_string) rejects — is propagated as
 /// [`AvpError::Context`] rather than collapsed to `None`, so an unreadable
-/// tracked file is never silently diffed as wholly added/removed.
+/// tracked file is never silently diffed as wholly added/removed. A containment
+/// violation surfaces as [`AvpError::Validator`].
+///
+/// # Errors
+///
+/// [`AvpError::Validator`] when `path` escapes the repository root (see
+/// [`confine_to_repo`]); [`AvpError::Context`] for a non-absent read failure.
 fn read_working(repo_path: &Path, path: &str) -> Result<Option<String>, AvpError> {
-    match std::fs::read_to_string(repo_path.join(path)) {
+    let resolved = confine_to_repo(repo_path, path)?;
+    match std::fs::read_to_string(resolved) {
         Ok(content) => Ok(Some(content)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(AvpError::Context(format!(
@@ -730,6 +820,11 @@ fn resolve_sha(repo_path: &Path, range: &str) -> Result<ResolvedScope, AvpError>
 
 /// Resolve a single-file scope: its working-tree changes if any, else its whole
 /// content reviewed as all-added work.
+///
+/// `path` is repo-relative by contract. Its working-tree read goes through
+/// [`read_working`] → [`confine_to_repo`], so a `review file` target that is
+/// absolute or escapes the repository root (via `..` or a symlink) is rejected
+/// with [`AvpError::Validator`] and its content is never read into scope.
 fn resolve_file(repo_path: &Path, path: &str) -> Result<ResolvedScope, AvpError> {
     let repo = open_repo(repo_path)?;
     let after = read_working(repo_path, path)?;
@@ -1847,6 +1942,110 @@ mod tests {
             }
             other => panic!("expected AvpError::Context, got: {other:?}"),
         }
+    }
+
+    // ---- read_working containment: reject paths escaping the repo root --
+
+    /// A `..` traversal path must be rejected — never read — with a typed
+    /// [`AvpError::Validator`] naming the full offending path. Without the
+    /// containment guard, `repo_path.join("../x")` climbs out of the repo and
+    /// reads an arbitrary file into the review agent's context.
+    #[test]
+    fn read_working_rejects_a_parent_traversal_path() {
+        let repo = TestRepo::new();
+        // A secret file just ABOVE the repo dir, named uniquely so a parallel
+        // test or a leftover can never make this assertion flaky.
+        let marker = format!(
+            "outside_secret_{}.txt",
+            repo.path().file_name().unwrap().to_string_lossy()
+        );
+        let outside = repo.path().parent().unwrap().join(&marker);
+        std::fs::write(&outside, "TOP SECRET").unwrap();
+
+        let got = read_working(repo.path(), &format!("../{marker}"));
+        let _ = std::fs::remove_file(&outside);
+
+        match got {
+            Err(AvpError::Validator { message, .. }) => {
+                assert!(
+                    message.contains(&format!("../{marker}")),
+                    "the error must carry the full offending path: {message}"
+                );
+                assert!(
+                    message.contains("escapes the repository root"),
+                    "the error must explain the escape: {message}"
+                );
+            }
+            other => panic!("a `..` traversal must be a Validator error, got: {other:?}"),
+        }
+    }
+
+    /// An absolute input path must be rejected outright: `Path::join` with an
+    /// absolute argument REPLACES the repo root entirely, so a naive join reads
+    /// straight from the given absolute path (e.g. `/etc/passwd`).
+    #[test]
+    fn read_working_rejects_an_absolute_path() {
+        let repo = TestRepo::new();
+        let mut secret = std::env::temp_dir();
+        secret.push(format!(
+            "abs_secret_{}.txt",
+            repo.path().file_name().unwrap().to_string_lossy()
+        ));
+        std::fs::write(&secret, "TOP SECRET").unwrap();
+
+        let got = read_working(repo.path(), secret.to_str().unwrap());
+        let _ = std::fs::remove_file(&secret);
+
+        match got {
+            Err(AvpError::Validator { message, .. }) => {
+                assert!(
+                    message.contains(secret.to_str().unwrap()),
+                    "the error must carry the full offending path: {message}"
+                );
+            }
+            other => panic!("an absolute path must be a Validator error, got: {other:?}"),
+        }
+    }
+
+    /// A repo-internal symlink whose target lies OUTSIDE the repo root must be
+    /// rejected: canonicalization resolves the link to its real path, which the
+    /// containment check finds is not under the root.
+    #[cfg(unix)]
+    #[test]
+    fn read_working_rejects_a_symlink_escaping_the_repo_root() {
+        let repo = TestRepo::new();
+        let outside_dir = tempfile::TempDir::new().unwrap();
+        let secret = outside_dir.path().join("secret.txt");
+        std::fs::write(&secret, "TOP SECRET").unwrap();
+        // A link living INSIDE the repo but pointing at the outside secret.
+        std::os::unix::fs::symlink(&secret, repo.path().join("link.txt")).unwrap();
+
+        let got = read_working(repo.path(), "link.txt");
+        match got {
+            Err(AvpError::Validator { message, .. }) => {
+                assert!(
+                    message.contains("link.txt"),
+                    "the error must name the offending path: {message}"
+                );
+                assert!(
+                    message.contains("escapes the repository root"),
+                    "the error must explain the escape: {message}"
+                );
+            }
+            other => panic!("an escaping symlink must be a Validator error, got: {other:?}"),
+        }
+    }
+
+    /// A normal NESTED relative path under the repo root is read exactly as
+    /// before the containment guard — the guard must not reject legitimate
+    /// repo-relative targets.
+    #[test]
+    fn read_working_reads_a_nested_relative_path_unchanged() {
+        let repo = TestRepo::new();
+        repo.write("src/deep/nested.rs", "pub fn nested() {}\n");
+        let got = read_working(repo.path(), "src/deep/nested.rs")
+            .expect("a nested repo-relative file must read normally");
+        assert_eq!(got.as_deref(), Some("pub fn nested() {}\n"));
     }
 
     /// A path absent at the requested ref resolves to `Ok(None)`.
