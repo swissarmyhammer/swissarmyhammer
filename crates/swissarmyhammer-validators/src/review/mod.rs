@@ -11,6 +11,7 @@
 
 pub mod drive;
 pub mod fleet;
+pub mod ignore;
 pub mod probes;
 pub mod scope;
 pub mod synthesize;

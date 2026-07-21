@@ -15,6 +15,15 @@ Each returns a `ReviewReport { markdown, counts }` and accepts the shared
 (`session` | `local`), and `batch_size?` (max inlined file bytes per review
 batch, default 262144) modifiers.
 
+Every `review` op resolves its scope through an ignore layer so non-source
+artifacts never enter review. On the first run in a repo a `.reviewignore` file
+is auto-generated at the repo root (gitignore syntax, defaulting to `.kanban/`);
+it is never overwritten, so your edits are authoritative. The repo's own
+`.gitignore` is honored on top of it — a gitignored file is never reviewed, even
+when tracked. This applies uniformly to `review file`, `review working`, and
+`review sha`: a path matched by either file is dropped from the reviewed set (a
+`review file` naming an ignored path resolves to an empty review, not an error).
+
 The loader-read ops introspect what is plugged in (no agent, fast):
 
 - `list validators` — one summary row per loaded RuleSet, filterable by `source`

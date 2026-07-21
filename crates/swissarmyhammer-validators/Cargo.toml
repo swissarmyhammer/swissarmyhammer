@@ -24,6 +24,11 @@ thiserror = { workspace = true }
 glob = { workspace = true }
 regex = { workspace = true }
 
+# gitignore-syntax matching for the review scope's `.reviewignore` + `.gitignore`
+# exclusion layer — reuses git's own ignore semantics (`!` negation, directory
+# patterns) rather than reimplementing them.
+ignore = { workspace = true }
+
 # Logging
 tracing = { workspace = true }
 

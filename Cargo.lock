@@ -8850,6 +8850,7 @@ dependencies = [
  "futures",
  "git2",
  "glob",
+ "ignore",
  "model-embedding",
  "regex",
  "rusqlite",

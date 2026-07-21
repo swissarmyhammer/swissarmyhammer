@@ -43,8 +43,13 @@ use swissarmyhammer_sem::parser::differ::compute_semantic_diff;
 use swissarmyhammer_sem::parser::plugins::code::is_code_file;
 use swissarmyhammer_sem::parser::plugins::create_default_registry;
 
+use ::ignore::gitignore::Gitignore;
+
 use crate::error::AvpError;
 use crate::review::fleet::{emit_progress, ReviewProgressEvent, ReviewProgressSender};
+use crate::review::ignore::{
+    ensure_reviewignore, load_review_ignore_matcher, review_ignore_reason,
+};
 use crate::review::probes::{run_probes, ChangeEntry, FileChange as ProbeChange, ProbeResult};
 use crate::validators::{MatchContext, RuleSet, ValidatorLoader};
 
@@ -602,11 +607,72 @@ fn to_probe_entry(change: &SemanticChange) -> ChangeEntry {
 /// Resolve a [`Scope`] to its changed-file set and the inputs every later step
 /// needs (sem-diff `FileChange`s, after-content, change purpose).
 fn resolve_scope_files(scope: &Scope, repo_path: &Path) -> Result<ResolvedScope, AvpError> {
-    match scope {
-        Scope::Working => resolve_working(repo_path),
-        Scope::Sha(range) => resolve_sha(repo_path, range),
-        Scope::File(path) => resolve_file(repo_path, path),
-        Scope::Glob(pattern) => resolve_glob(repo_path, pattern),
+    // Auto-generate `.reviewignore` (defaulting to `.kanban/`) on the first
+    // review of any repo, never clobbering a user-edited one. It is untracked
+    // and non-code, so it never enters the working scope resolved below.
+    ensure_reviewignore(repo_path)?;
+
+    let resolved = match scope {
+        Scope::Working => resolve_working(repo_path)?,
+        Scope::Sha(range) => resolve_sha(repo_path, range)?,
+        Scope::File(path) => resolve_file(repo_path, path)?,
+        Scope::Glob(pattern) => resolve_glob(repo_path, pattern)?,
+    };
+
+    // Uniform choke point: every scope's resolved file set is filtered through
+    // the same `.reviewignore` + `.gitignore` matcher, so a `.kanban/` board or a
+    // gitignored artifact is dropped identically whether it arrived via Working,
+    // Sha, File, or Glob. The per-scope resolver above has already read each
+    // candidate's disk/blob content; the matcher discards an ignored path's entry
+    // here so that content never reaches the review agent. Escape paths are
+    // rejected independently and earlier by `confine_to_repo`, so this filter is
+    // about relevance, not containment.
+    let matcher = load_review_ignore_matcher(repo_path)?;
+    Ok(filter_resolved_scope(resolved, &matcher))
+}
+
+/// Drop every resolved file the review-scope ignore `matcher` excludes, keeping
+/// the three views of the scope (paths, sem-diff inputs, after-content) mutually
+/// consistent.
+///
+/// A `Scope::File` naming an ignored path therefore resolves to an empty scope —
+/// consistent with the other scopes, never an error. Each excluded path is logged
+/// at DEBUG with its FULL path and the excluding pattern's source, never truncated.
+fn filter_resolved_scope(resolved: ResolvedScope, matcher: &Gitignore) -> ResolvedScope {
+    let ResolvedScope {
+        files,
+        file_changes,
+        after_content,
+        change_purpose,
+    } = resolved;
+
+    let mut kept: Vec<String> = Vec::with_capacity(files.len());
+    for path in files {
+        match review_ignore_reason(matcher, &path) {
+            Some(pattern) => tracing::debug!(
+                path = %path,
+                pattern = %pattern,
+                "review scope: excluded ignored path"
+            ),
+            None => kept.push(path),
+        }
+    }
+
+    let keep: BTreeSet<&str> = kept.iter().map(String::as_str).collect();
+    let file_changes = file_changes
+        .into_iter()
+        .filter(|change| keep.contains(change.file_path.as_str()))
+        .collect();
+    let after_content = after_content
+        .into_iter()
+        .filter(|(path, _)| keep.contains(path.as_str()))
+        .collect();
+
+    ResolvedScope {
+        files: kept,
+        file_changes,
+        after_content,
+        change_purpose,
     }
 }
 
@@ -1894,6 +1960,221 @@ mod tests {
         assert!(
             work.validators.is_empty(),
             "a changed .lock with no matching validator yields no work, got: {:?}",
+            work.validators
+        );
+    }
+
+    // ---- scope_review: .reviewignore + .gitignore exclusion --------------
+
+    /// The distinct file paths any validator carries in a resolved work-list.
+    fn work_paths(work: &WorkList) -> Vec<String> {
+        work.validators
+            .iter()
+            .flat_map(|v| v.files.iter().map(|f| f.path.clone()))
+            .collect()
+    }
+
+    /// A tracked, edited `.kanban/board.md` — the finish-loop churn the default
+    /// `.reviewignore` exists to suppress — must be dropped from the working
+    /// scope even though a tracked non-code modification would otherwise stay.
+    #[tokio::test]
+    async fn working_scope_excludes_tracked_kanban_board_edits() {
+        let repo = TestRepo::new();
+        repo.write(".kanban/board.md", "# board\n");
+        repo.write("src/lib.rs", "fn base() {}\n");
+        repo.commit("initial");
+        // A finish-loop comment edits the tracked board file.
+        repo.write(".kanban/board.md", "# board\n- new comment\n");
+
+        let conn = index_conn();
+        // A match-everything validator would otherwise pull the board into scope.
+        let loader = loader_with("everything", "*", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .unwrap();
+
+        let paths = work_paths(&work);
+        assert!(
+            !paths.iter().any(|p| p.starts_with(".kanban/")),
+            "the auto-ignored .kanban board must not enter working scope, got: {paths:?}"
+        );
+    }
+
+    /// A committed, tracked file matched by the repo's `.gitignore` must be
+    /// excluded from a `Scope::Sha` range while a real source edit in the same
+    /// range stays — gitignored artifacts are not source even when tracked.
+    #[tokio::test]
+    async fn sha_scope_excludes_a_gitignored_committed_file() {
+        let repo = TestRepo::new();
+        // The generated file is committed BEFORE the ignore exists, so it is
+        // tracked; git ignores only untracked paths, so it stays tracked after.
+        repo.write("src/lib.rs", "fn base() {}\n");
+        repo.write("src/schema.gen.rs", "fn generated() {}\n");
+        repo.commit("initial");
+        repo.write(".gitignore", "*.gen.rs\n");
+        repo.write("src/lib.rs", "fn base() {}\n\nfn added() {}\n");
+        repo.write("src/schema.gen.rs", "fn generated() {}\n\nfn more() {}\n");
+        repo.commit("second");
+
+        let conn = index_conn();
+        let loader = loader_with("everything", "*", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(
+            Scope::Sha("HEAD~1..HEAD".to_string()),
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let paths = work_paths(&work);
+        assert!(
+            !paths.iter().any(|p| p.ends_with(".gen.rs")),
+            "a gitignored committed file must be excluded from sha scope, got: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p == "src/lib.rs"),
+            "the real source edit must stay in sha scope, got: {paths:?}"
+        );
+    }
+
+    /// A `Scope::Glob` result is filtered through the ignore matcher too: a
+    /// user's `.reviewignore` directory pattern drops vendored files a broad
+    /// glob would otherwise sweep in.
+    #[tokio::test]
+    async fn glob_scope_excludes_reviewignored_files() {
+        let repo = TestRepo::new();
+        repo.write(".reviewignore", "src/vendor/\n");
+        repo.write("src/lib.rs", &format!("{}\n", body("real")));
+        repo.write("src/vendor/dep.rs", &format!("{}\n", body("vendored")));
+        repo.commit("initial");
+
+        let conn = index_conn();
+        let loader = loader_with("deduplicate", "*.rs", &["duplicates"]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(
+            Scope::Glob("src/*.rs".to_string()),
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let paths = work_paths(&work);
+        assert!(
+            paths.iter().any(|p| p == "src/lib.rs"),
+            "the real source file must stay in glob scope, got: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains("vendor")),
+            "the reviewignored vendored file must be excluded from glob scope, got: {paths:?}"
+        );
+    }
+
+    /// A `!` negation in `.reviewignore` re-includes a file a broader directory
+    /// pattern excluded — full gitignore semantics carry through the scope filter.
+    #[tokio::test]
+    async fn working_scope_negation_reincludes_a_broadly_excluded_file() {
+        let repo = TestRepo::new();
+        repo.write(".reviewignore", "src/gen/\n!src/gen/keep.rs\n");
+        repo.write("src/lib.rs", "fn base() {}\n");
+        repo.commit("initial");
+        // Two brand-new untracked source files under the excluded directory.
+        repo.write("src/gen/noise.rs", &format!("{}\n", body("noise")));
+        repo.write("src/gen/keep.rs", &format!("{}\n", body("keep")));
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .unwrap();
+
+        let paths = work_paths(&work);
+        assert!(
+            paths.iter().any(|p| p == "src/gen/keep.rs"),
+            "the `!` negation must re-include keep.rs, got: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p == "src/gen/noise.rs"),
+            "the broad directory pattern must still exclude noise.rs, got: {paths:?}"
+        );
+    }
+
+    /// The first review of a repo without a `.reviewignore` auto-generates the
+    /// default (with `.kanban/`); a second review preserves a user-edited file
+    /// byte-for-byte.
+    #[tokio::test]
+    async fn scope_review_autogenerates_reviewignore_then_preserves_edits() {
+        let repo = TestRepo::new();
+        repo.write("src/lib.rs", "fn base() {}\n");
+        repo.commit("initial");
+
+        let conn = index_conn();
+        let loader = loader_with("rust", "*.rs", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .unwrap();
+        let generated = std::fs::read_to_string(repo.path().join(".reviewignore"))
+            .expect("the first review must auto-generate .reviewignore");
+        assert!(
+            generated.contains(".kanban/"),
+            "the generated default must ignore .kanban/, got:\n{generated}"
+        );
+
+        // A user edits it; a second review must leave it byte-identical.
+        let edited = "# custom rules\nvendor/\n";
+        std::fs::write(repo.path().join(".reviewignore"), edited).unwrap();
+        scope_review(Scope::Working, repo.path(), &loader, &conn, &embedder, None)
+            .await
+            .unwrap();
+        let after = std::fs::read_to_string(repo.path().join(".reviewignore")).unwrap();
+        assert_eq!(
+            after, edited,
+            "a second review must not rewrite the user's .reviewignore"
+        );
+    }
+
+    /// A `Scope::File` naming an ignored path resolves to an empty scope — no
+    /// findings, no error — the same exclusion the other scopes apply.
+    #[tokio::test]
+    async fn file_scope_of_an_ignored_path_yields_empty_scope() {
+        let repo = TestRepo::new();
+        repo.write(".reviewignore", ".kanban/\n");
+        repo.write(".kanban/board.md", "# board\n");
+        repo.commit("initial");
+
+        let conn = index_conn();
+        let loader = loader_with("everything", "*", &[]);
+        let embedder = MockEmbedder::new(DIM);
+
+        let work = scope_review(
+            Scope::File(".kanban/board.md".to_string()),
+            repo.path(),
+            &loader,
+            &conn,
+            &embedder,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            work.validators.is_empty(),
+            "an explicitly named ignored file must resolve to an empty scope, got: {:?}",
             work.validators
         );
     }

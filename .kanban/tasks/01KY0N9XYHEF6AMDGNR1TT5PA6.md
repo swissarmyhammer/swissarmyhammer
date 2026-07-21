@@ -19,8 +19,8 @@ comments:
   timestamp: 2026-07-21T05:33:23.266374+00:00
 depends_on:
 - 01KY0N94MJ938XTK2K5SQMQ62V
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff480
 title: Surface model-download progress as MCP notifications/progress (code_context + review)
 ---
 ## What
