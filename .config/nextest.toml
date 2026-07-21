@@ -126,6 +126,15 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 [[profile.default.overrides]]
 filter = "package(kanban-app) and binary(ai_panel_e2e)"
 test-group = "llama-embedding-serial"
+# Bounded retry for a genuinely NONDETERMINISTIC real-model test, not to mask a
+# code bug: it drives the qwen-0.6B chat model (documented ~35% per-attempt
+# variance — spurious tool calls, KV-cache exhaustion, runaway-guard aborts) on a
+# GPU time-sliced against the other model tests. Under CI contention a turn can
+# slow past the test's own hang guard and Elapsed-timeout even though the model
+# is answering; re-running lands green when contention momentarily eases. Scoped
+# to this real-model binary only — deterministic tests never retry. Only the
+# failing test re-runs, so the happy path is not slowed.
+retries = 2
 # These run several real agentic generation rounds and retry the prompt pair on
 # transient 0.6B variance (KV-cache exhaustion / runaway-guard aborts) up to 6
 # attempts. Uncontended a clean pair lands in ~26s (measured locally), but the
@@ -157,6 +166,11 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 filter = "package(swissarmyhammer-agent) and binary(review_real_model_e2e)"
 test-group = "llama-embedding-serial"
 slow-timeout = { period = "60s", terminate-after = 8 }
+# Bounded retry for the same reason as the kanban ai_panel_e2e override above: a
+# nondeterministic qwen-0.6B real-model test whose turn can slow past its hang
+# budget under CI GPU contention. Re-run converts that transient to green; it
+# does not mask a code defect (deterministic tests never retry).
+retries = 2
 
 # Apply serial execution to llama-embedding tests
 [[profile.default.overrides]]
@@ -173,6 +187,13 @@ slow-timeout = { period = "30s", terminate-after = 10 }
 filter = "package(llama-agent)"
 test-group = "llama-embedding-serial"
 slow-timeout = { period = "30s", terminate-after = 10 }
+# Bounded retry for the same reason as the kanban / swissarmyhammer-agent
+# real-model overrides above: llama-agent's real-model integration tests
+# (e.g. acp_hooks_real_model) drive the nondeterministic qwen-0.6B chat model
+# through the live ACP loop; under CI GPU contention a tool-calling turn can slow
+# past the test's own hang guard (`must not hang: Elapsed`) even while the model
+# answers. Re-run lands green when contention eases; it does not mask a defect.
+retries = 2
 
 # Serialise the swissarmyhammer-entity tests that start a live FSEvents watcher
 # (see the `fsevents-watcher` group above for the why). Only these four tests
