@@ -252,6 +252,27 @@ impl VerifyOutcome {
     }
 }
 
+/// Stream one finding's resolved verdict over the optional progress channel.
+///
+/// Both verdict sources — guard refutations and agent verdicts — emit the same
+/// [`Verdict`](ReviewProgressEvent::Verdict) event, cloning the finding and
+/// reason into the owned event exactly once here. `None` emits nothing.
+fn emit_verdict(
+    progress: Option<&ReviewProgressSender>,
+    finding: &Finding,
+    confirmed: bool,
+    reason: &str,
+) {
+    emit_progress(
+        progress,
+        ReviewProgressEvent::Verdict {
+            finding: finding.clone(),
+            confirmed,
+            reason: reason.to_string(),
+        },
+    );
+}
+
 /// Verify a batch of candidate findings: deterministic guard, then adversarial
 /// agent, both pipelined on the shared `pool`.
 ///
@@ -288,13 +309,11 @@ pub async fn verify_findings(
     // these inline as fan-out returns, so they are final the moment `run_guard`
     // reports them.
     for verified in &refuted {
-        emit_progress(
+        emit_verdict(
             progress,
-            ReviewProgressEvent::Verdict {
-                finding: verified.finding.clone(),
-                confirmed: verified.confirmed,
-                reason: verified.reason.clone(),
-            },
+            &verified.finding,
+            verified.confirmed,
+            &verified.reason,
         );
     }
 
@@ -336,14 +355,7 @@ pub async fn verify_findings(
         );
         // Stream the agent verdict as this verify task resolves — final at this
         // moment, so a client learns each confirmed/refuted decision live.
-        emit_progress(
-            progress,
-            ReviewProgressEvent::Verdict {
-                finding: finding.clone(),
-                confirmed: verdict.confirmed,
-                reason: verdict.reason.clone(),
-            },
-        );
+        emit_verdict(progress, &finding, verdict.confirmed, &verdict.reason);
         verified.push(VerifiedFinding {
             finding,
             confirmed: verdict.confirmed,
