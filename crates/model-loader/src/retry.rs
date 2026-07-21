@@ -166,8 +166,10 @@ async fn download_with_retry_internal(
                     Ok(path) => Ok(path),
                     Err(e) => {
                         // Convert HuggingFace error to ModelError for retry logic
-                        if e.to_string().to_lowercase().contains("not found")
-                            || e.to_string().contains("404")
+                        if e.to_string()
+                            .to_lowercase()
+                            .contains(NOT_FOUND_ERROR_PATTERN)
+                            || e.to_string().contains(NOT_FOUND_HTTP_CODE)
                         {
                             Err(ModelError::NotFound(format!(
                                 "huggingface resource not found: {}",
@@ -209,6 +211,17 @@ async fn download_with_retry_internal(
 /// by `RetryManager`.)
 const RETRIABLE_HTTP_CODES: &[&str] = &["500", "502", "503", "504"];
 
+/// HTTP status code signalling a missing HuggingFace resource.
+///
+/// Shared by the error-classification path (mapping the raw hf-hub error to a
+/// [`ModelError`]) and the [`ERROR_GUIDANCE`] table so the two never drift.
+const NOT_FOUND_HTTP_CODE: &str = "404";
+
+/// Substring signalling a missing resource in a lowercased error message.
+///
+/// Shared with [`NOT_FOUND_HTTP_CODE`] across the same two sites.
+const NOT_FOUND_ERROR_PATTERN: &str = "not found";
+
 /// Predicate over a lowercased error message: does the message belong to a
 /// given failure class?
 type ErrorMatcher = fn(&str) -> bool;
@@ -220,7 +233,7 @@ type ErrorMatcher = fn(&str) -> bool;
 /// new branch.
 const ERROR_GUIDANCE: &[(ErrorMatcher, &str)] = &[
     (
-        |msg| msg.contains("404") || msg.contains("not found"),
+        |msg| msg.contains(NOT_FOUND_HTTP_CODE) || msg.contains(NOT_FOUND_ERROR_PATTERN),
         "📁 File not found. Verify the filename exists in the repository. You can browse the repo at https://huggingface.co/",
     ),
     (

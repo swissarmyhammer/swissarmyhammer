@@ -80,8 +80,8 @@ comments:
 
     Task is green and left in doing for /review.
   timestamp: 2026-07-21T04:02:45.863088+00:00
-position_column: doing
-position_ordinal: '8280'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffff180
 title: 'Review keep-alive: emit progress across ALL phases (scope/probes included), log every send, prove delivery over stdio'
 ---
 ## What

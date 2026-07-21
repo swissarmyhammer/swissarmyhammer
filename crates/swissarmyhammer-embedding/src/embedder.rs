@@ -212,7 +212,9 @@ impl Embedder {
             }
             #[cfg(target_os = "macos")]
             ModelExecutorConfig::AneEmbedding(cfg) => {
-                let max_seq = cfg.max_sequence_length.unwrap_or(256);
+                let max_seq = cfg
+                    .max_sequence_length
+                    .unwrap_or(ANE_DEFAULT_MAX_SEQUENCE_LENGTH);
                 let normalize = cfg.normalize;
                 (
                     EmbedderBackend::Ane(Box::new(build_ane_model(cfg, observer.as_ref()).await?)),
@@ -503,6 +505,11 @@ const TOKENIZER_FILENAME: &str = "tokenizer.json";
 #[cfg(target_os = "macos")]
 const MLPACKAGE_EXTENSION: &str = "mlpackage";
 
+/// Default maximum sequence length for the ANE backend when the model config
+/// does not specify one.
+#[cfg(target_os = "macos")]
+const ANE_DEFAULT_MAX_SEQUENCE_LENGTH: usize = 256;
+
 /// Build the CoreML/ANE backend. Model resolution (and download) happens
 /// here, during construction, so `observer` must be provided up front;
 /// `None` leaves downloads silent.
@@ -511,7 +518,9 @@ async fn build_ane_model(
     cfg: &EmbeddingModelConfig,
     observer: Option<&DownloadObserver>,
 ) -> Result<AneEmbeddingModel, EmbeddingError> {
-    let seq_length = cfg.max_sequence_length.unwrap_or(256);
+    let seq_length = cfg
+        .max_sequence_length
+        .unwrap_or(ANE_DEFAULT_MAX_SEQUENCE_LENGTH);
 
     // Derive model prefix from source.
     // Convention: HF repo "wballard/Foo-Bar-CoreML" → prefix "Foo-Bar"

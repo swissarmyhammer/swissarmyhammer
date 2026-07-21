@@ -101,7 +101,7 @@ pub async fn load_huggingface_model_with_path_and_folder(
         Ok(api) => api,
         Err(e) => {
             return Err(ModelError::Network(format!(
-                "failed to create HuggingFace API client for {}: {}. Use ModelSource::Local to load from local path instead.",
+                "failed to create HuggingFace API client for {}: {}. Use ModelSource::Local to load from local path instead",
                 repo, e
             )));
         }
