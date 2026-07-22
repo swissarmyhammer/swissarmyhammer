@@ -41,6 +41,10 @@ comments:
   id: 01ky5623k59vzb2f8wm5y0cez1
   text: 'Iteration 1 implementation landed (verified against git diff: 5 files, +642/−108). Key discovery from the implementer: rmcp 1.7 clients unconditionally inject a progressToken (service.rs next_progress_token), so a tokenless call is impossible through an rmcp client — which is why the pre-existing e2e stayed green while Claude Code subagent clients failed in the field. New integration test uses a raw newline-delimited JSON-RPC client over the duplex stream to actually exercise the tokenless path (TDD RED confirmed pre-fix). Full drive.py e2e passed: 9 notifications/message, 0 notifications/progress, WARN present exactly once. Now running the /test gate on the changed crate.'
   timestamp: 2026-07-22T15:10:44.325654+00:00
+- actor: claude-code
+  id: 01ky57ajydfnnfhcz2zzhnfp5g
+  text: 'Worked the 2026-07-22 10:13 review findings: added /// doc comments to `pub mod review_op;` and `pub mod validators;` in crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs, describing each module''s purpose (pipeline ops + streaming vs. loader-only introspection) in the file''s existing doc style. Audited the rest of mod.rs — every other pub item (structs, statics, fns) already carries docs, so zero recurrences expected on re-review. Verified: `cargo nextest run -p swissarmyhammer-tools review_progress` 3/3 passed, `cargo clippy -p swissarmyhammer-tools --all-targets -- -D warnings` clean, `cargo fmt --check` clean. Note: adversarial double-check agent not available in this environment; proceeding on the green gates given the change is doc-comments only (no behavior change). Task left in doing for the orchestrator.'
+  timestamp: 2026-07-22T15:32:50.765686+00:00
 position_column: doing
 position_ordinal: '8280'
 title: 'review: clients that omit progressToken get zero notifications and time out — decouple notifications/message from the token gate'
@@ -78,3 +82,8 @@ Fix in `review_op.rs` (+ call-site comment in `tools/review/mod.rs` ~358–360 w
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass.
+
+## Review Findings (2026-07-22 10:13)
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs:26` — Public module `review_op` lacks a documentation comment explaining its purpose and contents. Add a doc comment before the module declaration: `/// Operations module for review tool dispatch.`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs:27` — Public module `validators` lacks a documentation comment explaining its purpose and contents. Add a doc comment before the module declaration: `/// Validator loader and introspection operations.`.

@@ -23,7 +23,11 @@
 //! server injects the configured backend; tests inject a scripted agent). The
 //! loader-read ops need no agent.
 
+/// The three pipeline ops (`review file/working/sha`): scope resolution, engine
+/// invocation over a live ACP agent, and progress/content notification streaming.
 pub mod review_op;
+/// The validator introspection ops (`list/get/check validators`): pure loader
+/// reads over the builtin → user → project RuleSet stack, no agent required.
 pub mod validators;
 
 use async_trait::async_trait;
