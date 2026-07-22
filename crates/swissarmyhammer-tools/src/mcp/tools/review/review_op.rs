@@ -684,6 +684,31 @@ fn review_content_log_param(
     })
 }
 
+/// The `kind` tag on a content-channel keep-alive payload.
+///
+/// Sent as a `notifications/message` when a call has a content transport but
+/// no re-sendable progress param (the tokenless case): it is distinct from
+/// [`REVIEW_FINDINGS_KIND`]/[`REVIEW_VERDICT_KIND`] so a consumer accumulating
+/// findings never mistakes a keep-alive for a duplicate review event.
+const REVIEW_KEEP_ALIVE_KIND: &str = "review.keep-alive";
+
+/// The content-channel keep-alive `notifications/message` payload.
+///
+/// Carried on the same logger/level as the review content stream so any
+/// client already listening for review messages receives it — its only job is
+/// producing wire traffic that resets the client's tool timeout during engine
+/// silence when there is no progress param to re-send.
+fn review_keep_alive_log_param() -> LoggingMessageNotificationParam {
+    LoggingMessageNotificationParam {
+        level: LoggingLevel::Info,
+        logger: Some(REVIEW_LOG_LOGGER.to_string()),
+        data: serde_json::json!({
+            "kind": REVIEW_KEEP_ALIVE_KIND,
+            "message": "review in progress",
+        }),
+    }
+}
+
 /// Send one review content notification to the MCP peer as a
 /// `notifications/message`, logging the full payload first (never truncated) so
 /// the send path is provable from the log. A failed send is logged at WARN and
@@ -714,11 +739,12 @@ pub struct ReviewProgressBridge {
     /// [`into_parts`](Self::into_parts); private so the bridge's layout is not
     /// a field-level API commitment.
     sender: ReviewProgressSender,
-    /// The drain task forwarding mapped `notifications/progress` params to the
-    /// MCP peer or in-process sink. Await it after the run so buffered
-    /// notifications flush before the final result returns. Consumed through
-    /// [`into_parts`](Self::into_parts); private for the same reason as
-    /// [`sender`](Self::into_parts).
+    /// The drain task flushing both wire channels — mapped
+    /// `notifications/progress` params to the MCP peer or in-process sink, and
+    /// content `notifications/message` params to the peer. Await it after the
+    /// run so buffered notifications flush before the final result returns.
+    /// Consumed through [`into_parts`](Self::into_parts); private for the same
+    /// reason as [`sender`](Self::into_parts).
     drain: tokio::task::JoinHandle<()>,
 }
 
@@ -735,61 +761,150 @@ impl ReviewProgressBridge {
     }
 }
 
-/// Wire the review progress bridge for one tool call, when the caller opted in.
+/// Which transports one review call's streaming bridge drives, derived from
+/// the call's (`progressToken`, in-process sink, MCP peer) triple.
 ///
-/// Precedence matches `code_context`'s `rebuild index`: `progress_token` plus
-/// `progress_sink` (the explicit in-process opt-in) wins over `progress_token`
-/// plus `peer` (the stdio/HTTP MCP client); no token — or a token with neither
-/// transport (logged) — returns `None` and the review emits zero notifications.
+/// The two wire channels have DIFFERENT gates, per the MCP spec:
+/// `notifications/progress` must echo a client-supplied token, so progress
+/// ticks are token-gated; `notifications/message` carries no token, so review
+/// content flows to a peer with or without one. The in-process sink is typed
+/// for progress params only and never carries content. When both sink and
+/// peer are present the sink takes priority (the explicit in-process opt-in,
+/// matching `code_context`'s `rebuild index`) and content is suppressed
+/// entirely — neither carried on the sink nor leaked to a peer the caller did
+/// not choose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewBridgePlan {
+    /// No transport can carry anything — no bridge, zero notifications.
+    /// Covers no-peer-and-no-sink, and a sink without a token (sink params
+    /// are token-keyed, and the sink never carries content).
+    Nothing,
+    /// Token + in-process sink: progress params to the sink, no content.
+    SinkProgressOnly,
+    /// Token + MCP peer (no sink): both channels to the peer.
+    PeerProgressAndContent,
+    /// Peer without a token (no sink): content-only streaming — progress
+    /// ticks are disabled (no token to echo), while findings/verdicts and the
+    /// keep-alive flow as `notifications/message`.
+    PeerContentOnly,
+}
+
+/// Derive the [`ReviewBridgePlan`] for one call's transport triple.
+///
+/// Kept as a pure function of the three booleans so the transport table is
+/// unit-testable without constructing a real `Peer<RoleServer>`.
+fn review_bridge_plan(has_token: bool, has_sink: bool, has_peer: bool) -> ReviewBridgePlan {
+    match (has_token, has_sink, has_peer) {
+        (true, true, _) => ReviewBridgePlan::SinkProgressOnly,
+        (true, false, true) => ReviewBridgePlan::PeerProgressAndContent,
+        (false, false, true) => ReviewBridgePlan::PeerContentOnly,
+        (false, true, _) | (_, false, false) => ReviewBridgePlan::Nothing,
+    }
+}
+
+/// Forward review content params to the MCP peer as `notifications/message`
+/// until the channel closes, mirroring the progress `spawn_drain_task`.
+fn spawn_content_drain_task(
+    peer: Arc<Peer<RoleServer>>,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<LoggingMessageNotificationParam>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(param) = rx.recv().await {
+            send_review_content_log(&peer, param).await;
+        }
+    })
+}
+
+/// Wire the review streaming bridge for one tool call.
+///
+/// The bridge is built whenever ANY transport can carry something — see
+/// [`review_bridge_plan`] for the full table. In particular an MCP peer
+/// WITHOUT a `progressToken` still gets a bridge: content
+/// (`notifications/message`) and its keep-alive are not token-gated, only
+/// `notifications/progress` is. That call is logged at WARN (once) because
+/// the client is forgoing progress ticks. Only when no transport can carry
+/// anything does this return `None` and the review emits zero notifications.
 ///
 /// Must be called on the OUTER runtime (it spawns the mapping and drain
 /// tasks there) BEFORE [`run_review_request`] enters its `spawn_blocking`;
 /// only the returned synchronous sender crosses into the nested runtime.
 pub fn spawn_review_progress_bridge(context: &ToolContext) -> Option<ReviewProgressBridge> {
-    let token = context.progress_token.clone()?;
+    let token = context.progress_token.clone();
+    let plan = review_bridge_plan(
+        token.is_some(),
+        context.progress_sink.is_some(),
+        context.peer.is_some(),
+    );
 
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<ReviewProgressEvent>();
     let (param_tx, param_rx) = tokio::sync::mpsc::unbounded_channel::<ProgressNotificationParam>();
+    let (content_tx, content_rx) =
+        tokio::sync::mpsc::unbounded_channel::<LoggingMessageNotificationParam>();
 
-    let drain = if let Some(sink) = context.progress_sink.clone() {
-        tracing::debug!(?token, "review: wiring progress bridge to in-process sink");
-        spawn_in_process_drain_task(sink, param_rx)
-    } else if let Some(peer) = context.peer.clone() {
-        tracing::debug!(?token, "review: wiring progress bridge to MCP peer");
-        spawn_drain_task(peer, param_rx)
-    } else {
-        tracing::warn!(
-            "review: progressToken present but no MCP peer or progress sink — emitting no progress"
-        );
-        return None;
+    let (progress_drain, content_drain) = match plan {
+        ReviewBridgePlan::Nothing => {
+            match (&token, context.progress_sink.is_some()) {
+                (Some(_), _) => tracing::warn!(
+                    "review: progressToken present but no MCP peer or progress sink — emitting no progress"
+                ),
+                (None, true) => tracing::warn!(
+                    "review: progress sink present but no progressToken — the sink carries token-keyed progress params only, emitting no notifications"
+                ),
+                (None, false) => {}
+            }
+            return None;
+        }
+        ReviewBridgePlan::SinkProgressOnly => {
+            let sink = context.progress_sink.clone().expect("plan implies a sink");
+            tracing::debug!(?token, "review: wiring progress bridge to in-process sink");
+            (Some(spawn_in_process_drain_task(sink, param_rx)), None)
+        }
+        ReviewBridgePlan::PeerProgressAndContent => {
+            let peer = context.peer.clone().expect("plan implies a peer");
+            tracing::debug!(?token, "review: wiring progress bridge to MCP peer");
+            (
+                Some(spawn_drain_task(Arc::clone(&peer), param_rx)),
+                Some(spawn_content_drain_task(peer, content_rx)),
+            )
+        }
+        ReviewBridgePlan::PeerContentOnly => {
+            let peer = context.peer.clone().expect("plan implies a peer");
+            tracing::warn!(
+                "review: MCP peer present but the call carries no _meta.progressToken — \
+                 notifications/progress ticks are disabled for this call; streaming review \
+                 content (findings/verdicts) and keep-alives as notifications/message only"
+            );
+            (None, Some(spawn_content_drain_task(peer, content_rx)))
+        }
     };
+    // A channel whose drain was not spawned has no receiver: hand the mapping
+    // task `None` so it never routes anything there.
+    let content_tx = content_drain.is_some().then_some(content_tx);
 
-    // The content channel (findings/verdicts → `notifications/message`) honors
-    // the same sink-takes-priority rule as the progress drain above: when a
-    // `progress_sink` is the chosen transport, the sink contract is progress
-    // params ONLY, so no content is emitted — it is neither carried on the sink
-    // (which is typed for progress params) nor leaked to the peer. Content
-    // therefore reaches the peer only on the peer transport path (no sink), which
-    // subsumes the no-peer-and-no-sink case (already returned above). Gate the
-    // content peer on sink absence to make that contract explicit.
-    let content_peer = if context.progress_sink.is_some() {
-        None
-    } else {
-        context.peer.clone()
-    };
-
-    // The mapping task owns the cumulative counters and the content channel: it
-    // maps progress-tick variants to `param_tx` (drained to sink or peer) and
-    // sends content variants straight to `content_peer` as `notifications/message`.
-    // It ends when the engine drops its sender; dropping `param_tx` then closes
-    // the drain's source so the drain flushes and exits.
+    // The mapping task owns the cumulative counters and both wire channels: it
+    // maps progress-tick variants to `param_tx` (drained to sink or peer, when
+    // a token exists) and content variants to `content_tx` (drained to the
+    // peer as `notifications/message`). It ends when the engine drops its
+    // sender; dropping `param_tx`/`content_tx` then closes the drains' sources
+    // so they flush and exit.
     tokio::spawn(run_review_progress_mapping(
         event_rx,
         param_tx,
-        content_peer,
+        content_tx,
         token,
         REVIEW_PROGRESS_KEEP_ALIVE_INTERVAL,
     ));
+
+    // One awaitable handle covering however many drains this plan spawned, so
+    // the caller's flush-before-return contract stays a single `.await`.
+    let drain = tokio::spawn(async move {
+        if let Some(handle) = progress_drain {
+            let _ = handle.await;
+        }
+        if let Some(handle) = content_drain {
+            let _ = handle.await;
+        }
+    });
 
     Some(ReviewProgressBridge {
         sender: event_tx,
@@ -808,62 +923,92 @@ pub fn spawn_review_progress_bridge(context: &ToolContext) -> Option<ReviewProgr
 /// too infrequent to matter as traffic.
 const REVIEW_PROGRESS_KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// The bridge's mapping loop: map engine events to wire params, and re-send
-/// the latest param as a keep-alive whenever the engine stays silent for
+/// The bridge's mapping loop: map engine events to wire params on both
+/// channels, and re-send a keep-alive whenever the WIRE stays silent for
 /// `keep_alive`.
 ///
-/// The keep-alive re-send carries the exact latest param — identical
-/// `progress`/`total`/`message` — so wire monotonicity is preserved by
-/// construction. Before the first event there is nothing to re-send, so the
-/// timer stays disarmed. The loop ends when the engine drops its sender (or
-/// the drain side closes); dropping `param_tx` then closes the drain's source
-/// so the drain flushes and exits.
+/// Progress-tick variants are token-gated (`token: None` drops them — there
+/// is no client token to echo on a `notifications/progress`); content
+/// variants flow to `content_tx` whenever it exists, token or not.
+///
+/// The keep-alive window measures time since the last WIRE SEND on either
+/// channel — not since the last engine event, because a tokenless call's
+/// progress ticks produce no traffic and must not silence the timer. On
+/// expiry it re-sends the exact latest progress param when one exists
+/// (identical `progress`/`total`/`message`, so wire monotonicity is preserved
+/// by construction); otherwise it emits a [`review_keep_alive_log_param`]
+/// content message, so a tokenless client sees traffic within `keep_alive` of
+/// its first event. Before anything has been sent there is nothing to
+/// re-assure the client about, so the timer stays disarmed.
+///
+/// The loop ends when the engine drops its sender (or a drain side closes);
+/// dropping `param_tx`/`content_tx` then closes the drains' sources so they
+/// flush and exit.
 ///
 /// Extracted from [`spawn_review_progress_bridge`] so the keep-alive schedule
 /// is unit-testable under paused time.
 async fn run_review_progress_mapping(
     mut event_rx: tokio::sync::mpsc::UnboundedReceiver<ReviewProgressEvent>,
     param_tx: tokio::sync::mpsc::UnboundedSender<ProgressNotificationParam>,
-    peer: Option<Arc<Peer<RoleServer>>>,
-    token: ProgressToken,
+    content_tx: Option<tokio::sync::mpsc::UnboundedSender<LoggingMessageNotificationParam>>,
+    token: Option<ProgressToken>,
     keep_alive: std::time::Duration,
 ) {
     let mut state = ReviewProgressState::default();
     let mut latest: Option<ProgressNotificationParam> = None;
+    // When the last wire send happened on either channel; `None` until the
+    // first send keeps the keep-alive disarmed.
+    let mut last_sent: Option<tokio::time::Instant> = None;
     loop {
+        let deadline = last_sent.map(|at| at + keep_alive);
         tokio::select! {
             event = event_rx.recv() => {
                 let Some(event) = event else { break };
-                // Content-carrying events (findings, verdicts) go to
-                // notifications/message via the peer only — they carry no
-                // progress, so they never move the wire counter nor arm the
-                // keep-alive. With no peer (the in-process sink path), they are
+                // Content-carrying events (findings, verdicts) route to
+                // notifications/message whenever a content transport exists —
+                // regardless of any progress token (per the MCP spec only
+                // notifications/progress needs a client-supplied token). With
+                // no content transport (the in-process sink path), they are
                 // skipped: the sink contract is progress params.
-                match (review_content_log_param(&event), peer.as_ref()) {
-                    (Some(log_param), Some(p)) => {
-                        send_review_content_log(p, log_param).await;
-                        continue;
+                if let Some(log_param) = review_content_log_param(&event) {
+                    if let Some(tx) = content_tx.as_ref() {
+                        if tx.send(log_param).is_err() {
+                            break;
+                        }
+                        last_sent = Some(tokio::time::Instant::now());
                     }
-                    (Some(_), None) => continue,
-                    (None, _) => {}
+                    continue;
                 }
-                // Progress-tick variants map to notifications/progress as before.
-                let Some(param) = review_progress_param(&mut state, &token, &event) else {
+                // Progress-tick variants are token-gated: with no token there
+                // is no notifications/progress to emit, so the tick is dropped
+                // (content and the keep-alive still flow above/below).
+                let Some(token) = token.as_ref() else { continue };
+                let Some(param) = review_progress_param(&mut state, token, &event) else {
                     continue;
                 };
                 latest = Some(param.clone());
                 if param_tx.send(param).is_err() {
                     break;
                 }
+                last_sent = Some(tokio::time::Instant::now());
             }
-            // Re-armed on every loop iteration, so any event (or a prior
-            // keep-alive tick) restarts the silence window. Disarmed until
-            // the first event exists.
-            _ = tokio::time::sleep(keep_alive), if latest.is_some() => {
-                let param = latest.clone().expect("guarded by latest.is_some()");
-                if param_tx.send(param).is_err() {
-                    break;
+            // Keep-alive: fires `keep_alive` after the last wire send on
+            // either channel; disarmed until the first send exists. (The
+            // sleep future is only polled when armed — the `unwrap_or_else`
+            // merely satisfies evaluation of a disabled branch.)
+            _ = tokio::time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now)),
+                if deadline.is_some() =>
+            {
+                if let Some(param) = latest.clone() {
+                    if param_tx.send(param).is_err() {
+                        break;
+                    }
+                } else if let Some(tx) = content_tx.as_ref() {
+                    if tx.send(review_keep_alive_log_param()).is_err() {
+                        break;
+                    }
                 }
+                last_sent = Some(tokio::time::Instant::now());
             }
         }
     }
@@ -1154,7 +1299,7 @@ mod tests {
             event_rx,
             param_tx,
             None,
-            token("dl"),
+            Some(token("dl")),
             TEST_KEEP_ALIVE,
         ));
 
@@ -1305,9 +1450,7 @@ mod tests {
     }
 
     /// Drain everything currently buffered on `rx` without waiting.
-    fn take_buffered(
-        rx: &mut tokio::sync::mpsc::UnboundedReceiver<ProgressNotificationParam>,
-    ) -> Vec<ProgressNotificationParam> {
+    fn take_buffered<T>(rx: &mut tokio::sync::mpsc::UnboundedReceiver<T>) -> Vec<T> {
         let mut out = Vec::new();
         while let Ok(param) = rx.try_recv() {
             out.push(param);
@@ -1346,7 +1489,7 @@ mod tests {
             event_rx,
             param_tx,
             None,
-            token("ka"),
+            Some(token("ka")),
             TEST_KEEP_ALIVE,
         ));
 
@@ -1383,7 +1526,7 @@ mod tests {
             event_rx,
             param_tx,
             None,
-            token("disarmed"),
+            Some(token("disarmed")),
             TEST_KEEP_ALIVE,
         ));
 
@@ -1404,7 +1547,7 @@ mod tests {
             event_rx,
             param_tx,
             None,
-            token("reset"),
+            Some(token("reset")),
             TEST_KEEP_ALIVE,
         ));
 
@@ -1443,7 +1586,7 @@ mod tests {
             event_rx,
             param_tx,
             None,
-            token("done"),
+            Some(token("done")),
             TEST_KEEP_ALIVE,
         ));
 
@@ -1467,10 +1610,11 @@ mod tests {
         ToolContext::new(tool_handlers, git_ops, agent_config)
     }
 
-    /// No `progressToken` (and no sink) → no bridge → the review threads a
-    /// `None` sender and emits zero notifications — the pre-progress behavior.
+    /// With no transport at all (no token, no sink, no peer) there is nowhere
+    /// to ship any notification — no bridge. A missing token alone is NOT what
+    /// skips the bridge anymore: see the plan table below.
     #[tokio::test]
-    async fn no_progress_token_means_no_bridge() {
+    async fn no_transport_at_all_means_no_bridge() {
         assert!(spawn_review_progress_bridge(&bare_context()).is_none());
     }
 
@@ -1480,6 +1624,115 @@ mod tests {
     async fn a_token_without_peer_or_sink_means_no_bridge() {
         let context = bare_context().with_progress_token(token("t"));
         assert!(spawn_review_progress_bridge(&context).is_none());
+    }
+
+    /// The bridge's transport table: content streaming needs only a peer —
+    /// `notifications/progress` alone is token-gated (MCP spec), so a peer
+    /// WITHOUT a token gets a content-only bridge (the field regression:
+    /// tokenless clients used to get no bridge and total silence), and the
+    /// in-process sink carries token-keyed progress params only.
+    #[test]
+    fn bridge_plan_streams_content_to_a_peer_without_a_token() {
+        use ReviewBridgePlan as Plan;
+        // (token, sink, peer) → plan
+        let cases = [
+            ((false, false, false), Plan::Nothing),
+            ((true, false, false), Plan::Nothing),
+            ((true, true, false), Plan::SinkProgressOnly),
+            ((true, true, true), Plan::SinkProgressOnly),
+            ((true, false, true), Plan::PeerProgressAndContent),
+            ((false, false, true), Plan::PeerContentOnly),
+            ((false, true, false), Plan::Nothing),
+            ((false, true, true), Plan::Nothing),
+        ];
+        for ((has_token, has_sink, has_peer), want) in cases {
+            assert_eq!(
+                review_bridge_plan(has_token, has_sink, has_peer),
+                want,
+                "plan for (token={has_token}, sink={has_sink}, peer={has_peer})"
+            );
+        }
+    }
+
+    /// The tokenless mapping contract, under paused time: content events flow
+    /// to the content channel; progress ticks are dropped (token-gated); and
+    /// after the first content send, the gap between consecutive
+    /// `notifications/message` sends never exceeds the keep-alive interval —
+    /// even while tick events (which produce NO wire traffic without a token)
+    /// keep arriving, so a tokenless client's tool timeout keeps resetting.
+    #[tokio::test(start_paused = true)]
+    async fn tokenless_mapping_streams_content_and_bounds_message_gaps_by_the_keep_alive() {
+        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (param_tx, mut param_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (content_tx, mut content_rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(run_review_progress_mapping(
+            event_rx,
+            param_tx,
+            Some(content_tx),
+            None,
+            TEST_KEEP_ALIVE,
+        ));
+
+        // Progress ticks BEFORE any content: no wire traffic on either
+        // channel, and the keep-alive stays disarmed (nothing sent yet).
+        event_tx
+            .send(ReviewProgressEvent::Planned { total_pairs: 2 })
+            .unwrap();
+        advance(TEST_KEEP_ALIVE * 3).await;
+        assert!(
+            take_buffered(&mut param_rx).is_empty(),
+            "no token means no progress params"
+        );
+        assert!(
+            take_buffered(&mut content_rx).is_empty(),
+            "the keep-alive stays disarmed before the first wire send"
+        );
+
+        // First content event: one message crosses, arming the keep-alive.
+        event_tx
+            .send(ReviewProgressEvent::Findings {
+                validator: "v".to_string(),
+                findings: vec![],
+            })
+            .unwrap();
+        advance(std::time::Duration::ZERO).await;
+        let first = take_buffered(&mut content_rx);
+        assert_eq!(first.len(), 1, "the content event maps to one message");
+        assert_eq!(first[0].data["kind"], "review.findings");
+
+        // The engine keeps ticking progress — traffic-free for a tokenless
+        // call — so the message-channel silence must still be capped: one
+        // keep-alive message per full window since the LAST SEND, not since
+        // the last engine event.
+        let just_under = TEST_KEEP_ALIVE - std::time::Duration::from_secs(1);
+        advance(just_under).await;
+        event_tx
+            .send(ReviewProgressEvent::PairDone {
+                validator: "v".to_string(),
+                file: "src/a.rs".to_string(),
+            })
+            .unwrap();
+        advance(std::time::Duration::from_secs(1) + std::time::Duration::from_millis(1)).await;
+        let keep_alives = take_buffered(&mut content_rx);
+        assert_eq!(
+            keep_alives.len(),
+            1,
+            "one keep-alive per silence window since the last message send"
+        );
+        assert_eq!(keep_alives[0].data["kind"], "review.keep-alive");
+        assert_eq!(keep_alives[0].logger.as_deref(), Some("review"));
+        assert!(
+            take_buffered(&mut param_rx).is_empty(),
+            "still zero notifications/progress"
+        );
+
+        // Continued silence: another window, another keep-alive.
+        advance(TEST_KEEP_ALIVE + std::time::Duration::from_millis(1)).await;
+        assert_eq!(
+            take_buffered(&mut content_rx).len(),
+            1,
+            "keep-alives repeat while the wire stays silent"
+        );
     }
 
     /// Token + in-process sink wires the bridge: engine events are mapped to

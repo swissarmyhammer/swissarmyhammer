@@ -352,11 +352,14 @@ impl ReviewTool {
             .unwrap_or_else(review_op::default_embedder_factory);
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
 
-        // Progress bridge (one per call, only when the client opted in with a
-        // progressToken / in-process sink): spawned HERE on the outer runtime,
-        // BEFORE `run_review_request` enters its spawn_blocking + nested
-        // current-thread runtime — only the sync UnboundedSender crosses in.
-        // No token and no sink → None → zero notifications (unchanged behavior).
+        // Streaming bridge (one per call, whenever any transport can carry
+        // something — MCP peer, in-process sink): spawned HERE on the outer
+        // runtime, BEFORE `run_review_request` enters its spawn_blocking +
+        // nested current-thread runtime — only the sync UnboundedSender
+        // crosses in. A peer WITHOUT a progressToken still gets a bridge
+        // (content-only: notifications/message + keep-alive; progress ticks
+        // are token-gated per the MCP spec). Only no-transport-at-all → None
+        // → zero notifications.
         let (progress, drain) = match review_op::spawn_review_progress_bridge(context) {
             Some(bridge) => {
                 let (sender, drain) = bridge.into_parts();

@@ -15,16 +15,19 @@ Each returns a `ReviewReport { markdown, counts }` and accepts the shared
 (`session` | `local`), and `batch_size?` (max inlined file bytes per review
 batch, default 262144) modifiers.
 
-## Streaming (when a `progressToken` is supplied)
+## Streaming
 
-A `review file/working/sha` call that carries `_meta.progressToken` streams the
-run as it happens over two MCP channels, so a client can start resolving
-findings in parallel instead of waiting for the final `ReviewReport`:
+A `review file/working/sha` call streams the run as it happens over two MCP
+channels, so a client can start resolving findings in parallel instead of
+waiting for the final `ReviewReport`:
 
 - `notifications/progress` — pair-count ticks (`progress`/`total`/`message`) as
-  each `(validator, file)` pair is reviewed; advisory, for progress bars.
+  each `(validator, file)` pair is reviewed; advisory, for progress bars. Only
+  emitted when the call carries `_meta.progressToken` (the MCP spec requires
+  echoing a client-supplied token).
 - `notifications/message` — the review's ACTUAL content as it resolves, carried
-  as structured `data` under logger `"review"`, level `info`:
+  as structured `data` under logger `"review"`, level `info`. Not token-gated:
+  it flows to the calling peer with or without a `progressToken`.
   - `{"kind": "review.findings", "validator": "<name>", "findings": [<Finding>…]}`
     — emitted when a validator task completes, with every finding it parsed (an
     empty array means that validator came back clean). The `Finding` objects are
@@ -32,6 +35,10 @@ findings in parallel instead of waiting for the final `ReviewReport`:
   - `{"kind": "review.verdict", "finding": <Finding>, "confirmed": <bool>,
     "reason": "<why>"}` — emitted as each candidate's verdict resolves (guard
     refutation or adversarial-agent verdict).
+  - `{"kind": "review.keep-alive", "message": "review in progress"}` — a
+    periodic re-assurance during engine silence on calls with no
+    `progressToken` (tokenful calls keep alive by re-sending the latest
+    progress param instead); safe to ignore when accumulating findings.
 
 The streamed events are **per-validator granular**: the same finding can be
 emitted by more than one validator. The final `ReviewReport` exact-dedups those

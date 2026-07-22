@@ -7,11 +7,16 @@ step on the actual prior response, not on timers), calls the `review` tool
 with backend=local over the seeded sample crate, and asserts a
 machine-checkable success:
 
-  1. the review markdown is non-empty AND findings (blockers+warnings+nits) > 0
+  1. the review markdown is non-empty AND counts.findings > 0
   2. counts.failed == 0 and counts.attempted > 0 (the serialized names of the
      engine's tasks_failed / tasks_attempted tallies)
   3. zero "Queue is full" lines in the sample dir's .sah/mcp.<pid>.log
   4. at least one "AgentMessage (" reply line in that log
+  5. tokenless streaming: this harness sends NO _meta.progressToken (like a
+     subagent Claude Code connection), so the client must still RECEIVE
+     notifications/message frames with logger "review" (streamed
+     findings/verdicts/keep-alives), and zero notifications/progress frames
+     (progress ticks are token-gated per the MCP spec)
 
 Exits 0 only when every assertion holds; nonzero with a clear message
 otherwise. See README.md alongside this script for setup (build `sah` first).
@@ -30,7 +35,10 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SAMPLE_DIR = SCRIPT_DIR / "sample"
-REVIEW_FILE = SAMPLE_DIR / "src" / "orders.rs"
+# Repo-relative target for `review file`: the engine's scope validator
+# rejects absolute paths by contract ("escapes the repository root"), and the
+# server's repo root is the sample dir (its --cwd).
+REVIEW_FILE = "src/orders.rs"
 VALIDATORS = ["duplication", "magic-numbers"]
 REVIEW_TIMEOUT_SECONDS = 1800
 # initialize / tools/list are answered without touching the model, but a cold
@@ -74,13 +82,15 @@ def _response(markdown, counts):
     )
 
 
-def _counts(blockers=1, warnings=1, nits=0, attempted=4, failed=0):
-    """A synthetic `counts` payload mirroring the serialized ReviewCountsView."""
+def _counts(findings=2, attempted=4, failed=0):
+    """A synthetic `counts` payload mirroring the serialized ReviewCountsView.
+
+    Review is binary pass/fail — the engine serializes a single `findings`
+    count (post-dedup confirmed findings), not a per-severity breakdown.
+    """
     return {
-        "blockers": blockers,
-        "warnings": warnings,
-        "nits": nits,
-        "confirmed": blockers + warnings + nits,
+        "findings": findings,
+        "confirmed": findings,
         "refuted": 0,
         "attempted": attempted,
         "failed": failed,
@@ -140,9 +150,7 @@ def self_test():
         ),
         (
             "zero findings is rejected",
-            check_review_response(
-                _response(GOOD_MARKDOWN, _counts(blockers=0, warnings=0, nits=0))
-            ),
+            check_review_response(_response(GOOD_MARKDOWN, _counts(findings=0))),
             "zero findings",
         ),
         (
@@ -169,6 +177,21 @@ def self_test():
             "a log with no AgentMessage reply is rejected",
             check_server_log("INFO fleet task finished\n"),
             AGENT_MESSAGE_MARKER,
+        ),
+        (
+            "tokenless receipt of review messages yields no failures",
+            check_streamed_notifications(5, 0),
+            None,
+        ),
+        (
+            "zero review messages on a tokenless call is rejected",
+            check_streamed_notifications(0, 0),
+            "must still stream review content",
+        ),
+        (
+            "progress frames on a tokenless call are rejected",
+            check_streamed_notifications(5, 3),
+            "token-gated",
         ),
     ]
 
@@ -216,7 +239,7 @@ def check_review_response(message):
     failures = []
     markdown = payload.get("markdown") or ""
     counts = payload.get("counts") or {}
-    findings = sum(counts.get(k, 0) for k in ("blockers", "warnings", "nits"))
+    findings = counts.get("findings", 0)
     if not markdown.strip():
         failures.append("review markdown is empty")
     if findings <= 0:
@@ -230,6 +253,29 @@ def check_review_response(message):
         failures.append(
             f"{counts.get('failed')} fan-out review tasks failed (counts={counts}) "
             "— the findings are incomplete"
+        )
+    return failures
+
+
+def check_streamed_notifications(review_message_count, progress_count):
+    """Validate client-side notification receipt on the tokenless call.
+
+    Covers assertion 5: this harness never sends `_meta.progressToken`, so the
+    server must still stream review content as notifications/message (logger
+    "review") — the tokenless-silence regression — and must send zero
+    notifications/progress (progress ticks are token-gated per the MCP spec).
+    Returns a list of human-readable failure strings.
+    """
+    failures = []
+    if review_message_count == 0:
+        failures.append(
+            'zero notifications/message frames with logger "review" received — '
+            "a tokenless call must still stream review content to the client"
+        )
+    if progress_count != 0:
+        failures.append(
+            f"{progress_count} notifications/progress frames received on a "
+            "tokenless call — progress ticks must be token-gated"
         )
     return failures
 
@@ -299,6 +345,11 @@ class McpClient:
             request_id: threading.Event()
             for request_id in (INITIALIZE_ID, TOOLS_LIST_ID, REVIEW_CALL_ID)
         }
+        # Client-side receipt tallies for assertion 5 (tokenless streaming).
+        # Written only by the reader thread; read by the main thread after the
+        # review response has arrived (the reader is done by then).
+        self.review_message_count = 0
+        self.progress_count = 0
         self.stdin_lock = threading.Lock()
         self.thread = threading.Thread(target=self._reader, daemon=True)
         self.thread.start()
@@ -329,6 +380,16 @@ class McpClient:
             try:
                 msg = json.loads(line)
             except ValueError:
+                continue
+            # Notifications (method, no id): tally the two streamed kinds this
+            # harness asserts on (assertion 5), then move on.
+            if "method" in msg and "id" not in msg:
+                if msg["method"] == "notifications/message":
+                    params = msg.get("params") or {}
+                    if params.get("logger") == "review":
+                        self.review_message_count += 1
+                elif msg["method"] == "notifications/progress":
+                    self.progress_count += 1
                 continue
             # Server -> client request: decline politely so nothing blocks.
             if "method" in msg and "id" in msg:
@@ -460,7 +521,8 @@ def run_review(timeout):
     log_path = SAMPLE_DIR / ".sah" / f"mcp.{proc.pid}.log"
 
     try:
-        result, error = drive_review(McpClient(proc), timeout)
+        client = McpClient(proc)
+        result, error = drive_review(client, timeout)
         if error:
             print(f"\nFAIL: {error}")
             return EXIT_TIMEOUT
@@ -469,7 +531,14 @@ def run_review(timeout):
         # flushed/closed, GPU lock released) on every exit path.
         shutdown_server(proc)
 
+    log(
+        f"client received {client.review_message_count} notifications/message "
+        f'(logger "review") and {client.progress_count} notifications/progress'
+    )
     failures = check_review_response(result)
+    failures += check_streamed_notifications(
+        client.review_message_count, client.progress_count
+    )
     if log_path.exists():
         failures += check_server_log(log_path.read_text(errors="replace"))
     else:

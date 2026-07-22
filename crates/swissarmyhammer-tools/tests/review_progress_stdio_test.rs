@@ -54,6 +54,7 @@ use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironmen
 use swissarmyhammer_templating::TemplateLibrary;
 use swissarmyhammer_tools::mcp::McpServer;
 use swissarmyhammer_validators::review::test_support::PromptGate;
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
 // Reuse the shared review fixture (temp git repo + planted diff + on-disk
 // code_context index + scripted ACP agent + mock embedder). Pulled in by path
@@ -555,4 +556,205 @@ async fn review_progress_is_received_by_a_real_client_over_a_byte_stream_transpo
         !report_markdown.contains(CLAIM_GUARD_HERRING),
         "a refuted red-herring claim must not appear in the final report"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Tokenless client: raw newline-delimited JSON-RPC over the same transport.
+// ---------------------------------------------------------------------------
+
+/// Write one newline-delimited JSON-RPC frame to the transport.
+async fn send_frame<W: AsyncWrite + Unpin>(write: &mut W, frame: serde_json::Value) {
+    let mut line = frame.to_string();
+    line.push('\n');
+    write
+        .write_all(line.as_bytes())
+        .await
+        .expect("frame written to the duplex transport");
+    write.flush().await.expect("frame flushed");
+}
+
+/// Read the next JSON-RPC frame from the transport, failing loudly after
+/// [`WAIT_DEADLINE`].
+async fn next_frame(
+    lines: &mut tokio::io::Lines<
+        tokio::io::BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
+    >,
+) -> serde_json::Value {
+    let line = tokio::time::timeout(WAIT_DEADLINE, lines.next_line())
+        .await
+        .expect("timed out waiting for the next JSON-RPC frame")
+        .expect("transport read succeeds")
+        .expect("transport closed before the expected frame arrived");
+    serde_json::from_str(&line).expect("frame is valid JSON")
+}
+
+/// The field regression: a client that omits `_meta.progressToken` (as
+/// subagent Claude Code connections do) must still receive the streamed
+/// review CONTENT as `notifications/message` — and, per the MCP spec, zero
+/// `notifications/progress`, because there is no client-supplied token to
+/// echo. Before the fix such a call produced total silence and the client sat
+/// until its tool timeout.
+///
+/// This mirrors
+/// [`review_progress_is_received_by_a_real_client_over_a_byte_stream_transport`]
+/// — same real `McpServer`, same duplex byte-stream boundary — but it CANNOT
+/// use an rmcp client: rmcp 1.7's `send_request_with_option` unconditionally
+/// injects a progress token into `_meta` on every outgoing request
+/// (`service.rs`, `next_progress_token` + `set_progress_token`), so a
+/// tokenless `tools/call` is only producible by a raw JSON-RPC client. That
+/// raw client is also the truer mirror of the field failure. Receipt is
+/// asserted on frames read from the client side of the transport — never a
+/// server-side channel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_content_is_streamed_to_a_client_that_omits_the_progress_token() {
+    // Hermetic bootstrap, exactly as the tokenful test above.
+    std::env::set_var("SAH_DISABLE_EMBEDDING", "1");
+    let _home = IsolatedTestEnvironment::new().expect("isolated env");
+
+    let repo = TestRepo::new();
+    plant_diff(&repo);
+    seed_on_disk_index(repo.path());
+    let _cwd = CurrentDirGuard::new(repo.path()).expect("chdir");
+
+    // This test needs no stall window: open the gate up front so the
+    // scripted run streams straight through.
+    let (gate, controller) = PromptGate::new();
+    controller.release();
+
+    let server =
+        McpServer::new_with_work_dir(TemplateLibrary::default(), repo.path().to_path_buf(), None)
+            .await
+            .expect("server builds");
+    server
+        .set_review_factories(
+            scripted_factory(gated_planted_agent(gate)),
+            Some(mock_embedder_factory()),
+            None,
+        )
+        .await;
+
+    let (client_io, server_io) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
+    // `serve_server(...).await` resolves only after the client's `initialize`
+    // handshake, so the raw handshake below runs concurrently with it.
+    let server_task = tokio::spawn(serve_server(server, tokio::io::split(server_io)));
+
+    let (read_half, mut write) = tokio::io::split(client_io);
+    let mut lines = tokio::io::BufReader::new(read_half).lines();
+
+    // Raw MCP handshake: initialize -> response -> initialized notification.
+    send_frame(
+        &mut write,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "raw-tokenless-client", "version": "0"}
+            }
+        }),
+    )
+    .await;
+    let init_response = next_frame(&mut lines).await;
+    assert_eq!(
+        init_response["id"], 1,
+        "initialize response: {init_response}"
+    );
+    assert!(
+        init_response.get("error").is_none(),
+        "initialize failed: {init_response}"
+    );
+    send_frame(
+        &mut write,
+        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    )
+    .await;
+    let running_server = server_task
+        .await
+        .expect("server task joins")
+        .expect("server serves over the duplex transport");
+
+    // The tokenless call: `tools/call` with NO `_meta` at all.
+    send_frame(
+        &mut write,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "review",
+                "arguments": {"op": "review working", "backend": "local"}
+            }
+        }),
+    )
+    .await;
+
+    // Read frames until the call's response, tallying client-side receipt of
+    // both notification kinds. Server->client requests are declined so
+    // nothing blocks (mirrors a minimal client with no handlers).
+    let mut review_messages: Vec<serde_json::Value> = Vec::new();
+    let mut progress_count = 0usize;
+    let response = loop {
+        let frame = next_frame(&mut lines).await;
+        match frame["method"].as_str() {
+            Some("notifications/message") => {
+                if frame["params"]["logger"] == "review" {
+                    review_messages.push(frame["params"].clone());
+                }
+            }
+            Some("notifications/progress") => progress_count += 1,
+            Some(_) if frame.get("id").is_some() => {
+                // A server->client request: decline politely.
+                send_frame(
+                    &mut write,
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": frame["id"],
+                        "error": {"code": -32601, "message": "client has no handlers"}
+                    }),
+                )
+                .await;
+            }
+            _ => {
+                if frame["id"] == 2 {
+                    break frame;
+                }
+            }
+        }
+    };
+
+    // The call itself succeeded — silence, not failure, was the bug.
+    assert!(
+        response.get("error").is_none(),
+        "tokenless review call returned a JSON-RPC error: {response}"
+    );
+    assert_ne!(
+        response["result"]["isError"],
+        serde_json::Value::Bool(true),
+        "tokenless review call returned an error result: {response}"
+    );
+
+    // The core of the regression: review content REACHED the tokenless client
+    // as notifications/message (logger "review")...
+    assert!(
+        !review_messages.is_empty(),
+        "a client that omits the progressToken must still receive \
+         notifications/message review content; got zero"
+    );
+    assert!(
+        review_messages.iter().any(|m| {
+            m["data"]["kind"] == "review.findings" || m["data"]["kind"] == "review.verdict"
+        }),
+        "the streamed content must include findings/verdict payloads: {review_messages:#?}"
+    );
+
+    // ...and, per the MCP spec, ZERO notifications/progress: there is no
+    // client-supplied token to echo.
+    assert_eq!(
+        progress_count, 0,
+        "a tokenless call must receive no notifications/progress"
+    );
+
+    running_server.cancel().await.ok();
 }
