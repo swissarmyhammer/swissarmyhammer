@@ -57,8 +57,12 @@ comments:
   id: 01ky5qfk6f6pnsxmtvrsm0f3k3
   text: 'Fixed the 15:05 review finding (default-op literal duplication in tools/review/mod.rs). Checked for an existing op-name constant first: op strings come from Operation::op_string() (runtime format!("{verb} {noun}") in swissarmyhammer-operations) — no &''static str constant exists anywhere, and match arms need one, so a new const is the minimal correct fix, not a duplicate. Added `const DEFAULT_OP: &str = "review working";` next to REVIEW_OPERATIONS and used it in both `.unwrap_or(DEFAULT_OP)` and the `DEFAULT_OP =>` match arm. Divergence guard: new unit test `default_op_is_the_advertised_review_working_op_string` pins DEFAULT_OP == REVIEW_WORKING.op_string(), tying it to the REVIEW_OPERATIONS source of truth. Deliberately did NOT constify the other match-arm literals (each appears once as an arm; no default/dispatch pair to diverge). Verified: `cargo nextest run -p swissarmyhammer-tools review` 58/58 pass (new test PASS 0.014s), `cargo clippy -p swissarmyhammer-tools --all-targets -- -D warnings` clean, `cargo fmt --check` clean. Adversarial double-check agent not spawnable in this environment (no Task tool); proceeding on the green verification gate — the change is a 3-line refactor plus a pin test. Not committed; task left in doing per orchestrator instructions.'
   timestamp: 2026-07-22T20:15:12.079468+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01ky5qsy9zm5tfkbk7psy40m70
+  text: 'Review round 4 (HEAD~1..HEAD on 690ff9b6b): CLEAN — 0 findings (14 attempted, 0 confirmed). Task complete after 4 iterations: (1) core fix + tests + drive.py e2e [3c6a9e875], (2) module doc comments [52233ecec], (3) Clone+Copy derives on six ZST op types [dfbf5d1cd], (4) DEFAULT_OP constant + pin test [690ff9b6b]. All commits local, nothing pushed. Final gates: swissarmyhammer-tools suite 1443/1443, review-scoped 58/58, clippy -D warnings clean, fmt clean, full drive.py e2e PASS (tokenless client received 9 notifications/message, 0 notifications/progress, WARN present exactly once).'
+  timestamp: 2026-07-22T20:20:51.135943+00:00
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffffffffc80
 title: 'review: clients that omit progressToken get zero notifications and time out — decouple notifications/message from the token gate'
 ---
 # review: tokenless MCP clients get total silence
