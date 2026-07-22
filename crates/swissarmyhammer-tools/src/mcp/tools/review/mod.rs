@@ -71,7 +71,7 @@ const BATCH_SIZE_PARAM: ParamMeta = ParamMeta::new("batch_size")
     .param_type(ParamType::Integer);
 
 /// `review file` — review an explicit file path or glob.
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ReviewFile;
 
 static REVIEW_FILE_PARAMS: &[ParamMeta] = &[
@@ -100,7 +100,7 @@ impl Operation for ReviewFile {
 }
 
 /// `review working` — review uncommitted changes vs HEAD.
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ReviewWorking;
 
 impl Operation for ReviewWorking {
@@ -121,7 +121,7 @@ impl Operation for ReviewWorking {
 static REVIEW_WORKING_PARAMS: &[ParamMeta] = &[VALIDATORS_PARAM, BACKEND_PARAM, BATCH_SIZE_PARAM];
 
 /// `review sha` — review the changes in/since a commit or range.
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ReviewSha;
 
 static REVIEW_SHA_PARAMS: &[ParamMeta] = &[
@@ -150,7 +150,7 @@ impl Operation for ReviewSha {
 }
 
 /// `list validators` — summarize the loaded RuleSet stack.
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ListValidators;
 
 static LIST_VALIDATORS_PARAMS: &[ParamMeta] = &[
@@ -178,7 +178,7 @@ impl Operation for ListValidators {
 }
 
 /// `get validator` — one validator's full detail.
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct GetValidator;
 
 static GET_VALIDATOR_PARAMS: &[ParamMeta] = &[ParamMeta::new("name")
@@ -202,7 +202,7 @@ impl Operation for GetValidator {
 }
 
 /// `check validators` — lint every loaded validator.
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct CheckValidators;
 
 impl Operation for CheckValidators {

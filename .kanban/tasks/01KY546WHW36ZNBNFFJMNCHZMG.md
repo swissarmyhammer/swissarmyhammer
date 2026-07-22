@@ -45,6 +45,14 @@ comments:
   id: 01ky57ajydfnnfhcz2zzhnfp5g
   text: 'Worked the 2026-07-22 10:13 review findings: added /// doc comments to `pub mod review_op;` and `pub mod validators;` in crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs, describing each module''s purpose (pipeline ops + streaming vs. loader-only introspection) in the file''s existing doc style. Audited the rest of mod.rs — every other pub item (structs, statics, fns) already carries docs, so zero recurrences expected on re-review. Verified: `cargo nextest run -p swissarmyhammer-tools review_progress` 3/3 passed, `cargo clippy -p swissarmyhammer-tools --all-targets -- -D warnings` clean, `cargo fmt --check` clean. Note: adversarial double-check agent not available in this environment; proceeding on the green gates given the change is doc-comments only (no behavior change). Task left in doing for the orchestrator.'
   timestamp: 2026-07-22T15:32:50.765686+00:00
+- actor: claude-code
+  id: 01ky5pnf378bhks2bhgw002c4w
+  text: 'Review round 2 (engine run from the main session after the reviewer subagent died on an API spend-limit error): 5 confirmed findings, all "derive Clone, Copy on zero-sized public op type" in tools/review/mod.rs (ReviewFile, ReviewWorking, ReviewSha, ListValidators, CheckValidators). Recorded as dated checklist; task stays in review. Iteration 3: implementer to add the derives — and per the fix-the-cause-across-the-file rule, also check GetValidator and any other ZST op type in the file so re-review finds zero recurrences.'
+  timestamp: 2026-07-22T20:00:55.911525+00:00
+- actor: claude-code
+  id: 01ky5pv4km6v6tpg6bqn88x6cf
+  text: 'Worked the 2026-07-22 14:52 review findings (round 2, iteration 3): added `Clone, Copy` to the derives of ALL SIX zero-sized public op types in crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs — ReviewFile, ReviewWorking, ReviewSha, ListValidators, GetValidator, CheckValidators — every `#[derive(Debug, Default)]` in the file is now `#[derive(Clone, Copy, Debug, Default)]`. The engine flagged only 5; GetValidator had the identical shape and got the same fix per the fix-the-cause-across-the-file rule, so re-review should find zero recurrences. ReviewTool was audited and left alone (it has fields — agent_factory/embedder_factory/concurrency — so it is not a ZST and Copy is not applicable). Verified fresh: `cargo nextest run -p swissarmyhammer-tools review` 57/57 passed (incl. both stdio e2e binaries), `cargo clippy -p swissarmyhammer-tools --all-targets -- -D warnings` clean, `cargo fmt --check` clean (no reformat needed). Note: adversarial double-check agent not available in this environment; proceeding on the green gates given the change is derive-attributes only (no behavior change). Findings flipped to [x]; task left in doing for the orchestrator.'
+  timestamp: 2026-07-22T20:04:01.780699+00:00
 position_column: doing
 position_ordinal: '8280'
 title: 'review: clients that omit progressToken get zero notifications and time out — decouple notifications/message from the token gate'
@@ -87,3 +95,11 @@ Fix in `review_op.rs` (+ call-site comment in `tools/review/mod.rs` ~358–360 w
 
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs:26` — Public module `review_op` lacks a documentation comment explaining its purpose and contents. Add a doc comment before the module declaration: `/// Operations module for review tool dispatch.`.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs:27` — Public module `validators` lacks a documentation comment explaining its purpose and contents. Add a doc comment before the module declaration: `/// Validator loader and introspection operations.`.
+
+## Review Findings (2026-07-22 14:52)
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs:85` — Public type ReviewFile should derive Clone and Copy; zero-sized types can implement these traits cheaply, and downstream crates cannot add them due to orphan rules if absent. Change #[derive(Debug, Default)] to #[derive(Clone, Copy, Debug, Default)].
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs:110` — Public type ReviewWorking should derive Clone and Copy; zero-sized types can implement these traits cheaply, and downstream crates cannot add them due to orphan rules if absent. Change #[derive(Debug, Default)] to #[derive(Clone, Copy, Debug, Default)].
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs:123` — Public type ReviewSha should derive Clone and Copy; zero-sized types can implement these traits cheaply, and downstream crates cannot add them due to orphan rules if absent. Change #[derive(Debug, Default)] to #[derive(Clone, Copy, Debug, Default)].
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs:143` — Public type ListValidators should derive Clone and Copy; zero-sized types can implement these traits cheaply, and downstream crates cannot add them due to orphan rules if absent. Change #[derive(Debug, Default)] to #[derive(Clone, Copy, Debug, Default)].
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/review/mod.rs:181` — Public type CheckValidators should derive Clone and Copy; zero-sized types can implement these traits cheaply, and downstream crates cannot add them due to orphan rules if absent. Change #[derive(Debug, Default)] to #[derive(Clone, Copy, Debug, Default)].
