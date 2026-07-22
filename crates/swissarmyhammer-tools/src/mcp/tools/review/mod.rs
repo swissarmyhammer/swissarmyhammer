@@ -239,6 +239,13 @@ pub static REVIEW_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
     ]
 });
 
+/// The op dispatched when a call omits `op` (or sends it empty).
+///
+/// Named so the default in [`ReviewTool::execute`] and its match arm share one
+/// definition and can never diverge; a test pins it to the `review working`
+/// operation advertised by [`REVIEW_OPERATIONS`].
+const DEFAULT_OP: &str = "review working";
+
 // ---------------------------------------------------------------------------
 // The tool.
 // ---------------------------------------------------------------------------
@@ -503,19 +510,19 @@ impl McpTool for ReviewTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         context: &ToolContext,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        // A missing or empty `op` defaults to `review working` — the single
-        // source of truth for that default, so the match arms stay exact.
+        // A missing or empty `op` falls back to [`DEFAULT_OP`], the same
+        // constant its match arm dispatches on, so the two cannot diverge.
         let op_str = arguments
             .get("op")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .unwrap_or("review working");
+            .unwrap_or(DEFAULT_OP);
 
         let mut args = arguments.clone();
         args.remove("op");
 
         match op_str {
-            "review working" => self.execute_review(Scope::Working, &args, context).await,
+            DEFAULT_OP => self.execute_review(Scope::Working, &args, context).await,
             "review file" => {
                 let target = string_arg(&args, "path").ok_or_else(|| {
                     rmcp::ErrorData::invalid_params(

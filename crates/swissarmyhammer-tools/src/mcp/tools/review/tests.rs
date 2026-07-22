@@ -74,6 +74,14 @@ fn review_tool_is_registered_with_its_ops() {
     }
 }
 
+/// [`DEFAULT_OP`] (the op dispatched when a call omits `op`) must stay the
+/// `review working` operation's canonical op string, keeping the constant tied
+/// to the [`REVIEW_OPERATIONS`] source of truth.
+#[test]
+fn default_op_is_the_advertised_review_working_op_string() {
+    assert_eq!(DEFAULT_OP, REVIEW_WORKING.op_string());
+}
+
 /// The manual `Debug` impl renders the trait-object factory fields by
 /// presence/absence (closures are unprintable) alongside the plain fields.
 #[test]
