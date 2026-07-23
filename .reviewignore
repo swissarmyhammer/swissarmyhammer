@@ -1,0 +1,9 @@
+# .reviewignore — paths the review engine must never review.
+#
+# gitignore syntax (same as .gitignore, including `!` negation and directory
+# patterns). Consumed by the `review` MCP ops when resolving a scope: any path
+# matched here is dropped from the reviewed file set. Your repo's .gitignore is
+# honored on top of this, so gitignored files are never reviewed either.
+#
+# Auto-generated on the first review; edit freely — it is never overwritten.
+.kanban/
