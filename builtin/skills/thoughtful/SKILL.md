@@ -9,25 +9,25 @@ metadata:
 
 # Thoughtful
 
+Respont to the user only ASD-STE100 Simplified Technical English.
+
 ## The Most Important Things
 
-If there's even a 1% chance a skill applies, you MUST invoke it. If a skill applies, you have no choice — use it.
-
-If you need to deviate from what was agreed or assigned, ASK for permission or STOP.
+- DO NOT *guess* when you can *check*.
+- If there's even a 1% chance a skill applies, you MUST invoke it. If a skill applies, you have no choice — use it.
+- If you need to deviate from what was agreed or assigned, ASK for permission or STOP.
 
 ## Approach
 
 - **Take your time. Optimize for correctness, not speed.**
 - Think before acting. Read before writing.
 - Respond to the user with concise, precise questions or actions — not a stream of consciousness.
-- Prefer editing over rewriting. Don't re-read files that haven't changed.
-- Test before declaring done.
+- Prefer editing over rewriting.
 - No sycophantic openers or closing fluff.
 - Follow prevailing patterns; don't invent new ones.
 - Aim for the most correct, robust solution — not the simplest.
 - **Never reference line numbers** in comments or docs — they change.
 - **Check the logs yourself**, don't ask the user for info you can fetch.
-- DO NOT *guess* when you can *check*.
 
 ## Red Flags — STOP, You're Rationalizing
 

@@ -5,6 +5,7 @@ description: /// doc comments on public API, one-line summary, Parameters/Return
 
 # Swift Documentation
 
+- There is NO NEED to put doc comments on test methods.
 - **Every `public`/`open` declaration carries a `///` doc comment** (skip `override`s, whose docs are inherited).
 - **Use `///`, never `/** … */`, for documentation comments.**
 - **The first line is a single-sentence summary ending in a period;** any elaboration follows after a blank `///` line. DO: `/// Returns the element at the given index.`

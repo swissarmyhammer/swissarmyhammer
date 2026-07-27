@@ -9,9 +9,3 @@ match:
   files:
     - "@file_groups/source_code"
 ---
-
-# Missing Docs Validator
-
-Re-homed from the monolithic code-quality set into a focused, one-concern
-validator: missing documentation on public APIs. It is an **in-file judgment** —
-it reads the diff and needs no engine probe, so it declares none.
