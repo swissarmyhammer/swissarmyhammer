@@ -1,9 +1,9 @@
 ---
 name: complexity
 description: >-
-  Flag functions with high cognitive complexity — deep nesting, many branches,
-  complex boolean logic, nested loops, long conditional chains — that are hard to
-  read and reason about.
+  Flag functions with high cognitive complexity. Look for deep nesting, many
+  branches, and complex boolean logic. Also look for nested loops and long
+  conditional chains. These functions are hard to read and hard to reason about.
 metadata:
   version: "{{version}}"
 match:

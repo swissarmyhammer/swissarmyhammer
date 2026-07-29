@@ -1,10 +1,10 @@
 ---
 name: dead-code
 description: >-
-  Flag any added or changed symbol with no inbound callers that is not an entry
-  point, exported public API, or test. Also flag orphaned modules never wired
-  into production, unreachable branches, and commented-out code. Dead code is a
-  blocker: delete it, don't ship it.
+  Flag any added or changed symbol with no inbound callers, unless it is an
+  entry point, an exported public API, or a test. Also flag orphaned modules
+  that are never wired into production, unreachable branches, and
+  commented-out code. Dead code is a blocker. Delete it. Do not ship it.
 metadata:
   version: "{{version}}"
 match:
@@ -16,18 +16,20 @@ probes:
 
 # Dead Code Validator
 
-An added symbol that nothing calls is dead weight that confuses every future
-reader and hides intent. The engine runs the `callers` probe (`get callgraph`,
-inbound) on each added symbol and attaches the inbound call sites as
-ground-truth. An **empty inbound callgraph** on an added symbol that is not an
-entry point, exported public API, or test is the dead-code signal — a fact,
-delivered on the finding, that you confirm against the carve-outs before
-reporting. A confirmed finding is a **blocker**.
+An added symbol that nothing calls is dead weight. It confuses every future
+reader and hides the intent of the code. The engine runs the `callers` probe
+(`get callgraph`, inbound) on each added symbol. It attaches the inbound
+call sites as ground truth. An **empty inbound callgraph** on an added
+symbol is the dead-code signal, unless the symbol is an entry point, an
+exported public API, or a test. This is a fact on the finding. Confirm it
+against the carve-outs before you report it. A confirmed finding is a
+**blocker**.
 
-One carve-out deserves emphasis: **forward-staged scaffolding**. In an
-incremental, multi-step plan, a task routinely adds infrastructure — a field,
-parameter, or helper — *ahead of* the task that consumes it, so its inbound
-callgraph is legitimately empty until the follow-up lands. When the diff makes
-that intent legible (a placeholder default a later change replaces, a value
-plumbed through in preparation, or an explicit forward marker), it is
-work-in-process, not dead code; do not block it. See the rule's carve-outs.
+One carve-out needs emphasis: **forward-staged scaffolding**. In an
+incremental, multi-step plan, a task often adds infrastructure — a field, a
+parameter, or a helper — ahead of the task that consumes it. Its inbound
+callgraph is empty on purpose, until the follow-up task lands. The diff can
+make this intent clear in one of these ways: a placeholder default that a
+later change replaces, a value passed through in preparation, or an explicit
+forward marker. When the diff shows this intent, the code is
+work-in-process, not dead code. Do not block it. See the rule's carve-outs.

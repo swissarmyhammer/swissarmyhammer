@@ -5,9 +5,13 @@ description: New public types must implement all applicable traits
 
 # Rust Trait Implementations
 
-New public types must implement all applicable traits. Due to orphan rules, if you don't, downstream crates can't add them.
+New public types must implement all applicable traits. The orphan rule blocks
+downstream crates from adding these traits later. If you do not implement
+them now, downstream crates cannot add them.
 
-Check for: `Clone`, `Debug`, `Display`, `Default`, `PartialEq`, `Eq`, `Hash`, `PartialOrd`, `Ord`, `From`/`TryFrom`, `AsRef`, `Send`/`Sync` (add compile-time assertions for pointer types).
+Check for these traits: `Clone`, `Debug`, `Display`, `Default`, `PartialEq`,
+`Eq`, `Hash`, `PartialOrd`, `Ord`, `From`/`TryFrom`, `AsRef`, `Send`/`Sync`.
+For pointer types, add compile-time assertions for `Send`/`Sync`.
 
-- Collections: implement `FromIterator` and `Extend`.
-- `serde`: `Serialize`/`Deserialize` behind an optional feature flag.
+- For collections, implement `FromIterator` and `Extend`.
+- For `serde`, implement `Serialize`/`Deserialize` behind an optional feature flag.

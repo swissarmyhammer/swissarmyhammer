@@ -5,7 +5,7 @@ description: riverpod annotations, functional vs class-based providers, params o
 
 # Dart/Flutter Code Generation
 
-- Projects already using `freezed`/`json_serializable` should use `@riverpod` annotations.
-- Functional providers (annotated functions) for read-only/derived state.
-- Class-based providers (annotated Notifier subclasses) for mutable state with user-triggered methods.
-- Parameterized providers expressed as parameters on the annotated function/build method, not `.family` modifier syntax.
+- If a project already uses `freezed` or `json_serializable`, use `@riverpod` annotations.
+- Use functional providers, which are annotated functions, for read-only or derived state.
+- Use class-based providers, which are annotated Notifier subclasses, for mutable state with user-triggered methods.
+- Express a parameterized provider as parameters on the annotated function or build method. Do not use `.family` modifier syntax.

@@ -1,15 +1,16 @@
 ---
 name: lsp
 description: >-
-  Diagnose and install missing LSP servers for your project. Use when the user
-  says "lsp", "language servers", "check lsp", or wants to ensure code
-  intelligence is fully working. Also use when live code intelligence ops
-  (get_hover, get_completions, go to definition) return degraded results from
-  the tree-sitter layer instead of LSP, or when you see "no code intelligence",
-  "can't go to definition", "no type info available", or "source_layer:
-  TreeSitter" on ops that should have full LSP data.
+  Diagnose LSP servers that your project is missing, and install them. Use
+  this skill when the user says "lsp", "language servers", "check lsp", or
+  wants to make sure code intelligence works fully. Also use it when a live
+  code intelligence op (get_hover, get_completions, go to definition) returns
+  a weaker result from the tree-sitter layer instead of from LSP, or when you
+  see "no code intelligence", "can't go to definition", "no type info
+  available", or "source_layer: TreeSitter" on an op that should return full
+  LSP data.
 license: MIT OR Apache-2.0
-compatibility: Requires the `code_context` MCP tool for `lsp status` and `detect projects`. Also needs locally installed LSP servers (e.g. rust-analyzer, pyright, gopls, typescript-language-server) on the system PATH for the languages present in the workspace.
+compatibility: This skill needs the `code_context` MCP tool, for `lsp status` and `detect projects`. It also needs LSP servers installed locally, for example rust-analyzer, pyright, gopls, or typescript-language-server, on the system PATH, for the languages present in the workspace.
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
@@ -17,7 +18,7 @@ metadata:
 
 # LSP
 
-Diagnose LSP server health and install missing servers for the `code_context` MCP tool. When live LSP ops (`get_hover`, `get_completions`, `go_to_definition`) return tree-sitter results instead of LSP, the most likely cause is a missing server.
+Diagnose the health of LSP servers, and install missing servers, for the `code_context` MCP tool. When a live LSP op, such as `get_hover`, `get_completions`, or `go_to_definition`, returns a tree-sitter result instead of an LSP result, the most likely cause is a missing server.
 
 ## Process
 
@@ -29,7 +30,7 @@ Diagnose LSP server health and install missing servers for the `code_context` MC
 
 Returns:
 - `languages[]`: `{icon, extensions, lsp_server, installed, install_hint}` (hint only when not installed)
-- `all_healthy`: true when every detected language's server is installed
+- `all_healthy`: true when the server for every detected language is installed
 
 ### 2. Present
 
@@ -42,55 +43,55 @@ One row per language:
 
 ### 3. Act
 
-**`all_healthy: true`** — report all good, no action.
+**`all_healthy: true`** — report that everything is fine. Take no action.
 
 **Servers missing**:
-1. List the missing servers + install commands
+1. List the missing servers and their install commands
 2. Ask permission before installing
 3. Run approved installs via `shell`
-4. Re-run `lsp status` to confirm
-5. Show updated table
+4. Run `lsp status` again to confirm
+5. Show the updated table
 
 ### 4. Verify with a live op
 
-Confirm end-to-end with a known symbol:
+Confirm the fix from end to end, with a known symbol:
 
 ```json
 {"op": "get symbol", "query": "main"}
 ```
 
-LSP-sourced data confirms it works. Still degraded? The server may need a project restart or config (`compile_commands.json` for C/C++, `tsconfig.json` for TS).
+Data from LSP confirms that it works. Is the result still degraded? The server may need a project restart, or config, for example `compile_commands.json` for C or C++, or `tsconfig.json` for TypeScript.
 
 ### 5. Errors
 
-- **Install fails**: report output; suggest manual install (different package manager, permissions, version).
-- **No languages detected**: confirm source files exist; re-run after adding them.
+- **Install fails**: report the output. Suggest a manual install, for example with a different package manager, with different permissions, or a different version.
+- **No languages detected**: confirm that source files exist. Run the check again after you add them.
 
 ## Troubleshooting
 
-### `get_hover` / `get_definition` still return `source_layer: TreeSitter` after `installed: true`
+### `get_hover` or `get_definition` still return `source_layer: TreeSitter` after `installed: true`
 
-The LSP process was already running (against the prior state) when the binary was installed, or the initial scan hasn't finished. Installs don't restart live sessions.
+The LSP process was already running, against the earlier state, when you installed the binary. Or the initial scan has not finished yet. An install does not restart a live session.
 
-Restart the MCP server (or parent harness) so `sah` spawns a fresh LSP, then wait for the scan. Verify:
+Restart the MCP server, or the parent harness, so that `sah` starts a fresh LSP. Then wait for the scan to finish. Verify:
 
 ```json
 {"op": "get hover", "file_path": "<known-file>", "line": 0, "character": 0}
 ```
 
-A non-empty `contents` from the LSP layer = fixed.
+A non-empty `contents` field from the LSP layer means the problem is fixed.
 
-### `clangd` (C/C++): no symbols or "Unable to handle compilation, expected compilation database"
+### `clangd` (C or C++): no symbols, or "Unable to handle compilation, expected compilation database"
 
-`clangd` needs `compile_commands.json` at the workspace root (or a discoverable `build/`). Generate, then re-run `lsp status`:
+`clangd` needs `compile_commands.json` at the workspace root, or in a `build/` directory it can find. Generate this file, then run `lsp status` again:
 
 - CMake: `cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && ln -sf build/compile_commands.json .`
 - Make (Bear): `bear -- make`
-- Meson: already emitted in the build dir — symlink to root
+- Meson: this file is already produced in the build directory; make a symbolic link to it from the root
 
 ### `typescript-language-server` returns nothing in a monorepo
 
-No (or wrong) `tsconfig.json` resolves for the file — common when each package has its own but the root doesn't. Add a root `tsconfig.json` with `"references"` to each package, or open the agent inside the package dir. Confirm:
+No `tsconfig.json` resolves for the file, or the wrong one does. This is common when each package has its own `tsconfig.json`, but the root does not. Add a root `tsconfig.json` with `"references"` to each package, or open the agent inside the package directory. Confirm:
 
 ```json
 {"op": "get hover", "file_path": "packages/<pkg>/src/index.ts", "line": 0, "character": 0}
@@ -98,6 +99,6 @@ No (or wrong) `tsconfig.json` resolves for the file — common when each package
 
 ### Install succeeded but binary still not on `PATH`
 
-Installed to a dir (`~/.cargo/bin`, `~/.npm-global/bin`, `~/go/bin`) that the MCP server's env doesn't see. Shell rc only affects interactive shells.
+The install placed the binary in a directory, for example `~/.cargo/bin`, `~/.npm-global/bin`, or `~/go/bin`, that the environment of the MCP server does not see. A shell rc file only affects interactive shells.
 
-Export the directory in the environment that launches the agent (launchd on macOS, your service manager on Linux), then restart the MCP server. Confirm with `which <binary>` in that same environment.
+Export the directory in the environment that launches the agent, for example launchd on macOS, or your service manager on Linux. Then restart the MCP server. Confirm with `which <binary>` in that same environment.

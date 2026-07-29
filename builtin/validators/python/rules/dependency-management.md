@@ -5,6 +5,6 @@ description: Pin transitive deps in apps, minimum constraints in libraries, trea
 
 # Python Dependency Management
 
-- **Applications: pin all transitive dependencies** in lockfiles (`uv lock`, `poetry.lock`, `pip freeze`). "Trust semver" is not a security posture.
-- **Libraries: specify minimum version constraints**, not exact pins. A library pinning `requests==2.31.0` creates conflicts for users.
-- **Treat every update as potentially breaking.** The only reliable protection is test coverage, not version schemes.
+- **Pin all transitive dependencies in applications.** Use lockfiles such as `uv lock`, `poetry.lock`, or `pip freeze`. Do not trust semantic versioning as a security posture.
+- **Specify minimum version constraints in libraries.** Do not use exact pins. A library that pins `requests==2.31.0` creates conflicts for users.
+- **Treat every update as a possible breaking change.** Test coverage is the only reliable protection. Version schemes are not reliable protection.

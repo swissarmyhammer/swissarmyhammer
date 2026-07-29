@@ -1,9 +1,10 @@
 ---
 name: no-commented-code
 description: >-
-  Flag large blocks of commented-out code — disabled functions, classes, or
-  consecutive commented code lines. Version control preserves history; dead code
-  in comments only clutters and misleads.
+  Flag large blocks of commented-out code, such as disabled functions,
+  disabled classes, or many consecutive commented code lines. Version control
+  preserves history. Dead code in comments only clutters the code and misleads
+  readers.
 metadata:
   version: "{{version}}"
 match:

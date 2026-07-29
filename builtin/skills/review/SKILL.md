@@ -2,10 +2,10 @@
 name: review
 profiles:
   - kanban
-description: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review.
+description: A code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review.
 agent: reviewer
 license: MIT OR Apache-2.0
-compatibility: Requires the `review` MCP tool (the local multi-agent review engine) and the `kanban` MCP tool (to drive tasks through the review column and capture findings). 
+compatibility: This skill needs the `review` MCP tool, the local multi-agent review engine. It also needs the `kanban` MCP tool, to move tasks through the review column and record findings.
 metadata:
   author: "swissarmyhammer"
   version: "{{version}}"
@@ -14,7 +14,7 @@ metadata:
 
 # Code Review
 
-Perform a structured code review. You are a **thin driver**: detect the mode, call the right `review` op, write the returned findings onto a kanban task, and summarize. The `review` tool runs the multi-agent engine fleet — design, reuse/dead-code, correctness, tests, security, clarity, performance, language-specific checks. You do not hand-run those layers; the engine does.
+Perform a structured code review. You are a **thin driver**. Detect the mode, call the correct `review` op, write the findings onto a kanban task, and summarize the result. The `review` tool runs a fleet of engines: design, reuse and dead-code, correctness, tests, security, clarity, performance, and language-specific checks. You do not run those checks yourself. The engine runs them.
 
 Here is what the user provided: 
 $ARGUMENTS
@@ -26,36 +26,36 @@ $ARGUMENTS
 
 ## The `review` tool
 
-The engine is op-dispatched (verb + noun). Each `review` op returns a `ReviewReport`:
+The engine dispatches by op: a verb plus a noun. Each `review` op returns a `ReviewReport`:
 
-- `markdown` — a dated `## Review Findings (YYYY-MM-DD HH:MM)` section: one flat GFM checklist ordered by `file:line`. Review is binary pass/fail — there is no graded severity. Write it onto the task verbatim.
-- `counts` — `{ findings, confirmed, refuted }`. Use it for the summary.
+- `markdown` — a dated `## Review Findings (YYYY-MM-DD HH:MM)` section. It is one flat GFM checklist, ordered by `file:line`. A review result is either pass or fail; there is no severity scale. Write this text onto the task exactly as given.
+- `counts` — `{ findings, confirmed, refuted }`. Use this for the summary.
 
 | Op | Scope | When |
 |----|-------|------|
-| `{"op": "review working"}` | Uncommitted changes vs `HEAD` | The everyday default. |
-| `{"op": "review sha", "sha": "<commit-or-range>"}` | The changes in/since a commit or range (e.g. `HEAD~4..HEAD`, `abc123..HEAD`) | A commit, range, or "since" hint. |
+| `{"op": "review working"}` | Uncommitted changes vs `HEAD` | Use this as the everyday default. |
+| `{"op": "review sha", "sha": "<commit-or-range>"}` | The changes in or since a commit or range, for example `HEAD~4..HEAD` or `abc123..HEAD` | Use this for a commit, a range, or a "since" hint. |
 | `{"op": "review file", "path": "<path-or-glob>"}` | An explicit file path or glob | A specific file or set of files. |
 
 ### Passthrough modifiers
 
 Every `review` op accepts two optional modifiers:
 
-- **`validators`** — an array of **validator names** to run (defaults to every matching validator). Scoping is **whole-validator**, never per-rule: each validator is a named bundle of rules — `duplication`, `security`, or a language validator like `swift` (which bundles `casing`, `optionals`, `concurrency`, … as its rules). You pick validators, not individual rules; there is no rule-level filter. Use it when the user wants a narrowed review — "review just duplication" → `["duplication"]`; "review the Swift idioms" → `["swift"]`. To discover the available names (and the rules each bundles), call `{"op": "list validators"}`, or `{"op": "get validator", "name": "<name>"}` for one validator's full rule list.
-- **`backend`** — `session` (the remote default) or `local`. Pass `"local"` when the user says "review locally" / wants the in-process Llama backend.
+- **`validators`** — a list of **validator names** to run. By default, the tool runs every validator that matches. The scope is always **one whole validator**, never a single rule. Each validator is a named bundle of rules, for example `duplication`, `security`, or a language validator like `swift`, which bundles rules such as `casing`, `optionals`, and `concurrency`. You choose validators, not individual rules; there is no rule-level filter. Use this modifier when the user wants a narrower review. For "review just duplication", pass `["duplication"]`. For "review the Swift idioms", pass `["swift"]`. To find the available names, and the rules each one bundles, call `{"op": "list validators"}`. For one validator's full rule list, call `{"op": "get validator", "name": "<name>"}`.
+- **`backend`** — `session` (the remote default) or `local`. Pass `"local"` when the user says "review locally" or wants the in-process Llama backend.
 
 ```json
 {"op": "review working", "validators": ["duplication"]}
 {"op": "review sha", "sha": "HEAD~4..HEAD", "backend": "local"}
 ```
 
-There are no "dimensions" — that concept is gone. Scope is the op (`working`/`sha`/`file`); narrowing is `validators` (whole validators, not individual rules); the backend is `backend`.
+There is no "dimensions" concept; that idea is gone. The op sets the scope: `working`, `sha`, or `file`. The `validators` field narrows the scope, by whole validator, not by individual rule. The `backend` field sets the backend.
 
 ## Process
 
 ### 1. Ensure the review column
 
-Idempotent — use the partial above. Run every time.
+This step is idempotent. Use the partial above. Run it every time.
 
 ### 2. Determine the mode
 
@@ -64,8 +64,8 @@ Idempotent — use the partial above. Run every time.
 | `/review <task-id>` | **task-mode** on that task |
 | `/review <task-id> <sha-or-range>` | **task-mode** on that task, scoped to `<sha-or-range>` |
 | Bare `/review` with tasks in `review` column | **task-mode** on the **oldest** review task |
-| Bare `/review` with `review` empty | **range-mode** on the current branch's changes |
-| `/review HEAD~4..HEAD`, `/review since abc123`, `/review feature-branch` | **range-mode** on that range/branch |
+| Bare `/review` with `review` empty | **range-mode** on the changes of the current branch |
+| `/review HEAD~4..HEAD`, `/review since abc123`, `/review feature-branch` | **range-mode** on that range or branch |
 
 Bare `/review` check:
 
@@ -73,15 +73,15 @@ Bare `/review` check:
 {"op": "list tasks", "column": "review"}
 ```
 
-If any exist, pick the oldest (lowest ordinal / earliest created) for task-mode.
+If any tasks exist, pick the oldest one for task-mode. This is the task with the lowest ordinal, or the earliest creation time.
 
-**Note:** `/implement` leaves a finished task in `doing`, not `review` — it never parks tasks in `review`. So bare `/review` won't auto-target a task that was just implemented; pass `/review <id>` to target it explicitly. Orchestrators like `/finish` always pass the id (and usually a sha), so they're unaffected.
+**Note:** `/implement` leaves a finished task in `doing`, not in `review`. It never places a task in `review`. So a bare `/review` will not automatically target a task that was just implemented. Pass `/review <id>` to target it directly. Orchestrators such as `/finish` always pass the id, and usually a sha too, so this does not affect them.
 
 ### 3. Run the engine
 
-The chosen op decides the scope. Pass through `validators` / `backend` when the user asked to narrow or to run locally.
+The chosen op sets the scope. Pass through `validators` or `backend` when the user asks to narrow the review, or to run it locally.
 
-**Task-mode** — read the task first:
+**Task-mode.** Read the task first:
 
 ```json
 {"op": "get task", "id": "<id>"}
@@ -92,10 +92,10 @@ Pick the scope by this precedence:
 | Condition | Call |
 |-----------|------|
 | An explicit `<sha-or-range>` was passed (`/review <id> <sha>`) | `{"op": "review sha", "sha": "<sha-or-range>"}` |
-| The description has a commit/range/branch hint | `{"op": "review sha", "sha": "<range>"}` |
+| The description has a hint of a commit, range, or branch | `{"op": "review sha", "sha": "<range>"}` |
 | Otherwise | `{"op": "review working"}` |
 
-An explicit `<sha-or-range>` argument wins over everything else — this is how `/finish` asks for a review scoped to the just-committed checkpoint delta (e.g. `/review <id> HEAD~1..HEAD`), so each pass reviews only that iteration's change, never the whole accumulated task diff. Findings still land on `<id>` (task-mode) — the sha only narrows the scope, it does not turn this into range-mode.
+An explicit `<sha-or-range>` argument wins over every other rule. This is how `/finish` asks for a review scoped to the change just committed, for example `/review <id> HEAD~1..HEAD`. Each pass then reviews only that round's change, not the whole accumulated task diff. Findings still land on `<id>`, in task-mode. The sha only narrows the scope; it does not switch the mode to range-mode.
 
 **Range-mode**:
 
@@ -108,56 +108,56 @@ An explicit `<sha-or-range>` argument wins over everything else — this is how 
 | `/review feature-branch` | `{"op": "review sha", "sha": "feature-branch"}` |
 | `/review src/auth.rs` or a glob | `{"op": "review file", "path": "<path-or-glob>"}` |
 
-Take the report's `markdown` (the dated `## Review Findings (...)` section) and `counts`. You do not read files or run layers yourself — the engine fleet did, including any language-specific checks (now validators).
+Take the `markdown` field from the report (the dated `## Review Findings (...)` section) and the `counts` field. You do not read files or run the checks yourself. The engine fleet already did this, including any language-specific checks, now called validators.
 
 ### 4. Apply findings
 
-Never create one kanban task per finding. Findings = checklist items on a host task — the task being reviewed (task-mode) or a single tracking task (range-mode). The engine's `markdown` is already the dated section; write it in per the contract below.
+Do not create one kanban task for each finding. Findings become checklist items on a host task: the task under review, in task-mode, or one tracking task, in range-mode. The `markdown` field from the engine is already the dated section. Write it in following the rule below.
 
 #### Task-mode
 
-1. Re-read the target task (already have it from step 3): `{"op": "get task", "id": "<id>"}`.
+1. Read the target task again. You already have it from step 3:
 
-2. If not already in `review`, move it there now — **this is the only path a task takes into `review`**:
+2. If the task is not already in `review`, move it there now. **This is the only path a task takes into `review`**:
 
    ```json
    {"op": "move task", "id": "<id>", "column": "review"}
    ```
 
-   Implement leaves finished tasks in `doing` (it never moves them to `review`), so this is a real `doing → review` move on the first review pass, and a no-op on re-reviews once the task is already in `review`.
+   Implement leaves finished tasks in `doing`; it never moves them to `review`. So this step is a real move from `doing` to `review` on the first review pass. On a later review, once the task is already in `review`, this step does nothing.
 
-3. Parse the description for prior `## Review Findings (...)` sections; note whether every `- [ ]` has been flipped to `- [x]`.
+3. Read the description for earlier `## Review Findings (...)` sections. Note whether every `- [ ]` box is now `- [x]`.
 
-4. Outcome (use the engine's `counts` to decide "zero new findings"):
-   - **Zero new findings AND every prior item checked** → move to terminal column:
+4. Decide the outcome. Use the `counts` field from the engine to decide whether there are "zero new findings":
+   - **Zero new findings, and every earlier item checked.** Move the task to the terminal column:
 
      ```json
      {"op": "move task", "id": "<id>", "column": "done"}
      ```
 
-     Leave description history intact.
+     Leave the description history unchanged.
 
-   - **New findings OR any prior item still unchecked** → append the report's `markdown` (a new dated `## Review Findings (YYYY-MM-DD HH:MM)` section), write it back:
+   - **New findings exist, or an earlier item is still unchecked.** Add the `markdown` from the report as a new dated `## Review Findings (YYYY-MM-DD HH:MM)` section. Write it back:
 
      ```json
      {"op": "update task", "id": "<id>", "description": "<existing + blank line + new section>"}
      ```
 
-     Preserve existing description verbatim — never edit or delete prior sections. Task stays in `review`.
+     Keep the existing description exactly as it is. Do not edit or delete earlier sections. The task stays in `review`.
 
 #### Range-mode
 
-1. Fresh review with **zero findings** (`counts` all zero) → "clean, nothing to track", exit. Do NOT create a tracking task.
+1. If the fresh review has **zero findings** (`counts` all zero), report "clean, nothing to track" and stop. Do not create a tracking task.
 
-2. Otherwise create a tracking task in `review`. First ensure the `#review` tag exists:
+2. Otherwise, create a tracking task in `review`. First make sure the `#review` tag exists:
 
    ```json
    {"op": "list tags"}
    ```
 
-   Missing → `{"op": "add tag", "id": "review", "name": "Review", "color": "9900cc", "description": "Ad-hoc range review tracking"}`.
+   If the tag is missing, create it: `{"op": "add tag", "id": "review", "name": "Review", "color": "9900cc", "description": "Ad-hoc range review tracking"}`.
 
-3. Create directly in `review`, embedding the report's `markdown` after the scope line:
+3. Create the task directly in `review`. Put the `markdown` from the report after the scope line:
 
    ```json
    {"op": "add task", "title": "Review of <scope>", "description": "Scope: <range or branch>\n\n<report.markdown>", "column": "review"}
@@ -165,54 +165,54 @@ Never create one kanban task per finding. Findings = checklist items on a host t
 
 4. Tag it: `{"op": "tag task", "id": "<new-id>", "tag": "review"}`.
 
-   A subsequent `/review <tracking-id>` follows task-mode and moves it to terminal when all items are checked and a fresh review is clean.
+   A later `/review <tracking-id>` follows task-mode. It moves the task to the terminal column when all items are checked, and a fresh review is clean.
 
 ### 5. Summarize
 
 - **Mode**: task-mode (with id) or range-mode (with scope)
 - **Scope reviewed**: the op and its target (`review working`, `review sha HEAD~4..HEAD`, `review file src/auth.rs`)
-- **Counts**: from `counts` — the findings tally ("3 findings" or "clean")
+- **Counts**: the findings tally from `counts`, for example "3 findings" or "clean"
 - **Outcome**: one of
   - task advanced to terminal column
-  - findings appended to task `<id>`; remains in `review`
+  - findings added to task `<id>`; the task remains in `review`
   - tracking task `<id>` created in `review`
   - range clean, no tracking task
 - Optional one-sentence overall assessment
 
-No verdict label (no approve / request-changes / comment-only) — the column movement IS the verdict.
+There is no verdict label, such as approve, request changes, or comment-only. The column movement is the verdict.
 
 ## Examples
 
 **Task-mode clean:** `/review 01KN2X3Y4Z5A6B7C8D9E0F1G2H`.
 
 1. Ensure review column.
-2. `get task` → read body; no range hint, so `{"op": "review working"}`.
+2. Call `get task`, and read the body. There is no range hint, so call `{"op": "review working"}`.
 3. Engine returns `counts` all zero, and all prior items are now `- [x]`.
 4. Move to `done`.
 
-The column move is the verdict — no findings appended, history preserved.
+The column move is the verdict. No findings are added, and history is preserved.
 
 **Range-mode with findings:** `/review the last 4 commits`.
 
 1. Ensure review column.
-2. `review` empty → range-mode. `{"op": "review sha", "sha": "HEAD~4..HEAD"}`.
+2. The `review` column is empty, so use range-mode: `{"op": "review sha", "sha": "HEAD~4..HEAD"}`.
 3. Engine returns `markdown` with 3 findings and the matching `counts`.
 4. Ensure `#review` tag.
-5. Create tracking task in `review` with `Scope: HEAD~4..HEAD` + the report's `markdown`.
+5. Create a tracking task in `review` with `Scope: HEAD~4..HEAD` and the `markdown` from the report.
 6. Tag it `review`.
 
-Subsequent `/review <new-id>` follows task-mode — moves to `done` once items are checked and a re-review is clean.
+A later `/review <new-id>` follows task-mode. It moves the task to `done` once the items are checked and a re-review is clean.
 
-**Narrowed / local:** `/review just duplication` → `{"op": "review working", "validators": ["duplication"]}`. `/review locally` → `{"op": "review working", "backend": "local"}`.
+**Narrowed or local:** `/review just duplication` calls `{"op": "review working", "validators": ["duplication"]}`. `/review locally` calls `{"op": "review working", "backend": "local"}`.
 
 ## Rules
 
-- **The engine is the analysis.** You drive it and record its findings; you do not re-run layers, re-read files, or second-guess the report.
-- **Findings are obeyed, never declined.** A finding is an instruction: satisfy it by fixing the code. You may not dismiss a finding, and you may not edit a validator to make one disappear — both are disobedience. The one exception is findings that genuinely cannot all be satisfied (two rules that can't both hold, or one demanding code that won't compile/type-check, or fighting a deliberate documented contract like `snake_case` mirroring a backend payload or `null` required by a type): you can't obey contradictory orders, so **report it** — record it on the task and leave it in `review` (stuck) for a human to fix the rule. You do not pick a winner, edit validators, or force a verdict. Column movement remains the only verdict.
-- **Fix at the root, not the cited line.** A finding names one instance of a cause; satisfy it by eliminating that cause across the whole file, so a re-review of that file finds zero recurrences — never by patching only the line cited. Review is binary, like a test suite: any open finding means not done, regardless of how minor it looks. There is no severity tier that makes a finding optional or advisory — every finding is mandatory.
-- **Facts over opinions.** The engine reports technical findings; relay them, don't editorialize.
-- **Never ask to refactor existing tests — blanket exception, overrides every other rule.** Do NOT raise, record, or relay any finding whose subject is *changing test code that already existed* — refactoring, deduplicating, restructuring, renaming, re-docstringing, or otherwise restyling it — even when a validator (duplication, complexity, missing-docs, reuse, naming, function-length, …) flags it. **Drop the finding.** Adding a *new* regression test for the change under review is fine and expected; rewriting the tests that were already in the repo is out of scope. Why: test refactoring is not the task, it burns the implement loop on churn, and — critically — rewriting an existing test file collides with the upstream/maintainer test suite the change is graded against, turning a correct fix into a broken merge. The only thing that lifts this exception is the user *explicitly* asking for test refactoring.
-- **One concern per checklist item.** The engine already formats this way — preserve it.
-- **No per-finding tasks.** Findings = checklist items on the source task (task-mode) or a single tracking task (range-mode). The retired `review-finding` tag — don't create or reuse it.
-- **Preserve history on re-run.** Always append new dated sections. Never edit or delete prior ones; never flip checkboxes yourself — the user (or the implementer picking up the task) owns the marks.
-- **Column movement is the verdict.** Clean task → terminal column. Findings → stays in `review`.
+- **The engine performs the analysis.** You drive it and record its findings. Do not run the checks again, read the files again, or question the report.
+- **You must obey every finding; you must never decline one.** A finding is an instruction. Satisfy it by fixing the code. You must not dismiss a finding. You must not edit a validator to make a finding disappear; both actions are disobedience. There is one exception: findings that truly cannot all be satisfied together. This happens when two rules conflict, when one rule demands code that will not compile or type-check, or when a rule fights a deliberate, documented contract, for example `snake_case` that mirrors a backend payload, or a `null` value required by a type. You cannot obey contradictory orders, so **report the conflict**. Record it on the task, and leave the task in `review` as stuck, for a person to fix the rule. Do not pick a winner, edit a validator, or force a verdict. Column movement remains the only verdict.
+- **Fix the root cause, not only the cited line.** A finding names one instance of a cause. Satisfy it by removing that cause across the whole file, so a re-review of the file finds zero more instances. Do not patch only the cited line. A review result is binary, like a test suite: any open finding means the work is not done, no matter how small it looks. There is no severity tier that makes a finding optional. Every finding is mandatory.
+- **Report facts, not opinions.** The engine reports technical findings. Relay them. Do not add your own opinion.
+- **Do not ask to refactor existing tests. This exception overrides every other rule.** Do not raise, record, or relay any finding about *changing test code that already existed*. This includes refactoring, removing duplication, restructuring, renaming, changing docstrings, or restyling test code, even when a validator flags it, for example the duplication, complexity, missing-docs, reuse, naming, or function-length validator. **Drop the finding.** Adding a *new* regression test for the change under review is fine, and expected. Rewriting tests that were already in the repository is out of scope. The reason: test refactoring is not the task. It wastes the implement loop on churn. Critically, rewriting an existing test file can collide with the upstream test suite that grades the change, and can turn a correct fix into a broken merge. Only an *explicit* request from the user to refactor tests lifts this exception.
+- **Keep one concern in each checklist item.** The engine already formats findings this way. Keep this format.
+- **Do not create one task for each finding.** Findings become checklist items on the source task, in task-mode, or on one tracking task, in range-mode. The `review-finding` tag is retired. Do not create it or reuse it.
+- **Keep the history on every re-run.** Always add new dated sections. Do not edit or delete earlier sections. Do not check or uncheck a box yourself; the user, or the implementer who picks up the task, owns the checkmarks.
+- **Column movement is the verdict.** A clean task moves to the terminal column. A task with findings stays in `review`.

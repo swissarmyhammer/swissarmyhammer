@@ -5,7 +5,7 @@ description: src/ layout, mandatory test docstrings, do not mock what you do not
 
 # Python Testing
 
-- **Use the `src/` layout.** Tests must run against the installed package, not the source directory. Flat layouts hide packaging bugs.
-- **Test docstrings are mandatory.** Every test explains _why_ it exists, not just what it does. "Empty strings are invalid identifiers and should be rejected at the boundary, not silently produce None downstream."
-- **Don't mock what you don't own.** If a test mocks `boto3.client()` or `requests.get()` directly, flag it. Mock an owned facade wrapping the dependency instead.
-- **Regression tests reference bug tracker issues.** Information that doesn't fit in the test name belongs in the docstring.
+- **Use the `src/` layout.** Run tests against the installed package. Do not run tests against the source directory. Flat layouts hide packaging bugs.
+- **Write a docstring for every test.** The docstring must explain why the test exists, not only what it does. Example: "Empty strings are invalid identifiers and should be rejected at the boundary, not silently produce None downstream."
+- **Do not mock what you do not own.** Flag a test that mocks `boto3.client()` or `requests.get()` directly. Mock an owned facade that wraps the dependency instead.
+- **Reference bug tracker issues in regression tests.** Put information that does not fit in the test name in the docstring.

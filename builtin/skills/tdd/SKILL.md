@@ -1,6 +1,6 @@
 ---
 name: tdd
-description: Use before writing or changing production code — enforces strict test-driven development (RED, GREEN, REFACTOR) by writing the failing test first, watching it fail, then writing the code to pass. Use when the user says "tdd", "test first", "write the test first", "red-green-refactor", "write a failing test", or when implementing a new function, fixing a bug, or adding behavior that needs a regression test. Do NOT use for reading, exploring, or explaining existing code — use the explore skill instead. Do NOT use for running an already-written test suite — use the test skill. Do NOT use for pure refactors that add no new behavior and keep the existing tests green.
+description: Use this skill before you write or change production code. It enforces strict test-driven development (RED, GREEN, REFACTOR). Write the failing test first. Watch it fail. Then write the code to pass. Use it when the user says "tdd", "test first", "write the test first", "red-green-refactor", "write a failing test", or when you implement a new function, fix a bug, or add behavior that needs a regression test. Do not use it to read, explore, or explain existing code. Use the explore skill instead. Do not use it to run a test suite that already exists. Use the test skill instead. Do not use it for a pure refactor that adds no new behavior and keeps the existing tests green.
 license: MIT OR Apache-2.0
 metadata:
   author: swissarmyhammer
@@ -11,13 +11,13 @@ metadata:
 
 Write the test first. Watch it fail. Write correct, well-designed code to pass.
 
-**Core principle:** if you didn't watch the test fail, you don't know if it tests the right thing.
+**Core principle:** if you did not watch the test fail, you do not know whether it tests the right thing.
 
-**Optimize for correctness, not speed.** Violating the letter of the rules violates the spirit.
+**Optimize for correctness, not speed.** Breaking the letter of the rules breaks the spirit of the rules too.
 
 ## When to Use
 
-All code changes, no exceptions. If it's worth coding, it's worth testing. Thinking "skip just this once"? That's rationalization.
+Use it for all code changes. There are no exceptions. If work is worth coding, it is worth testing. Do you think, "I will skip it just this once"? That is rationalization, not a reason.
 
 ## The Iron Law
 
@@ -25,96 +25,96 @@ All code changes, no exceptions. If it's worth coding, it's worth testing. Think
 NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
 ```
 
-Wrote code before the test? **Delete it.** Don't keep as "reference", don't "adapt", don't look at it. Delete means delete.
+Did you write code before the test? **Delete it.** Do not keep it as a "reference". Do not "adapt" it. Do not look at it again. Delete means delete.
 
 ## Red-Green-Refactor
 
 ### RED — write the failing test
 
-One minimal test showing intended behavior:
-- One behavior per test ("and" in the name? split it)
-- Clear, descriptive name
-- Real code, not mocks (unless unavoidable)
-- Demonstrates intended API
+Write one minimal test. It shows the intended behavior:
+- Test one behavior in each test. If the test name has "and" in it, split the test.
+- Give the test a clear, descriptive name.
+- Use real code, not mocks, unless you cannot avoid a mock.
+- Show the intended API.
 
 ### Verify RED — watch it fail (mandatory)
 
-Run it. Confirm:
-- It **fails** (not errors, not compile-fails)
-- Failure message matches expectation
-- Fails because the feature is missing, not because of typos
+Run the test. Confirm that:
+- It **fails**. It does not error, and it does not fail to compile.
+- The failure message matches what you expect.
+- It fails because the feature is missing, not because of a typing error.
 
-**Passes immediately?** You're testing existing behavior — fix the test.
-**Errors?** Fix the error, re-run until it fails correctly.
+**Does the test pass immediately?** Then you are testing existing behavior. Fix the test.
+**Does the test error?** Fix the error. Run the test again until it fails correctly.
 
 ### GREEN — correct code
 
-Write correct, well-designed code that passes and follows the codebase's patterns.
-- No features beyond what the test requires
-- No unrelated refactors here — that's REFACTOR
-- Match existing style, idioms, conventions
+Write correct, well-designed code. The code must pass the test and follow the patterns of the codebase.
+- Add no feature beyond what the test requires.
+- Do not do unrelated refactoring here. That step is REFACTOR.
+- Match the existing style, idioms, and conventions.
 
 ### Verify GREEN — watch it pass (mandatory)
 
-Run it. Confirm:
-- New test passes
-- Other tests still pass
-- Output is pristine — no errors, no warnings
+Run the test. Confirm that:
+- The new test passes.
+- All other tests still pass.
+- The output is clean. There are no errors and no warnings.
 
-**New test fails?** Fix the code, not the test.
-**Other tests broke?** Fix them now.
+**Does the new test fail?** Fix the code, not the test.
+**Did other tests break?** Fix them now.
 
 ### REFACTOR — clean up
 
-Only after green:
-- Remove duplication
-- Improve names and clarity
-- Extract helpers following existing patterns
-- Make the solution robust and idiomatic
+Do this only after GREEN:
+- Remove duplication.
+- Improve names and clarity.
+- Extract helper functions that follow existing patterns.
+- Make the solution robust and idiomatic.
 
-Keep tests green throughout. No new behavior; harden existing.
+Keep the tests green throughout this step. Do not add new behavior. Strengthen the existing behavior only.
 
 ### Repeat
 
-Next failing test for the next behavior.
+Write the next failing test for the next behavior.
 
 ## Rationalizations vs Reality
 
 | Excuse | Reality |
 |--------|---------|
-| "Too simple to test" | Simple code breaks. Tests take 30s. |
-| "I'll test after" | Tests-after prove nothing — they pass immediately. |
-| "Tests-after same goal" | After = "what does this do?"; first = "what should this do?" |
-| "Already manually tested" | Ad-hoc ≠ systematic; can't re-run. |
-| "Deleting X hours is waste" | Sunk cost. Unverified code is tech debt. |
-| "Keep as reference, write tests" | You'll adapt it — that's testing after. Delete. |
-| "Need to explore first" | Fine — throw away the exploration, start TDD. |
-| "Test hard = design unclear" | Listen to the test. Hard to test = hard to use. |
+| "Too simple to test" | Simple code can break. A test takes about 30 seconds. |
+| "I'll test after" | Tests written after the code prove nothing. They pass immediately. |
+| "Tests-after same goal" | Testing after asks "what does this do?" Testing first asks "what should this do?" These are different goals. |
+| "Already manually tested" | Manual testing is not systematic testing. You cannot run it again. |
+| "Deleting X hours is waste" | This is the sunk-cost trap. Unverified code is technical debt. |
+| "Keep as reference, write tests" | You will adapt the old code. That is testing after. Delete the code. |
+| "Need to explore first" | This is fine. Throw away the exploration code. Then start TDD. |
+| "Test hard = design unclear" | Listen to the test. Code that is hard to test is hard to use. |
 | "TDD slows me down" | TDD is faster than debugging. |
-| "Manual is faster" | Manual misses edge cases; you re-test every change. |
-| "Existing code has no tests" | Add tests for what you touch. |
+| "Manual is faster" | Manual testing misses edge cases. You must re-test after every change. |
+| "Existing code has no tests" | Add tests for the code you touch. |
 
 ## Red Flags — STOP and Start Over
 
-- Code written before test
-- Test added after implementation
-- Test passes on first run
-- Can't explain why the test failed
+- You wrote code before the test.
+- You added the test after the code.
+- The test passes on first run.
+- You cannot explain why the test failed.
 - Tests "added later"
-- "Just this once" / "already manually tested" / "spirit not ritual"
-- "Keep as reference" / "adapt existing"
-- "Sunk hours, deletion wasteful"
-- "Dogmatic vs pragmatic" / "this is different because..."
+- "Just this once", "I already tested this manually", or "this is the spirit, not the ritual"
+- "Keep it as a reference" or "adapt the existing code"
+- You spent hours already, so deleting feels wasteful.
+- You call the rule "dogmatic" instead of "pragmatic", or you say "this is different because..."
 
-All of these = delete the code, start over with TDD.
+Each of these signs means: delete the code. Start over with TDD.
 
 ## Why Order Matters
 
-**Tests written after code pass immediately.** Passing immediately proves nothing — might test the wrong thing, might test implementation not behavior, might miss edge cases, you never saw it catch a bug. Test-first forces you to see the test fail, proving it tests something.
+**A test written after the code passes immediately.** Passing immediately proves nothing. The test might check the wrong thing. The test might check the implementation, not the behavior. The test might miss edge cases. You never saw the test catch a bug. Testing first forces you to watch the test fail. This proves that the test checks something real.
 
-**Sunk cost is the wrong frame.** Time is gone either way. Choice: delete + TDD (more hours, high confidence) or keep + tests after (30 min, low confidence, likely bugs). The waste is keeping untrusted code.
+**Sunk cost is the wrong way to think about this.** The time is gone either way. You have a choice. You can delete the code and use TDD: this takes more hours, but gives high confidence. Or you can keep the code and add tests after: this takes about 30 minutes, but gives low confidence and likely bugs. The real waste is keeping code you cannot trust.
 
-**TDD is pragmatic.** Finds bugs before commit, prevents regressions, documents behavior, enables refactoring. "Pragmatic" shortcuts = production debugging = slower.
+**TDD is a practical method.** It finds bugs before you commit. It prevents regressions. It documents behavior. It supports safe refactoring. A "practical" shortcut often leads to debugging in production, which is slower.
 
 ## Good Tests
 
@@ -122,46 +122,46 @@ All of these = delete the code, start over with TDD.
 |---------|------|-----|
 | Minimal | One thing | `test('validates email and domain and whitespace')` |
 | Clear | Name describes behavior | `test('test1')` |
-| Shows intent | Demonstrates the desired API | Obscures what the code should do |
+| Shows intent | Shows the wanted API | Hides what the code should do |
 | Real code | Tests actual behavior | Tests mock behavior |
 
 ## When Stuck
 
 | Problem | Solution |
 |---------|----------|
-| Don't know how to test | Write the wished-for API; write the assertion first; ask the user. |
-| Test too complicated | Design too complicated — simplify the interface. |
-| Must mock everything | Code too coupled — use DI. |
-| Test setup huge | Extract helpers; still complex → simplify design. |
+| Do not know how to test it | Write the wanted API first. Write the assertion first. Ask the user. |
+| The test is too complicated | The design is too complicated. Simplify the interface. |
+| You must mock everything | The code is too tightly coupled. Use dependency injection. |
+| Test setup is large | Extract helper functions. If it is still complex, simplify the design. |
 
 ## Bug Fixes
 
-Write a failing test that reproduces the bug, then follow the cycle. The test proves the fix and prevents regression. **Never fix bugs without a test.**
+Write a failing test that reproduces the bug. Then follow the red-green-refactor cycle. The test proves the fix and prevents the bug from returning. **Do not fix a bug without a test.**
 
 ## Cover the Inverse and the Siblings
 
-A fix that passes *your* test can still be incomplete. Before GREEN, ask two questions:
+A fix that passes *your* test can still be incomplete. Before GREEN, ask these two questions:
 
-- **Did I change one side of a pair?** write/read, serialize/deserialize, encode/decode, classify/parse, set/get. If so, test the **inverse direction** — round-trip it. A test you *name* "round-trip" must actually read back what it wrote; a write-only test that asserts an output string is not a round-trip, whatever its docstring says.
-- **Did I change how one token/flag/case/format is handled?** Then grep for every other site that consumes the same value and cover those too. Making a classifier case-insensitive while a value-parser still compares case-sensitively is the classic miss.
+- **Did you change one side of a pair, such as write and read, serialize and deserialize, encode and decode, classify and parse, or set and get?** If so, test the **inverse direction** too. Round-trip the data. A test *named* "round-trip" must actually read back what it wrote. A write-only test that checks an output string is not a round-trip test, no matter what its docstring says.
+- **Did you change how the code handles one token, flag, case, or format?** Then search for every other place that uses the same value, and test those places too. A common mistake: you make a classifier case-insensitive, but a value-parser elsewhere still compares text as case-sensitive.
 
-The hidden/real test almost always probes the symmetric or sibling path you didn't think of — not the example from the issue. Tests written only from your own mental model pass by construction and prove nothing about the part you forgot.
+The real, hidden test almost always checks the matching or sibling path that you did not think of. It is rarely the exact example from the issue. A test written only from your own mental model will pass by design. It proves nothing about the part you forgot.
 
 ## Verification Checklist
 
 Before marking complete:
-- [ ] Every new function/method has a test
-- [ ] Watched each test fail before implementing
-- [ ] Each failed for the expected reason (feature missing, not typo)
-- [ ] Wrote correct, well-designed code to pass
+- [ ] Every new function or method has a test
+- [ ] You watched each test fail before you wrote the code
+- [ ] Each test failed for the expected reason: the feature was missing, not because of a typing error
+- [ ] You wrote correct, well-designed code to pass the test
 - [ ] All tests pass
-- [ ] Output pristine (no errors, no warnings)
-- [ ] Real code (mocks only if unavoidable)
-- [ ] Edge cases and errors covered
-- [ ] Inverse direction / round-trip covered when one side of a pair changed (write↔read, encode↔decode, classify↔parse)
-- [ ] Ran the **existing** test module for the code you touched, not only your new tests
+- [ ] Output is clean: no errors, no warnings
+- [ ] You used real code; mocks only when you could not avoid them
+- [ ] Edge cases and errors are covered
+- [ ] The inverse direction, or round-trip, is covered when you changed one side of a pair, such as write and read, encode and decode, or classify and parse
+- [ ] You ran the **existing** test module for the code you touched, not only your new tests
 
-Can't check all? You skipped TDD. Start over.
+Can you not check every box? Then you skipped TDD. Start over.
 
 ## Final Rule
 
@@ -170,4 +170,4 @@ Production code → test exists and failed first
 Otherwise → not TDD
 ```
 
-No exceptions without explicit user permission.
+There are no exceptions without clear permission from the user.

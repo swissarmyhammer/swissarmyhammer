@@ -5,6 +5,6 @@ description: HookWidget over StatefulWidget, extract custom hooks, unconditional
 
 # Dart/Flutter Composition
 
-- Prefer `HookWidget`/`HookConsumerWidget` over `StatefulWidget` for lifecycle-dependent objects (controllers, animations).
-- Extract custom hooks (functions prefixed with `use`) when the same hook combination repeats.
-- **All hook calls must be unconditional and at the top level of `build`** — never inside `if`, `for`, or callbacks.
+- Use `HookWidget` or `HookConsumerWidget` instead of `StatefulWidget` for lifecycle-dependent objects, such as controllers and animations.
+- Extract a custom hook when the same hook combination repeats. Prefix the hook function name with `use`.
+- Call every hook unconditionally, at the top level of `build`. Do not call a hook inside `if`, inside `for`, or inside a callback.

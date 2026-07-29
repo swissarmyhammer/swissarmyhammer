@@ -5,7 +5,7 @@ description: Business logic in providers/notifiers, one ProviderContainer per te
 
 # Dart/Flutter Testability
 
-- Business logic lives in providers/notifiers, not widgets. A widget with `if/else` business logic or direct API calls is untestable.
-- One `ProviderContainer` per test — never share between tests.
-- Mock at the repository/service layer by overriding providers in `overrides`, not by mocking Notifiers directly.
-- Widget tests wrap with `ProviderScope` and override all I/O-touching providers.
+- Put business logic in providers or notifiers. Do not put business logic in widgets. A widget with `if/else` business logic is not testable. A widget with direct API calls is also not testable.
+- Use one `ProviderContainer` for each test. Do not share a `ProviderContainer` between tests.
+- Mock at the repository or service layer. Override providers in `overrides` to do this. Do not mock Notifiers directly.
+- Wrap widget tests with `ProviderScope`. Override every provider that touches I/O.

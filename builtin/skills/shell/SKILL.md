@@ -1,8 +1,8 @@
 ---
 name: shell
-description: Shell command execution with persistent history, process management, and searchable output. Use when you need to run a shell command, grep previous command output, get output lines from a prior command, list running processes, or kill a hung process. Triggers on phrases like "run X", "execute X", "grep the output", "grep the last build output", "kill that process", "show me the output of command N".
+description: Run shell commands with a persistent history, process management, and searchable output. Use this skill when you need to run a shell command, search earlier command output, get output lines from a prior command, list running processes, or kill a stuck process. It triggers on phrases like "run X", "execute X", "grep the output", "grep the last build output", "kill that process", "show me the output of command N".
 license: MIT OR Apache-2.0
-compatibility: Requires the `shell` MCP tool for persistent command history, process management, and searchable output. A plain built-in Bash tool cannot replace it; this skill will not function as documented without the `shell` MCP tool.
+compatibility: This skill needs the `shell` MCP tool, for persistent command history, process management, and searchable output. A plain built-in Bash tool cannot replace it. The skill does not work as documented without the `shell` MCP tool.
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
@@ -10,26 +10,26 @@ metadata:
 
 # Shell
 
-Virtual shell with persistent history, process management, and searchable output. Every command's output is stored for later retrieval.
+A virtual shell with persistent history, process management, and searchable output. The tool stores the output of every command for later retrieval.
 
-**Always use this skill for shell commands** — never the built-in Bash tool. The persistent history and process management are only available here.
+**Always use this skill for shell commands.** Do not use the built-in Bash tool. Only this skill gives you the persistent history and process management.
 
-This lets you:
-- skip `| tail` / `| grep` pipelines — just run, then grep/get_lines
-- run multiple greps without re-executing
+This skill lets you do the following:
+- Skip `| tail` or `| grep` pipelines. Run the command, then use grep or get lines.
+- Run multiple searches without running the command again.
 
 ## Operations
 
 ### execute command
 
-Run a command. Output is stored regardless of truncation.
+Run a command. The tool stores the output even when it truncates the displayed output.
 
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
 | command | string | yes | Command to run |
-| timeout | integer | no | Seconds before kill |
+| timeout | integer | no | Number of seconds before the tool stops the command |
 | working_directory | string | no | Default: current |
-| environment | string | no | JSON env vars |
+| environment | string | no | JSON list of environment variables |
 
 ```json
 {"op": "execute command", "command": "cargo nextest run", "timeout": 300}
@@ -37,7 +37,7 @@ Run a command. Output is stored regardless of truncation.
 
 ### list processes
 
-All commands with status, exit code, line count, timing, duration.
+Lists every command with its status, exit code, line count, timing, and duration.
 
 ```json
 {"op": "list processes"}
@@ -51,21 +51,21 @@ All commands with status, exit code, line count, timing, duration.
 
 ### grep history
 
-Ripgrep regex (or literal) across output.
+Searches the output with a ripgrep regex, or with literal text.
 
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
-| pattern | string | yes | Regex (or literal if `literal: true`) |
-| literal | boolean | no | Default: false. Skips escaping. |
+| pattern | string | yes | Regex, or literal text if `literal: true` |
+| literal | boolean | no | Default is false. When true, the tool does not escape the pattern. |
 | command_id | integer | no | Scope to one command |
 | limit | integer | no | Default: 10 |
 
-Prefer `literal: true` for exact text — no escaping:
+Use `literal: true` for exact text. This skips escaping:
 ```json
 {"op": "grep history", "pattern": "error[E0001]", "literal": true}
 ```
 
-Regex for wildcards or character classes:
+Use regex for wildcards or character classes:
 ```json
 {"op": "grep history", "pattern": "error\\[E\\d+\\]"}
 ```
@@ -78,12 +78,12 @@ Regex for wildcards or character classes:
 
 ## When to use each
 
-- **execute command** — primary operation
-- **grep history** — exact text/patterns (error codes, function names, paths) — instant, precise
-- **get lines** — surrounding context after grep, or to see truncated output
-- **list processes** — running state, command history with timing
-- **kill process** — stop hung or long-running commands
+- **execute command** — the main operation
+- **grep history** — for exact text or patterns, such as error codes, function names, or paths. It is instant and precise.
+- **get lines** — to see the context around a match, or to see output that was truncated
+- **list processes** — to see running state and command history with timing
+- **kill process** — to stop a stuck or long-running command
 
 ## Timeout
 
-Set `timeout` for commands that might hang (network, prompts), long builds where you want a safety net, or tailing/watching.
+Set `timeout` for a command that might hang, for example one that uses the network or waits for a prompt. Also set it for a long build, as a safety net, or for a command that tails or watches output.

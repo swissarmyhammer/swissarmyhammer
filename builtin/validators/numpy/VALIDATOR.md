@@ -1,12 +1,14 @@
 ---
 name: numpy
 description: >-
-  Reviewing NumPy / ndarray / numerical-array code: preserve shape and dtype
-  contracts, prefer passing inputs through over fabricating new arrays, and
-  handle empty/zero-size, broadcasting, and mixed/partial edges across every
-  calling convention a function supports. Applies only to diffs that actually
-  manipulate array-like (numpy/ndarray, or the array API shared by jax/torch/
-  dask) objects.
+  This validator reviews NumPy, ndarray, and other numerical array code. The
+  code must preserve shape and dtype contracts. The code must pass inputs
+  through. It must not fabricate new arrays. The code must handle empty or
+  zero-size arrays. It must handle broadcasting. It must handle mixed or
+  partial edges. The code must handle these cases for every calling
+  convention the function supports. This validator applies only to diffs
+  that manipulate array-like objects, such as numpy, ndarray, or the array
+  API shared by jax, torch, or dask.
 metadata:
   version: "{{version}}"
 match:
@@ -16,26 +18,31 @@ match:
 
 # NumPy / Numerical-Array Review Validator
 
-Numerical array code has contracts that ordinary scalar code does not: a result
-has a **shape**, a **dtype**, and a **container type** (ndarray vs list vs
-tuple), and those must hold across the function's full input space — including
-empty/zero-size arrays, scalars, broadcasting, and *mixed* inputs where some
-axes are empty and others are not. The hard bugs here are edge cases that the
-author's own tests miss because they reconstructed the edge output by hand
-instead of deriving it from the normal path.
+Numerical array code has contracts. Ordinary scalar code does not have these
+contracts. A result has a shape, a dtype, and a container type. The container
+type can be ndarray, list, or tuple. These contracts must hold across the
+function's full input space. This input space includes empty or zero-size
+arrays, scalars, broadcasting, and mixed inputs. In a mixed input, some axes
+are empty and other axes are not empty. The hardest bugs are edge cases. The
+author's own tests miss these edge cases. The tests miss the edge cases
+because the author built the edge output by hand. The author did not derive
+the edge output from the normal path.
 
-Two in-file judgment rules, read from the diff (no engine probe). Each fires
-only when the diff genuinely touches array code; on a diff with no ndarray work
-they report nothing.
+This validator uses two in-file judgment rules. The rules read the diff. The
+rules do not use an engine probe. Each rule fires only when the diff touches
+array code. If the diff has no ndarray work, the rules report nothing.
 
-- `shape-dtype-contract` — for an edge/short-circuit branch, return the input
-  (or a slice of the normal result) rather than fabricating arrays
-  (`np.empty`/`np.zeros`/`np.array(...)`) that re-derive the shape/dtype/
-  container contract and drift from it.
-- `array-edge-cases` — handle empty/zero-size, scalar, broadcasting and
-  mixed/partial inputs; guard the edge at the same granularity and pipeline
-  stage the normal code uses, and exercise it across every calling convention.
+- `shape-dtype-contract` — In an edge or short-circuit branch, return the
+  input, or a slice of the normal result. Do not fabricate arrays with
+  `np.empty`, `np.zeros`, or `np.array(...)`. A fabricated array re-derives
+  the shape, dtype, and container contract by hand. A fabricated array can
+  drift from the real contract.
+- `array-edge-cases` — Handle empty or zero-size inputs, scalar inputs,
+  broadcasting, and mixed or partial inputs. Guard the edge case at the same
+  granularity and pipeline stage that the normal code uses. Test the edge
+  case in every calling convention.
 
-These are enforced rules (binary pass/fail), not advisory — the real fix this
-validator is modelled on was a three-line pass-through that an elaborate,
-fabricated-output patch failed to match.
+These rules are enforced rules. Each rule gives a binary pass or fail result.
+These rules are not advisory. This validator is modeled on a real fix. The
+real fix was a three-line pass-through. An elaborate, fabricated-output patch
+failed to match the real fix.

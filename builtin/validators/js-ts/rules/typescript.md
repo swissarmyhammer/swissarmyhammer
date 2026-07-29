@@ -5,10 +5,10 @@ description: unknown over any, no object/Function types, descriptive generics, r
 
 # TypeScript
 
-- **`unknown` over `any`.** `any` requires specific, documented justification.
-- **No `object` or `Function` types.** Use `Record<string, unknown>` or `(...args: unknown[]) => unknown`.
-- **No `I`-prefixed interfaces.** `Options`, not `IOptions`.
-- **Descriptive generic names.** `Element`, `NewElement`, `InputType` — not `T`, `U`, `V`.
-- **`readonly`** on properties and arrays not intended to be mutated, especially in return values and options interfaces.
-- `number[]` not `Array<number>`. `readonly number[]` not `ReadonlyArray<number>`.
-- **Test types with `tsd`.** Test files named `index.test-d.ts`, using `expectType<T>()`. Do not `await` in type tests — it accepts non-Promise values and renders the test meaningless.
+- **Use `unknown`, not `any`.** Give a specific, documented reason before you use `any`.
+- **Do not use `object` or `Function` types.** Use `Record<string, unknown>` instead of `object`. Use `(...args: unknown[]) => unknown` instead of `Function`.
+- **Do not use `I`-prefixed interfaces.** Name the interface `Options`, not `IOptions`.
+- **Use descriptive generic names.** Use names like `Element`, `NewElement`, or `InputType`. Do not use `T`, `U`, or `V`.
+- **Add `readonly` to properties and arrays that must stay unchanged.** Do this most often in return values and options interfaces.
+- **Use `number[]`, not `Array<number>`.** Use `readonly number[]`, not `ReadonlyArray<number>`.
+- **Test types with `tsd`.** Name test files `index.test-d.ts`. Use `expectType<T>()` in these files. Do not use `await` in a type test. An `await` in a type test accepts non-Promise values. This makes the test meaningless.

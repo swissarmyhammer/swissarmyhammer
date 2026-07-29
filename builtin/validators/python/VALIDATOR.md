@@ -13,11 +13,10 @@ match:
 
 # Python Review Validator
 
-Language-scoped review guidance migrated from the review skill's
-`PYTHON_REVIEW.md` reference. These rules supplement the universal review
-layers and apply to changed Python (`.py`) files only.
+This validator gives language-scoped review guidance. It comes from the review skill's `PYTHON_REVIEW.md` reference. These rules add to the universal review layers. They apply only to changed Python (`.py`) files.
 
-Each rule is an **in-file idiom judgment** read from the diff — there are no
-engine probes. Every rule that fires must be fixed — review is binary
-pass/fail, with no advisory or severity tier among findings. Only add a rule to
-this validator if you want it enforced; there are no advisory rules.
+Each rule is an **in-file idiom judgment**. The reviewer makes this judgment by reading the diff. The validator has no engine probes.
+
+Fix every rule that fires. Review results are pass or fail. Findings have no advisory level or severity tier.
+
+Add a rule to this validator only if you want the reviewer to enforce it. This validator has no advisory rules.

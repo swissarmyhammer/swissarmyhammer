@@ -4,16 +4,16 @@ profiles:
   - code-context
 description: >-
   Code context operations for symbol lookup, search, grep, call graph, and blast
-  radius analysis. Use when the user says "blast radius", "who calls this",
+  radius analysis. Use this skill when the user says "blast radius", "who calls this",
   "find symbol", "find references", "go to definition", "symbol lookup",
   "callgraph", "find callers", "what calls this function", or "what's affected
-  if I change this". Also use proactively before modifying code to understand
-  structure, dependencies, and impact — list symbols and get callgraph (inbound)
-  to see who calls a symbol, and get blastradius when changing a shared symbol's
-  signature. Provides indexed, structural code intelligence that is faster and
-  more precise than raw text search.
+  if I change this". Also use this skill proactively before you modify code, to
+  understand structure, dependencies, and impact — list symbols and get callgraph
+  (inbound) to see who calls a symbol, and get blastradius when you change a
+  shared symbol's signature. This skill provides indexed, structural code
+  intelligence that is faster and more precise than raw text search.
 license: MIT OR Apache-2.0
-compatibility: Requires the `code_context` MCP tool  for indexed symbol lookup, grep, callgraph, and blast-radius operations.
+compatibility: This skill requires the `code_context` MCP tool for indexed symbol lookup, grep, callgraph, and blast-radius operations.
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
@@ -21,49 +21,50 @@ metadata:
 
 # Code Context
 
-Structural code intelligence for AI agents — indexed symbol lookup, callgraph traversal, blast-radius analysis, semantic search, AST queries. Tree-sitter + optional live LSP.
+Structural code intelligence for AI agents. It offers indexed symbol lookup, callgraph traversal, blast-radius analysis, semantic search, and AST queries. It uses tree-sitter, plus optional live LSP.
 
-The `code_context` tool is structural code intelligence — indexed symbol lookup,
-call graphs, and blast-radius analysis backed by tree-sitter and live LSP. It is
-not optional background. Lean on the cheap defaults below — `list symbols` and
-`get symbol` instead of reading whole files, `get callgraph` (inbound) to find
-callers — as part of doing the task, not extra work on top of it.
+The `code_context` tool provides structural code intelligence: indexed symbol
+lookup, call graphs, and blast-radius analysis, backed by tree-sitter and live
+LSP. It is not optional background work. Lean on the cheap defaults below as
+part of doing the task, not as extra work on top of it: use `list symbols` and
+`get symbol` instead of reading whole files, and use `get callgraph` (inbound)
+to find callers.
 
-Do not read files top to bottom, and do not guess where a symbol lives or who
+Do not read files top to bottom. Do not guess where a symbol lives or who
 calls it. `code_context` answers those questions precisely and cheaply.
 
-- **Before reading a file** — `{"op": "list symbols", "file_path": "<file>"}` for a
+- **Before reading a file** — run `{"op": "list symbols", "file_path": "<file>"}` for a
   table of contents, then `{"op": "get symbol", "query": "<symbol>"}` to pull only
   the code you need. Reading a whole file is the fallback, not the default.
-- **Before changing a symbol** — `{"op": "get callgraph", "symbol": "<symbol>",
+- **Before changing a symbol** — run `{"op": "get callgraph", "symbol": "<symbol>",
   "direction": "inbound"}` to see who calls it. When the symbol is shared or public
-  and you are changing its signature, also `{"op": "get blastradius", "file_path":
+  and you are changing its signature, also run `{"op": "get blastradius", "file_path":
   "<file>"}` for the wider dependent set. If the result surprises you, you do not yet
   understand the change well enough to make it.
-- **After changing a signature or behavior** — re-check the inbound callers the
+- **After you change a signature or behavior** — re-check the inbound callers the
   blast radius surfaced, and confirm each one still holds.
-- **When a test or build fails** — `{"op": "get callgraph", "symbol": "<failing
-  symbol>"}` to see what the failure actually reaches before you start fixing it.
-- **To find code by name or pattern** — `search symbol` / `grep code` instead of
+- **When a test or build fails** — run `{"op": "get callgraph", "symbol": "<failing
+  symbol>"}` to see what the failure actually reaches, before you start fixing it.
+- **To find code by name or pattern** — use `search symbol` or `grep code` instead of
   raw text search; they query the index, with kind and language filters.
 
-If `{"op": "get status"}` shows indexing incomplete, the live LSP ops
+If `{"op": "get status"}` shows indexing is incomplete, the live LSP ops
 (`get definition`, `get hover`, `get references`, `search workspace_symbol`) still
 work immediately — do not wait on the index. If callgraph or blast radius comes
 back empty for code that clearly compiles, the language server is missing or
 warming up: check `{"op": "lsp status"}` and invoke `/lsp` if needed.
 
 Fall back to raw Read/Grep/Glob only for non-code files (TOML, YAML, Markdown),
-string literals and config values not in the symbol index, or confirming exact
+string literals and config values not in the symbol index, or to confirm exact
 syntax once code_context has already given you the location.
 
 ## When to Use
 
-- **Before modifying code**: `get callgraph` (inbound) to know who calls the target before renaming or changing signatures; `get blastradius` for the wider dependent set when changing a shared symbol's signature.
-- **Navigating**: `get symbol` (jump to definition), `list symbols` (file overview), `search symbol` (fuzzy name).
-- **Pattern search**: `grep code` (regex with language/file filters).
-- **Meaning search**: `search code` (semantic similarity).
-- **Health checks**: `get status` (indexing), `lsp status` (servers), `detect projects` (types + build commands).
+- **Before modifying code**: use `get callgraph` (inbound) to know who calls the target before you rename it or change its signature; use `get blastradius` for the wider dependent set when you change a shared symbol's signature.
+- **Navigating**: `get symbol` jumps to a definition, `list symbols` gives a file overview, `search symbol` does a fuzzy name search.
+- **Pattern search**: `grep code` runs a regex search with language and file filters.
+- **Meaning search**: `search code` finds results by semantic similarity.
+- **Health checks**: `get status` checks indexing, `lsp status` checks servers, `detect projects` reports project types and build commands.
 
 ## Operations
 
@@ -73,7 +74,7 @@ syntax once code_context has already given you the location.
 {"op": "get symbol", "query": "MyStruct::new", "max_results": 5}
 ```
 
-Jump to definition with source context. Multi-tier fuzzy matching, supports qualified paths. Use this to avoid whole file reads.
+Jump to a definition with source context. It uses multi-tier fuzzy matching and supports qualified paths. Use this to avoid whole-file reads.
 
 ### search symbol
 
@@ -81,7 +82,7 @@ Jump to definition with source context. Multi-tier fuzzy matching, supports qual
 {"op": "search symbol", "query": "handler", "kind": "function", "max_results": 10}
 ```
 
-Fuzzy by partial name. Kinds: function, method, struct, class, interface, module, etc. Use this to avoid whole file reads.
+Searches by partial name, fuzzily. Kinds include function, method, struct, class, interface, and module. Use this to avoid whole-file reads.
 
 ### list symbols
 
@@ -89,7 +90,7 @@ Fuzzy by partial name. Kinds: function, method, struct, class, interface, module
 {"op": "list symbols", "file_path": "src/main.rs"}
 ```
 
-File overview before reading. Lets you target specific symbols with `get symbol` instead of reading the whole file.
+Gives a file overview before you read it. Lets you target specific symbols with `get symbol` instead of reading the whole file.
 
 ### grep code
 
@@ -97,7 +98,7 @@ File overview before reading. Lets you target specific symbols with `get symbol`
 {"op": "grep code", "pattern": "unsafe\\s*\\{", "language": ["rs"], "max_results": 20}
 ```
 
-Regex over indexed chunks. Filter by language extensions or specific paths. Use this instead of built in Grep tools or using any kind of bash or shell.
+Runs a regex search over indexed chunks. Filter by language extension or specific path. Use this instead of built-in Grep tools, and instead of any bash or shell command.
 
 ### search code
 
@@ -105,7 +106,7 @@ Regex over indexed chunks. Filter by language extensions or specific paths. Use 
 {"op": "search code", "query": "authentication handler", "top_k": 5}
 ```
 
-Semantic similarity — matches by meaning, not exact text.
+Matches by meaning, using semantic similarity, not exact text.
 
 ### get callgraph
 
@@ -113,9 +114,9 @@ Semantic similarity — matches by meaning, not exact text.
 {"op": "get callgraph", "symbol": "process_request", "direction": "inbound", "max_depth": 2}
 ```
 
-- **inbound**: who calls this (use before signature changes)
-- **outbound**: what this calls (implementation flow)
-- **both**: full neighborhood (impact)
+- **inbound**: who calls this symbol — use before you change a signature
+- **outbound**: what this symbol calls — the implementation flow
+- **both**: the full neighborhood — the impact
 
 ### get blastradius
 
@@ -123,7 +124,7 @@ Semantic similarity — matches by meaning, not exact text.
 {"op": "get blastradius", "file_path": "src/server.rs", "max_hops": 3}
 ```
 
-Transitive set of files/symbols affected by a change. Reach for it when changing a shared or public symbol's signature and you need its dependents — not a gate on every edit. Built from LSP call edges, so `edges: []` is common on compiling code when LSP is missing or warming up (see Troubleshooting); empty does not mean "no impact", so don't gate work on it — fall back to inbound `get callgraph` and targeted reads.
+This is the transitive set of files and symbols a change affects. Reach for it when you change a shared or public symbol's signature and need its dependents — it is not a gate on every edit. It is built from LSP call edges, so `edges: []` is common on compiling code when LSP is missing or warming up (see Troubleshooting); an empty result does not mean "no impact", so do not gate work on it — fall back to inbound `get callgraph` and targeted reads.
 
 Narrow to a symbol:
 
@@ -143,7 +144,7 @@ Narrow to a symbol:
 {"op": "query ast", "query": "(function_item name: (identifier) @name)", "language": "rust"}
 ```
 
-Tree-sitter S-expression queries — structural search beyond regex.
+Tree-sitter S-expression queries. These give structural search beyond regex.
 
 ### get status
 
@@ -151,7 +152,7 @@ Tree-sitter S-expression queries — structural search beyond regex.
 {"op": "get status"}
 ```
 
-Indexing progress. Run first if unsure whether the index is ready.
+Reports indexing progress. Run this first if you are unsure whether the index is ready.
 
 ### lsp status
 
@@ -159,7 +160,7 @@ Indexing progress. Run first if unsure whether the index is ready.
 {"op": "lsp status"}
 ```
 
-LSP server health per language. Missing? Follow the install hint.
+Reports LSP server health per language. If a server is missing, follow the install hint.
 
 ### detect projects
 
@@ -167,55 +168,55 @@ LSP server health per language. Missing? Follow the install hint.
 {"op": "detect projects"}
 ```
 
-Project types, build/test commands, coding guidelines. Run early to learn conventions.
+Reports project types, build and test commands, and coding guidelines. Run this early to learn the project's conventions.
 
 ## Workflow Patterns
 
 ### Before modifying code
 
-1. `list symbols` on the target file
-2. `get symbol` to read the function/struct
-3. `get callgraph` (inbound) on the symbol to find callers
-4. Changing a shared/public symbol's signature? `get blastradius` on the file for the wider dependent set (skip when it returns empty edges)
-5. Make changes
-6. Re-check callers for compatibility
+1. Run `list symbols` on the target file
+2. Run `get symbol` to read the function or struct
+3. Run `get callgraph` (inbound) on the symbol to find its callers
+4. If you are changing a shared or public symbol's signature, run `get blastradius` on the file for the wider dependent set (skip this when it returns empty edges)
+5. Make the changes
+6. Re-check the callers for compatibility
 
 ### Exploring unfamiliar code
 
-1. `detect projects` for type/conventions
-2. `get status` to verify the index
-3. `search symbol` with broad queries → discover key types
-4. `get callgraph` (outbound) on entry points → trace flow
-5. `list symbols` on files of interest before reading
+1. Run `detect projects` for the project type and conventions
+2. Run `get status` to verify the index
+3. Run `search symbol` with broad queries to discover key types
+4. Run `get callgraph` (outbound) on entry points to trace the flow
+5. Run `list symbols` on files of interest, before you read them
 
 ### Bug fixes
 
-1. `grep code` for the error message or pattern
-2. `get symbol` for the relevant function
-3. `get callgraph` (inbound) to trace how execution reaches it
-4. `get blastradius` to verify the fix won't break other code
+1. Run `grep code` for the error message or pattern
+2. Run `get symbol` for the relevant function
+3. Run `get callgraph` (inbound) to trace how execution reaches it
+4. Run `get blastradius` to verify the fix will not break other code
 
 ## Troubleshooting
 
 ### `search symbol` / `get symbol` returns nothing for a symbol you know exists
 
-Index hasn't finished. On a fresh workspace, `CodeContextWorkspace::open()` runs `startup_cleanup()` then spawns a background worker. Until it finishes, queries see an empty/partial index.
+The index has not finished. On a fresh workspace, `CodeContextWorkspace::open()` runs `startup_cleanup()` then spawns a background worker. Until it finishes, queries see an empty or partial index.
 
 ```json
 {"op": "get status"}
 ```
 
-If `files_pending > 0`, wait and poll. Only report missing when `files_pending == 0`.
+If `files_pending > 0`, wait and poll. Report a symbol as missing only when `files_pending == 0`.
 
 ### `get status` shows `files_indexed: 0` and `files_pending: 0` on a non-empty repo
 
-Startup cleanup didn't run — usually a stale leader lock from an uncleanly exited process. The reader-side workspace never re-scans on its own.
+Startup cleanup did not run — usually a stale leader lock from a process that exited uncleanly. The reader-side workspace never re-scans on its own.
 
 ```json
 {"op": "rebuild index", "layer": "both"}
 ```
 
-Poll `get status` until `files_pending: 0`. Persistent → wipe and rebuild:
+Poll `get status` until `files_pending: 0`. If the problem persists, wipe and rebuild:
 
 ```json
 {"op": "clear status"}
@@ -227,14 +228,14 @@ Restart the MCP server so `open()` runs cleanup as leader.
 
 Call edges come from LSP. If LSP is missing or warming up, `lsp_call_edges` is empty and traversal degrades to a single node.
 
-`{"op": "lsp status"}` — confirm installed/healthy. Missing → follow the install hint (or `/lsp`), wait for initial scan, re-run after `get status` shows complete.
+`{"op": "lsp status"}` — confirm it is installed and healthy. If it is missing, follow the install hint (or run `/lsp`), wait for the initial scan, and re-run once `get status` shows complete.
 
 ### `grep code` returns nothing although `rg` finds it on disk
 
-`grep code` searches **stored chunks**, not the filesystem. Files modified outside the MCP session aren't auto-invalidated (the file-watcher is currently a `FileEvent` enum without an active watcher).
+`grep code` searches **stored chunks**, not the file system. Files modified outside the MCP session are not auto-invalidated (the file watcher is currently a `FileEvent` enum without an active watcher).
 
 ```json
 {"op": "rebuild index", "layer": "treesitter"}
 ```
 
-For one-off live searches, fall back to Grep/ripgrep.
+For one-off live searches, fall back to Grep or ripgrep.

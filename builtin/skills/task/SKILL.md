@@ -2,9 +2,9 @@
 name: task
 profiles:
   - kanban
-description: Create a single, well-researched kanban task. Use when the user wants to add a task, track an idea, or capture work without entering full plan mode.
+description: Create one well-researched kanban task. Use this skill when the user wants to add a task, track an idea, or record work without a full planning session.
 license: MIT OR Apache-2.0
-compatibility: Requires the `code_context` MCP tool for researching symbols and impact before writing the task, and the `kanban` MCP tool to persist the task on the board. Both are provided by the swissarmyhammer `sah` MCP server; will not function on a harness that does not expose them.
+compatibility: This skill needs the `code_context` MCP tool. It uses this tool to research symbols and impact before it writes the task. It also needs the `kanban` MCP tool, to save the task on the board. The swissarmyhammer `sah` MCP server provides both tools. The skill does not work on a harness that does not expose them.
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
@@ -12,17 +12,17 @@ metadata:
 
 # Task
 
-Create one well-researched kanban task from an idea, request, or bug report.
+Create one well-researched kanban task from an idea, a request, or a bug report.
 
 $ARGUMENTS
 
 ## Constraints
 
-- **One task per invocation.** Multiple items → pick the most important, suggest `/plan` for the rest.
-- **Research before writing.** No guessing at paths, names, test locations.
-- **Ask, don't assume.** Vague requests get the `question` tool.
-- **Task quality is non-negotiable** — What + Acceptance Criteria + Tests.
-- **Kanban only** — no TodoWrite/TaskCreate.
+- **Create one task for each run.** If there are multiple items, pick the most important one. Suggest `/plan` for the rest.
+- **Research before you write.** Do not guess paths, names, or test locations.
+- **Ask; do not assume.** Use the `question` tool for a vague request.
+- **Task quality is required.** Each task must state What, Acceptance Criteria, and Tests.
+- **Use kanban only.** Do not use TodoWrite or TaskCreate.
 
 {% include "_partials/architecture-awareness" %}
 

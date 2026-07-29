@@ -16,17 +16,18 @@ match:
 
 # JavaScript/TypeScript Review Validator
 
-Language-scoped review guidance migrated from the review skill's
-`JS_TS_REVIEW.md` reference. These rules supplement the universal review
-layers and apply to changed JavaScript/TypeScript (`.js`, `.jsx`, `.ts`,
-`.tsx`) files only.
+This file gives language-scoped review guidance. It comes from the review
+skill's `JS_TS_REVIEW.md` reference. These rules add to the universal review
+layers. They apply only to changed JavaScript and TypeScript files: `.js`,
+`.jsx`, `.ts`, `.tsx`.
 
-The glob set `**/*.js`, `**/*.jsx`, `**/*.ts`, `**/*.tsx` is the literal
-equivalent of `**/*.{js,jsx,ts,tsx}`: the validator engine matches with the
-`glob` crate, which does not expand `{a,b}` brace alternation, so the
-extensions are listed individually.
+The glob set `**/*.js`, `**/*.jsx`, `**/*.ts`, `**/*.tsx` equals
+`**/*.{js,jsx,ts,tsx}`. The validator engine matches files with the `glob`
+crate. The `glob` crate does not expand `{a,b}` brace alternation. For this
+reason, the file lists each extension by itself.
 
-Each rule is an **in-file idiom judgment** read from the diff — there are no
-engine probes. Every rule that fires must be fixed — review is binary
-pass/fail, with no advisory or severity tier among findings. Only add a rule to
-this validator if you want it enforced; there are no advisory rules.
+Each rule is an **in-file idiom judgment**. The reviewer reads the diff to
+make this judgment. The engine runs no probes. You must fix every rule that
+fires. The review result is pass or fail. There is no advisory tier or
+severity tier among findings. Add a rule to this validator only when you want
+the reviewer to enforce it. This validator has no advisory rules.

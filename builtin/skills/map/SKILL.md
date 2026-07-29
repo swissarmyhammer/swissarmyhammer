@@ -1,8 +1,8 @@
 ---
 name: map
-description: Generate a visual architecture overview of the codebase with Mermaid diagrams. Produces ARCHITECTURE.md at repo root. Use when the user says "map", "architecture", "overview", or wants to understand the codebase structure.
+description: Generate a visual architecture overview of the codebase, with Mermaid diagrams. It writes `ARCHITECTURE.md` at the repository root. Use this skill when the user says "map", "architecture", "overview", or wants to understand the codebase structure.
 license: MIT OR Apache-2.0
-compatibility: Requires the `code_context` MCP tool for project detection, symbol enumeration, and callgraph traversal used to build the architecture diagram.
+compatibility: This skill needs the `code_context` MCP tool. It uses this tool for project detection, symbol listing, and callgraph traversal, to build the architecture diagram.
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
@@ -10,11 +10,11 @@ metadata:
 
 # Map Codebase
 
-Generate a visual architecture overview and write `ARCHITECTURE.md` at the repo root.
+Generate a visual architecture overview. Write `ARCHITECTURE.md` at the repository root.
 
 ## Process
 
-Work with the `code_context` MCP tool to explore the codebase structure, key types, and call graphs. Use Mermaid syntax for diagrams that render on GitHub.
+Use the `code_context` MCP tool to explore the codebase structure, the key types, and the call graphs. Use Mermaid syntax for diagrams, so they render on GitHub.
 
 ### 1. Check index status
 
@@ -22,16 +22,16 @@ Work with the `code_context` MCP tool to explore the codebase structure, key typ
 {"op": "get status"}
 ```
 
-If TS or LSP indexing < 90%, wait and re-check — map quality depends on a fully indexed codebase.
+If TS or LSP indexing is under 90%, wait, then check again. Map quality depends on a fully indexed codebase.
 
 ### 2. Gather structural data
 
-**File inventory** + scale (use `get status` counts):
+**File inventory and scale** (use the `get status` counts):
 ```json
 {"op": "grep code", "pattern": ".", "max_results": 1}
 ```
 
-**Key symbols** — major types, traits, entry points:
+**Key symbols**: the major types, traits, and entry points:
 ```json
 {"op": "search symbol", "kind": "struct", "query": "", "max_results": 50}
 {"op": "search symbol", "kind": "function", "query": "main", "max_results": 10}
@@ -57,11 +57,11 @@ If TS or LSP indexing < 90%, wait and re-check — map quality depends on a full
 
 ### 3. Read project config
 
-`Cargo.toml` / `package.json` / `go.mod` / `pyproject.toml`, and entry points (`main.rs`, `lib.rs`, `index.ts`, `main.go`, etc.).
+Read the project config, for example `Cargo.toml`, `package.json`, `go.mod`, or `pyproject.toml`. Also read the entry points, for example `main.rs`, `lib.rs`, `index.ts`, or `main.go`.
 
 ### 4. Write `ARCHITECTURE.md`
 
-Sections (each must include at least one Mermaid diagram where applicable):
+Write these sections. Each section must include at least one Mermaid diagram, where a diagram applies:
 
 **Header**:
 
@@ -75,7 +75,7 @@ Sections (each must include at least one Mermaid diagram where applicable):
 [2-3 sentences: what this is, what it does, language/framework]
 ```
 
-**Module/Package Dependencies** (`graph TD`) — group by layer when there are clear layers (CLI → core → data):
+**Module/Package Dependencies** (`graph TD`). Group nodes by layer when there are clear layers, for example CLI, then core, then data:
 
 ````markdown
 ```mermaid
@@ -87,7 +87,7 @@ graph TD
 ```
 ````
 
-**Key Types and Relationships** (`classDiagram`) — focus on 10–20 most important types:
+**Key Types and Relationships** (`classDiagram`). Focus on the 10 to 20 most important types:
 
 ````markdown
 ```mermaid
@@ -104,7 +104,7 @@ classDiagram
 ```
 ````
 
-**Key Flows** (`sequenceDiagram`) — 1–3 critical paths (request handling, data pipeline, build):
+**Key Flows** (`sequenceDiagram`). Show 1 to 3 critical paths, for example request handling, the data pipeline, or the build:
 
 ````markdown
 ```mermaid
@@ -134,9 +134,9 @@ pie title Codebase by Module
 ```
 ````
 
-**Directory Structure** — annotated tree of top-level dirs.
+**Directory Structure** — an annotated tree of the top-level directories.
 
-**Symbol Index** — table of major public types/functions grouped by module:
+**Symbol Index**: a table of the major public types and functions, grouped by module:
 
 ```markdown
 | Module | Symbol | Kind | Description |
@@ -161,12 +161,12 @@ Diagrams render on GitHub, VS Code, Obsidian.
 
 ## Rules
 
-- Always write to repo root; overwrite if exists.
+- Always write the file to the repository root. Overwrite the file if it already exists.
 - Every section gets at least one Mermaid diagram.
 - Diagrams must be valid Mermaid that renders on GitHub.
-- Architecture, not implementation — show the forest.
+- Show the architecture, not the implementation. Show the forest, not the trees.
 - Back every claim with a query result, not a guess.
-- Monorepo/workspace: workspace view first, then drill into key packages.
-{% if arguments %}- **Scoped mapping**: the user requested `{{ arguments }}`. Scope queries and output to that subdirectory or module.
-{% endif %}- Path/module argument → scope the map.
+- For a monorepo or workspace, show the workspace view first, then go deeper into the key packages.
+{% if arguments %}- **Scoped mapping**: the user requested `{{ arguments }}`. Scope your queries and your output to that subdirectory or module.
+{% endif %}- A path or module argument scopes the map.
 - Keep under 500 lines. Be selective.

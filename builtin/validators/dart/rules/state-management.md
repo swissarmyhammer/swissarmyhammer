@@ -5,8 +5,8 @@ description: Notifier/AsyncNotifier, AsyncValue.guard, valueOrNull, autoDispose 
 
 # Dart/Flutter State Management
 
-- **`Notifier`/`AsyncNotifier`**, not deprecated `StateNotifier`/`StateNotifierProvider`.
-- Initialization logic in `build()`, not constructors.
-- `AsyncValue.guard()` for async error handling — not manual try/catch with `state = AsyncError(...)`.
-- `state.valueOrNull` over `state.asData!` — force-unwrapping throws on loading/error.
-- `autoDispose` is the correct default. Providers without listeners should not persist. `ref.keepAlive()` is the opt-in exception, and should be conditional (keep on success, dispose on error).
+- Use `Notifier` or `AsyncNotifier`. Do not use the deprecated `StateNotifier` or `StateNotifierProvider`.
+- Put initialization logic in `build()`. Do not put initialization logic in constructors.
+- Use `AsyncValue.guard()` for async error handling. Do not use a manual try/catch with `state = AsyncError(...)`.
+- Use `state.valueOrNull` instead of `state.asData!`. Force-unwrapping with `state.asData!` throws an error during loading or error states.
+- `autoDispose` is the correct default setting. A provider without listeners must not persist. `ref.keepAlive()` is the exception. You must opt in to use `ref.keepAlive()`. Make `ref.keepAlive()` conditional. Keep the provider after success. Dispose of the provider after an error.

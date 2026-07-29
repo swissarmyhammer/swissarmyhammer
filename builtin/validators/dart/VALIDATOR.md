@@ -13,11 +13,6 @@ match:
 
 # Dart/Flutter Review Validator
 
-Language-scoped review guidance migrated from the review skill's
-`DART_FLUTTER_REVIEW.md` reference. These rules supplement the universal
-review layers and apply to changed Dart (`.dart`) files only.
+This guidance comes from the review skill's `DART_FLUTTER_REVIEW.md` reference. These rules add to the universal review layers. These rules apply only to changed Dart (`.dart`) files.
 
-Each rule is an **in-file idiom judgment** read from the diff — there are no
-engine probes. Every rule that fires must be fixed — review is binary
-pass/fail, with no advisory or severity tier among findings. Only add a rule to
-this validator if you want it enforced; there are no advisory rules.
+Each rule gives an in-file idiom judgment. You read the judgment from the diff. The validator does not use engine probes. You must fix every rule that fires. The review gives one of two results: pass or fail. No finding has an advisory level or a severity tier. Add a rule to this validator only if you want the review to enforce it. This validator has no advisory rules.

@@ -17,19 +17,26 @@ match:
 
 # Swift Review Validator
 
-Language-scoped review guidance for changed Swift (`.swift`) files, grounded in
-three sources: Apple's **Swift API Design Guidelines**, the idioms of Apple's
-own **open-source Swift** projects, and the **Point-Free** functional /
-dependency-injection school.
+This validator reviews changed Swift (`.swift`) files. It uses three sources
+for its guidance:
 
-Each rule is an **in-file idiom judgment** read from the diff — there are no
-engine probes. Every rule that fires must be fixed — review is binary
-pass/fail, with no advisory or severity tier among findings. Only add a rule to
-this validator if you want it enforced; there are no advisory rules.
+- Apple's **Swift API Design Guidelines**.
+- The idioms of Apple's own **open-source Swift** projects.
+- The **Point-Free** functional and dependency-injection school.
 
-Formatting-only concerns (whitespace, indentation, import ordering, semicolons)
-belong to `swift-format`, not this validator; the rules here are semantic.
+Each rule makes an in-file idiom judgment. The reviewer reads this judgment
+from the diff. The validator uses no engine probes.
 
-Some rule files are **library-conditional** — they open with a detection clause
-and apply only when the changed file uses that library (the controlled-
-dependency and Composable Architecture rules). Skip them for files that don't.
+You must fix every rule that fires. The review result is pass or fail.
+Findings carry no advisory level or severity tier. Add a rule to this
+validator only when you want the review to enforce it. This validator has no
+advisory rules.
+
+Formatting rules do not belong in this validator. This includes whitespace,
+indentation, import order, and semicolons. Use `swift-format` for these
+instead. The rules here address semantics.
+
+Some rule files are library-conditional. Each of these files opens with a
+detection clause. Apply the rule only when the changed file uses that
+library. This applies to the controlled-dependency rules and the Composable
+Architecture rules. Skip these rules for files that do not use the library.

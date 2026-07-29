@@ -1,10 +1,11 @@
 ---
 name: data-driven
 description: >-
-  Flag hardcoded literals and `match`/`if`-chains over a known set that should be
-  a table; repeated literals that should be a named constant. Express variation
-  as data (tables, maps, config, declarative specs) interpreted by a single code
-  path — not as parallel code paths a human must keep in lockstep.
+  Flag hardcoded literals. Flag `match`/`if`-chains over a known set; these
+  belong in a table instead. Flag repeated literals too; name each one as a
+  constant. Express variation as data — tables, maps, config, or declarative
+  specs — that a single code path interprets. Do not express variation as
+  parallel code paths that a human must keep in lockstep.
 metadata:
   version: "{{version}}"
 match:
@@ -14,9 +15,10 @@ match:
 
 # Data-Driven Validator
 
-Machine-written code trends toward hardcoding — enumerating cases in control flow
-and sprinkling literals — where the right shape is data interpreted by one code
-path. This validator pushes the other way. It is an **in-file judgment**: it
-reads the diff and needs no engine probe, so it declares none.
+Machine-written code tends toward hardcoding. It enumerates cases in control
+flow and scatters literals through the code, where data interpreted by one
+code path is the better shape. This validator pushes against that trend. It
+is an **in-file judgment**. It reads the diff and needs no engine probe, so
+it declares none.
 
 ** IMPORTANT ** This rule does not apply to test code.

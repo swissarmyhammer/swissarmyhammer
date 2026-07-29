@@ -5,6 +5,6 @@ description: Providers represent reads not writes, mutations in Notifier methods
 
 # Dart/Flutter Side Effects
 
-- **Providers represent reads, not writes.** A `FutureProvider` whose body calls `http.post(...)` is wrong.
-- Mutations belong in `Notifier` methods triggered by user actions.
-- `ref.onDispose` for resource cleanup (StreamControllers, timers). No side-effect-triggering code in `onDispose`.
+- A provider represents a read action. A provider must not represent a write action. A `FutureProvider` with a body that calls `http.post(...)` is wrong.
+- Put mutations in `Notifier` methods. A user action must trigger the method.
+- Use `ref.onDispose` to clean up resources, such as StreamControllers and timers. Do not put side-effect code in `onDispose`.
