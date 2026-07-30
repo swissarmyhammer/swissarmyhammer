@@ -1,0 +1,1 @@
+{"id":"01KYSFHND434QHZPQX4X263M1B","timestamp":"2026-07-30T12:21:19.908002Z","op":"create","item_id":"01KYSFHND052RWCHXA2YWNVM2W","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: d876e3\n+tag_name: ralph\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: d876e3\n-tag_name: ralph\n","transaction_id":null}
