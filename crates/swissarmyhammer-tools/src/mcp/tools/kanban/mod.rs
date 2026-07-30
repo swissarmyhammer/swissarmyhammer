@@ -32,10 +32,13 @@ use swissarmyhammer_kanban::{
 
 /// Where the kanban tool sits in the install lifecycle's priority ordering.
 ///
-/// The pipeline is re-spaced in 10s, so this value puts kanban between the
-/// Preamble (50) and Skills (60) steps — the same relative position it held in
-/// the legacy 22 → 25 → 30 ordering (after `ClaudeMd`, before
-/// `SkillDeployment`).
+/// `InitRegistry` runs its components in ASCENDING priority. `sah init`
+/// registers two — `ProjectStructure` (40) and this tool — so the value only
+/// has to sort after that one; `kanban init` registers this tool alone, where
+/// it orders nothing. Skills, agents, the preamble and the statusline are NOT
+/// registry components — they are `Profile` fields that
+/// `mirdan::install::init_profile` handles before the registry runs, so no
+/// priority value orders against them.
 const KANBAN_INIT_PRIORITY: i32 = 55;
 
 /// MCP tool for kanban board operations
@@ -178,6 +181,36 @@ async fn build_plan_data(
     Some(plan)
 }
 
+/// Attach ACP plan data to a kanban tool response.
+///
+/// An object response — every single-operation response — takes the plan as a
+/// `_plan` key beside its own fields. Anything else has nowhere to hold a key,
+/// so it is nested under `result` and the plan sits next to it:
+/// `{"result": [...], "_plan": {...}}`. Callers read `_plan` from the top level
+/// in both shapes.
+///
+/// The nesting branch is unreached through [`McpTool::execute`] today, on two
+/// preconditions. First, MCP hands the tool an arguments OBJECT and
+/// `parse_input` resolves an object to exactly one operation, so no batch array
+/// is ever built. Second, all twelve entries in [`TASK_MODIFYING_OPERATIONS`]
+/// return a JSON object, so the one response that can carry a plan is always an
+/// object. Neither is enforced: `parse_input` accepts a top-level array from
+/// other callers, and a future modifying op returning `null` or an array — as
+/// `next task` already returns `null` — would take the nesting branch. The
+/// branch stays because dropping the plan instead would be a silent loss.
+fn attach_plan(response: Value, plan: Value) -> Value {
+    match response {
+        Value::Object(mut map) => {
+            map.insert("_plan".to_string(), plan);
+            Value::Object(map)
+        }
+        batch => json!({
+            "result": batch,
+            "_plan": plan,
+        }),
+    }
+}
+
 /// The `(verb, noun)` pairs whose execution changes the task list.
 ///
 /// Comment mutations belong here too: a comment ack's top-level `id` is the
@@ -206,18 +239,24 @@ fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
 crate::impl_default_doctorable!(KanbanTool);
 
 impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
+    /// Returns the lifecycle identifier, borrowed from the MCP tool name so
+    /// install output and tool calls always name the tool the same way.
     fn name(&self) -> &str {
         <Self as crate::mcp::tool_registry::McpTool>::name(self)
     }
 
+    /// Returns the label the install reporter prints for this tool.
     fn display_name(&self) -> &str {
         "Kanban board"
     }
 
+    /// Returns the lifecycle section this tool is grouped under.
     fn category(&self) -> &str {
         "tools"
     }
 
+    /// Returns the ordering weight the install registry sorts on — see the
+    /// `KANBAN_INIT_PRIORITY` constant for what it does and does not order.
     fn priority(&self) -> i32 {
         KANBAN_INIT_PRIORITY
     }
@@ -250,7 +289,8 @@ impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
         self.run_lifecycle(&INIT_SPEC, scope, reporter)
     }
 
-    /// Deinitialize the kanban tool, mirroring [`Self::init`] by delegating to
+    /// Deinitialize the kanban tool, mirroring
+    /// [`swissarmyhammer_common::lifecycle::Initializable::init`] by delegating to
     /// mirdan:
     /// 1. Unregister the MCP server entry via
     ///    [`mirdan::install::unregister_mcp_server`] (if one was injected).
@@ -416,26 +456,56 @@ fn applier_error(results: &[InitResult]) -> Option<String> {
 
 #[async_trait]
 impl McpTool for KanbanTool {
+    /// Returns the name MCP clients call this tool by.
     fn name(&self) -> &'static str {
         "kanban"
     }
 
+    /// Returns the Markdown tool description, embedded from `description.md`
+    /// at compile time.
     fn description(&self) -> &'static str {
         include_str!("description.md")
     }
 
+    /// Returns the slim wire schema, served in the `tools/list` response: the
+    /// tool description plus one `op` property holding the enum of valid op
+    /// strings, with `op` the only required field. It carries NO per-op
+    /// parameter detail — every key in
+    /// [`swissarmyhammer_operations::schema::WIRE_DROPPED_KEYS`] is dropped, so
+    /// `description.md` is the only channel that can name an op's arguments to
+    /// the model. Nothing yet checks that it does:
+    /// [`swissarmyhammer_operations::schema::required_params_missing_from_description`]
+    /// is that check, and no kanban test calls it.
     fn schema(&self) -> serde_json::Value {
         build_schema(swissarmyhammer_kanban::schema::generate_kanban_mcp_schema)
     }
 
+    /// Returns the full in-process schema the schema-driven CLI generator
+    /// reads. It never goes over the wire, and it is NOT a superset of
+    /// [`Self::schema`]: `properties` is the flat union of every op's
+    /// parameters instead of `op` alone, and there is no top-level `required`.
+    /// What it adds are the five
+    /// [`swissarmyhammer_operations::schema::WIRE_DROPPED_KEYS`] entries —
+    /// per-op property maps, operation groups, forgiving-input rules, examples,
+    /// and the per-op required-name signatures.
     fn schema_full(&self) -> serde_json::Value {
         build_schema(swissarmyhammer_kanban::schema::generate_kanban_mcp_schema_full)
     }
 
+    /// Returns the kanban operation roster both schemas and the generated CLI
+    /// are built from.
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
         swissarmyhammer_kanban::schema::kanban_operations()
     }
 
+    /// Runs the operations parsed out of `arguments` and returns their JSON.
+    ///
+    /// Fills in the session actor when the caller omitted one, parses the
+    /// input, executes each operation in order, and serializes the result — a
+    /// single operation's own result verbatim — which may be `null`, as
+    /// `next task` returns on an empty board — or an array for a batch. When
+    /// any operation modified a task the current plan is attached; see
+    /// `attach_plan` for the two response shapes that produces.
     async fn execute(
         &self,
         mut arguments: serde_json::Map<String, serde_json::Value>,
@@ -494,23 +564,15 @@ impl McpTool for KanbanTool {
             json!(results)
         };
 
-        // Include plan data in response for task-modifying operations
-        // This enables ACP agents to emit Plan notifications
+        // Attach plan data for task-modifying operations so ACP agents can
+        // emit Plan notifications.
         if should_include_plan {
             if let Some(plan) =
                 build_plan_data(&ctx, &last_trigger, last_affected_task_id.as_deref()).await
             {
-                // Wrap in object if needed and add _plan key
-                if let Value::Object(ref mut map) = response {
-                    map.insert("_plan".to_string(), plan);
-                } else {
-                    response = json!({
-                        "result": response,
-                        "_plan": plan
-                    });
-                }
+                response = attach_plan(response, plan);
                 tracing::debug!(
-                    "Included plan data in kanban response: trigger={}",
+                    "included plan data in kanban response: trigger={}",
                     last_trigger
                 );
             }
@@ -3180,5 +3242,40 @@ mod tests {
                 "{direction} skip message"
             );
         }
+    }
+
+    /// A single-operation response is a JSON object, so the plan merges in as a
+    /// `_plan` sibling of the operation's own fields.
+    #[test]
+    fn test_attach_plan_merges_into_object_response() {
+        let plan = json!({"entries": [], "_meta": {"trigger": "update task"}});
+
+        let merged = attach_plan(json!({"id": "01ABC", "ok": true}), plan.clone());
+
+        assert_eq!(merged["id"], "01ABC", "got: {merged}");
+        assert_eq!(merged["ok"], true, "got: {merged}");
+        assert_eq!(merged["_plan"], plan, "got: {merged}");
+    }
+
+    /// A batch response is a JSON array, which cannot carry a key. When the
+    /// batch modified a task the array is nested under `result` and the plan
+    /// sits beside it, so a client reading a batch must expect
+    /// `{"result": [...], "_plan": {...}}` rather than a bare array.
+    #[test]
+    fn test_attach_plan_wraps_batch_array_response() {
+        let batch = json!([{"id": "01ABC", "ok": true}, {"id": "01DEF", "ok": true}]);
+        let plan = json!({"entries": [], "_meta": {"trigger": "add task"}});
+
+        let wrapped = attach_plan(batch.clone(), plan.clone());
+
+        assert!(
+            wrapped.is_object(),
+            "a batch carrying plan data must be an object, not a bare array, got: {wrapped}"
+        );
+        assert_eq!(
+            wrapped["result"], batch,
+            "the batch array must survive intact under `result`, got: {wrapped}"
+        );
+        assert_eq!(wrapped["_plan"], plan, "got: {wrapped}");
     }
 }

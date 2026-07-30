@@ -165,7 +165,7 @@ async fn dispatch_call_tool_request(
 ) -> Result<CallToolResult, McpError> {
     if request.name != TOOL_NAME {
         return Err(McpError::invalid_request(
-            format!("Unknown tool: {}", request.name),
+            format!("unknown tool: {}", request.name),
             None,
         ));
     }
@@ -270,7 +270,8 @@ fn classify_kanban_error_kind(err: &KanbanError) -> ErrorClass {
     }
 }
 
-/// Classify an [`EntityError`] for the entity-layer variants that can reach
+/// Classify an [`swissarmyhammer_entity::EntityError`] for the entity-layer
+/// variants that can reach
 /// the MCP surface without having been re-wrapped by
 /// `KanbanError::from_entity_error` — notably `move task` and similar
 /// direct-entity operations.
@@ -420,7 +421,7 @@ mod tests {
             "unknown tool name must map to invalid_request, got: {err:?}"
         );
         assert!(
-            err.message.contains("Unknown tool"),
+            err.message.contains("unknown tool"),
             "error message must identify the failure, got: {}",
             err.message
         );
@@ -601,6 +602,9 @@ mod tests {
         }
     }
 
+    /// Variants that name state the server cannot satisfy — an absent board,
+    /// a missing entity, a conflicting write — are caller-addressable, so they
+    /// must all reach `invalid_request` rather than looking like server bugs.
     #[test]
     fn classify_kanban_error_maps_state_conflicts_to_invalid_request() {
         let cases = [
@@ -628,6 +632,9 @@ mod tests {
         }
     }
 
+    /// Variants the caller cannot fix — lock contention, IO, a broken
+    /// registry — must reach `internal_error` so clients stop retrying with a
+    /// corrected request.
     #[test]
     fn classify_kanban_error_maps_server_failures_to_internal_error() {
         let cases = [

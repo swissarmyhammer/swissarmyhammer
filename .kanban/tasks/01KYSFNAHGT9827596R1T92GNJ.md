@@ -298,6 +298,78 @@ comments:
 
     Task stays in `doing`, 38/38.
   timestamp: 2026-07-30T18:17:36.088565+00:00
+- actor: claude-code
+  id: 01kyt8fnws8qmas5ae5331r2jj
+  text: |-
+    Review round 8: all 18 findings satisfied. Every box is `- [x]` (56/56). Task stays in `doing`.
+
+    The 18 findings were 3 debt classes. I cleared each class fully in the two files, not only at the cited lines.
+
+    ## Class 1 — missing doc comments (15 cited, 10 real)
+
+    The engine reported the same item twice from adjacent line numbers. The 10 real items were all trait-impl methods in `tools/kanban/mod.rs`: `name`, `display_name`, `category`, `priority` on the `Initializable` impl, and `name`, `description`, `schema`, `schema_full`, `operations`, `execute` on the `McpTool` impl. `McpTool::name` was NOT cited. I documented it too.
+
+    `apps/kanban-cli/src/commands/serve.rs` needed nothing outside its test module. Its two undocumented test functions got docs anyway, so that file is now at 100 percent.
+
+    **Exhaustiveness proof.** I wrote a checker (`scratchpad/check_docs.py`) that finds every `fn`/`struct`/`enum`/`trait`/`const`/`type` outside `#[cfg(test)]`, walks up past attributes, and demands a `///` above it. Against `git show HEAD:` it reports exactly the 10 items above, and 0 for serve.rs. Against the new tree it reports 0 for both files. The checker is therefore proven to detect this class, not just to agree with me.
+
+    **Stronger proof: rustdoc is silent too.** `cargo doc --no-deps` now reports ZERO warnings for both files. That repaired two broken links that predate this round: `[`Self::init`]` did not resolve (the trait method needed its full path), and `[`EntityError`]` in serve.rs named no item in scope. Same debt class, same files.
+
+    Not swept, on purpose: `mod.rs` still has 59 undocumented test functions. `builtin/validators/missing-docs/rules/missing-docs.md` exempts `#[test]`/`#[tokio::test]` items and `mod tests` explicitly, and no round has ever cited one. serve.rs is now at 100 percent only because it had just two.
+
+    ## Class 2 — error message casing (2 cited)
+
+    `"Unknown tool: {}"` in serve.rs lowercased, plus the test assertion that pinned the old spelling.
+
+    **Exhaustiveness proof.** `grep -noE '"[A-Z][^"]{3,}'` over the whole file now returns 8 hits, none of them an error message: the tool description, two `env!("CARGO_PKG_VERSION")`, four test board names, and one test assertion string. Zero capitalized error Display messages remain.
+
+    Left capitalized on purpose, as already adjudicated: `InitResult::ok` success messages.
+
+    The same capitalized string lives in `swissarmyhammer-tools/src/mcp/server.rs`, `agent-client-protocol-extras/src/test_mcp_server.rs` and `claude-agent/src/tools.rs`. Those are outside the two files this card touches, so a review of this diff cannot cite them. Filed as ^p4mp9n6 rather than expanding scope.
+
+    ## Class 3 — batch response shape (1 cited)
+
+    Extracted the inline wrapper out of `execute` into a pure helper, `attach_plan(response, plan) -> Value`. An object response takes `_plan` as a sibling key. Anything else nests under `result`. The branch was untestable inside a 90-line async method; as a pure function it takes two direct unit tests.
+
+    The behavior predates this card (commit 20e4a9c55, February), but the card owns it now, so the test lands here.
+
+    **RED proved on both branches, one at a time:**
+    - Batch branch made to return the array and drop the plan: `test_attach_plan_wraps_batch_array_response` failed with `got: [{"id":"01ABC",...}]`.
+    - Object branch made to skip the insert: `test_attach_plan_merges_into_object_response` failed with `left: Null`.
+    - The casing change was proved too. Reverting the one string to `"Unknown tool: "` failed the existing test with `got: Unknown tool: not-kanban`.
+
+    ## What the adversarial passes found — 7 findings, all doc accuracy, all fixed
+
+    Two `double-check` runs. The first proved `attach_plan` byte-identical to the old inline code for every input class, then returned REVISE on 4 doc claims. The second returned REVISE on 3 more. Every one was true. I checked each against the source myself before changing anything.
+
+    1. `schema()` claimed the wire schema carries "per-op required fields". It does not. `generate_mcp_schema_wire` emits `properties` with only `op` and `required: ["op"]`. The per-op map is `x-op-signatures`, which is member 5 of `WIRE_DROPPED_KEYS` — and an existing test asserts every one of those keys is absent from the wire schema. My doc contradicted a green test.
+    2. `schema()` then claimed the description "has to name each op's arguments". The check exists (`required_params_missing_from_description`) but has only two callers, neither of them kanban — and `description.md` names no required parameter at all, so kanban would fail it today. Replaced the obligation with the fact.
+    3. `schema_full()` claimed "the wire surface plus the five entries". It is not a superset: the full schema has NO top-level `required`, and its `properties` is the flat union of every op's parameters, not `op` alone.
+    4. `priority()` claimed kanban runs "after the preamble and before skill deployment". Neither half holds. The registry holds two components — `ProjectStructure` (40) and this tool — and nothing declares 50 or 60. Skills, agents, preamble and statusline are `Profile` fields that `init_profile` handles BEFORE the registry runs. I had copied the stale comment on `KANBAN_INIT_PRIORITY` into a second place; both are now corrected together, so they cannot drift.
+    5. A follow-up clause, "the pipeline is spaced in 10s", was also unsupported: the four priorities in the workspace are 0, 22, 40, 55. Deleted.
+    6. `execute()` claimed one operation yields "a lone object". `next task` returns `Value::Null` on an empty board, and `execute` passes a single result through verbatim.
+    7. `attach_plan`'s unreachability argument named only one precondition. It needs two: the arguments-object rule AND the fact that all twelve `TASK_MODIFYING_OPERATIONS` return JSON objects. The critic checked all twelve; they do. Neither precondition is enforced, and the doc now says so.
+
+    ## For the next agent
+
+    **A doc comment is a claim. Verify it like code.** Seven of my ten new docs were wrong on the first or second attempt — not vague, wrong, and one of them contradicted a test that was passing in the same run. Compilers and clippy do not read prose. The only cheap defence is to open the function you are describing before you describe it.
+
+    **`cargo doc --no-deps` is a free extra gate.** It caught two broken intra-doc links that predate this card and that clippy never mentions. Run it on any file you add docs to; grep its output for that file's path.
+
+    The traps recorded in rounds 5 to 7 all held and cost nothing:
+    - `cp` + `touch` on every restore. Never `mv` a `.bak` back — that restores an older mtime, cargo skips the rebuild, and nextest silently runs the neutered binary.
+    - The `files` MCP edit op echoes the WHOLE post-edit file. On a 3000-line file that overflows the tool budget while the edit still lands. I used a `python3` script through `shell` for every large patch.
+    - `kanban` CLI is noun-first (`kanban task update`). I used it to flip the 18 boxes, passing the new body as `--description "$(cat file)"`, so the change went through real dispatch and kept the changelog honest.
+
+    New note: the running MCP server is an OLD binary. `add task {tags: ["bug"]}` on ^p4mp9n6 still dropped the tags, because THIS card's fix is uncommitted and not yet in the server the agent talks to. That is not a regression. Use `tag task` until the fix ships.
+
+    ## Verification
+
+    - `cargo nextest run -E 'rdeps(swissarmyhammer-kanban)'`: 7934 tests, **7934 passed**, 2 skipped, 0 failed. Run three times this round, green each time — before the doc revisions, after the first set, and after the second. The `review_progress_notifications_test` flake (^t681xdv, ^yh4m6ed, ^pxhzk1s) passed all three.
+    - `cargo fmt --all -- --check`: clean. `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+    - `cargo doc --no-deps`: zero warnings attributable to either file.
+    - Files changed: `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs` and `apps/kanban-cli/src/commands/serve.rs`. Nothing else. `git status --porcelain | grep builtin` gives zero hits. No new stray `.kanban` directory; the one under `crates/swissarmyhammer-mcp-proxy/` predates this session, as round 6 recorded.
+  timestamp: 2026-07-30T19:37:09.273802+00:00
 position_column: doing
 position_ordinal: '8280'
 title: add task / update task silently discard the tags array
@@ -395,3 +467,24 @@ Both forms were dropped, so the cause is not id-versus-name resolution:
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:296` — Error message starts with capital letter — the rule requires error Display messages to be lowercase with no trailing punctuation. Change message to lowercase: `"no .kanban directory found"`.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:301` — Error message starts with capital letter — the rule requires error Display messages to be lowercase with no trailing punctuation. Change message to lowercase: `format!("failed to register merge drivers: {e}")`.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:341` — Error message starts with capital letter — the rule requires error Display messages to be lowercase with no trailing punctuation. Change message to lowercase: `format!("failed to remove merge drivers: {e}")`.
+
+## Review Findings (2026-07-30 13:31)
+
+- [x] `apps/kanban-cli/src/commands/serve.rs:159` — Error message starts with uppercase letter. Display messages on errors must be lowercase, no trailing punctuation. Change `"Unknown tool:"` to `"unknown tool:"`.
+- [x] `apps/kanban-cli/src/commands/serve.rs:307` — Error message at line 307 has 'Unknown tool' capitalized while other error messages in the same file—'cannot read cwd' (line 261) and 'failed to parse kanban operation' (line 293)—are lowercase. The change description states 'Error Display messages lowercased across the whole file,' but this message was not lowercased, creating an inconsistency. Change line 307 from `format!("Unknown tool: {}"` to `format!("unknown tool: {}"` to match the lowercase pattern applied to other error messages in the refactor.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:154` — Public trait method `fn name()` in Initializable impl lacks documentation. Trait implementations should document their methods for consistency. Add doc comment explaining the method returns the kanban tool's identifier.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:156` — Public trait method `name()` in `Initializable` impl lacks doc comment, while later methods in same impl have them (line 172+), creating inconsistency. Add doc comment explaining the method, or rely on trait documentation being sufficient for all simple forwarding methods.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:158` — Public trait method `fn display_name()` in Initializable impl lacks documentation. Trait implementations should document their methods. Add doc comment explaining this is the human-readable name for the kanban tool.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:160` — Public trait method `display_name()` in `Initializable` impl lacks doc comment. Add doc comment or ensure consistent treatment across trait impl.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:162` — Public trait method `fn category()` in Initializable impl lacks documentation. Trait implementations should document their methods. Add doc comment explaining this categorizes the kanban tool as part of the 'tools' category.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:164` — Public trait method `category()` in `Initializable` impl lacks doc comment. Add doc comment or ensure consistent treatment across trait impl.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:166` — Public trait method `fn priority()` in Initializable impl lacks documentation. Trait implementations should document their methods. Add doc comment explaining this returns the initialization priority used in the lifecycle sequencing.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:168` — Public trait method `priority()` in `Initializable` impl lacks doc comment. Add doc comment or ensure consistent treatment across trait impl.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:182` — Public trait method `description()` in `McpTool` impl lacks doc comment. Add doc comment explaining the tool description.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:351` — Public trait method `execute()` in `McpTool` impl lacks doc comment, while later trait methods in the `execute_operation` function (outside impl) have them. Add doc comment explaining the execute method's behavior and role in dispatching tool calls.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:398` — Public trait method `fn description()` lacks documentation. Trait implementations should document their methods. Add doc comment explaining it returns the tool description from an embedded file.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:402` — Public trait method `fn schema()` lacks documentation. The difference between `schema()` and `schema_full()` is not self-explanatory without explanation. Add doc comment explaining what the compact schema contains and how it differs from `schema_full()`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:406` — Public trait method `fn schema_full()` lacks documentation. The meaning of 'full' and how it differs from `schema()` is not self-explanatory. Add doc comment explaining what fields or details are included in the full schema vs the compact version.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:410` — Public trait method `fn operations()` lacks documentation. It is not immediately clear what operations are returned or their purpose. Add doc comment explaining this method returns the list of kanban operations supported by the MCP tool.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:414` — Public trait method `async fn execute()` lacks documentation. This is a large, complex method implementing the tool execution logic with multiple steps. Add comprehensive doc comment explaining the method's purpose, input/output format, and key behaviors (e.g., plan data attachment for task-modifying operations).
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:415` — Batch operation response format changed without test coverage. When a batch contains task-modifying operations and plan data is included, responses that previously returned `[{...}, {...}]` are now wrapped as `{"result": [...], "_plan": {...}}`. This breaks the response shape contract for clients expecting array responses from batch operations. Either (1) add test coverage for batch operations with task-modifying operations to document the new format as intentional, or (2) modify the wrapping logic to append `_plan` to array responses while preserving the array format (e.g., `response = json!({"entries": response, "_plan": plan})` or similar), maintaining backward compatibility.
