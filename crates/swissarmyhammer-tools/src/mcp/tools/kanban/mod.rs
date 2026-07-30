@@ -385,19 +385,12 @@ impl KanbanTool {
     ) -> Vec<InitResult> {
         use swissarmyhammer_common::lifecycle::Initializable;
         let name = Initializable::name(self);
-        let mut results = Vec::new();
+        let mut results = self.mcp_server_results(spec, scope, reporter);
 
-        if let Some((server_name, entry)) = &self.mcp_server {
-            let mcp = (spec.apply_mcp_server)(*scope, server_name, entry, reporter);
-            match applier_error(&mcp) {
-                Some(err) => {
-                    results.push(InitResult::error(name, err));
-                    if spec.abort_on_mcp_error {
-                        return results;
-                    }
-                }
-                None => results.extend(mcp),
-            }
+        // Install abandons the steps that follow, so a half-configured agent
+        // is not left behind; teardown carries on to strip what it can reach.
+        if spec.abort_on_mcp_error && applier_error(&results).is_some() {
+            return results;
         }
 
         // A User-scope install has no project dir, so it has no board.
@@ -409,6 +402,30 @@ impl KanbanTool {
             results.push(InitResult::ok(name, spec.nothing_to_do));
         }
         results
+    }
+
+    /// Run the MCP-server step of one lifecycle direction.
+    ///
+    /// Returns no results when no server entry was injected, the applier's own
+    /// results when it succeeded, and a single [`InitResult::error`] when it
+    /// failed. Whether that error stops the lifecycle is the caller's call —
+    /// see [`LifecycleSpec::abort_on_mcp_error`].
+    fn mcp_server_results(
+        &self,
+        spec: &LifecycleSpec,
+        scope: &InitScope,
+        reporter: &dyn InitReporter,
+    ) -> Vec<InitResult> {
+        use swissarmyhammer_common::lifecycle::Initializable;
+        let Some((server_name, entry)) = &self.mcp_server else {
+            return Vec::new();
+        };
+
+        let mcp = (spec.apply_mcp_server)(*scope, server_name, entry, reporter);
+        match applier_error(&mcp) {
+            Some(err) => vec![InitResult::error(Initializable::name(self), err)],
+            None => mcp,
+        }
     }
 }
 

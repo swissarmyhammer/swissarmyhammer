@@ -434,6 +434,23 @@ comments:
     - `cargo fmt --all -- --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo doc --no-deps`: zero warnings attributable to the file.
     - Files changed: `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs` only. Nothing under `builtin/` — `git status --porcelain | grep builtin` gives zero hits, and the `builtin/` edits present at session start belong to a parallel session. No new stray `.kanban` directory.
   timestamp: 2026-07-30T20:51:36.326749+00:00
+- actor: claude-code
+  id: 01kytevy0mdqcg23svce23gjn6
+  text: |-
+    Review finding (2026-07-30 16:06) fixed: run_lifecycle nesting flattened.
+
+    Change — `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs`:
+    - Moved the MCP-server step out of `run_lifecycle` into a new private helper `KanbanTool::mcp_server_results`. The helper uses a let-else for "no server entry injected" and a two-arm match that maps an applier error to a single `InitResult::error`, or passes the applier results through. Max nesting depth in the helper: 2 (match arms).
+    - `run_lifecycle` now starts from the helper's results and makes ONE flat decision: `if spec.abort_on_mcp_error && applier_error(&results).is_some() { return results; }`. Max nesting depth in `run_lifecycle`: 1 (the top-level ifs). The reported chain if let -> match -> Some arm -> if is gone.
+    - Behavior is unchanged: an applier error still contributes exactly one error result, init still abandons the merge-driver step, deinit still carries on to it.
+
+    Mutation proof that `abort_on_mcp_error` still controls the behavior (both directions, after the refactor), with `test_mcp_applier_error_aborts_init_but_not_deinit`:
+    - INIT_SPEC true -> false: FAIL. "init must abort on an MCP applier error" left: 2, right: 1 (the merge-driver result appeared).
+    - DEINIT_SPEC false -> true: FAIL. "deinit must carry on to the merge-driver step" left: 1, right: 2 (the merge-driver result disappeared).
+    - Both flags restored: PASS.
+
+    Verification: `cargo nextest run -E 'rdeps(swissarmyhammer-kanban)'` 7943 passed, 0 failed, 2 skipped. `cargo fmt` clean (no diff). `cargo clippy --workspace --all-targets -- -D warnings` clean. Card is 58/58. Left in doing, not committed.
+  timestamp: 2026-07-30T21:28:42.260217+00:00
 position_column: doing
 position_ordinal: '8280'
 title: add task / update task silently discard the tags array
@@ -556,3 +573,7 @@ Both forms were dropped, so the cause is not id-versus-name resolution:
 ## Review Findings (2026-07-30 15:08)
 
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:194` — The TASK_MODIFYING_OPERATIONS list specifies 12 operations that attach plan data in the execute function (lines 390, 411). Plan-data write-back is tested (executed) for all 12, but read-back (verification that plan contains affected_task_id) is verified for only 4 of 12 operations. The write-side is comprehensive; the read-side (proving 'round-trip') is incomplete. Operations add task, delete task, move task, complete task, unassign task, untag task, update comment, and delete comment attach plan data but are never tested to read it back. Add read-back tests for all 8 missing operations following the pattern of test_update_task_plan_carries_affected_task_id: each test should execute the operation and assert data["_plan"]["_meta"]["affected_task_id"] equals the affected task or comment's ID, proving the plan round-trip for all 12 task-modifying operations.
+
+## Review Findings (2026-07-30 16:06)
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:410` — The `run_lifecycle` function has 4-level nesting depth, exceeding the 3-level threshold. The if statement checking `spec.abort_on_mcp_error` sits inside the `Some(err) =>` arm of a match statement, which sits inside an `if let` pattern, creating a chain: if let → match → Some arm → if. Flatten the nesting by extracting the MCP error handling into a separate helper method, or replace the match with an if let: `if let Some(err) = applier_error(&mcp) { results.push(...); if spec.abort_on_mcp_error { return results; } } else { results.extend(mcp); }`. This reduces the if statement to 3-level depth.
