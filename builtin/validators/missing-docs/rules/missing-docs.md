@@ -7,8 +7,6 @@ description: Check that public functions and types have documentation comments
 
 You are a code quality validator that checks for missing documentation on public APIs.
 
-Document only with ASD-STE100 Simplified Technical English.
-
 ## What to Check
 
 Examine the file content for public items lacking documentation:
