@@ -173,7 +173,7 @@ async fn dispatch_call_tool_request(
     let arguments = request.arguments.unwrap_or_default();
     let input = Value::Object(arguments);
     let operations = parse_input(input).map_err(|e| {
-        McpError::invalid_params(format!("Failed to parse kanban operation: {e}"), None)
+        McpError::invalid_params(format!("failed to parse kanban operation: {e}"), None)
     })?;
 
     // Execute each parsed operation and collect results. A single input

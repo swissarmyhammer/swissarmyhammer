@@ -197,6 +197,107 @@ comments:
     - Files changed: `tag/shared.rs` (new), `tag/delete.rs`, `tag/update.rs`, `tag/mod.rs`, `tools/src/mcp/tools/kanban/mod.rs`.
     - Nothing under `builtin/` was touched. The stray `.kanban` under `crates/swissarmyhammer-mcp-proxy/` dates from Jul 5 and is not from this session.
   timestamp: 2026-07-30T17:12:43.441805+00:00
+- actor: claude-code
+  id: 01kyt366fayba54nfwa4d5ewdv
+  text: |-
+    Review round 7: all 10 findings satisfied, every box flipped to `- [x]` (38/38). Task stays in `doing`.
+
+    All 10 findings were in ONE file, `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs` — pre-existing defects in the enclosing file, surfaced because this card touched it. The new `tag/shared.rs` walker came back clean.
+
+    ## Error message casing (6 findings)
+
+    The rule is `builtin/validators/rust/rules/error-handling.md`: "Display messages on errors: lowercase, no trailing punctuation." Swept the WHOLE file, not only the five cited lines:
+
+    - `"Cannot determine current directory"` -> `"cannot determine current directory"` (was duplicated in `init` AND `deinit`; now one copy)
+    - `"No .kanban directory found"` -> lowercase (same, was duplicated)
+    - `"Failed to register merge drivers: {e}"` -> `"failed to register merge drivers: {e}"`
+    - `"Failed to remove merge drivers: {e}"` -> `"failed to remove merge drivers: {e}"`
+    - `"Failed to parse kanban operation: {}"` -> lowercase
+    - `tracing::warn!("Failed to list tasks for plan")` -> lowercase (not cited, same class)
+
+    Left alone on purpose: `InitResult::ok` messages ("Kanban merge drivers registered", "Kanban tool initialized"). Those are SUCCESS messages, not error Display messages. The engine did not flag them, and the sibling shell tool spells its `ok` messages the same way (`"Shell tool deinitialized"`), so lowercasing them would break the prevailing pattern to satisfy a rule that does not cover them.
+
+    ## Structure (4 findings)
+
+    **`Debug` derive.** `#[derive(Default)]` -> `#[derive(Debug, Default)]`. `mirdan::mcp_config::McpServerEntry` already derives `Debug`, so the field carries.
+
+    **`schema()` / `schema_full()`.** Both read `kanban_operations()` and hand it to a generator. Collapsed onto `build_schema(generate: fn(&[&dyn Operation]) -> Value)`; each method is now one line naming its generator. One roster read, so the compact and full schemas can never disagree about which operations exist.
+
+    **The two duplicated `init`/`deinit` blocks (2 findings) — collapsed together, not separately.** They are the same two steps pointing opposite ways, so patching each block with its own helper would have left two parallel skeletons. Instead:
+
+    - `LifecycleSpec` — a const table holding EVERY value that differs: the applier fn pointer, the error/verb/message/ok strings, and the fallback message. `INIT_SPEC` and `DEINIT_SPEC` are the only two instances.
+    - `KanbanTool::run_lifecycle(&spec, scope, reporter)` — the single skeleton. `init` and `deinit` are one-line delegations.
+    - `merge_driver_result(spec, name, reporter)` — the merge-driver step, once.
+    - `unregister_mcp_server_entry` — a 3-line adapter giving `unregister_mcp_server` the `register_mcp_server` signature (removal needs only the name), so both directions fit one `McpServerApplier` field.
+
+    The two directions were NOT symmetric, and the asymmetry is now explicit data rather than buried in duplicated code: `abort_on_mcp_error: true` for init (stop, so no half-configured agent is left behind), `false` for deinit (carry on, so teardown strips as much as it can reach). That one flag is the whole behavioral difference.
+
+    Two old early `return results` statements in the merge-driver blocks were dropped as cosmetic: nothing followed them except `if results.is_empty()`, which cannot fire once a result has been pushed. Verified by enumeration, not by assumption.
+
+    **`is_task_modifying_operation`.** 12 `(verb, noun)` arms in a `matches!` where every arm returned `true` — data written as control flow. Now `const TASK_MODIFYING_OPERATIONS: &[(Verb, Noun)]` + `.contains(&(verb, noun))`. `Verb`/`Noun` already derive `Copy + PartialEq`, so no new bounds. Proved the pair set is byte-identical by extracting both lists with `grep -oE 'Verb::[A-Za-z]+, Noun::[A-Za-z]+' | sort` from `git show HEAD:` and from the new file, then `diff` — empty.
+
+    ## RED proof
+
+    New test `test_tool_lifecycle_no_board_skips_merge_drivers`. Project scope with no `.kanban/` board: BOTH directions must report exactly one SKIPPED result reading `no .kanban directory found`. It pins three things at once — the lowercase wording, the skip-not-error contract, and the fact that init and deinit now reach the same extracted helper.
+
+    Proven RED by reverting only that one string to `"No .kanban directory found"`: failed with `left: "No .kanban directory found" / right: "no .kanban directory found"` on the `init` arm. Restored with `cp` + `touch` (the round-5 mtime trap), re-ran, GREEN. Because the neutered string was a SINGLE occurrence and both loop arms consumed it, the RED also proves both directions share one code path — the point of the extraction.
+
+    The merge-driver skip path had no test before this round.
+
+    ## Verification
+
+    - `cargo nextest run -E 'rdeps(swissarmyhammer-kanban)'`: 7931 tests, **7931 passed**, 2 skipped, 0 failed. The `review_progress_notifications_test` flake (^t681xdv, ^yh4m6ed, ^pxhzk1s) passed this round.
+    - `cargo nextest run -p swissarmyhammer-tools -E 'test(mcp::tools::kanban)'`: 74/74.
+    - `cargo fmt --all -- --check`: clean. `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+    - Files changed: `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs` only (+222 / -132). Nothing under `builtin/` — confirmed with `git status --porcelain | grep builtin`, zero hits. No stray `.kanban` dirs created; the one under `crates/swissarmyhammer-mcp-proxy/` predates this session, as round 6 recorded.
+
+    ## For the next agent
+
+    The traps from rounds 5 and 6 all held and cost nothing this round because they were written down: `cp` + `touch` on every restore (never `mv` a `.bak`, it restores an older mtime and cargo skips the rebuild), and `kanban task update` is noun-first (`kanban <noun> <verb>`); the wrong order exits 0 and writes nothing.
+
+    New note: the `files` MCP edit op echoes the WHOLE post-edit file back as `tagged_content`. On a 3000-line file that overflows the tool-result budget and the edit still lands, which reads like a failure. For large files, patch with a `python3` script through `shell` and verify with `grep`/`sed`.
+  timestamp: 2026-07-30T18:04:35.690803+00:00
+- actor: claude-code
+  id: 01kyt3y0jre3fm3ghz06gq4ayv
+  text: |-
+    Adversarial pass (`double-check`) returned REVISE with 2 findings. Both acted on. Re-verified green.
+
+    ## What the critic confirmed
+
+    It reconstructed the pre-change `init`/`deinit` from `git show HEAD:` and enumerated every input state — `mcp_server` Some/None x applier ok/error x scope User/Local/Project x board present/absent x merge-driver ok/error. Result count, order, status, message, and reporter emit order agree in every state. No `LifecycleSpec` field is crossed between the two specs. The 12 `(verb, noun)` pairs, the `schema`/`schema_full` routing, and the `unregister_mcp_server_entry` adapter all check out.
+
+    ## Finding 1 — the asymmetry flag had no test (accepted, fixed)
+
+    Fair hit, and the sharpest one available: the refactor converts a control-flow difference into a single `bool` in a const table, and every existing lifecycle test takes the MCP success path. Flip either flag — or copy one spec from the other — and the suite stays green while a half-configured agent gets left behind. The flag was the only unguarded part of the change.
+
+    Making the applier fail is not obvious. Reading `mirdan::install::for_each_agent_strategy`: a PER-AGENT failure only emits an `InitEvent::Warning` and still returns `InitResult::ok`. The one path that yields an error result is `detected_agents_or_error()`, i.e. `load_agents_config()` failing. So the deterministic lever is an UNPARSEABLE `MIRDAN_AGENTS_CONFIG`, not an unwritable MCP target.
+
+    New test `test_mcp_applier_error_aborts_init_but_not_deinit`. Points `MIRDAN_AGENTS_CONFIG` at `agents:\n  - id: [unclosed`, with a `.kanban/` board present so the merge-driver step has a result to contribute whenever it is reached:
+    - `init` at Project scope must return exactly 1 result, status `Error` — it abandoned the merge-driver step.
+    - `deinit` at Project scope must return exactly 2 — the error, then a non-error merge-driver result — it carried on.
+
+    That is precisely the old behavior: old `init` did `return vec![InitResult::error(...)]`, old `deinit` pushed the error and fell through. The test encodes the preserved asymmetry, it does not invent one.
+
+    Both flags proven RED independently:
+    - `INIT_SPEC.abort_on_mcp_error: true -> false`: init returned 2 results, `left: 2 / right: 1`.
+    - `DEINIT_SPEC.abort_on_mcp_error: false -> true`: deinit returned 1, `left: 1 / right: 2`.
+    Restored with `cp` + `touch` each time; GREEN after each restore.
+
+    ## Finding 2 — the same message, capitalized, in the sibling entry point (accepted, fixed)
+
+    `apps/kanban-cli/src/commands/serve.rs` carries a second copy of `"Failed to parse kanban operation: {e}"` — the same string, for the same tool, in the other MCP call handler. Lowercasing only `mod.rs` would have made `sah serve` and `kanban serve` disagree about the same failure. Fixed. It was the only capitalized error message in that file.
+
+    Not touched, and deliberately: `mirdan::install::detected_agents_or_error` builds `"Failed to load agents config: {e}"`. It is a different crate, not cited by any finding, and the shell tool carries similar pre-existing capitals. Sweeping mirdan belongs on its own card, not this one.
+
+    ## Re-verification after the revisions
+
+    - `cargo nextest run -E 'rdeps(swissarmyhammer-kanban)'`: 7932 tests, **7932 passed**, 2 skipped, 0 failed. The `review_progress_notifications_test` flake (^t681xdv, ^yh4m6ed, ^pxhzk1s) passed again.
+    - `cargo nextest run -p swissarmyhammer-tools -p kanban-cli` over the kanban, lifecycle and serve tests: 199/199.
+    - `cargo fmt --all -- --check`: clean. `cargo clippy --workspace --all-targets -- -D warnings`: exit 0, zero warnings.
+    - Files changed: `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs` (+275/-132) and `apps/kanban-cli/src/commands/serve.rs` (1 line). Nothing under `builtin/`.
+
+    Task stays in `doing`, 38/38.
+  timestamp: 2026-07-30T18:17:36.088565+00:00
 position_column: doing
 position_ordinal: '8280'
 title: add task / update task silently discard the tags array
@@ -281,3 +382,16 @@ Both forms were dropped, so the cause is not id-versus-name resolution:
 - [x] `crates/swissarmyhammer-kanban/src/tag/update.rs:64` — Public builder method `with_description()` lacks a doc comment. Add a doc comment: `/// Set the tag's description.`.
 - [x] `crates/swissarmyhammer-kanban/src/tag/update.rs:82` — The pattern of iterating over all tasks and applying a tag_parser operation to their bodies is reimplemented here instead of reusing the identical pattern from delete.rs. Both iterate, read body, transform via tag_parser, check for changes, and write back. Extract a shared helper function `apply_tag_edit_to_all_tasks(ectx: &EntityContext, edit_fn: impl Fn(&str) -> String) -> Result<()>` in tag/shared.rs or task/shared.rs. Call it from both delete.rs as `apply_tag_edit_to_all_tasks(&ectx, |body| tag_parser::remove_tag(body, &slug))` and from update.rs as `apply_tag_edit_to_all_tasks(&ectx, |body| tag_parser::rename_tag(body, &old_slug, &normalized))`.
 - [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:2242` — Test docstring claims 'in every wire shape and every ref format', but the ref_form iteration omits uppercase forms (tag_id.to_uppercase() and short.to_uppercase()). The resolver unit tests in task/tags.rs prove uppercase ULIDs and short IDs resolve correctly; this integration test should exercise the same forms through the MCP boundary to match its stated scope. Add tag_id.to_uppercase() and short.to_uppercase() (and optionally format!("^{}", short.to_uppercase())) to the ref_form iteration, or revise the docstring to clarify the test scope.
+
+## Review Findings (2026-07-30 12:30)
+
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:43` — pub struct KanbanTool is a public type with non-empty representation but does not implement Debug — the validator rule requires all public types with non-empty representation to implement Debug. Add Debug to the derive macro: `#[derive(Debug, Default)]`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:133` — The `schema()` and `schema_full()` methods (lines 133–137 and 139–143, respectively) are near-verbatim duplicates. Both call `kanban_operations()` and pass it to a schema generation function, differing only in which function to call (`generate_kanban_mcp_schema` vs `generate_kanban_mcp_schema_full`). Extract a shared helper parameterized by the schema generator function. Extract a helper method `fn generate_schema(&self, full: bool) -> serde_json::Value` that conditionally calls the appropriate schema generator, or use a callback: `fn build_schema<F>(&self, generator: F) -> serde_json::Value where F: Fn(...) -> Value`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:184` — The MCP server handling block in `init()` (lines ~184–193) is near-verbatim with the same block in `deinit()` (lines ~276–285). Both check if `mcp_server` is injected, call a mirdan registration/unregistration function, check for errors via `applier_error()`, and extend results. They differ only in function names (`register_mcp_server` vs `unregister_mcp_server`) and error-handling strategy (early return vs push-and-continue). Extract a helper function parameterized by operation and error-handling mode. Extract a helper `apply_mcp_server_lifecycle(scope, name, reporter, register: bool, on_error: impl Fn()) -> Vec<InitResult>` that dispatches to the appropriate mirdan function and error strategy. Alternatively, pass a closure for the operation.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:207` — The `init()` method's scope-conditional block (lines 207–242) is near-verbatim with the same block in `deinit()` (lines 303–338). Both check the scope, get the current directory, handle errors, join `.kanban`, call a merge-driver function, emit events, and push results. They differ only in function names (`register_merge_drivers` vs `unregister_merge_drivers`) and string literals (verbs and messages). This should be extracted to a shared helper function parameterized by operation and strings. Extract a helper function `apply_merge_driver_lifecycle(scope, reporter, name, register: bool, verb: &str, operation_desc: &str) -> Vec<InitResult>` and call it from both `init()` and `deinit()`. Pass a closure or enum to dispatch between register and unregister operations.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:233` — Error message starts with capital letter — the rule requires error Display messages to be lowercase with no trailing punctuation. Change message to lowercase: `"failed to parse kanban operation: {}"`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:287` — The `is_task_modifying_operation` function uses a massive `matches!` statement enumerating 12 (verb, noun) pairs over a known, finite set (the operation enum variants). Each arm has identical logic (all return true). This is a perfect candidate for extracting to a constant set and checking membership, making the code more maintainable and emphasizing that this is data (a set of operation types to track) rather than control flow. Extract the 12 pairs to a constant set: `const TASK_MODIFYING_OPERATIONS: &[(Verb, Noun)] = &[(Verb::Add, Noun::Task), (Verb::Update, Noun::Task), …];` Then replace the matches! block with a single membership check: `TASK_MODIFYING_OPERATIONS.contains(&(verb, noun))`. This makes the enumeration of tracked operations explicit, declarative, and easy to extend without touching control flow.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:289` — Error message starts with capital letter — the rule requires error Display messages to be lowercase with no trailing punctuation. Change message to lowercase: `"cannot determine current directory"`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:296` — Error message starts with capital letter — the rule requires error Display messages to be lowercase with no trailing punctuation. Change message to lowercase: `"no .kanban directory found"`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:301` — Error message starts with capital letter — the rule requires error Display messages to be lowercase with no trailing punctuation. Change message to lowercase: `format!("failed to register merge drivers: {e}")`.
+- [x] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:341` — Error message starts with capital letter — the rule requires error Display messages to be lowercase with no trailing punctuation. Change message to lowercase: `format!("failed to remove merge drivers: {e}")`.

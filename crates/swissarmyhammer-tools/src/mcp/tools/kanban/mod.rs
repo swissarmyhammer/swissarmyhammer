@@ -16,10 +16,13 @@
 use crate::mcp::plan_notifications::{PlanEntry, PlanEntryPriority, PlanEntryStatus};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
+use mirdan::mcp_config::McpServerEntry;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use swissarmyhammer_common::lifecycle::{InitResult, InitScope};
+use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
 use swissarmyhammer_kanban::{
     parse::parse_input, task::ListTasks, Execute, KanbanContext, KanbanOperation, Noun, Verb,
 };
@@ -36,7 +39,7 @@ use swissarmyhammer_kanban::{
 const KANBAN_INIT_PRIORITY: i32 = 55;
 
 /// MCP tool for kanban board operations
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct KanbanTool {
     /// Optional MCP server entry the tool registers during `init`/`deinit`.
     ///
@@ -45,7 +48,7 @@ pub struct KanbanTool {
     /// server. The kanban CLI injects `Some((name, entry))` via
     /// [`KanbanTool::with_mcp_server`] so the install lifecycle registers the
     /// `kanban serve` command with each detected agent.
-    mcp_server: Option<(String, mirdan::mcp_config::McpServerEntry)>,
+    mcp_server: Option<(String, McpServerEntry)>,
 }
 
 impl KanbanTool {
@@ -65,11 +68,7 @@ impl KanbanTool {
     /// `init` writes `name → entry` into each scope's agent config (via
     /// mirdan), and `deinit` removes it. `new()`/`Default` leave it unset so
     /// the serve and sah paths are unaffected.
-    pub fn with_mcp_server(
-        mut self,
-        name: impl Into<String>,
-        entry: mirdan::mcp_config::McpServerEntry,
-    ) -> Self {
+    pub fn with_mcp_server(mut self, name: impl Into<String>, entry: McpServerEntry) -> Self {
         self.mcp_server = Some((name.into(), entry));
         self
     }
@@ -131,7 +130,7 @@ async fn build_plan_data(
     let tasks = match tasks_result {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!("Failed to list tasks for plan: {}", e);
+            tracing::warn!("failed to list tasks for plan: {}", e);
             return None;
         }
     };
@@ -179,25 +178,28 @@ async fn build_plan_data(
     Some(plan)
 }
 
+/// The `(verb, noun)` pairs whose execution changes the task list.
+///
+/// Comment mutations belong here too: a comment ack's top-level `id` is the
+/// owning TASK id, which is what feeds `affected_task_id`.
+const TASK_MODIFYING_OPERATIONS: &[(Verb, Noun)] = &[
+    (Verb::Add, Noun::Task),
+    (Verb::Update, Noun::Task),
+    (Verb::Delete, Noun::Task),
+    (Verb::Move, Noun::Task),
+    (Verb::Complete, Noun::Task),
+    (Verb::Assign, Noun::Task),
+    (Verb::Unassign, Noun::Task),
+    (Verb::Tag, Noun::Task),
+    (Verb::Untag, Noun::Task),
+    (Verb::Add, Noun::Comment),
+    (Verb::Update, Noun::Comment),
+    (Verb::Delete, Noun::Comment),
+];
+
 /// Check if an operation modifies tasks (and should trigger plan notification)
 fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
-    matches!(
-        (verb, noun),
-        (Verb::Add, Noun::Task)
-            | (Verb::Update, Noun::Task)
-            | (Verb::Delete, Noun::Task)
-            | (Verb::Move, Noun::Task)
-            | (Verb::Complete, Noun::Task)
-            | (Verb::Assign, Noun::Task)
-            | (Verb::Unassign, Noun::Task)
-            | (Verb::Tag, Noun::Task)
-            | (Verb::Untag, Noun::Task)
-            // Comment mutations are task mutations: their ack's top-level
-            // `id` is the owning TASK id, which feeds `affected_task_id`.
-            | (Verb::Add, Noun::Comment)
-            | (Verb::Update, Noun::Comment)
-            | (Verb::Delete, Noun::Comment)
-    )
+    TASK_MODIFYING_OPERATIONS.contains(&(verb, noun))
 }
 
 // No special health checks; inherits the default OK check.
@@ -225,8 +227,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
     /// MCP registration (when an entry is injected) is relevant in every
     /// scope; the merge-driver step is gated to Project|Local inside
     /// `init`/`deinit` because a User-scope install has no project dir.
-    fn is_applicable(&self, scope: &swissarmyhammer_common::lifecycle::InitScope) -> bool {
-        use swissarmyhammer_common::lifecycle::InitScope;
+    fn is_applicable(&self, scope: &InitScope) -> bool {
         matches!(
             scope,
             InitScope::User | InitScope::Local | InitScope::Project
@@ -245,61 +246,8 @@ impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
     ///
     /// Kanban is not a shell, so unlike `ShellExecuteTool` it does NOT deny the
     /// `Bash` tool.
-    fn init(
-        &self,
-        scope: &swissarmyhammer_common::lifecycle::InitScope,
-        reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
-    ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
-        use swissarmyhammer_common::lifecycle::{InitResult, InitScope, Initializable};
-        use swissarmyhammer_common::reporter::InitEvent;
-        let name = Initializable::name(self);
-        let mut results = Vec::new();
-
-        if let Some((server_name, entry)) = &self.mcp_server {
-            let mcp = mirdan::install::register_mcp_server(*scope, server_name, entry, reporter);
-            if let Some(err) = applier_error(&mcp) {
-                return vec![InitResult::error(name, err)];
-            }
-            results.extend(mcp);
-        }
-
-        if matches!(scope, InitScope::Project | InitScope::Local) {
-            let cwd = match std::env::current_dir() {
-                Ok(d) => d,
-                Err(_) => {
-                    results.push(InitResult::skipped(
-                        name,
-                        "Cannot determine current directory",
-                    ));
-                    return results;
-                }
-            };
-
-            let kanban_dir = cwd.join(".kanban");
-            if !kanban_dir.exists() {
-                results.push(InitResult::skipped(name, "No .kanban directory found"));
-                return results;
-            }
-
-            if let Err(e) = swissarmyhammer_kanban::board::register_merge_drivers(&kanban_dir) {
-                results.push(InitResult::error(
-                    name,
-                    format!("Failed to register merge drivers: {e}"),
-                ));
-                return results;
-            }
-
-            reporter.emit(&InitEvent::Action {
-                verb: "Configured".to_string(),
-                message: "kanban merge drivers".to_string(),
-            });
-            results.push(InitResult::ok(name, "Kanban merge drivers registered"));
-        }
-
-        if results.is_empty() {
-            results.push(InitResult::ok(name, "Kanban tool initialized"));
-        }
-        results
+    fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        self.run_lifecycle(&INIT_SPEC, scope, reporter)
     }
 
     /// Deinitialize the kanban tool, mirroring [`Self::init`] by delegating to
@@ -307,63 +255,150 @@ impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
     /// 1. Unregister the MCP server entry via
     ///    [`mirdan::install::unregister_mcp_server`] (if one was injected).
     /// 2. Remove `.kanban/` git merge drivers — only for Project and Local.
-    fn deinit(
+    fn deinit(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        self.run_lifecycle(&DEINIT_SPEC, scope, reporter)
+    }
+}
+
+/// Signature shared by the two mirdan MCP server appliers.
+type McpServerApplier = fn(InitScope, &str, &McpServerEntry, &dyn InitReporter) -> Vec<InitResult>;
+
+/// Signature shared by the two `.kanban/` merge-driver appliers.
+type MergeDriverApplier = fn(&Path) -> Result<(), std::io::Error>;
+
+/// Everything that differs between the kanban tool's `init` and `deinit`.
+///
+/// Both directions run the same two steps — MCP server registration and
+/// `.kanban/` git merge drivers — pointing opposite ways. The steps live once
+/// in [`KanbanTool::run_lifecycle`]; this table supplies the direction.
+struct LifecycleSpec {
+    /// Applies the mirdan MCP server change for this direction.
+    apply_mcp_server: McpServerApplier,
+    /// Whether an MCP applier error abandons the steps that follow.
+    ///
+    /// Install stops, so a half-configured agent is not left behind. Teardown
+    /// carries on, so it strips as much as it can still reach.
+    abort_on_mcp_error: bool,
+    /// Adds or removes the `.kanban/` git merge drivers.
+    apply_merge_drivers: MergeDriverApplier,
+    /// Prefix for the error reported when `apply_merge_drivers` fails.
+    merge_driver_failure: &'static str,
+    /// Reporter verb for the merge-driver action.
+    merge_driver_verb: &'static str,
+    /// Reporter message for the merge-driver action.
+    merge_driver_action: &'static str,
+    /// Result message when the merge-driver step succeeds.
+    merge_driver_ok: &'static str,
+    /// Result message when no step had anything to report.
+    nothing_to_do: &'static str,
+}
+
+/// Adapts [`mirdan::install::unregister_mcp_server`] to [`McpServerApplier`].
+///
+/// Removal needs only the server name, so the entry is ignored. The adapter
+/// lets both directions sit in one [`LifecycleSpec`] field.
+fn unregister_mcp_server_entry(
+    scope: InitScope,
+    server_name: &str,
+    _entry: &McpServerEntry,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    mirdan::install::unregister_mcp_server(scope, server_name, reporter)
+}
+
+/// Install direction: register the MCP server, add the merge drivers.
+const INIT_SPEC: LifecycleSpec = LifecycleSpec {
+    apply_mcp_server: mirdan::install::register_mcp_server,
+    abort_on_mcp_error: true,
+    apply_merge_drivers: swissarmyhammer_kanban::board::register_merge_drivers,
+    merge_driver_failure: "failed to register merge drivers",
+    merge_driver_verb: "Configured",
+    merge_driver_action: "kanban merge drivers",
+    merge_driver_ok: "Kanban merge drivers registered",
+    nothing_to_do: "Kanban tool initialized",
+};
+
+/// Teardown direction: unregister the MCP server, remove the merge drivers.
+const DEINIT_SPEC: LifecycleSpec = LifecycleSpec {
+    apply_mcp_server: unregister_mcp_server_entry,
+    abort_on_mcp_error: false,
+    apply_merge_drivers: swissarmyhammer_kanban::board::unregister_merge_drivers,
+    merge_driver_failure: "failed to remove merge drivers",
+    merge_driver_verb: "Removed",
+    merge_driver_action: "kanban merge driver configuration",
+    merge_driver_ok: "Kanban merge drivers removed",
+    nothing_to_do: "Kanban tool deinitialized",
+};
+
+impl KanbanTool {
+    /// Run one direction of the install lifecycle.
+    ///
+    /// `init` and `deinit` are the same two steps pointing opposite ways, so
+    /// both delegate here and `spec` names the direction. Returns one
+    /// [`InitResult`] per step that ran, or a single fallback result when the
+    /// scope left every step with nothing to do.
+    fn run_lifecycle(
         &self,
-        scope: &swissarmyhammer_common::lifecycle::InitScope,
-        reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
-    ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
-        use swissarmyhammer_common::lifecycle::{InitResult, InitScope, Initializable};
-        use swissarmyhammer_common::reporter::InitEvent;
+        spec: &LifecycleSpec,
+        scope: &InitScope,
+        reporter: &dyn InitReporter,
+    ) -> Vec<InitResult> {
+        use swissarmyhammer_common::lifecycle::Initializable;
         let name = Initializable::name(self);
         let mut results = Vec::new();
 
-        if let Some((server_name, _entry)) = &self.mcp_server {
-            let mcp = mirdan::install::unregister_mcp_server(*scope, server_name, reporter);
-            if let Some(err) = applier_error(&mcp) {
-                results.push(InitResult::error(name, err));
-            } else {
-                results.extend(mcp);
+        if let Some((server_name, entry)) = &self.mcp_server {
+            let mcp = (spec.apply_mcp_server)(*scope, server_name, entry, reporter);
+            match applier_error(&mcp) {
+                Some(err) => {
+                    results.push(InitResult::error(name, err));
+                    if spec.abort_on_mcp_error {
+                        return results;
+                    }
+                }
+                None => results.extend(mcp),
             }
         }
 
+        // A User-scope install has no project dir, so it has no board.
         if matches!(scope, InitScope::Project | InitScope::Local) {
-            let cwd = match std::env::current_dir() {
-                Ok(d) => d,
-                Err(_) => {
-                    results.push(InitResult::skipped(
-                        name,
-                        "Cannot determine current directory",
-                    ));
-                    return results;
-                }
-            };
-
-            let kanban_dir = cwd.join(".kanban");
-            if !kanban_dir.exists() {
-                results.push(InitResult::skipped(name, "No .kanban directory found"));
-                return results;
-            }
-
-            if let Err(e) = swissarmyhammer_kanban::board::unregister_merge_drivers(&kanban_dir) {
-                results.push(InitResult::error(
-                    name,
-                    format!("Failed to remove merge drivers: {e}"),
-                ));
-                return results;
-            }
-
-            reporter.emit(&InitEvent::Action {
-                verb: "Removed".to_string(),
-                message: "kanban merge driver configuration".to_string(),
-            });
-            results.push(InitResult::ok(name, "Kanban merge drivers removed"));
+            results.push(merge_driver_result(spec, name, reporter));
         }
 
         if results.is_empty() {
-            results.push(InitResult::ok(name, "Kanban tool deinitialized"));
+            results.push(InitResult::ok(name, spec.nothing_to_do));
         }
         results
     }
+}
+
+/// Add or remove the git merge drivers for the board in the current directory.
+///
+/// Reports a skip — not an error — when there is no board to act on, so a
+/// project that never ran `init board` still installs cleanly.
+fn merge_driver_result(
+    spec: &LifecycleSpec,
+    name: &str,
+    reporter: &dyn InitReporter,
+) -> InitResult {
+    let Ok(cwd) = std::env::current_dir() else {
+        return InitResult::skipped(name, "cannot determine current directory");
+    };
+
+    let kanban_dir = cwd.join(".kanban");
+    if !kanban_dir.exists() {
+        return InitResult::skipped(name, "no .kanban directory found");
+    }
+
+    if let Err(e) = (spec.apply_merge_drivers)(&kanban_dir) {
+        return InitResult::error(name, format!("{}: {e}", spec.merge_driver_failure));
+    }
+
+    reporter.emit(&InitEvent::Action {
+        verb: spec.merge_driver_verb.to_string(),
+        message: spec.merge_driver_action.to_string(),
+    });
+    InitResult::ok(name, spec.merge_driver_ok)
 }
 
 /// Collect the first error message from an applier's results, if any.
@@ -371,7 +406,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
 /// The mirdan appliers return one [`InitResult`] per aggregate; surface an
 /// error so the tool's `init`/`deinit` can abort like the merge-driver step
 /// does. Mirrors the helper of the same name in the shell tool.
-fn applier_error(results: &[swissarmyhammer_common::lifecycle::InitResult]) -> Option<String> {
+fn applier_error(results: &[InitResult]) -> Option<String> {
     use swissarmyhammer_common::lifecycle::InitStatus;
     results
         .iter()
@@ -390,13 +425,11 @@ impl McpTool for KanbanTool {
     }
 
     fn schema(&self) -> serde_json::Value {
-        let ops = swissarmyhammer_kanban::schema::kanban_operations();
-        swissarmyhammer_kanban::schema::generate_kanban_mcp_schema(ops)
+        build_schema(swissarmyhammer_kanban::schema::generate_kanban_mcp_schema)
     }
 
     fn schema_full(&self) -> serde_json::Value {
-        let ops = swissarmyhammer_kanban::schema::kanban_operations();
-        swissarmyhammer_kanban::schema::generate_kanban_mcp_schema_full(ops)
+        build_schema(swissarmyhammer_kanban::schema::generate_kanban_mcp_schema_full)
     }
 
     fn operations(&self) -> &'static [&'static dyn swissarmyhammer_operations::Operation] {
@@ -428,7 +461,7 @@ impl McpTool for KanbanTool {
         // Parse the input to get operations
         let input = Value::Object(arguments);
         let operations = parse_input(input).map_err(|e| {
-            McpError::invalid_params(format!("Failed to parse kanban operation: {}", e), None)
+            McpError::invalid_params(format!("failed to parse kanban operation: {}", e), None)
         })?;
 
         // Execute each operation and collect results
@@ -487,6 +520,17 @@ impl McpTool for KanbanTool {
             serde_json::to_string_pretty(&response).unwrap_or_else(|_| response.to_string()),
         ))
     }
+}
+
+/// Build a kanban MCP schema from the crate's single operation roster.
+///
+/// `generate` picks the shape: the compact schema the tool advertises, or the
+/// full one. Both read the same roster, so the two can never disagree about
+/// which operations exist.
+fn build_schema(
+    generate: fn(&[&dyn swissarmyhammer_operations::Operation]) -> serde_json::Value,
+) -> serde_json::Value {
+    generate(swissarmyhammer_kanban::schema::kanban_operations())
 }
 
 /// Execute a single kanban operation.
@@ -3036,5 +3080,105 @@ mod tests {
             !results.is_empty(),
             "init should report at least the merge-driver result"
         );
+    }
+
+    /// An MCP applier error stops `init` but not `deinit`.
+    ///
+    /// This is the one place the two directions genuinely disagree, carried by
+    /// [`LifecycleSpec::abort_on_mcp_error`]. Install must abandon the
+    /// merge-driver step so a half-configured agent is not left behind;
+    /// teardown must carry on so it strips as much as it can still reach.
+    ///
+    /// An unparseable `MIRDAN_AGENTS_CONFIG` is the deterministic way to make
+    /// the applier fail: per-agent failures only warn, but a config that will
+    /// not load short-circuits to an error `InitResult`.
+    #[tokio::test]
+    #[serial(cwd, env)]
+    async fn test_mcp_applier_error_aborts_init_but_not_deinit() {
+        use swissarmyhammer_common::lifecycle::InitStatus;
+
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let home = env.home_path();
+        let project = home.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let _cwd = CurrentDirGuard::new(&project).expect("chdir into project");
+
+        let bad_config = project.join("broken-agents.yaml");
+        std::fs::write(&bad_config, "agents:\n  - id: [unclosed\n").expect("write broken config");
+        let _mirdan = MirdanConfigGuard::set(&bad_config);
+
+        // A board exists, so the merge-driver step has a result to contribute
+        // whenever it is reached.
+        std::fs::create_dir_all(project.join(".kanban")).unwrap();
+
+        let tool = tool_with_kanban_server();
+        let reporter = NullReporter;
+
+        let init = Initializable::init(&tool, &InitScope::Project, &reporter);
+        assert_eq!(
+            init.len(),
+            1,
+            "init must abort on an MCP applier error, reporting only that error: {init:?}"
+        );
+        assert_eq!(init[0].status, InitStatus::Error);
+
+        let deinit = Initializable::deinit(&tool, &InitScope::Project, &reporter);
+        assert_eq!(
+            deinit.len(),
+            2,
+            "deinit must carry on to the merge-driver step after an MCP applier error: {deinit:?}"
+        );
+        assert_eq!(deinit[0].status, InitStatus::Error);
+        assert_ne!(
+            deinit[1].status,
+            InitStatus::Error,
+            "the merge-driver step should have run and succeeded"
+        );
+    }
+
+    /// Project scope with no `.kanban/` board: both directions report the
+    /// merge-driver step as a SKIP, not an error, so a project that never ran
+    /// `init board` still installs and uninstalls cleanly. Also pins the
+    /// lowercase, unpunctuated wording the error-message rule requires.
+    #[tokio::test]
+    #[serial(cwd, env)]
+    async fn test_tool_lifecycle_no_board_skips_merge_drivers() {
+        use swissarmyhammer_common::lifecycle::InitStatus;
+
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let home = env.home_path();
+        let project = home.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let _cwd = CurrentDirGuard::new(&project).expect("chdir into project");
+
+        // sah path: no MCP entry, so the merge-driver step is the only step.
+        let tool = KanbanTool::new();
+        let reporter = NullReporter;
+
+        for (direction, results) in [
+            (
+                "init",
+                Initializable::init(&tool, &InitScope::Project, &reporter),
+            ),
+            (
+                "deinit",
+                Initializable::deinit(&tool, &InitScope::Project, &reporter),
+            ),
+        ] {
+            assert_eq!(
+                results.len(),
+                1,
+                "{direction} should report exactly the merge-driver result"
+            );
+            assert_eq!(
+                results[0].status,
+                InitStatus::Skipped,
+                "{direction} should skip, not fail, with no board present"
+            );
+            assert_eq!(
+                results[0].message, "no .kanban directory found",
+                "{direction} skip message"
+            );
+        }
     }
 }
