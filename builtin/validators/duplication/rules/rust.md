@@ -22,6 +22,14 @@ duplication — do not flag them:
 - **Macro expansions**: code produced by `macro_rules!` or proc macros — if the
   expansion repeats, the macro is the single source; there is nothing to
   extract.
+- **Generic dispatch over a fixed set of distinct types** — a generic function
+  monomorphized per concrete type (e.g. `fn register<T: SomeTrait>(...)`),
+  called once per type in a small, closed set, where each call's body differs
+  because the underlying types genuinely differ rather than from copy-paste.
+  Rust resolves generics at compile time — there is no way to iterate the set
+  of types and make one call, so one call site per type is the only shape the
+  language allows. Do not flag this unless a further shared abstraction would
+  strictly reduce the code (not just relocate it) and preserve locality.
 
 The test: does the repeated block contain logic that could drift out of sync?
 A one-line delegation to a shared function cannot drift. Flag the copies only
