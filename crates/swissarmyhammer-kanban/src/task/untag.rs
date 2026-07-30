@@ -1,8 +1,8 @@
 //! UntagTask command — removes `#tag` from task description
 
 use crate::context::KanbanContext;
-use crate::error::{KanbanError, Result};
-use crate::task::tags::{apply_tag_refs, TagApply};
+use crate::error::KanbanError;
+use crate::task::tags::{apply_one_tag_ref, TagApply};
 use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,6 +28,7 @@ pub struct UntagTask {
 }
 
 impl UntagTask {
+    /// Create a new UntagTask command for the given task and tag reference.
     pub fn new(id: impl Into<TaskId>, tag: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -39,24 +40,9 @@ impl UntagTask {
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for UntagTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
-        let result: Result<Value> = async {
-            let ectx = ctx.entity_context().await?;
-            let mut entity = ectx.read("task", self.id.as_str()).await?;
-
-            // Same resolver as `tag task`, inverse application: strip `#slug`
-            // from the body.
-            let refs = std::slice::from_ref(&self.tag);
-            if apply_tag_refs(&ectx, &mut entity, refs, TagApply::Remove).await? {
-                ectx.write(&entity).await?;
-            }
-
-            // Thin ack — success implies the tag is gone (idempotent);
-            // `get task` is the escape hatch for the post-op tag list.
-            Ok(crate::task_helpers::task_mutation_ack(&entity))
-        }
-        .await;
-
-        match result {
+        // Same shared path as `tag task`, inverse mode: strip `#slug` from the
+        // body instead of appending it.
+        match apply_one_tag_ref(ctx, self.id.as_str(), &self.tag, TagApply::Remove).await {
             Ok(value) => ExecutionResult::Success { value },
             Err(error) => ExecutionResult::Failed { error },
         }

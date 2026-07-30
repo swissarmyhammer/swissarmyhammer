@@ -2,8 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::task::shared::auto_create_body_tags;
-use crate::task::tags::{apply_tag_refs, TagApply};
+use crate::task::tags::{apply_one_tag_ref, TagApply};
 use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,6 +26,7 @@ pub struct TagTask {
 }
 
 impl TagTask {
+    /// Create a new TagTask command for the given task and tag reference.
     pub fn new(id: impl Into<TaskId>, tag: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -38,26 +38,10 @@ impl TagTask {
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for TagTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
-        let result: std::result::Result<Value, KanbanError> = async {
-            let ectx = ctx.entity_context().await?;
-            let mut entity = ectx.read("task", self.id.as_str()).await?;
-
-            // One shared path with `add task`/`update task`: resolve the ref,
-            // append `#slug` to the body, then let the auto-create pass mint
-            // the Tag entity if this name is new.
-            let refs = std::slice::from_ref(&self.tag);
-            if apply_tag_refs(&ectx, &mut entity, refs, TagApply::Append).await? {
-                ectx.write(&entity).await?;
-            }
-            auto_create_body_tags(&ectx, &entity).await?;
-
-            // Thin ack — success implies the tag took effect; `get task` is
-            // the escape hatch for the post-op tag list.
-            Ok(crate::task_helpers::task_mutation_ack(&entity))
-        }
-        .await;
-
-        match result {
+        // One shared path with `untag task` and with `add task`/`update task`:
+        // resolve the ref, append `#slug` to the body, mint the Tag entity if
+        // this name is new. Only the mode differs from `untag task`.
+        match apply_one_tag_ref(ctx, self.id.as_str(), &self.tag, TagApply::Append).await {
             Ok(value) => ExecutionResult::Success { value },
             Err(error) => ExecutionResult::Failed { error },
         }

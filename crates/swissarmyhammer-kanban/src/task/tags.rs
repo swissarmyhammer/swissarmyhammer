@@ -7,14 +7,19 @@
 //! tag reference means exactly the same thing on every one of them and the
 //! plural form can never drift from the singular one.
 //!
-//! Creating the `Tag` entity for a name that does not exist yet is not done
-//! here: every caller already runs `shared::auto_create_body_tags` after its
-//! write, which mints a `Tag` with an auto-color for each `#tag` in the body.
+//! Creating the `Tag` entity for a name that does not exist yet is a separate
+//! pass: `shared::auto_create_body_tags` mints a `Tag` with an auto-color for
+//! each `#tag` in the written body. [`apply_tag_refs`] leaves that to its
+//! caller, because the caller owns the write; the single-ref front door
+//! [`apply_one_tag_ref`] owns both.
 
+use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::tag_parser;
+use crate::task::shared::auto_create_body_tags;
+use crate::task_helpers::task_mutation_ack;
 use crate::types::{short_id, SHORT_ID_LEN};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use swissarmyhammer_entity::{Entity, EntityContext};
 
@@ -70,6 +75,38 @@ pub(crate) async fn apply_tag_refs(
     }
     entity.set("body", json!(new_body));
     Ok(true)
+}
+
+/// Apply one forgiving tag ref to a task and return the thin mutation ack.
+///
+/// The whole body of `tag task` and `untag task`: they differ only in `mode`,
+/// so they share this one function rather than carrying near-identical copies
+/// that can drift apart.
+///
+/// Reads the task, routes the ref through [`apply_tag_refs`], writes only when
+/// the body actually changed, and mints the `Tag` entity for any name that is
+/// new. Minting is skipped for [`TagApply::Remove`], which can never introduce
+/// a name.
+pub(crate) async fn apply_one_tag_ref(
+    ctx: &KanbanContext,
+    task_id: &str,
+    tag_ref: &str,
+    mode: TagApply,
+) -> Result<Value> {
+    let ectx = ctx.entity_context().await?;
+    let mut entity = ectx.read("task", task_id).await?;
+
+    let refs = [tag_ref.to_string()];
+    if apply_tag_refs(&ectx, &mut entity, &refs, mode).await? {
+        ectx.write(&entity).await?;
+    }
+    if mode != TagApply::Remove {
+        auto_create_body_tags(&ectx, &entity).await?;
+    }
+
+    // Thin ack — success implies the tag took effect; `get task` is the escape
+    // hatch for the post-op tag list.
+    Ok(task_mutation_ack(&entity))
 }
 
 /// Rewrite a body so its `#tag` markers match `slugs` under `mode`.
@@ -273,7 +310,17 @@ mod tests {
         let tags = board_tags();
         let short = short_id(BUG_ID);
         assert_eq!(resolve_tag_ref(&tags, &short).unwrap(), "bug");
+        // `tag_by_short_id` lowercases both sides, so an uppercase short id —
+        // the form a caller copies straight out of a ULID — resolves too.
+        assert_eq!(
+            resolve_tag_ref(&tags, &short.to_uppercase()).unwrap(),
+            "bug"
+        );
         assert_eq!(resolve_tag_ref(&tags, &format!("^{short}")).unwrap(), "bug");
+        assert_eq!(
+            resolve_tag_ref(&tags, &format!("^{}", short.to_uppercase())).unwrap(),
+            "bug"
+        );
         assert_eq!(
             resolve_tag_ref(&tags, &format!("^{BUG_ID}")).unwrap(),
             "bug"

@@ -7,96 +7,15 @@
 //! The parser skips code blocks and inline code.
 
 use std::collections::BTreeSet;
+use std::ops::Range;
 
-/// Extract unique tag slugs (names) from markdown text.
+/// Whether a line opens or closes a fenced code block.
 ///
-/// Returns a deduplicated, sorted list of tag name strings (without the `#` prefix).
-/// Skips tags inside fenced code blocks and inline code spans.
-pub fn parse_tags(text: &str) -> Vec<String> {
-    let mut tags = BTreeSet::new();
-    let mut in_fenced_block = false;
-
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-
-        // Toggle fenced code blocks (``` or ~~~)
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_fenced_block = !in_fenced_block;
-            continue;
-        }
-        if in_fenced_block {
-            continue;
-        }
-
-        // Skip headings (lines starting with #)
-        if trimmed.starts_with('#') && trimmed.chars().nth(1).is_none_or(|c| c == '#' || c == ' ') {
-            continue;
-        }
-
-        // Parse inline, skipping backtick spans
-        let bytes = line.as_bytes();
-        let len = bytes.len();
-        let mut i = 0;
-
-        while i < len {
-            // Skip inline code
-            if bytes[i] == b'`' {
-                i += 1;
-                while i < len && bytes[i] != b'`' {
-                    i += 1;
-                }
-                if i < len {
-                    i += 1; // skip closing backtick
-                }
-                continue;
-            }
-
-            // Match #tag — a slug of [A-Za-z0-9-], requiring an alphanumeric first char
-            if bytes[i] == b'#' {
-                // Must be start of line or preceded by whitespace/punctuation (not alphanumeric/underscore)
-                let preceded_ok =
-                    i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_');
-                // The char right after # must be alphanumeric, else it is not a tag
-                // (rejects "#[", "#(", "#!", and leading-hyphen "#-x").
-                let first_ok = i + 1 < len && bytes[i + 1].is_ascii_alphanumeric();
-                if preceded_ok && first_ok {
-                    let start = i + 1;
-                    let mut end = start;
-                    // Slug runs over [A-Za-z0-9-]; stop at the first char outside it,
-                    // which naturally trims trailing punctuation ("#bug," -> "bug").
-                    while end < len && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-') {
-                        end += 1;
-                    }
-                    if end > start {
-                        let slug = &line[start..end];
-                        tags.insert(slug.to_string());
-                        i = end;
-                        continue;
-                    }
-                }
-            }
-
-            i += 1;
-        }
-    }
-
-    tags.into_iter().collect()
-}
-
-/// Whether a `#slug` match that ends at byte `after` really ends there.
-///
-/// [`parse_tags`] runs a slug over `[A-Za-z0-9-]` and stops at the first
-/// character outside that set, so `#bug,` is the tag `bug`. Every writer
-/// ([`remove_tag`], [`rename_tag`]) must end its match by the same rule, or a
-/// marker sitting next to punctuation reads as a tag but cannot be edited.
-fn slug_ends_at(bytes: &[u8], after: usize) -> bool {
-    after >= bytes.len() || !(bytes[after].is_ascii_alphanumeric() || bytes[after] == b'-')
-}
-
-/// Whether a `#slug` match starting at byte `i` is preceded by a slug
-/// character, which would make it part of a longer word rather than a marker.
-fn slug_starts_at(bytes: &[u8], i: usize) -> bool {
-    i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_')
+/// `trimmed` is the line with leading whitespace removed. This is the only
+/// place the fence markers are written down, so the reader and the writers can
+/// never disagree about where a code block starts.
+fn is_fence_line(trimmed: &str) -> bool {
+    trimmed.starts_with("```") || trimmed.starts_with("~~~")
 }
 
 /// Whether a line is a markdown heading, which [`parse_tags`] skips whole.
@@ -106,6 +25,108 @@ fn slug_starts_at(bytes: &[u8], i: usize) -> bool {
 fn is_heading_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     trimmed.starts_with('#') && trimmed.chars().nth(1).is_none_or(|c| c == '#' || c == ' ')
+}
+
+/// Walk the lines of `text`, flagging the ones that can carry tags.
+///
+/// Yields every line in order, paired with whether a `#word` on it counts as a
+/// tag. Fence lines, lines inside a fenced block, and headings are `false`:
+/// [`parse_tags`] ignores them, so the writers copy them verbatim. This is the
+/// one markdown state machine behind the reader and both writers.
+///
+/// The iterator carries the fenced-block state, so **consume it in full**. A
+/// caller that stops early (`take`, `find`, `any`) never runs the fence toggle
+/// for the lines it skipped, and every later line it does read gets the wrong
+/// `tag_bearing` flag.
+fn markdown_lines(text: &str) -> impl Iterator<Item = (&str, bool)> {
+    let mut in_fenced_block = false;
+    text.lines().map(move |line| {
+        let trimmed = line.trim_start();
+        if is_fence_line(trimmed) {
+            in_fenced_block = !in_fenced_block;
+            return (line, false);
+        }
+        (line, !in_fenced_block && !is_heading_line(line))
+    })
+}
+
+/// Advance past the inline code span that opens at the backtick at byte `i`.
+///
+/// Returns the byte index just past the closing backtick, or the end of the
+/// line when the span never closes. A backtick never appears inside a
+/// multi-byte UTF-8 sequence, so the result is always a character boundary and
+/// the skipped slice can be copied whole.
+fn skip_inline_code(bytes: &[u8], i: usize) -> usize {
+    let mut end = i + 1;
+    while end < bytes.len() && bytes[end] != b'`' {
+        end += 1;
+    }
+    (end + 1).min(bytes.len())
+}
+
+/// The byte range of the slug of a `#tag` marker starting at byte `i`.
+///
+/// `None` when no marker starts there: the byte is not `#`, the `#` is glued to
+/// the end of a word, or the character right after it is not ASCII alphanumeric
+/// — which rejects `#[`, `#(`, `#!`, and the leading hyphen in `#-x`.
+///
+/// The slug runs over `[A-Za-z0-9-]` and ends at the first character outside
+/// that set, so `#bug,` is the tag `bug`. This is the module's only boundary
+/// rule: the reader and both writers call it, so a marker next to punctuation
+/// can never read as a tag that cannot be edited. A consequence for the
+/// writers: text the reader does not count as a tag — `#v2.0` reads as `v2` —
+/// is never edited under the full literal.
+///
+/// # Panics
+///
+/// `i` must be a valid index into `bytes`.
+fn tag_slug_at(bytes: &[u8], i: usize) -> Option<Range<usize>> {
+    let glued_to_a_word = i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+    if bytes[i] != b'#' || glued_to_a_word {
+        return None;
+    }
+    let start = i + 1;
+    if start >= bytes.len() || !bytes[start].is_ascii_alphanumeric() {
+        return None;
+    }
+    let mut end = start;
+    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-') {
+        end += 1;
+    }
+    Some(start..end)
+}
+
+/// Extract unique tag slugs (names) from markdown text.
+///
+/// Returns a deduplicated, sorted list of tag name strings (without the `#` prefix).
+/// Skips tags inside fenced code blocks and inline code spans.
+pub fn parse_tags(text: &str) -> Vec<String> {
+    let mut tags = BTreeSet::new();
+    for (line, tag_bearing) in markdown_lines(text) {
+        if tag_bearing {
+            collect_line_tags(line, &mut tags);
+        }
+    }
+    tags.into_iter().collect()
+}
+
+/// Collect the tag slugs of one tag-bearing line, skipping inline code spans.
+fn collect_line_tags(line: &str, tags: &mut BTreeSet<String>) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'`' {
+            i = skip_inline_code(bytes, i);
+            continue;
+        }
+        match tag_slug_at(bytes, i) {
+            Some(slug) => {
+                tags.insert(line[slug.clone()].to_string());
+                i = slug.end;
+            }
+            None => i += 1,
+        }
+    }
 }
 
 /// Append `#tag` to the end of description text.
@@ -149,150 +170,74 @@ pub fn append_tag(text: &str, slug: &str) -> String {
 ///
 /// Cleans up surrounding whitespace so no double-spaces remain.
 pub fn remove_tag(text: &str, slug: &str) -> String {
-    let pattern = format!("#{}", slug);
-    let mut result = String::with_capacity(text.len());
-    let mut in_fenced_block = false;
-    let mut first_line = true;
-
-    for line in text.lines() {
-        if !first_line {
-            result.push('\n');
-        }
-        first_line = false;
-
-        let trimmed = line.trim_start();
-
-        // Toggle fenced code blocks
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_fenced_block = !in_fenced_block;
-            result.push_str(line);
-            continue;
-        }
-        if in_fenced_block || is_heading_line(line) {
-            result.push_str(line);
-            continue;
-        }
-
-        // Process line, removing the tag pattern
-        let bytes = line.as_bytes();
-        let len = bytes.len();
-        let mut i = 0;
-
-        while i < len {
-            // Skip inline code
-            if bytes[i] == b'`' {
-                result.push('`');
-                i += 1;
-                while i < len && bytes[i] != b'`' {
-                    let ch = line[i..].chars().next().unwrap();
-                    result.push(ch);
-                    i += ch.len_utf8();
-                }
-                if i < len {
-                    result.push('`');
-                    i += 1;
-                }
-                continue;
-            }
-
-            // Check for #tag pattern
-            if bytes[i] == b'#' && slug_starts_at(bytes, i) && line[i..].starts_with(&pattern) {
-                let after = i + pattern.len();
-                if slug_ends_at(bytes, after) {
-                    // Absorb one space so the prose does not keep a hole. The
-                    // space after the marker goes when there is one; a marker
-                    // touching punctuation ("#bug,") has none, so the space in
-                    // front of it goes instead.
-                    i = after;
-                    if i < len && bytes[i] == b' ' {
-                        i += 1;
-                    } else if result.ends_with(' ') {
-                        result.pop();
-                    }
-                    continue;
-                }
-            }
-
-            let ch = line[i..].chars().next().unwrap();
-            result.push(ch);
-            i += ch.len_utf8();
-        }
-    }
-
-    // Clean up trailing whitespace on each line
-    result
+    edit_tag_markers(text, slug, None)
         .lines()
-        .map(|l| l.trim_end())
+        .map(str::trim_end)
         .collect::<Vec<_>>()
         .join("\n")
 }
 
 /// Rename all occurrences of `#old` to `#new` in text.
 pub fn rename_tag(text: &str, old_slug: &str, new_slug: &str) -> String {
-    let old_pattern = format!("#{}", old_slug);
-    let new_pattern = format!("#{}", new_slug);
-    let mut result = String::with_capacity(text.len());
-    let mut in_fenced_block = false;
-    let mut first_line = true;
+    edit_tag_markers(text, old_slug, Some(&format!("#{new_slug}")))
+}
 
-    for line in text.lines() {
-        if !first_line {
+/// Rewrite every `#slug` marker in `text`.
+///
+/// `replacement` is what goes in the marker's place: `Some("#new")` renames,
+/// `None` removes. One writer, so [`remove_tag`] and [`rename_tag`] share the
+/// markdown state machine ([`markdown_lines`]) and the boundary rule
+/// ([`tag_slug_at`]) with [`parse_tags`] — whatever the reader counts as a tag,
+/// the writers can always edit.
+fn edit_tag_markers(text: &str, slug: &str, replacement: Option<&str>) -> String {
+    let mut result = String::with_capacity(text.len());
+    for (index, (line, tag_bearing)) in markdown_lines(text).enumerate() {
+        if index > 0 {
             result.push('\n');
         }
-        first_line = false;
-
-        let trimmed = line.trim_start();
-
-        // Toggle fenced code blocks
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_fenced_block = !in_fenced_block;
+        if tag_bearing {
+            edit_line_markers(line, slug, replacement, &mut result);
+        } else {
             result.push_str(line);
-            continue;
-        }
-        if in_fenced_block || is_heading_line(line) {
-            result.push_str(line);
-            continue;
-        }
-
-        // Process line, replacing old tag with new
-        let bytes = line.as_bytes();
-        let len = bytes.len();
-        let mut i = 0;
-
-        while i < len {
-            // Skip inline code
-            if bytes[i] == b'`' {
-                result.push('`');
-                i += 1;
-                while i < len && bytes[i] != b'`' {
-                    let ch = line[i..].chars().next().unwrap();
-                    result.push(ch);
-                    i += ch.len_utf8();
-                }
-                if i < len {
-                    result.push('`');
-                    i += 1;
-                }
-                continue;
-            }
-
-            // Check for #old pattern
-            if bytes[i] == b'#' && slug_starts_at(bytes, i) && line[i..].starts_with(&old_pattern) {
-                let after = i + old_pattern.len();
-                if slug_ends_at(bytes, after) {
-                    result.push_str(&new_pattern);
-                    i = after;
-                    continue;
-                }
-            }
-
-            let ch = line[i..].chars().next().unwrap();
-            result.push(ch);
-            i += ch.len_utf8();
         }
     }
-
     result
+}
+
+/// Rewrite the `#slug` markers of one tag-bearing line into `out`.
+///
+/// Inline code spans are copied through untouched, matching what [`parse_tags`]
+/// skips. Removal absorbs one adjacent space so the prose keeps no hole: the
+/// space after the marker goes when there is one; a marker touching punctuation
+/// (`#bug,`) has none, so the space in front of it goes instead.
+fn edit_line_markers(line: &str, slug: &str, replacement: Option<&str>, out: &mut String) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'`' {
+            let end = skip_inline_code(bytes, i);
+            out.push_str(&line[i..end]);
+            i = end;
+            continue;
+        }
+        match tag_slug_at(bytes, i).filter(|found| line[found.clone()] == *slug) {
+            Some(found) => {
+                i = found.end;
+                if let Some(text) = replacement {
+                    out.push_str(text);
+                } else if i < bytes.len() && bytes[i] == b' ' {
+                    i += 1;
+                } else if out.ends_with(' ') {
+                    out.pop();
+                }
+            }
+            None => {
+                let ch = line[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+    }
 }
 
 /// Normalize a tag name into a slug that round-trips through [`parse_tags`].

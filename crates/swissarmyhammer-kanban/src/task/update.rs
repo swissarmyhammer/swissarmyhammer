@@ -119,8 +119,8 @@ impl UpdateTask {
     }
 
     /// Set the attachments field value (replaces all existing attachments)
-    pub fn with_attachments(mut self, attachments: Value) -> Self {
-        self.attachments = Some(attachments);
+    pub fn with_attachments(mut self, attachments: impl Into<Value>) -> Self {
+        self.attachments = Some(attachments.into());
         self
     }
 
@@ -550,6 +550,84 @@ mod tests {
         );
     }
 
+    /// The docstring on `tags` promises "an empty list clears every tag".
+    /// Seeding is asserted first, so the clear cannot pass vacuously against a
+    /// card that never carried a tag.
+    #[tokio::test]
+    async fn test_update_task_empty_tags_clears_every_tag() {
+        let (_temp, ctx) = setup().await;
+
+        let add = AddTask::new("Drop them all")
+            .with_tags(vec!["keep".to_string(), "me".to_string()])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+        assert_eq!(
+            fetch(&ctx, id).await["tags"],
+            serde_json::json!(["keep", "me"]),
+            "the seed step must really tag the card, or the clear proves nothing"
+        );
+
+        UpdateTask::new(id)
+            .with_tags(vec![])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(
+            fetch(&ctx, id).await["tags"],
+            serde_json::json!([]),
+            "an empty `tags` list must clear every tag"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // `attachments` tests
+    // -----------------------------------------------------------------------
+
+    /// `with_attachments` declares the capability; this proves the value it
+    /// sets is stored and reads back. The entity layer copies each source into
+    /// the board's `.attachments/` store and hands the field back as metadata
+    /// objects, so the assertion is on the stored names, not the source paths.
+    #[tokio::test]
+    async fn test_update_task_with_attachments_round_trips() {
+        let (temp, ctx) = setup().await;
+
+        let add = AddTask::new("Attach me")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+
+        // The entity layer verifies each source exists, so point at a real file.
+        let source = temp.path().join("note.txt");
+        std::fs::write(&source, b"note").unwrap();
+
+        UpdateTask::new(id)
+            .with_attachments(vec![source.to_string_lossy().to_string()])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let stored = fetch(&ctx, id).await["attachments"].clone();
+        let names: Vec<&str> = stored
+            .as_array()
+            .expect("attachments should be an array")
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["note.txt"],
+            "`with_attachments` must store the attachment, got: {stored}"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Date field tests
     // -----------------------------------------------------------------------
@@ -621,6 +699,36 @@ mod tests {
         assert!(
             fetch(&ctx, id).await["due"].is_null(),
             "due should be null after clearing"
+        );
+    }
+
+    /// `clear_scheduled` is the twin of `clear_due` on the symmetric date
+    /// field, so it carries the same coverage.
+    #[tokio::test]
+    async fn test_update_task_clear_scheduled_date() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a task with a scheduled date already set.
+        let add = AddTask::new("Task")
+            .with_scheduled("2026-04-15")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+        assert_eq!(add["scheduled"], "2026-04-15");
+
+        // Clear the scheduled date.
+        UpdateTask::new(id)
+            .clear_scheduled()
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert!(
+            fetch(&ctx, id).await["scheduled"].is_null(),
+            "scheduled should be null after clearing"
         );
     }
 

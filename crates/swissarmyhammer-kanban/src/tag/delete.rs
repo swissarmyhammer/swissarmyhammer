@@ -38,12 +38,18 @@ impl Execute<KanbanContext, KanbanError> for DeleteTag {
                 .await
                 .map_err(KanbanError::from_entity_error)?;
             let tag_name = entity.get_str("tag_name").unwrap_or("").to_string();
+            // `add tag` stores the name verbatim, but a body always carries the
+            // NORMALIZED slug — that is what every tagging path writes and what
+            // `parse_tags` reads back. Normalize before editing bodies, exactly
+            // as `cut tag` and `paste tag` do, or a tag whose stored name needs
+            // normalizing (`"Bug Fix"`, `"v2.0"`) leaves its markers behind.
+            let slug = tag_parser::normalize_slug(&tag_name);
 
-            // Remove #name text from all task bodies
+            // Remove #slug text from all task bodies
             let all_tasks = ectx.list("task").await?;
             for mut task in all_tasks {
                 let body = task.get_str("body").unwrap_or("").to_string();
-                let new_body = tag_parser::remove_tag(&body, &tag_name);
+                let new_body = tag_parser::remove_tag(&body, &slug);
                 if new_body != body {
                     task.set("body", json!(new_body));
                     ectx.write(&task).await?;
@@ -65,5 +71,112 @@ impl Execute<KanbanContext, KanbanError> for DeleteTag {
             Ok(value) => ExecutionResult::Success { value },
             Err(error) => ExecutionResult::Failed { error },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::InitBoard;
+    use crate::tag::AddTag;
+    use crate::task::AddTask;
+    use tempfile::TempDir;
+
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        (temp, ctx)
+    }
+
+    /// Deleting a tag strips its markers from every task body.
+    #[tokio::test]
+    async fn test_delete_tag_strips_markers_from_task_bodies() {
+        let (_temp, ctx) = setup().await;
+
+        let tag = AddTag::new("bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let tag_id = tag["id"].as_str().unwrap().to_string();
+
+        let task = AddTask::new("Fix login")
+            .with_description("Login broken #bug please fix")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task["id"].as_str().unwrap().to_string();
+
+        DeleteTag::new(tag_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let ectx = ctx.entity_context().await.unwrap();
+        let body = ectx.read("task", &task_id).await.unwrap();
+        let body = body.get_str("body").unwrap_or("").to_string();
+        assert!(!body.contains("#bug"), "marker must be gone from: {body}");
+        assert!(
+            body.contains("Login broken") && body.contains("please fix"),
+            "the prose must survive: {body}"
+        );
+    }
+
+    /// A tag stored under a name that needs normalizing (`add tag` keeps the
+    /// name verbatim) still has its markers stripped. A body always carries the
+    /// NORMALIZED slug, so the delete must normalize the stored name before it
+    /// edits bodies.
+    #[tokio::test]
+    async fn test_delete_tag_with_unnormalized_stored_name_strips_markers() {
+        let (_temp, ctx) = setup().await;
+
+        let tag = AddTag::new("Bug Fix")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let tag_id = tag["id"].as_str().unwrap().to_string();
+
+        let task = AddTask::new("Fix login")
+            .with_tags(vec!["Bug Fix".to_string()])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task["id"].as_str().unwrap().to_string();
+
+        let ectx = ctx.entity_context().await.unwrap();
+        let seeded = ectx.read("task", &task_id).await.unwrap();
+        assert!(
+            seeded.get_str("body").unwrap_or("").contains("#Bug-Fix"),
+            "the body must carry the normalized marker, or the delete proves nothing: {:?}",
+            seeded.get_str("body")
+        );
+
+        DeleteTag::new(tag_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // A fresh entity context — the one used for the seed assertion caches
+        // what it read, so it would hand back the pre-delete body.
+        let ectx = ctx.entity_context().await.unwrap();
+        let body = ectx.read("task", &task_id).await.unwrap();
+        let body = body.get_str("body").unwrap_or("").to_string();
+        assert!(
+            !body.contains("#Bug-Fix"),
+            "marker must be gone from: {body}"
+        );
     }
 }

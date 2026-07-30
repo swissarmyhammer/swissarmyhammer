@@ -77,11 +77,16 @@ impl Execute<KanbanContext, KanbanError> for UpdateTag {
                         }
                     }
 
-                    // Bulk rename #old-name → #new-name in all task bodies
+                    // Bulk rename #old-slug → #new-slug in all task bodies.
+                    // `add tag` stores the name verbatim, but a body always
+                    // carries the NORMALIZED slug, so the old name needs the
+                    // same normalization the new one already gets — otherwise a
+                    // tag stored as `"Bug Fix"` renames nothing.
+                    let old_slug = tag_parser::normalize_slug(&old_name);
                     let all_tasks = ectx.list("task").await?;
                     for mut task in all_tasks {
                         let body = task.get_str("body").unwrap_or("").to_string();
-                        let new_body = tag_parser::rename_tag(&body, &old_name, &normalized);
+                        let new_body = tag_parser::rename_tag(&body, &old_slug, &normalized);
                         if new_body != body {
                             task.set("body", json!(new_body));
                             ectx.write(&task).await?;
@@ -246,6 +251,56 @@ mod tests {
             !body.contains("#bug"),
             "Should not contain #bug in: {}",
             body
+        );
+    }
+
+    /// A tag stored under a name that needs normalizing (`add tag` keeps the
+    /// name verbatim) still renames the markers in task bodies. A body always
+    /// carries the NORMALIZED slug, so the rename must normalize the old name
+    /// too — not just the new one.
+    #[tokio::test]
+    async fn test_rename_tag_with_unnormalized_stored_name_rewrites_bodies() {
+        let (_temp, ctx) = setup().await;
+
+        let tag_result = AddTag::new("Bug Fix")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let tag_id = tag_result["id"].as_str().unwrap().to_string();
+
+        let task_result = AddTask::new("Fix login")
+            .with_tags(vec!["Bug Fix".to_string()])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task_result["id"].as_str().unwrap().to_string();
+
+        let ectx = ctx.entity_context().await.unwrap();
+        let seeded = ectx.read("task", &task_id).await.unwrap();
+        assert!(
+            seeded.get_str("body").unwrap_or("").contains("#Bug-Fix"),
+            "the body must carry the normalized marker, or the rename proves nothing: {:?}",
+            seeded.get_str("body")
+        );
+
+        UpdateTag::new(tag_id)
+            .with_name("defect")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // A fresh entity context — the one used for the seed assertion caches
+        // what it read, so it would hand back the pre-rename body.
+        let ectx = ctx.entity_context().await.unwrap();
+        let task = ectx.read("task", &task_id).await.unwrap();
+        let body = task.get_str("body").unwrap_or("");
+        assert!(body.contains("#defect"), "expected #defect in: {body}");
+        assert!(
+            !body.contains("#Bug-Fix"),
+            "the old marker must be gone from: {body}"
         );
     }
 

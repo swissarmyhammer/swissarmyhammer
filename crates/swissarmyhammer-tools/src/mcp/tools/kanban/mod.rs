@@ -27,6 +27,14 @@ use swissarmyhammer_kanban::{
 // Operations and schema are provided by the kanban crate's single source of truth:
 // `swissarmyhammer_kanban::schema::kanban_operations()`
 
+/// Where the kanban tool sits in the install lifecycle's priority ordering.
+///
+/// The pipeline is re-spaced in 10s, so this value puts kanban between the
+/// Preamble (50) and Skills (60) steps — the same relative position it held in
+/// the legacy 22 → 25 → 30 ordering (after `ClaudeMd`, before
+/// `SkillDeployment`).
+const KANBAN_INIT_PRIORITY: i32 = 55;
+
 /// MCP tool for kanban board operations
 #[derive(Default)]
 pub struct KanbanTool {
@@ -209,11 +217,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
     }
 
     fn priority(&self) -> i32 {
-        // Sits between the Preamble (50) and Skills (60) steps in the
-        // re-spaced 10s pipeline — same relative position it held in the
-        // legacy 22 → 25 → 30 ordering (after `ClaudeMd`, before
-        // `SkillDeployment`).
-        55
+        KANBAN_INIT_PRIORITY
     }
 
     /// Applies in all three scopes — User, Local, and Project.
@@ -749,7 +753,7 @@ mod tests {
         tag_args.insert("name".to_string(), json!("bug"));
         let tag_result = tool.execute(tag_args, &context).await.unwrap();
         let tag_id = parse_json(&tag_result)["id"].as_str().unwrap().to_string();
-        let short: String = tag_id[tag_id.len() - 7..].to_lowercase();
+        let short = swissarmyhammer_kanban::types::short_id(&tag_id);
 
         for ref_form in [
             "bug".to_string(),
@@ -803,8 +807,81 @@ mod tests {
         }
     }
 
+    /// Real-path e2e: `assignees` shares the `tags` shape tolerance, so it must
+    /// survive every wire shape on both `add task` and `update task`.
+    ///
+    /// `assignees` is a reference field: the entity layer prunes ids that name
+    /// no actor, so the actors are registered first.
+    #[tokio::test]
+    async fn test_assignees_persist_across_input_shapes_via_served_tool() {
+        let temp = TempDir::new().unwrap();
+        let context = create_test_context()
+            .await
+            .with_working_dir(temp.path().to_path_buf());
+        let tool = KanbanTool::new();
+        init_test_board(&tool, &context).await;
+
+        for actor in ["alice", "bob"] {
+            let mut actor_args = serde_json::Map::new();
+            actor_args.insert("op".to_string(), json!("add actor"));
+            actor_args.insert("id".to_string(), json!(actor));
+            actor_args.insert("name".to_string(), json!(actor));
+            actor_args.insert("type".to_string(), json!("human"));
+            tool.execute(actor_args, &context).await.unwrap();
+        }
+
+        let shapes = [
+            ("single string", json!("alice")),
+            ("json array", json!(["alice"])),
+            (
+                "stringified array",
+                json!(serde_json::to_string(&vec!["alice"]).unwrap()),
+            ),
+        ];
+
+        for (shape_name, assignees_value) in shapes {
+            // add task carrying the assignees
+            let mut add_args = serde_json::Map::new();
+            add_args.insert("op".to_string(), json!("add task"));
+            add_args.insert("title".to_string(), json!("Assigned"));
+            add_args.insert("assignees".to_string(), assignees_value.clone());
+            let add_result = tool.execute(add_args, &context).await.unwrap();
+            let task_id = extract_task_id(&add_result);
+            assert_eq!(
+                get_task(&tool, &context, &task_id).await["assignees"],
+                json!(["alice"]),
+                "add task dropped assignees for shape={shape_name}"
+            );
+
+            // update task replacing the assignees on a differently-assigned card
+            let mut add_args = serde_json::Map::new();
+            add_args.insert("op".to_string(), json!("add task"));
+            add_args.insert("title".to_string(), json!("Reassign"));
+            add_args.insert("assignees".to_string(), json!(["bob"]));
+            let add_result = tool.execute(add_args, &context).await.unwrap();
+            let task_id = extract_task_id(&add_result);
+            assert_eq!(
+                get_task(&tool, &context, &task_id).await["assignees"],
+                json!(["bob"]),
+                "the seed step must really assign, or the replace proves nothing"
+            );
+
+            let mut update_args = serde_json::Map::new();
+            update_args.insert("op".to_string(), json!("update task"));
+            update_args.insert("id".to_string(), json!(task_id));
+            update_args.insert("assignees".to_string(), assignees_value.clone());
+            tool.execute(update_args, &context).await.unwrap();
+            assert_eq!(
+                get_task(&tool, &context, &task_id).await["assignees"],
+                json!(["alice"]),
+                "update task dropped assignees for shape={shape_name}"
+            );
+        }
+    }
+
     /// An unresolvable tag id ref must fail loudly through the served tool, and
-    /// leave the task's tags untouched.
+    /// leave the task's tags untouched. Both `add task` and `update task`
+    /// enforce it — they share one resolver, so they share the rule.
     #[tokio::test]
     async fn test_unresolvable_tag_ref_errors_via_served_tool() {
         let temp = TempDir::new().unwrap();
@@ -813,6 +890,29 @@ mod tests {
             .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
+
+        // add task rejects the ref outright — no card is created.
+        let mut bad_add_args = serde_json::Map::new();
+        bad_add_args.insert("op".to_string(), json!("add task"));
+        bad_add_args.insert("title".to_string(), json!("Never lands"));
+        bad_add_args.insert("tags".to_string(), json!(["01KJZEPKJ35S76KF7E9HS5742J"]));
+        let add_error = tool
+            .execute(bad_add_args, &context)
+            .await
+            .expect_err("an unresolvable tag ref must surface as a tool error on add task too");
+        assert!(
+            format!("{add_error:?}").contains("01KJZEPKJ35S76KF7E9HS5742J"),
+            "the error must name the ref it could not resolve, got: {add_error:?}"
+        );
+
+        let mut list_args = serde_json::Map::new();
+        list_args.insert("op".to_string(), json!("list tasks"));
+        let listed = tool.execute(list_args, &context).await.unwrap();
+        assert!(
+            !parse_json(&listed).to_string().contains("Never lands"),
+            "a rejected add must leave no card behind, got: {}",
+            parse_json(&listed)
+        );
 
         let mut add_args = serde_json::Map::new();
         add_args.insert("op".to_string(), json!("add task"));
